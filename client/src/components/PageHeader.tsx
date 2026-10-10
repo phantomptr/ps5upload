@@ -9,9 +9,8 @@ import { Spinner } from "./Spinner";
  *
  * Layout: [icon] [title] [count/status]  ...  [right-side action?]
  *
- * - icon + title are always present; the accent 20px Lucide icon
- *   signals which screen we're on at a glance, especially for users
- *   with many tabs open.
+ * - title is always present, large and bold; the icon is optional and sits
+ *   beside it in a small white circle.
  * - count is the lightweight "3 items" text that hangs off the title.
  *   It's optional — screens without a natural list count omit it.
  * - loading shows a small spinner next to the title, used while a
@@ -31,7 +30,9 @@ export function PageHeader({
   description,
   right,
 }: {
-  icon: LucideIcon;
+  /** A small coral glyph beside the title. Optional: the big title alone
+   *  says where you are. */
+  icon?: LucideIcon;
   title: string;
   count?: number | string;
   loading?: boolean;
@@ -39,18 +40,20 @@ export function PageHeader({
   right?: React.ReactNode;
 }) {
   return (
-    <header className="mb-6">
-      <div className="mb-1 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <header className="mb-7">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[0.7rem] bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
-            <Icon size={18} />
-          </span>
+          {Icon && (
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] text-[var(--color-accent-bright)] shadow-[var(--edge-highlight),var(--shadow-1)]">
+              <Icon size={18} />
+            </span>
+          )}
           {/* A phone has room for a two-line title, not for "Firmware Spoof Detecti…". */}
-          <h1 className="min-w-0 text-2xl leading-tight font-bold tracking-[-0.025em] [overflow-wrap:anywhere] sm:truncate">
+          <h1 className="min-w-0 text-[1.75rem] leading-[1.1] font-bold tracking-[-0.03em] [overflow-wrap:anywhere] sm:truncate sm:text-[2.25rem]">
             {title}
           </h1>
           {count !== undefined && (
-            <span className="shrink-0 rounded-full bg-[var(--color-surface-3)] px-2 py-0.5 text-xs tabular-nums text-[var(--color-muted)]">
+            <span className="shrink-0 rounded-full border border-[var(--color-border-strong)] px-2.5 py-0.5 text-xs font-medium tabular-nums text-[var(--color-muted)]">
               {count}
             </span>
           )}
@@ -59,11 +62,11 @@ export function PageHeader({
         {/* On a phone the actions sit under the title: let their row wrap, so a
             button keeps its label instead of shrinking to "Ref…". */}
         {right && (
-          <div className="shrink-0 sm:pt-0.5 [&>div]:flex-wrap max-sm:[&>div]:justify-start">{right}</div>
+          <div className="shrink-0 [&>div]:flex-wrap max-sm:[&>div]:justify-start">{right}</div>
         )}
       </div>
       {description && (
-        <p className="max-w-3xl text-sm leading-relaxed text-[var(--color-muted)] sm:pl-12">
+        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-[var(--color-muted)]">
           {description}
         </p>
       )}

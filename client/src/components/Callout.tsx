@@ -53,7 +53,7 @@ export function Callout({
     },
     info: {
       color: "var(--color-accent)",
-      softColor: "var(--color-surface-3)",
+      softColor: "var(--color-accent-soft)",
       Icon: Info,
     },
   }[tone];
@@ -65,16 +65,17 @@ export function Callout({
       role={isAlert ? "alert" : "status"}
       aria-live={isAlert ? "assertive" : "polite"}
       className={[
-        "flex items-start gap-2.5 rounded-lg border p-3 text-sm",
+        "flex items-start gap-3 rounded-[var(--radius-card)] border px-4 py-3 text-sm shadow-[var(--edge-highlight),var(--shadow-1)]",
         className,
       ].join(" ")}
+      // Glass tinted by the tone, with an edge in the tone's colour.
       style={{
-        borderColor: config.color,
-        background: config.softColor,
+        borderColor: `color-mix(in srgb, ${config.color} 38%, transparent)`,
+        background: `linear-gradient(${config.softColor}, ${config.softColor}), var(--color-surface-raised)`,
       }}
     >
       <Icon
-        size={14}
+        size={16}
         className="mt-0.5 shrink-0"
         aria-hidden="true"
         style={{ color: config.color }}

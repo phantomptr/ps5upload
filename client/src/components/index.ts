@@ -47,3 +47,4 @@ export { Toaster } from "./Toaster";
 export { SkipNav } from "./SkipNav";
 export { LiveRegion } from "./LiveRegion";
 export { Sparkline } from "./Sparkline";
+export { Orb } from "./Orb";

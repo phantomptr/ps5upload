@@ -33,9 +33,10 @@ export interface TabsProps {
  *   - Only the active tab is in the tab order (tabindex=0; others =-1)
  *   - aria-controls links tab → panel (the caller owns the panel)
  *
- * Three visual variants:
- *   underline — low-weight, for page-level screens (Logs, Payloads)
- *   pills     — Game Hub style, filled active tab
+ * Every variant is a row of chips (active = white filled pill, inactive =
+ * hairline outline); the variant only sets spacing:
+ *   underline — page-level tabs (Logs, Payloads); a little more room
+ *   pills     — Game Hub style
  *   segmented — File Browser view modes (compact)
  *
  * Game Hub: use `pills` on lg+, `underline` on mobile (switch via
@@ -71,37 +72,17 @@ export function Tabs({
   };
 
   const containerCls: Record<TabsVariant, string> = {
-    underline: "flex items-center gap-1 border-b border-[var(--color-border)]",
-    pills: "flex items-center gap-1",
-    segmented:
-      "inline-flex items-center gap-0.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-0.5",
+    underline: "flex flex-wrap items-center gap-2",
+    pills: "flex flex-wrap items-center gap-1.5",
+    segmented: "inline-flex flex-wrap items-center gap-1.5",
   };
 
-  const tabCls = (active: boolean, disabled: boolean): string => {
-    const base = "flex items-center gap-1.5 whitespace-nowrap transition-colors";
+  const tabCls = (disabled: boolean): string => {
+    const base = "chip gap-1.5 whitespace-nowrap";
     const sizing =
-      size === "md" ? "px-3 py-2 text-sm" : "px-2 py-1 text-xs";
+      size === "md" ? "min-h-9 px-4 text-sm" : "min-h-8 px-3 text-xs";
     if (disabled) return `${base} ${sizing} opacity-50 cursor-not-allowed`;
-    switch (variant) {
-      case "underline":
-        return `${base} ${sizing} border-b-2 ${
-          active
-            ? "border-[var(--color-accent)] font-semibold text-[var(--color-accent)]"
-            : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-text)]"
-        }`;
-      case "pills":
-        return `${base} ${sizing} rounded-full ${
-          active
-            ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
-            : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
-        }`;
-      case "segmented":
-        return `${base} ${sizing} rounded-md ${
-          active
-            ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
-            : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
-        }`;
-    }
+    return `${base} ${sizing}`;
   };
 
   return (
@@ -124,7 +105,7 @@ export function Tabs({
             tabIndex={active ? 0 : -1}
             disabled={tab.disabled}
             onClick={() => onChange(tab.id)}
-            className={tabCls(active, !!tab.disabled)}
+            className={tabCls(!!tab.disabled)}
           >
             {Icon && <Icon size={size === "md" ? 14 : 12} aria-hidden="true" />}
             {tab.label}

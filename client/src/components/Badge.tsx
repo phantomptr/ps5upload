@@ -49,8 +49,8 @@ export function Badge({
 }: BadgeProps) {
   const sizeCls =
     size === "md"
-      ? "px-2 py-0.5 text-xs"
-      : "px-1.5 py-0.5 text-[0.625rem] leading-tight";
+      ? "px-2.5 py-0.5 text-xs"
+      : "px-2 py-0.5 text-[0.625rem] leading-tight";
 
   const toneColor = {
     neutral: "var(--color-muted)",
@@ -73,6 +73,7 @@ export function Badge({
   if (variant === "soft") {
     style.color = toneColor;
     style.background = `color-mix(in srgb, ${toneColor} 14%, transparent)`;
+    style.boxShadow = `inset 0 0 0 1px color-mix(in srgb, ${toneColor} 18%, transparent)`;
   } else if (variant === "solid") {
     style.color = "var(--color-accent-contrast)";
     style.background = toneColor;

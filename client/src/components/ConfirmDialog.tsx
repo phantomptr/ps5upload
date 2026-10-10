@@ -127,12 +127,12 @@ export function useConfirm(): {
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={pending.message ? bodyId : undefined}
-        className="anim-pop elev-3 w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5"
+        className="anim-pop glass-float elev-3 w-full max-w-md rounded-[var(--radius-panel)] p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <header
           id={titleId}
-          className="mb-2 flex items-center gap-2 text-sm font-semibold"
+          className="mb-2 flex items-center gap-2 text-base font-semibold"
         >
           {pending.destructive && (
             <AlertTriangle size={14} className="text-[var(--color-bad)]" />
@@ -142,7 +142,7 @@ export function useConfirm(): {
         {pending.message && (
           <p
             id={bodyId}
-            className="mb-4 whitespace-pre-line text-xs text-[var(--color-muted)]"
+            className="mb-5 whitespace-pre-line text-sm text-[var(--color-muted)]"
           >
             {pending.message}
           </p>
@@ -245,19 +245,19 @@ export function useAlert(): {
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={pending.message ? bodyId : undefined}
-        className="anim-pop elev-3 w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5"
+        className="anim-pop glass-float elev-3 w-full max-w-md rounded-[var(--radius-panel)] p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <header
           id={titleId}
-          className="mb-2 flex items-center gap-2 text-sm font-semibold"
+          className="mb-2 flex items-center gap-2 text-base font-semibold"
         >
           <span>{pending.title}</span>
         </header>
         {pending.message && (
           <p
             id={bodyId}
-            className="mb-4 whitespace-pre-wrap text-xs text-[var(--color-muted)]"
+            className="mb-5 whitespace-pre-wrap text-sm text-[var(--color-muted)]"
           >
             {pending.message}
           </p>
@@ -352,12 +352,12 @@ export function usePrompt(): {
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={pending.message ? bodyId : undefined}
-        className="anim-pop elev-3 w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5"
+        className="anim-pop glass-float elev-3 w-full max-w-md rounded-[var(--radius-panel)] p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <header
           id={titleId}
-          className="mb-2 text-sm font-semibold"
+          className="mb-2 text-base font-semibold"
         >
           {pending.title}
         </header>

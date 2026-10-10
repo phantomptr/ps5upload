@@ -54,7 +54,7 @@ export function BrowseMenu(props: {
   return (
     <div
       role="menu"
-      className="elev-3 absolute right-0 z-40 mt-1 min-w-56 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] py-1"
+      className="glass-float elev-3 absolute right-0 z-40 mt-1 min-w-56 overflow-hidden rounded-[var(--radius-card)] p-1.5"
     >
       <button type="button" role="menuitem" className={item} onClick={props.onLocal}>
         <HardDrive size={14} className="text-[var(--color-muted)]" />
@@ -132,9 +132,9 @@ export function BrowseButton(props: BrowseButtonProps) {
   };
 
   const tone = props.primary
-    ? "border-transparent bg-[var(--color-accent)] text-[var(--color-accent-contrast)] shadow-sm hover:brightness-110"
-    : "border-[var(--color-border)] bg-[var(--color-surface-2)] hover:bg-[var(--color-surface-3)]";
-  const base = `inline-flex min-h-8 items-center gap-1.5 border ${tone} px-3 text-sm disabled:opacity-50`;
+    ? "border-transparent bg-[var(--color-accent)] bg-[image:var(--accent-fill)] text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105"
+    : "border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)]";
+  const base = `inline-flex min-h-9 items-center gap-1.5 border ${tone} px-4 text-sm font-medium disabled:opacity-50`;
   const label = props.label ?? tr("browse", undefined, "Browse…");
   return (
     <div ref={wrap} className={`relative inline-flex ${props.className ?? ""}`}>
@@ -142,7 +142,7 @@ export function BrowseButton(props: BrowseButtonProps) {
         type="button"
         disabled={props.disabled || props.busy}
         title={props.tooltip}
-        className={`${base} ${props.remote ? "rounded-s-md" : "rounded-md"}`}
+        className={`${base} ${props.remote ? "rounded-s-full" : "rounded-full"}`}
         onClick={() => (props.onMainClick ? props.onMainClick() : void pick())}
       >
         {props.busy ? <Spinner size={14} tone="inherit" /> : (props.icon ?? <FolderOpen size={14} />)}
@@ -155,7 +155,7 @@ export function BrowseButton(props: BrowseButtonProps) {
           aria-haspopup="menu"
           aria-expanded={open}
           aria-label={tr("browse_servers", undefined, "Browse a server")}
-          className={`${base} rounded-e-md px-2 ${
+          className={`${base} rounded-e-full px-2.5 ${
             props.primary ? "border-s-[var(--color-accent-contrast)]/30" : "border-s-0"
           }`}
           onClick={() => setOpen((v) => !v)}

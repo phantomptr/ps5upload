@@ -11,6 +11,13 @@ import "./state/uiScale";
 import "./state/accessibility";
 import "./lib/androidInsets";
 import "./state/lang";
+// Poppins, bundled with the app (desktop and Docker run offline). Each file
+// carries every subset the family has, split by unicode-range, so a page only
+// downloads the glyphs it shows.
+import "@fontsource/poppins/400.css";
+import "@fontsource/poppins/500.css";
+import "@fontsource/poppins/600.css";
+import "@fontsource/poppins/700.css";
 import "./index.css";
 import {
   installUserConfigMirror,

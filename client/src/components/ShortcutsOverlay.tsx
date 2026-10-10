@@ -122,7 +122,7 @@ export function ShortcutsOverlay() {
         if (e.target === e.currentTarget) setOpen(false);
       }}
     >
-      <div className="anim-pop elev-3 w-[480px] max-w-[90vw] overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+      <div className="anim-pop glass-float elev-3 w-[480px] max-w-[90vw] overflow-hidden rounded-[var(--radius-panel)]">
         <header className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
           <div className="flex items-center gap-2">
             <Keyboard size={14} className="text-[var(--color-muted)]" />

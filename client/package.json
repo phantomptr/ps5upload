@@ -29,6 +29,7 @@
     "dist:android": "tauri android build --apk --target aarch64 --target armv7"
   },
   "dependencies": {
+    "@fontsource/poppins": "^5.3.0",
     "@tauri-apps/api": "^2.12.1",
     "@tauri-apps/plugin-dialog": "^2.8.1",
     "@tauri-apps/plugin-notification": "^2.5.1",

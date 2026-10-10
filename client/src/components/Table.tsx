@@ -309,7 +309,7 @@ export function Table<T>({
       <th
         key="__sel"
         role="columnheader"
-        className="sticky left-0 z-20 border-b border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-2"
+        className="sticky left-0 z-20 border-b border-[var(--color-border)] bg-[var(--color-float)] px-2 py-2"
         style={{ width: 36 }}
       >
         {selectionMode === "multi" ? (
@@ -351,9 +351,9 @@ export function Table<T>({
         aria-sort={ariaSort as React.AriaAttributes["aria-sort"]}
         onClick={col.sort ? () => handleSort(col.key) : undefined}
         className={[
-          "border-b border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]",
+          "border-b border-[var(--color-border)] px-3 py-2.5 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]",
           col.sort ? "cursor-pointer select-none hover:text-[var(--color-text)]" : "",
-          col.sticky ? "sticky left-0 z-20 bg-[var(--color-surface-2)]" : "",
+          col.sticky ? "sticky left-0 z-20 bg-[var(--color-float)]" : "",
           alignCls(col.align),
         ].join(" ")}
         style={col.width ? { width: col.width } : undefined}
@@ -377,7 +377,9 @@ export function Table<T>({
       tabIndex={0}
       onKeyDown={handleGridKeyDown}
     >
-      <table className="w-full border-collapse text-sm">
+      {/* Rows sit on the glass with no grid lines; a row shows itself as a
+          soft rounded band on hover or selection. */}
+      <table className="w-full border-separate border-spacing-0 text-sm">
         <thead>
           <tr role="row">{headerCells}</tr>
         </thead>
@@ -386,8 +388,15 @@ export function Table<T>({
             const key = rowKey(row, rowIdx);
             const disabled = isRowDisabled?.(row, rowIdx) ?? false;
             const selected = selectedKeys?.has(key) ?? false;
-            const zebraCls =
-              zebra && rowIdx % 2 === 1 ? "bg-[var(--color-surface)]" : "";
+            const zebraCls = selected
+              ? "bg-[var(--color-accent-soft)]"
+              : zebra && rowIdx % 2 === 1
+                ? "bg-[var(--color-surface)]"
+                : "";
+            // Rounded ends on the band, and the hover tint, live on the cells:
+            // a row's own background is not clipped by its cells' radii.
+            const bandCls =
+              "first:rounded-l-2xl last:rounded-r-2xl group-hover/row:bg-[var(--color-surface-3)]";
 
             const cells: ReactNode[] = [];
 
@@ -399,7 +408,7 @@ export function Table<T>({
                   key="__sel"
                   role="gridcell"
                   tabIndex={cellActive ? 0 : -1}
-                  className={`sticky left-0 z-10 border-b border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 ${zebraCls}`}
+                  className={`sticky left-0 z-10 bg-[var(--color-float)] px-2 ${bandCls} ${zebraCls}`}
                   style={{ width: 36 }}
                 >
                   <input
@@ -429,11 +438,11 @@ export function Table<T>({
                       : undefined
                   }
                   className={[
-                    "border-b border-[var(--color-border)]",
+                    bandCls,
                     cellPad,
                     alignCls(col.align),
                     col.sticky
-                      ? "sticky left-0 z-10 bg-[var(--color-surface-2)]"
+                      ? "sticky left-0 z-10 bg-[var(--color-float)]"
                       : "",
                     zebraCls,
                     onRowClick && !disabled ? "cursor-pointer" : "",
@@ -452,7 +461,7 @@ export function Table<T>({
                 role="row"
                 aria-selected={selectionEnabled ? selected : undefined}
                 aria-disabled={disabled || undefined}
-                className={`${rowH} ${selected ? "bg-[var(--color-accent-soft,var(--color-surface-3))]" : ""}`}
+                className={`group/row ${rowH}`}
               >
                 {cells}
               </tr>

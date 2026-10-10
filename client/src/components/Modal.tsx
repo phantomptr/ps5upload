@@ -119,8 +119,8 @@ export function Modal({
     ? "anim-scrim fixed inset-0 z-50 flex items-end justify-center bg-[var(--overlay-scrim)] sm:items-center sm:p-4"
     : "anim-scrim fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4";
   const panelCls = isSheet
-    ? `anim-sheet-up elev-3 flex max-h-[90dvh] w-full ${SIZES[size]} flex-col overflow-hidden rounded-t-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] sm:rounded-lg ${panelClassName}`
-    : `anim-pop elev-3 flex max-h-[90dvh] w-full ${SIZES[size]} flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] ${panelClassName}`;
+    ? `anim-sheet-up glass-float elev-3 flex max-h-[90dvh] w-full ${SIZES[size]} flex-col overflow-hidden rounded-t-[var(--radius-panel)] sm:rounded-[var(--radius-panel)] ${panelClassName}`
+    : `anim-pop glass-float elev-3 flex max-h-[90dvh] w-full ${SIZES[size]} flex-col overflow-hidden rounded-[var(--radius-panel)] ${panelClassName}`;
 
   return (
     // z-50 is the modal layer. The confirm/alert/prompt dialogs (ConfirmDialog)
@@ -142,10 +142,10 @@ export function Modal({
         className={panelCls}
       >
         {title && (
-          <header className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3">
+          <header className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-6 py-4">
             <h2
               id={titleId}
-              className="flex min-w-0 items-center gap-2 truncate text-sm font-semibold"
+              className="flex min-w-0 items-center gap-2 truncate text-base font-semibold tracking-[-0.01em]"
             >
               {titleIcon}
               {title}
@@ -155,7 +155,7 @@ export function Modal({
               onClick={onClose}
               aria-label={tr("close", undefined, "Close")}
               title={tr("close", undefined, "Close")}
-              className="shrink-0 rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] text-[var(--color-muted)] shadow-[var(--edge-highlight)] hover:text-[var(--color-text)]"
             >
               <X size={16} />
             </button>
@@ -165,7 +165,7 @@ export function Modal({
           {children}
         </div>
         {footer && (
-          <footer className="flex items-center justify-end gap-2 border-t border-[var(--color-border)] px-4 py-3">
+          <footer className="flex items-center justify-end gap-2 border-t border-[var(--color-border)] px-6 py-4">
             {footer}
           </footer>
         )}

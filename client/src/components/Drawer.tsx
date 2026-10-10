@@ -98,18 +98,17 @@ export function Drawer({
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className={[
-          "elev-3 absolute top-0 bottom-0 flex flex-col border-[var(--color-border)] bg-[var(--color-surface-2)]",
-          side === "right"
-            ? "right-0 border-l"
-            : "left-0 border-r",
+          // A floating glass sheet inset from the window edge, like the shell.
+          "glass-float elev-3 absolute top-2 bottom-2 flex flex-col overflow-hidden rounded-[var(--radius-panel)]",
+          side === "right" ? "right-2" : "left-2",
           slideAnim,
           className,
         ].join(" ")}
         style={{ width: computedWidth }}
       >
         {title && (
-          <header className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3">
-            <h2 id={titleId} className="truncate text-sm font-semibold">
+          <header className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-5 py-4">
+            <h2 id={titleId} className="truncate text-base font-semibold">
               {title}
             </h2>
             <button
@@ -124,7 +123,7 @@ export function Drawer({
         )}
         <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
         {footer && (
-          <footer className="border-t border-[var(--color-border)] px-4 py-3">
+          <footer className="border-t border-[var(--color-border)] px-5 py-4">
             {footer}
           </footer>
         )}

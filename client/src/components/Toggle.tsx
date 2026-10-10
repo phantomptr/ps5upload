@@ -69,14 +69,17 @@ export function Toggle({
           className={[
             "relative flex h-7 items-center rounded-full",
             "transition-colors duration-150",
-            checked ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-3)]",
+            // Coral when on; a hairline glass well when off.
+            checked
+              ? "bg-[image:var(--accent-fill)] shadow-[var(--accent-glow)]"
+              : "border border-[var(--color-border-strong)] bg-[var(--color-surface-3)]",
           ].join(" ")}
           style={{ width: "3.25rem" }}
         >
           <span
             aria-hidden="true"
             className={[
-              "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform duration-150",
+              "inline-block h-5 w-5 transform rounded-full bg-white shadow-[0_2px_6px_rgb(60_30_40/0.3)] transition-transform duration-150",
               checked ? "translate-x-6" : "translate-x-1",
             ].join(" ")}
           />

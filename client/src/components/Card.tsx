@@ -4,9 +4,9 @@ import type { LucideIcon } from "lucide-react";
  * Standard content card. Replaces the ad-hoc `rounded-lg border ...`
  * snippet that every screen had been writing inline.
  *
- * Default styling:
- *   rounded-lg, border-[var(--color-border)], bg-[var(--color-surface-2)],
- *   p-4.
+ * Default styling: frosted glass — translucent white over the wash, a
+ * bright white edge, a large radius and a wide soft shadow (no blur: cards
+ * come in long lists, and the fill reads the same over the wash without it).
  *
  * When `title` is provided, renders a section header above the
  * children. `icon` is optional; if present it appears left of the
@@ -50,24 +50,24 @@ export function Card({
 }) {
   const border = accent
     ? "border-[var(--color-accent)]"
-    : "border-[var(--color-border)]";
-  const pad = padded ? "p-4" : "";
+    : "border-[var(--glass-edge)]";
+  const pad = padded ? "p-5" : "";
   const liftCls = interactive
-    ? "transition-[transform,box-shadow,border-color] hover:-translate-y-px hover:border-[var(--color-border-strong)] hover:elev-2 cursor-pointer text-left"
+    ? "transition-[transform,box-shadow,border-color] hover:-translate-y-0.5 hover:shadow-[var(--edge-highlight),var(--shadow-2)] cursor-pointer text-left"
     : "";
 
   const header = title && (
     <header className="mb-3 flex items-center justify-between gap-2">
-      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-        {Icon && <Icon size={14} />}
-        <span>{title}</span>
+      <div className="flex min-w-0 items-center gap-2 text-[0.9375rem] font-semibold tracking-[-0.01em] text-[var(--color-text)]">
+        {Icon && <Icon size={16} className="shrink-0 text-[var(--color-accent-bright)]" />}
+        <span className="min-w-0">{title}</span>
       </div>
       {right && <div className="shrink-0">{right}</div>}
     </header>
   );
 
   const footer = actions && (
-    <footer className="mt-3 flex items-center justify-end gap-2 border-t border-[var(--color-border)] pt-3">
+    <footer className="mt-4 flex items-center justify-end gap-2 border-t border-[var(--color-border)] pt-4">
       {actions}
     </footer>
   );

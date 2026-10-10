@@ -1,5 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 
+import { Orb } from "./Orb";
+
 /**
  * v5 EmptyState primitive (§22.29).
  *
@@ -61,25 +63,30 @@ export function EmptyState({
 
   const content = body ?? message;
   const Heading = headingTag;
-  // Pick the icon/hero node: hero wins, then icon.
+  // Pick the icon/hero node: hero wins, then icon. The icon sits on a small
+  // orb, the app's soft focal point.
+  const big = size === "hero" || fill;
   const heroNode = hero ?? (Icon ? (
-    <Icon
-      size={size === "hero" || fill ? 40 : 20}
-      className={size === "hero" || fill
-        ? "mx-auto mb-4 text-[var(--color-muted)] opacity-60"
-        : "mx-auto mb-2 text-[var(--color-muted)] opacity-60"}
-      aria-hidden
-    />
+    <span
+      className={`relative mx-auto grid place-items-center ${big ? "mb-5 h-16 w-16" : "mb-3 h-11 w-11"}`}
+    >
+      <Orb size={big ? 64 : 44} className="[grid-area:1/1]" />
+      <Icon
+        size={big ? 26 : 18}
+        className="relative [grid-area:1/1] text-white drop-shadow-[0_1px_2px_rgb(120_30_40/0.4)]"
+        aria-hidden
+      />
+    </span>
   ) : null);
 
   if (size === "hero" || fill) {
     return (
       <div
         role={role}
-        className={`rounded-[var(--radius-panel)] border border-dashed border-[var(--color-border)] bg-[var(--color-surface-raised)] p-12 text-center ${fillCls}`}
+        className={`rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-12 text-center shadow-[var(--edge-highlight),var(--shadow-1)] ${fillCls}`}
       >
         {heroNode}
-        {title && <Heading className="mb-1.5 text-lg font-semibold">{title}</Heading>}
+        {title && <Heading className="mb-1.5 text-xl font-semibold tracking-[-0.01em]">{title}</Heading>}
         {content && (
           <div className="mx-auto max-w-xl text-sm leading-relaxed text-[var(--color-muted)]">
             {content}
@@ -93,10 +100,10 @@ export function EmptyState({
   return (
     <div
       role={role}
-      className="rounded-[var(--radius-panel)] border border-dashed border-[var(--color-border)] bg-[var(--color-surface-raised)] p-6 text-center text-sm text-[var(--color-muted)]"
+      className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-6 text-center text-sm text-[var(--color-muted)] shadow-[var(--edge-highlight),var(--shadow-1)]"
     >
       {heroNode}
-      {title && <Heading className="mb-1.5 text-base font-semibold">{title}</Heading>}
+      {title && <Heading className="mb-1.5 text-base font-semibold text-[var(--color-text)]">{title}</Heading>}
       {content}
       {action && (
         <div className="mt-3 flex justify-center">{action}</div>

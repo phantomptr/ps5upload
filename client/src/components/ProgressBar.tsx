@@ -37,9 +37,12 @@ export function ProgressBar({
   paused?: boolean;
   className?: string;
 }) {
-  const h = size === "sm" ? "h-1" : "h-1.5";
+  const h = size === "sm" ? "h-1.5" : "h-2";
+  // The accent fill is the coral→pink sweep of the brand; terminal states
+  // stay flat so they read as a state, not as progress.
   const toneVar = {
-    accent: "var(--color-accent)",
+    accent:
+      "linear-gradient(90deg, var(--color-accent-bright), var(--color-accent-pink))",
     good: "var(--color-good)",
     warn: "var(--color-warn)",
     bad: "var(--color-bad)",

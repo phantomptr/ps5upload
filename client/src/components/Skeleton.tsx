@@ -15,7 +15,7 @@ export function Skeleton({ className = "" }: { className?: string }) {
   return (
     <div
       aria-hidden
-      className={`anim-skeleton rounded-md border border-[var(--color-border)] ${className}`}
+      className={`anim-skeleton rounded-[var(--radius-field)] ${className}`}
     />
   );
 }
@@ -45,7 +45,7 @@ export function SkeletonRows({
       {Array.from({ length: rows }, (_, i) => (
         <div
           key={i}
-          className={`anim-skeleton rounded-md border border-[var(--color-border)] ${rowClassName}`}
+          className={`anim-skeleton rounded-[var(--radius-field)] ${rowClassName}`}
           // Stagger the shimmer start so the column doesn't strobe in
           // lockstep — reads as texture, not a blinking wall.
           style={{ animationDelay: `${i * 90}ms` }}

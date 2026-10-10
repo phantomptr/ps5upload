@@ -17,7 +17,8 @@ export interface SegmentedControlProps {
 }
 
 /**
- * Pill-shaped multi-option toggle. Implements the WAI-ARIA Radiogroup
+ * A row of chips: the checked one is a filled white pill, the rest hairline
+ * outlines. Implements the WAI-ARIA Radiogroup
  * pattern:
  *
  *   - role="radiogroup" on the container
@@ -68,7 +69,7 @@ export function SegmentedControl({
       role="radiogroup"
       aria-label={ariaLabel}
       className={[
-        "inline-flex items-center gap-0.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-0.5",
+        "inline-flex flex-wrap items-center gap-1.5",
         className,
       ].join(" ")}
     >
@@ -92,10 +93,7 @@ export function SegmentedControl({
               // max-md:min-h-11 — segments measured 27px on a phone, well
               // under the 44px touch floor (mobile-design §4.1). Desktop
               // density is unchanged.
-              "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors max-md:min-h-11 max-md:px-4",
-              checked
-                ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
-                : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]",
+              "chip min-h-8 gap-1.5 px-3.5 text-xs font-medium max-md:min-h-11 max-md:px-4",
             ].join(" ")}
           >
             {Icon && <Icon size={12} aria-hidden="true" />}

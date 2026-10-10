@@ -38,10 +38,11 @@ function ToastItem({ toast }: { toast: Toast }) {
       role={role}
       aria-live={role === "alert" ? "assertive" : "polite"}
       className={[
-        "pointer-events-auto flex items-start gap-2.5 rounded-lg border bg-[var(--color-surface-2)] px-3 py-2.5 shadow-lg",
+        "glass-float pointer-events-auto flex items-start gap-2.5 rounded-[var(--radius-card)] px-4 py-3",
         animCls,
       ].join(" ")}
-      style={{ borderColor: color }}
+      // The tone shows on the icon and a tinted edge; the body stays glass.
+      style={{ borderColor: `color-mix(in srgb, ${color} 45%, transparent)` }}
     >
       <Icon
         size={16}

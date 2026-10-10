@@ -19,10 +19,10 @@ export interface ButtonProps
 /**
  * Shared button primitive. Four variants cover every in-app use:
  *
- *   primary   — the main CTA on a screen; filled accent color.
- *   secondary — neutral action (Refresh, Choose file); bordered.
- *   ghost     — subtle tertiary (Dismiss, icon-only); border-less.
- *   danger    — destructive (Delete, Uninstall); red border.
+ *   primary   — the main CTA on a screen; a coral pill with a soft glow.
+ *   secondary — neutral action (Refresh, Choose file); a white glass pill.
+ *   ghost     — subtle tertiary (Dismiss, icon-only); bare until hovered.
+ *   danger    — destructive (Delete, Uninstall); glass pill in red.
  *
  * Three sizes:
  *   sm — header actions and inline row actions (default).
@@ -61,8 +61,8 @@ export function Button({
   const base =
     // `shrink-0`: a button keeps its label; a tight row wraps (or the call site
     // gives room) rather than ellipsizing "Refresh" to "Ref…".
-    "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-[var(--radius-control)] font-semibold " +
-    "transition-[background-color,border-color,color,transform,box-shadow] active:translate-y-px " +
+    "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-medium " +
+    "transition-[background-color,border-color,color,transform,box-shadow,filter] active:translate-y-px " +
     "disabled:cursor-not-allowed disabled:opacity-50";
 
   // `max-md:min-h-11` enforces the 44px touch floor (mobile-design §4.1)
@@ -77,22 +77,22 @@ export function Button({
 
   const sizing =
     size === "lg"
-      ? "px-5 py-2.5 text-sm"
+      ? "px-6 py-3 text-sm"
       : size === "md"
-        ? "px-4 py-2 text-sm"
-        : "px-3 py-1.5 text-xs";
+        ? "px-5 py-2 text-sm"
+        : "px-3.5 py-1.5 text-xs";
 
   const spinnerSize = size === "lg" ? 16 : size === "md" ? 14 : 12;
 
   const variants: Record<ButtonVariant, string> = {
     primary:
-      "border border-transparent bg-[var(--color-accent)] text-[var(--color-accent-contrast)] shadow-sm hover:brightness-110",
+      "border border-transparent bg-[image:var(--accent-fill)] font-semibold text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105 hover:shadow-[0_14px_30px_-10px_var(--color-accent-bright)]",
     secondary:
-      "border border-[var(--color-border)] bg-[var(--color-surface-raised)] text-[var(--color-text)] shadow-sm hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-3)]",
+      "border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] text-[var(--color-text)] shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)]",
     ghost:
       "border border-transparent text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]",
     danger:
-      "border border-[var(--color-bad)] bg-[var(--color-surface-raised)] text-[var(--color-bad)] hover:bg-[var(--color-bad-soft)]",
+      "border border-[color-mix(in_srgb,var(--color-bad)_45%,transparent)] bg-[var(--color-surface-raised)] text-[var(--color-bad)] hover:bg-[var(--color-bad-soft)]",
   };
 
   return (

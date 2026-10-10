@@ -1,56 +1,44 @@
 @import "tailwindcss";
 
 /*
- * ─── ps5upload v3 design system — "Control Deck" ─────────────────────────
+ * ─── ps5upload design system — "Sense" ───────────────────────────────────
  *
  * Theme tokens are referenced everywhere via `var(--color-*)` through
  * Tailwind's arbitrary-value syntax (e.g. `bg-[var(--color-surface)]`).
  * Switching themes only needs to redefine the tokens; no component has
  * to know which theme is active.
  *
- * Default (no data-theme attr) = dark. The theme store rewrites
- * `document.documentElement.dataset.theme` to "light" when the user
- * toggles, which overrides the `@theme` tokens via `:root[data-theme="light"]`.
+ * Two modes. Dark is the attribute-less default; the theme store sets
+ * `data-theme="light"` on <html> for light (state/theme.ts).
  *
- * v3 direction: console-grade "machined panel" depth instead of flat
- * borders — every theme now also defines an elevation ramp (--shadow-1..3),
- * a top-edge highlight for raised panels (--edge-highlight), and a subtle
- * background atmosphere (--atmosphere). The accent is a more luminous
- * PlayStation blue (hue 255). Type identity deliberately stays on the
- * system stack: the app ships in 17 languages including Arabic, Thai,
- * Hindi and Japanese, and a custom Latin display font would fracture
- * those scripts — the brand carries through color, depth and motion.
+ * The look: everything floats on a soft atmospheric wash (warm peach, rose
+ * and lavender by day; aubergine and indigo with an ember and a violet glow
+ * by night). Surfaces are frosted glass — translucent white with a bright
+ * white edge and very large radii — so the wash shows through. One warm
+ * coral accent, used sparingly. Type is Poppins, bundled (no network), with
+ * the system stack behind it so scripts Poppins lacks (CJK, Arabic, Thai,
+ * Bengali) fall back per glyph.
+ *
+ * The colour tokens live on :root, NOT in Tailwind's @theme. Tailwind inlines
+ * @theme values into arbitrary values it can resolve at build time (it turned
+ * `bg-[color-mix(in_oklab,var(--color-surface-2)_94%,…)]` into the dark
+ * theme's literal colours), which painted dark bands into the light theme.
+ * Plain custom properties are never inlined, so every theme switch reaches
+ * every class.
+ *
+ * Contrast (WCAG, body text on the glass over the brightest/most saturated
+ * part of the wash; measured with the alpha-composited colour):
+ *   light  text  ≥ 10.2:1   muted ≥ 5.2:1 (sidebar canvas) / ≥ 6.6:1 (cards)
+ *          accent text ≥ 4.9:1 on cards; white on the primary fill ≥ 4.6:1
+ *   dark   text  ≥ 10.0:1   muted ≥ 4.8:1                accent ≥ 4.9:1
+ *          dark text on the primary fill ≥ 6.9:1
  */
 
-/* PS5 Dark — the console's black-plastic centre panel: a deep, cool
- * charcoal (not pure black), lit by the PlayStation-blue accent. */
 @theme {
-  --color-surface: oklch(0.17 0.013 262);
-  --color-surface-2: oklch(0.21 0.014 260);
-  --color-surface-3: oklch(0.258 0.015 258);
-  --color-border: oklch(0.31 0.02 258);
-  --color-border-strong: oklch(0.41 0.025 256);
-  --color-muted: oklch(0.70 0.025 252);
-  --color-text: oklch(0.955 0.008 250);
-  --color-accent: oklch(0.7 0.17 255);
-  --color-accent-contrast: oklch(0.1 0.02 255);
-  /* Soft accent for hover/selected chip backgrounds that should read
-   * as "accent-adjacent" without competing with the primary accent. */
-  --color-accent-soft: oklch(0.34 0.09 255);
-  --color-good: oklch(0.78 0.14 150);
-  --color-good-soft: oklch(0.3 0.07 150);
-  --color-warn: oklch(0.82 0.15 75);
-  --color-warn-soft: oklch(0.32 0.08 75);
-  --color-bad: oklch(0.72 0.2 25);
-  --color-bad-soft: oklch(0.26 0.1 25);
-  /* Platform badge colors (Installed Apps): PS4 = blue, PS5 = violet.
-   * Tuned per theme — lighter text on dark surfaces, darker on light. */
-  --color-ps4: oklch(0.7 0.14 255);
-  --color-ps4-soft: oklch(0.3 0.07 255);
-  --color-ps5: oklch(0.72 0.15 295);
-  --color-ps5-soft: oklch(0.32 0.08 295);
-  /* Hero logo drop shadow (About screen) — heavy on dark, soft on light. */
-  --shadow-logo: 0 12px 40px -10px rgba(0, 0, 0, 0.5);
+  /* Poppins first; the system stack catches every glyph it does not have. */
+  --font-sans:
+    "Poppins", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans",
+    Helvetica, Arial, sans-serif;
   /* Monospace gets a proper stack (paths, content-ids, kernel strings are
    * everywhere in this app) instead of the browser default. */
   --font-mono:
@@ -58,164 +46,180 @@
     "Liberation Mono", monospace;
 }
 
-/* Elevation ramp + atmosphere. Declared on :root (not @theme) because they
- * are consumed only via var() in CSS below and in component classNames —
- * they don't need Tailwind utility generation. */
+/* ── Dark: the same language at night ─────────────────────────────────── */
 :root {
-  /* Raised panel (cards): hairline lift, barely-there. */
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+
+  /* Glass surfaces, from the deepest well to the most raised. */
+  --color-surface: rgb(255 255 255 / 0.05);
+  --color-surface-2: rgb(255 255 255 / 0.075);
+  --color-surface-3: rgb(255 255 255 / 0.11);
+  --color-surface-raised: rgb(255 255 255 / 0.085);
+  /* Floating layers (menus, dialogs): nearly opaque, so what is behind them
+   * never competes with their text. */
+  --color-float: rgb(36 27 46 / 0.94);
+  /* The big rounded canvas the desktop shell sits in. */
+  --color-canvas: rgb(255 255 255 / 0.035);
+  --glass-edge: rgb(255 255 255 / 0.13);
+  /* The active nav pill / chip: the solid white pill of the reference. */
+  --color-pill: rgb(255 255 255 / 0.14);
+
+  --color-border: rgb(255 255 255 / 0.1);
+  --color-border-strong: rgb(255 255 255 / 0.2);
+  --color-muted: #c2b3ba;
+  --color-text: #f6eee9;
+  --color-accent: #ff8a63;
+  --color-accent-contrast: #1d1118;
+  /* Soft accent for hover/selected chip backgrounds that should read
+   * as "accent-adjacent" without competing with the primary accent. */
+  --color-accent-soft: rgb(255 138 99 / 0.16);
+  /* The bright coral of the reference: icons, the arrow buttons, the orb. */
+  --color-accent-bright: #ff7a4f;
+  --color-accent-pink: #f06a92;
+  --accent-fill: linear-gradient(135deg, #ff8a63 0%, #f2708f 100%);
+  --accent-glow: 0 10px 28px -10px rgb(255 110 80 / 0.55);
+
+  --color-good: #5fd39a;
+  --color-good-soft: rgb(95 211 154 / 0.14);
+  --color-warn: #f4b64e;
+  --color-warn-soft: rgb(244 182 78 / 0.14);
+  --color-bad: #ff7a85;
+  --color-bad-soft: rgb(255 122 133 / 0.14);
+  /* Platform badge colors (Installed Apps): PS4 = blue, PS5 = violet. */
+  --color-ps4: #8fb0ff;
+  --color-ps4-soft: rgb(143 176 255 / 0.15);
+  --color-ps5: #c3a2ff;
+  --color-ps5-soft: rgb(195 162 255 / 0.15);
+
+  /* Hero logo drop shadow (About screen). */
+  --shadow-logo: 0 12px 40px -10px rgb(0 0 0 / 0.5);
+  /* Raised panel (cards): a wide, faint shadow. */
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.2), 0 12px 32px -16px rgb(0 0 0 / 0.45);
   /* Floating chrome (menus, popovers). */
-  --shadow-2: 0 4px 16px -4px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 16px 40px -14px rgb(0 0 0 / 0.6);
   /* Modal layer. */
-  --shadow-3: 0 16px 48px -12px rgba(0, 0, 0, 0.65);
-  /* Machined top edge on raised panels: a 1px light catch along the top,
-   * like a chamfered aluminum edge under overhead light. */
-  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.045);
-  /* Background atmosphere: a faint accent-tinted glow bleeding down from
-   * the top of the window so large empty regions feel lit, not void. */
-  --atmosphere: radial-gradient(
-    120% 70% at 50% -10%,
-    oklch(0.28 0.06 255 / 0.35),
-    transparent 60%
-  );
-  --overlay-scrim: rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 30px 80px -20px rgb(0 0 0 / 0.7);
+  /* The bright top edge of a glass panel. */
+  --edge-highlight: inset 0 1px 0 rgb(255 255 255 / 0.08);
+  --overlay-scrim: rgb(8 4 14 / 0.55);
+
+  /* The wash every surface floats on. */
+  --atmosphere-base: #150f1d;
+  --atmosphere:
+    radial-gradient(55% 55% at 0% 0%, rgb(255 120 70 / 0.2), transparent 70%),
+    radial-gradient(60% 60% at 100% 100%, rgb(130 90 255 / 0.26), transparent 70%),
+    radial-gradient(50% 45% at 45% 110%, rgb(225 80 140 / 0.14), transparent 70%),
+    linear-gradient(160deg, #1c1322 0%, #171225 45%, #12142c 100%);
+  --dot-color: rgb(255 170 150 / 0.12);
+
+  --glass-blur: 28px;
 
   /* Product shell — one shared rhythm for every screen. */
-  --color-surface-raised: color-mix(
-    in oklab,
-    var(--color-surface-2) 92%,
-    var(--color-text) 8%
-  );
-  --color-accent-glow: color-mix(
-    in oklab,
-    var(--color-accent) 22%,
-    transparent
-  );
-  --radius-control: 0.625rem;
-  --radius-panel: 0.875rem;
-  --content-max: 76rem;
+  --color-accent-glow: rgb(255 138 99 / 0.22);
+  --radius-control: 999px;
+  --radius-field: 1rem;
+  --radius-card: 1.5rem;
+  --radius-panel: 1.75rem;
+  --radius-canvas: 2.25rem;
+  --content-max: 80rem;
 }
 
-/* PS5 Light — the console's white-plastic outer panels: a clean, cool
- * bright white with the PlayStation-blue accent. */
+/* ── Light: the reference ─────────────────────────────────────────────── */
 :root[data-theme="light"] {
-  --color-surface: oklch(0.975 0.004 255);
-  --color-surface-2: oklch(0.945 0.006 252);
-  --color-surface-3: oklch(0.905 0.01 252);
-  --color-border: oklch(0.86 0.012 252);
-  --color-border-strong: oklch(0.75 0.016 252);
-  --color-muted: oklch(0.49 0.02 252);
-  --color-text: oklch(0.21 0.02 250);
-  --color-accent: oklch(0.52 0.19 255);
-  --color-accent-contrast: oklch(0.99 0.005 250);
-  --color-accent-soft: oklch(0.92 0.05 255);
-  --color-good: oklch(0.52 0.14 150);
-  --color-good-soft: oklch(0.92 0.05 150);
-  --color-warn: oklch(0.6 0.14 75);
-  --color-warn-soft: oklch(0.94 0.05 75);
-  --color-bad: oklch(0.54 0.2 25);
-  --color-bad-soft: oklch(0.94 0.05 25);
-  --color-ps4: oklch(0.48 0.16 255);
-  --color-ps4-soft: oklch(0.92 0.05 255);
-  --color-ps5: oklch(0.48 0.18 295);
-  --color-ps5-soft: oklch(0.93 0.05 295);
-  --shadow-logo: 0 12px 40px -10px rgba(0, 0, 0, 0.15);
-  --shadow-1: 0 1px 2px rgba(30, 41, 59, 0.08);
-  --shadow-2: 0 4px 16px -4px rgba(30, 41, 59, 0.18);
-  --shadow-3: 0 16px 48px -12px rgba(30, 41, 59, 0.25);
-  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  --atmosphere: radial-gradient(
-    120% 70% at 50% -10%,
-    oklch(0.93 0.025 255 / 0.55),
-    transparent 60%
-  );
-  --overlay-scrim: rgba(15, 23, 42, 0.3);
+  color-scheme: light;
+
+  --color-surface: rgb(255 255 255 / 0.5);
+  --color-surface-2: rgb(255 255 255 / 0.66);
+  --color-surface-3: rgb(92 60 70 / 0.075);
+  --color-surface-raised: rgb(255 255 255 / 0.72);
+  --color-float: rgb(255 250 249 / 0.94);
+  --color-canvas: rgb(255 255 255 / 0.38);
+  --glass-edge: rgb(255 255 255 / 0.92);
+  --color-pill: #ffffff;
+
+  --color-border: rgb(92 60 70 / 0.13);
+  --color-border-strong: rgb(92 60 70 / 0.26);
+  --color-muted: #5c4d50;
+  --color-text: #2a2224;
+  --color-accent: #bf3a25;
+  --color-accent-contrast: #ffffff;
+  --color-accent-soft: rgb(255 107 61 / 0.14);
+  --color-accent-bright: #ff6b3d;
+  --color-accent-pink: #f0508a;
+  --accent-fill: linear-gradient(135deg, #d0431f 0%, #c73a5c 100%);
+  --accent-glow: 0 10px 24px -10px rgb(232 85 50 / 0.6);
+
+  --color-good: #1d7346;
+  --color-good-soft: rgb(29 115 70 / 0.12);
+  --color-warn: #8a5200;
+  --color-warn-soft: rgb(214 140 30 / 0.16);
+  --color-bad: #b4232f;
+  --color-bad-soft: rgb(220 50 70 / 0.12);
+  --color-ps4: #2a55b8;
+  --color-ps4-soft: rgb(42 85 184 / 0.12);
+  --color-ps5: #6b3fc4;
+  --color-ps5-soft: rgb(107 63 196 / 0.12);
+
+  --shadow-logo: 0 12px 40px -10px rgb(120 60 60 / 0.25);
+  --shadow-1: 0 1px 2px rgb(120 70 60 / 0.05), 0 14px 34px -18px rgb(120 70 60 / 0.3);
+  --shadow-2: 0 18px 40px -16px rgb(120 70 60 / 0.35);
+  --shadow-3: 0 34px 90px -26px rgb(110 60 70 / 0.45);
+  --edge-highlight: inset 0 1px 0 rgb(255 255 255 / 0.95);
+  --overlay-scrim: rgb(80 45 60 / 0.22);
+
+  --atmosphere-base: #ebe7e6;
+  --atmosphere:
+    radial-gradient(60% 65% at 0% 80%, rgb(232 176 146 / 0.85), transparent 70%),
+    radial-gradient(55% 50% at 45% 108%, rgb(236 150 175 / 0.9), transparent 70%),
+    radial-gradient(55% 65% at 100% 100%, rgb(196 160 245 / 0.95), transparent 70%),
+    linear-gradient(180deg, #ebe9e9 0%, #ebe5e3 55%, #ead9db 100%);
+  --dot-color: rgb(230 120 120 / 0.22);
+
+  --color-accent-glow: rgb(255 107 61 / 0.18);
 }
 
-/* OLED variant of the dark theme.
- *
- * Pure-#000 background instead of the standard dark theme's slight
- * lift. The point is to mitigate burn-in on OLED panels — every pixel
- * set to #000 is literally off, which both reduces the heat budget and
- * removes the "ghost image" risk for persistent UI like the sidebar.
- * Surfaces step up by very small amounts so card boundaries remain
- * visible without forcing the panel to drive low-luminance pixels
- * (which is where banding shows up on OLED).
- *
- * No atmosphere gradient on OLED — the whole point is pixels-off black.
- * Colours are cooler-shifted than the dark theme by design — pure
- * black backgrounds make slightly-warm greys read as muddy. */
-:root[data-theme="oled"] {
-  --color-surface: oklch(0 0 0);
-  --color-surface-2: oklch(0.1 0.005 250);
-  --color-surface-3: oklch(0.16 0.005 250);
-  --color-border: oklch(0.22 0.005 250);
-  --color-border-strong: oklch(0.32 0.005 250);
-  --color-muted: oklch(0.62 0.012 250);
-  --color-text: oklch(0.96 0.005 250);
-  --color-accent: oklch(0.72 0.17 255);
-  --color-accent-contrast: oklch(0 0 0);
-  --color-accent-soft: oklch(0.22 0.07 255);
-  --color-good: oklch(0.8 0.14 150);
-  --color-good-soft: oklch(0.18 0.06 150);
-  --color-warn: oklch(0.84 0.15 75);
-  --color-warn-soft: oklch(0.2 0.07 75);
-  --color-bad: oklch(0.74 0.2 25);
-  --color-bad-soft: oklch(0.16 0.1 25);
-  --color-ps4: oklch(0.72 0.14 255);
-  --color-ps4-soft: oklch(0.2 0.06 255);
-  --color-ps5: oklch(0.74 0.15 295);
-  --color-ps5-soft: oklch(0.22 0.07 295);
-  --shadow-logo: 0 12px 40px -10px rgba(0, 0, 0, 0.6);
-  --shadow-1: none;
-  --shadow-2: 0 4px 16px -4px rgba(0, 0, 0, 0.8);
-  --shadow-3: 0 16px 48px -12px rgba(0, 0, 0, 0.9);
-  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --atmosphere: none;
-  --overlay-scrim: rgba(0, 0, 0, 0.6);
+/* High contrast: opaque surfaces, no blur, stronger lines, unmuted text. */
+:root[data-contrast="high"] {
+  --color-surface: #1b1522;
+  --color-surface-2: #231b2c;
+  --color-surface-3: #31283b;
+  --color-surface-raised: #261e30;
+  --color-float: #261e30;
+  --color-canvas: #18121f;
+  --glass-edge: rgb(255 255 255 / 0.4);
+  --glass-blur: 0px;
+}
+:root[data-theme="light"][data-contrast="high"] {
+  --color-surface: #ffffff;
+  --color-surface-2: #ffffff;
+  --color-surface-3: #ece5e6;
+  --color-surface-raised: #ffffff;
+  --color-float: #ffffff;
+  --color-canvas: #faf7f7;
+  --glass-edge: rgb(60 30 40 / 0.45);
+  --color-border: rgb(60 30 40 / 0.35);
+  --color-border-strong: rgb(60 30 40 / 0.6);
 }
 
-/* Rose — a warm, bright theme built around a bold rose accent.
- *
- * Surfaces are a warm off-white with a barely-there pink tint (very low
- * chroma at hue ~350) so the screen reads soft and light rather than
- * clinical, while the deep rose accent (the signature) carries the
- * personality on buttons, links, and selected states. Text stays a dark
- * warm plum for strong, comfortable contrast on the pale surface. The
- * semantic good/warn/bad and PS4/PS5 badge colours are kept distinct from
- * the rose accent so status never reads as "just pink". */
-:root[data-theme="rose"] {
-  --color-surface: oklch(0.985 0.006 350);
-  --color-surface-2: oklch(0.96 0.012 350);
-  --color-surface-3: oklch(0.925 0.022 350);
-  --color-border: oklch(0.88 0.025 350);
-  --color-border-strong: oklch(0.76 0.04 350);
-  --color-muted: oklch(0.5 0.045 350);
-  --color-text: oklch(0.26 0.045 350);
-  --color-accent: oklch(0.56 0.21 350);
-  --color-accent-contrast: oklch(0.99 0.005 350);
-  --color-accent-soft: oklch(0.93 0.06 350);
-  --color-good: oklch(0.54 0.13 158);
-  --color-good-soft: oklch(0.93 0.05 158);
-  --color-warn: oklch(0.62 0.14 65);
-  --color-warn-soft: oklch(0.95 0.05 65);
-  --color-bad: oklch(0.55 0.22 22);
-  --color-bad-soft: oklch(0.95 0.05 22);
-  --color-ps4: oklch(0.48 0.16 255);
-  --color-ps4-soft: oklch(0.92 0.05 255);
-  --color-ps5: oklch(0.5 0.2 305);
-  --color-ps5-soft: oklch(0.93 0.05 305);
-  --shadow-logo: 0 12px 40px -10px oklch(0.56 0.21 350 / 0.25);
-  --shadow-1: 0 1px 2px oklch(0.4 0.1 350 / 0.1);
-  --shadow-2: 0 4px 16px -4px oklch(0.4 0.12 350 / 0.2);
-  --shadow-3: 0 16px 48px -12px oklch(0.4 0.12 350 / 0.28);
-  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.8);
-  --atmosphere: radial-gradient(
-    120% 70% at 50% -10%,
-    oklch(0.9 0.05 350 / 0.6),
-    transparent 60%
-  );
-  --overlay-scrim: oklch(0.3 0.08 350 / 0.32);
+/* No blur when the system asks for less transparency, or when motion is cut
+ * down (blur repaints are the heaviest thing on the screen). The glass then
+ * gets more opaque so text keeps its contrast without the frosting. */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-blur: 0px;
+    --color-surface-2: rgb(44 34 54 / 0.92);
+    --color-surface-raised: rgb(48 37 58 / 0.92);
+    --color-canvas: rgb(30 22 38 / 0.9);
+  }
+  :root[data-theme="light"] {
+    --color-surface-2: rgb(255 255 255 / 0.9);
+    --color-surface-raised: rgb(255 255 255 / 0.92);
+    --color-canvas: rgb(255 255 255 / 0.75);
+  }
+}
+:root[data-motion="reduced"],
+:root[data-motion="none"] {
+  --glass-blur: 0px;
 }
 
 html,
@@ -224,16 +228,8 @@ body,
   height: 100%;
   height: 100dvh;
   margin: 0;
-  background: var(--color-surface);
   color: var(--color-text);
-  font-family:
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    Roboto,
-    Helvetica,
-    Arial,
-    sans-serif;
+  font-family: var(--font-sans);
   /* Base size that scales the whole app: every Tailwind text/spacing class
    * is rem-based, so this one value proportionally enlarges text AND layout.
    * 18px (up from the 16px OS baseline) for comfortable, human-friendly
@@ -261,6 +257,21 @@ body,
   overflow: hidden;
 }
 
+/* The atmosphere: painted once on <html> and fixed, so every glass surface
+ * above it frosts the same wash. */
+html {
+  background-color: var(--atmosphere-base);
+  background-image: var(--atmosphere);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
+body,
+#root {
+  background: transparent;
+}
+
 /* v5 §6.3 (mobile): kill the browser's pull-to-refresh globally. Also
  * prevents scroll chaining (a scroll reaching the edge propagating to
  * body). */
@@ -274,7 +285,7 @@ body {
   width: 100%;
   max-width: var(--content-max);
   margin-inline: auto;
-  padding: 1.5rem;
+  padding: 1.75rem 2rem 2.5rem;
 }
 
 .page-kicker {
@@ -282,112 +293,164 @@ body {
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.45rem;
-  color: var(--color-accent);
+  color: var(--color-muted);
   font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
+  font-weight: 500;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
+/* ── Glass ────────────────────────────────────────────────────────────────
+ * Frosted panels. `.glass` is the heavy one (backdrop blur) for the few big
+ * or floating surfaces; `.surface-panel` is the card treatment without blur,
+ * which looks the same over the wash and costs nothing to scroll (long lists
+ * of cards, Android WebView). */
+.glass {
+  background: var(--color-surface-2);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--edge-highlight), var(--shadow-1);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+}
+
+.glass-float {
+  background: var(--color-float);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--edge-highlight), var(--shadow-2);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+}
+
 .surface-panel {
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--glass-edge);
   border-radius: var(--radius-panel);
   background: var(--color-surface-raised);
   box-shadow: var(--edge-highlight), var(--shadow-1);
 }
 
-.dashboard-hero {
+/* The faint dotted texture of the reference, fading out from the centre. */
+.dot-texture {
+  background-image: radial-gradient(var(--dot-color) 1.2px, transparent 1.6px);
+  background-size: 12px 12px;
+  -webkit-mask-image: radial-gradient(closest-side, #000 30%, transparent 100%);
+  mask-image: radial-gradient(closest-side, #000 30%, transparent 100%);
+}
+
+/* The brand orb: a glossy coral-to-pink sphere with a soft highlight. Sized
+ * by the component (components/Orb.tsx); everything else is here so it
+ * renders the same everywhere. */
+.orb {
   position: relative;
-  isolation: isolate;
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  overflow: hidden;
-  padding: 1.1rem 1.25rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-panel);
+  display: inline-block;
+  flex: none;
+  border-radius: 9999px;
   background:
-    linear-gradient(105deg, var(--color-surface-raised), var(--color-surface-2));
-  box-shadow: var(--edge-highlight), var(--shadow-1);
+    radial-gradient(circle at 32% 26%, rgb(255 255 255 / 0.85) 0%, rgb(255 255 255 / 0) 30%),
+    radial-gradient(circle at 70% 78%, #f0508a 0%, rgb(240 80 138 / 0) 60%),
+    radial-gradient(circle at 40% 40%, #ff9a6b 0%, #ff6b3d 45%, #e2405f 100%);
+  box-shadow:
+    inset -4px -6px 14px rgb(160 30 60 / 0.35),
+    inset 3px 4px 10px rgb(255 255 255 / 0.35),
+    0 10px 24px -6px rgb(240 90 70 / 0.55);
 }
 
-.dashboard-hero::after {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  inset: -100% -8% -100% 58%;
-  opacity: 0.7;
-  background: radial-gradient(circle, var(--color-accent-glow), transparent 62%);
-  pointer-events: none;
-}
-
-.dashboard-hero.is-offline::after {
-  background: radial-gradient(
-    circle,
-    color-mix(in oklab, var(--color-warn) 13%, transparent),
-    transparent 62%
-  );
-}
-
-.dashboard-hero-icon {
-  display: grid;
+/* White circular icon button (the bell / avatar of the reference). */
+.icon-orb-button {
+  display: inline-grid;
+  place-items: center;
   width: 2.75rem;
   height: 2.75rem;
   flex: none;
-  place-items: center;
-  border: 1px solid color-mix(in oklab, var(--color-accent) 25%, var(--color-border));
-  border-radius: 0.8rem;
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-}
-
-.dashboard-hero.is-offline .dashboard-hero-icon {
-  border-color: color-mix(in oklab, var(--color-warn) 28%, var(--color-border));
-  background: var(--color-warn-soft);
-  color: var(--color-warn);
-}
-
-.action-tile {
-  display: flex;
-  min-height: 4.25rem;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.75rem;
-  background: color-mix(in oklab, var(--color-surface) 54%, transparent);
-  text-align: left;
+  border-radius: 9999px;
+  border: 1px solid var(--glass-edge);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  box-shadow: var(--edge-highlight), var(--shadow-1);
   transition:
     transform 140ms ease,
-    border-color 140ms ease,
-    background-color 140ms ease;
+    background-color 140ms ease,
+    box-shadow 140ms ease;
 }
-
-.action-tile:not([aria-disabled="true"]):hover {
+.icon-orb-button:hover {
+  background: var(--color-float);
   transform: translateY(-1px);
-  border-color: color-mix(in oklab, var(--color-accent) 55%, var(--color-border));
-  background: var(--color-surface-3);
 }
 
-.action-tile[aria-disabled="true"] {
+/* Framed image tile: a thick white frame around a soft generated "photo",
+ * the label on the image bottom-left and a white round arrow button. */
+.photo-tile {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  padding: 0.5rem;
+  border-radius: var(--radius-panel);
+  background: rgb(255 255 255 / 0.85);
+  box-shadow: var(--shadow-1);
+  transition:
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 180ms ease;
+}
+:root:not([data-theme="light"]) .photo-tile {
+  background: rgb(255 255 255 / 0.12);
+  border: 1px solid var(--glass-edge);
+}
+.photo-tile:not([aria-disabled="true"]):hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-2);
+}
+.photo-tile[aria-disabled="true"] {
   cursor: not-allowed;
-  opacity: 0.56;
 }
-
-.action-tile-icon {
+.photo-tile[aria-disabled="true"] .photo-tile-image {
+  filter: grayscale(0.7) brightness(1.02);
+  opacity: 0.7;
+}
+.photo-tile-image {
+  position: relative;
+  isolation: isolate;
+  height: 100%;
+  overflow: hidden;
+  border-radius: calc(var(--radius-panel) - 0.5rem);
+}
+/* Long-exposure streaks over the generated photo: soft light bands that
+ * make the mesh read as a blurred photograph rather than a flat gradient. */
+.photo-tile-image::before {
+  content: "";
+  position: absolute;
+  inset: -10%;
+  z-index: 0;
+  background:
+    radial-gradient(55% 3.5% at 32% 36%, rgb(255 255 255 / 0.7), transparent),
+    radial-gradient(40% 2.5% at 66% 50%, rgb(255 255 255 / 0.6), transparent),
+    radial-gradient(65% 4.5% at 44% 62%, rgb(255 255 255 / 0.45), transparent),
+    radial-gradient(30% 2.5% at 22% 26%, rgb(255 255 255 / 0.5), transparent),
+    radial-gradient(45% 3.5% at 74% 30%, rgb(255 236 224 / 0.6), transparent),
+    radial-gradient(35% 2% at 58% 72%, rgb(255 255 255 / 0.45), transparent);
+  /* Each tile turns the streaks its own way (--streak, set per tile). */
+  transform: var(--streak, rotate(-7deg));
+  filter: blur(2.5px);
+  pointer-events: none;
+}
+/* The soft lower fade the label sits on. */
+.photo-tile-image::after {
+  content: "";
+  position: absolute;
+  inset: 40% 0 0;
+  background: linear-gradient(180deg, transparent, rgb(255 255 255 / 0.78));
+  pointer-events: none;
+}
+:root:not([data-theme="light"]) .photo-tile-image::after {
+  background: linear-gradient(180deg, transparent, rgb(20 12 28 / 0.72));
+}
+.photo-tile-arrow {
   display: grid;
-  width: 2.35rem;
-  height: 2.35rem;
-  flex: none;
   place-items: center;
-  border-radius: 0.65rem;
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-}
-
-.action-tile[aria-disabled="true"] .action-tile-icon {
-  background: var(--color-surface-3);
-  color: var(--color-muted);
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 9999px;
+  background: #fff;
+  color: var(--color-accent-bright);
+  box-shadow: 0 6px 16px -6px rgb(120 60 50 / 0.45);
 }
 
 .metric-row {
@@ -396,7 +459,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  border-bottom: 1px solid color-mix(in oklab, var(--color-border) 68%, transparent);
+  border-bottom: 1px solid var(--color-border);
   font-size: 0.8125rem;
 }
 
@@ -404,13 +467,67 @@ body {
   border-bottom: 0;
 }
 
-/* The window atmosphere — painted on #root so it sits under the app shell.
- * Most screens are transparent containers over it; solid surface-2 cards
- * float above it with their elevation shadows. */
-#root {
-  background-color: var(--color-surface);
-  background-image: var(--atmosphere);
-  background-repeat: no-repeat;
+/* Chip: a pill filter. Active = white filled, inactive = hairline outline.
+ * Colour and shape only: size comes from the caller's utilities (this sheet
+ * is unlayered, so anything set here would beat them). */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text);
+  white-space: nowrap;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+.chip:hover {
+  background: var(--color-surface);
+}
+.chip[aria-pressed="true"],
+.chip[aria-checked="true"],
+.chip[aria-selected="true"],
+.chip.is-active {
+  border-color: var(--glass-edge);
+  background: var(--color-pill);
+  font-weight: 600;
+  box-shadow: var(--edge-highlight), var(--shadow-1);
+}
+
+/* The desktop shell: one big rounded glass canvas floating on the wash, with
+ * the sidebar and the content inside it. Phones keep the full-bleed layout. */
+@media (min-width: 768px) {
+  .shell-canvas {
+    overflow: hidden;
+    border: 1px solid var(--glass-edge);
+    border-radius: var(--radius-canvas);
+    background: var(--color-canvas);
+    box-shadow: var(--edge-highlight), var(--shadow-3);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  }
+}
+
+/* Sidebar nav item: a pill. Active = the white pill with a coral icon. */
+.nav-pill {
+  color: var(--color-text);
+}
+.nav-pill:hover {
+  background: var(--color-surface);
+}
+.nav-pill.active,
+.nav-pill[aria-current="page"] {
+  background: var(--color-pill);
+  font-weight: 600;
+  box-shadow: var(--edge-highlight), var(--shadow-1);
+}
+.nav-pill .nav-pill-icon {
+  color: var(--color-muted);
+}
+.nav-pill.active .nav-pill-icon,
+.nav-pill[aria-current="page"] .nav-pill-icon {
+  color: var(--color-accent-bright);
 }
 
 * {
@@ -433,7 +550,6 @@ body {
 :where(a, button, [role="button"], [role="menuitem"], [role="tab"], [tabindex]):focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
-  border-radius: 6px;
 }
 
 :where(input, select, textarea):focus-visible {
@@ -594,13 +710,13 @@ body {
   animation: ps-sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-/* Skeleton shimmer: a moving light band over a surface-3 base. */
+/* Skeleton shimmer: a moving light band over the glass. */
 .anim-skeleton {
   background: linear-gradient(
     100deg,
-    var(--color-surface-2) 40%,
-    var(--color-surface-3) 50%,
-    var(--color-surface-2) 60%
+    var(--color-surface-3) 40%,
+    var(--color-surface-raised) 50%,
+    var(--color-surface-3) 60%
   );
   background-size: 200% 100%;
   /* 2.2s (was 1.6s) — a slower, gentler sweep reads as "loading" rather than
@@ -623,16 +739,6 @@ body {
 @media (max-width: 767px) {
   .app-page {
     padding: 1rem;
-  }
-
-  .dashboard-hero {
-    align-items: flex-start;
-    flex-wrap: wrap;
-    padding: 1rem;
-  }
-
-  .dashboard-hero > :last-child {
-    width: 100%;
   }
 }
 
@@ -895,24 +1001,39 @@ input[type="radio"] {
  * Used by v4.3+ screens as a shorthand for the standard input/chip styling.
  * Keeps the Tailwind utility soup out of every form field while respecting
  * the theme system (all colors are CSS vars). */
+/* Fields are rounded glass: a white-edged well that turns coral-edged on
+ * focus. Single-line fields are pills; a textarea keeps a large radius
+ * (`textarea.input` below) so its corners don't eat the text. */
 .input {
   width: 100%;
   border-radius: var(--radius-control);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--glass-edge);
   background: var(--color-surface-raised);
-  padding: 0.375rem 0.625rem;
+  box-shadow: inset 0 1px 2px rgb(60 30 40 / 0.06);
+  padding: 0.45rem 0.9rem;
   font-size: 0.875rem;
   color: var(--color-text);
-  transition: border-color 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
-.input:focus {
+:root[data-theme="light"] .input,
+:root[data-theme="light"] .select {
+  border-color: rgb(92 60 70 / 0.12);
+}
+textarea.input {
+  border-radius: var(--radius-field);
+}
+.input:focus,
+.select:focus {
   border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 .input::placeholder {
   color: var(--color-muted);
 }
 .input-sm {
-  padding: 0.25rem 0.5rem;
+  padding: 0.25rem 0.7rem;
   font-size: 0.75rem;
 }
 
@@ -936,15 +1057,21 @@ input[type="radio"] {
 .select {
   width: 100%;
   border-radius: var(--radius-control);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--glass-edge);
   background: var(--color-surface-raised);
-  padding: 0.375rem 0.625rem;
+  padding: 0.45rem 0.9rem;
   font-size: 0.875rem;
   color: var(--color-text);
-  transition: border-color 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
-.select:focus {
-  border-color: var(--color-accent);
+/* Native option lists are drawn by the OS on an opaque sheet; glass tokens
+ * would leave them transparent. */
+.select option,
+select option {
+  background: var(--color-float);
+  color: var(--color-text);
 }
 .radio {
   accent-color: var(--color-accent);
@@ -961,9 +1088,9 @@ input[type="radio"] {
   align-items: center;
   gap: 0.25rem;
   border-radius: 9999px;
-  padding: 0.125rem 0.5rem;
+  padding: 0.15rem 0.6rem;
   font-size: 0.75rem;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1;
 }
 .badge-sm {

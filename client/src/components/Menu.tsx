@@ -170,7 +170,7 @@ export function MenuList({
               item.onSelect();
             }}
             className={[
-              "flex w-full items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-xs transition-colors",
+              "flex w-full items-center gap-2 whitespace-nowrap rounded-full px-3 py-2 text-left text-xs transition-colors",
               "disabled:cursor-not-allowed disabled:opacity-50",
               activeIdx === i
                 ? "bg-[var(--color-surface-3)]"
@@ -220,7 +220,7 @@ export function MenuDropdown({
 
   return (
     <div
-      className="anim-rise elev-2 absolute z-30 my-1 min-w-[200px] max-w-[calc(100vw-1rem)] overflow-y-auto overflow-x-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]"
+      className="anim-rise glass-float elev-2 absolute z-30 my-1 min-w-[200px] max-w-[calc(100vw-1rem)] overflow-y-auto overflow-x-hidden rounded-[var(--radius-card)] p-1.5"
       style={{
         ...menuPositionStyle,
         ...style,
