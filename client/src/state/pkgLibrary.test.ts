@@ -132,7 +132,6 @@ import {
   skipPkgAlternativeSelection,
   PKG_ALTERNATIVE_SKIP,
   PKG_MAY_NOT_LAUNCH_MESSAGE,
-  PKG_ENGINE_BLIND_HINT,
   type PkgEntry,
 } from "./pkgLibrary";
 import { useTaskStore } from "./tasks";
@@ -578,22 +577,6 @@ describe("describeInstallSample (stream state naming)", () => {
     );
     expect(detail).not.toContain("left");
     expect(detail).not.toContain("/s");
-  });
-
-  it("says why the numbers stopped moving when the engine is gone", () => {
-    // The bytes below the line are the last ones we could read. Without the
-    // note the UI showed a frozen bar with no explanation, which reads as
-    // "stuck" — but the install may be running fine and simply unwatched.
-    const s = describeInstallSample({
-      ...base,
-      phase: "install",
-      installedBytes: 1000,
-      note: PKG_ENGINE_BLIND_HINT,
-    });
-    expect(s.detail).toBe(PKG_ENGINE_BLIND_HINT);
-    // The bar still points at the last real progress rather than resetting.
-    expect(s.current).toBe(1000);
-    expect(s.pct).toBe(100);
   });
 
   it("reports the transfer, not the (still zero) install bytes, while streaming", () => {

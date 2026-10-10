@@ -57,8 +57,6 @@ interface PlayTimeState {
   credit: (host: string, titleIds: string[], deltaSec: number) => void;
   /** Reset a single title's count on one console (manual override). */
   reset: (host: string, titleId: string) => void;
-  /** Wipe all counts across every console. */
-  resetAll: () => void;
 }
 
 /** Read one console's accumulated seconds for a title from a snapshot. */
@@ -166,11 +164,6 @@ export const usePlayTimeStore = create<PlayTimeState>((set, get) => ({
       lastSeenByHost: { ...lastSeenByHost, [key]: nextSeen },
       lastSampleMs,
     };
-    set(newState);
-    persist(newState);
-  },
-  resetAll: () => {
-    const newState = { byHost: {}, lastSeenByHost: {}, lastSampleMs: 0 };
     set(newState);
     persist(newState);
   },

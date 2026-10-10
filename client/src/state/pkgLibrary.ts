@@ -29,7 +29,6 @@ import {
 } from "../api/ps5";
 import {
   listVolumes,
-  processList,
   type ExternalPkg,
   type Volume,
 } from "../api/ps5";
@@ -126,14 +125,6 @@ export const PKG_TEMP_DIR = "/user/data/ps5upload/pkg_temp";
 export const PKG_MAY_NOT_LAUNCH_MESSAGE =
   "Installed, but via a fallback that may not launch on this firmware. If the game won't start (“can't start the game or app”), re-install it from the PS5: Settings → System → Debug Settings → Game → Package Installer.";
 
-/** Sony accepted the request, but none of the signals we trust proved that the
- *  asynchronous install finished. This is deliberately a warning rather than
- *  success: callers must keep the source package and must not mark it installed. */
-/** Toast copy for an accepted-but-unverified install (prefixed with the
- *  package name at the call site). */
-export const PKG_INSTALL_UNVERIFIED_TOAST =
-  "is still finishing on the PS5. Large games keep installing for a while after the transfer ends — ps5upload keeps checking, and the staged package is kept until it is confirmed.";
-
 /** Shown when the background re-verify can never succeed for this package —
  *  no title id, and neither a fingerprint nor a size to match an installed
  *  artifact against. Saying "we keep checking" there would be a lie. */
@@ -144,16 +135,6 @@ export const PKG_REVERIFY_IMPOSSIBLE_HINT =
  *  package registering. The row stays open with a Recheck action. */
 export const PKG_REVERIFY_GAVE_UP_HINT =
   "Still not confirmed after 30 minutes. A very large title can take longer — check the PS5's Notifications, or use Recheck to look again.";
-
-export const PKG_ACCEPTED_UNVERIFIED_HINT =
-  "The PS5 accepted the install request, but ps5upload couldn’t verify that installation completed. Check the PS5 home screen and Notifications / Downloads. The staged package was kept so you can retry, or use Settings → System → Debug Settings → Game → Package Installer.";
-
-/** Shown while the app can't reach the engine that is tracking the install.
- *  Deliberately does NOT call the install failed: the engine owns the install
- *  state (and, for a Stream install, is the web server the console is pulling
- *  from), so an unreachable engine means the install is UNWATCHED, not broken. */
-export const PKG_ENGINE_BLIND_HINT =
-  "Lost contact with the ps5upload engine, which is the only thing that can report this install — it may still be running. Still watching; nothing has been cancelled.";
 
 /** Whether an install response indicates the title may not launch.
  *
@@ -1274,33 +1255,6 @@ const READY_POLL_MS = 1_500;
  *  real post-install blip settles well within this. */
 const READY_WAIT_TIMEOUT_MS = 30_000;
 
-/** `http://ip:port` of a pkg-host URL, or null when there is none to show. */
-export function originOf(url: string | undefined): string | null {
-  if (!url) return null;
-  try {
-    return new URL(url).origin;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * A stream the PS5 never fetched a byte of. With no proxy error this is the
- * console failing to reach this computer at all (#327: 0x80431068 on a
- * network with no proxy), so the proxy is the last thing to check, not the
- * only one: a firewall blocking the engine's port inbound is the usual cause.
- */
-export function streamUnreachableMessage(rcHex: string, servedFrom: string | null): string {
-  const where = servedFrom ? ` at ${servedFrom}` : "";
-  return (
-    `The PS5 never reached this computer${where} to fetch the package (${rcHex}). ` +
-    "Allow ps5upload through this computer's firewall (on Windows, for both Private and Public networks), " +
-    "keep the computer and the PS5 on the same network with any VPN off, and set the PS5's Proxy Server to “Do Not Use”. " +
-    "If the address shown is not this computer's LAN address (a VPN, virtual-machine or container address), set PS5UPLOAD_PKG_HOST_IP to the LAN IP and restart the engine. " +
-    "Upload & install works without this connection."
-  );
-}
-
 /**
  * Poll the console-readiness probe (the AppListRegistered round-trip) until it
  * reports ready, or `timeoutMs` elapses. Returns true once ready, false on
@@ -1336,32 +1290,6 @@ const DPI_VERIFY_IDLE_MS = 3 * 60 * 1000;
  *  on a slow internal copy. */
 const DPI_VERIFY_MAX_MS = 4 * 60 * 60 * 1000;
 
-/** Guidance when a PATCH/UPDATE (a "…DP" package) can't be applied even after
- *  the DPI fallback. ps5upload applies updates through Sony's safe installer
- *  (in-process appinst, or the DPI daemon when the in-process path hits a
- *  firmware authid gate) — never the destructive tier that would delete the
- *  base. When even DPI declines it, the update usually doesn't match the
- *  installed game (or the base isn't installed). The base game is untouched;
- *  the PS5's own Package Installer is the most reliable last resort. This
- *  replaces the raw, misleading "PKG header — corrupt or wrongly named" text. */
-/** Shown when the update never reached the PS5 at all because the DPI
- *  daemon — the only install path that can apply a patch once the
- *  in-process installer hits the firmware authid gate — could not be
- *  brought up. Distinct from `PKG_PATCH_REJECTED_HINT` on purpose: saying
- *  "the PS5 declined it" when the console never saw the request sends
- *  people hunting for the wrong base-game version.
- *
- *  Which of the three causes it was — no image in this build, the console's
- *  loader not answering on :9021, or the daemon never coming up on :9115 —
- *  is decided by `dpiUnavailableCopy` from the engine's machine-readable
- *  reason code. Re-exported here so existing importers keep working.
- *  See `lib/dpiUnavailable.ts` for why one message for all three was wrong. */
-export {
-  PKG_PATCH_DAEMON_NO_BRINGUP_HINT,
-  PKG_PATCH_DAEMON_UNAVAILABLE_HINT,
-  PKG_PATCH_LOADER_UNREACHABLE_HINT,
-} from "../lib/dpiUnavailable";
-
 /** Shown when an update was accepted and then silently discarded. The
  *  workaround is not guessable, so it has to be in the message. */
 export const PKG_PATCH_DID_NOT_APPLY_HINT =
@@ -1371,6 +1299,14 @@ export const PKG_PATCH_DID_NOT_APPLY_HINT =
 export const PKG_PATCH_REGRESSED_HINT =
   "Re-applying this update removed it — the game has gone back to its base version. The PS5's installer treats a re-applied update as one to undo. Apply the update once more to return to the updated version, and avoid re-installing an update the game already has.";
 
+/** Guidance when a PATCH/UPDATE (a "…DP" package) can't be applied even after
+ *  the DPI fallback. ps5upload applies updates through Sony's safe installer
+ *  (in-process appinst, or the DPI daemon when the in-process path hits a
+ *  firmware authid gate) — never the destructive tier that would delete the
+ *  base. When even DPI declines it, the update usually doesn't match the
+ *  installed game (or the base isn't installed). The base game is untouched;
+ *  the PS5's own Package Installer is the most reliable last resort. This
+ *  replaces the raw, misleading "PKG header — corrupt or wrongly named" text. */
 export const PKG_PATCH_REJECTED_HINT =
   "This update couldn’t be applied. The PS5 itself declined it — most often because the update doesn’t match your installed version of the game, or the base game isn’t installed yet. Your base game is untouched. Check that this update is meant for the version you have installed, and that the base game is installed first.";
 
@@ -1972,26 +1908,6 @@ export function retryInstallReverify(task: {
   });
   return true;
 }
-
-/** Is a payload loader visible in the console's process list?
- *
- *  Distinguishes "you never loaded one" from "it is running but not listening
- *  on :9021". The 2026-09-09 reports were all the second, and the advice for
- *  the first ("re-run your loader") reads as obviously wrong to someone
- *  looking at a running loader — which is why that user stopped.
- *
- *  Best-effort by construction: a diagnostic must never turn a failed install
- *  into a thrown error, so every failure answers "not seen".
- */
-export async function loaderProcessSeen(host: string): Promise<boolean> {
-  try {
-    const { processes } = await processList(mgmtAddr(host));
-    return processes.some((p) => /elfldr|pldmgr|etahen/i.test(p.name ?? ""));
-  } catch {
-    return false;
-  }
-}
-
 
 /** Post to the ONE install endpoint and poll its status to a terminal phase,
  *  feeding live samples to the caller. The engine owns everything in between —

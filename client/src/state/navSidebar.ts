@@ -37,17 +37,15 @@ interface NavSidebarState {
   hidden: string[];
   /** Section keys whose items are folded away. */
   closedSections: string[];
-  isHidden: (to: string) => boolean;
   toggleHidden: (to: string) => void;
   toggleSection: (key: string) => void;
   /** Replace both lists — hydrating from the settings-file mirror. */
   setAll: (hidden: readonly unknown[], closedSections: readonly unknown[]) => void;
 }
 
-export const useNavSidebarStore = create<NavSidebarState>((set, get) => ({
+export const useNavSidebarStore = create<NavSidebarState>((set) => ({
   hidden: loadList(HIDDEN_KEY),
   closedSections: loadList(CLOSED_KEY),
-  isHidden: (to) => get().hidden.includes(to),
   toggleHidden: (to) =>
     set((s) => {
       const hidden = flip(s.hidden, to);

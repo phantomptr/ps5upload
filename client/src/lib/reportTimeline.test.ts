@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 vi.mock("../state/engine", () => ({ getEngineUrl: () => "http://engine" }));
 vi.mock("./appJournal", () => ({ readAppEvents: async () => [], appJournalDropped: () => 0 }));
-import { fetchTimeline, filterCats, formatLine, mergeEvents, recentProblems } from "./reportTimeline";
+import { fetchTimeline, filterCats, formatLine, mergeEvents } from "./reportTimeline";
 import type { EventRecord } from "./eventRecord";
 
 const e = (ts: number, src: EventRecord["src"], code: string, level: EventRecord["level"] = "info"): EventRecord => ({
@@ -17,18 +17,6 @@ describe("mergeEvents", () => {
   it("sorts by time and keeps each source's own order on ties", () => {
     const m = mergeEvents([e(2, "engine", "b"), e(2, "engine", "c")], [e(1, "app", "a"), e(2, "app", "d")]);
     expect(m.map((x) => x.code)).toEqual(["a", "b", "c", "d"]);
-  });
-});
-
-describe("recentProblems", () => {
-  it("returns the newest warnings and errors first", () => {
-    const r = recentProblems([e(1, "engine", "x", "warn"), e(2, "engine", "y"), e(3, "helper", "z", "error")]);
-    expect(r.map((x) => x.code)).toEqual(["z", "x"]);
-  });
-  it("caps the list", () => {
-    const many = Array.from({ length: 30 }, (_, i) => e(i, "engine", `c${i}`, "error"));
-    expect(recentProblems(many, 10)).toHaveLength(10);
-    expect(recentProblems(many, 10)[0].code).toBe("c29");
   });
 });
 

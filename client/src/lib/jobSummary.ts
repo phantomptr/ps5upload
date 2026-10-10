@@ -79,12 +79,6 @@ export async function fetchJobSummary(jobId: string): Promise<JobSummary | null>
   return getJson<JobSummary>(`/api/jobs/${encodeURIComponent(jobId)}/summary`);
 }
 
-/** The newest `limit` summaries, newest first. */
-export async function fetchJobSummaries(limit = 20): Promise<JobSummary[]> {
-  const r = await getJson<{ summaries?: JobSummary[] }>(`/api/jobs/summaries?limit=${limit}`);
-  return Array.isArray(r?.summaries) ? r.summaries : [];
-}
-
 /** Catalog key and English text of the one-line interpretation for each dominant share. The
  *  keys are written out so the i18n scripts see them. */
 export const WHY_TEXT: Record<DominantShare, { key: string; text: string }> = {

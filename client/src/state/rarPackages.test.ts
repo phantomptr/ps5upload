@@ -26,7 +26,6 @@ import {
   isArchiveFirstVolume,
   isRarFirstVolume,
   orderForInstall,
-  rarFolderName,
 } from "./rarPackages";
 
 const HOST = "10.0.0.5";
@@ -65,9 +64,9 @@ describe("helpers", () => {
   });
 
   it("names the console folder after the archive, deterministically", () => {
-    expect(rarFolderName("/x/My Game [v1].part1.rar")).toBe("rar_My_Game_v1");
-    expect(rarFolderName("/x/My Game [v1].part1.rar")).toBe(rarFolderName("/y/My Game [v1].rar"));
-    expect(rarFolderName("..rar")).toBe("rar_archive");
+    expect(archiveFolderName("/x/My Game [v1].part1.rar")).toBe("rar_My_Game_v1");
+    expect(archiveFolderName("/x/My Game [v1].part1.rar")).toBe(archiveFolderName("/y/My Game [v1].rar"));
+    expect(archiveFolderName("..rar")).toBe("rar_archive");
   });
 
   it("orders base, then patch (older first), then DLC", () => {

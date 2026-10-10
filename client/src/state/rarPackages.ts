@@ -75,9 +75,6 @@ export function archiveFolderName(archivePath: string): string {
   return `${kind}_${stem || "archive"}`.slice(0, 80);
 }
 
-/** The RAR spelling of [`archiveFolderName`], kept for its callers. */
-export const rarFolderName = archiveFolderName;
-
 /** Install tier: base (0) before patch (1) before DLC (2). */
 export function packageTier(category: string): number {
   if (category === "gp") return 1;

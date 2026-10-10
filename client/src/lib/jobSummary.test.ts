@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../state/engine", () => ({ getEngineUrl: () => "http://engine.test" }));
 
-import { fetchJobSummaries, fetchJobSummary, whyEntry, type JobSummary } from "./jobSummary";
+import { fetchJobSummary, whyEntry, type JobSummary } from "./jobSummary";
 
 function stub(routes: Record<string, { status?: number; body: unknown }>) {
   const calls: string[] = [];
@@ -38,13 +38,6 @@ describe("job summaries", () => {
     expect(await fetchJobSummary("nope")).toBeNull();
     vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new Error("down"))));
     expect(await fetchJobSummary("x")).toBeNull();
-    expect(await fetchJobSummaries()).toEqual([]);
-  });
-
-  it("lists the newest summaries with the limit", async () => {
-    const calls = stub({ "/api/jobs/summaries?limit=20": { body: { summaries: [summary] } } });
-    expect(await fetchJobSummaries(20)).toHaveLength(1);
-    expect(calls[0]).toBe("http://engine.test/api/jobs/summaries?limit=20");
   });
 
   it("maps every dominant share to its own catalog key", () => {

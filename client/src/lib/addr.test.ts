@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   hostOf,
-  loaderAddr,
   mgmtAddr,
-  portOf,
   PS5_LOADER_PORT,
   PS5_AVA1_PORT,
   consoleAddr,
@@ -85,28 +83,6 @@ describe("named address helpers", () => {
     expect(mgmtAddr("192.168.1.50:9113")).toBe("192.168.1.50");
     expect(transferAddr("192.168.1.50:9114")).toBe("192.168.1.50");
   });
-  it("loaderAddr targets :9021", () => {
-    expect(loaderAddr("192.168.1.50")).toBe("192.168.1.50:9021");
-  });
-});
-
-describe("portOf", () => {
-  it("extracts port from host:port", () => {
-    expect(portOf("192.168.1.50:9114")).toBe(9114);
-  });
-  it("returns null when no port", () => {
-    expect(portOf("192.168.1.50")).toBeNull();
-  });
-  it("returns null for non-numeric suffix", () => {
-    expect(portOf("192.168.1.50:abc")).toBeNull();
-  });
-  it("rejects ports outside the valid range", () => {
-    expect(portOf("192.168.1.50:0")).toBeNull();
-    expect(portOf("192.168.1.50:99999")).toBeNull();
-  });
-  it("returns null for empty input", () => {
-    expect(portOf("")).toBeNull();
-  });
 });
 
 describe("IPv6 addressing", () => {
@@ -122,7 +98,6 @@ describe("IPv6 addressing", () => {
   });
   it("brackets an IPv6 literal when composing host:port", () => {
     expect(withPort("fe80::1", 9114)).toBe("[fe80::1]:9114");
-    expect(loaderAddr("fe80::1")).toBe("[fe80::1]:9021");
   });
   it("keeps an IPv6 console splittable for the engine (bracketed, port ignored)", () => {
     expect(consoleAddr("fe80::1")).toBe("[fe80::1]:9120");
@@ -130,10 +105,5 @@ describe("IPv6 addressing", () => {
   });
   it("leaves IPv4 unbracketed and portless", () => {
     expect(mgmtAddr("192.168.1.50")).toBe("192.168.1.50");
-  });
-  it("portOf reads a bracketed IPv6 port and null for a bare literal", () => {
-    expect(portOf("[fe80::1]:9114")).toBe(9114);
-    expect(portOf("[fe80::1]")).toBeNull();
-    expect(portOf("fe80::1")).toBeNull();
   });
 });

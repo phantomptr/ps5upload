@@ -38,7 +38,7 @@ describe("the sidebar's hidden screens", () => {
     const storage = installStorage();
     const store = await freshStore();
     store.getState().toggleHidden("/cheats");
-    expect(store.getState().isHidden("/cheats")).toBe(true);
+    expect(store.getState().hidden).toContain("/cheats");
     expect(JSON.parse(storage.get(HIDDEN_KEY)!)).toEqual(["/cheats"]);
     const again = await freshStore();
     expect(again.getState().hidden).toEqual(["/cheats"]);

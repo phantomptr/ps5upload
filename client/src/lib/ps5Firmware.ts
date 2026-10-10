@@ -1,8 +1,8 @@
 /**
  * The running console's firmware version, read from its kernel string.
  *
- * Distinct from sdkVersionHex.ts, which converts a version to the BCD
- * word a title records in param.json.
+ * Distinct from sdkVersionHex.ts, which reads the BCD word a title
+ * records in param.json as a version.
  *
  * Extract the user-visible PS5 firmware version ("9.60", "5.00", …) from
  * the kernel build string surfaced via the STATUS_ACK's `ps5_kernel`
@@ -39,24 +39,6 @@ export function parsePS5Firmware(kernel: string | null | undefined): string | nu
     }
   }
   return null;
-}
-
-/**
- * The firmware MAJOR number (9, 10, 11, 12, …) from the kernel string, or
- * null when it can't be parsed.
- *
- * Used to label firmware-specific diagnostics and the Stream beta warning.
- * It is deliberately not a capability gate: real hardware has streamed on
- * FW 5.10 while another console rejected the HTTP path on FW 9.60 before its
- * first request. Console network/proxy state and installer context matter
- * more than a firmware-major cutoff, so callers must handle the real result
- * and offer staged Upload → Install as the fallback.
- */
-export function firmwareMajor(kernel: string | null | undefined): number | null {
-  const fw = parsePS5Firmware(kernel);
-  if (!fw) return null;
-  const major = Number(fw.split(".")[0]);
-  return Number.isFinite(major) ? major : null;
 }
 
 /** The newest firmware on which a PS5 fake (FPKG) GAME is playable. Above it

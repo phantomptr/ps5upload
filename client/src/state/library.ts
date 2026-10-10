@@ -102,17 +102,6 @@ export function libraryForHost(
   return s.byHost[keyOf(host)] ?? IDLE_LIBRARY;
 }
 
-/** Effective mount lookup — probe-derived `mountMap` is authoritative, but a
- *  not-yet-confirmed `pendingMounts` entry covers the post-fs_mount window. The
- *  Library row reads through this so a freshly-mounted image flips to MOUNTED
- *  in the same render the user clicks. Operates on a single console's slot. */
-export function effectiveMount(
-  s: Pick<LibrarySlot, "mountMap" | "pendingMounts">,
-  imagePath: string,
-): string | null {
-  return s.mountMap.get(imagePath) ?? s.pendingMounts.get(imagePath) ?? null;
-}
-
 /** Reverse lookup: given a path inside one of the active mounts, return the
  *  backing image_path. Longest mount-point match wins so nested mounts
  *  attribute correctly. Operates on a single console's slot. */

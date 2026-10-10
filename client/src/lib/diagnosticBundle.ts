@@ -164,29 +164,6 @@ export function redactHost(host: string | null | undefined, redact: boolean): st
   return `<host:${host.length}-char>`;
 }
 
-/**
- * Redact addresses embedded in free-form diagnostic text.
- *
- * Structured host fields go through `redactHost`, but bug-report logs also
- * contain addresses inside error strings (`connect 192.168.1.50:9021`, for
- * example). Those files used to be copied verbatim, so checking "Redact IPs"
- * only protected report fields and not the logs beside them.
- */
-export function redactDiagnosticText(text: string, redact: boolean): string {
-  if (!redact || !text) return text;
-
-  // Avoid lookbehind so this remains compatible with older Android WebViews.
-  // Redact the entire address, including its network prefix.
-  const ipv4 = text.replace(
-    /(^|[^0-9.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?=$|[^0-9.])/g,
-    (_whole, prefix: string) => `${prefix}<IPv4>`,
-  );
-
-  // Socket errors render IPv6 hosts in brackets. Redact the host while
-  // retaining a following port, e.g. [fe80::1]:9021 -> [<IPv6>]:9021.
-  return ipv4.replace(/\[[0-9a-f:.]*:[0-9a-f:.]+\]/gi, "[<IPv6>]");
-}
-
 export function buildDiagnosticBundle(opts: {
   appVersion: string;
   redact: boolean;

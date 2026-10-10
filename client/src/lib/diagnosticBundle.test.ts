@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDiagnosticBundle,
-  redactDiagnosticText,
   redactHost,
 } from "./diagnosticBundle";
 
@@ -44,31 +43,6 @@ describe("redactHost", () => {
     expect(redactHost("999.999.999.999", true)).toBe("<IPv4>");
     // No fourth octet: not IPv4, falls through to hostname path.
     expect(redactHost("192.168.1", true)).toBe("<host:9-char>");
-  });
-});
-
-describe("redactDiagnosticText", () => {
-  it("redacts IPv4 addresses embedded in errors while preserving ports", () => {
-    expect(
-      redactDiagnosticText(
-        "send dpi.elf: connect 192.168.86.99:9021: Connection refused",
-        true,
-      ),
-    ).toBe("send dpi.elf: connect <IPv4>:9021: Connection refused");
-  });
-
-  it("redacts every address in JSON/log text, including bracketed IPv6", () => {
-    const text = '{"host":"10.0.0.5","error":"connect [fe80::1234]:9114"}';
-    const redacted = redactDiagnosticText(text, true);
-    expect(redacted).not.toContain("10.0.0.5");
-    expect(redacted).not.toContain("fe80::1234");
-    expect(redacted).toContain("<IPv4>");
-    expect(redacted).toContain("[<IPv6>]:9114");
-  });
-
-  it("leaves diagnostic text untouched when redaction is off", () => {
-    const text = "connect 172.16.1.9:9115";
-    expect(redactDiagnosticText(text, false)).toBe(text);
   });
 });
 

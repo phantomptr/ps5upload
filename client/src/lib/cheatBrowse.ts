@@ -37,30 +37,6 @@ export function isUsableGameTitle(title: string | undefined): boolean {
   return true;
 }
 
-/** The best name we can show for a title, in order of trustworthiness.
- *
- *  1. the cheat file's own name — written by whoever made the cheat
- *  2. the game as installed on THIS console — matches what the player sees
- *  3. the repo index — covers games that are not installed on this console
- *  4. the title id, when nothing better exists
- */
-export function resolveCheatName(
-  titleId: string,
-  sources: {
-    fromCheatFile?: string;
-    installed?: Map<string, string>;
-    fromRepoIndex?: Map<string, string>;
-  },
-): string {
-  const key = titleId.toUpperCase();
-  if (isUsableGameTitle(sources.fromCheatFile)) return sources.fromCheatFile!.trim();
-  const installed = sources.installed?.get(key);
-  if (isUsableGameTitle(installed)) return installed!.trim();
-  const repo = sources.fromRepoIndex?.get(key);
-  if (isUsableGameTitle(repo)) return repo!.trim();
-  return titleId;
-}
-
 /** title id → game name, built from repo entries.
  *
  *  First usable name wins: the same game appears in several repos and under

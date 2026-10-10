@@ -1,9 +1,9 @@
 /**
- * Firmware version <-> the BCD word a title records.
+ * The BCD word a title records -> its firmware version.
  *
  * Distinct from ps5Firmware.ts, which reads the running console's version
- * out of its kernel build string. This one converts between "9.60" and
- * the 0x09600000 that param.json and the SDK offset table use — the two
+ * out of its kernel build string. This one reads the 0x09600000 that
+ * param.json and the SDK offset table use as "9.60" — the two
  * were easy to confuse when both were named for "firmware".
  *
  * Versions are stored BCD-style — the decimal digits become hex digits,
@@ -11,86 +11,8 @@
  * reports `system_sw_raw: "0x09600004"`, and the payload SDK's offset
  * table switches on `0x09600000`, `0x12700000`, `0x13600000`.
  *
- * This exists so the SDK Version Changer can offer real firmware
- * versions instead of asking the user to hand-encode hex.
+ * Backport uses it to name the firmware a title's SDK version requires.
  */
-
-/** Firmware versions the payload SDK has kernel offsets for, newest first. */
-export const PS5_FIRMWARES = [
-  "13.60",
-  "13.40",
-  "13.20",
-  "13.00",
-  "12.70",
-  "12.60",
-  "12.40",
-  "12.20",
-  "12.00",
-  "11.60",
-  "11.40",
-  "11.20",
-  "11.00",
-  "10.60",
-  "10.40",
-  "10.20",
-  "10.00",
-  "9.60",
-  "9.40",
-  "9.20",
-  "9.05",
-  "9.00",
-  "8.60",
-  "8.40",
-  "8.20",
-  "8.00",
-  "7.61",
-  "7.60",
-  "7.40",
-  "7.20",
-  "7.01",
-  "7.00",
-  "6.50",
-  "6.02",
-  "6.00",
-  "5.50",
-  "5.10",
-  "5.02",
-  "5.00",
-  "4.51",
-  "4.50",
-  "4.03",
-  "4.02",
-  "4.00",
-  "3.21",
-  "3.20",
-  "3.10",
-  "3.00",
-  "2.70",
-  "2.50",
-  "2.30",
-  "2.26",
-  "2.25",
-  "2.20",
-  "2.00",
-  "1.14",
-  "1.13",
-  "1.12",
-  "1.11",
-  "1.10",
-  "1.05",
-  "1.02",
-  "1.01",
-  "1.00",
-] as const;
-
-/** "9.60" -> "0x09600000". Returns null if the input isn't a version. */
-export function fwToSdkHex(version: string): string | null {
-  const m = /^(\d{1,2})\.(\d{1,2})$/.exec(version.trim());
-  if (!m) return null;
-  const major = m[1].padStart(2, "0");
-  const minor = m[2].padEnd(2, "0");
-  return `0x${major}${minor}0000`;
-}
 
 /**
  * "0x09600000" -> "9.60". Also accepts the padded form param.json stores

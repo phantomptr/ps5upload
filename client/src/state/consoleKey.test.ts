@@ -24,8 +24,7 @@ describe("U14: tasks are attributed by console identity", () => {
     const s = useTaskStore.getState();
     const t1 = s.registerTask({ kind: "upload-file", origin: "t", label: "1", consoleId: "10.0.0.5", consoleKey: "a" });
     const t2 = s.registerTask({ kind: "upload-file", origin: "t", label: "2", consoleId: "10.0.0.5", consoleKey: "b" });
-    const ids = (k: string) => useTaskStore.getState().tasksForConsole("10.0.0.5", k).map((t) => t.id);
-    expect(ids("a")).toEqual([t1]);
-    expect(ids("b")).toEqual([t2]);
+    expect(s.getTask(t1)?.consoleKey).toBe("a");
+    expect(s.getTask(t2)?.consoleKey).toBe("b");
   });
 });

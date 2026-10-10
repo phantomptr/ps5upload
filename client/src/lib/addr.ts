@@ -83,29 +83,3 @@ export const mgmtAddr = consoleAddr;
 
 /** Alias of `consoleAddr` (see `mgmtAddr`). */
 export const transferAddr = consoleAddr;
-
-/** Address for the loader port (`host:9021`). */
-export function loaderAddr(host: string): string {
-  return withPort(host, PS5_LOADER_PORT);
-}
-
-/** Extract the port from a `host:port` string. Returns `null` when
- *  there's no port suffix. Useful for the few diagnostic call sites
- *  that need to surface "which port were we talking to?" in error
- *  text. */
-export function portOf(addr: string): number | null {
-  if (!addr) return null;
-  // Bracketed IPv6: the port (if any) follows `]:`.
-  if (addr.startsWith("[")) {
-    const sep = addr.indexOf("]:");
-    if (sep < 0) return null;
-    const n = parseInt(addr.slice(sep + 2), 10);
-    return Number.isFinite(n) && n > 0 && n <= 65535 ? n : null;
-  }
-  // Bare IPv6 literal carries no port (every colon is part of the host).
-  if (isBareIpv6(addr)) return null;
-  const i = addr.lastIndexOf(":");
-  if (i < 0) return null;
-  const n = parseInt(addr.slice(i + 1), 10);
-  return Number.isFinite(n) && n > 0 && n <= 65535 ? n : null;
-}

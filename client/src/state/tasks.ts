@@ -323,18 +323,6 @@ interface TaskState {
   /** Look up a task by id. Returns undefined if not found (including
    *  terminal history evicted by MAX_TASK_HISTORY). */
   getTask: (id: string) => Task | undefined;
-
-  /** All currently-active (non-terminal) tasks. The badge / spinner
-   *  reads this. Computed in-place so callers don't need a selector. */
-  activeTasks: () => Task[];
-
-  /** All currently-running tasks (status === "running"). Stricter
-   *  than activeTasks — excludes queued/paused/awaiting. */
-  runningTasks: () => Task[];
-
-  /** Tasks for a specific console (bare host). Used by the per-console
-   *  queue view in the Tasks tab. */
-  tasksForConsole: (consoleId: string, consoleKey?: string) => Task[];
 }
 
 export const useTaskStore = create<TaskState>((set, get) => ({
@@ -430,39 +418,4 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   getTask: (id) => get().tasks.find((t) => t.id === id),
-
-  activeTasks: () => get().tasks.filter((t) => isActivatable(t.status)),
-
-  runningTasks: () => get().tasks.filter((t) => t.status === "running"),
-
-  tasksForConsole: (consoleId, consoleKey) => {
-    const host = hostOf(consoleId);
-    // By identity when both sides have one; by address otherwise (older tasks, unlisted hosts).
-    return get().tasks.filter((t) =>
-      consoleKey && t.consoleKey ? t.consoleKey === consoleKey : t.consoleId === host,
-    );
-  },
 }));
-
-// ---------------------------------------------------------------------------
-// Convenience: subscribe helper for components that need to react to a
-// specific task's status change (e.g. a modal that closes when done).
-// ---------------------------------------------------------------------------
-
-/** Subscribe to status changes for a specific task. Returns an unsubscribe
- *  function. The listener is called with the new status (or undefined if
- *  the task was removed/evicted). */
-export function onTaskStatusChange(
-  taskId: string,
-  listener: (status: TaskStatus | undefined) => void,
-): () => void {
-  let lastStatus: TaskStatus | undefined = useTaskStore.getState().getTask(taskId)?.status;
-  return useTaskStore.subscribe((s) => {
-    const t = s.tasks.find((x) => x.id === taskId);
-    const next = t?.status;
-    if (next !== lastStatus) {
-      lastStatus = next;
-      listener(next);
-    }
-  });
-}

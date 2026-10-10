@@ -4,27 +4,6 @@
 // terminal-state transitions are unit-testable without the
 // store/Tauri/React surface.
 
-/** Move the item with `id` one slot earlier in the array. Returns the
- *  same array reference when nothing changes (already at top, or id
- *  not found) so a Zustand `set` can short-circuit. */
-export function moveItemUp<T extends { id: string }>(items: T[], id: string): T[] {
-  const i = items.findIndex((it) => it.id === id);
-  if (i <= 0) return items;
-  const next = items.slice();
-  [next[i - 1], next[i]] = [next[i], next[i - 1]];
-  return next;
-}
-
-/** Move the item with `id` one slot later in the array. Returns the
- *  same array reference when nothing changes. */
-export function moveItemDown<T extends { id: string }>(items: T[], id: string): T[] {
-  const i = items.findIndex((it) => it.id === id);
-  if (i < 0 || i >= items.length - 1) return items;
-  const next = items.slice();
-  [next[i], next[i + 1]] = [next[i + 1], next[i]];
-  return next;
-}
-
 /** Move `id` earlier, but only past items in the SAME group (e.g. same
  *  target console). Swaps with the nearest preceding same-group item so the
  *  per-console grouped queue reorders within its console without disturbing

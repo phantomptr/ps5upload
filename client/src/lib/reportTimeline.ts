@@ -24,14 +24,6 @@ export function filterCats(events: EventRecord[], cats: ReadonlySet<EventCat>): 
   return events.filter((e) => cats.has(e.cat));
 }
 
-/** The last `n` warnings and errors, newest first: step 1's "Recent problems we noticed". */
-export function recentProblems(events: EventRecord[], n = 10): EventRecord[] {
-  return events
-    .filter((e) => e.level !== "info")
-    .slice(-n)
-    .reverse();
-}
-
 function parts(ts: number, tz?: string) {
   const f = new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,

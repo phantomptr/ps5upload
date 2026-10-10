@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  moveItemDown,
   moveItemDownWithinGroup,
-  moveItemUp,
   moveItemUpWithinGroup,
   nextPending,
   patchItem,
@@ -18,42 +16,6 @@ const items = (): Item[] => [
   { id: "b", status: "pending" },
   { id: "c", status: "pending" },
 ];
-
-describe("moveItemUp", () => {
-  it("swaps with the previous slot", () => {
-    expect(moveItemUp(items(), "c").map((i) => i.id)).toEqual([
-      "a",
-      "c",
-      "b",
-    ]);
-  });
-  it("returns same reference when already at the top", () => {
-    const arr = items();
-    expect(moveItemUp(arr, "a")).toBe(arr);
-  });
-  it("returns same reference when id missing", () => {
-    const arr = items();
-    expect(moveItemUp(arr, "missing")).toBe(arr);
-  });
-});
-
-describe("moveItemDown", () => {
-  it("swaps with the next slot", () => {
-    expect(moveItemDown(items(), "a").map((i) => i.id)).toEqual([
-      "b",
-      "a",
-      "c",
-    ]);
-  });
-  it("returns same reference when already at the bottom", () => {
-    const arr = items();
-    expect(moveItemDown(arr, "c")).toBe(arr);
-  });
-  it("returns same reference when id missing", () => {
-    const arr = items();
-    expect(moveItemDown(arr, "missing")).toBe(arr);
-  });
-});
 
 describe("removeItem", () => {
   it("drops the matching id", () => {

@@ -4,7 +4,6 @@ import {
   useTaskStore,
   isTerminal,
   isActivatable,
-  onTaskStatusChange,
   MAX_TASK_HISTORY,
   trimTaskHistory,
   type Task,
@@ -166,41 +165,14 @@ describe("taskStore lifecycle", () => {
     expect(useTaskStore.getState().getTask(b)!.status).toBe("running");
   });
 
-  it("activeTasks / runningTasks / tasksForConsole filter correctly", () => {
-    useTaskStore.getState().registerTask({
+  it("records the console as a bare host", () => {
+    const id = useTaskStore.getState().registerTask({
       kind: "upload-file",
       origin: "test",
       label: "running-a",
       consoleId: "192.168.1.10:9113",
     });
-    useTaskStore.getState().registerTask({
-      kind: "pkg-install",
-      origin: "test",
-      label: "queued-b",
-      consoleId: "192.168.1.10",
-      status: "queued",
-    });
-    const t3 = useTaskStore.getState().registerTask({
-      kind: "fs-delete",
-      origin: "test",
-      label: "done-c",
-      consoleId: "192.168.1.20",
-    });
-    useTaskStore.getState().finishTask(t3, "done");
-
-    const active = useTaskStore.getState().activeTasks();
-    expect(active).toHaveLength(2);
-    expect(active.map((t) => t.label).sort()).toEqual(["queued-b", "running-a"]);
-
-    const running = useTaskStore.getState().runningTasks();
-    expect(running).toHaveLength(1);
-    expect(running[0].label).toBe("running-a");
-
-    const c1 = useTaskStore.getState().tasksForConsole("192.168.1.10");
-    expect(c1).toHaveLength(2);
-    const c2 = useTaskStore.getState().tasksForConsole("192.168.1.20:9113");
-    expect(c2).toHaveLength(1);
-    expect(c2[0].label).toBe("done-c");
+    expect(useTaskStore.getState().getTask(id)!.consoleId).toBe("192.168.1.10");
   });
 
   it("persists to localStorage and recovers on reload (terminal tasks only)", () => {
@@ -295,55 +267,5 @@ describe("bounded task history", () => {
       MAX_TASK_HISTORY - 1,
     );
     expect(trimmed[0].id).toBe("0");
-  });
-});
-
-describe("onTaskStatusChange subscription", () => {
-  beforeEach(() => {
-    resetStore();
-  });
-  afterEach(() => resetStore());
-
-  it("fires listener when the task's status changes", () => {
-    const calls: (string | undefined)[] = [];
-    const id = useTaskStore.getState().registerTask({
-      kind: "upload-file",
-      origin: "test",
-      label: "sub",
-      consoleId: "1.1.1.1",
-    });
-    const unsub = onTaskStatusChange(id, (s) => {
-      if (s) calls.push(s);
-    });
-    // registered as running already — simulate finish.
-    useTaskStore.getState().finishTask(id, "done");
-    expect(calls).toContain("done");
-    unsub();
-  });
-
-  it("unsubscribe stops further notifications", () => {
-    const id = useTaskStore.getState().registerTask({
-      kind: "upload-file",
-      origin: "test",
-      label: "sub2",
-      consoleId: "1.1.1.1",
-    });
-    let calls = 0;
-    const unsub = onTaskStatusChange(id, () => {
-      calls++;
-    });
-    useTaskStore.getState().finishTask(id, "done");
-    unsub();
-    // Further mutations should not call the listener.
-    const id2 = useTaskStore.getState().registerTask({
-      kind: "upload-file",
-      origin: "test",
-      label: "other",
-      consoleId: "1.1.1.1",
-    });
-    useTaskStore.getState().finishTask(id2, "failed");
-    // The listener may have fired once for the finishTask(id,"done") above;
-    // what matters is that id2's mutation doesn't reach it.
-    expect(calls).toBeLessThanOrEqual(1);
   });
 });

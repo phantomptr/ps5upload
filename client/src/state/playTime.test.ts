@@ -78,14 +78,6 @@ describe("usePlayTimeStore (per-host)", () => {
     expect(playSecondsFor(s, "5.6.7.8", "CUSA00001")).toBe(50);
   });
 
-  it("resetAll wipes every console", () => {
-    const st = usePlayTimeStore.getState();
-    st.credit("1.2.3.4", ["CUSA00001"], 100);
-    st.credit("5.6.7.8", ["CUSA00002"], 50);
-    st.resetAll();
-    expect(usePlayTimeStore.getState().byHost).toEqual({});
-  });
-
   it("ignores empty title lists and non-positive deltas", () => {
     const st = usePlayTimeStore.getState();
     st.credit("1.2.3.4", [], 60);

@@ -58,23 +58,16 @@ export interface HostProbe {
  *  every render (e.g. Hardware screen's setInterval, found by the
  *  2.12.0 crash audit). */
 export function useStaleHostGuard(): { capture: () => HostProbe } {
-  const capture = useCallback((): HostProbe => {
-    // Read host fresh at capture-time, not via the React subscription —
-    // the host the hook saw at React-render-time may be older than the
-    // one in the store right now. We want the most-recent-known value
-    // at the moment work starts.
-    const probedHost = useConnectionStore.getState().host;
-    return {
-      host: probedHost,
-      isStale: () => useConnectionStore.getState().host !== probedHost,
-    };
-  }, []);
+  // Reads host fresh at capture-time, not via the React subscription —
+  // the host the hook saw at React-render-time may be older than the
+  // one in the store right now. We want the most-recent-known value
+  // at the moment work starts.
+  const capture = useCallback((): HostProbe => captureHostProbe(), []);
   return useMemo(() => ({ capture }), [capture]);
 }
 
-/** Non-hook variant for use OUTSIDE React (engine bridges, queue
- *  workers, etc.). Same contract as the hook. Use the hook in
- *  components; this in modules. */
+/** Non-hook variant: what the hook's `capture` does. Same contract as
+ *  the hook. */
 export function captureHostProbe(): HostProbe {
   const probedHost = useConnectionStore.getState().host;
   return {

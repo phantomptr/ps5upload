@@ -5,7 +5,6 @@ import {
   isSupportedCheatFormat,
   isUsableGameTitle,
   namesFromRepoEntries,
-  resolveCheatName,
   NO_CHEAT_FILTERS,
 } from "./cheatBrowse";
 import type { CheatRepoEntry } from "../api/ps5";
@@ -44,32 +43,13 @@ describe("isUsableGameTitle", () => {
   });
 });
 
-describe("resolveCheatName", () => {
-  const installed = new Map([["CUSA00556", "The Last of Us™ Remastered"]]);
-  const repo = namesFromRepoEntries(real);
-
-  it("prefers the cheat file's own name", () => {
-    expect(resolveCheatName("CUSA00556", {
-      fromCheatFile: "TLOU (cheat author name)", installed, fromRepoIndex: repo,
-    })).toBe("TLOU (cheat author name)");
-  });
-
-  it("falls back to the installed game's name", () => {
-    expect(resolveCheatName("CUSA00556", { installed, fromRepoIndex: repo }))
-      .toBe("The Last of Us™ Remastered");
-  });
-
-  it("uses the repo index for a game that is NOT installed", () => {
-    // The reported bug: a downloaded cheat for a game you do not have shows
-    // a bare title id, because the only name source was the installed list.
-    expect(resolveCheatName("CUSA34394", { installed, fromRepoIndex: repo }))
-      .toBe("God of War Ragnarok");
-  });
-
-  it("falls through to the title id rather than showing junk", () => {
-    expect(resolveCheatName("CUSA14936", { installed, fromRepoIndex: repo }))
-      .toBe("CUSA14936");
-    expect(resolveCheatName("CUSA99999", {})).toBe("CUSA99999");
+describe("namesFromRepoEntries", () => {
+  it("names games from the repo index and skips junk names", () => {
+    // A downloaded cheat for a game that is not installed has only the repo
+    // index to name it; a content id there must not stand in for a name.
+    const names = namesFromRepoEntries(real);
+    expect(names.get("CUSA34394")).toBe("God of War Ragnarok");
+    expect(names.has("CUSA14936")).toBe(false);
   });
 });
 
