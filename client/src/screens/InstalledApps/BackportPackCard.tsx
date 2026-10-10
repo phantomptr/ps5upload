@@ -184,7 +184,7 @@ export function BackportPackCard({
   }, [record, tr, transport]);
 
   return (
-    <div className="rounded-lg border border-[var(--color-border)] p-3 flex flex-col gap-2">
+    <div className="rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)] p-3 flex flex-col gap-2">
       <div className="flex items-center gap-2 text-sm font-medium">
         <PackageOpen size={15} />
         {tr("pack_title", undefined, "Install a backport pack")}

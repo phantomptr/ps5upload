@@ -57,7 +57,7 @@ export function ServingLinks() {
           {links.map((l) => (
             <li
               key={l.id}
-              className="rounded-lg border border-[var(--color-border)] p-3 text-xs"
+              className="rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)] p-3 text-xs"
             >
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium text-[var(--color-text)]">

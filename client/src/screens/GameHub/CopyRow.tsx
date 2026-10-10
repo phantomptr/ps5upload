@@ -199,7 +199,7 @@ export function CopyRow({
           <button
             type="button"
             onClick={onSend}
-            className="inline-flex items-center gap-1 rounded-md border border-[var(--color-accent)] px-2 py-1 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-3)]"
+            className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-accent-soft)]"
           >
             <Upload size={12} />
             {tr("collection.send_go", undefined, "Send to PS5")}

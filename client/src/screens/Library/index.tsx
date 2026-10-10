@@ -2689,7 +2689,7 @@ function LibraryRowImpl({
       </div>
 
       {busy && (
-        <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+        <div className="flex flex-col gap-2 rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-2 text-xs">
           <div className="flex items-center gap-2">
             <Spinner size={12} tone="accent" />
             <span className="font-medium">
@@ -2768,7 +2768,7 @@ function LibraryRowImpl({
               <button
                 type="button"
                 onClick={() => stopWatchedJob(dlKey, libraryWatchDeps)}
-                className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
+                className="ml-auto rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)]"
                 title={tr(
                   "library_download_stop_tooltip",
                   undefined,
@@ -2784,7 +2784,7 @@ function LibraryRowImpl({
                 onClick={() => {
                   stopLibraryMove(mvKey);
                 }}
-                className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
+                className="ml-auto rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)]"
                 title={tr(
                   "library_move_stop_tooltip",
                   undefined,
@@ -2834,7 +2834,7 @@ function LibraryRowImpl({
           hits transient errors will see no banner. */}
       {busy === "move-copying" &&
         moveProgressUnsupportedThreshold === "2.2.16" && (
-          <div className="rounded-md border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-2 text-xs text-[var(--color-warn)]">
+          <div className="rounded-2xl bg-[var(--color-warn-soft)] px-3 py-2 text-xs text-[var(--color-warn)]">
             {tr(
               "library_move_progress_unsupported_2_2_16",
               undefined,
@@ -2844,7 +2844,7 @@ function LibraryRowImpl({
         )}
       {busy === "move-copying" &&
         moveProgressUnsupportedThreshold === "2.2.7" && (
-          <div className="rounded-md border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-2 text-xs text-[var(--color-warn)]">
+          <div className="rounded-2xl bg-[var(--color-warn-soft)] px-3 py-2 text-xs text-[var(--color-warn)]">
             {tr(
               "library_move_progress_unsupported_2_2_7",
               undefined,
@@ -2854,7 +2854,7 @@ function LibraryRowImpl({
         )}
 
       {mountNote && (
-        <div className="flex items-start gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] p-2 text-xs">
+        <div className="flex items-start gap-2 rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-accent-soft)] px-3 py-2 text-xs">
           <Play size={12} className="mt-0.5 text-[var(--color-accent)]" />
           <span className="flex-1">{mountNote}</span>
           <button
@@ -3017,7 +3017,7 @@ function GameDetailsModal({
       onClick={onCancel}
     >
       <div
-        className="w-full max-w-2xl rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5"
+        className="glass-float max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-[var(--radius-panel)] p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="mb-3 flex items-center gap-2 text-sm font-semibold">
@@ -3031,7 +3031,7 @@ function GameDetailsModal({
               <img
                 src={info.coverImageUrl}
                 alt={displayTitle}
-                className="w-full rounded-md border border-[var(--color-border)]"
+                className="w-full rounded-[var(--radius-card)] border-[6px] border-[var(--color-pill)] shadow-[var(--shadow-1)]"
                 /* PSN cover-art URLs sometimes 404 for region-mismatched
                  * titles. Hide the broken-image placeholder rather than
                  * leaving a raw cracked-icon. */
@@ -3065,7 +3065,7 @@ function GameDetailsModal({
                     onClick={() => {
                       void openExternal(url);
                     }}
-                    className="inline-flex items-center justify-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-3)]"
+                    className="inline-flex items-center justify-center gap-1 rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)]"
                   >
                     <ExternalLink size={11} />
                     {tr(
@@ -3229,7 +3229,7 @@ function MoveModal({
       onClick={onCancel}
     >
       <div
-        className="w-full max-w-lg rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5"
+        className="glass-float max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-[var(--radius-panel)] p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="mb-3 flex items-center gap-2 text-sm font-semibold">
@@ -3255,7 +3255,7 @@ function MoveModal({
           <select
             value={volume}
             onChange={(e) => setVolume(e.target.value)}
-            className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+            className="rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 py-2 text-sm"
           >
             {volumePaths.map((p) => (
               <option key={p} value={p}>
@@ -3272,7 +3272,7 @@ function MoveModal({
               undefined,
               "subpath (e.g. games)",
             )}
-            className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+            className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 py-2 text-sm"
           />
         </div>
 
@@ -3307,7 +3307,7 @@ function MoveModal({
           )}
         />
 
-        <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+        <div className="mb-4 rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-2 text-xs">
           <div className="text-xs uppercase tracking-wide text-[var(--color-muted)]">
             {tr("library_move_modal_resolved", undefined, "Will move to")}
           </div>
@@ -3327,7 +3327,7 @@ function MoveModal({
         )}
 
         {noop && !nameInvalid && (
-          <div className="mb-3 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+          <div className="mb-3 rounded-2xl bg-[var(--color-warn-soft)] px-3 py-2 text-xs text-[var(--color-warn)]">
             {tr(
               "library_move_modal_noop",
               undefined,
@@ -3596,7 +3596,7 @@ function MountModal({
       onClick={onCancel}
     >
       <div
-        className="w-full max-w-lg rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5"
+        className="glass-float max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-[var(--radius-panel)] p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="mb-3 flex items-center gap-2 text-sm font-semibold">
@@ -3633,7 +3633,7 @@ function MountModal({
         </dl>
 
         {!supportsMountPoint && (
-          <div className="mb-3 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+          <div className="mb-3 rounded-2xl bg-[var(--color-warn-soft)] px-3 py-2 text-xs text-[var(--color-warn)]">
             {tr(
               "library_mount_modal_old_payload",
               undefined,
@@ -3651,7 +3651,7 @@ function MountModal({
               <select
                 value={volume}
                 onChange={(e) => setVolume(e.target.value)}
-                className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+                className="rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 py-2 text-sm"
               >
                 {(dropdownPaths.includes(volume)
                   ? dropdownPaths
@@ -3674,7 +3674,7 @@ function MountModal({
                   undefined,
                   "subpath (e.g. homebrew)",
                 )}
-                className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+                className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 py-2 text-sm"
               />
             </div>
 
@@ -3722,7 +3722,7 @@ function MountModal({
           )}
         />
 
-        <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+        <div className="mb-4 rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-2 text-xs">
           <div className="text-xs uppercase tracking-wide text-[var(--color-muted)]">
             {tr("library_mount_modal_resolved", undefined, "Will mount at")}
           </div>
@@ -3739,7 +3739,7 @@ function MountModal({
          * the engine. Doesn't disable the button; some firmware /
          * setup combinations DO accept it. */}
         {supportsMountPoint && /^\/mnt\/(usb|ext)\d/.test(volume) && (
-          <div className="mb-4 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+          <div className="mb-4 rounded-2xl bg-[var(--color-warn-soft)] px-3 py-2 text-xs text-[var(--color-warn)]">
             <div className="mb-1 font-semibold">
               {tr(
                 "library_mount_modal_usb_warn_title",
@@ -3800,7 +3800,7 @@ function MountModal({
             edits the image file in place with no undo. State both halves at
             the moment of the choice rather than after something breaks. */}
         {supportsReadOnly && !readOnly && intent !== "edit" && (
-          <div className="mb-3 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+          <div className="mb-3 rounded-2xl bg-[var(--color-warn-soft)] px-3 py-2 text-xs text-[var(--color-warn)]">
             <div className="mb-1 font-semibold">
               {tr(
                 "library_mount_modal_rw_title",
@@ -3831,7 +3831,7 @@ function MountModal({
         )}
 
         {!isLegacyRoot && !nameInvalid && (
-          <div className="mb-3 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+          <div className="mb-3 rounded-2xl bg-[var(--color-warn-soft)] px-3 py-2 text-xs text-[var(--color-warn)]">
             {tr(
               "library_mount_modal_outside_default",
               undefined,
@@ -3841,7 +3841,7 @@ function MountModal({
         )}
 
         {crossVolume && !nameInvalid && imageVolume && (
-          <div className="mb-3 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+          <div className="mb-3 rounded-2xl bg-[var(--color-warn-soft)] px-3 py-2 text-xs text-[var(--color-warn)]">
             {tr(
               "library_mount_modal_cross_volume",
               { imageVolume, volume },
@@ -3984,7 +3984,7 @@ function ConfirmRow({
       ? tr("library_confirm_delete_yes", undefined, "Yes, delete")
       : tr("library_confirm_chmod_yes", undefined, "Yes, set Permission 777");
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+    <div className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-2 text-xs">
       <span className="flex-1">{message}</span>
       <div className="flex shrink-0 items-center gap-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>

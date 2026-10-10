@@ -154,7 +154,7 @@ export function OrganizeModal({
         </div>
       )}
       {result && (
-        <div className="mt-3 rounded-lg border border-[var(--color-border)] p-3 text-xs">
+        <div className="mt-3 rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)] p-3 text-xs">
           <div className="text-sm text-[var(--color-text)]">
             {tr(
               "collection.org_done",
@@ -243,7 +243,7 @@ export function OrganizeModal({
                 {plan.moves.map((m) => (
                   <li
                     key={moveKey(m)}
-                    className="rounded-lg border border-[var(--color-border)] p-2 text-xs"
+                    className="rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)] p-2 text-xs"
                   >
                     <div className="flex items-start gap-2">
                       <Checkbox
@@ -369,7 +369,7 @@ export function OrganizeModal({
             {runs.slice(0, 10).map((r) => (
               <li
                 key={r.id}
-                className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--color-border)] p-2 text-xs"
+                className="flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)] p-2 text-xs"
               >
                 <span className="text-[var(--color-text)]">
                   {new Date(r.created_at).toLocaleString()}

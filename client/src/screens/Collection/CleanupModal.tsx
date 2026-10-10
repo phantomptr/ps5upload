@@ -179,7 +179,7 @@ export function CleanupModal({
               "{n} files, {size} on disk",
             )}
           </div>
-          <ul className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-[var(--color-border)] p-2 font-mono text-[0.6875rem] text-[var(--color-muted)]">
+          <ul className="mt-2 max-h-48 overflow-y-auto rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)] p-2 font-mono text-[0.6875rem] text-[var(--color-muted)]">
             {junk.sample.map((f) => (
               <li key={f.path} className="break-all" title={f.path}>
                 {shortPath(f.path, settings?.roots ?? [])}

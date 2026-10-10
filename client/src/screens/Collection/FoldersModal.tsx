@@ -85,7 +85,7 @@ export function FoldersModal({
         {roots.map((r) => (
           <li
             key={r}
-            className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] px-3 py-2"
+            className="flex items-center gap-2 rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-2"
           >
             {r.startsWith("remote://") && (
               <Server
