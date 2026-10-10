@@ -45,7 +45,7 @@ export default function FwSpoofScreen() {
       <ConnectionGate>
         <PageHeader
           icon={ShieldAlert}
-          title={tr("fw_spoof_title", undefined, "Firmware Spoof Detection")}
+          title={tr("fw_spoof_title_v2", undefined, "Firmware spoof check")}
           description={tr(
           "fw_spoof_subtitle_v2",
             undefined,

@@ -2718,6 +2718,7 @@ fanCurve_preview: "Preview",
 
   // FwSpoof extras
   fw_spoof_title: "Firmware Spoof Detection",
+  fw_spoof_title_v2: "Firmware spoof check",
   fw_spoof_subtitle: "Detect if the reported firmware version has been modified",
   fw_spoof_detected: "Spoofing Detected",
   fw_spoof_clean: "No Spoofing Detected",
