@@ -417,31 +417,37 @@ fn build_mode(
     });
     let time = request.time.unwrap_or_else(now);
     // A libSceAmpr title looks its files up through `ampr_emu.index` at the image root (see
-    // `ampr_index`); a dump without one gets one generated from exactly the files packaged.
+    // `ampr_index`), and `ampr_emu` trusts its sizes. It is always generated from exactly the
+    // files packaged: a dump's own copy lists the folder as it was, before the param.json
+    // rewrite, executable repairs, left-out files and the icons the container carries.
     let mut generated: std::collections::HashMap<String, Vec<u8>> =
         std::collections::HashMap::new();
-    if !files
+    let dump_index = files
         .iter()
-        .any(|f| f.path.eq_ignore_ascii_case(AMPR_INDEX))
-        && source::imports_ampr(tree.as_mut(), "eboot.bin")
-    {
-        let listed: Vec<(String, u64)> = files.iter().map(|f| (f.path.clone(), f.size)).collect();
-        match crate::ampr_index::build(&listed, time.0) {
-            Some(index) => {
-                progress(&format!(
-                    "generating {AMPR_INDEX} for libSceAmpr ({} files)",
-                    listed.len()
-                ));
-                files.push(SourceFile {
-                    path: AMPR_INDEX.to_string(),
-                    size: index.len() as u64,
-                });
-                generated.insert(AMPR_INDEX.to_string(), index);
-            }
-            None => progress(&format!(
-                "not generating {AMPR_INDEX}: two files differ only in case"
-            )),
+        .any(|f| f.path.eq_ignore_ascii_case(AMPR_INDEX));
+    if dump_index || source::imports_ampr(tree.as_mut(), "eboot.bin") {
+        files.retain(|f| !f.path.eq_ignore_ascii_case(AMPR_INDEX));
+        let mut listed: Vec<(String, u64)> =
+            files.iter().map(|f| (f.path.clone(), f.size)).collect();
+        // The plan adds a keystone when the source has none; it is in the image, so listed.
+        if !files.iter().any(|f| f.path == plan::KEYSTONE) {
+            listed.push((plan::KEYSTONE.to_string(), plan::KEYSTONE_LEN));
         }
+        let index = crate::ampr_index::build(&listed, time.0).map_err(crate::Error::Format)?;
+        progress(&format!(
+            "{} {AMPR_INDEX} for libSceAmpr ({} files)",
+            if dump_index {
+                "regenerating"
+            } else {
+                "generating"
+            },
+            listed.len()
+        ));
+        files.push(SourceFile {
+            path: AMPR_INDEX.to_string(),
+            size: index.len() as u64,
+        });
+        generated.insert(AMPR_INDEX.to_string(), index);
     }
     // A plaintext package carries the marker where a native one carries its random seed, so the
     // slot and the mode can never disagree and `request.seed` only has meaning in the native mode.

@@ -698,6 +698,85 @@ fn scan_for(tree: &mut dyn SourceTree, rel: &str, start: u64, len: u64, needle: 
     false
 }
 
+/// Does the folder's own `ampr_emu.index` describe the folder? `ampr_emu` trusts its sizes, so
+/// a stale one is worth saying, even though a package always carries a freshly generated one.
+fn ampr_index_check(tree: &mut dyn SourceTree) -> (bool, String) {
+    let name = crate::ampr_index::NAME;
+    let Some(at) = tree
+        .files()
+        .iter()
+        .find(|f| f.path.eq_ignore_ascii_case(name))
+        .map(|f| f.path.clone())
+    else {
+        return (
+            true,
+            format!(
+                "eboot.bin imports libSceAmpr; the package will carry an {name} generated \
+                 from its files (the folder has none)"
+            ),
+        );
+    };
+    let regenerated = "a package carries one generated from its files; an image carries the \
+                       folder's copy as it is";
+    let Some(listed) = tree
+        .read(&at)
+        .ok()
+        .and_then(|d| crate::ampr_index::parse(&d))
+    else {
+        return (
+            false,
+            format!("the folder's {name} is not a readable AMPRIDX3 index: {regenerated}"),
+        );
+    };
+    let on_disk: std::collections::HashMap<String, u64> = tree
+        .files()
+        .iter()
+        .filter(|f| !f.path.eq_ignore_ascii_case(name))
+        .map(|f| (f.path.to_ascii_lowercase(), f.size))
+        .collect();
+    let mut first: Option<String> = None;
+    let (mut gone, mut resized) = (0usize, 0usize);
+    let mut seen = std::collections::HashSet::new();
+    for e in &listed {
+        let key = e.path.to_ascii_lowercase();
+        match on_disk.get(&key) {
+            None => {
+                gone += 1;
+                first.get_or_insert_with(|| format!("{} is listed but missing", e.path));
+            }
+            Some(&size) if size != e.size => {
+                resized += 1;
+                first.get_or_insert_with(|| {
+                    format!("{} is listed at {} bytes, {size} on disk", e.path, e.size)
+                });
+            }
+            Some(_) => {}
+        }
+        seen.insert(key);
+    }
+    let unlisted: Vec<&String> = on_disk.keys().filter(|k| !seen.contains(*k)).collect();
+    if let Some(p) = unlisted.first() {
+        first.get_or_insert_with(|| format!("{p} is not listed"));
+    }
+    match first {
+        None => (
+            true,
+            format!(
+                "eboot.bin imports libSceAmpr and the folder's {name} matches its {} files",
+                listed.len()
+            ),
+        ),
+        Some(example) => (
+            false,
+            format!(
+                "the folder's {name} is stale ({gone} listed missing, {} unlisted, {resized} \
+                 sizes differ; {example}): {regenerated}",
+                unlisted.len()
+            ),
+        ),
+    }
+}
+
 /// Report readiness for a source tree. Never blocks: the caller decides which findings
 /// matter for the build it is about to run.
 pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
@@ -764,20 +843,8 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
     // Spider-Man 2 built without `ampr_emu.index` exited at startup ("returned from main",
     // CE-108255-1); the same build with the index at the folder root played (FW 5.10).
     if imports_ampr(tree, "eboot.bin") {
-        let has_index = tree
-            .files()
-            .iter()
-            .any(|f| f.path.eq_ignore_ascii_case("ampr_emu.index"));
-        r.push(
-            "ampr_emu.index for a libSceAmpr title",
-            true,
-            if has_index {
-                "eboot.bin imports libSceAmpr and the folder carries ampr_emu.index"
-            } else {
-                "eboot.bin imports libSceAmpr; the package will carry an ampr_emu.index \
-                 generated from its files (the folder has none)"
-            },
-        );
+        let (ok, detail) = ampr_index_check(tree);
+        r.push("ampr_emu.index for a libSceAmpr title", ok, detail);
     }
 
     if let Some(m) = module_magic(tree, "eboot.bin") {
@@ -1151,16 +1218,45 @@ mod tests {
         assert!(ampr.ok, "{}", ampr.detail);
         assert!(ampr.detail.contains("generated"), "{}", ampr.detail);
 
-        // With the index at the root, the same title passes that check.
-        std::fs::write(dir.join("ampr_emu.index"), b"AMPRIDX3").unwrap();
-        let mut tree = open(&dir).unwrap();
-        let with_index = readiness(tree.as_mut());
-        let ampr = with_index
-            .checks
-            .iter()
-            .find(|c| c.name == "ampr_emu.index for a libSceAmpr title")
-            .expect("the ampr check");
+        let check = |dir: &std::path::Path| {
+            let mut tree = open(dir).unwrap();
+            readiness(tree.as_mut())
+                .checks
+                .into_iter()
+                .find(|c| c.name == "ampr_emu.index for a libSceAmpr title")
+                .expect("the ampr check")
+        };
+
+        // An index that describes the folder passes.
+        let listed = vec![
+            ("eboot.bin".to_string(), 8192),
+            (
+                "sce_sys/param.json".to_string(),
+                std::fs::metadata(dir.join("sce_sys/param.json"))
+                    .unwrap()
+                    .len(),
+            ),
+        ];
+        let index = crate::ampr_index::build(&listed, 0).unwrap();
+        std::fs::write(dir.join("ampr_emu.index"), &index).unwrap();
+        let ampr = check(&dir);
         assert!(ampr.ok, "{}", ampr.detail);
+        assert!(ampr.detail.contains("matches"), "{}", ampr.detail);
+
+        // A stale one (a file grew after it was made) is reported, never passed unchecked.
+        std::fs::write(dir.join("eboot.bin"), [eboot.clone(), vec![0; 16]].concat()).unwrap();
+        let ampr = check(&dir);
+        assert!(!ampr.ok, "{}", ampr.detail);
+        assert!(
+            ampr.detail.contains("eboot.bin is listed at 8192 bytes"),
+            "{}",
+            ampr.detail
+        );
+
+        // So is one that is not an index at all.
+        std::fs::write(dir.join("ampr_emu.index"), b"AMPRIDX3").unwrap();
+        let ampr = check(&dir);
+        assert!(!ampr.ok, "{}", ampr.detail);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
