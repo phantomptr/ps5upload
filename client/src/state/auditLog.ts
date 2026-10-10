@@ -9,15 +9,16 @@ import { safeGetItem, safeSetItem } from "../lib/safeStorage";
  * answers a different question: "what changed on my PS5(s) lately
  * that I might want to undo or attribute?".
  *
- * Stored as a 256-entry ring buffer in localStorage. Each entry is
- * append-only — we don't expose `clear()` to make it a meaningful
- * safety record.
+ * Stored as a 256-entry ring buffer in localStorage: the oldest entries roll
+ * off, and clearing the app's site data wipes it. There is no `clear()` in
+ * the UI so an accidental click can't erase the record.
  */
 
 export type AuditKind =
   | "fs_delete"
   | "fs_chmod"
   | "library_unregister"
+  | "app_uninstall"
   | "library_unmount"
   | "library_register"
   | "library_chmod"
@@ -34,6 +35,7 @@ export type AuditKind =
   | "peripheral_eject"
   | "peripheral_bd_off"
   | "pkg_install_start"
+  | "pkg_install"
   | "pkg_dpi_direct_install"
   | "lwfs_mount"
   | "pkg_direct_mount";

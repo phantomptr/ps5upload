@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseFaq, searchFaq, slugOf } from "./faqDoc";
+import { faqItemUrl, parseFaq, searchFaq, slugOf } from "./faqDoc";
 
 const MD = `# FAQ
 
@@ -128,5 +128,13 @@ describe("searchFaq", () => {
     const [hit] = searchFaq(d, "risk");
     expect(hit.topic.title).toBe("Disclaimer");
     expect(hit.item).toBeNull();
+  });
+});
+
+describe("faqItemUrl", () => {
+  it("links to the answer under the served base path", () => {
+    expect(faqItemUrl("http://nas:8080", undefined, "a b")).toBe("http://nas:8080/faq?item=a%20b");
+    expect(faqItemUrl("http://nas:8080", "/", "x")).toBe("http://nas:8080/faq?item=x");
+    expect(faqItemUrl("http://nas:8080", "/ps5/", "x")).toBe("http://nas:8080/ps5/faq?item=x");
   });
 });

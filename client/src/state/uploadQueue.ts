@@ -1,5 +1,6 @@
 import { consoleAddr } from "../lib/addr";
 import { create } from "zustand";
+import { audit } from "./auditLog";
 
 import { pkgMkdirChain } from "../lib/pkgStorage";
 
@@ -911,6 +912,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       unwatch();
       if (installInFlight.get(h) === tracked) installInFlight.delete(h);
     }
+    audit("pkg_install", item.displayName, { context: h, failed: !r.ok });
     if (!r.ok) throw new InstallItemError(r);
     settle(item.id, r);
     return {

@@ -123,9 +123,9 @@ export default function NotificationsScreen() {
         icon={Bell}
         title={tr("ps5notif_title", undefined, "PS5 Notifications")}
         description={tr(
-          "ps5notif_description_v2",
+          "ps5notif_description_v3",
           undefined,
-          "Notifications the PS5 has shown, read from the console. Refreshes every 5 seconds.",
+          "Messages ps5upload has put on your TV (Remote Play, cheats), read back from its helper on the console. Not the PS5's own notification panel. Refreshes every 5 seconds.",
         )}
         count={items.length}
         right={
@@ -195,9 +195,9 @@ export default function NotificationsScreen() {
               "No notifications",
             )}
             message={tr(
-              "ps5notif_empty_hint",
+              "ps5notif_empty_hint_v2",
               undefined,
-              "System notifications from the PS5 will appear here",
+              "When ps5upload puts a message on your TV, such as a Remote Play PIN or a cheat being switched on, it is listed here so you can read it again. This is not the PS5's own notification panel; the console does not let us read that.",
             )}
           />
         ) : (

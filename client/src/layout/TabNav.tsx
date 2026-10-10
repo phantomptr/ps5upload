@@ -110,7 +110,6 @@ const TABS: TabDef[] = [
       "/send-payload",
       "/processes",
       "/shell",
-      "/stats",
     ],
   },
   {

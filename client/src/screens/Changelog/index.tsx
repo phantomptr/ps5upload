@@ -17,10 +17,9 @@ const GITHUB_RELEASES_URL =
   "https://github.com/phantomptr/ps5upload/releases";
 
 /**
- * Changelog screen — the default landing page, so users see "what's
- * new" every time they launch. Renders CHANGELOG.md with a header
- * pointing at the GitHub releases page for full history beyond what
- * ships bundled.
+ * Changelog screen ("What's new"). Renders the whole CHANGELOG.md the app
+ * was built with, plus a link to the GitHub releases page (release
+ * downloads, and notes for versions newer than this build).
  */
 export default function ChangelogScreen() {
   const tr = useTr();
@@ -46,9 +45,9 @@ export default function ChangelogScreen() {
         icon={Sparkles}
         title={tr("whats_new", undefined, "What's new")}
         description={tr(
-          "changelog_description",
+          "changelog_description_v2",
           undefined,
-          "Release notes for ps5upload. Old versions live on GitHub; the most recent entries are bundled with the app.",
+          "Release notes for every ps5upload version up to this one, bundled with the app. Newer releases and their downloads are on GitHub.",
         )}
         right={
           <Button

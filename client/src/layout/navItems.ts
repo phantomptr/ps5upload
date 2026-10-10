@@ -32,7 +32,6 @@ import {
   HelpCircle,
   ScrollText,
   Activity as ActivityIcon,
-  BarChart3,
   TerminalSquare,
   PieChart,
   LayoutDashboard,
@@ -244,7 +243,6 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ActivityIcon,
     section: { key: "nav_section_diagnostics", fallback: "Diagnostics" },
   },
-  { to: "/stats", key: "stats", fallback: "Stats", icon: BarChart3 },
   { to: "/logs", key: "logs", fallback: "Logs", icon: ScrollText },
   {
     to: "/audit-log",

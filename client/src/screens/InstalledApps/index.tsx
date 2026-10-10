@@ -81,6 +81,7 @@ import { killGame } from "../../lib/killGame";
 import { useMakeWay } from "../../lib/useMakeWay";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
+import { audit } from "../../state/auditLog";
 import { useTr } from "../../state/lang";
 import { transferAddr, mgmtAddr, hostOf } from "../../lib/addr";
 import { useImageRetry } from "../../lib/useImageRetry";
@@ -1110,6 +1111,7 @@ export default function InstalledAppsScreen({
       setError(null);
       try {
         await appUnregister(transferAddr(probe.host), t.titleId);
+        audit("app_uninstall", withConsolePrefix(probe.host, t.titleName), { context: t.titleId });
         if (probe.isStale()) return;
         setTitles((cur) => cur?.filter((x) => x.titleId !== t.titleId) ?? cur);
         void refresh();
