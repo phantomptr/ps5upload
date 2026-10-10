@@ -164,3 +164,47 @@ describe("activityHistory clear() / remove()", () => {
     expect(st().entries).toHaveLength(1);
   });
 });
+
+describe("activityHistory clear(host) / clearRunning(host)", () => {
+  beforeEach(() => {
+    resetStore();
+    if (typeof window !== "undefined") window.localStorage.clear();
+  });
+  afterEach(() => resetStore());
+
+  const st = () => useActivityHistoryStore.getState();
+
+  it("clear(host) drops only the entries that console shows", () => {
+    const mine = st().start("upload", "mine", { addr: "10.0.0.1:9120" });
+    st().finish(mine, "done");
+    const local = st().start("upload", "local only");
+    st().finish(local, "done");
+    const other = st().start("upload", "other", { addr: "10.0.0.2:9120" });
+    st().finish(other, "done");
+
+    st().clear("10.0.0.1");
+
+    expect(st().entries.map((e) => e.id)).toEqual([other]);
+  });
+
+  it("clearRunning(host) stops only that console's running rows", () => {
+    const mine = st().start("upload", "mine", { addr: "10.0.0.1:9120" });
+    const other = st().start("upload", "other", { addr: "10.0.0.2:9120" });
+
+    st().clearRunning("10.0.0.1");
+
+    const byId = new Map(st().entries.map((e) => [e.id, e.outcome]));
+    expect(byId.get(mine)).toBe("stopped");
+    expect(byId.get(other)).toBe("running");
+  });
+
+  it("without a host both clear every console", () => {
+    const a = st().start("upload", "a", { addr: "10.0.0.1:9120" });
+    st().start("upload", "b", { addr: "10.0.0.2:9120" });
+    st().finish(a, "done");
+    st().clearRunning();
+    expect(st().entries.every((e) => e.outcome !== "running")).toBe(true);
+    st().clear();
+    expect(st().entries).toHaveLength(0);
+  });
+});

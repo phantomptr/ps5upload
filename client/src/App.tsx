@@ -16,7 +16,7 @@ import { isTauriEnv } from "./lib/tauriEnv";
  * Code-splitting strategy:
  *
  * Eagerly imported (always-on, small):
- *   - ChangelogScreen — landing route, must paint immediately
+ *   - ChangelogScreen — small; the CHANGELOG text itself loads on demand
  *   - ConnectionScreen — first thing users see; adding suspense
  *     here would force a flash on app launch
  *   - SettingsScreen — small enough that lazy-loading isn't worth
@@ -62,7 +62,6 @@ const FirstRunScreen = lazyWithReload(() => import("./screens/FirstRun"));
 const SavesScreen = lazyWithReload(() => import("./screens/Saves"));
 const ProcessesScreen = lazyWithReload(() => import("./screens/Processes"));
 const CapturesScreen = lazyWithReload(() => import("./screens/Captures"));
-const StatsScreen = lazyWithReload(() => import("./screens/Stats"));
 const ShellScreen = lazyWithReload(() => import("./screens/Shell"));
 const DiskUsageScreen = lazyWithReload(() => import("./screens/DiskUsage"));
 const AboutScreen = lazyWithReload(() => import("./screens/About"));
@@ -450,14 +449,8 @@ function AppRoutes({ location }: { location: Location }) {
         />
         {/* Same screen; one address, so the sidebar's Tasks entry lights up for it. */}
         <Route path="/activity" element={<ActivityToTasks />} />
-        <Route
-          path="/stats"
-          element={
-            <Suspense fallback={<ScreenLoader />}>
-              <StatsScreen />
-            </Suspense>
-          }
-        />
+        {/* Stats is a tab of Tasks now. */}
+        <Route path="/stats" element={<Navigate to="/tasks?tab=stats" replace />} />
         {/* Legacy deep link / bookmark support for pre-2.12 installs.
             Kernel logs now live under the Logs tab ?tab=kernel.
             Keep the redirect indefinitely for any external bookmarks. */}

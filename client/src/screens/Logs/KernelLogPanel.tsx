@@ -383,9 +383,9 @@ export default function KernelLogPanel() {
           </div>
           <div className="mt-2 text-xs text-[var(--color-muted)]">
             {tr(
-              "kernellog_default_hidden_explainer",
+              "kernellog_categories_explainer",
               undefined,
-              "Default-hidden categories are Sony's own subsystems that emit constantly on every jailbroken PS5 regardless of what payload is running. They aren't caused by ps5upload. The crash, ps5upload, and other-payload categories are always visible by default.",
+              "Every category starts out shown. The Sony ones are the console's own subsystems, which log constantly on every jailbroken PS5 whatever payload is running; they aren't caused by ps5upload. Untick them to cut the noise.",
             )}
           </div>
         </div>

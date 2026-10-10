@@ -231,7 +231,9 @@ export default function AppLogsPanel() {
       {/* Persistent disk-log controls. These logs are written to
           ~/.ps5upload/logs/ so a bug report can package a time window; the
           level here gates the MINIMUM severity recorded (not what's shown
-          above). */}
+          above). The browser build has no disk log (diag_log_append is
+          desktop-only), so the level would change nothing there. */}
+      {isTauriEnv() && (
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-xs">
         <span className="text-[var(--color-muted)]">
           {tr(
@@ -251,16 +253,15 @@ export default function AppLogsPanel() {
             </option>
           ))}
         </select>
-        {isTauriEnv() && (
-          <button
-            type="button"
-            onClick={() => void invoke("diag_log_open_dir").catch(() => {})}
-            className="ml-auto text-[var(--color-accent)] hover:underline"
-          >
-            {tr("logs_open_folder", undefined, "Open logs folder")}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => void invoke("diag_log_open_dir").catch(() => {})}
+          className="ml-auto text-[var(--color-accent)] hover:underline"
+        >
+          {tr("logs_open_folder", undefined, "Open logs folder")}
+        </button>
       </div>
+      )}
 
       <div className="mb-4 flex flex-wrap items-center gap-1.5 text-xs">
         <FilterPill

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { activityForHost } from "../lib/activityScope";
 
 /**
  * Cross-screen log of every operation the user has triggered: uploads,
@@ -23,6 +24,8 @@ import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 const STORAGE_KEY = "ps5upload.activityHistory";
 const MAX_ENTRIES = 100;
+/** How many operations the history keeps; screens that total it say so. */
+export const ACTIVITY_HISTORY_LIMIT = MAX_ENTRIES;
 
 export type ActivityKind =
   | "upload"
@@ -136,8 +139,10 @@ interface ActivityHistoryState {
   ) => void;
   /** Clear the history — terminal (done/failed/stopped) entries only.
    *  Still-`running` entries are preserved so a clear can't make an
-   *  in-flight transfer/op disappear. */
-  clear: () => void;
+   *  in-flight transfer/op disappear. With `host`, only the entries that
+   *  console's view shows (its own plus local-only work) are cleared;
+   *  other consoles' history is kept. */
+  clear: (host?: string | null) => void;
   /** Delete a single history row by id. No-op for a still-`running`
    *  entry (Stop/Cancel it first). */
   remove: (id: string) => void;
@@ -148,8 +153,9 @@ interface ActivityHistoryState {
    *  payload disconnected mid-poll, etc. Without this the ActivityBar
    *  shows a forever-running ghost until the user restarts the app
    *  (which `loadInitial` then converts via the same logic). Past
-   *  entries are left alone — only running rows get touched. */
-  clearRunning: () => void;
+   *  entries are left alone — only running rows get touched. `host`
+   *  scopes it the same way as `clear`. */
+  clearRunning: (host?: string | null) => void;
   /** All entries currently in `running` state — the ActivityBar
    *  reads this to show the global in-flight indicator. Computed
    *  in-place so callers don't need a selector. */
@@ -324,13 +330,16 @@ export const useActivityHistoryStore = create<ActivityHistoryState>(
       });
     },
 
-    clear() {
+    clear(host) {
       // Clear the HISTORY only — keep any still-running entries (a clear
       // shouldn't make an in-flight transfer/op vanish from the UI). There is
       // no separate "queued" activity state today; queue-pending items aren't
       // activity records, so nothing queued is lost here either.
       set((s) => {
-        const kept = s.entries.filter((e) => e.outcome === "running");
+        const shown = new Set(activityForHost(s.entries, host).map((e) => e.id));
+        const kept = s.entries.filter(
+          (e) => e.outcome === "running" || !shown.has(e.id),
+        );
         persist(kept);
         return { entries: kept };
       });
@@ -349,12 +358,13 @@ export const useActivityHistoryStore = create<ActivityHistoryState>(
       });
     },
 
-    clearRunning() {
+    clearRunning(host) {
       set((s) => {
         const now = Date.now();
+        const shown = new Set(activityForHost(s.entries, host).map((e) => e.id));
         let changed = false;
         const next = s.entries.map((e) => {
-          if (e.outcome !== "running") return e;
+          if (e.outcome !== "running" || !shown.has(e.id)) return e;
           changed = true;
           return {
             ...e,

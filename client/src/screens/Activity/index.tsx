@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
 import {
   Activity as ActivityIcon,
@@ -19,7 +19,8 @@ import {
 } from "../../components";
 import { TaskList } from "../../components/TaskList";
 import { RunningEngineJobs } from "../../components/RunningEngineJobs";
-import { TelemetryDashboard } from "../../components/TelemetryDashboard";
+import { StatsPanel } from "./StatsPanel";
+import { parseActivityTab, stopActionFor, type ActivityTab } from "./activityView";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import {
@@ -41,14 +42,13 @@ import { profileNameForAddr, useRosterStore } from "../../state/roster";
 import { ConsoleChip } from "../../components/ConsoleChip";
 
 /**
- * Cross-screen log of past + current operations. Reads from the
- * persistent `activityHistory` store (last 100 entries, kept in
- * localStorage). Lets the user answer "what just happened" without
- * re-tracing through engine logs.
- *
- * Layout: in-flight entries on top with live elapsed/progress, past
- * entries below sorted newest-first. A Clear button wipes history
- * (with confirm).
+ * Tasks screen. Three tabs (`?tab=`):
+ *  - tasks: the live task projection with its real controls.
+ *  - history: the persistent `activityHistory` log (last 100 entries, kept
+ *    in localStorage) as a day timeline above the list of rows.
+ *  - stats: aggregates of that same history.
+ * History and stats show the selected console's entries plus local-only work;
+ * Clear acts on exactly what is shown.
  */
 export default function ActivityScreen() {
   const tr = useTr();
@@ -59,6 +59,17 @@ export default function ActivityScreen() {
   // `?console=<ip>`: another console's activity, opened from a job running there.
   const [params, setParams] = useSearchParams();
   const otherConsole = params.get("console");
+  const view = parseActivityTab(params.get("tab"));
+  const setView = (tab: ActivityTab) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (tab === "tasks") next.delete("tab");
+        else next.set("tab", tab);
+        return next;
+      },
+      { replace: true },
+    );
   const scopeHost = otherConsole || activeHost;
   const entries = activityForHost(allEntries, scopeHost);
   const profiles = useRosterStore((s) => s.profiles);
@@ -68,9 +79,6 @@ export default function ActivityScreen() {
   // Canonical confirm dialog — replaces the hand-rolled modal this screen
   // used to maintain in parallel with ConfirmDialog (style drift hazard).
   const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
-  const [view, setView] = useState<
-    "tasks" | "history" | "timeline" | "telemetry"
-  >("tasks");
 
   const running = entries.filter((e) => e.outcome === "running");
   const past = entries.filter((e) => e.outcome !== "running");
@@ -78,19 +86,19 @@ export default function ActivityScreen() {
   const onClearAll = async () => {
     const ok = await confirmDialog({
       title: tr(
-        "activity_clear_confirm_title",
+        "activity_clear_shown_confirm_title",
         undefined,
-        "Clear all activity?",
+        "Clear this history?",
       ),
       message: tr(
-        "activity_clear_confirm_body",
+        "activity_clear_shown_confirm_body",
         undefined,
-        "Removes finished entries (done, failed, stopped). Still-running activities are kept so nothing in flight disappears. To delete one row, use its trash button.",
+        "Removes the finished entries listed here (done, failed, stopped). Other consoles' history and anything still running are kept. To delete one row, use its trash button.",
       ),
       confirmLabel: tr("activity_clear", undefined, "Clear history"),
       destructive: true,
     });
-    if (ok) clear();
+    if (ok) clear(scopeHost);
   };
 
   return (
@@ -110,56 +118,26 @@ export default function ActivityScreen() {
               role="group"
               aria-label={tr("activity_view_toggle", undefined, "View")}
             >
-              <button
-                type="button"
+              <ViewButton
+                active={view === "tasks"}
                 onClick={() => setView("tasks")}
-                aria-pressed={view === "tasks"}
-                className={`rounded-md px-2.5 py-1.5 max-md:min-h-11 max-md:px-4 font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
-                  view === "tasks"
-                    ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
-                    : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
-                }`}
               >
                 {tr("v5_tab_tasks", undefined, "Tasks")}
-              </button>
-              <button
-                type="button"
+              </ViewButton>
+              <ViewButton
+                active={view === "history"}
                 onClick={() => setView("history")}
-                aria-pressed={view === "history"}
-                className={`rounded-md px-2.5 py-1.5 font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
-                  view === "history"
-                    ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
-                    : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
-                }`}
               >
-                {tr("changelog_full_history", undefined, "History")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setView("timeline")}
-                aria-pressed={view === "timeline"}
-                className={`rounded-md px-2.5 py-1.5 font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
-                  view === "timeline"
-                    ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
-                    : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
-                }`}
+                {tr("activity_view_history", undefined, "History")}
+              </ViewButton>
+              <ViewButton
+                active={view === "stats"}
+                onClick={() => setView("stats")}
               >
-                {tr("activity_view_timeline", undefined, "Timeline")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setView("telemetry")}
-                aria-pressed={view === "telemetry"}
-                className={`rounded-md px-2.5 py-1.5 max-md:min-h-11 max-md:px-4 font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
-                  view === "telemetry"
-                    ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
-                    : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
-                }`}
-              >
-                {tr("activity_view_telemetry", undefined, "Telemetry")}
-              </button>
+                {tr("stats", undefined, "Stats")}
+              </ViewButton>
             </div>
-            {view !== "tasks" && entries.length > 0 ? (
+            {view === "history" && entries.length > 0 ? (
               <Button
                 variant="ghost"
                 size="sm"
@@ -186,19 +164,23 @@ export default function ActivityScreen() {
           <button
             type="button"
             className="underline hover:text-[var(--color-text)]"
-            onClick={() => setParams({})}
+            onClick={() =>
+              setParams(
+                (prev) => {
+                  const next = new URLSearchParams(prev);
+                  next.delete("console");
+                  return next;
+                },
+                { replace: true },
+              )
+            }
           >
             {tr("activity_show_this_console", undefined, "Show this console")}
           </button>
         </div>
       )}
 
-      {view === "timeline" && entries.length > 0 && (
-        <ActivityTimeline entries={entries} />
-      )}
-
-      {/* v5 telemetry dashboard — live sensor charts. */}
-      {view === "telemetry" && <TelemetryDashboard />}
+      {view === "stats" && <StatsPanel entries={entries} />}
 
       {/* The unified task projection and legacy operation history are separate
           views. Stacking both produced duplicate rows for the same upload and
@@ -218,7 +200,7 @@ export default function ActivityScreen() {
         />
       )}
 
-      {(view === "history" || view === "timeline") && entries.length === 0 && (
+      {view === "history" && entries.length === 0 && (
         <EmptyState
           icon={ActivityIcon}
           size="hero"
@@ -229,6 +211,12 @@ export default function ActivityScreen() {
             "Uploads, downloads, and file system operations show up here as you trigger them.",
           )}
         />
+      )}
+
+      {view === "history" && entries.length > 0 && (
+        <div className="mb-6">
+          <ActivityTimeline entries={entries} />
+        </div>
       )}
 
       {view === "history" && running.length > 0 && (
@@ -245,7 +233,7 @@ export default function ActivityScreen() {
                 actually-cancellable in-flight ops. */}
             <button
               type="button"
-              onClick={clearRunning}
+              onClick={() => clearRunning(scopeHost)}
               className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs normal-case tracking-normal hover:bg-[var(--color-surface-3)]"
               title={tr(
                 "activity_clear_running_tooltip",
@@ -283,11 +271,37 @@ export default function ActivityScreen() {
   );
 }
 
+function ViewButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`rounded-md px-2.5 py-1.5 max-md:min-h-11 max-md:px-4 font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
+        active
+          ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
+          : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 function ActivityRow({ entry }: { entry: ActivityEntry }) {
   const tr = useTr();
   const remove = useActivityHistoryStore((s) => s.remove);
   const [detailOpen, setDetailOpen] = useState(false);
   const isRunning = entry.outcome === "running";
+  const stopAction = stopActionFor(entry);
   // "Running but nothing on the wire yet" — for archive uploads (esp. .rar,
   // which the engine extracts to a host temp dir BEFORE any transfer) this is
   // the long silent prep phase that used to read as a misleading "Uploading N
@@ -444,22 +458,30 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
           <Eye size={13} />
         </button>
         {isRunning ? (
-          <button
-            type="button"
-            onClick={() => void handleStop()}
-            className="rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
-            title={tr(
-              "activity_stop_tooltip",
-              undefined,
-              entry.opId !== undefined
-                ? "Cancel the in-flight operation"
-                : "Stop watching this operation (engine job may continue server-side)",
-            )}
-          >
-            {entry.opId !== undefined
-              ? tr("activity_cancel", undefined, "Cancel")
-              : tr("fs_download_stop", undefined, "Stop")}
-          </button>
+          stopAction && (
+            <button
+              type="button"
+              onClick={() => void handleStop()}
+              className="rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
+              title={
+                stopAction === "cancel"
+                  ? tr(
+                      "activity_cancel_tooltip",
+                      undefined,
+                      "Cancel this operation",
+                    )
+                  : tr(
+                      "fs_download_stop_tooltip",
+                      undefined,
+                      "Stop watching this download (engine job continues server-side)",
+                    )
+              }
+            >
+              {stopAction === "cancel"
+                ? tr("activity_cancel", undefined, "Cancel")
+                : tr("fs_download_stop", undefined, "Stop watching")}
+            </button>
+          )
         ) : (
           <button
             type="button"

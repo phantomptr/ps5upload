@@ -3,16 +3,15 @@ import {
   Heart,
   Coffee,
   Mail,
-  Zap,
-  HardDrive,
-  Radio,
-  Cpu,
   Sparkles,
   ShieldAlert,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { openExternalUrl as openExternal } from "../../lib/openExternalUrl";
 import { COFFEE_URL } from "../../lib/supportLinks";
 import { getAppVersion } from "../../lib/appVersion";
+import { isTauriEnv } from "../../lib/tauriEnv";
+import { visibleFeatures } from "./features";
 
 import { useTr } from "../../state/lang";
 import { Button, Card, Badge } from "../../components";
@@ -30,54 +29,6 @@ const URLS = {
   coffee: COFFEE_URL,
   email: `mailto:${AUTHOR_EMAIL}`,
 };
-
-/** Top-level feature cards — four one-sentence pitches of what the app
- *  actually does. Helps first-time About-page visitors quickly scan
- *  "is this what I need?". Icons match the feature's sidebar icon so
- *  there's visual continuity if the user jumps over to try it. */
-/** Module-level constants can't reach `useTr` (it's a hook). Each
- *  feature carries a {key, fallback} pair instead; the rendering
- *  loop calls `tr()` per feature so language changes flow through. */
-const FEATURES: {
-  icon: typeof Zap;
-  titleKey: string;
-  titleFallback: string;
-  bodyKey: string;
-  bodyFallback: string;
-}[] = [
-  {
-    icon: Zap,
-    titleKey: "about_feat_fast_transfers_title",
-    titleFallback: "Fast transfers",
-    bodyKey: "about_feat_fast_transfers_body",
-    bodyFallback:
-      "AVA1 transfer protocol with BLAKE3 verification, encrypted sessions, resumable jobs and small-file packing. Uses your LAN flat-out.",
-  },
-  {
-    icon: HardDrive,
-    titleKey: "about_feat_native_mount_title",
-    titleFallback: "Native image mount",
-    bodyKey: "about_feat_native_mount_body",
-    bodyFallback:
-      "Attach .exfat and .ffpkg images to /mnt/ps5upload/ via MDIOCATTACH + nmount — no third-party helpers needed.",
-  },
-  {
-    icon: Radio,
-    titleKey: "about_feat_works_everything_title",
-    titleFallback: "Works with everything",
-    bodyKey: "about_feat_works_everything_body",
-    bodyFallback:
-      "Send any PS5 payload ELF — homebrew loaders, kernel patches, custom utilities — over :9021 with a file-picker flow.",
-  },
-  {
-    icon: Cpu,
-    titleKey: "about_feat_hardware_title",
-    titleFallback: "Live hardware view",
-    bodyKey: "about_feat_hardware_body",
-    bodyFallback:
-      "Model, serial, uptime, CPU frequency, RAM, and fan-threshold control — all without touching Sony's UI.",
-  },
-];
 
 export default function AboutScreen() {
   const tr = useTr();
@@ -143,14 +94,14 @@ export default function AboutScreen() {
         </div>
       </header>
 
-      {/* Features — 2×2 grid on sm+, 4-wide on lg+. Compact icon
+      {/* Features — 2-wide grid on sm+, 3-wide on lg+. Compact icon
           cards so the page doesn't turn into a wall of words. */}
       <section className="mb-10">
         <SectionTitle icon={Sparkles}>
           {tr("about_what_it_does", undefined, "What it does")}
         </SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {FEATURES.map((f) => (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {visibleFeatures(isTauriEnv()).map((f) => (
             <FeatureTile
               key={f.titleKey}
               icon={f.icon}
@@ -292,7 +243,7 @@ function FeatureTile({
   title,
   body,
 }: {
-  icon: typeof Zap;
+  icon: LucideIcon;
   title: string;
   body: string;
 }) {

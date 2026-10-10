@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { parseFaq, searchFaq, slugOf } from "./faqDoc";
+import faqText from "virtual:doc/faq";
+
+import { faqItemUrl, parseFaq, searchFaq, slugOf } from "./faqDoc";
 
 const MD = `# FAQ
 
@@ -128,5 +130,28 @@ describe("searchFaq", () => {
     const [hit] = searchFaq(d, "risk");
     expect(hit.topic.title).toBe("Disclaimer");
     expect(hit.item).toBeNull();
+  });
+});
+
+describe("faqItemUrl", () => {
+  it("links to the answer under the served base path", () => {
+    expect(faqItemUrl("http://nas:8080", undefined, "a b")).toBe("http://nas:8080/faq?item=a%20b");
+    expect(faqItemUrl("http://nas:8080", "/", "x")).toBe("http://nas:8080/faq?item=x");
+    expect(faqItemUrl("http://nas:8080", "/ps5/", "x")).toBe("http://nas:8080/ps5/faq?item=x");
+  });
+});
+
+describe("FAQ.md", () => {
+  it("names only screens that still exist", () => {
+    for (const gone of ["FTP Server screen", "SMB Browser", "Game Metadata", "Installed screen", "Library tab", "optional FTP server"]) {
+      expect(faqText, gone).not.toContain(gone);
+    }
+  });
+
+  it("gives one list of payloads to load before an install", () => {
+    const q = "Which payloads must be running before I install a package?";
+    expect(faqText).toContain(q);
+    expect(faqText).toContain("a53_ppr_install_fast.elf");
+    expect(faqText).not.toContain("The console needs kstuff, `a53_ppr_install_fast.elf` and `shadowmountplus.elf` loaded first");
   });
 });

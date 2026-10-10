@@ -83,7 +83,7 @@ const TAB_DEFS: TabDef[] = [
     icon: Activity,
     to: "/tasks",
     sections: ["nav_section_diagnostics"],
-    extra: ["/activity", "/kernel-log", "/bug-report"],
+    extra: ["/activity", "/stats", "/kernel-log", "/bug-report"],
   },
 ];
 

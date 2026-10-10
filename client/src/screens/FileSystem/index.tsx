@@ -106,6 +106,7 @@ import {
 import { useFsNavStore } from "../../state/fsNavigation";
 import { trackTask } from "../../state/trackTask";
 import { useActivityHistoryStore } from "../../state/activityHistory";
+import { audit } from "../../state/auditLog";
 import { pushNotification } from "../../state/notifications";
 import { usePkgLibrary } from "../../state/pkgLibrary";
 import { isRemovableMount } from "../../lib/mountPaths";
@@ -865,6 +866,7 @@ export default function FileSystemScreen() {
         .finish(activityId, okOutcome ? "done" : "failed", {
           error: errMsg ?? undefined,
         });
+      audit("fs_delete", withConsolePrefix(host, itemPath), { failed: !okOutcome });
       setBusyEntry(null);
     }
   };
@@ -1390,6 +1392,7 @@ export default function FileSystemScreen() {
           })();
           try {
             await fsDelete(addr, itemPath, opId);
+            audit("fs_delete", withConsolePrefix(host, itemPath));
           } catch (e) {
             // Engine maps payload's "fs_delete_cancelled" to HTTP 409
             // → fsDelete throws an Error containing "cancelled". The

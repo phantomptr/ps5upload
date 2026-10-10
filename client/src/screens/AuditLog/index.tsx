@@ -8,11 +8,10 @@ import { useAuditLogStore, type AuditEntry } from "../../state/auditLog";
 /**
  * Top-level Audit log screen (promoted from a Settings card in 2.12.0).
  *
- * The audit log records every destructive or otherwise-irreversible
- * action the user has taken: deletes (Library, FileSystem, Saves),
- * unmounts, reboots/shutdowns, app unregisters, mount-replacements,
- * etc. It's a permanent local safety record — there's deliberately
- * no "Clear" button.
+ * The audit log records power actions (wake, rest, restart, shut down),
+ * deletes from Files and the game library, unregisters, uninstalls and
+ * installs. It lives in localStorage as a 256-entry ring; there's
+ * deliberately no "Clear" button.
  *
  * Why promoted: the conceptual-model audit flagged Settings as a
  * "junk drawer" mixing real preferences with one-off operations and
@@ -40,17 +39,17 @@ export default function AuditLogScreen() {
         icon={ShieldCheck}
         title={tr("audit_log_title", undefined, "Audit log")}
         description={tr(
-          "audit_log_description_v2",
+          "audit_log_description_v3",
           undefined,
-          "A permanent record, kept on this computer, of what you deleted or changed that cannot be undone. It cannot be cleared, on purpose. The last 100 entries are shown.",
+          "A record, kept in this app on this computer, of power actions, deletes, unregisters, uninstalls and installs. The newest 256 are kept and older ones roll off; there is no clear button, but clearing the app's data or browser storage erases it. The last 100 are shown.",
         )}
       />
       {entries.length === 0 ? (
         <p className="text-xs text-[var(--color-muted)]">
           {tr(
-            "audit_empty",
+            "audit_empty_v2",
             undefined,
-            "No destructive actions recorded yet. Reboots, deletes, unregisters, and similar will appear here as you perform them.",
+            "Nothing recorded yet. Power actions (wake, rest mode, restart, shut down), deletes, unregisters, uninstalls and installs appear here as you do them.",
           )}
         </p>
       ) : (

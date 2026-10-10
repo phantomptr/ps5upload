@@ -142,6 +142,7 @@ import {
   saveMountDest,
 } from "../../lib/mountDest";
 import { useActivityHistoryStore } from "../../state/activityHistory";
+import { audit } from "../../state/auditLog";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import {
@@ -1178,6 +1179,7 @@ function LibraryRowImpl({
     let errMsg: string | null = null;
     try {
       await fsDelete(consoleAddr(host), entry.path);
+      audit("fs_delete", withConsolePrefix(host, entry.path));
       onChanged();
     } catch (e) {
       okOutcome = false;
@@ -2219,6 +2221,7 @@ function LibraryRowImpl({
     let errMsg: string | null = null;
     try {
       await appUnregister(consoleAddr(host), entry.titleId);
+      audit("library_unregister", withConsolePrefix(host, entry.name), { context: entry.titleId });
       setMountNote(
         `Unregistered ${entry.titleId}. The XMB tile is removed; the source files on disk were not touched.`,
       );

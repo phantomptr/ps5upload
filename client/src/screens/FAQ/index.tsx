@@ -11,7 +11,9 @@ import {
 } from "../../components";
 import { Tabs } from "../../components/Tabs";
 import { loadBundledDoc } from "../../lib/bundledDoc";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import {
+  faqItemUrl,
   parseFaq,
   searchFaq,
   slugOf,
@@ -202,10 +204,13 @@ export default function FAQScreen() {
       return next;
     });
   const showTopic = (id: string) => setSearchParams({ topic: id }, { replace: true });
-  // Clipboard needs a secure context; the self-hosted web UI often has none. No button then.
-  const canCopy = typeof navigator !== "undefined" && !!navigator.clipboard?.writeText;
+  // A link only means something in the browser build: the desktop and Android apps load from
+  // an internal origin nobody else can open. Clipboard also needs a secure context, which the
+  // self-hosted web UI often lacks. No button in either case.
+  const canCopy =
+    !isTauriEnv() && typeof navigator !== "undefined" && !!navigator.clipboard?.writeText;
   const copyLink = (item: FaqItem) => {
-    const url = `${window.location.origin}/faq?item=${encodeURIComponent(item.id)}`;
+    const url = faqItemUrl(window.location.origin, import.meta.env.VITE_BASE_URL, item.id);
     void navigator.clipboard.writeText(url).catch(() => {});
   };
   const allOpen = !!topic && topic.items.length > 0 && topic.items.every((i) => open.has(i.id));

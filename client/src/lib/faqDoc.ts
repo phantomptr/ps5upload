@@ -31,6 +31,13 @@ export interface FaqDoc {
   topics: FaqTopic[];
 }
 
+/** A shareable web-UI link to one answer. `base` is the router basename the build was served
+ *  under (VITE_BASE_URL), so a UI hosted at a sub-path links back to itself. */
+export function faqItemUrl(origin: string, base: string | undefined, itemId: string): string {
+  const prefix = (base || "/").replace(/\/+$/, "");
+  return `${origin}${prefix}/faq?item=${encodeURIComponent(itemId)}`;
+}
+
 /** A link-safe id from a heading or question. */
 export function slugOf(text: string): string {
   return (
