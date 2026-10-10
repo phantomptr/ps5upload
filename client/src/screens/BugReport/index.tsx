@@ -236,7 +236,7 @@ function BugReportPage({ host }: { host: string }) {
       </div>
 
       {/* Always in reach: what still blocks the report, and the button that creates it. */}
-      <div className="sticky bottom-3 z-10 px-4 pb-1 md:px-8 max-md:bottom-[calc(var(--safe-bottom)+5rem)]">
+      <div className="sticky bottom-3 z-10 px-4 pb-1 md:px-8">
         <div className="glass-float mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-3 gap-y-1.5 rounded-[var(--radius-panel)] px-4 py-2.5">
           <Button variant="ghost" size="sm" onClick={discard}>
             {tr("br_discard", undefined, "Start over")}

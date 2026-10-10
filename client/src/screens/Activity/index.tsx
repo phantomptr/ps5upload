@@ -296,14 +296,14 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
       ? Math.min(100, (entry.bytes / entry.totalBytes) * 100)
       : null;
 
+  // The outcome icon carries the state; the edge only speaks up for work
+  // still running and for failures.
   const borderClass =
     entry.outcome === "running"
-      ? "border-[var(--color-accent)]"
-      : entry.outcome === "done"
-        ? "border-[var(--color-good)]"
-        : entry.outcome === "failed"
-          ? "border-[var(--color-bad)]"
-          : "border-[var(--color-warn)]";
+      ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)]"
+      : entry.outcome === "failed"
+        ? "border-[color-mix(in_srgb,var(--color-bad)_35%,transparent)]"
+        : "border-[var(--glass-edge)]";
 
   // Stop dispatch — pick the appropriate cancel mechanism based on
   // entry.kind. For ops with an op_id (Library moves, FS pastes), call the
@@ -359,7 +359,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
 
   return (
     <li
-      className={`rounded-md border bg-[var(--color-surface-2)] p-3 text-xs ${borderClass}`}
+      className={`rounded-[var(--radius-card)] border bg-[var(--color-surface-raised)] px-4 py-3 text-xs shadow-[var(--edge-highlight)] ${borderClass}`}
     >
       <div className="mb-1 flex items-center gap-2">
         <OutcomeIcon outcome={entry.outcome} />

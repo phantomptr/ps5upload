@@ -173,7 +173,7 @@ export default function UsbAutoloaderModal({
                   {drives.map((d) => (
                     <li
                       key={d.path}
-                      className={`flex items-center gap-3 rounded-md border p-2 text-xs ${
+                      className={`flex items-center gap-3 rounded-[var(--radius-field)] border p-2 text-xs ${
                         pickedDrive === d.path
                           ? "border-[var(--color-accent)] bg-[var(--color-surface)]"
                           : "border-[var(--color-border)]"
@@ -234,7 +234,7 @@ export default function UsbAutoloaderModal({
                     return (
                       <li
                         key={p.id}
-                        className={`flex items-center gap-3 rounded-md border p-2 text-xs ${
+                        className={`flex items-center gap-3 rounded-[var(--radius-field)] border p-2 text-xs ${
                           cached
                             ? checked
                               ? "border-[var(--color-accent)] bg-[var(--color-surface)]"

@@ -795,9 +795,9 @@ function StatRow({
   // value in small muted type rather than squeezed in beside it.
   return (
     <div className="metric-row min-w-0 py-2">
-      <dt className="shrink-0 text-[var(--color-muted)]">{label}</dt>
-      <dd className="min-w-0 text-right" title={hint}>
-        <div className="font-mono tabular-nums">{value}</div>
+      <dt className="min-w-0 text-[var(--color-muted)]">{label}</dt>
+      <dd className="min-w-0 max-w-[65%] shrink-0 text-right" title={hint}>
+        <div className="whitespace-nowrap font-mono tabular-nums">{value}</div>
         {hint && (
           <div className="mt-0.5 text-xs leading-snug text-[var(--color-muted)]">
             {hint}
@@ -927,11 +927,8 @@ function FanThresholdCard({
               onClick={() => applyThreshold(p.c)}
               disabled={!canSet}
               title={tr(p.hintKey, undefined, p.hintFallback)}
-              className={`flex flex-col items-center gap-0.5 rounded-md border px-2 py-2 text-xs transition ${
-                active
-                  ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                  : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
-              } disabled:opacity-50`}
+              aria-pressed={active}
+              className="chip flex-col justify-center gap-0.5 !rounded-[var(--radius-field)] px-2 py-2.5 text-xs disabled:opacity-50"
             >
               <span className="flex items-center gap-1 font-medium">
                 {active && <Check size={10} />}

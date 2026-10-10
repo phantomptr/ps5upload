@@ -23,12 +23,7 @@ export default function Chips<T extends string>({
               role="radio"
               aria-checked={on}
               onClick={() => onChange(o.value)}
-              className={
-                "inline-flex h-8 items-center rounded-full border px-3.5 text-sm transition-colors " +
-                (on
-                  ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] font-medium text-[var(--color-text)]"
-                  : "border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)]")
-              }
+              className="chip h-8 px-3.5 text-sm max-md:h-11"
             >
               {o.label}
             </button>

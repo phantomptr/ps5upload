@@ -1118,11 +1118,8 @@ function NotifPrunePanel() {
             key={o.days}
             type="button"
             onClick={() => pickDays(o.days)}
-            className={`rounded-md border px-2 py-1 text-xs max-md:min-h-11 max-md:px-4 ${
-              days === o.days
-                ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
-            }`}
+            aria-pressed={days === o.days}
+            className="chip min-h-8 px-3.5 text-xs max-md:min-h-11 max-md:px-4"
           >
             {tr(o.labelKey, o.labelFallback)}
           </button>

@@ -662,7 +662,7 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
                     enabled={canConvert}
                     cache={thumbCache}
                   />
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1 basis-[10rem]">
                     <code className="block truncate text-xs">
                       {item.path.split("/").pop()}
                     </code>

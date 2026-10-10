@@ -348,7 +348,7 @@ export function CheatGameDetail({
               return (
                 <li
                   key={`${e.repo_id}/${e.filename}`}
-                  className={`flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 ${
+                  className={`flex flex-wrap items-center gap-3 rounded-[var(--radius-field)] border px-3 py-2 ${
                     match ? "border-[var(--color-good)]/50 bg-[var(--color-good)]/5" : "border-[var(--color-border)]"
                   }`}
                 >

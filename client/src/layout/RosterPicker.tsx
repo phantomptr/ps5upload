@@ -238,7 +238,7 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
             {profiles.map((p, index) => (
               <li
                 key={p.id}
-                className={`rounded-md border p-3 text-xs ${
+                className={`rounded-[var(--radius-field)] border p-3 text-xs ${
                   p.id === active?.id
                     ? "border-[var(--color-accent)]"
                     : "border-[var(--color-border)]"

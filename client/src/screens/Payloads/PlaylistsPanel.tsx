@@ -267,7 +267,7 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
         <div
           ref={dropZoneRef}
           data-own-drop=""
-          className={`mb-4 rounded-md border-2 border-dashed p-3 text-center text-xs transition-colors ${
+          className={`mb-4 rounded-[var(--radius-field)] border-2 border-dashed p-3 text-center text-xs transition-colors ${
             dropActive
               ? "border-[var(--color-accent)] bg-[var(--color-surface-3)]"
               : "border-[var(--color-border)] text-[var(--color-muted)]"
@@ -553,7 +553,7 @@ function RunStatusBanner({ host }: { host: string }) {
     const hasFailures = runStatus.failureCount > 0;
     return (
       <div
-        className={`mb-3 rounded-md border p-2 text-xs ${
+        className={`mb-3 rounded-[var(--radius-field)] border p-2 text-xs ${
           hasFailures
             ? "border-[var(--color-warn)] bg-[var(--color-surface)]"
             : "border-[var(--color-good)] bg-[var(--color-surface)]"
@@ -907,7 +907,7 @@ function PlaylistCard({
               // step path to 0px on one nowrap line. Allowing the row to wrap
               // — with a floored path min-width below — drops the controls to
               // their own line instead, keeping the payload path visible.
-              className={`flex flex-col gap-2 rounded border p-2 text-xs sm:flex-row sm:flex-wrap sm:items-center ${
+              className={`flex flex-col gap-2 rounded-[var(--radius-field)] border p-2 text-xs sm:flex-row sm:flex-wrap sm:items-center ${
                 i === activeStepIndex
                   ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
                   : "border-[var(--color-border)] bg-[var(--color-surface-2)]"

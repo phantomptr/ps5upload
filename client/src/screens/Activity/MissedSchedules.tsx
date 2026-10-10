@@ -41,7 +41,7 @@ export function MissedSchedules() {
             key={s.id}
             className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2.5"
           >
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 basis-[12rem]">
               <div className="truncate text-sm font-medium">{s.label}</div>
               <div className="text-xs text-[var(--color-muted)]">
                 {tr(

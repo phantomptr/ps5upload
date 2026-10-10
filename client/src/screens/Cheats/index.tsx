@@ -359,7 +359,7 @@ function EngineBar({
   const tr = useTr();
   return (
     <div
-      className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 ${
+      className={`flex flex-wrap items-center gap-3 rounded-[var(--radius-field)] border px-4 py-3 ${
         status.enabled
           ? "border-[var(--color-good)]/40 bg-[var(--color-good)]/5"
           : "border-[var(--color-border)] bg-[var(--color-surface-2)]"

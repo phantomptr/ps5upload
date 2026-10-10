@@ -381,7 +381,7 @@ function CheckRow({
   const Icon = ui.icon;
   return (
     <div
-      className={`flex items-start gap-3 rounded-lg border ${ui.ring} bg-[var(--color-surface-2)] p-3`}
+      className={`flex items-start gap-3 rounded-[var(--radius-field)] border ${ui.ring} bg-[var(--color-surface-2)] p-3`}
     >
       <Icon size={16} className={`mt-0.5 shrink-0 ${ui.cls}`} />
       <div className="min-w-0 flex-1">
