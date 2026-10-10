@@ -3975,10 +3975,10 @@ export interface JobSnapshot {
   /** Populated for `running` only — total expected bytes so the UI can
    *  render percent + ETA. Pre-computed from source size at job start. */
   total_bytes?: number;
-  /** Planned file list for per-file UI. Shipped once on the first
-   *  Running tick and republished each tick so polling picks it up
-   *  regardless of when the UI subscribes. Empty for tiny jobs. */
-  files?: PlannedFile[];
+  /** How many files the running job plans to send. The list itself is not in
+   *  the snapshot (it can be megabytes); `fetchJobFiles` (lib/jobFiles) reads it
+   *  once. Absent when the job has no list. */
+  files_count?: number;
   /** Reconcile-mode skip counts. 0 for plain uploads. */
   skipped_files?: number;
   skipped_bytes?: number;

@@ -24,6 +24,7 @@ import {
   type ReconcileMode,
 } from "../api/ps5";
 import { fileResumeTxId } from "../lib/fileResumeTx";
+import { fetchJobFiles } from "../lib/jobFiles";
 import { createRunGen } from "../lib/runGen";
 import { log } from "./logs";
 import {
@@ -88,8 +89,11 @@ export type TransferPhase =
        *  we have at least 2 samples. */
       bytesPerSec: number;
       /** Planned file list — used to render the per-file status panel.
-       *  Empty until the first tick with a populated list arrives. */
+       *  Fetched once per job (lib/jobFiles); empty until it arrives. */
       files: PlannedFile[];
+      /** How many files the job plans to send (from the snapshot, so it is
+       *  known before `files` arrives). 0 when the job has no list. */
+      fileCount: number;
       /** Number of files in `files` whose cumulative byte range is
        *  below `bytesSent` — treat these as "done". Derived; lives
        *  in state so the UI doesn't recompute every render. */
@@ -431,6 +435,7 @@ export const useTransferStore = create<TransferState>((set) => {
         totalBytes: 0,
         bytesPerSec: 0,
         files: [],
+        fileCount: 0,
         filesCompleted: 0,
         skippedFiles: 0,
         skippedBytes: 0,
@@ -452,6 +457,20 @@ export const useTransferStore = create<TransferState>((set) => {
       // lib/rollingRate so the two surfaces never disagree on what
       // "smoothed bytes/sec" means.
       const samples: RateSample[] = [{ ts: startedAtMs, bytes: 0 }];
+      // The job's planned file list, read once from its own route: the
+      // snapshot only carries `files_count`.
+      let files: PlannedFile[] = [];
+      let filesFetch: Promise<void> | null = null;
+      const loadFiles = (want: number) => {
+        if (filesFetch || files.length >= want) return;
+        filesFetch = fetchJobFiles(jobId)
+          .then((got) => {
+            if (got) files = got;
+          })
+          .finally(() => {
+            filesFetch = null;
+          });
+      };
 
       const poll = async () => {
         if (!isLive()) return;
@@ -724,7 +743,8 @@ export const useTransferStore = create<TransferState>((set) => {
           const bytesSent = snap.bytes_sent ?? 0;
           pushRateSample(samples, now, bytesSent);
           const bytesPerSec = computeRate(samples, now);
-          const files = snap.files ?? [];
+          const fileCount = snap.files_count ?? 0;
+          if (fileCount > 0) loadFiles(fileCount);
           // Cumulative-sum the file sizes to find how many have been
           // "completed" — defined as: their cumulative end byte is at
           // or below the bytes accounted for. Close enough for UI: on
@@ -769,6 +789,7 @@ export const useTransferStore = create<TransferState>((set) => {
             totalBytes: snap.total_bytes ?? 0,
             bytesPerSec,
             files,
+            fileCount: Math.max(fileCount, files.length),
             filesCompleted,
             skippedFiles: snap.skipped_files ?? 0,
             skippedBytes: snap.skipped_bytes ?? 0,

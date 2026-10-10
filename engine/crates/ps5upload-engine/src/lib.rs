@@ -210,13 +210,18 @@ pub(crate) enum JobState {
         /// fail to stat the source, which would error before Running).
         #[serde(default)]
         total_bytes: u64,
-        /// Ordered list of files this job will send. Shipped once on
-        /// the first Running tick so the UI can render per-file status.
-        /// For folder uploads this is the planned delta (reconcile) or
-        /// the full tree walk (plain dir). For single files / file-list
-        /// uploads, it's the requested file(s). Empty-by-default keeps
-        /// wire size small for small jobs where the list isn't useful.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        /// Ordered list of files this job will send. For folder uploads
+        /// this is the planned delta (reconcile) or the full tree walk
+        /// (plain dir); for single files / file-list uploads, the
+        /// requested file(s). The job snapshot (poll, list, events) carries
+        /// only its length as `files_count`: a big folder's list is
+        /// megabytes and was re-sent on every 500 ms poll. The list itself
+        /// is served once by `GET /api/jobs/{id}/files`.
+        #[serde(
+            rename = "files_count",
+            serialize_with = "serialize_len",
+            skip_serializing_if = "Vec::is_empty"
+        )]
         files: Vec<PlannedFile>,
         /// Files already present on the PS5 that were skipped this run
         /// (reconcile mode only). 0 for non-reconcile uploads.
@@ -321,6 +326,12 @@ pub(crate) enum JobState {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_console: Option<String>,
     },
+}
+
+/// Serializes a list as its length (see `JobState::Running::files`).
+#[allow(clippy::ptr_arg)] // serde hands the field over as `&Vec<_>`
+fn serialize_len<S: serde::Serializer, T>(v: &Vec<T>, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_u64(v.len() as u64)
 }
 
 /// Build a `JobState::Failed` from a transfer error, populating the
@@ -958,11 +969,10 @@ fn walk_plan_with(
 /// Intentionally does NOT carry `files: Vec<PlannedFile>`. The handler
 /// writes the files list once on the initial Running set_job; the
 /// ticker then only updates the scalar counters, preserving whatever
-/// files list the handler stored. For jobs with thousands of files
-/// (large reconcile deltas) this drops the per-tick SSE payload from
-/// O(files × path_len) back down to O(1), and the UI already caches
-/// the files list on its first snapshot, so the visible behavior is
-/// identical.
+/// files list the handler stored. The snapshot it broadcasts carries
+/// only the list's length (`files_count`), and is serialized under the
+/// lock instead of cloning the job, so a tick stays O(1) in the file
+/// count.
 #[derive(Clone)]
 struct TickerContext {
     started_at_ms: u64,
@@ -1094,9 +1104,14 @@ fn spawn_progress_ticker(
                         *fp = files_processing;
                         *ff = files_finalized;
                         *bf = bytes_finalized;
-                        // Clone once for the SSE broadcast path; the
-                        // lock-held section stays short.
-                        Some(g.get(&job_id).cloned())
+                        // Nobody listening: skip building the event.
+                        // Serialize from the reference (no clone of the
+                        // job); `files` serializes as a count.
+                        Some(
+                            (events_tx.receiver_count() > 0)
+                                .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
+                                .flatten(),
+                        )
                     }
                     // Job moved to terminal state (Done/Failed) — stop
                     // ticking to avoid writing over the terminal record.
@@ -1105,10 +1120,11 @@ fn spawn_progress_ticker(
             };
             match maybe_snapshot {
                 Some(Some(state)) => {
-                    let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, serde_json::json!(state)) });
+                    let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, state) });
                     let _ = events_tx.send(msg.to_string());
                 }
-                _ => break,
+                Some(None) => {}
+                None => break,
             }
         }
     });
@@ -1161,14 +1177,16 @@ fn spawn_verify_stage(
                             done,
                             total,
                         });
-                        g.get(&job_id).cloned()
+                        g.get(&job_id).map(|st| serde_json::json!(st))
                     }
                     _ => None,
                 }
             };
             let Some(state) = snapshot else { break };
-            let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, serde_json::json!(state)) });
-            let _ = events_tx.send(msg.to_string());
+            if events_tx.receiver_count() > 0 {
+                let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, state) });
+                let _ = events_tx.send(msg.to_string());
+            }
             if finished {
                 break;
             }
@@ -1463,22 +1481,27 @@ pub(crate) fn set_job(
     job_id: Uuid,
     state: JobState,
 ) {
+    // Serialized before the move into the map, so the (possibly long) file
+    // list is never cloned; it serializes as a count.
+    let terminal = matches!(state, JobState::Done { .. } | JobState::Failed { .. });
+    let json = serde_json::json!(state);
     {
         let mut g = jobs.lock().unwrap_or_else(|e| e.into_inner());
         if !g.contains_key(&job_id) && g.len() >= JOBS_MAP_CAP {
             evict_oldest_terminal(&mut g);
         }
-        g.insert(job_id, state.clone());
+        g.insert(job_id, state);
     }
-    if matches!(state, JobState::Done { .. } | JobState::Failed { .. }) {
-        let json = serde_json::json!(state);
+    if terminal {
         telemetry::on_state(job_id, &json);
         if let Some(e) = job_event(&job_id.to_string(), &json) {
             ps5upload_core::events::emit_event(e);
         }
     }
-    let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, serde_json::json!(state)) });
-    let _ = events_tx.send(msg.to_string());
+    if events_tx.receiver_count() > 0 {
+        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, json) });
+        let _ = events_tx.send(msg.to_string());
+    }
 }
 
 /// The journal event for a job that reached a terminal state (bug-report spec §1.2); `None`
@@ -8908,20 +8931,39 @@ async fn get_job(State(state): State<AppState>, Path(id): Path<String>) -> impl 
         Ok(u) => u,
         Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid job id").into_response(),
     };
-    match state
+    // Serialized under the lock rather than cloned: the snapshot carries the
+    // file list's length only (`files_count`), so this stays cheap at 2 polls/s.
+    let job = state
         .jobs
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(&uuid)
-        .cloned()
-    {
-        Some(job) => (
-            StatusCode::OK,
-            Json(with_live_notes(uuid, serde_json::json!(job))),
-        )
-            .into_response(),
+        .map(|j| serde_json::json!(j));
+    match job {
+        Some(job) => (StatusCode::OK, Json(with_live_notes(uuid, job))).into_response(),
         None => json_err(StatusCode::NOT_FOUND, "job not found").into_response(),
     }
+}
+
+/// GET /api/jobs/{id}/files — a running job's planned file list (`{"files":
+/// [{"rel_path","size"}...]}`), fetched once by the UI that shows it. The job
+/// snapshot only carries its length. A finished job no longer has one: `[]`.
+async fn get_job_files(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    let uuid = match id.parse::<Uuid>() {
+        Ok(u) => u,
+        Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid job id").into_response(),
+    };
+    let files = match state
+        .jobs
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&uuid)
+    {
+        Some(JobState::Running { files, .. }) => serde_json::json!(files),
+        Some(_) => serde_json::json!([]),
+        None => return json_err(StatusCode::NOT_FOUND, "job not found").into_response(),
+    };
+    (StatusCode::OK, Json(serde_json::json!({ "files": files }))).into_response()
 }
 
 /// POST /api/jobs/{id}/cancel — truly stop a running transfer. Flips the job's
@@ -9841,6 +9883,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/metrics", get(telemetry::metrics_handler))
         .route("/api/bug-report/bundle", post(bug_report_bundle_handler))
         .route("/api/jobs/{id}", get(get_job))
+        .route("/api/jobs/{id}/files", get(get_job_files))
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/events", get(events_stream))
         .route("/api/engine-logs", get(engine_logs_tail))
@@ -10727,6 +10770,95 @@ mod helpers_tests {
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    fn running_with_files(n: usize) -> JobState {
+        JobState::Running {
+            stage: None,
+            started_at_ms: 1,
+            bytes_sent: 0,
+            total_bytes: 0,
+            files: (0..n)
+                .map(|i| PlannedFile {
+                    rel_path: format!("dir/file{i}.bin"),
+                    size: 10,
+                })
+                .collect(),
+            skipped_files: 0,
+            skipped_bytes: 0,
+            files_processing: 0,
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
+        }
+    }
+
+    async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// The 500 ms poll used to carry the whole planned file list (megabytes on a big
+    /// folder). It carries the count; the list comes from `/files`, once.
+    #[tokio::test]
+    async fn a_running_job_snapshot_has_a_file_count_and_files_route_has_the_list() {
+        let job_id = Uuid::new_v4();
+        let (events_tx, _rx) = broadcast::channel(16);
+        let state = AppState {
+            jobs: Arc::new(Mutex::new(HashMap::from([(job_id, running_with_files(3))]))),
+            default_ps5_addr: "127.0.0.1:1".to_string(),
+            events_tx,
+        };
+        let snap = body_json(
+            get_job(State(state.clone()), Path(job_id.to_string()))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(snap["status"], "running");
+        assert_eq!(snap["files_count"], 3);
+        assert!(snap.get("files").is_none(), "full list in the poll: {snap}");
+
+        let listed = body_json(list_jobs(State(state.clone())).await.into_response()).await;
+        assert!(listed[0]["job"].get("files").is_none());
+        assert_eq!(listed[0]["job"]["files_count"], 3);
+
+        let files = body_json(
+            get_job_files(State(state.clone()), Path(job_id.to_string()))
+                .await
+                .into_response(),
+        )
+        .await;
+        let list = files["files"].as_array().unwrap();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0]["rel_path"], "dir/file0.bin");
+        assert_eq!(list[0]["size"], 10);
+
+        let missing = get_job_files(State(state), Path(Uuid::new_v4().to_string()))
+            .await
+            .into_response();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// An event carries the count too, and nothing is built when no one listens.
+    #[test]
+    fn set_job_events_carry_the_count_only() {
+        let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
+        let (events_tx, mut rx) = broadcast::channel(16);
+        let job_id = Uuid::new_v4();
+        set_job(&jobs, &events_tx, job_id, running_with_files(2));
+        let msg: serde_json::Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(msg["job"]["files_count"], 2);
+        assert!(msg["job"].get("files").is_none());
+        drop(rx);
+        // No receiver: still stored, nothing to send to.
+        set_job(&jobs, &events_tx, job_id, running_with_files(4));
+        assert!(matches!(
+            jobs.lock().unwrap().get(&job_id),
+            Some(JobState::Running { files, .. }) if files.len() == 4
+        ));
     }
 
     #[test]

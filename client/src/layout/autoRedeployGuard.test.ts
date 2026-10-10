@@ -44,6 +44,7 @@ describe("auto-redeploy must not fire over a live transfer", () => {
           totalBytes: 2,
           bytesPerSec: 1,
           files: [],
+          fileCount: 0,
           filesCompleted: 0,
           skippedFiles: 0,
           skippedBytes: 0,
