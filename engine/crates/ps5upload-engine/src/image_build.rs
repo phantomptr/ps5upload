@@ -503,6 +503,80 @@ pub(crate) fn build(
     result
 }
 
+/// AMPR LZ4 asset packs for an image (see `ps5upload_fpkg::ampr_pack`): the game's files
+/// packed into seekable LZ4 volumes that a backport's `ampr_emu` serves, the originals left out.
+pub(crate) struct Lz4Packs {
+    /// drakmor's profile format; the built-in profile (from `level` and `block_shift`) when
+    /// absent.
+    pub profile: Option<ps5upload_fpkg::ampr_pack::Config>,
+    /// 1 (fastest) to 12 (smallest).
+    pub level: u8,
+    /// log2 of the block size, 14 (16 KiB) to 20 (1 MiB).
+    pub block_shift: u8,
+}
+
+/// The spool an LZ4 build packs into, next to the image it is for.
+pub(crate) fn lz4_spool(output: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.lz4spool", output.display()))
+}
+
+/// [`build`], with the game's files packed first. Only exFAT: the packs are already
+/// compressed, so the `.ffpfsc` container has nothing left to gain. The volumes are spooled
+/// beside the output and removed once the image is written and read back, or has failed.
+/// `stage` reports `pack` before the image's own stages.
+pub(crate) fn build_packed(
+    format: ImageFormat,
+    source: &mut dyn SourceTree,
+    output: &Path,
+    packs: &Lz4Packs,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(&str, u64, u64),
+) -> Result<ImageBuilt, String> {
+    use ps5upload_fpkg::ampr_pack;
+    if format != ImageFormat::Exfat {
+        return Err("LZ4 asset packs are written into exFAT images only".into());
+    }
+    let config = packs
+        .profile
+        .clone()
+        .unwrap_or_else(|| ampr_pack::default_profile(packs.level, packs.block_shift));
+    let spool = lz4_spool(output);
+    let _ = std::fs::remove_dir_all(&spool);
+    let mtime = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    stage("pack", 0, 0);
+    let prepared = {
+        let mut progress = |done: u64, total: u64| stage("pack", done, total);
+        let mut control = ampr_pack::Control {
+            progress: Some(&mut progress),
+            cancel: Some(cancel),
+        };
+        ampr_pack::image::prepare(source, &config, &spool, mtime, &mut control)
+    };
+    let result = match prepared {
+        Ok((mut overlay, report)) => {
+            build(format, None, &mut overlay, output, cancel, stage).map(|b| (b, report))
+        }
+        Err(e) => Err(e.to_string()),
+    };
+    let _ = std::fs::remove_dir_all(&spool);
+    let (mut built, report) = result?;
+    let s = &report.stats;
+    built.detail.push_str(&format!(
+        ", LZ4 packs: {} files packed into {} volume(s) ({} -> {} bytes, {} LZ4 / {} raw \
+         chunks), {} loose",
+        s.files_packed,
+        report.volumes.len(),
+        s.logical_bytes,
+        s.stored_bytes,
+        s.chunks_lz4,
+        s.chunks_raw,
+        s.files_loose
+    ));
+    Ok(built)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,6 +731,142 @@ mod tests {
         .expect("refused");
         assert!(e.contains("données.bin"), "{e}");
         assert!(!out.exists() && !root.join("x.ffpfs.partial").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A backported AMPR title: its eboot imports libSceAmpr and its fakelib carries a
+    /// pack-capable ampr_emu.
+    fn ampr_game(root: &Path) -> PathBuf {
+        let src = game(root);
+        let mut eboot: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        eboot[1000..1014].copy_from_slice(b"libSceAmpr.prx");
+        std::fs::write(src.join("eboot.bin"), eboot).unwrap();
+        std::fs::create_dir_all(src.join("fakelib")).unwrap();
+        let mut module = vec![0u8; 4096];
+        module[100..108].copy_from_slice(b"AMPRPAK4");
+        module[200..217].copy_from_slice(b"ampr_assets.index");
+        module[300..321].copy_from_slice(b"\x000.4.2.1 (c) Drakmor\0");
+        std::fs::write(src.join("fakelib/libSceAmpr.sprx"), module).unwrap();
+        let text: Vec<u8> = (0..400_000u32)
+            .flat_map(|i| format!("asset {} ", i % 977).into_bytes())
+            .take(400_000)
+            .collect();
+        std::fs::create_dir_all(src.join("data/only_packed")).unwrap();
+        std::fs::write(src.join("data/only_packed/table.bin"), &text).unwrap();
+        std::fs::write(src.join("data/text.bin"), &text[..150_000]).unwrap();
+        std::fs::write(src.join("data/settings.json"), b"{\"a\":1}").unwrap();
+        src
+    }
+
+    /// An LZ4-packed exFAT image, read back through the exFAT reader and then the pack reader,
+    /// gives every packed file's source bytes; the packed originals are not in the image, the
+    /// loose files are, and the regenerated ampr_emu.index lists the original files.
+    #[test]
+    fn an_lz4_packed_exfat_reads_back_to_the_source() {
+        use ps5upload_fpkg::ampr_pack::Reader;
+        let root = std::env::temp_dir().join(format!("ps5upload-imgl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = ampr_game(&root);
+        let out = root.join("PPSA99999-app.exfat");
+        let mut tree = FolderSource::open(&src).unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut stages: Vec<String> = Vec::new();
+        let built = build_packed(
+            ImageFormat::Exfat,
+            &mut tree,
+            &out,
+            &Lz4Packs {
+                profile: None,
+                level: 9,
+                block_shift: 16,
+            },
+            &cancel,
+            &mut |s, _, _| {
+                if stages.last().map(String::as_str) != Some(s) {
+                    stages.push(s.to_string());
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(stages, ["pack", "plan", "write", "verify"]);
+        assert!(built.detail.contains("LZ4 packs"), "{}", built.detail);
+        assert!(!lz4_spool(&out).exists(), "the spool is removed");
+
+        let mut image = ps5upload_fpkg::exfat::ExFatSource::open(&out).unwrap();
+        let in_image: Vec<String> = image.files().iter().map(|f| f.path.clone()).collect();
+        let reader = Reader::open(&mut image, "ampr_assets.index").unwrap();
+        let mut source = FolderSource::open(&src).unwrap();
+        let mut packed = 0;
+        for f in source.files().to_vec() {
+            let i = reader
+                .find(&f.path)
+                .expect("every source file is in the manifest");
+            let want = source.read(&f.path).unwrap();
+            if reader.manifest.files[i].packed() {
+                packed += 1;
+                assert!(
+                    !in_image.contains(&f.path),
+                    "{} is packed and loose",
+                    f.path
+                );
+                assert_eq!(
+                    reader.read_file(i, &mut image, "").unwrap(),
+                    want,
+                    "{}",
+                    f.path
+                );
+            } else {
+                assert_eq!(image.read(&f.path).unwrap(), want, "{}", f.path);
+            }
+        }
+        assert!(packed >= 3, "data files are packed ({packed})");
+        // The default profile keeps the module, system files and text config loose.
+        for loose in [
+            "eboot.bin",
+            "fakelib/libSceAmpr.sprx",
+            "sce_sys/param.json",
+            "data/settings.json",
+        ] {
+            assert!(in_image.contains(&loose.to_string()), "{loose}");
+        }
+        // A folder packing emptied is still there.
+        assert!(image
+            .empty_dirs()
+            .iter()
+            .any(|d| d.trim_matches('/') == "data/only_packed"));
+        let index =
+            ps5upload_fpkg::ampr_index::parse(&image.read("ampr_emu.index").unwrap()).unwrap();
+        assert_eq!(index.len(), source.files().len());
+        assert!(index
+            .iter()
+            .any(|e| e.path == "data/only_packed/table.bin" && e.size == 400_000));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Packing is exFAT-only and leaves nothing behind when it is refused.
+    #[test]
+    fn lz4_packs_are_refused_for_other_formats() {
+        let root = std::env::temp_dir().join(format!("ps5upload-imgr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = ampr_game(&root);
+        let out = root.join("x.ffpkg");
+        let mut tree = FolderSource::open(&src).unwrap();
+        let e = build_packed(
+            ImageFormat::Ffpkg,
+            &mut tree,
+            &out,
+            &Lz4Packs {
+                profile: None,
+                level: 9,
+                block_shift: 16,
+            },
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .err()
+        .expect("refused");
+        assert!(e.contains("exFAT"), "{e}");
+        assert!(!out.exists() && !lz4_spool(&out).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
