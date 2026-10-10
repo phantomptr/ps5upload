@@ -17,7 +17,7 @@ const offer = (category: string, version: string) => ({
   category,
 });
 
-function render(view: GameView | null, titleId = "PPSA01234") {
+function render(view: GameView | null, titleId = "PPSA01234", running = false) {
   return renderToStaticMarkup(
     <MemoryRouter>
       <ConsolesCard
@@ -31,6 +31,8 @@ function render(view: GameView | null, titleId = "PPSA01234") {
         refresh={async (host) => ({ host, read_at: 0, installed: false, dlc_missing: [] })}
         onPlay={() => {}}
         launching={false}
+        running={running}
+        onStop={() => {}}
         sendHost={null}
         setSendHost={() => {}}
       />
@@ -67,6 +69,26 @@ describe("the game page's console rows", () => {
     expect(html).toContain("Install update 01.004");
     // Play only on the connected console.
     expect(html.match(/Play</g)?.length).toBe(1);
+  });
+
+  it("offers Close game instead of Play on the console the game is running on", () => {
+    const html = render(
+      {
+        title_id: "PPSA01234",
+        title: "Astro",
+        platform: "PS5",
+        cover: null,
+        copies: [],
+        consoles: [
+          { host: "192.168.1.100", read_at: nowSec, installed: true, dlc_missing: [] },
+          { host: "192.168.1.99", read_at: nowSec, installed: true, dlc_missing: [] },
+        ],
+      },
+      "PPSA01234",
+      true,
+    );
+    expect(html.match(/Close game</g)?.length).toBe(1);
+    expect(html).not.toContain("Play<");
   });
 
   it("says a console has not been checked when it never read the game", () => {

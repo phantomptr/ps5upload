@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { gamePath } from "../../lib/gamePage";
 import { useMakeWay } from "../../lib/useMakeWay";
+import { useTrackedPlay, type TrackedPlay } from "../../lib/trackedPlay";
 import { smpHandoffNote } from "../../lib/smpHandoffNote";
 import {
   dismissLibraryMove,
@@ -194,6 +195,8 @@ export default function LibraryScreen() {
   const registeredBySource = useLibraryStore(
     (s) => libraryForHost(s, host).registeredBySource,
   );
+  // One read for every row: the same play time Game Activity shows.
+  const trackedPlay = useTrackedPlay(host);
   // Whether ShadowMount+ is running right now. Gates the per-row "Edit
   // files…" action: checking an image out only means anything when SMP is the
   // one holding it. Probed at screen level so ~100 rows don't each ask.
@@ -649,6 +652,7 @@ export default function LibraryScreen() {
                       pendingMounts={pendingMounts}
                       volumes={volumes}
                       registeredBySource={registeredBySource}
+                      trackedPlay={trackedPlay}
                       smpRunning={smpRunning}
                       onChanged={refresh}
                     />
@@ -688,6 +692,7 @@ export default function LibraryScreen() {
                       pendingMounts={pendingMounts}
                       volumes={volumes}
                       registeredBySource={registeredBySource}
+                      trackedPlay={trackedPlay}
                       smpRunning={smpRunning}
                       onChanged={refresh}
                     />
@@ -724,6 +729,7 @@ function CappedRows({
   pendingMounts,
   volumes,
   registeredBySource,
+  trackedPlay,
   smpRunning,
   onChanged,
 }: {
@@ -735,6 +741,7 @@ function CappedRows({
   pendingMounts: Map<string, string>;
   volumes: Volume[];
   registeredBySource: Map<string, RegisteredTitle>;
+  trackedPlay: Map<string, TrackedPlay> | null;
   smpRunning: boolean;
   onChanged: () => void;
 }) {
@@ -759,6 +766,7 @@ function CappedRows({
           pendingMounts={pendingMounts}
           volumes={volumes}
           registeredBySource={registeredBySource}
+          trackedPlay={trackedPlay}
           smpRunning={smpRunning}
           onChanged={onChanged}
         />
@@ -869,6 +877,7 @@ function LibraryRowImpl({
   pendingMounts,
   volumes,
   registeredBySource,
+  trackedPlay,
   smpRunning,
   onChanged,
 }: {
@@ -889,6 +898,8 @@ function LibraryRowImpl({
   /** source_path → registered title. Supplies the name + cover for
    *  disk-image rows, which have no readable `sce_sys/` of their own. */
   registeredBySource: Map<string, RegisteredTitle>;
+  /** The helper's tracked play time (Game Activity's numbers); null = use the app's own. */
+  trackedPlay: Map<string, TrackedPlay> | null;
   /** ShadowMount+ is running, so it owns any image in a scan folder. Gates
    *  the "Edit files…" action, which works by taking the image away from it. */
   smpRunning: boolean;
@@ -901,9 +912,13 @@ function LibraryRowImpl({
     entry.kind === "game" &&
     !!entry.titleId &&
     runningTitleIds.has(entry.titleId);
-  const playSeconds = usePlayTimeStore((s) =>
+  const localPlaySeconds = usePlayTimeStore((s) =>
     entry.kind === "game" ? playSecondsFor(s, host, entry.titleId) : undefined,
   );
+  const playSeconds =
+    trackedPlay && entry.kind === "game"
+      ? (entry.titleId ? trackedPlay.get(entry.titleId)?.seconds : undefined)
+      : localPlaySeconds;
   const kindLabel =
     entry.kind === "game"
       ? tr("library_row_kind_game", undefined, "Game")
