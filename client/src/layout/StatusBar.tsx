@@ -105,7 +105,9 @@ export default function StatusBar() {
     .join("\n");
 
   return (
-    <div className="hidden min-h-8 flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap border-t border-[var(--color-border)] bg-[var(--color-surface-raised)] px-3 pb-[calc(var(--safe-bottom)_+_0.3rem)] pt-1.5 pl-[calc(env(safe-area-inset-left)_+_0.75rem)] pr-[calc(env(safe-area-inset-right)_+_0.75rem)] text-[0.6875rem] text-[var(--color-muted)] shadow-[0_-1px_8px_rgba(0,0,0,0.06)] md:flex">
+    // A quiet line on the atmosphere under the shell's canvas, lined up with
+    // the canvas's inner edge.
+    <div className="hidden min-h-9 flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap px-4 pb-[calc(var(--safe-bottom)_+_0.35rem)] pt-1.5 pl-[calc(env(safe-area-inset-left)_+_2rem)] pr-[calc(env(safe-area-inset-right)_+_2rem)] text-[0.6875rem] text-[var(--color-muted)] md:flex">
       {/* Group 1 — the Engine (our local backend). */}
       <div
         className="flex items-center gap-2"
@@ -131,7 +133,7 @@ export default function StatusBar() {
           {ps5Name}
         </span>
         {ps5Connected && ps5Firmware && (
-          <span className="rounded bg-[var(--color-surface-3)] px-1 font-mono text-xs">
+          <span className="rounded-full border border-[var(--color-border-strong)] px-2 font-mono text-[0.625rem]">
             {tr("status_fw", { ver: ps5Firmware }, `FW ${ps5Firmware}`)}
           </span>
         )}
@@ -258,7 +260,7 @@ function CaptureButton() {
         "Capture a screenshot of this screen for a bug report",
       )}
       aria-label={tr("status_capture", undefined, "Capture screenshot")}
-      className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--color-surface-3)]"
+      className="flex items-center gap-1 rounded-full px-2 py-0.5 hover:bg-[var(--color-surface)]"
     >
       {icon}
       <span className="hidden sm:inline">

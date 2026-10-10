@@ -10,7 +10,7 @@ import { useUpdateStore } from "../state/update";
 import { useNavSidebarStore } from "../state/navSidebar";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { useBetaFeaturesStore } from "../state/betaFeatures";
-import NotificationInbox from "./NotificationInbox";
+import { Orb } from "../components/Orb";
 import RosterPicker from "./RosterPicker";
 import { isPinnedNav, PINNED_NAV_ITEMS, sidebarGroups, type NavItem } from "./navItems";
 import { isMacOrLinuxDesktop } from "../lib/platform";
@@ -85,25 +85,22 @@ export default function Sidebar() {
           to={item.to}
           title={collapsed ? label : undefined}
           aria-label={collapsed ? label : undefined}
-          className={({ isActive }) =>
-            [
-              "relative flex min-h-10 items-center rounded-[0.65rem] text-[0.8125rem] transition-[background-color,color,box-shadow]",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--color-accent)]",
-              collapsed ? "justify-center px-2" : "gap-2.5 px-2.5",
-              isActive
-                ? "bg-[var(--color-accent-soft)] font-semibold text-[var(--color-accent)] shadow-[inset_3px_0_0_var(--color-accent)]"
-                : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]",
-            ].join(" ")
-          }
+          // Pills: the active one is the white pill with a coral icon
+          // (`.nav-pill` in index.css keys off aria-current).
+          className={[
+            "nav-pill relative flex min-h-11 items-center rounded-full text-[0.875rem] transition-[background-color,color,box-shadow]",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--color-accent)]",
+            collapsed ? "justify-center px-2" : "gap-3 px-4",
+          ].join(" ")}
         >
-          <Icon size={18} strokeWidth={1.8} className="shrink-0" />
+          <Icon size={19} strokeWidth={1.7} className="nav-pill-icon shrink-0" />
           {!collapsed && <span className="min-w-0 flex-1 truncate">{label}</span>}
           {showErrors && (
             <span
               className={
                 collapsed
                   ? "absolute right-1 top-1 h-2 w-2 rounded-full bg-[var(--color-bad)]"
-                  : "rounded-full bg-[var(--color-bad)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white"
+                  : "rounded-full bg-[var(--color-bad)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--color-accent-contrast)]"
               }
               aria-label={`${errorCount} logged errors`}
             >
@@ -125,7 +122,7 @@ export default function Sidebar() {
             onClick={() => toggleHidden(item.to)}
             aria-label={tr("nav_hide_item", { name: label }, "Hide {name} from the sidebar")}
             title={tr("nav_hide", undefined, "Hide from the sidebar")}
-            className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md bg-[var(--color-surface-2)] text-[var(--color-muted)] opacity-0 hover:text-[var(--color-text)] focus-visible:opacity-100 group-hover:opacity-100"
+            className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-[var(--color-float)] text-[var(--color-muted)] opacity-0 hover:text-[var(--color-text)] focus-visible:opacity-100 group-hover:opacity-100"
           >
             <EyeOff size={14} aria-hidden />
           </button>
@@ -138,30 +135,27 @@ export default function Sidebar() {
     <aside
       data-testid="desktop-sidebar"
       data-collapsed={collapsed ? "true" : "false"}
-      className={`hidden min-h-0 shrink-0 flex-col border-r border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-surface-2)_94%,var(--color-surface)_6%)] transition-[width] duration-200 md:flex ${
-        collapsed ? "w-[4.25rem]" : "w-[15.5rem]"
+      // Sits inside the shell's glass canvas, so it has no fill of its own.
+      className={`hidden min-h-0 shrink-0 flex-col transition-[width] duration-200 md:flex ${
+        collapsed ? "w-[5rem]" : "w-[17rem]"
       }`}
     >
       <div
-        className={`flex h-[4.25rem] shrink-0 items-center ${
-          collapsed ? "justify-center px-2" : "gap-2 px-3.5"
+        className={`flex h-[5.5rem] shrink-0 items-center ${
+          collapsed ? "justify-center px-2" : "gap-2 ps-6 pe-3"
         }`}
       >
         <NavLink
           to="/home"
           aria-label={tr("v5_tab_home", undefined, "Home")}
-          className={`flex min-w-0 items-center gap-2 rounded-md ${
+          className={`flex min-w-0 items-center gap-3 rounded-full ${
             collapsed ? "justify-center" : "flex-1"
           }`}
         >
-          <img
-            src={`${import.meta.env.BASE_URL.replace(/\/+$/, "")}/logo-square.png`}
-            alt=""
-            className="h-8 w-8 shrink-0 rounded-[0.6rem] shadow-sm"
-          />
+          <Orb size={collapsed ? 34 : 40} />
           {!collapsed && (
             <span className="min-w-0">
-              <span className="block truncate text-sm font-bold tracking-[-0.02em]">
+              <span className="block truncate text-[1.25rem] leading-tight font-semibold tracking-[-0.02em]">
                 PS5Upload
               </span>
               {/* Deliberately NOT `uppercase` like the nav section headings:
@@ -183,7 +177,7 @@ export default function Sidebar() {
               "Collapse navigation",
             )}
             title={tr("sidebar_collapse", undefined, "Collapse navigation")}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
           >
             <ChevronLeft size={18} aria-hidden />
           </button>
@@ -194,7 +188,7 @@ export default function Sidebar() {
 
       <nav
         aria-label={tr("v5_tab_primary_nav", undefined, "Primary")}
-        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-3 [overscroll-behavior:contain]"
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-3 [overscroll-behavior:contain]"
       >
         <ul className="space-y-1">{PINNED_NAV_ITEMS.map((item) => renderItem(item, false))}</ul>
         {groups.map((group) => {
@@ -202,15 +196,16 @@ export default function Sidebar() {
           // The icon rail has no header to reopen a folded section from, so it shows them all.
           const open = collapsed || !closedSections.includes(group.section.key);
           return (
-            <section key={group.section.key} className="mt-3">
+            <section key={group.section.key} className="mt-5">
               {collapsed ? (
-                <div aria-hidden className="mx-2 mb-2 border-t border-[var(--color-border)]" />
+                <div aria-hidden className="mx-3 mb-3 border-t border-[var(--color-border)]" />
               ) : (
+                // The small uppercase captions of the reference (GENERAL, OTHERS).
                 <button
                   type="button"
                   onClick={() => toggleSection(group.section.key)}
                   aria-expanded={open}
-                  className="flex w-full items-center gap-1 rounded px-2.5 pb-1.5 text-left text-[0.625rem] font-bold uppercase tracking-[0.12em] text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  className="flex w-full items-center gap-1 rounded-full px-2 pb-2 text-left text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)] hover:text-[var(--color-text)]"
                 >
                   <span className="min-w-0 flex-1 truncate">{title}</span>
                   {open ? <ChevronDown size={12} aria-hidden /> : <ChevronRight size={12} aria-hidden />}
@@ -225,7 +220,7 @@ export default function Sidebar() {
         {hiddenCount > 0 && !collapsed && (
           <NavLink
             to="/more"
-            className="mt-3 block rounded-[0.65rem] px-2.5 py-1.5 text-[0.6875rem] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+            className="mt-4 block rounded-full px-4 py-2 text-[0.6875rem] text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
           >
             {tr("nav_hidden_count", { count: hiddenCount }, "{count} hidden — show them from More")}
           </NavLink>
@@ -233,7 +228,7 @@ export default function Sidebar() {
       </nav>
 
       <div
-        className={`flex shrink-0 items-center border-t border-[var(--color-border)] p-2.5 ${
+        className={`flex shrink-0 items-center px-4 pb-4 pt-2 ${
           collapsed ? "flex-col gap-1" : "gap-1"
         }`}
       >
@@ -243,25 +238,24 @@ export default function Sidebar() {
           aria-label={
             collapsed ? tr("v5_tab_more", undefined, "More") : undefined
           }
-          className={`flex h-10 items-center rounded-[0.65rem] text-[0.8125rem] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] ${
-            collapsed ? "w-10 justify-center" : "min-w-0 flex-1 gap-2 px-2.5"
+          className={`flex h-11 items-center rounded-full text-[0.875rem] text-[var(--color-text)] hover:bg-[var(--color-surface)] ${
+            collapsed ? "w-11 justify-center" : "min-w-0 flex-1 gap-3 px-4"
           }`}
         >
-          <LayoutGrid size={18} aria-hidden />
+          <LayoutGrid size={19} strokeWidth={1.7} className="text-[var(--color-muted)]" aria-hidden />
           {!collapsed && (
             <span className="truncate">
               {tr("v5_tab_more", undefined, "More")}
             </span>
           )}
         </NavLink>
-        <NotificationInbox />
         {collapsed && (
           <button
             type="button"
             onClick={toggleCollapsed}
             aria-label={tr("sidebar_expand", undefined, "Expand navigation")}
             title={tr("sidebar_expand", undefined, "Expand navigation")}
-            className="flex h-10 w-10 items-center justify-center rounded-md text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+            className="flex h-10 w-10 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
           >
             <ChevronRight size={18} aria-hidden />
           </button>

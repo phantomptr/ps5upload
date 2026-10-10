@@ -17,7 +17,7 @@ import { NAV_ITEMS, groupNavItems } from "./navItems";
 /**
  * v5 primary navigation for phones.
  *
- * Mobile (<md): a 56px bottom nav with 5 primary tabs. The mobile
+ * Mobile (<md): a floating glass pill bar with 5 primary tabs. The mobile
  *   top-bar hamburger is replaced by this nav; the "More" tab navigates
  *   to /more. Both tiers used to render the desktop Sidebar in an
  *   overlay — a 270px column in a 448px sheet on phones, and a drawer
@@ -120,7 +120,7 @@ function PlayingDot() {
   return (
     <span
       aria-hidden
-      className="absolute right-0 top-0 h-2 w-2 animate-pulse rounded-full bg-[var(--color-good)] ring-2 ring-[var(--color-surface-2)]"
+      className="absolute right-0 top-0 h-2 w-2 animate-pulse rounded-full bg-[var(--color-good)] ring-2 ring-[var(--color-float)]"
     />
   );
 }
@@ -142,7 +142,9 @@ export function TabBottomNav() {
     <>
       <nav
         aria-label={tr("v5_tab_primary_nav", undefined, "Primary")}
-        className="h-bottom-nav md:hidden fixed inset-x-0 bottom-0 z-40 flex items-stretch justify-around border-t border-[var(--color-border)] bg-[var(--color-surface-2)] pb-[var(--safe-bottom)]"
+        // Floats above the gesture bar: the safe area is a margin here, not
+        // padding, so the pill keeps its shape on every phone.
+        className="glass-float elev-2 md:hidden fixed inset-x-3 bottom-[calc(var(--safe-bottom)_+_0.6rem)] z-40 flex h-16 items-stretch justify-around gap-1 rounded-full p-1.5"
       >
         {TABS.map((tab) => {
           const Icon = tab.icon;
@@ -159,11 +161,8 @@ export function TabBottomNav() {
               aria-label={label}
               aria-current={active ? "page" : undefined}
               className={[
-                "relative flex flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium",
+                "nav-pill relative flex flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-[0.6875rem] font-medium",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]",
-                active
-                  ? "text-[var(--color-accent)]"
-                  : "text-[var(--color-muted)]",
               ]
                 .filter(Boolean)
                 .join(" ")}
@@ -171,7 +170,7 @@ export function TabBottomNav() {
               {/* The icon carries the dot, not the tab: a dot pinned to the
                   full-width tab box would float far from the glyph. */}
               <span className="relative">
-                <Icon size={22} aria-hidden />
+                <Icon size={21} strokeWidth={1.8} className="nav-pill-icon" aria-hidden />
                 {showPlaying && <PlayingDot />}
               </span>
               <span>{base}</span>
@@ -185,17 +184,12 @@ export function TabBottomNav() {
         <NavLink
           to="/more"
           aria-label={tr("v5_tab_more", undefined, "More")}
-          className={({ isActive }) =>
-            [
-              "flex flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]",
-              isActive
-                ? "text-[var(--color-accent)]"
-                : "text-[var(--color-muted)]",
-            ].join(" ")
-          }
+          className={[
+            "nav-pill flex flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-[0.6875rem] font-medium",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]",
+          ].join(" ")}
         >
-          <MoreHorizontal size={22} aria-hidden />
+          <MoreHorizontal size={21} strokeWidth={1.8} className="nav-pill-icon" aria-hidden />
           <span>{tr("v5_tab_more", undefined, "More")}</span>
         </NavLink>
       </nav>

@@ -103,7 +103,7 @@ function useCommands(close: () => void): Command[] {
       {
         id: "theme:toggle",
         label: tr("cmdpalette_toggle_theme", undefined, "Toggle theme"),
-        keywords: ["dark", "light", "oled"],
+        keywords: ["dark", "light", "mode"],
         group: "Theme",
         run: () => {
           toggleTheme();
@@ -192,6 +192,15 @@ function useCommands(close: () => void): Command[] {
   }, [navigate, toggleTheme, close, tr, games]);
 }
 
+/** The event a button sends to open the palette (it is otherwise opened by
+ *  Cmd/Ctrl+K). A window event keeps the palette's state where it is. */
+export const OPEN_COMMAND_PALETTE_EVENT = "ps5upload:open-command-palette";
+
+/** Open the command palette from anywhere (the search button in the top bar). */
+export function openCommandPalette(): void {
+  window.dispatchEvent(new Event(OPEN_COMMAND_PALETTE_EVENT));
+}
+
 export function CommandPalette() {
   const tr = useTr();
   const [open, setOpen] = useState(false);
@@ -236,6 +245,12 @@ export function CommandPalette() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener(OPEN_COMMAND_PALETTE_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_COMMAND_PALETTE_EVENT, onOpen);
   }, []);
 
   useEffect(() => {
@@ -316,7 +331,7 @@ export function CommandPalette() {
         if (e.target === e.currentTarget) close();
       }}
     >
-      <div className="anim-pop elev-3 w-[560px] max-w-[90vw] overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+      <div className="anim-pop glass-float elev-3 w-[560px] max-w-[90vw] overflow-hidden rounded-[var(--radius-panel)]">
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-2">
           <Search size={14} className="text-[var(--color-muted)]" />
           <input

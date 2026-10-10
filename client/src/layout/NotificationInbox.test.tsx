@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { panelAnchorClass } from "./NotificationInbox";
+import { panelAnchorClass, panelPlacementClass } from "./NotificationInbox";
 
 /**
  * The Android bug this pins: the bell renders in two places that sit on
@@ -26,5 +26,13 @@ describe("panelAnchorClass", () => {
       const cls = panelAnchorClass(align);
       expect(cls.includes("left-0") && cls.includes("right-0")).toBe(false);
     }
+  });
+});
+
+describe("panelPlacementClass", () => {
+  it("opens up from a footer and down from the desktop top bar", () => {
+    expect(panelPlacementClass("above")).toContain("bottom-full");
+    expect(panelPlacementClass("below")).toContain("top-full");
+    expect(panelPlacementClass("below")).not.toContain("bottom-full");
   });
 });

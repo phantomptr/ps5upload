@@ -42,7 +42,8 @@ export default function NavigationControls() {
   return (
     <nav
       aria-label={tr("navigation_history", undefined, "View history")}
-      className="flex items-center gap-1"
+      // Back and Forward share one glass pill.
+      className="flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1 shadow-[var(--edge-highlight),var(--shadow-1)]"
     >
       <button
         type="button"
@@ -50,7 +51,7 @@ export default function NavigationControls() {
         title={backLabel}
         disabled={position <= 0}
         onClick={() => navigate(-1)}
-        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-35"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-3)] disabled:cursor-not-allowed disabled:opacity-35"
       >
         <ArrowLeft size={16} />
       </button>
@@ -60,7 +61,7 @@ export default function NavigationControls() {
         title={forwardLabel}
         disabled={position >= furthest}
         onClick={() => navigate(1)}
-        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-35"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-3)] disabled:cursor-not-allowed disabled:opacity-35"
       >
         <ArrowRight size={16} />
       </button>

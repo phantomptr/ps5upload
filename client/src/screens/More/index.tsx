@@ -18,7 +18,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { NavLink } from "react-router";
-import { ChevronRight, Eye, EyeOff, LayoutGrid, Search, X } from "lucide-react";
+import { ChevronRight, Eye, EyeOff, LayoutGrid, Moon, Search, Sun, X } from "lucide-react";
 
 import { PageHeader, Input, EmptyState } from "../../components";
 import { useTr } from "../../state/lang";
@@ -90,9 +90,9 @@ export default function MoreScreen() {
 
       {/* Sticky zone: console switcher + search. Sticks inside <main>'s
           scroll context — this screen adds no scroller of its own. */}
-      <div className="sticky top-0 z-10 -mx-4 border-b border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-surface)_92%,transparent)] px-4 pb-3 pt-1 shadow-sm backdrop-blur-xl">
+      <div className="glass-float sticky top-2 z-10 rounded-[var(--radius-panel)] px-1 py-3 [&>div:first-child]:mx-2">
         <RosterPicker />
-        <div className="mt-3">
+        <div className="mt-3 px-2">
           <Input
             type="search"
             inputMode="search"
@@ -124,7 +124,7 @@ export default function MoreScreen() {
                     undefined,
                     "Clear search",
                   )}
-                  className="flex h-11 w-11 items-center justify-center rounded-md text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-muted)] hover:text-[var(--color-text)]"
                 >
                   <X size={18} />
                 </button>
@@ -146,7 +146,7 @@ export default function MoreScreen() {
         />
       ) : searching ? (
         /* Flat results — grouping is noise once the list is narrowed. */
-        <ul className="surface-panel mt-3 overflow-hidden divide-y divide-[var(--color-border)]">
+        <ul className="surface-panel mt-4 overflow-hidden p-1.5">
           {matches.map((item) => (
             <MoreRow
               key={item.to}
@@ -160,7 +160,7 @@ export default function MoreScreen() {
       ) : (
         <>
           {/* Pinned, like the sidebar: the way to report a problem is always first. */}
-          <ul className="surface-panel mt-1 overflow-hidden divide-y divide-[var(--color-border)]">
+          <ul className="surface-panel mt-4 overflow-hidden p-1.5">
             <MoreRow
               item={BUG_REPORT_NAV_ITEM}
               errorCount={errorCount}
@@ -169,11 +169,11 @@ export default function MoreScreen() {
             />
           </ul>
           {groups.map((group) => (
-            <section key={group.section.key} className="mt-4 first:mt-1">
-              <h2 className="px-1 pb-1 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+            <section key={group.section.key} className="mt-6 first:mt-1">
+              <h2 className="px-4 pb-2 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
                 {tr(group.section.key, undefined, group.section.fallback)}
               </h2>
-              <ul className="surface-panel overflow-hidden divide-y divide-[var(--color-border)]">
+              <ul className="surface-panel overflow-hidden p-1.5">
                 {group.items.map((item) => (
                   <MoreRow
                     key={item.to}
@@ -189,17 +189,18 @@ export default function MoreScreen() {
       )}
 
       {/* Utility footer — theme, notifications, version. */}
-      <div className="mt-6 flex items-center justify-between border-t border-[var(--color-border)] pt-3">
+      <div className="mt-6 flex items-center justify-between pt-1">
         <button
           type="button"
           onClick={toggleTheme}
-          className="flex h-11 items-center gap-2 rounded-md px-3 text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+          className="chip h-11 gap-2 px-4 text-sm font-medium"
           aria-label={tr(
             "switch_theme",
             { current: theme },
             `Switch theme (current: ${theme})`,
           )}
         >
+          {theme === "light" ? <Moon size={16} aria-hidden /> : <Sun size={16} aria-hidden />}
           {tr("more_theme", undefined, "Theme")}
         </button>
         <div className="flex items-center gap-2">
@@ -250,15 +251,15 @@ export function MoreRow({
             // 56px on touch (the §4.1 floor with room for the chevron);
             // tighter above md where the pointer is a mouse and the
             // extra height just costs rows-per-screen.
-            "flex min-h-14 w-full items-center gap-3 px-3 text-[15px] transition-colors md:min-h-11 md:text-sm",
+            "flex min-h-14 w-full items-center gap-3 rounded-full px-4 text-[15px] transition-colors md:min-h-11 md:text-sm",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]",
             isActive
-              ? "bg-[var(--color-accent-soft)] font-semibold text-[var(--color-accent)]"
+              ? "bg-[var(--color-pill)] font-semibold text-[var(--color-text)] shadow-[var(--edge-highlight),var(--shadow-1)] [&>svg:first-child]:text-[var(--color-accent-bright)]"
               : "text-[var(--color-text)] hover:bg-[var(--color-surface-3)] active:bg-[var(--color-surface-3)]",
           ].join(" ")
         }
       >
-        <Icon size={22} strokeWidth={1.75} className="shrink-0" />
+        <Icon size={22} strokeWidth={1.75} className="shrink-0 text-[var(--color-muted)]" />
         <span className="min-w-0 flex-1 truncate">
           {tr(item.key, undefined, item.fallback)}
         </span>
@@ -269,7 +270,7 @@ export function MoreRow({
         )}
         {showErrors && (
           <span
-            className="rounded-full bg-[var(--color-bad)] px-2 py-0.5 text-xs font-semibold tabular-nums text-white"
+            className="rounded-full bg-[var(--color-bad)] px-2 py-0.5 text-xs font-semibold tabular-nums text-[var(--color-accent-contrast)]"
             title={tr(
               errorCount === 1 ? "logged_error_one" : "logged_error_many",
               { count: errorCount },
@@ -314,7 +315,7 @@ export function MoreRow({
               ? tr("nav_show_item", { name: label }, "Show {name} in the sidebar")
               : tr("nav_hide_item", { name: label }, "Hide {name} from the sidebar")
           }
-          className={`mr-2 hidden h-11 w-11 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[var(--color-surface-3)] md:flex ${
+          className={`mr-2 hidden h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--color-surface-3)] md:flex ${
             hidden ? "text-[var(--color-muted)] opacity-60 hover:opacity-100" : "text-[var(--color-accent)]"
           }`}
         >

@@ -70,17 +70,18 @@ export default function RosterPicker() {
     : null;
 
   return (
-    <div className="relative mx-2 mb-1" ref={wrapperRef}>
+    <div className="relative mx-4 mb-1" ref={wrapperRef}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         // min-h-11 (44px) meets the touch-target floor (mobile-design
         // §4.1). It's only +3px over the natural height, so desktop is
         // visually unchanged — no need to make it conditional.
-        className="flex min-h-12 w-full items-center gap-2.5 rounded-[0.7rem] border border-[var(--color-border)] bg-[color-mix(in_oklab,var(--color-surface)_45%,transparent)] px-3 py-2 text-left text-xs shadow-sm hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-3)]"
+        // A glass pill, like the reference's search field.
+        className="flex min-h-12 w-full items-center gap-2.5 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] py-1.5 ps-1.5 pe-4 text-left text-xs shadow-[var(--edge-highlight),var(--shadow-1)] transition-colors hover:bg-[var(--color-float)]"
       >
-        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[var(--color-surface-3)] text-[var(--color-muted)]">
-          <Cable size={13} />
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-bright)]">
+          <Cable size={15} />
         </span>
         <div className="min-w-0 flex-1 leading-tight">
           {active ? (
@@ -108,7 +109,7 @@ export default function RosterPicker() {
       </button>
 
       {open && (
-        <div className="elev-2 absolute left-0 right-0 top-[calc(100%+0.35rem)] z-40 overflow-hidden rounded-[0.7rem] border border-[var(--color-border)] bg-[var(--color-surface-raised)] py-1">
+        <div className="glass-float elev-2 absolute left-0 right-0 top-[calc(100%+0.35rem)] z-40 overflow-hidden rounded-[var(--radius-card)] py-1.5">
           {profiles.length > 1 && (
             <ul className="max-h-40 overflow-y-auto">
               {profiles.map((p) => (
@@ -119,8 +120,8 @@ export default function RosterPicker() {
                       setActive(p.id);
                       setOpen(false);
                     }}
-                    className={`flex w-full items-center gap-2 px-4 py-1.5 text-left text-xs hover:bg-[var(--color-surface-2)] ${
-                      p.id === active?.id ? "bg-[var(--color-surface-2)]" : ""
+                    className={`flex w-full items-center gap-2 px-4 py-2 text-left text-xs hover:bg-[var(--color-surface-3)] ${
+                      p.id === active?.id ? "bg-[var(--color-surface-3)]" : ""
                     }`}
                   >
                     {p.id === active?.id ? (
@@ -148,7 +149,7 @@ export default function RosterPicker() {
               setOpen(false);
               setManageOpen(true);
             }}
-            className="flex w-full items-center gap-2 border-t border-[var(--color-border)] px-4 py-1.5 text-left text-xs hover:bg-[var(--color-surface-2)]"
+            className="flex w-full items-center gap-2 border-t border-[var(--color-border)] px-4 py-2 text-left text-xs hover:bg-[var(--color-surface-3)]"
           >
             <Pencil size={11} />
             {tr("roster_manage", undefined, "Manage PS5s")}

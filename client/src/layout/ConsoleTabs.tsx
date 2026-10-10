@@ -82,23 +82,18 @@ function ConsoleTab({
       title={`${name} — ${host}`}
       aria-current={active ? "page" : undefined}
       data-console-id={id}
-      className={`flex max-w-[14rem] shrink-0 items-center gap-2 rounded-t-md border-x border-t-2 px-3 py-1.5 text-sm ${
-        active
-          ? "border-x-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)]"
-          : "border-x-transparent text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+      // A chip: the console on show is the filled white pill.
+      className={`chip flex min-h-9 max-w-[14rem] shrink-0 items-center gap-2 px-3.5 text-sm ${
+        active ? "is-active" : ""
       }`}
-      // Identity stripe: each console keeps its own color on the tab's top
-      // edge (full strength when active, dimmed otherwise). Two same-model
+      // Identity edge: each console keeps its own color on the pill's edge
+      // (full strength when active, dimmed otherwise). Two same-model
       // consoles with similar default names stay tellable apart at a
       // glance, and the same color repeats on activity chips so rows match
       // tabs without reading names. Hex palette → append alpha for the dim.
-      style={{
-        borderTopColor: accent
-          ? active
-            ? accent
-            : `${accent}55`
-          : "transparent",
-      }}
+      style={
+        accent ? { borderColor: active ? accent : `${accent}66` } : undefined
+      }
     >
       <StatusDot host={host} />
       <span className="truncate">{name}</span>
@@ -151,7 +146,7 @@ export default function ConsoleTabs() {
   };
 
   return (
-    <div className="flex items-end gap-1 overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-surface)] px-2 pt-1.5">
+    <div className="flex min-w-0 items-center gap-2 overflow-x-auto px-1 py-1.5">
       {profiles.map((p) => (
         <ConsoleTab
           key={p.id}
@@ -165,7 +160,7 @@ export default function ConsoleTabs() {
       ))}
 
       {adding ? (
-        <div className="mb-1 flex shrink-0 items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-1">
+        <div className="flex shrink-0 items-center gap-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-1.5 py-1">
           <input
             autoFocus
             value={ip}
@@ -176,7 +171,7 @@ export default function ConsoleTabs() {
             }}
             placeholder={tr("console_tab_ip", "PS5 IP")}
             inputMode="decimal"
-            className="w-28 rounded bg-[var(--color-surface)] px-2 py-1 text-sm outline-none"
+            className="w-28 rounded-full bg-[var(--color-surface)] px-3 py-1 text-sm outline-none"
           />
           <input
             value={name}
@@ -186,13 +181,13 @@ export default function ConsoleTabs() {
               if (e.key === "Escape") setAdding(false);
             }}
             placeholder={tr("console_tab_name", "Name (optional)")}
-            className="w-32 rounded bg-[var(--color-surface)] px-2 py-1 text-sm outline-none"
+            className="w-32 rounded-full bg-[var(--color-surface)] px-3 py-1 text-sm outline-none"
           />
           <button
             type="button"
             onClick={submitAdd}
             aria-label={tr("add", "Add")}
-            className="rounded p-1 text-[var(--color-good)] hover:bg-[var(--color-surface-3)]"
+            className="rounded-full p-1 text-[var(--color-good)] hover:bg-[var(--color-surface-3)]"
           >
             <Check size={16} />
           </button>
@@ -200,7 +195,7 @@ export default function ConsoleTabs() {
             type="button"
             onClick={() => setAdding(false)}
             aria-label={tr("cancel", "Cancel")}
-            className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+            className="rounded-full p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
           >
             <X size={16} />
           </button>
@@ -211,7 +206,7 @@ export default function ConsoleTabs() {
           onClick={() => setAdding(true)}
           aria-label={tr("console_tab_add", "Add a console")}
           title={tr("console_tab_add", "Add a console")}
-          className="mb-1 shrink-0 rounded-md px-2 py-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-dashed border-[var(--color-border-strong)] text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
         >
           <Plus size={16} />
         </button>

@@ -1,7 +1,7 @@
 import { saveLastRoute } from "../lib/lastRoute";
 import { useLocation, useNavigate, useOutlet } from "react-router";
 import { Activity, useEffect, useRef, useState, type ReactNode } from "react";
-import { Lock, RefreshCw, WifiOff, X } from "lucide-react";
+import { Lock, Moon, RefreshCw, Search, Sun, WifiOff, X } from "lucide-react";
 import { localNetworkBlocked, requestLocalNetwork } from "../lib/androidLocalNetwork";
 import StatusBar from "./StatusBar";
 import SessionBanner from "./SessionBanner";
@@ -65,7 +65,10 @@ import {
   liveHelperDecision,
   MAX_REDEPLOYS_WITHOUT_RECOVERY,
 } from "../lib/autoRedeploy";
-import { CommandPalette } from "../components/CommandPalette";
+import { CommandPalette, openCommandPalette } from "../components/CommandPalette";
+import { Orb } from "../components/Orb";
+import NotificationInbox from "./NotificationInbox";
+import { useThemeStore } from "../state/theme";
 import { ShortcutsOverlay } from "../components/ShortcutsOverlay";
 import { LocalPathPicker } from "../components/LocalPathPicker";
 import { Toaster } from "../components/Toaster";
@@ -1386,7 +1389,9 @@ export default function AppShell() {
   }, []);
 
   return (
-    <div className="flex h-full flex-col bg-[var(--color-surface)] text-[var(--color-text)]">
+    // No fill: the atmosphere is painted on <html> (index.css) and the shell
+    // floats on it.
+    <div className="flex h-full flex-col text-[var(--color-text)]">
       {/* v5 global a11y infrastructure — mounted once at shell root. */}
       <SkipNav />
       <LiveRegion />
@@ -1396,14 +1401,10 @@ export default function AppShell() {
       <GlobalPackageViewer />
       {/* v5 mobile top bar — kept slim; primary nav is the bottom
           tab bar. Only renders below md. */}
-      <div className="h-top-bar flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-raised)] px-3 pb-2 pt-[calc(env(safe-area-inset-top)_+_0.5rem)] shadow-sm md:hidden">
+      <div className="h-top-bar flex items-center gap-2.5 px-4 pb-2 pt-[calc(env(safe-area-inset-top)_+_0.5rem)] md:hidden">
         <NavigationControls />
-        <img
-          src={`${import.meta.env.BASE_URL.replace(/\/+$/, "")}/logo-square.png`}
-          alt="PS5Upload"
-          className="h-8 w-8 rounded-[0.6rem]"
-        />
-        <span className="text-base font-bold tracking-tight">PS5Upload</span>
+        <Orb size={28} />
+        <span className="text-base font-semibold tracking-[-0.02em]">PS5Upload</span>
       </div>
       <HelperVersionBanner />
       <SessionBanner />
@@ -1411,42 +1412,51 @@ export default function AppShell() {
       <AndroidLocalNetworkBanner />
       <AndroidStorageAccessBanner />
 
-      <div className="flex min-h-0 flex-1">
-        {/* Desktop defaults to labeled navigation again. Users who prefer the
-            compact v5 rail can collapse it explicitly; that choice persists. */}
-        <Sidebar />
+      {/* Desktop: one big rounded glass canvas floating on the atmosphere, with
+          the sidebar inside it. Phones keep the full-bleed layout. */}
+      <div className="flex min-h-0 flex-1 md:px-4 md:pt-4 lg:px-5 lg:pt-5">
+        <div className="shell-canvas flex min-h-0 min-w-0 flex-1">
+          {/* Desktop defaults to labeled navigation again. Users who prefer the
+              compact v5 rail can collapse it explicitly; that choice persists. */}
+          <Sidebar />
 
-        <main
-          id="main"
-          tabIndex={-1}
-          className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[color-mix(in_oklab,var(--color-surface)_96%,var(--color-surface-2)_4%)] outline-none"
-        >
-          {/* Console tab strip — one tab per PS5; switches the viewed console
-              while every console's uploads/installs keep running in their own
-              background loops. Hidden for single-console users. */}
-          <ConsoleTabs />
-          {/* Slim, dismissible "update available" bar (the auto-check already
-              ran on mount). Pinned above the scroll area so it stays visible. */}
-          <UpdateToast />
-          {/* Browser-style history for a desktop app: route and workspace-tab
-              changes are first-class views, so users can retrace a workflow
-              without reopening More or rebuilding a search. */}
-          <div className="hidden h-10 items-center border-b border-[var(--color-border)] bg-[var(--color-surface-raised)] px-3 md:flex">
-            <NavigationControls />
-          </div>
-          {/* Vertical scroll only. overflow-x-hidden is a backstop: the
-              index.css width safety net makes content fit, but this guarantees
-              the page can never scroll sideways. Nested blocks that are meant
-              to scroll horizontally (tables in overflow-x-auto, code) have
-              their own scroll context and are unaffected. */}
-          {/* `key={pathname}` re-runs the entrance animation on navigation.
-              Route changes already swap the rendered screen component, so
-              re-creating this wrapper adds no extra remount cost — and it
-              guarantees scroll position resets per screen. Same-path query
-              changes (e.g. /payloads?tab=send) keep the node, so tab
-              switches inside a screen don't re-animate. */}
-          <KeptScreens pathname={location.pathname} className="anim-screen flex-1 overflow-y-auto overflow-x-hidden pb-[calc(56px+var(--safe-bottom))] md:pb-0 [overscroll-behavior:contain]" />
-        </main>
+          <main
+            id="main"
+            tabIndex={-1}
+            className="flex min-w-0 flex-1 flex-col overflow-hidden outline-none"
+          >
+            <div className="flex min-w-0 items-center gap-3 px-3 md:px-6 md:pt-4">
+              {/* Browser-style history for a desktop app: route and workspace-tab
+                  changes are first-class views, so users can retrace a workflow
+                  without reopening More or rebuilding a search. */}
+              <div className="hidden md:block">
+                <NavigationControls />
+              </div>
+              {/* Console tab strip — one tab per PS5; switches the viewed console
+                  while every console's uploads/installs keep running in their own
+                  background loops. Hidden for single-console users. */}
+              <div className="min-w-0 flex-1">
+                <ConsoleTabs />
+              </div>
+              <TopBarActions />
+            </div>
+            {/* Slim, dismissible "update available" bar (the auto-check already
+                ran on mount). Pinned above the scroll area so it stays visible. */}
+            <UpdateToast />
+            {/* Vertical scroll only. overflow-x-hidden is a backstop: the
+                index.css width safety net makes content fit, but this guarantees
+                the page can never scroll sideways. Nested blocks that are meant
+                to scroll horizontally (tables in overflow-x-auto, code) have
+                their own scroll context and are unaffected. */}
+            {/* `key={pathname}` re-runs the entrance animation on navigation.
+                Route changes already swap the rendered screen component, so
+                re-creating this wrapper adds no extra remount cost — and it
+                guarantees scroll position resets per screen. Same-path query
+                changes (e.g. /payloads?tab=send) keep the node, so tab
+                switches inside a screen don't re-animate. */}
+            <KeptScreens pathname={location.pathname} className="anim-screen flex-1 overflow-y-auto overflow-x-hidden pb-[calc(88px+var(--safe-bottom))] md:pb-0 [overscroll-behavior:contain]" />
+          </main>
+        </div>
       </div>
       <ActivityBar />
       <StatusBar />
@@ -1462,6 +1472,45 @@ export default function AppShell() {
   );
 }
 
+
+/** The right end of the desktop top bar: search (the command palette),
+ *  notifications and the theme switch, as white round buttons. */
+function TopBarActions() {
+  const tr = useTr();
+  const theme = useThemeStore((s) => s.theme);
+  const toggleTheme = useThemeStore((s) => s.toggleTheme);
+  const searchLabel = tr("topbar_search_label", undefined, "Search screens and commands");
+  return (
+    <div className="hidden shrink-0 items-center gap-2.5 md:flex">
+      <button
+        type="button"
+        onClick={openCommandPalette}
+        aria-label={searchLabel}
+        title={searchLabel}
+        aria-keyshortcuts="Control+K Meta+K"
+        className="flex h-11 w-60 items-center gap-2.5 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 text-sm text-[var(--color-muted)] shadow-[var(--edge-highlight),var(--shadow-1)] transition-colors hover:bg-[var(--color-float)] max-lg:w-11 max-lg:justify-center max-lg:px-0"
+      >
+        <Search size={17} className="shrink-0 text-[var(--color-text)]" aria-hidden />
+        <span className="min-w-0 flex-1 truncate text-left max-lg:hidden">
+          {tr("topbar_search", undefined, "Search…")}
+        </span>
+        <kbd className="rounded-full border border-[var(--color-border)] px-2 py-0.5 font-sans text-[0.625rem] max-lg:hidden">
+          {typeof navigator !== "undefined" && /mac/i.test(navigator.platform) ? "⌘K" : "Ctrl K"}
+        </kbd>
+      </button>
+      <NotificationInbox align="right" placement="below" variant="orb" />
+      <button
+        type="button"
+        onClick={toggleTheme}
+        aria-label={tr("switch_theme", { current: theme }, `Switch theme (current: ${theme})`)}
+        title={tr("switch_theme", { current: theme }, `Switch theme (current: ${theme})`)}
+        className="icon-orb-button"
+      >
+        {theme === "light" ? <Moon size={18} aria-hidden /> : <Sun size={18} aria-hidden />}
+      </button>
+    </div>
+  );
+}
 
 /** How many screens stay alive behind the one on show. Enough for going back and forth in a
  *  workflow; bounded so a long session does not keep every screen it ever opened. */

@@ -72,7 +72,7 @@ export function ActivitySummaryLine({
     >
       {body}
       {summary.failedUnseen > 0 && (
-        <span className="shrink-0 rounded-full bg-[var(--color-bad)] px-1.5 text-[0.625rem] font-medium text-white">
+        <span className="shrink-0 rounded-full bg-[var(--color-bad)] px-1.5 text-[0.625rem] font-medium text-[var(--color-accent-contrast)]">
           {tr("activity_failed_badge", { count: summary.failedUnseen }, `${summary.failedUnseen} failed`)}
         </span>
       )}
@@ -98,7 +98,7 @@ export function ActivityPanelView(props: ActivityPanelProps) {
   const tr = useTr();
   const { summary, onOpen } = props;
   return (
-    <div className="max-h-[50vh] space-y-3 overflow-y-auto border-t border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 text-xs">
+    <div className="glass-float mx-4 mt-3 max-h-[50vh] space-y-3 overflow-y-auto rounded-[var(--radius-card)] px-5 py-4 text-xs lg:mx-5">
       {summary.running.length === 0 ? (
         <p className="text-[var(--color-muted)]">
           {tr("activity_nothing_running", undefined, "Nothing running")}
@@ -167,7 +167,7 @@ function RunningRow({ row, onOpen, onCancel, canCancel, consoleOf }: { row: Acti
           <button
             type="button"
             onClick={() => onCancel(task)}
-            className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-0.5 hover:bg-[var(--color-surface-3)]"
+            className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-0.5 hover:bg-[var(--color-surface-3)]"
           >
             {tr("activity_cancel", undefined, "Cancel")}
           </button>
@@ -223,7 +223,7 @@ function FinishedRowView({ row, onOpen, onRetry, canRetry }: { row: FinishedRow 
         <button
           type="button"
           onClick={() => onRetry(task)}
-          className="ms-auto shrink-0 rounded border border-[var(--color-border)] px-1.5 py-0.5 hover:bg-[var(--color-surface-3)]"
+          className="ms-auto shrink-0 rounded-full border border-[var(--color-border)] px-2 py-0.5 hover:bg-[var(--color-surface-3)]"
         >
           {tr("activity_retry", undefined, "Retry")}
         </button>

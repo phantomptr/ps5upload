@@ -30,6 +30,12 @@ export function panelAnchorClass(align: "left" | "right"): string {
   return align === "right" ? "right-0" : "left-0";
 }
 
+/** Which way the panel opens from the bell: up from a footer, down from the
+ *  desktop top bar. */
+export function panelPlacementClass(placement: "above" | "below"): string {
+  return placement === "below" ? "top-full mt-2" : "bottom-full mb-1";
+}
+
 /**
  * Notification inbox — sidebar bell + slide-out panel.
  *
@@ -45,6 +51,8 @@ export function panelAnchorClass(align: "left" | "right"): string {
  */
 export default function NotificationInbox({
   align = "left",
+  placement = "above",
+  variant = "plain",
 }: {
   /**
    * Which edge of the bell the panel is anchored to — i.e. which way it
@@ -59,6 +67,11 @@ export default function NotificationInbox({
    * rather than a tighter clamp.
    */
   align?: "left" | "right";
+  /** Opens up (footers, the default) or down (the desktop top bar). */
+  placement?: "above" | "below";
+  /** "plain" is the quiet footer bell; "orb" the white round button of the
+   *  desktop top bar. */
+  variant?: "plain" | "orb";
 } = {}) {
   const tr = useTr();
   const navigate = useNavigate();
@@ -140,9 +153,13 @@ export default function NotificationInbox({
         // (mobile-design §4.1). Grow the hit area below md — the same
         // breakpoint the rest of the app uses to mean "mobile" — so the
         // dense desktop sidebar footer is left alone.
-        className="relative flex items-center justify-center rounded-md p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] max-md:h-11 max-md:w-11"
+        className={
+          variant === "orb"
+            ? "icon-orb-button relative"
+            : "relative flex items-center justify-center rounded-full p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] max-md:h-11 max-md:w-11"
+        }
       >
-        <Bell size={14} />
+        <Bell size={variant === "orb" ? 18 : 14} />
         {unread > 0 && (
           <span
             className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--color-bad)] px-1 text-[10px] font-semibold tabular-nums text-white"
@@ -165,7 +182,7 @@ export default function NotificationInbox({
           // edge of the bell it pins to, it grows AWAY from the nearest
           // window edge, and max-w-[calc(100vw-2rem)] keeps narrow windows
           // safe on the other side.
-          className={`anim-rise elev-2 absolute bottom-full mb-1 w-80 max-w-[calc(100vw-2rem)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] ${panelAnchorClass(align)}`}
+          className={`anim-rise glass-float elev-2 absolute w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-[var(--radius-card)] ${panelPlacementClass(placement)} ${panelAnchorClass(align)}`}
           style={{ zIndex: 60 }}
         >
           <header className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2">
