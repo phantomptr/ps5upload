@@ -41,11 +41,11 @@ export function HealthCardView({
   const fails = problems.some((p) => p.status === "fail");
   const ok = scanned && problems.length === 0;
   return (
-    <div className="mb-4" data-testid="home-health">
+    <div data-testid="home-health">
       <Card>
         <div className="flex flex-wrap items-center gap-3">
           <span
-            className={`grid h-8 w-8 shrink-0 place-items-center rounded-[0.6rem] bg-[var(--color-surface-3)] ${
+            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--color-surface-3)] ${
               !scanned
                 ? "text-[var(--color-muted)]"
                 : ok
@@ -65,7 +65,9 @@ export function HealthCardView({
               <AlertTriangle size={15} />
             )}
           </span>
-          <div className="min-w-0 flex-1">
+          {/* A floor on the text's width: below it the buttons wrap to the next
+              line instead of squeezing the heading to a word per line. */}
+          <div className="min-w-[14rem] flex-1">
             <h2 className="text-sm font-semibold tracking-tight">
               {!scanned
                 ? tr(
@@ -110,7 +112,7 @@ export function HealthCardView({
           </button>
           <Link
             to="/health"
-            className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] px-3 text-xs font-semibold hover:bg-[var(--color-surface-3)]"
+            className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 text-xs font-medium shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)]"
           >
             {tr("home_health_open", undefined, "Health check and speed test")}
             <ArrowRight size={13} aria-hidden />
@@ -121,7 +123,7 @@ export function HealthCardView({
             {problems.slice(0, SHOWN).map((p) => (
               <li
                 key={p.id}
-                className={`rounded-lg border px-3 py-2 text-xs ${
+                className={`rounded-2xl border px-4 py-2.5 text-xs ${
                   p.status === "fail"
                     ? "border-[var(--color-bad)]/50"
                     : "border-[var(--color-warn)]/40"

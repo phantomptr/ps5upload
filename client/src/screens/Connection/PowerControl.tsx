@@ -214,10 +214,10 @@ export default function PowerControl({ host }: { host: string }) {
   }
 
   return (
-    <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+    <section className="surface-panel px-5 py-4">
       {confirmDialogNode}
-      <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
-        <Power size={12} />
+      <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
+        <Power size={15} className="text-[var(--color-accent-bright)]" />
         {tr("power_control_title", undefined, "PS5 power")}
       </div>
       <div className="flex flex-wrap items-center gap-2">

@@ -27,8 +27,8 @@ export function ServersCardView(props: {
   return (
     <Card className="xl:col-span-12">
       <div className="mb-3 flex items-center gap-2">
-        <Network size={16} className="text-[var(--color-muted)]" />
-        <h2 className="flex-1 text-sm font-semibold">{tr("v5_home_servers", undefined, "Servers")}</h2>
+        <Network size={16} className="text-[var(--color-accent-bright)]" />
+        <h2 className="flex-1 text-[0.9375rem] font-semibold">{tr("v5_home_servers", undefined, "Servers")}</h2>
         {props.connections.length > 0 && (
           <Button variant="ghost" size="sm" onClick={props.onAdd}>
             <Plus size={14} />
@@ -55,7 +55,7 @@ export function ServersCardView(props: {
           {props.connections.map((c) => (
             <li
               key={c.id}
-              className="flex min-w-48 items-center gap-2 rounded-lg border border-[var(--color-border)] px-3 py-2"
+              className="flex min-w-48 items-center gap-2 rounded-full border border-[var(--color-border-strong)] py-1.5 ps-4 pe-1.5"
             >
               <span
                 className={`h-2 w-2 shrink-0 rounded-full ${
