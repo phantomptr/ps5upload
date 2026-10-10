@@ -19,7 +19,6 @@ import {
   WifiOff,
   XCircle,
   type LucideIcon,
-  Network,
 } from "lucide-react";
 
 import { useConnectionStore } from "../../state/connection";
@@ -199,7 +198,6 @@ export default function HomeScreen() {
             <QuickAction to="/files" icon={FolderTree} label={tr("v5_qa_files", "Browse files")} readiness={readinessFor("browse-console")} />
             <QuickAction to="/games" icon={Gamepad2} label={tr("v5_qa_games", "Open Games")} readiness={readinessFor("browse-console")} />
             <QuickAction to="/saves" icon={Save} label={tr("v5_qa_saves", "Back up saves")} readiness={readinessFor("browse-console")} />
-            <QuickAction to="/connections?add=1" icon={Network} label={tr("v5_qa_connect_server", "Connect a server")} readiness={{ ready: true, blockers: [], warnings: [] }} />
           </div>
         </Card>
 
@@ -277,7 +275,7 @@ export default function HomeScreen() {
             icon={ActivityIcon}
             title={tr("v5_home_recent_activity", "Recent activity")}
             description={tr("v5_home_recent_activity_desc", "Latest operations across every console.")}
-            action={<InlineLink to="/activity" label={tr("v5_tab_tasks", "View tasks")} />}
+            action={<InlineLink to="/tasks" label={tr("v5_tab_tasks", "View tasks")} />}
           />
           {recentActivity.length === 0 ? (
             <CompactEmpty icon={ActivityIcon} title={tr("v5_home_no_activity", "No activity yet")} body={tr("v5_home_no_activity_desc", "Uploads, installs, and file jobs will appear here.")} />
@@ -322,6 +320,9 @@ export default function HomeScreen() {
             </ul>
           )}
         </Card>
+
+        {/* Saved servers, once and always here: browse a NAS, or add the first one. */}
+        <ServersCard />
       </div>
     </div>
   );
@@ -360,7 +361,10 @@ function SensorMetric({ label, value }: { label: string; value: string }) {
 }
 
 function QuickAction({ to, icon: Icon, label, readiness }: { to: string; icon: LucideIcon; label: string; readiness: { ready: boolean; blockers: string[]; warnings: string[] } }) {
-  const detail = readiness.ready ? readiness.warnings[0] || "Ready" : readiness.blockers[0] || "Unavailable";
+  const tr = useTr();
+  const detail = readiness.ready
+    ? readiness.warnings[0] || tr("v5_qa_ready", "Ready")
+    : readiness.blockers[0] || tr("v5_qa_unavailable", "Unavailable");
   const content = (
     <>
       <span className="action-tile-icon"><Icon size={17} aria-hidden /></span>
@@ -384,8 +388,6 @@ function CompactEmpty({ icon: Icon, title, body }: { icon: LucideIcon; title: st
       <div>
         <div className="text-xs font-semibold">{title}</div>
         <div className="mt-0.5 text-[0.6875rem] text-[var(--color-muted)]">{body}</div>
-
-        <ServersCard />
       </div>
     </div>
   );

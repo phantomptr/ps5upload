@@ -96,6 +96,12 @@ function LandingRedirect() {
   return <Navigate to={to} replace />;
 }
 
+/** /activity keeps working for old links (?console=… included) but lands on /tasks. */
+function ActivityToTasks() {
+  const { search, hash } = useLocation();
+  return <Navigate to={{ pathname: "/tasks", search, hash }} replace />;
+}
+
 /** Guards a route whose screen has NO browser-functional path at all (see
  *  the matching `hideInBrowser` nav entry in Sidebar.tsx) — redirects a
  *  direct/typed navigation there in a browser session rather than rendering
@@ -442,14 +448,8 @@ function AppRoutes({ location }: { location: Location }) {
             </Suspense>
           }
         />
-        <Route
-          path="/activity"
-          element={
-            <Suspense fallback={<ScreenLoader />}>
-              <ActivityScreen />
-            </Suspense>
-          }
-        />
+        {/* Same screen; one address, so the sidebar's Tasks entry lights up for it. */}
+        <Route path="/activity" element={<ActivityToTasks />} />
         <Route
           path="/stats"
           element={

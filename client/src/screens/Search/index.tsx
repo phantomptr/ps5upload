@@ -1,5 +1,6 @@
 import { consoleAddr } from "../../lib/addr";
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import {
   Search as SearchIcon,
   File as FileIcon,
@@ -28,9 +29,10 @@ import {
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { usePrompt } from "../../components/ConfirmDialog";
 import { pushNotification } from "../../state/notifications";
-import { useTr } from "../../state/lang";
+import { useTr, type Translator } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
 import { isTauriEnv } from "../../lib/tauriEnv";
+import { fileSystemLinkFor } from "./searchLink";
 
 /** Size filter options. `labelKey` resolves through `tr()` at render
  *  time; `labelFallback` is the English text used when the lang file
@@ -483,14 +485,14 @@ export default function SearchScreen() {
               </span>
               <button
                 type="button"
-                onClick={() => exportSearchResults(result.hits, "csv")}
+                onClick={() => exportSearchResults(result.hits, "csv", tr)}
                 className="ml-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
               >
                 {tr("search_export_csv", undefined, "Export CSV")}
               </button>
               <button
                 type="button"
-                onClick={() => exportSearchResults(result.hits, "json")}
+                onClick={() => exportSearchResults(result.hits, "json", tr)}
                 className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
               >
                 {tr("search_export_json", undefined, "Export JSON")}
@@ -500,23 +502,30 @@ export default function SearchScreen() {
               {result.hits.map((h, i) => {
                 const Icon = h.kind === "dir" ? Folder : FileIcon;
                 return (
-                  <li
-                    key={`${h.path}-${i}`}
-                    className="flex items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-sm"
-                  >
-                    <Icon
-                      size={14}
-                      className="shrink-0 text-[var(--color-muted)]"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-mono text-sm">{h.name}</div>
-                      <div className="truncate font-mono text-xs text-[var(--color-muted)]">
-                        {h.path}
+                  <li key={`${h.path}-${i}`}>
+                    <Link
+                      to={fileSystemLinkFor(h)}
+                      title={tr(
+                        "search_open_in_files",
+                        undefined,
+                        "Open in File System",
+                      )}
+                      className="flex items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-sm hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-3)]"
+                    >
+                      <Icon
+                        size={14}
+                        className="shrink-0 text-[var(--color-muted)]"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-mono text-sm">{h.name}</div>
+                        <div className="truncate font-mono text-xs text-[var(--color-muted)]">
+                          {h.path}
+                        </div>
                       </div>
-                    </div>
-                    <span className="shrink-0 text-xs text-[var(--color-muted)] tabular-nums">
-                      {h.size > 0 ? formatBytes(h.size) : "—"}
-                    </span>
+                      <span className="shrink-0 text-xs text-[var(--color-muted)] tabular-nums">
+                        {h.size > 0 ? formatBytes(h.size) : "—"}
+                      </span>
+                    </Link>
                   </li>
                 );
               })}
@@ -531,7 +540,11 @@ export default function SearchScreen() {
 /** Save the current hits to disk via the Tauri save dialog. CSV uses
  *  RFC 4180 quoting (double-quote both wrappers and embedded quotes);
  *  JSON serializes the entire SearchHit shape. */
-async function exportSearchResults(hits: SearchHit[], format: "csv" | "json") {
+async function exportSearchResults(
+  hits: SearchHit[],
+  format: "csv" | "json",
+  tr: Translator,
+) {
   const fileName = `ps5upload-search-${Date.now()}.${format}`;
   let text: string;
   if (format === "json") {
@@ -570,11 +583,15 @@ async function exportSearchResults(hits: SearchHit[], format: "csv" | "json") {
       if (!dest || typeof dest !== "string") return;
       await writeTextFileToPath(dest, text, fileName);
     }
-    pushNotification("success", "Search results exported", {
-      body: `Saved ${hits.length.toLocaleString()} ${format.toUpperCase()} rows.`,
+    pushNotification("success", tr("search_exported_title", "Search results exported"), {
+      body: tr(
+        "search_exported_body",
+        { n: hits.length.toLocaleString(), format: format.toUpperCase() },
+        "Saved {n} {format} rows.",
+      ),
     });
   } catch (e) {
-    pushNotification("error", "Couldn't export search results", {
+    pushNotification("error", tr("search_export_failed_title", "Couldn't export search results"), {
       body: e instanceof Error ? e.message : String(e),
     });
   }

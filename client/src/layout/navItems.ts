@@ -128,8 +128,8 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     to: "/connections",
-    key: "connections_title",
-    fallback: "Connections",
+    key: "v5_home_servers",
+    fallback: "Servers",
     icon: Network,
   },
   { to: "/backup", key: "backup", fallback: "Backup", icon: Archive },

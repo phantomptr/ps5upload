@@ -124,7 +124,7 @@ export function ActivityPanelView(props: ActivityPanelProps) {
       )}
       <button
         type="button"
-        onClick={() => onOpen("/activity")}
+        onClick={() => onOpen("/tasks")}
         className="text-[var(--color-accent)] hover:underline"
       >
         {tr("activity_see_all", undefined, "See all activity")}

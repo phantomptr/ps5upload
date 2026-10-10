@@ -12,6 +12,7 @@ import {
 import { useTr } from "../state/lang";
 import { useAnyGameRunning } from "../state/runningApps";
 import type { LucideIcon } from "lucide-react";
+import { NAV_ITEMS, groupNavItems } from "./navItems";
 
 /**
  * v5 primary navigation.
@@ -32,101 +33,80 @@ import type { LucideIcon } from "lucide-react";
  *   `/console`, `/tasks` routes.
  */
 
+export type TabId = "home" | "games" | "files" | "console" | "tasks";
+
 interface TabDef {
   /** v5 tab id (also used as the i18n key suffix). */
-  id: "home" | "games" | "files" | "console" | "tasks";
+  id: TabId;
   /** lucide icon component. */
   icon: LucideIcon;
-  /** Current v4 route to link to (will become /<id> as tabs are built). */
+  /** Route the tab links to. */
   to: string;
-  /** Additional v4 prefixes that count as "active" for this tab. */
-  matches: string[];
+  /** The sidebar sections (navItems' section keys) whose screens light this tab up, so the
+   *  tabs file every screen where the sidebar does. */
+  sections: string[];
+  /** Routes outside the sidebar that still belong here: redirects, sub-screens, pinned items. */
+  extra: string[];
 }
 
-const TABS: TabDef[] = [
+const TAB_DEFS: TabDef[] = [
   {
     id: "home",
     icon: LayoutDashboard,
     to: "/home",
-    matches: [
-      "/home",
-      "/dashboard",
-      "/whats-new",
-      "/connection",
-      "/about",
-      "/faq",
-      "/settings",
-      "/first-run",
-    ],
+    sections: ["nav_section_setup", "nav_section_help"],
+    extra: ["/home", "/dashboard", "/first-run"],
   },
   {
     id: "games",
     icon: Gamepad2,
     to: "/games",
-    matches: [
-      "/games",
-      "/library",
-      "/installed",
-      "/cheats",
-      "/saves",
-      "/captures",
-      "/game-activity",
-      "/search",
-      "/collection",
-    ],
+    sections: ["nav_section_games_mods"],
+    extra: ["/library", "/installed", "/screenshots", "/videos"],
   },
   {
     id: "files",
     icon: FolderTree,
     to: "/files",
-    matches: [
-      "/files",
-      "/upload",
-      "/install-package",
-      "/file-system",
-      "/volumes",
-      "/connections",
-      "/disk-usage",
-    ],
+    sections: ["nav_section_files"],
+    extra: ["/file-system"],
   },
   {
     id: "console",
     icon: Cpu,
     to: "/console",
-    matches: [
-      "/console",
-      "/hardware",
-      "/fan-curve",
-      "/profile",
-      "/backup",
-      "/local-image",
-      "/health",
-      "/remote-play",
-      "/notifications",
-      "/fw-spoof",
-      "/nanodns",
-      "/nano-dns",
-      "/payloads",
-      "/send-payload",
-      "/processes",
-      "/shell",
-      "/stats",
-    ],
+    sections: ["nav_section_console", "nav_section_advanced"],
+    extra: ["/hardware", "/nanodns", "/nano-dns", "/send-payload", "/shadowmount"],
   },
   {
     id: "tasks",
     icon: Activity,
     to: "/tasks",
-    matches: [
-      "/tasks",
-      "/activity",
-      "/logs",
-      "/kernel-log",
-      "/audit-log",
-      "/bug-report",
-    ],
+    sections: ["nav_section_diagnostics"],
+    extra: ["/activity", "/kernel-log", "/bug-report"],
   },
 ];
+
+/** Each tab with the routes that count as "on" it: its sidebar sections' screens, then its extras. */
+const TABS = TAB_DEFS.map((tab) => ({
+  ...tab,
+  matches: [
+    ...groupNavItems(NAV_ITEMS)
+      .filter((g) => tab.sections.includes(g.section.key))
+      .flatMap((g) => g.items.map((i) => i.to)),
+    ...tab.extra,
+  ],
+}));
+
+/** The tab a path belongs to, or null (e.g. /more). */
+export function tabForPath(pathname: string): TabId | null {
+  for (const tab of TABS) {
+    if (tab.matches.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+      return tab.id;
+    }
+  }
+  return null;
+}
 
 /**
  * The "a game is running" dot on the Games tab.
@@ -150,17 +130,7 @@ function PlayingDot() {
 }
 
 function useActiveTab(): string | null {
-  const { pathname } = useLocation();
-  for (const tab of TABS) {
-    if (
-      tab.matches.some(
-        (p) => pathname === p || pathname.startsWith(p + "/"),
-      )
-    ) {
-      return tab.id;
-    }
-  }
-  return null;
+  return tabForPath(useLocation().pathname);
 }
 
 /**

@@ -209,11 +209,12 @@ export default function ConnectionsScreen() {
       {dialog}
       <PageHeader
         icon={Network}
-        title={tr("connections_title", undefined, "Connections")}
+        // "Servers", not "Connections": that read as the PS5's Connection screen.
+        title={tr("v5_home_servers", undefined, "Servers")}
         description={tr(
-          "connections_subtitle",
+          "servers_subtitle",
           undefined,
-          "Your NAS and servers (SMB, FTP, SFTP). Anywhere you browse for a game or file, pick from them with the ▾ next to Browse.",
+          "Your NAS and servers (SMB, FTP, FTPS, SFTP). Anywhere you browse for a game or file, pick from them with the ▾ next to Browse.",
         )}
         right={
           <div className="flex gap-2">

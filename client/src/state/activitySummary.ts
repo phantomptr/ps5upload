@@ -93,18 +93,19 @@ export function shortLabel(kind: TaskKind): string {
   }
 }
 
-/** The screen a job belongs to, opened when its row is clicked. */
+/** The screen a job belongs to, opened when its row is clicked. Real routes only: a redirect
+ *  would land on the right screen but leave a second history entry behind. */
 export function routeForTask(task: Task): string {
   const k = task.kind;
   if (k.startsWith("upload-")) return "/upload";
-  if (k.startsWith("fs-") || k === "download") return "/file-system";
+  if (k.startsWith("fs-") || k === "download") return "/files";
   if (k.startsWith("pkg-") || k === "install-batch") return "/install-package";
   if (k.startsWith("backup-")) return "/backup";
   if (k.startsWith("save-")) return "/saves";
   if (k === "fpkg-convert" || k === "ffpfsc-compress") return "/convert";
-  if (k === "backport-patch" || k.startsWith("fakelib-")) return "/installed";
+  if (k === "backport-patch" || k.startsWith("fakelib-")) return "/games?tab=ready";
   if (k === "bug-report") return "/bug-report";
-  if (k.startsWith("library-")) return "/library";
+  if (k.startsWith("library-")) return "/games?tab=files";
   if (k === "cheat-download") return "/cheats";
   return "/tasks";
 }
