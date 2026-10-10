@@ -9,16 +9,13 @@ import { Button, Card, Checkbox, ProgressBar } from "../../components";
 import { makesImage } from "../../state/fpkgConversion";
 import type { InstallMethod, Pipeline, PipelineStage } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
+import { formatBytes } from "../../lib/format";
 import type { Task } from "../../state/tasks";
 import type { AmprPacksReadiness, ImageFormat } from "../../api/fpkg";
 import { overallProgress, stageRows, type StageRow } from "./stages";
 
-export function prettyBytes(n: number): string {
-  if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(2)} GiB`;
-  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)} MiB`;
-  if (n >= 1 << 10) return `${(n / (1 << 10)).toFixed(0)} KiB`;
-  return `${n} B`;
-}
+/** The app's one size formatter (IEC), kept under this name for the Convert cards. */
+export const prettyBytes = formatBytes;
 
 export function prettyDuration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));

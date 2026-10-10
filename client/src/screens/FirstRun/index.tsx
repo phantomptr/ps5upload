@@ -30,6 +30,7 @@ import { PageHeader, Button, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { selectConsoleByAddress, withConsolePrefix } from "../../state/roster";
+import { formatBytes } from "../../lib/format";
 
 /**
  * First-run setup wizard.
@@ -279,9 +280,9 @@ export default function FirstRunScreen() {
           updateStep(id, {
             state: "busy",
             note: tr(
-              "first_run_note_downloading",
-              { tag: release.tag, kb: (release.picked_asset_size / 1024).toFixed(0) },
-              "downloading {tag} ({kb} KB)…",
+              "first_run_note_downloading_v2",
+              { tag: release.tag, size: formatBytes(release.picked_asset_size) },
+              "downloading {tag} ({size})…",
             ),
           });
           const local = await payloadsDownload(

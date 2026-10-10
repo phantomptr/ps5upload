@@ -988,6 +988,10 @@ interface PkgLibraryState {
    *  upload is QUEUED behind an active transfer (the PS5 can only do one at a
    *  time). Null when nothing is waiting. */
   busyNotice: string | null;
+  /** A refresh asked for while an install ran: it was held (the package
+   *  list is being written to) and runs as soon as the install ends. The
+   *  Install screen says so instead of looking like Refresh did nothing. */
+  refreshDeferred: boolean;
   /** The "download the link to this computer first" step, which runs before
    *  its install joins the queue — so it has no queue row to show it and
    *  needs its own line on the Install screen. Null when no download runs. */
@@ -1358,14 +1362,8 @@ export function fmtEta(remainingBytes: number, bytesPerSec: number): string {
   return m > 0 ? `${h}h ${m}m left` : `${h}h left`;
 }
 
-/** Bytes as a short human string: MB below a GB, GB above. */
-function fmtBytes(n: number): string {
-  if (n >= 1024 * 1024 * 1024)
-    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(0)} MB`;
-  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${n} B`;
-}
+/** Bytes as a short human string, in the app's one (IEC) unit system. */
+const fmtBytes = formatBytes;
 
 /**
  * Name the state a live install is in, and where its progress bar should point.
@@ -2203,17 +2201,35 @@ const pkgAddsInFlight = new Set<string>();
  * `host` (it matches this instance's console) and uses it for addresses.
  */
 const makePkgLibraryStore = () =>
-  createStore<PkgLibraryState>((set, get) => ({
+  createStore<PkgLibraryState>((set, get) => {
+  // The console whose refresh was held for a running install (see refreshDeferred).
+  let deferredHost: string | null = null;
+  const endInstall = () => {
+    set({ installing: false, busyNotice: null });
+    if (deferredHost) {
+      const h = deferredHost;
+      deferredHost = null;
+      set({ refreshDeferred: false });
+      void get().refresh(h);
+    }
+  };
+  return {
     entries: [],
     loading: false,
     error: null,
     installing: false,
     busyNotice: null,
+    refreshDeferred: false,
     downloadNotice: null,
     installingAll: false,
 
     async refresh(host) {
-      if (!host?.trim() || get().installing) return;
+      if (!host?.trim()) return;
+      if (get().installing) {
+        deferredHost = host;
+        set({ refreshDeferred: true });
+        return;
+      }
       set({ loading: true, error: null });
       const addr = mgmtAddr(host);
       const titles = loadTitleCache();
@@ -2815,7 +2831,7 @@ const makePkgLibraryStore = () =>
         });
         outcome = { ok: false, message };
       } finally {
-        set({ installing: false, busyNotice: null });
+        endInstall();
       }
       return outcome;
     },
@@ -3278,7 +3294,7 @@ const makePkgLibraryStore = () =>
       };
       // Runs from the console queue, one install at a time per console.
       set({ installing: true, busyNotice: null });
-      const clearBusy = () => set({ installing: false, busyNotice: null });
+      const clearBusy = () => endInstall();
       try {
         useTaskStore.getState().updateTask(taskId, {
           status: "running",
@@ -3745,7 +3761,7 @@ const makePkgLibraryStore = () =>
               : ""),
         };
       } finally {
-        set({ installing: false, busyNotice: null });
+        endInstall();
       }
     },
 
@@ -3809,7 +3825,7 @@ const makePkgLibraryStore = () =>
       } catch (e) {
         return { ok: false, message: pkgError(e) };
       } finally {
-        set({ installing: false, busyNotice: null });
+        endInstall();
       }
     },
 
@@ -3834,7 +3850,8 @@ const makePkgLibraryStore = () =>
       // upload/install (status uploading/installing/queued).
       await bulkDelete(get, set, host, (e) => e.status === "idle");
     },
-  }));
+  };
+  });
 
 /**
  * Per-console store registry. One isolated PkgLibrary store instance per PS5

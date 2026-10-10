@@ -55,7 +55,7 @@ describe("StorageCard — default package drive", () => {
         onUseForPackages={() => {}}
       />,
     );
-    expect(withKept).toContain("66.1 GB kept by the console for its own use");
+    expect(withKept).toContain("61.6 GiB kept by the console for its own use");
     expect(html(vol("/data", { fs_type: "nullfs" }), null)).not.toContain("kept by the console");
   });
 

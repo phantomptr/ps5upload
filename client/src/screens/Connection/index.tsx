@@ -35,6 +35,7 @@ import { selectConsoleByAddress } from "../../state/roster";
 import { useTr } from "../../state/lang";
 import PowerControl from "./PowerControl";
 import { BringUpPanel } from "./BringUpPanel";
+import { formatBytes } from "../../lib/format";
 
 type StepState = "idle" | "busy" | "ok" | "fail";
 
@@ -1074,7 +1075,6 @@ function BundledPayloadBanner() {
     );
   }
   if (!info) return null;
-  const kb = (info.size / 1024).toFixed(1);
   const built =
     info.mtime > 0
       ? new Date(info.mtime * 1000).toLocaleString()
@@ -1088,7 +1088,7 @@ function BundledPayloadBanner() {
     >
       <span>
         <span className="font-semibold text-[var(--color-text)]">{basename}</span>{" "}
-        · {kb} KB
+        · {formatBytes(info.size)}
       </span>
       <span>{tr("connection_built", { date: built }, `built: ${built}`)}</span>
     </div>

@@ -22,6 +22,7 @@ const extract = vi.fn();
 const cleanupExtract = vi.fn(async () => ({ ok: true }));
 const deletePackage = vi.fn(async () => ({ ok: true }));
 const jobStatus = vi.fn();
+const jobCancel = vi.fn();
 const installStream = vi.fn();
 const uploadInstall = vi.fn();
 // The staged row an upload install reports through; the test drives it.
@@ -41,7 +42,7 @@ vi.mock("../api/fpkg", () => ({
 }));
 vi.mock("../api/ps5", () => ({
   jobStatus: (...a: unknown[]) => jobStatus(...a),
-  jobCancel: vi.fn(),
+  jobCancel: (...a: unknown[]) => jobCancel(...a),
 }));
 vi.mock("./pkgLibrary", () => ({
   pkgLibraryStore: () => ({
@@ -74,6 +75,12 @@ vi.mock("../api/remote", () => ({
 // The console of the moment: what the connection bar says when the install starts.
 const conn = { host: "10.0.0.2", payloadStatus: "up" };
 vi.mock("./connection", () => ({ useConnectionStore: { getState: () => conn } }));
+// The roster the recorded install target is checked against.
+const roster = { profiles: [] as { id: string; name: string; host: string }[] };
+vi.mock("./roster", async (orig) => ({
+  ...(await orig<typeof import("./roster")>()),
+  useRosterStore: { getState: () => roster },
+}));
 
 import { POLL_MS, useFpkgConversion } from "./fpkgConversion";
 import { commandTask, taskCapabilities } from "./taskControls";
@@ -101,6 +108,8 @@ describe("fpkg pipeline", () => {
     deletePackage.mockClear();
     conn.host = "10.0.0.2";
     conn.payloadStatus = "up";
+    roster.profiles = [];
+    jobCancel.mockReset().mockResolvedValue(undefined);
   });
 
   it("converts through the stages and ends done", async () => {
@@ -219,18 +228,38 @@ describe("fpkg pipeline", () => {
     expect(installStream).toHaveBeenCalledTimes(1);
   });
 
-  it("installs on the console selected when the install starts, not when Convert was pressed", async () => {
+  it("installs on the console chosen when Convert & install was pressed, not the one switched to", async () => {
     jobStatus
       .mockResolvedValueOnce({ status: "running" })
       .mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
     installStream.mockResolvedValue({ ok: true });
+    roster.profiles = [
+      { id: "a", name: "Pro", host: "10.0.0.2" },
+      { id: "b", name: "Phat", host: "10.0.0.9" },
+    ];
     await useFpkgConversion.getState().start(req, { install: true, host: "10.0.0.2" });
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", host: "10.0.0.2" });
     await tick();
     conn.host = "10.0.0.9"; // the user switched consoles during the build
     await tick();
     await tick();
-    expect(installStream).toHaveBeenCalledWith("/out/a.pkg", "10.0.0.9", expect.anything());
-    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", host: "10.0.0.9" });
+    expect(installStream).toHaveBeenCalledWith("/out/a.pkg", "10.0.0.2", expect.anything());
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", host: "10.0.0.2" });
+  });
+
+  it("stops with the package kept when the chosen console left the roster during the build", async () => {
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
+    roster.profiles = [{ id: "b", name: "Phat", host: "10.0.0.9" }];
+    await useFpkgConversion.getState().start(req, { install: true, host: "10.0.0.2" });
+    await tick();
+    await tick();
+    expect(installStream).not.toHaveBeenCalled();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "failed",
+      stage: "send",
+      packagePath: "/out/a.pkg",
+      message: expect.stringContaining("no longer in your consoles"),
+    });
   });
 
   it("keeps the built package's title id for Launch", async () => {
@@ -422,14 +451,37 @@ describe("fpkg pipeline", () => {
     expect(installStream).not.toHaveBeenCalled();
   });
 
-  it("fails, not spins, when the engine stops answering", async () => {
+  it("fails, not spins, when the engine stops answering, and stops the build it gave up on", async () => {
     jobStatus.mockRejectedValue(new Error("connection refused"));
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    for (let i = 0; i < 7; i++) await tick();
+    expect(jobCancel).toHaveBeenCalledWith("j1");
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "failed",
+      message: expect.stringContaining("conversion was stopped"),
+    });
+  });
+
+  it("says the build may still run when even the stop cannot reach the engine", async () => {
+    jobStatus.mockRejectedValue(new Error("connection refused"));
+    jobCancel.mockRejectedValue(new Error("connection refused"));
     await useFpkgConversion.getState().start(req, { install: false, host: null });
     for (let i = 0; i < 7; i++) await tick();
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       phase: "failed",
-      message: expect.stringContaining("stopped responding"),
+      message: expect.stringContaining("may still be running"),
     });
+  });
+
+  it("tolerates a few missed polls without failing", async () => {
+    jobStatus
+      .mockRejectedValueOnce(new Error("timeout"))
+      .mockRejectedValueOnce(new Error("timeout"))
+      .mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    for (let i = 0; i < 4; i++) await tick();
+    expect(jobCancel).not.toHaveBeenCalled();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done" });
   });
 
   it("reports a failed build at the stage it reached, with no package", async () => {

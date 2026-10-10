@@ -22,7 +22,7 @@ import {
 import { useConfirm } from "../../components/ConfirmDialog";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
-import { formatStorageBytes } from "../../lib/format";
+import { formatBytes } from "../../lib/format";
 import { hostOf, transferAddr } from "../../lib/addr";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { isInternalVolume, usePkgStorageStore } from "../../lib/pkgStorage";
@@ -36,8 +36,8 @@ import { KeptByApp } from "./KeptByApp";
  *  FS_MOUNT_BASE in payload/src/runtime.c. */
 const PS5UPLOAD_MOUNT_PREFIX = "/mnt/ps5upload/";
 
-// Volume cards use formatStorageBytes (decimal GB/TB) from lib/format.ts
-// so capacity matches the PS5's own base-1000 storage figures.
+// Volume cards use formatBytes (IEC GiB/TiB) like every other size in the
+// app, so a drive's free space reads the same here as on Files and Upload.
 
 export default function VolumesScreen() {
   const tr = useTr();
@@ -386,9 +386,9 @@ function MountedImageCard({
         <div>
           <div className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-muted)]">
             <span>
-              {formatStorageBytes(v.free_bytes)}{" "}
+              {formatBytes(v.free_bytes)}{" "}
               {tr("volumes_free_of_mounted", undefined, "free of")}{" "}
-              {formatStorageBytes(v.total_bytes)}
+              {formatBytes(v.total_bytes)}
             </span>
             <span className="tabular-nums">
               {pct.toFixed(0)}
@@ -481,9 +481,9 @@ export function StorageCard({
         <div>
           <div className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-muted)]">
             <span>
-              {formatStorageBytes(v.free_bytes)}{" "}
+              {formatBytes(v.free_bytes)}{" "}
               {tr("volumes_free_of_storage", undefined, "free of")}{" "}
-              {formatStorageBytes(v.total_bytes)}
+              {formatBytes(v.total_bytes)}
             </span>
             <span className="tabular-nums">
               {pct.toFixed(0)}
@@ -494,7 +494,7 @@ export function StorageCard({
             <div className="mb-2 text-xs text-[var(--color-muted)]">
               {tr(
                 "volumes_kept_by_console",
-                { kept: formatStorageBytes(consoleKeptBytes) },
+                { kept: formatBytes(consoleKeptBytes) },
                 "{kept} kept by the console for its own use",
               )}
             </div>
@@ -505,10 +505,10 @@ export function StorageCard({
                 {tr(
                   "volumes_upload_safe_capacity",
                   {
-                    safe: formatStorageBytes(uploadSafeBytes),
+                    safe: formatBytes(uploadSafeBytes),
                     // Everything between "free" and "likely to fit": the working margin,
                     // and on internal storage what the PS5 holds back as it writes.
-                    reserve: formatStorageBytes(
+                    reserve: formatBytes(
                       Math.max(0, v.free_bytes - uploadSafeBytes),
                     ),
                   },

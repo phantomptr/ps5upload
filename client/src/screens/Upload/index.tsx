@@ -70,6 +70,7 @@ import {
   Input,
   Select,
   Toggle,
+  ProgressBar,
 } from "../../components";
 import {
   parseArchivePart,
@@ -379,8 +380,10 @@ export default function UploadScreen() {
   // Per-console one-shot phase: bind to THIS console's slot so switching tabs
   // shows the right upload (and a one-shot on another console never appears
   // here). phaseForHost falls back to the shared IDLE_PHASE singleton, so the
-  // selector stays referentially stable.
-  const transferPhase = useTransferStore((s) => phaseForHost(s, host));
+  // selector stays referentially stable. Only the phase KIND is read here:
+  // the live numbers change every poll (500 ms) and belong to TransferStatus,
+  // so the whole screen does not re-render with each tick.
+  const transferKind = useTransferStore((s) => phaseForHost(s, host).kind);
   const startTransfer = useTransferStore((s) => s.start);
   const resetTransfer = useTransferStore((s) => s.reset);
   const alwaysOverwrite = useUploadSettingsStore((s) => s.alwaysOverwrite);
@@ -823,7 +826,7 @@ export default function UploadScreen() {
           availableVolumes={availableVolumes}
           excludeMode={excludeMode}
           excludes={excludes}
-          transferPhase={transferPhase}
+          transferKind={transferKind}
           preflightBusy={preflightBusy}
           preflightError={preflightError}
           onClear={() => {
@@ -964,7 +967,7 @@ function Step2Options(props: {
   availableVolumes: Volume[];
   excludeMode: ExcludeMode;
   excludes: { pattern: string; enabled: boolean }[];
-  transferPhase: TransferPhase;
+  transferKind: TransferPhase["kind"];
   preflightBusy: boolean;
   preflightError: string | null;
   onClear: () => void;
@@ -997,7 +1000,7 @@ function Step2Options(props: {
     availableVolumes,
     excludeMode,
     excludes,
-    transferPhase,
+    transferKind,
     preflightBusy,
     preflightError,
     onClear,
@@ -1113,8 +1116,7 @@ function Step2Options(props: {
   // it up from a scan folder.
   const showMountToggle =
     source.kind === "image" && payloadCanMountImage(source.path);
-  const inFlight =
-    transferPhase.kind === "starting" || transferPhase.kind === "running";
+  const inFlight = transferKind === "starting" || transferKind === "running";
   // (2.11.0) Mutual-exclusion with QueuePanel. The PS5 payload's
   // transfer port is single-client — concurrent transfer connections
   // serialize at the socket, but the UI would say both are
@@ -1525,7 +1527,7 @@ function Step2Options(props: {
         </>
       )}
 
-      <TransferStatus phase={transferPhase} />
+      <TransferStatus onRetry={onUpload} />
 
       <div className="flex flex-wrap items-center justify-end gap-2">
         {/* Which PS5 this upload targets — a chip instead of baking a
@@ -1598,7 +1600,7 @@ function Step2Options(props: {
           {preflightBusy
             ? tr("upload_checking", "Checking…")
             : inFlight
-              ? transferPhase.kind === "starting"
+              ? transferKind === "starting"
                 ? tr("upload_starting", "Starting…")
                 : tr("upload_uploading", "Uploading…")
               : source.kind === "pkg"
@@ -1864,13 +1866,14 @@ function ExistingDestinationDialog({
   );
 }
 
-function TransferStatus({ phase }: { phase: TransferPhase }) {
+function TransferStatus({ onRetry }: { onRetry: () => void }) {
   const navigate = useNavigate();
   const tr = useTr();
-  // The parent binds `phase` to the ACTIVE console's slot, so the Stop button
-  // resets that same console's one-shot. Read the active host here rather than
-  // thread it through the intermediate sub-component.
+  // The ACTIVE console's one-shot. Subscribed here, not in the screen, so the
+  // 500 ms progress ticks re-render only this card.
   const host = useConnectionStore((s) => s.host);
+  const phase = useTransferStore((s) => phaseForHost(s, host));
+  const reattach = useTransferStore((s) => s.reattach);
   // Read settings directly — threading through Step2Options just to get
   // here would add props for something that's a rendering decision.
   const showFiles = useUploadSettingsStore((s) => s.showTransferFiles);
@@ -1884,7 +1887,7 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
 
   if (phase.kind === "starting") {
     return (
-      <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
+      <div className="mb-3 flex items-center gap-2.5 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] px-5 py-4 text-sm">
         <Spinner size={14} tone="accent" />
         {tr("upload_status_preparing", "Preparing upload…")}
       </div>
@@ -1912,7 +1915,7 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
     // would be misleading — describe what's actually happening.
     if (totalBytes === 0 && files.length === 0) {
       return (
-        <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
+        <div className="mb-3 flex items-center gap-2.5 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] px-5 py-4 text-sm">
           <Spinner size={14} tone="accent" />
           {tr(
             "upload_status_checking_existing",
@@ -1932,7 +1935,7 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
     // are working — without lying about the bytes.
     if (bytesSent === 0 && files.length > 0) {
       return (
-        <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
+        <div className="mb-3 flex items-center gap-2.5 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] px-5 py-4 text-sm">
           <Spinner size={14} tone="accent" />
           <span>
             {tr(
@@ -1965,7 +1968,7 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
     // interstitial above also catches this, but defense in depth).
     const isFinalizing = totalBytes > 0 && bytesSent >= totalBytes;
     return (
-      <div className="mb-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
+      <div className="mb-3 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] px-5 py-4 text-sm">
         {resuming && (
           <div className="mb-2 text-xs text-[var(--color-muted)]">
             {tr(
@@ -2026,19 +2029,40 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
                 )}
               </span>
             )}
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => cancelTransfer(host)}
-              className="rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-3)]"
               title={tr(
                 "upload_status_stop_tooltip",
                 "Cancel this upload. Start it again with Resume to continue where it stopped.",
               )}
             >
               {tr("upload_status_stop", "Stop")}
-            </button>
+            </Button>
           </div>
         </div>
+        {phase.lostContact && (
+          <div
+            role="status"
+            className="mb-3 flex flex-wrap items-center gap-3 rounded-[var(--radius-field)] border border-[var(--color-warn)] bg-[var(--color-warn-soft)] px-4 py-3 text-xs"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-[var(--color-warn)]">
+                {tr("upload_lost_contact_title", "Lost contact — the upload may still be running")}
+              </div>
+              <div className="mt-0.5 text-[var(--color-muted)]">
+                {tr(
+                  "upload_lost_contact_body",
+                  "The app can't read this upload's progress right now, so it keeps checking. Don't start it again until it answers or you stop it.",
+                )}
+              </div>
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => reattach(host ?? "")}>
+              {tr("upload_lost_contact_reattach", "Check again")}
+            </Button>
+          </div>
+        )}
         <JobLiveNotes live={phase.live} />
         {isFinalizing && (
           // Explanatory line so users with big multi-file uploads
@@ -2070,12 +2094,11 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
           </div>
         )}
         {totalBytes > 0 && (
-          <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-3)]">
-            <div
-              className="h-full bg-[var(--color-accent)] transition-[width] duration-300 ease-out"
-              style={{ width: `${pct}%` }}
-            />
-          </div>
+          <ProgressBar
+            value={pct / 100}
+            label={tr("upload_status_uploading", "Uploading")}
+            paused={!!phase.lostContact}
+          />
         )}
         {showFiles && files.length > 1 && (
           <FileListPanel files={files} completed={filesCompleted} />
@@ -2092,8 +2115,9 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
     const allSkipped =
       phase.bytesSent === 0 && phase.filesSent === 0 && phase.skippedFiles > 0;
     return (
-      <div className="mb-3 rounded-md border border-[var(--color-good)] bg-[var(--color-surface-2)] p-4 text-sm">
-        <div className="mb-2 font-medium text-[var(--color-good)]">
+      <div className="mb-3 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] px-5 py-4 text-sm">
+        <div className="mb-3 flex items-center gap-2 font-semibold text-[var(--color-good)]">
+          <span aria-hidden className="h-2 w-2 rounded-full bg-[var(--color-good)]" />
           {allSkipped
             ? tr("upload_already_up_to_date", "Already up to date")
             : tr("upload_complete", "Upload complete")}
@@ -2213,6 +2237,12 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
       <ErrorCard
         title={tr("upload_failed_title", "Upload failed")}
         detail={humanizeUploadError(phase.error)}
+        onDismiss={clearPhase}
+        action={
+          <Button variant="secondary" size="sm" onClick={onRetry}>
+            {tr("upload_failed_retry", "Retry")}
+          </Button>
+        }
       />
       <WhySlowPanel jobId={phase.jobId} />
     </div>
@@ -3202,7 +3232,7 @@ function BandwidthCard() {
           }}
           placeholder="0"
         />
-        <span className="text-xs text-[var(--color-muted)]">{tr("upload_unit_mbs", "MB/s")}</span>
+        <span className="text-xs text-[var(--color-muted)]">{tr("upload_unit_mbs", "MiB/s")}</span>
         {cap > 0 && (
           <button
             type="button"
@@ -3218,7 +3248,7 @@ function BandwidthCard() {
           ? tr(
               "bandwidth_cap_on_hint_v2",
               { n: cap },
-              `All uploads together are held to about ${cap} MB/s, from the next upload started. Set to 0 to remove the limit.`,
+              `All uploads together are held to about ${cap} MiB/s, from the next upload started. Set to 0 to remove the limit.`,
             )
           : tr(
               "bandwidth_cap_off_hint_v2",
@@ -3372,12 +3402,7 @@ function DestinationCard({
     // What is likely to fit, which on internal storage is less than what is allocatable.
     usableBytesByPath.set(v.path, volumeLikelyFitsBytes(v));
   }
-  const formatUsable = (bytes: number) => {
-    const gib = bytes / 1024 ** 3;
-    if (gib >= 1024) return `${(gib / 1024).toFixed(1)} TB usable`;
-    if (gib >= 10) return `${gib.toFixed(0)} GB usable`;
-    return `${gib.toFixed(1)} GB usable`;
-  };
+  const formatUsable = (bytes: number) => `${formatBytes(bytes)} usable`;
 
   return (
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">

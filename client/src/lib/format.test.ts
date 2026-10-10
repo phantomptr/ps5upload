@@ -42,6 +42,16 @@ describe("formatBytes", () => {
   });
 });
 
+describe("one unit system", () => {
+  // Volumes, Files, Upload and Convert used to mix decimal GB with GiB for
+  // the same byte counts on the same screen. Everything now goes through
+  // formatBytes; this pins the unit labels a drive size renders with.
+  it("labels a drive's size in GiB/TiB", () => {
+    expect(formatBytes(825e9)).toBe("768 GiB");
+    expect(formatBytes(2e12)).toBe("1.82 TiB");
+  });
+});
+
 describe("formatDuration", () => {
   it("returns dash for negative or non-finite", () => {
     expect(formatDuration(-1)).toBe("—");

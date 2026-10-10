@@ -613,6 +613,61 @@ export function nextPendingForHost(
   return best;
 }
 
+/** "Delete the source after upload": the upload already succeeded, so a
+ *  failed delete must not fail the row — but it must not vanish either, or
+ *  the user believes the space was freed. */
+export async function deleteSourceAfterUpload(
+  path: string,
+  addr: string,
+  del: (p: string) => Promise<unknown> = (p) => fpkg.deletePackage(p),
+): Promise<void> {
+  try {
+    await del(path);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    pushNotification(
+      "warning",
+      withConsolePrefix(
+        addr,
+        trStatic("queue_delete_source_failed", "Uploaded, but the source was not deleted"),
+      ),
+      { body: `${path} — ${msg}` },
+    );
+  }
+}
+
+/** What Clear tells the user about the work it could not simply drop: a
+ *  running upload is stopped (its engine job cancelled), a running install
+ *  keeps going. Null when nothing was running. */
+export function clearNotice(
+  items: QueueItem[],
+  kept: QueueItem[],
+): { addr: string; title: string; body: string } | null {
+  const stopped = items.find((it) => it.status === "running" && !kept.includes(it));
+  if (stopped) {
+    return {
+      addr: stopped.addr,
+      title: trStatic("queue_clear_stopped_title", "Queue cleared — the running upload was stopped"),
+      body: trStatic(
+        "queue_clear_stopped_body",
+        "The upload that was sending was stopped. Add it to the queue again to send it.",
+      ),
+    };
+  }
+  const install = kept[0];
+  if (install) {
+    return {
+      addr: install.addr,
+      title: trStatic("queue_clear_install_kept_title", "Queue cleared — one install is still running"),
+      body: trStatic(
+        "queue_clear_install_kept_body",
+        "An install can't be stopped once the PS5 has it, so it stays in the queue until it ends.",
+      ),
+    };
+  }
+  return null;
+}
+
 export const useUploadQueueStore = create<QueueState>((set, get) => {
   // PER-CONSOLE generation counters. Each console drains in its own loop;
   // every startHost() bumps a monotonic counter and stamps it as that
@@ -1655,7 +1710,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           void releaseCopy(next.sourcePath);
           releaseArchiveCopy(next.id);
           if (next.deleteSourceAfterUpload) {
-            void fpkg.deletePackage(next.sourcePath).catch(() => {});
+            void deleteSourceAfterUpload(next.sourcePath, next.addr);
           }
           if (!isLive()) return;
           break; // success → next item
@@ -2155,33 +2210,20 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     },
 
     clear() {
-      // If an item is mid-transfer, the engine job + the real PS5-side
-      // write keep running after we wipe the queue (the transfer port is
-      // single-client, so the next upload will block behind it until it
-      // finishes). Surface that instead of going silent — otherwise the
-      // user clicks Clear, the UI empties, and a subsequent upload
-      // mysteriously stalls behind the orphaned transfer. Mirrors the
-      // documented reset() caveat in transfer.ts.
-      // An install that is running stays (it can't be stopped); everything
-      // else goes.
+      // A running transfer is cancelled below (its engine job too); a running
+      // install stays, because an install can't be stopped once Sony has it.
+      // Say which of the two happened — the notice must match what Clear did.
       const keep = get().items.filter(
         (it) => it.sourceKind === "install" && it.status === "running",
       );
       for (const it of get().items) {
         if (!keep.includes(it)) settle(it.id, { ok: false, message: "Removed from the queue." });
       }
-      const inFlight = get().items.find((it) => it.status === "running");
-      if (inFlight) {
-        pushNotification(
-          "info",
-          withConsolePrefix(
-            inFlight.addr,
-            "Queue cleared — one upload is still finishing",
-          ),
-          {
-            body: `"${inFlight.displayName}" is already transferring to the PS5 and will run to completion. The next upload waits until it's done.`,
-          },
-        );
+      const notice = clearNotice(get().items, keep);
+      if (notice) {
+        pushNotification("info", withConsolePrefix(notice.addr, notice.title), {
+          body: notice.body,
+        });
       }
       // Re-stamp every running console's generation so any in-flight loop
       // exits at the next await, then wipe the list + run state.

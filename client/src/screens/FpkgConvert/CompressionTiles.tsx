@@ -2,12 +2,10 @@
 
 import type { FpkgCompression, FpkgEstimate } from "../../api/fpkg";
 import { useTr } from "../../state/lang";
+import { formatBytes } from "../../lib/format";
 import { prettyDuration } from "./RunCard";
 
-/** Decimal gigabytes, as the PS5's own storage screen counts. */
-function gb(bytes: number): string {
-  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${(bytes / 1e6).toFixed(0)} MB`;
-}
+const gb = formatBytes;
 
 const TILES: { value: FpkgCompression; icon: string; key: string; label: string }[] = [
   { value: "fast", icon: "⚡", key: "fpkg.compressionFast", label: "Fast" },

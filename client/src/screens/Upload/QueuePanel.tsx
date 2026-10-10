@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -147,7 +147,7 @@ export function queueSections(
 
 /** The console queue. On Upload it shows every console; Install Package
  *  passes `host` to show just the console being installed to. */
-export function QueuePanel({ host }: { host?: string } = {}) {
+export const QueuePanel = memo(function QueuePanel({ host }: { host?: string } = {}) {
   const tr = useTr();
   const allItems = useUploadQueueStore((s) => s.items);
   const items = useMemo(() => queueItemsForHost(allItems, host), [allItems, host]);
@@ -362,7 +362,7 @@ export function QueuePanel({ host }: { host?: string } = {}) {
       </div>
     </section>
   );
-}
+});
 
 /** The queue's counts as small chips — only the states that have any, so
  *  "2 total · 0 done · 1 pending · 0 failed" becomes "1 in progress · 1
