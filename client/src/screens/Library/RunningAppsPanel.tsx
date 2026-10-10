@@ -12,7 +12,6 @@ import {
   appdbQuery,
   appSuspend,
   appResume,
-  appKill,
   type AppDbEntry,
   type RunningApp,
 } from "../../api/ps5";
@@ -25,6 +24,7 @@ import { withConsolePrefix } from "../../state/roster";
 import { useRunningAppsStore } from "../../state/runningApps";
 import { useDocumentVisible } from "../../lib/visibility";
 import { transferScreenBusy } from "../../lib/ps5Transfers";
+import { killGame } from "../../lib/killGame";
 
 interface RunningJoined {
   app_id: number;
@@ -301,7 +301,12 @@ export default function RunningAppsPanel({ mgmtAddr }: { mgmtAddr: string }) {
                     destructive: true,
                     confirmLabel: tr("running_apps_kill", undefined, "Kill"),
                   });
-                  if (ok) void doAction(a.app_id, "Kill", appKill);
+                  // Same close as Games' "Close game": SIGKILL when Sony's app-kill refuses.
+                  if (ok) {
+                    void doAction(a.app_id, "Kill", async (addr, id) => ({
+                      ok: await killGame(addr, { appId: id }),
+                    }));
+                  }
                 }}
                 disabled={busyApp !== null}
               >

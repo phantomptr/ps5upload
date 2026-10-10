@@ -3,12 +3,12 @@
  *
  * Everything about one game behind one URL: `/games/:title_id`.
  *
- * Header: game icon, name, title_id, firmware, size, launch actions.
- * Tabs: Overview · Cheats · Saves · Media · Add-ons · Updates · Storage · Play Time
+ * Header: game icon, name, title_id, size, play time.
+ * Tabs: Overview · Cheats · Saves · Add-ons · Updates
  *
- * The tab content is rendered by sub-components that lazily fetch their
- * own data. Most tabs start as placeholder shells that the user can
- * navigate to; each gets fleshed out in subsequent phases.
+ * Launching and closing live on the console rows (ConsolesCard), so with
+ * several consoles it is always clear which one a game starts or stops on.
+ * Each tab fetches its own data when opened.
  */
 import { useMakeWay } from "../../lib/useMakeWay";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -21,11 +21,7 @@ import {
   Image as ImageIcon,
   Package,
   Download,
-  HardDrive,
-  Clock,
   Shield,
-  Play,
-  Film,
 } from "lucide-react";
 
 import {
@@ -43,11 +39,7 @@ import { GameIcon } from "../../components/GameIcon";
 import { useTr } from "../../state/lang";
 import { useLibraryStore, libraryForHost } from "../../state/library";
 import { useConnectionStore } from "../../state/connection";
-import {
-  usePlayTimeStore,
-  playSecondsFor,
-  lastSeenPlayingFor,
-} from "../../state/playTime";
+import { usePlayTimeStore } from "../../state/playTime";
 import { usePkgLibrary, type PkgEntry } from "../../state/pkgLibrary";
 import { pushNotification } from "../../state/notifications";
 import {
@@ -70,6 +62,11 @@ import { CollectionCover } from "../Collection/CollectionCover";
 import { ConsolesCard } from "./ConsolesCard";
 import { DrivesCard } from "./DrivesCard";
 import { fetchRunningGames } from "../../lib/runningGames";
+import { killGame } from "../../lib/killGame";
+import { playFor, useTrackedPlay } from "../../lib/trackedPlay";
+import { useRunningAppsStore } from "../../state/runningApps";
+// Direct import to avoid the barrel's circular-dep warning at build.
+import { useConfirm } from "../../components/ConfirmDialog";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { formatBytes, formatDuration } from "../../lib/format";
 
@@ -81,16 +78,7 @@ import { formatBytes, formatDuration } from "../../lib/format";
 const LAUNCH_CONFIRM_TIMEOUT_MS = 90_000;
 const LAUNCH_CONFIRM_POLL_MS = 2_000;
 
-const TAB_IDS = [
-  "overview",
-  "cheats",
-  "saves",
-  "media",
-  "addons",
-  "updates",
-  "storage",
-  "playtime",
-] as const;
+const TAB_IDS = ["overview", "cheats", "saves", "addons", "updates"] as const;
 
 type TabId = (typeof TAB_IDS)[number];
 
@@ -181,8 +169,10 @@ export default function GameHubScreen() {
     return null;
   }, [title_id, entries, installedTitles, gv.view]);
 
-  const playSeconds = playSecondsFor(playTimeState, host, title_id ?? null);
-  const lastSeenMs = lastSeenPlayingFor(playTimeState, host, title_id ?? null);
+  // Same numbers as Game Activity's Tracked tab; the app's own count only when
+  // the helper has no tracker to ask.
+  const tracked = useTrackedPlay(host);
+  const { seconds: playSeconds, lastSeenMs } = playFor(tracked, playTimeState, host, title_id);
 
   const tabs = useMemo(
     () =>
@@ -229,6 +219,8 @@ export default function GameHubScreen() {
         try {
           const running = await fetchRunningGames(addr);
           if (probe.isStale()) return;
+          // Publish it so the console row offers Close game straight away.
+          useRunningAppsStore.getState().setRunning(Array.from(running.keys()), probe.host);
           if (running.has(title_id)) return; // up — done waiting
         } catch {
           // Transient RPC failure while the title comes up: keep waiting.
@@ -259,6 +251,66 @@ export default function GameHubScreen() {
       setLaunching(false);
     }
   }, [title_id, launching, guard, tr, makeWay]);
+
+  // ── Close ─────────────────────────────────────────────────────────
+  // Running state comes from the shared store the shell's watcher (and the
+  // Games screen, while open) keeps current for the connected console.
+  const running = useRunningAppsStore(
+    (s) => !!title_id && !!host && s.host === host && s.titleIds.has(title_id),
+  );
+  const [stopping, setStopping] = useState(false);
+  const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
+
+  const handleStop = useCallback(async () => {
+    if (!title_id || stopping) return;
+    const probe = guard.capture();
+    if (!probe.host?.trim()) return;
+    const label = game?.name ?? title_id;
+    const ok = await confirmDialog({
+      title: tr("installed_stop_confirm_title", { name: label }, `Close ${label}?`),
+      message: tr(
+        "installed_stop_confirm_body",
+        undefined,
+        "This closes the running game on the PS5. Any unsaved progress will be lost — the same as quitting from the console.",
+      ),
+      confirmLabel: tr("installed_stop", undefined, "Close game"),
+      destructive: true,
+    });
+    if (!ok || probe.isStale()) return;
+    setStopping(true);
+    try {
+      const addr = mgmtAddr(probe.host);
+      // The store holds title ids only; the app id and pid come from a fresh read.
+      const target = (await fetchRunningGames(addr)).get(title_id);
+      const closed = target ? await killGame(addr, target) : true;
+      if (probe.isStale()) return;
+      if (closed) {
+        const store = useRunningAppsStore.getState();
+        store.setRunning(
+          Array.from(store.titleIds).filter((t) => t !== title_id),
+          probe.host,
+        );
+        pushNotification("info", label, {
+          body: tr("installed_stopped", undefined, "Game closed"),
+        });
+      } else {
+        pushNotification("error", label, {
+          body: tr(
+            "installed_stop_failed",
+            undefined,
+            "Couldn't close the game — it may have already exited.",
+          ),
+        });
+      }
+    } catch (e) {
+      if (probe.isStale()) return;
+      pushNotification("error", label, {
+        body: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setStopping(false);
+    }
+  }, [title_id, stopping, guard, game?.name, confirmDialog, tr]);
 
   if (!title_id) {
     return (
@@ -323,6 +375,7 @@ export default function GameHubScreen() {
   return (
     <div className="app-page">
       {makeWayDialog}
+      {confirmDialogNode}
       {/* Header */}
       <header className="mb-6">
         <div className="mb-3 flex items-center gap-2">
@@ -383,22 +436,6 @@ export default function GameHubScreen() {
             )}
           </div>
 
-          {/* Launch actions */}
-          {(game.source !== "collection" || connectedEntry?.installed) && (
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              variant="primary"
-              size="sm"
-              leftIcon={launching ? <Spinner size={14} /> : <Play size={14} />}
-              disabled={launching || payloadStatus !== "up"}
-              onClick={handleLaunch}
-            >
-              {launching
-                ? tr("game_hub_launching", undefined, "Starting…")
-                : tr("game_hub_launch", undefined, "Launch")}
-            </Button>
-          </div>
-          )}
         </div>
       </header>
 
@@ -422,6 +459,9 @@ export default function GameHubScreen() {
             refresh={gv.refresh}
             onPlay={() => void handleLaunch()}
             launching={launching}
+            running={running}
+            onStop={() => void handleStop()}
+            stopping={stopping}
             sendHost={sendHost}
             setSendHost={setSendHost}
           />
@@ -479,16 +519,10 @@ function GameTabContent({
       return <CheatsTab titleId={game.titleId} host={host} />;
     case "saves":
       return <SavesTab titleId={game.titleId} host={host} />;
-    case "media":
-      return <MediaTab />;
     case "addons":
       return <PackagesTab titleId={game.titleId} title={game.name} host={host} view={view} kind="addons" />;
     case "updates":
       return <PackagesTab titleId={game.titleId} title={game.name} host={host} view={view} kind="updates" />;
-    case "storage":
-      return <StorageTab game={game} />;
-    case "playtime":
-      return <PlayTimeTab playSeconds={playSeconds} lastSeenMs={lastSeenMs} />;
     default:
       return null;
   }
@@ -750,50 +784,6 @@ function SavesTab({ titleId, host }: { titleId: string; host: string | null }) {
 }
 
 /**
- * Media tab.
- *
- * The PS5 stores screenshots and clips under
- * `/user/av_contents/{photo,video}/<userId>/<userId>/<batch>/<file>` — the
- * path carries a capture batch, NOT a title id, and the payload's listing
- * has nothing else to key on. So there is no honest way to show "this
- * game's media" here. Rather than filter on a heuristic that silently
- * misattributes captures, we say so and link to the full browsers.
- */
-function MediaTab() {
-  const tr = useTr();
-  const navigate = useNavigate();
-  return (
-    <TabCard icon={ImageIcon} title={tr("game_hub_media", undefined, "Media")}>
-      <p className="text-sm text-[var(--color-muted)]">
-        {tr(
-          "game_hub_media_not_per_game",
-          undefined,
-          "The PS5 doesn't tag screenshots or clips with the game they came from — captures are filed by date, not by title. Browse everything on the console instead:",
-        )}
-      </p>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button
-          variant="secondary"
-          size="sm"
-          leftIcon={<ImageIcon size={14} />}
-          onClick={() => navigate("/captures")}
-        >
-          {tr("game_hub_open_screenshots", undefined, "Screenshots")}
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          leftIcon={<Film size={14} />}
-          onClick={() => navigate("/captures?tab=videos")}
-        >
-          {tr("game_hub_open_videos", undefined, "Video clips")}
-        </Button>
-      </div>
-    </TabCard>
-  );
-}
-
-/**
  * Add-ons / Updates tab — staged packages for this title, split by PARAM.SFO
  * CATEGORY. `ac` is DLC, `gp` is an update/patch. Both come from the same
  * per-host package library store, so one component serves both tabs.
@@ -935,6 +925,7 @@ function OverviewTab({
   lastSeenMs: number | undefined;
 }) {
   const tr = useTr();
+  const navigate = useNavigate();
   return (
     <div className="grid gap-4 md:grid-cols-2">
       <Card>
@@ -975,74 +966,19 @@ function OverviewTab({
             </div>
           )}
         </dl>
+        {/* Captures are filed by date, not by game, so this opens all of them. */}
+        <div className="mt-4">
+          <Button
+            variant="secondary"
+            size="sm"
+            leftIcon={<ImageIcon size={14} />}
+            onClick={() => navigate("/captures")}
+          >
+            {tr("captures", undefined, "Screenshots & clips")}
+          </Button>
+        </div>
       </Card>
     </div>
-  );
-}
-
-/** Storage tab — disk usage breakdown. */
-function StorageTab({ game }: { game: GameInfo }) {
-  const tr = useTr();
-  return (
-    <Card>
-      <h2 className="mb-3 text-sm font-semibold">
-        {tr("game_hub_storage", undefined, "Storage")}
-      </h2>
-      {game.size > 0 ? (
-        <dl className="space-y-2 text-sm">
-          <div className="flex justify-between">
-            <dt className="text-[var(--color-muted)]">{tr("game_hub_game_data", undefined, "Game data")}</dt>
-            <dd>{formatBytes(game.size)}</dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-[var(--color-muted)]">{tr("game_hub_path", undefined, "Path")}</dt>
-            <dd className="max-w-[300px] truncate font-mono text-xs" title={game.path}>
-              {game.path || "—"}
-            </dd>
-          </div>
-        </dl>
-      ) : (
-        <p className="text-sm text-[var(--color-muted)]">
-          {tr("game_hub_size_unavailable", undefined, "Size information unavailable.")}
-        </p>
-      )}
-    </Card>
-  );
-}
-
-/** Play time tab — aggregate stats. */
-function PlayTimeTab({
-  playSeconds,
-  lastSeenMs,
-}: {
-  playSeconds: number | undefined;
-  lastSeenMs: number | undefined;
-}) {
-  const tr = useTr();
-  return (
-    <Card>
-      <h2 className="mb-3 text-sm font-semibold">
-        {tr("game_hub_playtime", undefined, "Play Time")}
-      </h2>
-      {playSeconds !== undefined && playSeconds > 0 ? (
-        <dl className="space-y-2 text-sm">
-          <div className="flex justify-between">
-            <dt className="text-[var(--color-muted)]">{tr("game_hub_total", undefined, "Total")}</dt>
-            <dd>{formatDuration(playSeconds)}</dd>
-          </div>
-          {lastSeenMs && (
-            <div className="flex justify-between">
-              <dt className="text-[var(--color-muted)]">{tr("game_hub_last_session", undefined, "Last session")}</dt>
-              <dd>{new Date(lastSeenMs).toLocaleString()}</dd>
-            </div>
-          )}
-        </dl>
-      ) : (
-        <p className="text-sm text-[var(--color-muted)]">
-          {tr("game_hub_no_playtime", undefined, "No play time data recorded for this game.")}
-        </p>
-      )}
-    </Card>
   );
 }
 
@@ -1058,16 +994,10 @@ function tabLabel(
       return tr("game_hub_cheats", undefined, "Cheats");
     case "saves":
       return tr("game_hub_saves", undefined, "Saves");
-    case "media":
-      return tr("game_hub_media", undefined, "Media");
     case "addons":
       return tr("game_hub_addons", undefined, "Add-ons");
     case "updates":
       return tr("game_hub_updates", undefined, "Updates");
-    case "storage":
-      return tr("game_hub_storage", undefined, "Storage");
-    case "playtime":
-      return tr("game_hub_playtime", undefined, "Play Time");
     default:
       return id;
   }
@@ -1082,16 +1012,10 @@ function tabIcon(id: TabId) {
       return Shield;
     case "saves":
       return Save;
-    case "media":
-      return ImageIcon;
     case "addons":
       return Package;
     case "updates":
       return Download;
-    case "storage":
-      return HardDrive;
-    case "playtime":
-      return Clock;
     default:
       return Info;
   }

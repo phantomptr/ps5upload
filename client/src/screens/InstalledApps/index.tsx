@@ -53,13 +53,10 @@ import {
 } from "../../lib/runningGames";
 import {
   usePlayTimeStore,
-  playSecondsFor,
-  lastSeenPlayingFor,
   formatPlayTime,
   formatLastSeen,
 } from "../../state/playTime";
 import {
-  PageHeader,
   EmptyState,
   ErrorCard,
   WarningCard,
@@ -78,6 +75,7 @@ import { LAST_PS5_FAKE_GAME_FIRMWARE, ps5FakeGameUnplayableFirmware } from "../.
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { handleHomebrewRefusal, isHomebrewRefusal, type RefusalOutcome } from "../../lib/launchRefusal";
 import { killGame } from "../../lib/killGame";
+import { playFor, useTrackedPlay } from "../../lib/trackedPlay";
 import { useMakeWay } from "../../lib/useMakeWay";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
@@ -225,14 +223,14 @@ function NowPlayingBanner({
   titles,
   running,
   stoppingId,
-  playByHost,
+  playSecondsOf,
   onStop,
 }: {
   host: string;
   titles: InstalledTitle[];
   running: Map<string, RunningGame>;
   stoppingId: string | null;
-  playByHost: Record<string, Record<string, number>>;
+  playSecondsOf: (titleId: string) => number | undefined;
   onStop: (t: InstalledTitle) => void;
 }) {
   const tr = useTr();
@@ -250,7 +248,7 @@ function NowPlayingBanner({
         {tr("installed_now_playing", undefined, "Now playing")}
       </div>
       {playing.map((t) => {
-        const secs = playSecondsFor({ byHost: playByHost }, host, t.titleId);
+        const secs = playSecondsOf(t.titleId);
         return (
           <div key={t.titleId} className="flex items-center gap-3">
             <div className="w-14 shrink-0">
@@ -651,11 +649,7 @@ function Section({
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 
-export default function InstalledAppsScreen({
-  embedded = false,
-}: {
-  embedded?: boolean;
-}) {
+export default function InstalledAppsScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   // Kernel R/W = a jailbroken entry point (kstuff) is active. Without it,
@@ -728,6 +722,13 @@ export default function InstalledAppsScreen({
   // Per-title play stats for THIS console (cumulative seconds + last-seen ms).
   const playByHost = usePlayTimeStore((s) => s.byHost);
   const lastSeenByHost = usePlayTimeStore((s) => s.lastSeenByHost);
+  // The helper's tracked play (what Game Activity shows), or the app's own
+  // count when the helper has no tracker.
+  const tracked = useTrackedPlay(host);
+  const playOf = useCallback(
+    (titleId: string) => playFor(tracked, { byHost: playByHost, lastSeenByHost }, host, titleId),
+    [tracked, playByHost, lastSeenByHost, host],
+  );
   // Native window.confirm() is a no-op in Tauri's webview; use the in-tree
   // modal instead (see ConfirmDialog.tsx).
   const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
@@ -1225,8 +1226,8 @@ export default function InstalledAppsScreen({
     running: running.has(t.titleId),
     stopping: stoppingId === t.titleId,
     discNeedsSmp: kindOf(t) === "disc" && !smpRunning && !smpChecking,
-    playSeconds: playSecondsFor({ byHost: playByHost }, host, t.titleId),
-    lastSeenMs: lastSeenPlayingFor({ lastSeenByHost }, host, t.titleId),
+    playSeconds: playOf(t.titleId).seconds,
+    lastSeenMs: playOf(t.titleId).lastSeenMs,
     onUninstall: handleUninstall,
     onLaunch: handleLaunch,
     onStop: handleStop,
@@ -1244,8 +1245,7 @@ export default function InstalledAppsScreen({
   // titles never observed running. Pure derivation over the already-grouped
   // `installed` array; other groups (disc/folder/system) are left as-is.
   const installedView = useMemo(() => {
-    const secs = (t: InstalledTitle) =>
-      playSecondsFor({ byHost: playByHost }, host, t.titleId) ?? 0;
+    const secs = (t: InstalledTitle) => playOf(t.titleId).seconds ?? 0;
     let rows = installed;
     if (onlyUnplayed) {
       rows = rows.filter((t) => secs(t) === 0);
@@ -1256,10 +1256,10 @@ export default function InstalledAppsScreen({
     // Running titles to the front, after every other ordering. See
     // sortRunningFirst for why this is applied last.
     return sortRunningFirst(rows, running);
-  }, [installed, onlyUnplayed, sortByPlaytime, playByHost, host, running]);
+  }, [installed, onlyUnplayed, sortByPlaytime, playOf, running]);
 
   return (
-    <div className={`flex flex-col gap-5 ${embedded ? "" : "p-6"}`}>
+    <div className="flex flex-col gap-5">
       {backportTitle && titles ? (
         <BackportPanel
           open
@@ -1274,42 +1274,18 @@ export default function InstalledAppsScreen({
           onLaunch={(title) => void handleLaunch(title)}
         />
       ) : null}
-      {!embedded && <PageHeader
-        icon={Gamepad2}
-        title={tr("installed_apps_title", undefined, "Installed Apps")}
-        loading={loading}
-        description={tr(
-          "installed_apps_subtitle",
-          undefined,
-          "Everything installed on the PS5, grouped by how it got there. Press Play to launch a title; Uninstall to remove it.",
-        )}
-        right={
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<RefreshCw size={12} />}
-            onClick={() => void refresh()}
-            disabled={loading || !host?.trim()}
-            loading={loading}
-          >
-            {tr("refresh", undefined, "Refresh")}
-          </Button>
-        }
-      />}
-      {embedded && (
-        <div className="flex justify-end">
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<RefreshCw size={12} />}
-            onClick={() => void refresh()}
-            disabled={loading || !host?.trim()}
-            loading={loading}
-          >
-            {tr("refresh", undefined, "Refresh")}
-          </Button>
-        </div>
-      )}
+      <div className="flex justify-end">
+        <Button
+          variant="secondary"
+          size="sm"
+          leftIcon={<RefreshCw size={12} />}
+          onClick={() => void refresh()}
+          disabled={loading || !host?.trim()}
+          loading={loading}
+        >
+          {tr("refresh", undefined, "Refresh")}
+        </Button>
+      </div>
 
       <ConnectionGate require="payload">
         {/* Anything actually running goes above every advisory on this
@@ -1319,7 +1295,7 @@ export default function InstalledAppsScreen({
           titles={all}
           running={running}
           stoppingId={stoppingId}
-          playByHost={playByHost}
+          playSecondsOf={(id) => playOf(id).seconds}
           onStop={handleStop}
         />
 
@@ -1562,9 +1538,9 @@ export default function InstalledAppsScreen({
                 ) : (
                   <p className="col-span-full text-xs text-[var(--color-muted)]">
                     {tr(
-                      "installed_all_played",
+                      "installed_all_played_v2",
                       undefined,
-                      "Every installed title has been seen playing while ps5upload was open — nothing flagged as unused.",
+                      "Every installed title has been seen playing — nothing flagged as unused.",
                     )}
                   </p>
                 )}
@@ -1574,11 +1550,11 @@ export default function InstalledAppsScreen({
             {discs.length > 0 ? (
               <Section
                 icon={Disc3}
-                title={tr("installed_section_disc", undefined, "Disk images")}
+                title={tr("installed_section_disc_v2", undefined, "Games from disk images")}
                 hint={tr(
-                  "installed_section_disc_hint",
+                  "installed_section_disc_hint_v2",
                   undefined,
-                  "Mounted from /mnt/shadowmnt by ShadowMount+. They only mount + launch while ShadowMount+ is running.",
+                  "Registered games that run from a disk image. They mount and launch only while ShadowMount+ is running. The image files themselves are under Game files.",
                 )}
                 count={discs.length}
               >

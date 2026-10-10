@@ -173,6 +173,9 @@ processes_kill_system_body:
 processes_kill_app_title: 'Close "{name}"?',
 processes_kill_app_body:
   'This force-closes the running game "{name}". Any unsaved progress will be lost. Use Restart instead to relaunch it.',
+processes_kill_payload_title: 'Stop payload "{name}"?',
+processes_kill_payload_body:
+  'This kills the payload "{name}" (kstuff, etaHEN and the like). Whatever it provides stops until you send it again, and games that need it may stop starting.',
 activity: "Activity",
 about: "About",
 activity_title: "Activity",
@@ -276,6 +279,7 @@ library_empty_title: "Nothing in the scan folders yet",
 library_empty_message: "Upload a game folder or disk image, or register titles with a PS5-side installer — they'll show up here.",
 library_games: "Games",
 library_disk_images: "Disk images (.exfat / .ffpkg)",
+library_disk_image_files: "Disk image files (.exfat / .ffpkg / .ffpfs)",
 library_fpkg_kstuff_tip: "Tip: for faster .ffpkg / .exfat mounting (3-4×), try drakmor/kstuff-lite instead of the default kstuff. Install from the Payloads library.",
 payloads_refresh_error_banner: "Couldn't refresh from GitHub — showing cached snapshot. The latest tag on GitHub may be newer than what's shown here.",
 library_fpkg_kstuff_tip_repo: "View on GitHub",
@@ -2067,11 +2071,16 @@ installed_playtime_tooltip:
   "Play time and last-seen are tracked only while ps5upload is open and watching — not the console's own records.",
 installed_all_played:
   "Every installed title has been seen playing while ps5upload was open — nothing flagged as unused.",
+installed_all_played_v2:
+  "Every installed title has been seen playing — nothing flagged as unused.",
 installed_section_installed_hint:
   "Installed via Sony's installer from a .pkg (or shipped with the console). No source path.",
 installed_section_disc: "Disk images",
 installed_section_disc_hint:
   "Mounted from /mnt/shadowmnt by ShadowMount+. They only mount + launch while ShadowMount+ is running.",
+installed_section_disc_v2: "Games from disk images",
+installed_section_disc_hint_v2:
+  "Registered games that run from a disk image. They mount and launch only while ShadowMount+ is running. The image files themselves are under Game files.",
 installed_section_folder: "Folder homebrew",
 installed_section_folder_hint:
   "Registered from a /data/homebrew/<id>-app folder on the console.",
@@ -2948,6 +2957,7 @@ fanCurve_preview: "Preview",
   game_activity_launches: "launches",
   game_activity_no_data: "No data found",
   game_activity_no_recent: "No recently played data",
+  game_activity_no_console_playtime: "No console play time",
   game_activity_now_playing: "Currently playing",
   game_activity_recent: "Recently Played",
   game_activity_console_playtime: "Console Play Time",
@@ -3782,6 +3792,7 @@ first_run_description_v2: "Loads what most set-ups need, in the right order: kst
 first_run_description_v3: "Loads what most set-ups need, in the right order: kstuff (lets fake packages install and run), ShadowMount+ (puts game images and folders on the PS5's home screen) and ps5upload's own helper. After the PS5 restarts, Connection offers this wizard again.",
 fw_spoof_subtitle_v2: "Checks whether the firmware version this PS5 reports has been changed by a spoofing payload, so you know its real version before you install something that depends on it.",
 game_activity_subtitle_v2: "What was played on this PS5 and for how long, read from the console's own records.",
+game_activity_subtitle_v3: "What was played on this PS5 and for how long. Tracked play time is counted by the ps5upload helper on the console; Console Play Time is read from the console's own records.",
 health_subtitle_v2: "Checks that the PS5, this app and the network between them are working, says what to fix when something is not, and measures how fast files move between them.",
 localimage_subtitle_v2: "Open a game image (.exfat or .ffpkg) that is on this computer and add, replace or remove files inside it, without unpacking the whole image.",
 processes_subtitle_v2: "The programs running on the PS5 right now. You can stop or restart one; take care with system processes, since stopping the wrong one can freeze the console.",

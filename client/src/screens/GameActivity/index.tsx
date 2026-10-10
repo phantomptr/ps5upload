@@ -22,7 +22,7 @@ function formatDuration(seconds: number): string {
   return `${hours}h ${remMins}m`;
 }
 
-/* All three tabs identify a title the same way: the game's name when the
+/* Both tabs identify a title the same way: the game's name when the
  * payload could resolve one from app.db, with the title id demoted to a
  * subtitle. When there is no name -- a title that has been deleted, or a
  * console whose app.db would not open -- the title id stays the heading,
@@ -65,9 +65,7 @@ export default function GameActivityScreen() {
   const [dbSource, setDbSource] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"tracked" | "recently_played" | "play_time">(
-    "tracked",
-  );
+  const [tab, setTab] = useState<"tracked" | "play_time">("tracked");
 
   const refresh = useCallback(async () => {
     if (!addr || payloadStatus !== "up") return;
@@ -79,9 +77,8 @@ export default function GameActivityScreen() {
         setEntries(resp.titles ?? []);
         setCurrentTitle(resp.current_title ?? "");
       } else {
-        // Both database tabs render through the same row list — the rows
-        // carry title_id plus an optional name and total_seconds, and the
-        // renderer already shows whichever of those are present.
+        // Rows carry title_id plus an optional name and total_seconds; the
+        // renderer shows whichever of those are present.
         const resp = await activityDbQuery(tab, addr);
         setDbRows(resp.rows ?? []);
         setDbSource(resp.source ?? "");
@@ -121,20 +118,23 @@ export default function GameActivityScreen() {
           icon={Clock}
           title={tr("game_activity_title", undefined, "Game Activity Tracker")}
           description={tr(
-          "game_activity_subtitle_v2",
+            "game_activity_subtitle_v3",
             undefined,
-            "What was played on this PS5 and for how long, read from the console's own records.",
+            "What was played on this PS5 and for how long. Tracked play time is counted by the ps5upload helper on the console; Console Play Time is read from the console's own records.",
           )}
           right={
             <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                onClick={() => setResetOpen(true)}
-                disabled={resetting || payloadStatus !== "up" || !addr}
-              >
-                <Trash2 size={16} />
-                {tr("game_activity_reset", undefined, "Reset play time")}
-              </Button>
+              {/* Reset clears only the helper's tracked table, so it lives on that tab. */}
+              {tab === "tracked" && (
+                <Button
+                  variant="ghost"
+                  onClick={() => setResetOpen(true)}
+                  disabled={resetting || payloadStatus !== "up" || !addr}
+                >
+                  <Trash2 size={16} />
+                  {tr("game_activity_reset", undefined, "Reset play time")}
+                </Button>
+              )}
               <Button variant="ghost" onClick={() => void refresh()} disabled={loading}>
                 {loading ? <Spinner size={16} tone="inherit" /> : <RefreshCw size={16} />}
                 {tr("refresh", undefined, "Refresh")}
@@ -151,12 +151,6 @@ export default function GameActivityScreen() {
             onClick={() => setTab("tracked")}
           >
             <Clock size={16} /> {tr("game_activity_tracked", undefined, "Tracked Playtime")}
-          </Button>
-          <Button
-            variant={tab === "recently_played" ? "primary" : "ghost"}
-            onClick={() => setTab("recently_played")}
-          >
-            <Database size={16} /> {tr("game_activity_recent", undefined, "Recently Played")}
           </Button>
           <Button
             variant={tab === "play_time" ? "primary" : "ghost"}
@@ -234,7 +228,7 @@ export default function GameActivityScreen() {
         ) : dbRows.length === 0 ? (
           <EmptyState
             icon={Database}
-            title={tr("game_activity_no_recent", undefined, "No recently played data")}
+            title={tr("game_activity_no_console_playtime", undefined, "No console play time")}
             message={
               dbSource === "none"
                 ? tr("game_activity_db_unavail", undefined, "Database unavailable on this firmware")

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
-import { Download, Monitor, Play, RefreshCw, Upload } from "lucide-react";
+import { Download, Monitor, Play, RefreshCw, Square, Upload } from "lucide-react";
 
 import type { CollectionLocation } from "../../api/collection";
 import type { ConsoleEntry, GameView } from "../../api/games";
@@ -36,6 +36,9 @@ export function ConsolesCard({
   refresh,
   onPlay,
   launching,
+  running = false,
+  onStop,
+  stopping = false,
   sendHost,
   setSendHost,
 }: {
@@ -48,6 +51,10 @@ export function ConsolesCard({
   refresh: (host: string) => Promise<ConsoleEntry>;
   onPlay: () => void;
   launching: boolean;
+  /** The game is running on the connected console: its row offers Close game instead of Play. */
+  running?: boolean;
+  onStop?: () => void;
+  stopping?: boolean;
   /** The console whose send panel is open, or null. */
   sendHost: string | null;
   setSendHost: (host: string | null) => void;
@@ -91,6 +98,9 @@ export function ConsolesCard({
               refresh={refresh}
               onPlay={onPlay}
               launching={launching}
+              running={running && h === connected}
+              onStop={onStop}
+              stopping={stopping}
               sending={sendHost === h}
               setSending={(on) => setSendHost(on ? h : null)}
             />
@@ -112,6 +122,9 @@ function ConsoleRow({
   refresh,
   onPlay,
   launching,
+  running,
+  onStop,
+  stopping,
   sending,
   setSending,
 }: {
@@ -125,6 +138,9 @@ function ConsoleRow({
   refresh: (host: string) => Promise<ConsoleEntry>;
   onPlay: () => void;
   launching: boolean;
+  running: boolean;
+  onStop?: () => void;
+  stopping: boolean;
   sending: boolean;
   setSending: (on: boolean) => void;
 }) {
@@ -200,6 +216,22 @@ function ConsoleRow({
   const button = (a: RowAction) => {
     switch (a.kind) {
       case "play":
+        if (running && onStop) {
+          return (
+            <Button
+              key="play"
+              size="sm"
+              variant="danger"
+              leftIcon={stopping ? <Spinner size={13} /> : <Square size={13} />}
+              disabled={stopping}
+              onClick={onStop}
+            >
+              {stopping
+                ? tr("installed_stopping", undefined, "Closing…")
+                : tr("installed_stop", undefined, "Close game")}
+            </Button>
+          );
+        }
         return (
           <Button
             key="play"

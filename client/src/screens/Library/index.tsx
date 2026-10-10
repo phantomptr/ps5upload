@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { gamePath } from "../../lib/gamePage";
 import { useMakeWay } from "../../lib/useMakeWay";
+import { useTrackedPlay, type TrackedPlay } from "../../lib/trackedPlay";
 import { smpHandoffNote } from "../../lib/smpHandoffNote";
 import {
   dismissLibraryMove,
@@ -146,7 +147,6 @@ import { audit } from "../../state/auditLog";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import {
-  PageHeader,
   EmptyState,
   ErrorCard,
   Button,
@@ -179,11 +179,7 @@ function formatDuration(sec: number): string {
 
 // formatBytes moved to lib/format.ts — kept consistent across screens.
 
-export default function LibraryScreen({
-  embedded = false,
-}: {
-  embedded?: boolean;
-}) {
+export default function LibraryScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const guard = useStaleHostGuard();
@@ -200,6 +196,8 @@ export default function LibraryScreen({
   const registeredBySource = useLibraryStore(
     (s) => libraryForHost(s, host).registeredBySource,
   );
+  // One read for every row: the same play time Game Activity shows.
+  const trackedPlay = useTrackedPlay(host);
   // Whether ShadowMount+ is running right now. Gates the per-row "Edit
   // files…" action: checking an image out only means anything when SMP is the
   // one holding it. Probed at screen level so ~100 rows don't each ask.
@@ -471,46 +469,19 @@ export default function LibraryScreen({
   const querying = query.trim() !== "";
 
   return (
-    <div className={embedded ? "" : "p-6"}>
-      {!embedded && (
-        <PageHeader
-          icon={LibraryBig}
-          title={tr("games_title", "Games")}
-          count={entries?.length}
+    <div>
+      <div className="mb-4 flex justify-end">
+        <Button
+          variant="secondary"
+          size="sm"
+          leftIcon={<RefreshCw size={12} />}
+          onClick={refresh}
+          disabled={loading || !host?.trim()}
           loading={loading}
-          description={tr(
-            "library_description",
-            undefined,
-            "Games and disk images anywhere on your PS5. Games are folders containing sce_sys/param.json; disk images are .exfat, .ffpkg, and .ffpfs files.",
-          )}
-          right={
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<RefreshCw size={12} />}
-              onClick={refresh}
-              disabled={loading || !host?.trim()}
-              loading={loading}
-            >
-              {tr("refresh", undefined, "Refresh")}
-            </Button>
-          }
-        />
-      )}
-      {embedded && (
-        <div className="mb-4 flex justify-end">
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<RefreshCw size={12} />}
-            onClick={refresh}
-            disabled={loading || !host?.trim()}
-            loading={loading}
-          >
-            {tr("refresh", undefined, "Refresh")}
-          </Button>
-        </div>
-      )}
+        >
+          {tr("refresh", undefined, "Refresh")}
+        </Button>
+      </div>
 
       {/* An open edit session hides a game from the PS5 home screen, so the
           reminder sits above the list rather than inside the row it came
@@ -682,6 +653,7 @@ export default function LibraryScreen({
                       pendingMounts={pendingMounts}
                       volumes={volumes}
                       registeredBySource={registeredBySource}
+                      trackedPlay={trackedPlay}
                       smpRunning={smpRunning}
                       onChanged={refresh}
                     />
@@ -692,9 +664,9 @@ export default function LibraryScreen({
                     <SectionHeader
                       icon={<FileArchive size={13} />}
                       title={tr(
-                        "library_disk_images",
+                        "library_disk_image_files",
                         undefined,
-                        "Disk images (.exfat / .ffpkg / .ffpfs)",
+                        "Disk image files (.exfat / .ffpkg / .ffpfs)",
                       )}
                       count={split.images.length}
                     />
@@ -721,6 +693,7 @@ export default function LibraryScreen({
                       pendingMounts={pendingMounts}
                       volumes={volumes}
                       registeredBySource={registeredBySource}
+                      trackedPlay={trackedPlay}
                       smpRunning={smpRunning}
                       onChanged={refresh}
                     />
@@ -757,6 +730,7 @@ function CappedRows({
   pendingMounts,
   volumes,
   registeredBySource,
+  trackedPlay,
   smpRunning,
   onChanged,
 }: {
@@ -768,6 +742,7 @@ function CappedRows({
   pendingMounts: Map<string, string>;
   volumes: Volume[];
   registeredBySource: Map<string, RegisteredTitle>;
+  trackedPlay: Map<string, TrackedPlay> | null;
   smpRunning: boolean;
   onChanged: () => void;
 }) {
@@ -792,6 +767,7 @@ function CappedRows({
           pendingMounts={pendingMounts}
           volumes={volumes}
           registeredBySource={registeredBySource}
+          trackedPlay={trackedPlay}
           smpRunning={smpRunning}
           onChanged={onChanged}
         />
@@ -902,6 +878,7 @@ function LibraryRowImpl({
   pendingMounts,
   volumes,
   registeredBySource,
+  trackedPlay,
   smpRunning,
   onChanged,
 }: {
@@ -922,6 +899,8 @@ function LibraryRowImpl({
   /** source_path → registered title. Supplies the name + cover for
    *  disk-image rows, which have no readable `sce_sys/` of their own. */
   registeredBySource: Map<string, RegisteredTitle>;
+  /** The helper's tracked play time (Game Activity's numbers); null = use the app's own. */
+  trackedPlay: Map<string, TrackedPlay> | null;
   /** ShadowMount+ is running, so it owns any image in a scan folder. Gates
    *  the "Edit files…" action, which works by taking the image away from it. */
   smpRunning: boolean;
@@ -934,9 +913,13 @@ function LibraryRowImpl({
     entry.kind === "game" &&
     !!entry.titleId &&
     runningTitleIds.has(entry.titleId);
-  const playSeconds = usePlayTimeStore((s) =>
+  const localPlaySeconds = usePlayTimeStore((s) =>
     entry.kind === "game" ? playSecondsFor(s, host, entry.titleId) : undefined,
   );
+  const playSeconds =
+    trackedPlay && entry.kind === "game"
+      ? (entry.titleId ? trackedPlay.get(entry.titleId)?.seconds : undefined)
+      : localPlaySeconds;
   const kindLabel =
     entry.kind === "game"
       ? tr("library_row_kind_game", undefined, "Game")
