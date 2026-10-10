@@ -15,7 +15,6 @@ import {
   Plus,
   type LucideIcon,
   ListPlus,
-  ArrowRightLeft,
 } from "lucide-react";
 import clsx from "clsx";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -87,7 +86,7 @@ import { isRemotePath } from "../../lib/remotePath";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { useUploadQueueStore } from "../../state/uploadQueue";
 import { SendAsImageCard } from "./SendAsImageCard";
-import { pkgLibraryStore, usePkgLibrary } from "../../state/pkgLibrary";
+import { pkgLibraryStore } from "../../state/pkgLibrary";
 import { pkgStorageFor } from "../../lib/pkgStorage";
 import { useInstallSettingsStore } from "../../state/installSettings";
 import { useRecentHostMetricsStore } from "../../state/recentHostMetrics";
@@ -106,7 +105,6 @@ import { QueuePanel } from "./QueuePanel";
 import { RunningEngineJobs } from "../../components/RunningEngineJobs";
 import { BottleneckLine, JobLiveNotes, UnsettledLine } from "./Bottleneck";
 import { WhySlowPanel } from "./WhySlow";
-import { Ps5ToPs5Card } from "./Ps5ToPs5";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { formatBytes } from "../../lib/format";
 import { resumeSummary } from "../../lib/resumeSummary";
@@ -223,7 +221,6 @@ export default function UploadScreen() {
   );
 
   const [dropActive, setDropActive] = useState(false);
-  const [showPs5Source, setShowPs5Source] = useState(false);
 
   // For a `.zip` source: wrap its contents in a folder named after the
   // zip ("subfolder", the default) or extract them straight into the
@@ -754,15 +751,7 @@ export default function UploadScreen() {
         onRemoteFile={(p) => (batchRows.length > 0 ? addToBatch([{ path: p, isDir: false }]) : void pickFile(p))}
         onRemoteFolder={(p) => (batchRows.length > 0 ? addToBatch([{ path: p, isDir: true }]) : void pickFolder(p))}
         onScanFolder={() => void handleScanFolder()}
-        onFromPs5={() => setShowPs5Source((v) => !v)}
       />
-
-      {showPs5Source && !source && batchRows.length === 0 && (
-        <Ps5ToPs5Card
-          host={host?.trim() ?? ""}
-          status={<TransferStatus phase={transferPhase} />}
-        />
-      )}
 
       {batchRows.length > 0 && (
         <BatchReview
@@ -877,7 +866,6 @@ function Step1Picker({
   onRemoteFile,
   onRemoteFolder,
   onScanFolder,
-  onFromPs5,
 }: {
   active: boolean;
   dropActive: boolean;
@@ -887,8 +875,6 @@ function Step1Picker({
   onRemoteFolder: (path: string) => void;
   /** Add a folder's games (its immediate children) to the review list. */
   onScanFolder: () => void;
-  /** Toggle the "From another PS5" source card. */
-  onFromPs5: () => void;
 }) {
   const tr = useTr();
   return (
@@ -941,15 +927,19 @@ function Step1Picker({
         <Button variant="ghost" leftIcon={<ListPlus size={14} />} onClick={onScanFolder}>
           {tr("batch_scan", undefined, "Add games from a folder…")}
         </Button>
-        <Button variant="ghost" leftIcon={<ArrowRightLeft size={14} />} onClick={onFromPs5}>
-          {tr("ps5src_title", undefined, "From another PS5")}
-        </Button>
       </div>
       <p className="mx-auto mt-3 max-w-md text-xs text-[var(--color-muted)]">
         {tr(
           "upload_picker_hint",
           undefined,
           "Files: any file — .exfat images unlock a mount-after-upload option. Folders: game folders are auto-detected from sce_sys/param.sfo.",
+        )}
+      </p>
+      <p className="mx-auto mt-1 max-w-md text-xs text-[var(--color-muted)]">
+        {tr(
+          "upload_picker_from_ps5_hint",
+          undefined,
+          "Copying from another PS5? Select the files in File System and choose Send to another console.",
         )}
       </p>
     </section>
@@ -1148,20 +1138,11 @@ function Step2Options(props: {
   // the user confirms the destination console.
   const rosterProfiles = useRosterStore((s) => s.profiles);
   const multiConsole = rosterProfiles.length > 1;
-  // An install streams the DPI loader to the single-payload loader, which
-  // replaces the payload that owns the transfer port — so starting an upload
-  // mid-install would just fail (or race the payload swap). Disable while an
-  // install is running, symmetric to InstallPackage disabling install during
-  // an upload. Per-console store: disable upload only when THIS PS5 is
-  // mid-install, not when some other console is.
-  const installing = usePkgLibrary(stepHost, (s) => s.installing);
+  // No separate install check: an install leaves the helper alone (the
+  // installer daemon runs beside it), and it runs as a console-queue item,
+  // so `queueRunning` already covers it and Add to queue stays open.
   const uploadDisabled =
-    detecting ||
-    inFlight ||
-    preflightBusy ||
-    queueRunning ||
-    installing ||
-    !!detectError;
+    detecting || inFlight || preflightBusy || queueRunning || !!detectError;
 
   return (
     <>
@@ -1459,7 +1440,7 @@ function Step2Options(props: {
                 <div className="mt-0.5 text-xs text-[var(--color-muted)]">
                   {tr(
                     "upload_register_after_desc",
-                    "Registers the game with the PS5 right after the upload finishes, so it's ready to launch — no Library visit needed. If this step fails the upload itself is unaffected and you can still add it from the Library.",
+                    "Registers the game with the PS5 right after the upload finishes, so it's ready to launch. If this step fails the upload itself is unaffected and you can still register it from Games → Game files.",
                   )}
                 </div>
               </div>
@@ -1893,11 +1874,9 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
   // Read settings directly — threading through Step2Options just to get
   // here would add props for something that's a rendering decision.
   const showFiles = useUploadSettingsStore((s) => s.showTransferFiles);
-  // For the Stop button in the running phase. Bumps the transfer
-  // runId so the in-flight poll loop's next state-write is a no-op
-  // and the UI returns to idle. Engine job continues server-side
-  // until completion or the next reconnect — the payload's single-
-  // client transfer port serializes the next BEGIN_TX behind it.
+  // Stop in the running phase cancels the engine job, then returns the
+  // UI to idle; reset alone would only stop watching it.
+  const cancelTransfer = useTransferStore((s) => s.cancel);
   const resetTransfer = useTransferStore((s) => s.reset);
   // Dismiss the upload's one-shot status (idle + in-flight poll no-op).
   const clearPhase = () => resetTransfer(host);
@@ -2049,11 +2028,11 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
             )}
             <button
               type="button"
-              onClick={() => resetTransfer(host)}
+              onClick={() => cancelTransfer(host)}
               className="rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-3)]"
               title={tr(
                 "upload_status_stop_tooltip",
-                "Stop watching this upload (engine job continues server-side until next BEGIN_TX preempts it)",
+                "Cancel this upload. Start it again with Resume to continue where it stopped.",
               )}
             >
               {tr("upload_status_stop", "Stop")}
@@ -2189,7 +2168,7 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
         )}
         {/* The #1 post-upload question is "why isn't it on my home
             screen?" — either it already IS (register-after-upload ran),
-            or we point at the Library to finish the job. */}
+            or we point at Games → Game files to finish the job. */}
         <div className="mt-3 flex items-center gap-2 border-t border-[var(--color-border)] pt-3">
           <span className="text-xs text-[var(--color-muted)]">
             {phase.registeredAs
@@ -2200,7 +2179,7 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
                 )
               : tr(
                   "upload_done_next_hint",
-                  "Next: open the Library to register or mount it so it shows up on the PS5 home screen.",
+                  "Next: open Games → Game files to register or mount it so it shows up on the PS5 home screen.",
                 )}
           </span>
           <div className="ml-auto flex items-center gap-2">
@@ -2209,9 +2188,9 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
                 variant="primary"
                 size="sm"
                 className="shrink-0"
-                onClick={() => navigate("/games")}
+                onClick={() => navigate("/games?tab=files")}
               >
-                {tr("upload_done_open_library", "Open Library")}
+                {tr("upload_done_open_library", "Open Game files")}
               </Button>
             )}
             <Button

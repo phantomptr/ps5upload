@@ -436,11 +436,9 @@ export function humanizePs5Error(
   // one of its export symbols on the user's firmware. The 2.2.43
   // payload tries multiple library paths and symbol-name variants
   // before giving up; reaching this means none of them worked. The
-  // user's options are limited: either upload the bundled payload
-  // again (Connection → Send payload — newer payload may know more
-  // variants) or fall back to non-BGFT install (FTP + manual
-  // register, or the Library's Mount → Register flow for image
-  // games).
+  // user's options are limited: update the helper (a newer one may
+  // know more variants), install on the console itself, or register
+  // a game folder/image from Games → Game files.
   if (
     /BGFT symbol missing/i.test(raw) ||
     /dlopen libSceBgft\.sprx failed/i.test(raw) ||

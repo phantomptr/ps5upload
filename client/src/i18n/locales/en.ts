@@ -68,6 +68,7 @@ upload_drop_here: "Drop a file or folder here — it's detected automatically",
 upload_choose_file: "Choose file",
 upload_choose_folder: "Choose folder",
 upload_picker_hint: "Files: any file — .exfat images unlock a mount-after-upload option. Folders: game folders are auto-detected from sce_sys/param.sfo.",
+upload_picker_from_ps5_hint: "Copying from another PS5? Select the files in File System and choose Send to another console.",
 connection_send_send: "Send helper",
 connection_send_resend: "Resend helper",
 connection_send_locating: "Locating ELF… ({sec}s)",
@@ -712,7 +713,7 @@ queue_cancel_item: "Cancel this upload (keeps the rest of the queue going)",
 queue_size_chip: "{size} to upload",
   
 activity_clear_running: "Clear running",
-fs_download_stop: "Stop watching",
+fs_download_stop: "Cancel",
 fs_bulk_stopping: "Stopping…",
 fs_bulk_stop: "Stop",
 fs_bulk_cancel_copy: "Cancel copy",
@@ -763,7 +764,7 @@ queue_count: "{total} total · {done} done · {pending} pending · {failed} fail
 activity_clear_running_tooltip: "Mark stuck running entries as stopped without cancelling. Use when the underlying op is already gone (engine restart, app crash) and the row is just stuck in the UI.",
 connection_block_match: "matches this app",
 fs_download_tooltip: "Save a copy of this entry to a folder on this computer",
-fs_download_stop_tooltip: "Stop watching this download (engine job continues server-side)",
+fs_download_stop_tooltip: "Cancel this download. The partly downloaded file is removed.",
 library_move_cancelled: "Move cancelled. The source is unchanged.",
 library_download_stopped: "Download stopped.",
 library_mount_unsupported_tooltip: "Unsupported image format — only .exfat and .ffpkg can be mounted",
@@ -1627,19 +1628,19 @@ errorboundary_show_stack: "Show stack trace",
 errorboundary_try_again: "Try again",
 errorboundary_reload_window: "Reload window",
 shortcuts_title: "Keyboard shortcuts",
-local_image: "Edit Game Image",
+local_image: "Edit image on this computer",
 localimage_unsupported: "Not available on this system",
 localimage_how: "How this works",
-localimage_title: "Edit Game Image",
+localimage_title: "Edit image on this computer",
 localimage_subtitle:
   "Open a game image on this computer to change the files inside it",
 localimage_open: "Open an image",
 localimage_pick: "Choose a game image",
 localimage_filter: "Disk images",
 localimage_explain:
-  "It opens the image as a normal drive on this computer, so you can add, replace and delete files inside it \u2014 patch files, for example \u2014 using Finder or Explorer, exactly like a USB stick. Changes are saved straight into the image file. ps5upload never writes to the image itself; your operating system does. Eject it here when you are done.",
+  "It opens the image as a normal drive on this computer, so you can add, replace and delete files inside it \u2014 patch files, for example \u2014 using Finder or your file manager, exactly like a USB stick. Changes are saved straight into the image file. ps5upload never writes to the image itself; your operating system does. Eject it here when you are done.",
 localimage_none: "No image open",
-localimage_none_hint: "Choose a .exfat or .img file to open it as a drive.",
+localimage_none_hint: "Choose a .exfat, .img, .image or .raw file to open it as a drive.",
 localimage_not_mounted: "attached, but nothing could be mounted from it",
 localimage_open_failed:
   "The image is mounted at {path}, but this computer would not open it. Open that folder yourself.",
@@ -1966,7 +1967,7 @@ upload_status_checking_existing: "Checking what's already on your PS5…",
 upload_status_resuming: "Resuming: {done} of {total} files already present ({have}); {send} to send.",
 upload_status_preparing_files: "Preparing transfer of {count} files…",
 upload_status_preparing_hint: "(building the file list and reading the first batch — large folders or slow source disks take a minute)",
-upload_status_stop_tooltip: "Stop watching this upload (engine job continues server-side until next BEGIN_TX preempts it)",
+upload_status_stop_tooltip: "Cancel this upload. Start it again with Resume to continue where it stopped.",
 upload_wrapped_hint_intro: "This folder isn't a game on its own, but it contains a game folder inside:",
 upload_wrapped_hint_suffix: ". Did you mean to upload that one?",
 upload_mount_after_desc: "After the image lands on the PS5, the payload mounts it via the kernel's LVD backend. Off by default — turn on if you also want the image attached so the title shows up in the launcher immediately.",
@@ -2175,7 +2176,7 @@ err_launch_corrupt:
 err_launch_homebrew_refused:
   "The PS5 refused to start this title (0x80940033). The console isn't starting homebrew or fake-package games right now: load kstuff (or reboot and run the jailbreak again), then try again.",
 err_launch_unknown:
-  "PS5 launcher returned 0x{code}. The title may have been removed, or the install isn't complete — try Re-register from the Library tab.",
+  "PS5 launcher returned 0x{code}. The title may have been removed, or the install isn't complete. For a game folder or disk image, add it to the home screen again from Games → Game files.",
 err_launch_title_id_invalid:
   "Title ID doesn't look valid. Make sure the game's PARAM.SFO has a title_id like CUSA12345 or PPSA01234.",
 err_mount_not_a_file:
@@ -2198,11 +2199,11 @@ err_mount_nmount_other:
   "PS5 kernel rejected the mount: {reason}. Try a different mount point (e.g. under /data or /mnt/ps5upload) — the image itself is fine.",
 err_unknown_reason: "unknown reason",
 err_appinst_not_initialized:
-  "Sony's installer subsystem isn't initialised yet — push the latest bundled payload (Connection → Send payload) so the lazy-init in 2.2.46+ runs. If the error persists, the install API isn't reachable from our process context on this firmware; FTP-upload + Library → Register is the workaround.",
+  "Sony's installer subsystem isn't initialised yet. Make sure the PS5 runs the current helper (Update helper in the banner, or send it again from the Connection screen), then retry. If it still fails, install the package on the PS5 itself: Settings → System → Debug Settings → Game → Package Installer.",
 err_appinst_nospace:
   "Your PS5 doesn't have enough free space for this install. Settings → Storage → Free up space, then retry.",
 err_appinst_drm_type:
-  "Sony's installer rejected this PKG's DRM type. Try the Library → Register flow with 'Patch DRM' instead — it rewrites applicationDrmType to 'standard' before installing.",
+  "Sony's installer rejected this PKG's DRM type. If you have the game as a folder or disk image on the console, use Add to home screen (patch DRM) in Games → Game files instead: it rewrites applicationDrmType to 'standard' before registering.",
 err_appinst_content_type:
   "Sony's installer doesn't accept this PKG's content type on the current firmware (e.g. some patch-pkgs / DLC formats). The base game's PKG should still install if you have it.",
 err_appinst_busy:
@@ -2228,11 +2229,11 @@ err_install_2101:
 err_install_80b2_generic:
   "PS5's PlayGo subsystem rejected the install with a 0x80B2_xxxx error. This is the install fetch path, not the pkg parser — your file likely is fine. Try pushing the latest payload (Connection → Send payload); the new ShellUI-RPC install path bypasses the most common 0x80B2 reject class.",
 err_bgft_not_loadable:
-  "Your PS5 firmware doesn't expose Sony's BGFT installer in a way ps5upload can use. Push the latest bundled payload (Connection → Send payload) — it tries more library paths and symbol variants. If it still fails, install via FTP + Library → Register instead; .pkg-via-BGFT isn't available on this firmware.",
+  "Your PS5 firmware doesn't expose Sony's BGFT installer in a way ps5upload can use. Make sure the PS5 runs the current helper (Update helper in the banner, or send it again from the Connection screen), then retry. If it still fails, this firmware can't install a .pkg that way: install it on the PS5 itself (Settings → System → Debug Settings → Game → Package Installer), or, for a game folder or disk image, use Add to home screen in Games → Game files.",
 err_install_enoent_dlc:
   "This looks like a DLC pkg (content_id {contentId}). Sony's installer needs the base game ({baseTitle}) to be installed BEFORE the DLC, because the install reads metadata from the base game's app_home. Install {baseTitle} first, then retry this DLC. The 0x80020002 is the kernel reporting \"no such file\" when it tried to follow the base-game reference — not a problem with your DLC pkg.",
 err_install_enoent_generic:
-  "Sony's installer couldn't open a file it needed during install (kernel error 0x80020002 = ENOENT). If this is a DLC pkg, the base game isn't installed yet — install the base first. Otherwise the staging file may have been deleted between upload and install; retry the install once. If it keeps failing, FTP-upload the pkg to /user/data/ps5upload/pkg_temp/ manually and use Library → Register to install.",
+  "Sony's installer couldn't open a file it needed during install (kernel error 0x80020002 = ENOENT). If this is a DLC pkg, the base game isn't installed yet — install the base first. Otherwise the staged package may have been deleted between upload and install; retry the install once. If it keeps failing, install it with Stream & install on the Install Package screen, which sends the package straight from this computer instead of copying it to the console first.",
 err_install_defrag:
   "Your PS5 needs defragmented free space. Settings → Storage → Free up space, then retry.",
 err_install_leftover_download:
@@ -2380,9 +2381,9 @@ upload_system_file_read: "Allow downloading system files (/system, /system_data)
 upload_system_file_read_hint: "Lets the FileSystem browser download files from read-only system partitions that are normally blocked (e.g. /system/common/lib, /system_data/priv). Read-only — never affects delete, move, or write. Off by default; turn on only if you know what you're doing.",
 upload_pick_here_mobile: "Pick a file or folder to upload",
 upload_register_after_title: "Add to PS5 home screen when done",
-upload_register_after_desc: "Registers the game with the PS5 right after the upload finishes, so it's ready to launch — no Library visit needed. If this step fails the upload itself is unaffected and you can still add it from the Library.",
-upload_done_next_hint: "Next: open the Library to register or mount it so it shows up on the PS5 home screen.",
-upload_done_open_library: "Open Library",
+upload_register_after_desc: "Registers the game with the PS5 right after the upload finishes, so it's ready to launch. If this step fails the upload itself is unaffected and you can still register it from Games → Game files.",
+upload_done_next_hint: "Next: open Games → Game files to register or mount it so it shows up on the PS5 home screen.",
+upload_done_open_library: "Open Game files",
 
 // Profile (avatar + offline-account username)
 profile: "Profile",
@@ -2609,7 +2610,7 @@ roster_order_hint: "This order sets the console tabs and the picker.",
   fs_install_confirm_title: 'Install "{name}"?',
   fs_install_done: "Installed {name}",
   fs_install_may_not_launch:
-    "The install registered, but the title may not launch — check Installed Apps.",
+    "The install registered, but the title may not launch. Check it on the Games screen.",
   fs_install_pkg_tooltip: "Install this package on your PS5",
   fs_path_gone: "That folder no longer exists — returned to /data",
   fs_path_gone_body: "{path} no longer exists on the PS5.",
@@ -3823,14 +3824,14 @@ activity_description_v2: "Everything the app is doing and has done on your conso
 audit_log_description_v2: "A permanent record, kept on this computer, of what you deleted or changed that cannot be undone. It cannot be cleared, on purpose. The last 100 entries are shown.",
 audit_log_description_v3: "A record, kept in this app on this computer, of power actions, deletes, unregisters, uninstalls and installs. The newest 256 are kept and older ones roll off; there is no clear button, but clearing the app's data or browser storage erases it. The last 100 are shown.",
 backup_subtitle_v2: "Copy files and folders from the PS5 to this computer as a snapshot, and put a snapshot back on the PS5 later.",
-disk_usage_description_v2: "See what is taking up space on the PS5. Each block is a folder, sized by what it holds; click one to look inside it.",
+disk_usage_description_v2: "See what is taking up space on the PS5. Each block is a file or a folder. A folder is sized by the files directly inside it; its subfolders are not counted, so click it to look further down.",
 first_run_description_v2: "Loads what most set-ups need, in the right order: kstuff (lets fake packages install and run), ShadowMount+ (puts game images and folders on the PS5's home screen) and ps5upload's own helper. You can run it again any time from Settings.",
 first_run_description_v3: "Loads what most set-ups need, in the right order: kstuff (lets fake packages install and run), ShadowMount+ (puts game images and folders on the PS5's home screen) and ps5upload's own helper. After the PS5 restarts, Connection offers this wizard again.",
 fw_spoof_subtitle_v2: "Checks whether the firmware version this PS5 reports has been changed by a spoofing payload, so you know its real version before you install something that depends on it.",
 game_activity_subtitle_v2: "What was played on this PS5 and for how long, read from the console's own records.",
 game_activity_subtitle_v3: "What was played on this PS5 and for how long. Tracked play time is counted by the ps5upload helper on the console; Console Play Time is read from the console's own records.",
 health_subtitle_v2: "Checks that the PS5, this app and the network between them are working, says what to fix when something is not, and measures how fast files move between them.",
-localimage_subtitle_v2: "Open a game image (.exfat or .ffpkg) that is on this computer and add, replace or remove files inside it, without unpacking the whole image.",
+localimage_subtitle_v2: "Open a game disk image stored on this computer (.exfat, .img, .image or .raw) and add, replace or remove files inside it, without unpacking it. For a game on the PS5, use Edit files… in Games → Game files.",
 processes_subtitle_v2: "The programs running on the PS5 right now. You can stop or restart one; take care with system processes, since stopping the wrong one can freeze the console.",
 ps5notif_description_v2: "Notifications the PS5 has shown, read from the console. Refreshes every 5 seconds.",
 ps5notif_description_v3: "Messages ps5upload has put on your TV (Remote Play, cheats), read back from its helper on the console. Not the PS5's own notification panel. Refreshes every 5 seconds.",

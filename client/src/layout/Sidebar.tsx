@@ -13,6 +13,7 @@ import { useBetaFeaturesStore } from "../state/betaFeatures";
 import NotificationInbox from "./NotificationInbox";
 import RosterPicker from "./RosterPicker";
 import { isPinnedNav, PINNED_NAV_ITEMS, sidebarGroups, type NavItem } from "./navItems";
+import { isMacOrLinuxDesktop } from "../lib/platform";
 
 const COLLAPSED_KEY = "ps5upload.desktop-sidebar.collapsed.v1";
 
@@ -61,7 +62,7 @@ export default function Sidebar() {
   const toggleHidden = useNavSidebarStore((s) => s.toggleHidden);
   const toggleSection = useNavSidebarStore((s) => s.toggleSection);
   const groups = useMemo(
-    () => sidebarGroups(hidden, betaEnabled, !isTauriEnv()),
+    () => sidebarGroups(hidden, betaEnabled, !isTauriEnv(), isMacOrLinuxDesktop()),
     [hidden, betaEnabled],
   );
 

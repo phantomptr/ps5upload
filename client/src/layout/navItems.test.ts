@@ -6,6 +6,7 @@ import {
   HOME_NAV_ITEM,
   PINNED_NAV_ITEMS,
   sidebarGroups,
+  navItemOffered,
   groupNavItems,
   filterNavItems,
   type NavItem,
@@ -102,6 +103,39 @@ describe("the sidebar's sections", () => {
     expect(browserOnlyHidden.length).toBeGreaterThan(0);
     const inBrowser = paths(sidebarGroups([], false, true));
     for (const p of browserOnlyHidden) expect(inBrowser).not.toContain(p);
+  });
+
+  it("offers Edit image on this computer only on a macOS or Linux desktop", () => {
+    expect(paths(sidebarGroups([], false, false, true))).toContain("/local-image");
+    // Windows or Android desktop app.
+    expect(paths(sidebarGroups([], false, false, false))).not.toContain("/local-image");
+    // Browser build: it would attach the image on the engine's server.
+    expect(paths(sidebarGroups([], false, true, true))).not.toContain("/local-image");
+  });
+});
+
+describe("navItemOffered", () => {
+  const item = (extra: Partial<NavItem>): NavItem => ({
+    to: "/x",
+    key: "x",
+    fallback: "X",
+    icon,
+    ...extra,
+  });
+  it("keeps an ordinary screen everywhere", () => {
+    for (const inBrowser of [false, true])
+      for (const macOrLinux of [false, true])
+        expect(navItemOffered(item({}), { inBrowser, macOrLinux })).toBe(true);
+  });
+  it("drops a macOrLinuxOnly screen elsewhere", () => {
+    const i = item({ macOrLinuxOnly: true });
+    expect(navItemOffered(i, { inBrowser: false, macOrLinux: true })).toBe(true);
+    expect(navItemOffered(i, { inBrowser: false, macOrLinux: false })).toBe(false);
+  });
+  it("drops a hideInBrowser screen in the browser", () => {
+    const i = item({ hideInBrowser: true });
+    expect(navItemOffered(i, { inBrowser: true, macOrLinux: true })).toBe(false);
+    expect(navItemOffered(i, { inBrowser: false, macOrLinux: true })).toBe(true);
   });
 });
 

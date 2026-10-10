@@ -25,43 +25,18 @@ vi.mock("../api/ps5", async (importOriginal) => {
   };
 });
 vi.mock("../api/ava1", () => ({
-  startPs5ToPs5: vi.fn(async () => "relay-job"),
   pairingStatus: vi.fn(),
   pairingConfirm: vi.fn(),
 }));
 
-import { startTransferFile } from "../api/ps5";
-import { startPs5ToPs5 } from "../api/ava1";
 import { phaseForHost, useTransferStore } from "./transfer";
 
 beforeEach(() => {
   vi.useFakeTimers();
   useTransferStore.setState({ phasesByHost: {} });
-  vi.mocked(startPs5ToPs5).mockClear();
-  vi.mocked(startTransferFile).mockClear();
 });
 
-describe("PS5 to PS5 through the one-shot transfer store", () => {
-  it("starts the relay, not a local upload, and shows its job like any other", async () => {
-    await useTransferStore.getState().start({
-      sourceKind: "file",
-      srcPath: "/data/games/X",
-      dest: "/data/games",
-      addr: "10.0.0.2",
-      ps5Source: { fromAddr: "10.0.0.3" },
-    });
-    expect(startPs5ToPs5).toHaveBeenCalledWith(
-      "10.0.0.3",
-      "/data/games/X",
-      "10.0.0.2",
-      "/data/games",
-    );
-    expect(startTransferFile).not.toHaveBeenCalled();
-    const p = phaseForHost(useTransferStore.getState(), "10.0.0.2");
-    expect(p.kind).toBe("running");
-    if (p.kind === "running") expect(p.jobId).toBe("relay-job");
-  });
-
+describe("one-shot transfer live notes", () => {
   it("carries the skipping, bottleneck and settling notes of a running job, and only then", async () => {
     await useTransferStore.getState().start({
       sourceKind: "file",

@@ -28,6 +28,7 @@ import { useUpdateStore } from "../../state/update";
 import { useThemeStore } from "../../state/theme";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { getAppVersion } from "../../lib/appVersion";
+import { isMacOrLinuxDesktop } from "../../lib/platform";
 import RosterPicker from "../../layout/RosterPicker";
 import { useBetaFeaturesStore } from "../../state/betaFeatures";
 import NotificationInbox from "../../layout/NotificationInbox";
@@ -37,6 +38,7 @@ import {
   NAV_ITEMS,
   groupNavItems,
   filterNavItems,
+  navItemOffered,
   navItemVisible,
   type NavItem,
 } from "../../layout/navItems";
@@ -62,7 +64,9 @@ export default function MoreScreen() {
   const visible = useMemo(
     () =>
       NAV_ITEMS.filter(
-        (i) => (!i.hideInBrowser || isTauriEnv()) && navItemVisible(i, betaEnabled),
+        (i) =>
+          navItemOffered(i, { inBrowser: !isTauriEnv(), macOrLinux: isMacOrLinuxDesktop() }) &&
+          navItemVisible(i, betaEnabled),
       ),
     [betaEnabled],
   );

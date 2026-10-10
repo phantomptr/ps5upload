@@ -19,6 +19,7 @@ import {
   type AttachedImage,
   type LocalImageStatus,
 } from "../../api/ps5";
+import { LOCAL_IMAGE_EXTENSIONS } from "./imageTypes";
 
 function basename(p: string): string {
   const parts = p.split(/[\\/]/);
@@ -51,7 +52,7 @@ export default function LocalImageScreen() {
       filters: [
         {
           name: tr("localimage_filter", undefined, "Disk images"),
-          extensions: ["exfat", "img", "image", "raw"],
+          extensions: [...LOCAL_IMAGE_EXTENSIONS],
         },
       ],
     });
@@ -104,11 +105,11 @@ export default function LocalImageScreen() {
     <div className="app-page">
       <PageHeader
         icon={FilePen}
-        title={tr("localimage_title", undefined, "Edit Game Image")}
+        title={tr("localimage_title", undefined, "Edit image on this computer")}
         description={tr(
           "localimage_subtitle_v2",
           undefined,
-          "Open a game image (.exfat or .ffpkg) that is on this computer and add, replace or remove files inside it, without unpacking the whole image.",
+          "Open a game disk image stored on this computer (.exfat, .img, .image or .raw) and add, replace or remove files inside it, without unpacking it. For a game on the PS5, use Edit files… in Games → Game files.",
         )}
         right={
           <Button
@@ -156,7 +157,7 @@ export default function LocalImageScreen() {
             {tr(
               "localimage_explain",
               undefined,
-              "It opens the image as a normal drive on this computer, so you can add, replace and delete files inside it \u2014 patch files, for example \u2014 using Finder or Explorer, exactly like a USB stick. Changes are saved straight into the image file. ps5upload never writes to the image itself; your operating system does. Eject it here when you are done.",
+              "It opens the image as a normal drive on this computer, so you can add, replace and delete files inside it \u2014 patch files, for example \u2014 using Finder or your file manager, exactly like a USB stick. Changes are saved straight into the image file. ps5upload never writes to the image itself; your operating system does. Eject it here when you are done.",
             )}
           </span>
         </span>
@@ -169,7 +170,7 @@ export default function LocalImageScreen() {
           message={tr(
             "localimage_none_hint",
             undefined,
-            "Choose a .exfat or .img file to open it as a drive.",
+            "Choose a .exfat, .img, .image or .raw file to open it as a drive.",
           )}
         />
       )}

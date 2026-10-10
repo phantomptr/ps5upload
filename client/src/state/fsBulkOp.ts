@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import { jobCancel } from "../api/ps5";
 import { hostOf } from "../lib/addr";
 
 /**
@@ -281,11 +282,9 @@ export function fsBulkOpHandle(host: string) {
  *  Generation counter (`runId`) gives the runner an abort handle:
  *  every begin() bumps it (per host), the runner captures its own value,
  *  and every poll-loop iteration re-checks. `requestStop()` bumps the
- *  counter without resetting other fields, so the runner's next
- *  await boundary observes the abort and tears down cleanly. The
- *  engine job continues on the engine side (no engine cancel API
- *  today); the UI just stops polling and the download eventually
- *  finishes invisibly with the .part promotion happening server-side. */
+ *  counter and resets the slot, so the runner's next await boundary
+ *  observes the abort and tears down cleanly. It also cancels the
+ *  engine job, which stops the download and drops its staging file. */
 export interface DownloadOpState {
   active: boolean;
   jobId: string | null;
@@ -319,9 +318,9 @@ interface DownloadOpStore {
   ) => void;
   end: (host: string, errorBanner?: string | null) => void;
   clearError: (host: string) => void;
-  /** Tear-down request from the UI. Bumps this host's runId so its
-   *  active runner (if any) stops polling at the next await; resets
-   *  the other fields. */
+  /** Stop button: cancels the engine job, bumps this host's runId so
+   *  its active runner (if any) stops polling at the next await, and
+   *  resets the other fields. */
   requestStop: (host: string) => void;
 }
 
@@ -388,6 +387,10 @@ export const useFsDownloadOpStore = create<DownloadOpStore>((set, get) => {
       put(host, { ...slot(host), errorBanner: null });
     },
     requestStop(host) {
+      // Best-effort: a job that already ended is a harmless no-op on the
+      // engine, and an unreachable engine still leaves the UI stopped.
+      const { jobId } = slot(host);
+      if (jobId) void jobCancel(jobId).catch(() => {});
       // Bump runId so the runner's isLive() returns false at its next
       // check; reset everything else so the UI banner clears.
       put(host, { ...IDLE_DOWNLOAD, runId: slot(host).runId + 1 });
