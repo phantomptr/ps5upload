@@ -201,11 +201,11 @@ make run-client    # launch the Tauri dev app
   (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`,
   `libayatana-appindicator3-dev`, `libxdo-dev`, `libssl-dev`,
   `build-essential`), Node.js 22 LTS via NodeSource (only if missing),
-  Rust via rustup, and checksum-verified PS5 Payload SDK v0.43 →
+  Rust via rustup, and checksum-verified PS5 Payload SDK v0.44 →
   `~/ps5-payload-sdk`.
 - **`make install-macos`** — macOS: Xcode CLT, Homebrew, `node`, current
-  `llvm` (LLVM 22 at this release), Rust via rustup, and checksum-verified
-  PS5 Payload SDK v0.43.
+  `llvm` (LLVM 23 at this release), Rust via rustup, and checksum-verified
+  PS5 Payload SDK v0.44.
 - **`make install-windows`** — Windows 11: Node.js LTS, Rust, VS 2022 Build
   Tools (C++ workload), WebView2 Runtime, 7-Zip, and PS5 Payload SDK
   via `winget`. Run from an elevated PowerShell (or any shell with
@@ -268,7 +268,7 @@ See [`TESTING.md`](TESTING.md) for the full workflow, and [`CONTRIBUTING.md`](CO
 
 ## Tech stack
 
-- **Payload**: C (FreeBSD 11), prospero-clang, PS5 Payload SDK v0.43
+- **Payload**: C (FreeBSD 11), prospero-clang, PS5 Payload SDK v0.44
 - **Engine**: Rust, tokio + axum
 - **Client**: Tauri 2, React, TypeScript, Zustand, Tailwind CSS v4, Vite
 - **Protocol**: AVA1 (Noise XX handshake, ChaCha20-Poly1305, BLAKE3 verification)

@@ -192,7 +192,10 @@ printf '%s\n' "$PS5_SDK_TAG" > "$STAGED_SDK/$VERSION_MARKER"
 mkdir -p "$(dirname "$SDK_DIR")"
 BACKUP_DIR=""
 if [ -e "$SDK_DIR" ]; then
-  BACKUP_DIR="${SDK_DIR}.backup-$(date +%Y%m%d-%H%M%S)-$$"
+  # Name the backup after the release it holds when it says (backup-v0.43-...).
+  OLD_TAG="$(tr -d '[:space:]' < "$SDK_DIR/$VERSION_MARKER" 2>/dev/null || true)"
+  case "$OLD_TAG" in v[0-9]*) OLD_TAG="$OLD_TAG-" ;; *) OLD_TAG="" ;; esac
+  BACKUP_DIR="${SDK_DIR}.backup-${OLD_TAG}$(date +%Y%m%d-%H%M%S)-$$"
   mv "$SDK_DIR" "$BACKUP_DIR"
   ok "Moved the previous SDK to $BACKUP_DIR"
 fi

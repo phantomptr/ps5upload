@@ -30,14 +30,14 @@ export PS5_PAYLOAD_SDK
 PS5_SDK_TAG := $(shell sed -n 's/^PS5_SDK_TAG=//p' scripts/ps5-sdk.env 2>/dev/null)
 
 # On macOS the payload SDK's `prospero-clang` wrapper resolves `ld.lld`
-# and `clang` through `prospero-llvm-config`. SDK v0.43 supports LLVM 16–22.
-# Homebrew exposes the current major as `llvm` (not `llvm@22`), so discover
+# and `clang` through `prospero-llvm-config`. SDK v0.44 supports LLVM 16–23.
+# Homebrew exposes the current major as `llvm` (not `llvm@23`), so discover
 # its real prefix and retain versioned fallbacks for older installations.
 # Linux/WSL picks up `llvm-config-<N>` from apt naturally.
 ifeq ($(shell uname -s),Darwin)
   MACOS_LLVM_CONFIG := $(shell \
     if command -v brew >/dev/null 2>&1; then \
-      for formula in llvm llvm@22 llvm@18; do \
+      for formula in llvm llvm@23 llvm@22 llvm@18; do \
         prefix="$$(brew --prefix "$$formula" 2>/dev/null || true)"; \
         if [ -n "$$prefix" ] && [ -x "$$prefix/bin/llvm-config" ]; then \
           printf '%s\n' "$$prefix/bin/llvm-config"; \
@@ -96,7 +96,7 @@ ANDROID_ENV = JAVA_HOME="$(ANDROID_JAVA_HOME)" ANDROID_HOME="$(ANDROID_HOME)" ND
 ADB ?= $(ANDROID_HOME)/platform-tools/adb
 
 .PHONY: all help
-.PHONY: install install-ubuntu install-macos install-windows
+.PHONY: install install-ubuntu install-macos install-windows update-sdk
 .PHONY: setup setup-engine setup-payload setup-client
 .PHONY: build payload installer engine client _engine-release _payload-if-ready _android-build-if-ready
 .PHONY: test test-root test-engine test-engine-coverage test-desktop test-payload test-client test-client-coverage
@@ -129,6 +129,8 @@ help:
 	@echo "  make install-ubuntu   - Ubuntu/Debian/WSL2: apt + rustup + node + PS5 SDK $(PS5_SDK_TAG)"
 	@echo "  make install-macos    - macOS: brew + rustup + LLVM + PS5 SDK $(PS5_SDK_TAG)"
 	@echo "  make install-windows  - Windows 11: winget + rustup + VS Build Tools + PS5 SDK $(PS5_SDK_TAG)"
+	@echo "  make update-sdk       - Move the PS5 SDK pin to the latest release and install it"
+	@echo "                          (SDK_TAG=vX.Y for a specific one; SDK_CHECK=1 to only check)"
 	@echo ""
 	@echo "Quick start (after install):"
 	@echo "  1. make setup         - Check toolchains, install client deps"
@@ -242,6 +244,13 @@ install-windows:
 	  echo "  Run scripts/install-windows.ps1 directly from a PowerShell prompt."; \
 	  exit 1; \
 	fi
+
+# Bump the PS5 Payload SDK pin (scripts/ps5-sdk.env) to the latest upstream
+# release, or SDK_TAG, and install it into $(PS5_PAYLOAD_SDK); the old SDK is
+# kept as a backup. SDK_CHECK=1 only reports whether a newer release exists.
+update-sdk:
+	@PS5_SDK_INSTALL_DIR="$(PS5_PAYLOAD_SDK)" bash scripts/update-ps5-sdk.sh \
+	  $(if $(SDK_TAG),--tag $(SDK_TAG)) $(if $(SDK_CHECK),--check)
 
 #──────────────────────────────────────────────────────────────────────────────
 # Setup

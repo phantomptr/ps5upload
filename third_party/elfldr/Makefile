@@ -24,7 +24,7 @@ else
 endif
 
 # ps5upload: link ps5upload's own build of the SDK's startup code (see
-# payload/sdk-crt.mk). The SDK v0.43 one stops before main() on FW 5.50.
+# payload/sdk-crt.mk). The SDK's own one (v0.43 on) stops before main() on FW 5.50.
 include ../../payload/sdk-crt.mk
 
 CFLAGS := -Wall -Werror -O1

@@ -62,8 +62,18 @@ Each self-test lives in `payload/tests/*_selftest.c` (hardware guards, ptrace re
 AVA1 C itself is tested by `ava1-ctest`, which compiles it on the host and checks it against the
 Rust side (see the full gate below).
 
-The SDK version is pinned in `scripts/ps5-sdk.env` (currently **v0.43**)
+The SDK version is pinned in `scripts/ps5-sdk.env` (currently **v0.44**)
 and verified by checksum. Local installers and CI read the same file.
+
+To move to a newer SDK release, run `make update-sdk` (or
+`scripts/update-ps5-sdk.sh [--tag vX.Y] [--check]`). It downloads the release,
+rewrites the pin and its checksum, refreshes the vendored `prospero-nid` and
+`payload/third_party/sdk-crt` if upstream changed them at that tag, and installs
+the SDK into `$PS5_PAYLOAD_SDK` (default `/opt/ps5-payload-sdk`), keeping the old
+one as a `.backup-<old tag>-<time>` directory. If `/opt` needs root it uses
+`sudo` from a terminal; without it, the backup goes to your home directory.
+Then `rm -rf payload/build payload/installer/build payload/third_party/sdk-crt/build`,
+run `make test-payload`, and commit the changed pin.
 
 **Adding payload logic?** If it can be separated from the console, put it
 header-only in `payload/include/` and give it a self-test here. That is

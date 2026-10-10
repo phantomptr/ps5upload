@@ -1,6 +1,6 @@
 # ps5upload's build of the PS5 Payload SDK's startup code (crt1.o).
 #
-# The SDK's own crt1.o (v0.43) stops every payload before main() when either of
+# The SDK's own crt1.o (v0.43; crt/ is unchanged in v0.44) stops every payload before main() when either of
 # two kernel searches it added comes up empty (see third_party/sdk-crt/
 # ps5upload.patch): reported on FW 5.50, where 6.x helpers never started while
 # 5.x (built on v0.42) did. The same sources, with those searches made
