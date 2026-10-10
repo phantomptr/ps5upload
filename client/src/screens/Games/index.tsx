@@ -54,9 +54,9 @@ export default function GamesScreen() {
       tabs={tabs}
       renderPanel={(tab) =>
         tab === "files" ? (
-          <LibraryScreen embedded />
+          <LibraryScreen />
         ) : (
-          <InstalledAppsScreen embedded />
+          <InstalledAppsScreen />
         )
       }
     />

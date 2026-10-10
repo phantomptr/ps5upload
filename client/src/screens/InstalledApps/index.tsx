@@ -59,7 +59,6 @@ import {
   formatLastSeen,
 } from "../../state/playTime";
 import {
-  PageHeader,
   EmptyState,
   ErrorCard,
   WarningCard,
@@ -650,11 +649,7 @@ function Section({
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 
-export default function InstalledAppsScreen({
-  embedded = false,
-}: {
-  embedded?: boolean;
-}) {
+export default function InstalledAppsScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   // Kernel R/W = a jailbroken entry point (kstuff) is active. Without it,
@@ -1257,7 +1252,7 @@ export default function InstalledAppsScreen({
   }, [installed, onlyUnplayed, sortByPlaytime, playByHost, host, running]);
 
   return (
-    <div className={`flex flex-col gap-5 ${embedded ? "" : "p-6"}`}>
+    <div className="flex flex-col gap-5">
       {backportTitle && titles ? (
         <BackportPanel
           open
@@ -1272,42 +1267,18 @@ export default function InstalledAppsScreen({
           onLaunch={(title) => void handleLaunch(title)}
         />
       ) : null}
-      {!embedded && <PageHeader
-        icon={Gamepad2}
-        title={tr("installed_apps_title", undefined, "Installed Apps")}
-        loading={loading}
-        description={tr(
-          "installed_apps_subtitle",
-          undefined,
-          "Everything installed on the PS5, grouped by how it got there. Press Play to launch a title; Uninstall to remove it.",
-        )}
-        right={
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<RefreshCw size={12} />}
-            onClick={() => void refresh()}
-            disabled={loading || !host?.trim()}
-            loading={loading}
-          >
-            {tr("refresh", undefined, "Refresh")}
-          </Button>
-        }
-      />}
-      {embedded && (
-        <div className="flex justify-end">
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<RefreshCw size={12} />}
-            onClick={() => void refresh()}
-            disabled={loading || !host?.trim()}
-            loading={loading}
-          >
-            {tr("refresh", undefined, "Refresh")}
-          </Button>
-        </div>
-      )}
+      <div className="flex justify-end">
+        <Button
+          variant="secondary"
+          size="sm"
+          leftIcon={<RefreshCw size={12} />}
+          onClick={() => void refresh()}
+          disabled={loading || !host?.trim()}
+          loading={loading}
+        >
+          {tr("refresh", undefined, "Refresh")}
+        </Button>
+      </div>
 
       <ConnectionGate require="payload">
         {/* Anything actually running goes above every advisory on this

@@ -145,7 +145,6 @@ import { useActivityHistoryStore } from "../../state/activityHistory";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import {
-  PageHeader,
   EmptyState,
   ErrorCard,
   Button,
@@ -178,11 +177,7 @@ function formatDuration(sec: number): string {
 
 // formatBytes moved to lib/format.ts — kept consistent across screens.
 
-export default function LibraryScreen({
-  embedded = false,
-}: {
-  embedded?: boolean;
-}) {
+export default function LibraryScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const guard = useStaleHostGuard();
@@ -470,46 +465,19 @@ export default function LibraryScreen({
   const querying = query.trim() !== "";
 
   return (
-    <div className={embedded ? "" : "p-6"}>
-      {!embedded && (
-        <PageHeader
-          icon={LibraryBig}
-          title={tr("games_title", "Games")}
-          count={entries?.length}
+    <div>
+      <div className="mb-4 flex justify-end">
+        <Button
+          variant="secondary"
+          size="sm"
+          leftIcon={<RefreshCw size={12} />}
+          onClick={refresh}
+          disabled={loading || !host?.trim()}
           loading={loading}
-          description={tr(
-            "library_description",
-            undefined,
-            "Games and disk images anywhere on your PS5. Games are folders containing sce_sys/param.json; disk images are .exfat, .ffpkg, and .ffpfs files.",
-          )}
-          right={
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<RefreshCw size={12} />}
-              onClick={refresh}
-              disabled={loading || !host?.trim()}
-              loading={loading}
-            >
-              {tr("refresh", undefined, "Refresh")}
-            </Button>
-          }
-        />
-      )}
-      {embedded && (
-        <div className="mb-4 flex justify-end">
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<RefreshCw size={12} />}
-            onClick={refresh}
-            disabled={loading || !host?.trim()}
-            loading={loading}
-          >
-            {tr("refresh", undefined, "Refresh")}
-          </Button>
-        </div>
-      )}
+        >
+          {tr("refresh", undefined, "Refresh")}
+        </Button>
+      </div>
 
       {/* An open edit session hides a game from the PS5 home screen, so the
           reminder sits above the list rather than inside the row it came
