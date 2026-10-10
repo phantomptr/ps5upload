@@ -4,6 +4,18 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.7.4
+
+### Fixed
+
+- **Send helper took 20 to 40 seconds.** The console showed the helper arriving at once, but the
+  app kept waiting. When you pressed Send helper while the app was also re-sending the helper on
+  its own (after a reconnect, or to update it), two helpers started together and spent that time
+  fighting over which one stays. The app now sends one helper per console at a time: a press
+  during an automatic send waits for that helper instead of starting a second.
+
+---
+
 ## 6.7.3
 
 ### Fixed
