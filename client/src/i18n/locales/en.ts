@@ -272,6 +272,7 @@ library_empty_title: "Nothing in the scan folders yet",
 library_empty_message: "Upload a game folder or disk image, or register titles with a PS5-side installer — they'll show up here.",
 library_games: "Games",
 library_disk_images: "Disk images (.exfat / .ffpkg)",
+library_disk_image_files: "Disk image files (.exfat / .ffpkg / .ffpfs)",
 library_fpkg_kstuff_tip: "Tip: for faster .ffpkg / .exfat mounting (3-4×), try drakmor/kstuff-lite instead of the default kstuff. Install from the Payloads library.",
 payloads_refresh_error_banner: "Couldn't refresh from GitHub — showing cached snapshot. The latest tag on GitHub may be newer than what's shown here.",
 library_fpkg_kstuff_tip_repo: "View on GitHub",
@@ -2038,6 +2039,9 @@ installed_section_installed_hint:
 installed_section_disc: "Disk images",
 installed_section_disc_hint:
   "Mounted from /mnt/shadowmnt by ShadowMount+. They only mount + launch while ShadowMount+ is running.",
+installed_section_disc_v2: "Games from disk images",
+installed_section_disc_hint_v2:
+  "Registered games that run from a disk image. They mount and launch only while ShadowMount+ is running. The image files themselves are under Game files.",
 installed_section_folder: "Folder homebrew",
 installed_section_folder_hint:
   "Registered from a /data/homebrew/<id>-app folder on the console.",

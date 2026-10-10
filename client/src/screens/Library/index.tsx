@@ -663,9 +663,9 @@ export default function LibraryScreen() {
                     <SectionHeader
                       icon={<FileArchive size={13} />}
                       title={tr(
-                        "library_disk_images",
+                        "library_disk_image_files",
                         undefined,
-                        "Disk images (.exfat / .ffpkg / .ffpfs)",
+                        "Disk image files (.exfat / .ffpkg / .ffpfs)",
                       )}
                       count={split.images.length}
                     />

@@ -1548,11 +1548,11 @@ export default function InstalledAppsScreen() {
             {discs.length > 0 ? (
               <Section
                 icon={Disc3}
-                title={tr("installed_section_disc", undefined, "Disk images")}
+                title={tr("installed_section_disc_v2", undefined, "Games from disk images")}
                 hint={tr(
-                  "installed_section_disc_hint",
+                  "installed_section_disc_hint_v2",
                   undefined,
-                  "Mounted from /mnt/shadowmnt by ShadowMount+. They only mount + launch while ShadowMount+ is running.",
+                  "Registered games that run from a disk image. They mount and launch only while ShadowMount+ is running. The image files themselves are under Game files.",
                 )}
                 count={discs.length}
               >
