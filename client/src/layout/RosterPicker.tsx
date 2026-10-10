@@ -22,6 +22,7 @@ import { useTr } from "../state/lang";
 import { useConfirm } from "../components/ConfirmDialog";
 import { Modal } from "../components/Modal";
 import { parsePS5Firmware } from "../lib/ps5Firmware";
+import { formatDate } from "../lib/formatDate";
 
 /**
  * Sidebar dropdown for switching between known PS5s.
@@ -237,7 +238,7 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
             {profiles.map((p, index) => (
               <li
                 key={p.id}
-                className={`rounded-md border p-3 text-xs ${
+                className={`rounded-[var(--radius-field)] border p-3 text-xs ${
                   p.id === active?.id
                     ? "border-[var(--color-accent)]"
                     : "border-[var(--color-border)]"
@@ -250,14 +251,14 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                         value={editName}
                         onChange={(e) => setEditName(e.target.value)}
                         placeholder={tr("roster_edit_name_placeholder", "Name")}
-                        className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1"
+                        className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1"
                       />
                       <input
                         value={editHost}
                         onChange={(e) => setEditHost(e.target.value)}
                         placeholder="192.168.1.50"
                         inputMode="decimal"
-                        className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1"
+                        className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1"
                       />
                     </div>
                     <textarea
@@ -270,13 +271,13 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                         undefined,
                         "Notes (e.g. firmware quirks, do-not-update warnings)",
                       )}
-                      className="w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs"
+                      className="w-full resize-y rounded-[var(--radius-field)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-xs"
                     />
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
                         onClick={commitEdit}
-                        className="rounded-md bg-[var(--color-accent)] px-2 py-1 text-[var(--color-accent-contrast)]"
+                        className="inline-flex items-center gap-1 rounded-full bg-[image:var(--accent-fill)] px-3 py-1 text-xs font-semibold text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105 disabled:opacity-50"
                       >
                         {tr("save", undefined, "Save")}
                       </button>
@@ -299,11 +300,9 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                           {tr(
                             "roster_last_seen",
                             {
-                              when: new Date(
-                                p.last_seen_at * 1000,
-                              ).toLocaleString(),
+                              when: formatDate(p.last_seen_at * 1000),
                             },
-                            `last seen: ${new Date(p.last_seen_at * 1000).toLocaleString()}`,
+                            `last seen: ${formatDate(p.last_seen_at * 1000)}`,
                           )}
                           {p.last_seen_payload &&
                             ` · ps5upload v${p.last_seen_payload}`}
@@ -320,7 +319,7 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                       onClick={() => startEdit(p)}
                       aria-label={tr("roster_edit", undefined, "Edit PS5")}
                       title={tr("roster_edit", undefined, "Edit PS5")}
-                      className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
+                      className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
                     >
                       <Pencil size={12} />
                     </button>
@@ -334,7 +333,7 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                         `Move ${p.name} up`,
                       )}
                       title={tr("roster_move_up", undefined, "Move up")}
-                      className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-30"
+                      className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-30"
                     >
                       <ChevronUp size={12} />
                     </button>
@@ -348,7 +347,7 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                         `Move ${p.name} down`,
                       )}
                       title={tr("roster_move_down", undefined, "Move down")}
-                      className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-30"
+                      className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-30"
                     >
                       <ChevronDownIcon size={12} />
                     </button>
@@ -377,7 +376,7 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                         `Remove ${p.name}`,
                       )}
                       title={tr("remove", undefined, "Remove")}
-                      className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-bad-soft)] hover:text-[var(--color-bad)]"
+                      className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-bad-soft)] hover:text-[var(--color-bad)]"
                     >
                       <Trash2 size={12} />
                     </button>
@@ -400,20 +399,20 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                   undefined,
                   "Living-room PS5",
                 )}
-                className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs"
+                className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-xs"
               />
               <input
                 value={newHost}
                 onChange={(e) => setNewHost(e.target.value)}
                 placeholder="192.168.1.50"
                 inputMode="decimal"
-                className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs"
+                className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-xs"
               />
               <button
                 type="button"
                 onClick={handleAdd}
                 disabled={!newHost.trim()}
-                className="inline-flex items-center gap-1 rounded-md bg-[var(--color-accent)] px-2 py-1 text-xs text-[var(--color-accent-contrast)] disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-full bg-[image:var(--accent-fill)] px-3 py-1 text-xs font-semibold text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105 disabled:opacity-50"
               >
                 <Plus size={11} />
                 {tr("add", undefined, "Add")}

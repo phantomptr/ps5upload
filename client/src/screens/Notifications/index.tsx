@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   Bell,
   RefreshCw,
@@ -17,17 +17,18 @@ import {
 } from "../../components";
 import { useTr } from "../../state/lang";
 import { useConnectionStore } from "../../state/connection";
-import { useDocumentVisible } from "../../lib/visibility";
+import { usePoll } from "../../lib/usePoll";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { transferAddr } from "../../lib/addr";
 import { notifList, notifClear, type Notification } from "../../api/ps5";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { hostOf } from "../../lib/addr";
 import { isNotifRead, usePs5NotifRead } from "../../state/ps5NotifRead";
+import { formatDate } from "../../lib/formatDate";
 
 function formatTs(ts: number): string {
   if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleString();
+  return formatDate(ts * 1000);
 }
 
 function levelColor(level: string): string {
@@ -45,7 +46,6 @@ export default function NotificationsScreen() {
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const addr = host ? transferAddr(host) : "";
-  const visible = useDocumentVisible();
   const guard = useStaleHostGuard();
 
   const [items, setItems] = useState<Notification[]>([]);
@@ -102,12 +102,8 @@ export default function NotificationsScreen() {
     }
   }, [addr, payloadStatus, guard]);
 
-  useEffect(() => {
-    void refresh();
-    if (!visible) return;
-    const id = window.setInterval(() => void refresh(), POLL_MS);
-    return () => window.clearInterval(id);
-  }, [refresh, visible]);
+  // Paused while hidden or while a transfer to this console runs.
+  usePoll(refresh, POLL_MS, { host, enabled: !!addr && payloadStatus === "up" });
 
   // The payload has no read state, so it is kept here, per console.
   const readState = usePs5NotifRead((s) => (host ? s.byHost[hostOf(host)] : undefined));
@@ -163,12 +159,14 @@ export default function NotificationsScreen() {
       />
 
       <ConnectionGate>
-        {error && <ErrorCard title={error} />}
+        {error && <ErrorCard title={error} onRetry={() => void refresh()} />}
 
         {unreadCount > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] px-4 py-2 text-sm">
-            <span className="flex items-center gap-2 text-[var(--color-accent)]">
-              <Mail size={14} />
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 py-2.5 text-sm shadow-[var(--edge-highlight)]">
+            <span className="flex items-center gap-2.5 font-medium">
+              <span className="icon-disc !h-7 !w-7" aria-hidden>
+                <Mail size={13} />
+              </span>
               {tr(
                 "notifications_unread",
                 { count: unreadCount },
@@ -207,17 +205,17 @@ export default function NotificationsScreen() {
               return (
                 <div
                   key={n.seq}
-                  className={`rounded-md border px-3 py-2.5 transition-colors ${
+                  className={`rounded-[var(--radius-card)] border px-4 py-3 transition-colors ${
                     read
-                      ? "border-[var(--color-border)] bg-[var(--color-surface-2)]"
-                      : "border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)]"
+                      ? "border-[var(--color-border)] bg-[var(--color-surface)]"
+                      : "border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)]"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <span
                       aria-hidden
                       className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
-                        read ? "bg-transparent" : "bg-[var(--color-accent)]"
+                        read ? "bg-transparent" : "bg-[var(--color-accent-bright)]"
                       }`}
                     />
                     <div className="min-w-0 flex-1">
@@ -241,7 +239,7 @@ export default function NotificationsScreen() {
                     <button
                       type="button"
                       onClick={() => host && setRead(host, n.seq, !read)}
-                      className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+                      className="flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] max-md:min-h-11"
                     >
                       {read ? <Mail size={12} /> : <MailOpen size={12} />}
                       {read

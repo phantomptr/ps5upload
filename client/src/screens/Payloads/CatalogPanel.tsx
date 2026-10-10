@@ -360,7 +360,7 @@ export default function CatalogPanel() {
             with ps5upload is the guidance that was missing — kept as plain
             text rather than buttons so it never implies these are installed
             or endorsed beyond "start here". */}
-        <div className="rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] p-3">
+        <div className="rounded-[var(--radius-card)] border border-[var(--color-accent)] bg-[var(--color-surface)] p-3">
           <p className="text-xs font-semibold">
             {tr("payloads_essentials_title", undefined, "Recommended alongside ps5upload")}
           </p>
@@ -372,7 +372,7 @@ export default function CatalogPanel() {
             )}
           </p>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
           <div className="text-xs text-[var(--color-muted)]">
             {tr(
               "payloads_curated_blurb",
@@ -420,7 +420,7 @@ export default function CatalogPanel() {
           </div>
         </div>
         {addOpen && (
-          <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+          <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs font-medium text-[var(--color-text)]">
                 {tr("payloads_add_repo_title", undefined, "Track a custom payload repo")}
@@ -470,7 +470,7 @@ export default function CatalogPanel() {
                     undefined,
                     "Used only when you enter a bare owner/name. GitHub or a Gitea/Forgejo host.",
                   )}
-                  className="w-36 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-xs outline-none focus:border-[var(--color-accent)]"
+                  className="w-36 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1.5 text-xs outline-none focus:border-[var(--color-accent)]"
                 />
               </label>
               <Button
@@ -484,7 +484,7 @@ export default function CatalogPanel() {
               </Button>
             </div>
             {addError && (
-              <div className="mt-2 text-xs text-[var(--color-danger)]">{addError}</div>
+              <div className="mt-2 text-xs text-[var(--color-bad)]">{addError}</div>
             )}
           </div>
         )}
@@ -514,7 +514,7 @@ export default function CatalogPanel() {
           />
         )}
         {query.trim() && visibleCatalog.length === 0 && (
-          <div className="rounded-md border border-dashed border-[var(--color-border)] p-6 text-center text-xs text-[var(--color-muted)]">
+          <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-border)] p-6 text-center text-xs text-[var(--color-muted)]">
             {tr(
               "payloads_search_no_match",
               { query: query.trim() },
@@ -600,7 +600,7 @@ function PayloadCard({
   const updateAvailable =
     !!local && !!release && !!release.tag && local.version !== release.tag;
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <section className="surface-panel p-5">
       <div className="flex flex-wrap items-start gap-3">
         {/* Floor the text column's min-width to min(100%,16rem). With `flex-1`
             (basis 0%) + `min-w-0`, the name column shrank to nothing at large
@@ -630,7 +630,7 @@ function PayloadCard({
               <button
                 type="button"
                 onClick={onRemove}
-                className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-danger)]"
+                className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-bad)]"
                 title={tr("payloads_custom_remove", undefined, "Remove this custom repo")}
               >
                 <Trash2 size={11} />
@@ -705,7 +705,7 @@ function PayloadCard({
                   value={selectedTag}
                   onChange={(e) => onSelectTag(e.target.value)}
                   disabled={busy}
-                  className="max-w-[12rem] rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-1 text-xs"
+                  className="max-w-[12rem] rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-1.5 py-1 text-xs"
                   title={tr(
                     "payloads_version_tooltip",
                     undefined,
@@ -768,7 +768,7 @@ function PayloadCard({
       </div>
 
       {release && (
-        <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+        <div className="mt-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--color-muted)]">
             <span>
               {tr(
@@ -809,7 +809,7 @@ function PayloadCard({
             // user has no way to tell live data from N-day-stale
             // cache, and might wonder why the "latest" version
             // doesn't match a release they just saw on GitHub.
-            <div className="mt-2 flex items-start gap-1.5 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+            <div className="mt-2 flex items-start gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-surface)] p-3 text-xs text-[var(--color-warn)]">
               <AlertTriangle size={11} className="mt-0.5 shrink-0" />
               <span>
                 {tr(
@@ -836,7 +836,7 @@ function PayloadCard({
         // (a renamed/deleted repo → 404, or a down Forgejo host) is not a
         // user error — the row stays present and usable later. The loud red
         // card made users think the payload was "broken" or "removed".
-        <div className="mt-3 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-muted)]">
+        <div className="mt-3 flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs text-[var(--color-muted)]">
           <AlertTriangle size={11} className="mt-0.5 shrink-0" />
           <span className="min-w-0 break-words">
             {tr(

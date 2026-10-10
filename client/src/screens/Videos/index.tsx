@@ -7,7 +7,7 @@ import {
   CheckSquare,
   Square,
   Eye,
-  X,
+  Trash2,
 } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
@@ -20,10 +20,19 @@ import {
 } from "../../api/ps5";
 import { useConnectionStore } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
-import { useScrollLock } from "../../lib/useScrollLock";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
-import { Button, EmptyState, ErrorCard, Spinner, ConnectionGate } from "../../components";
+import {
+  Button,
+  EmptyState,
+  ErrorCard,
+  Modal,
+  Spinner,
+  ConnectionGate,
+} from "../../components";
 import { CaptureToolbar } from "../Captures/CaptureToolbar";
+import { useCaptureDelete } from "../Captures/useCaptureDelete";
+import { humanizePs5Error } from "../../lib/humanizeError";
+import { formatDate } from "../../lib/formatDate";
 import { useTr } from "../../state/lang";
 import { pickPath } from "../../lib/pickPath";
 import { formatBytes } from "../../lib/format";
@@ -62,6 +71,18 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const {
+    deleting,
+    deleteSelected,
+    dialog: deleteDialog,
+  } = useCaptureDelete({
+    host,
+    kind: "videos",
+    selected,
+    setSelected,
+    setItems,
+    setError,
+  });
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
   // Inline <video> preview is desktop-only (streams a downloaded copy from a
   // scratch dir via convertFileSrc — no mobile file-serving equivalent, and
@@ -101,7 +122,7 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
       setItems(r.items);
     } catch (e) {
       if (probe.isStale()) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizePs5Error(e instanceof Error ? e.message : String(e)));
     } finally {
       setLoading(false);
     }
@@ -203,7 +224,6 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
     loading: boolean;
     error: string | null;
   } | null>(null);
-  useScrollLock(!!preview);
 
   async function openPreview(item: ScreenshotEntry) {
     if (!host?.trim() || !canPreview) return;
@@ -248,16 +268,7 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
     });
   }
 
-  // Esc closes the preview; clean the scratch dir if the user navigates away
-  // with it open.
-  useEffect(() => {
-    if (!preview) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closePreview();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [preview]);
+  // Clean the scratch dir if the user navigates away with the preview open.
   useEffect(
     () => () => {
       // Unmount cleanup handled via closePreview on Esc/close; this catches
@@ -280,14 +291,14 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
         description={
           isTauriEnv()
             ? tr(
-                "videos_description_v2",
+                "videos_description_v3",
                 undefined,
-                "Video clips saved on the PS5 (its Capture Gallery). Download them to this computer as they are; no conversion is needed. To delete one, use Files.",
+                "Video clips saved on the PS5 (its Capture Gallery). Download them to this computer as they are; no conversion is needed. Select some to delete them.",
               )
             : tr(
-                "videos_description_browser",
+                "videos_description_browser_v2",
                 undefined,
-                "Video clips saved on the PS5 (its Capture Gallery). Download them as they are to a folder on the computer running ps5upload; no conversion is needed. To delete one, use Files.",
+                "Video clips saved on the PS5 (its Capture Gallery). Download them as they are to a folder on the computer running ps5upload; no conversion is needed. Select some to delete them.",
               )
         }
         right={
@@ -309,6 +320,18 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
                 {tr("videos_bulk_download", { n: selected.size }, `Download ${selected.size}`)}
               </Button>
             )}
+            {selected.size > 0 && (
+              <Button
+                variant="danger"
+                size="sm"
+                loading={deleting}
+                leftIcon={<Trash2 size={12} />}
+                onClick={() => void deleteSelected()}
+                disabled={deleting || bulkBusy}
+              >
+                {tr("captures_bulk_delete", { n: selected.size }, `Delete ${selected.size}`)}
+              </Button>
+            )}
             <Button
               variant="secondary"
               size="sm"
@@ -328,6 +351,17 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
             <ErrorCard
               title={tr("videos_error", undefined, "Couldn't list video clips")}
               detail={error}
+              onDismiss={() => setError(null)}
+              action={
+                <Button
+                  size="sm"
+                  leftIcon={<RefreshCw size={12} />}
+                  onClick={() => void refresh()}
+                  disabled={loading}
+                >
+                  {tr("retry", undefined, "Retry")}
+                </Button>
+              }
             />
           </div>
         )}
@@ -356,47 +390,50 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
                 : tr("videos_select_all", undefined, "Select all")}
             </button>
           )}
-          <ul className="space-y-1">
+          <ul className="space-y-2">
             {items?.map((item) => {
               const isSelected = selected.has(item.path);
               const rowBusy = busyPaths.has(item.path);
               return (
                 <li
                   key={item.path}
-                  className={`flex items-center gap-3 rounded-md border p-2 text-xs ${
+                  className={`flex items-center gap-3 rounded-[var(--radius-card)] border px-3 py-2.5 text-xs shadow-[var(--edge-highlight)] transition-colors ${
                     isSelected
-                      ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
-                      : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
+                      ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)]"
+                      : "border-[var(--glass-edge)] bg-[var(--color-surface-raised)]"
                   }`}
                 >
                   <button
                     type="button"
+                    role="checkbox"
+                    aria-checked={isSelected}
                     onClick={() => toggleOne(item.path)}
-                    className="text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
                     aria-label={tr("videos_select", undefined, "Toggle select")}
                   >
-                    {isSelected ? <CheckSquare size={12} /> : <Square size={12} />}
+                    {isSelected ? <CheckSquare size={14} /> : <Square size={14} />}
                   </button>
-                  <VideoIcon
-                    size={16}
-                    className="shrink-0 text-[var(--color-muted)]"
-                  />
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-field)] bg-[var(--color-surface-3)] text-[var(--color-muted)]">
+                    <VideoIcon size={16} aria-hidden />
+                  </span>
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-medium text-[var(--color-text)]">
                       {basename(item.path)}
                     </div>
                     <div className="truncate text-[var(--color-muted)]">
                       {formatBytes(item.size)}
+                      {item.mtime ? ` · ${formatDate(item.mtime * 1000)}` : ""}
                     </div>
                   </div>
                   {canPreview && (
                     <button
                       type="button"
                       onClick={() => openPreview(item)}
-                      className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                      className="icon-orb-button !h-9 !w-9 text-[var(--color-muted)] hover:text-[var(--color-text)]"
                       aria-label={tr("videos_preview", undefined, "Preview")}
+                      title={tr("videos_preview", undefined, "Preview")}
                     >
-                      <Eye size={13} />
+                      <Eye size={14} />
                     </button>
                   )}
                   {/* The browser build downloads too, into a folder on the engine's machine. */}
@@ -404,8 +441,9 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
                     type="button"
                     onClick={() => void downloadOne(item)}
                     disabled={rowBusy}
-                    className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+                    className="icon-orb-button !h-9 !w-9 text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
                     aria-label={tr("videos_download", undefined, "Download")}
+                    title={tr("videos_download", undefined, "Download")}
                   >
                     {rowBusy ? (
                       <Spinner size={14} tone="inherit" />
@@ -420,46 +458,37 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
         </div>
 
         {preview && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6"
-            onClick={closePreview}
+          <Modal
+            open
+            onClose={closePreview}
+            title={<span className="truncate font-mono text-sm">{basename(preview.item.path)}</span>}
+            size="xl"
+            bodyClassName="p-4"
           >
-            <div
-              className="relative max-h-full max-w-3xl overflow-hidden rounded-lg bg-[var(--color-surface)]"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                type="button"
-                onClick={closePreview}
-                className="absolute right-2 top-2 z-10 rounded-full bg-black/50 p-1.5 text-white hover:bg-black/70"
-                aria-label={tr("close", undefined, "Close")}
-              >
-                <X size={16} />
-              </button>
-              <div className="flex min-h-[240px] min-w-[320px] items-center justify-center p-2">
-                {preview.loading && (
-                  <div className="flex items-center gap-2 text-sm text-[var(--color-muted)]">
-                    <Spinner size={16} />
-                    {tr("videos_preview_loading", undefined, "Downloading clip…")}
-                  </div>
-                )}
-                {preview.error && (
-                  <div className="max-w-sm text-center text-sm text-[var(--color-danger)]">
-                    {preview.error}
-                  </div>
-                )}
-                {preview.url && !preview.loading && (
-                  <video
-                    src={preview.url}
-                    controls
-                    autoPlay
-                    className="max-h-[70vh] max-w-full rounded"
-                  />
-                )}
-              </div>
+            <div className="flex min-h-[240px] items-center justify-center overflow-hidden rounded-[var(--radius-card)] bg-[var(--color-surface-3)]">
+              {preview.loading && (
+                <div className="flex items-center gap-2 p-10 text-sm text-[var(--color-muted)]">
+                  <Spinner size={16} />
+                  {tr("videos_preview_loading", undefined, "Downloading clip…")}
+                </div>
+              )}
+              {preview.error && (
+                <div className="max-w-sm p-8 text-center text-sm text-[var(--color-bad)]">
+                  {preview.error}
+                </div>
+              )}
+              {preview.url && !preview.loading && (
+                <video
+                  src={preview.url}
+                  controls
+                  autoPlay
+                  className="max-h-[70vh] max-w-full"
+                />
+              )}
             </div>
-          </div>
+          </Modal>
         )}
+        {deleteDialog}
       </ConnectionGate>
     </div>
   );

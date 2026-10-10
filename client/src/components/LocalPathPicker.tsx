@@ -96,7 +96,7 @@ export function PickerView(p: PickerViewProps) {
   const shown = p.entries.filter((e) => e.is_dir || passes(e.name, p.filters));
   return (
     <div
-      className="anim-scrim fixed inset-0 z-50 flex items-end justify-center bg-[var(--overlay-scrim)] sm:items-center"
+      className="anim-scrim scrim fixed inset-0 z-50 flex items-end justify-center sm:items-center"
       style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "var(--safe-bottom)" }}
       onClick={p.onCancel}
     >
@@ -111,7 +111,7 @@ export function PickerView(p: PickerViewProps) {
           <button
             type="button"
             aria-label={tr("cancel", undefined, "Cancel")}
-            className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)]"
+            className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)]"
             onClick={p.onCancel}
           >
             <X size={18} />
@@ -156,7 +156,7 @@ export function PickerView(p: PickerViewProps) {
               <span className="flex-1 truncate text-xs text-[var(--color-muted)]">{p.cwdLabel}</span>
               {!p.remote && p.roots.length > 1 && (
                 <select
-                  className="max-w-[40%] truncate rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1 py-0.5 text-xs"
+                  className="max-w-[40%] truncate rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-1 py-0.5 text-xs"
                   value={p.currentRoot ?? ""}
                   onChange={(e) => e.target.value && p.onRoot(e.target.value)}
                 >

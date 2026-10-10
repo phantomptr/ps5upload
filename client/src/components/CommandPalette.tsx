@@ -326,13 +326,13 @@ export function CommandPalette() {
 
   return (
     <div
-      className="anim-scrim fixed inset-0 z-50 flex items-start justify-center bg-[var(--overlay-scrim)] pt-[15vh]"
+      className="anim-scrim scrim fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
       onClick={(e) => {
         if (e.target === e.currentTarget) close();
       }}
     >
       <div className="anim-pop glass-float elev-3 w-[560px] max-w-[90vw] overflow-hidden rounded-[var(--radius-panel)]">
-        <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-5 py-3.5">
+        <div className="field-shell flex items-center gap-3 border-b border-[var(--color-border)] px-5 py-3.5">
           <Search size={17} className="text-[var(--color-muted)]" />
           <input
             ref={inputRef}
@@ -344,7 +344,7 @@ export function CommandPalette() {
               "cmdpalette_search_placeholder",
               "Type a command or search…",
             )}
-            className="flex-1 bg-transparent text-sm outline-none"
+            className="field-quiet flex-1 bg-transparent text-sm"
           />
           <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-muted)]">
             {tr("cmdpalette_esc", "Esc")}

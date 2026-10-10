@@ -114,7 +114,7 @@ export default function UsbAutoloaderModal({
     >
       <div className="space-y-5 p-5 text-sm">
         {mobile ? (
-          <div className="flex flex-col items-center gap-2 rounded-md border border-dashed border-[var(--color-border)] p-6 text-center">
+          <div className="flex flex-col items-center gap-2 rounded-[var(--radius-card)] border border-dashed border-[var(--color-border)] p-6 text-center">
             <HardDrive size={24} className="text-[var(--color-muted)]" />
             <div className="text-sm font-medium">
               {tr(
@@ -161,7 +161,7 @@ export default function UsbAutoloaderModal({
                   {tr("usb_wizard_scanning", undefined, "Scanning…")}
                 </div>
               ) : drives.length === 0 ? (
-                <div className="rounded-md border border-dashed border-[var(--color-border)] p-3 text-xs text-[var(--color-muted)]">
+                <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-border)] p-3 text-xs text-[var(--color-muted)]">
                   {tr(
                     "usb_wizard_no_drives",
                     undefined,
@@ -173,7 +173,7 @@ export default function UsbAutoloaderModal({
                   {drives.map((d) => (
                     <li
                       key={d.path}
-                      className={`flex items-center gap-3 rounded-md border p-2 text-xs ${
+                      className={`flex items-center gap-3 rounded-[var(--radius-field)] border p-2 text-xs ${
                         pickedDrive === d.path
                           ? "border-[var(--color-accent)] bg-[var(--color-surface)]"
                           : "border-[var(--color-border)]"
@@ -234,7 +234,7 @@ export default function UsbAutoloaderModal({
                     return (
                       <li
                         key={p.id}
-                        className={`flex items-center gap-3 rounded-md border p-2 text-xs ${
+                        className={`flex items-center gap-3 rounded-[var(--radius-field)] border p-2 text-xs ${
                           cached
                             ? checked
                               ? "border-[var(--color-accent)] bg-[var(--color-surface)]"
@@ -321,7 +321,7 @@ export default function UsbAutoloaderModal({
                 )}
                 {result && (
                   <div className="mt-2 space-y-2 text-xs">
-                    <div className="rounded-md border border-[var(--color-good)] bg-[var(--color-surface)] p-2">
+                    <div className="rounded-[var(--radius-card)] border border-[var(--color-good)] bg-[var(--color-surface)] p-3">
                       <div className="font-medium text-[var(--color-good)]">
                         {tr(
                           "usb_wizard_done",
@@ -336,7 +336,7 @@ export default function UsbAutoloaderModal({
                       </ul>
                     </div>
                     {result.skipped.length > 0 && (
-                      <div className="rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2">
+                      <div className="rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-surface)] p-3">
                         <div className="font-medium text-[var(--color-warn)]">
                           {tr("usb_wizard_skipped", undefined, "Skipped")}
                         </div>
@@ -347,7 +347,7 @@ export default function UsbAutoloaderModal({
                         </ul>
                       </div>
                     )}
-                    <details className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
+                    <details className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
                       <summary className="cursor-pointer text-[var(--color-muted)]">
                         {tr(
                           "usb_wizard_show_autoload_txt",

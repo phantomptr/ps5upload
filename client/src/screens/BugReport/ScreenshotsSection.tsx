@@ -118,7 +118,7 @@ export default function ScreenshotsSection({
                         aria-label={s.name}
                         onClick={() => toggle(s)}
                         className={
-                          "relative block w-full rounded-lg border-2 p-0.5 transition-colors " +
+                          "relative block w-full rounded-[var(--radius-field)] border-2 p-0.5 transition-colors " +
                           (on
                             ? "border-[var(--color-accent)]"
                             : "border-transparent opacity-75 hover:border-[var(--color-border-strong)] hover:opacity-100")
@@ -130,7 +130,7 @@ export default function ScreenshotsSection({
                             "absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full border " +
                             (on
                               ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
-                              : "border-white/70 bg-black/40")
+                              : "border-[var(--glass-edge)] bg-[var(--color-float)]")
                           }
                         >
                           {on && <Check size={12} strokeWidth={3} />}
@@ -154,7 +154,7 @@ export default function ScreenshotsSection({
                 type="button"
                 aria-label={`${tr("br_remove", undefined, "Remove")} ${f.name}`}
                 onClick={() => setAttached((a) => ({ ...a, files: a.files.filter((x) => x !== f) }))}
-                className="absolute right-1.5 top-1.5 rounded-full bg-black/70 p-1 text-white"
+                className="glass-float absolute right-1.5 top-1.5 rounded-full p-1 text-[var(--color-text)]"
               >
                 <X size={12} />
               </button>

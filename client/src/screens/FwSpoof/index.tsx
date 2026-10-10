@@ -59,7 +59,7 @@ export default function FwSpoofScreen() {
           }
         />
 
-        {error && <div className="mb-4"><ErrorCard title={error} /></div>}
+        {error && <div className="mb-4"><ErrorCard title={error} onRetry={() => void refresh()} /></div>}
 
         {loading && !status ? (
           <div className="flex items-center justify-center py-12">
@@ -116,39 +116,39 @@ export default function FwSpoofScreen() {
                 {tr("fw_spoof_details", undefined, "Details")}
               </h3>
               <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
-                <div className="flex items-center justify-between gap-2 rounded-md bg-[var(--color-surface-3)] px-3 py-2">
+                <div className="flex items-center justify-between gap-2 rounded-[var(--radius-field)] bg-[var(--color-surface-3)] px-3 py-2">
                   <span className="text-[var(--color-muted)]">
                     {tr("fw_spoof_sw_version", undefined, "System SW Version")}
                   </span>
                   <code className="font-mono font-semibold">{swVersionDisplay}</code>
                 </div>
-                <div className="flex items-center justify-between gap-2 rounded-md bg-[var(--color-surface-3)] px-3 py-2">
+                <div className="flex items-center justify-between gap-2 rounded-[var(--radius-field)] bg-[var(--color-surface-3)] px-3 py-2">
                   <span className="text-[var(--color-muted)]">
                     {tr("fw_spoof_sw_raw", undefined, "Raw SW Value")}
                   </span>
                   <code className="font-mono">{status.system_sw_raw || "—"}</code>
                 </div>
-                <div className="flex items-center justify-between gap-2 rounded-md bg-[var(--color-surface-3)] px-3 py-2">
+                <div className="flex items-center justify-between gap-2 rounded-[var(--radius-field)] bg-[var(--color-surface-3)] px-3 py-2">
                   <span className="text-[var(--color-muted)]">
                     {tr("fw_spoof_kernel", undefined, "Kernel Release")}
                   </span>
                   <code className="font-mono">{status.kernel_release || "—"}</code>
                 </div>
-                <div className="flex items-center justify-between gap-2 rounded-md bg-[var(--color-surface-3)] px-3 py-2">
+                <div className="flex items-center justify-between gap-2 rounded-[var(--radius-field)] bg-[var(--color-surface-3)] px-3 py-2">
                   <span className="text-[var(--color-muted)]">
                     {tr("fw_spoof_kernel_fw", undefined, "Kernel FW Version")}
                   </span>
                   <code className="font-mono">{status.kernel_fw_version || "—"}</code>
                 </div>
                 {status.kernel_version && (
-                  <div className="flex items-center justify-between gap-2 rounded-md bg-[var(--color-surface-3)] px-3 py-2 md:col-span-2">
+                  <div className="flex items-center justify-between gap-2 rounded-[var(--radius-field)] bg-[var(--color-surface-3)] px-3 py-2 md:col-span-2">
                     <span className="text-[var(--color-muted)]">
                       {tr("fw_spoof_kern_version", undefined, "Kernel Build")}
                     </span>
                     <code className="font-mono text-xs">{status.kernel_version}</code>
                   </div>
                 )}
-                <div className="flex items-center justify-between gap-2 rounded-md bg-[var(--color-surface-3)] px-3 py-2">
+                <div className="flex items-center justify-between gap-2 rounded-[var(--radius-field)] bg-[var(--color-surface-3)] px-3 py-2">
                   <span className="text-[var(--color-muted)]">
                     {tr("fw_spoof_flag", undefined, "Spoofed")}
                   </span>

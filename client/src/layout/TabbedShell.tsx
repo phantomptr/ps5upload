@@ -123,7 +123,7 @@ export default function TabbedShell<Id extends string>({
         description={description}
       />
 
-      {/* Tab strip — underline style for low visual weight. The
+      {/* Tab strip — the shared chip look (active = white pill). The
           page header already announces the screen. A11y: tablist +
           tab + tabpanel per WAI-ARIA; aria-pressed is for toggle
           buttons (different semantics). aria-controls/labelledby
@@ -133,7 +133,7 @@ export default function TabbedShell<Id extends string>({
       <div
         role="tablist"
         aria-label={tr(titleKey, undefined, titleFallback)}
-        className="mb-4 flex items-center gap-1 border-b border-[var(--color-border)]"
+        className="mb-5 flex flex-wrap items-center gap-2"
       >
         {tabs.map(({ id, icon: Icon, key, fallback }) => {
           const isActive = id === activeTab;
@@ -148,12 +148,7 @@ export default function TabbedShell<Id extends string>({
               tabIndex={isActive ? 0 : -1}
               onClick={() => setActiveTab(id)}
               onKeyDown={(e) => onTabKey(e, id)}
-              className={
-                "flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm transition-colors " +
-                (isActive
-                  ? "border-[var(--color-accent)] font-semibold text-[var(--color-accent)]"
-                  : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-text)]")
-              }
+              className="chip min-h-9 gap-1.5 px-4 text-sm max-md:min-h-11"
             >
               <Icon size={14} strokeWidth={1.75} />
               {tr(key, undefined, fallback)}

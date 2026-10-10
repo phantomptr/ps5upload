@@ -39,8 +39,8 @@ test("guides a disconnected user through primary navigation and recovery", async
   await expect(page.getByRole("heading", { name: "More" })).toBeVisible();
   await body.getByRole("link", { name: "Tasks", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Tasks", pressed: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: /history/i })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Tasks", selected: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /history/i })).toBeVisible();
   await expect(page.getByText("No activity yet")).toBeVisible();
 
   await page.getByRole("link", { name: "More" }).click();

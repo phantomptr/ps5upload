@@ -123,7 +123,7 @@ export function NpSignInSection({
       </ol>
 
       <div
-        className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
+        className={`mb-3 rounded-[var(--radius-field)] border px-3 py-2 text-xs ${
           readiness.kind === "ready"
             ? "border-[var(--color-good)]/40"
             : "border-[var(--color-warn)]/40"

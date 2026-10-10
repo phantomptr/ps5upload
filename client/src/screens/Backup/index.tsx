@@ -34,10 +34,10 @@ import {
 import { trackTask } from "../../state/trackTask";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { SNAPSHOT_MAX_DEPTH, SNAPSHOTS_KEPT_PER_NAME } from "./snapshotLimits";
+import { formatDate } from "../../lib/formatDate";
 
 function formatTimestamp(ts: number): string {
-  const d = new Date(ts * 1000);
-  return d.toLocaleString();
+  return formatDate(ts * 1000);
 }
 
 /** Things people actually want to keep a copy of.
@@ -246,10 +246,10 @@ export default function BackupScreen() {
         />
 
         <ConnectionGate>
-          {error && <div className="mb-4"><ErrorCard title={error} /></div>}
+          {error && <div className="mb-4"><ErrorCard title={error} onRetry={() => void refresh()} onDismiss={() => setError(null)} /></div>}
 
           {actionMsg && (
-            <div className="rounded-lg border border-[var(--color-good)]/30 bg-[var(--color-good)]/10 px-4 py-3 text-sm text-[var(--color-good)]">
+            <div className="rounded-[var(--radius-card)] border border-[var(--color-good)]/30 bg-[var(--color-good)]/10 px-4 py-3 text-sm text-[var(--color-good)]">
               {actionMsg}
             </div>
           )}
@@ -283,11 +283,8 @@ export default function BackupScreen() {
                     setTag(defaultTagFor(preset.path));
                   }}
                   title={preset.path}
-                  className={`rounded-md border px-2 py-1 text-xs ${
-                    path === preset.path
-                      ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10"
-                      : "border-[var(--color-border)] hover:bg-[var(--color-surface)]"
-                  }`}
+                  aria-pressed={path === preset.path}
+                  className="chip min-h-8 px-3.5 text-xs max-md:min-h-11"
                 >
                   {tr(preset.labelKey, undefined, preset.label)}
                 </button>
@@ -356,7 +353,7 @@ export default function BackupScreen() {
                 {entries.map((entry) => (
                   <div
                     key={`${entry.tag}-${entry.timestamp}`}
-                    className="flex items-center justify-between rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2.5"
+                    className="flex items-center justify-between rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2.5"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
@@ -409,7 +406,7 @@ export default function BackupScreen() {
             </div>
           )}
 
-          <div className="flex items-start gap-2 rounded-lg border border-[var(--color-warn)]/20 bg-[var(--color-warn)]/5 px-4 py-3 text-xs text-[var(--color-warn)]">
+          <div className="flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-warn)]/20 bg-[var(--color-warn)]/5 px-4 py-3 text-xs text-[var(--color-warn)]">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <div className="space-y-1">
               <p>

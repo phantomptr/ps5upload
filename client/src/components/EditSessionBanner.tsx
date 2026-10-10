@@ -84,7 +84,7 @@ export default function EditSessionBanner({
   };
 
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-accent-soft)] p-3">
+    <div className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--color-accent)] bg-[var(--color-accent-soft)] p-3">
       <div className="flex flex-wrap items-center gap-3">
         <FilePenLine
           size={18}

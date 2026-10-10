@@ -463,6 +463,19 @@ body {
   border-bottom: 0;
 }
 
+/* A panel header's icon: a small coral-on-blush disc, the same language as
+ * the Home tiles' icon buttons. */
+.icon-disc {
+  display: inline-grid;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  place-items: center;
+  border-radius: 9999px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent-bright);
+}
+
 /* Chip: a pill filter. Active = white filled, inactive = hairline outline.
  * Colour and shape only: size comes from the caller's utilities (this sheet
  * is unlayered, so anything set here would beat them). */
@@ -551,6 +564,43 @@ body {
 :where(input, select, textarea):focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
+}
+
+/* Fields that already show focus their own way don't also get the heavy
+ * ring: `.input` / `.select` turn coral-edged with a soft halo, and a
+ * `.field-quiet` field sits in a `.field-shell` that lights up instead (the
+ * command palette's search row). Keyboard focus stays visible everywhere. */
+.input:focus-visible,
+.select:focus-visible,
+.field-quiet:focus-visible {
+  outline: none;
+}
+.field-shell {
+  transition: box-shadow 140ms ease, background-color 140ms ease;
+}
+.field-shell:has(.field-quiet:focus-visible) {
+  box-shadow: inset 0 -2px 0 var(--color-accent);
+}
+.field-shell.rounded-full:has(.field-quiet:focus-visible),
+.field-shell-ring:has(.field-quiet:focus-visible) {
+  box-shadow: 0 0 0 2px var(--color-accent), 0 0 0 5px var(--color-accent-soft);
+}
+
+/* Modal / palette backdrop: the scrim colour plus a light frost, so what is
+ * behind a dialog recedes instead of competing with it. */
+.scrim {
+  background: var(--overlay-scrim);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) / 4));
+  backdrop-filter: blur(calc(var(--glass-blur) / 4));
+}
+
+/* Sticky bars (table headers, a form's action footer) over scrolling
+ * content: the same frosted glass as a panel, so rows sliding under them
+ * blur instead of showing through. */
+.glass-bar {
+  background: var(--color-float);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
 }
 
 /* ── Themed scrollbars ────────────────────────────────────────────────────

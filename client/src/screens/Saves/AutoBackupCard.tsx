@@ -24,7 +24,7 @@ export default function AutoBackupCard() {
   // Same centred column as the save list below it, so the two line up on a wide window.
   return (
     <section
-      className="mx-auto mb-4 max-w-4xl rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
+      className="mx-auto mb-4 max-w-4xl rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
       data-testid="auto-save-backup"
     >
       <header className="mb-1 flex items-center gap-2">
@@ -64,7 +64,7 @@ export default function AutoBackupCard() {
           max={50}
           value={keep}
           onChange={(e) => set({ keep: clampKeep(Number(e.target.value)) })}
-          className="w-20 justify-self-start rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm text-[var(--color-text)] sm:justify-self-end"
+          className="w-20 justify-self-start rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm text-[var(--color-text)] sm:justify-self-end"
         />
       </div>
       <label className="mt-3 flex items-center gap-2 border-t border-[var(--color-border)] pt-3 text-sm">

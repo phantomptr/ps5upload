@@ -210,7 +210,7 @@ function GameRow({
         type="button"
         onClick={onSelect}
         aria-current={selected ? "true" : undefined}
-        className={`flex w-full items-center gap-3 rounded-md border px-2.5 py-2 text-left transition-colors ${
+        className={`flex w-full items-center gap-3 rounded-[var(--radius-field)] border px-2.5 py-2 text-left transition-colors ${
           selected
             ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)]"
             : "border-transparent hover:border-[var(--color-border)] hover:bg-[var(--color-surface-2)]"

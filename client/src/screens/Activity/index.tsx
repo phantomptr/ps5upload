@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
   Activity as ActivityIcon,
@@ -18,6 +18,8 @@ import {
   Badge,
 } from "../../components";
 import { TaskList } from "../../components/TaskList";
+import { Tabs } from "../../components/Tabs";
+import { MissedSchedules } from "./MissedSchedules";
 import { RunningEngineJobs } from "../../components/RunningEngineJobs";
 import { StatsPanel } from "./StatsPanel";
 import { parseActivityTab, stopActionFor, type ActivityTab } from "./activityView";
@@ -40,6 +42,7 @@ import { useConnectionStore } from "../../state/connection";
 import { activityForHost } from "../../lib/activityScope";
 import { profileNameForAddr, useRosterStore } from "../../state/roster";
 import { ConsoleChip } from "../../components/ConsoleChip";
+import { formatDate } from "../../lib/formatDate";
 
 /**
  * Tasks screen. Three tabs (`?tab=`):
@@ -113,30 +116,18 @@ export default function ActivityScreen() {
         )}
         right={
           <div className="flex flex-wrap items-center gap-2">
-            <div
-              className="flex max-w-full overflow-x-auto rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-0.5 text-xs shadow-sm"
-              role="group"
-              aria-label={tr("activity_view_toggle", undefined, "View")}
-            >
-              <ViewButton
-                active={view === "tasks"}
-                onClick={() => setView("tasks")}
-              >
-                {tr("v5_tab_tasks", undefined, "Tasks")}
-              </ViewButton>
-              <ViewButton
-                active={view === "history"}
-                onClick={() => setView("history")}
-              >
-                {tr("activity_view_history", undefined, "History")}
-              </ViewButton>
-              <ViewButton
-                active={view === "stats"}
-                onClick={() => setView("stats")}
-              >
-                {tr("stats", undefined, "Stats")}
-              </ViewButton>
-            </div>
+            <Tabs
+              variant="segmented"
+              size="sm"
+              ariaLabel={tr("activity_view_toggle", undefined, "View")}
+              value={view}
+              onChange={(id) => setView(id as ActivityTab)}
+              tabs={[
+                { id: "tasks", label: tr("v5_tab_tasks", undefined, "Tasks") },
+                { id: "history", label: tr("activity_view_history", undefined, "History") },
+                { id: "stats", label: tr("stats", undefined, "Stats") },
+              ]}
+            />
             {view === "history" && entries.length > 0 ? (
               <Button
                 variant="ghost"
@@ -185,6 +176,7 @@ export default function ActivityScreen() {
       {/* The unified task projection and legacy operation history are separate
           views. Stacking both produced duplicate rows for the same upload and
           made it unclear which controls were authoritative. */}
+      {view === "tasks" && <MissedSchedules />}
       {view === "tasks" && <RunningEngineJobs />}
       {view === "tasks" && <TaskList />}
       {view === "tasks" && taskCount === 0 && (
@@ -234,7 +226,7 @@ export default function ActivityScreen() {
             <button
               type="button"
               onClick={() => clearRunning(scopeHost)}
-              className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs normal-case tracking-normal hover:bg-[var(--color-surface-3)]"
+              className="chip ml-auto min-h-7 px-3 text-xs font-medium normal-case tracking-normal"
               title={tr(
                 "activity_clear_running_tooltip",
                 undefined,
@@ -271,31 +263,6 @@ export default function ActivityScreen() {
   );
 }
 
-function ViewButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`rounded-md px-2.5 py-1.5 max-md:min-h-11 max-md:px-4 font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
-        active
-          ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
-          : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
 function ActivityRow({ entry }: { entry: ActivityEntry }) {
   const tr = useTr();
   const remove = useActivityHistoryStore((s) => s.remove);
@@ -329,14 +296,14 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
       ? Math.min(100, (entry.bytes / entry.totalBytes) * 100)
       : null;
 
+  // The outcome icon carries the state; the edge only speaks up for work
+  // still running and for failures.
   const borderClass =
     entry.outcome === "running"
-      ? "border-[var(--color-accent)]"
-      : entry.outcome === "done"
-        ? "border-[var(--color-good)]"
-        : entry.outcome === "failed"
-          ? "border-[var(--color-bad)]"
-          : "border-[var(--color-warn)]";
+      ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)]"
+      : entry.outcome === "failed"
+        ? "border-[color-mix(in_srgb,var(--color-bad)_35%,transparent)]"
+        : "border-[var(--glass-edge)]";
 
   // Stop dispatch — pick the appropriate cancel mechanism based on
   // entry.kind. For ops with an op_id (Library moves, FS pastes), call the
@@ -392,7 +359,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
 
   return (
     <li
-      className={`rounded-md border bg-[var(--color-surface-2)] p-3 text-xs ${borderClass}`}
+      className={`rounded-[var(--radius-card)] border bg-[var(--color-surface-raised)] px-4 py-3 text-xs shadow-[var(--edge-highlight)] ${borderClass}`}
     >
       <div className="mb-1 flex items-center gap-2">
         <OutcomeIcon outcome={entry.outcome} />
@@ -452,7 +419,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
         <button
           type="button"
           onClick={() => setDetailOpen(true)}
-          className="rounded-md border border-[var(--color-border)] p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+          className="rounded-full border border-[var(--color-border)] p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
           title={tr("activity_view_tooltip", undefined, "View details")}
         >
           <Eye size={13} />
@@ -462,7 +429,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
             <button
               type="button"
               onClick={() => void handleStop()}
-              className="rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
+              className="chip min-h-7 px-3 text-xs"
               title={
                 stopAction === "cancel"
                   ? tr(
@@ -486,7 +453,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
           <button
             type="button"
             onClick={() => remove(entry.id)}
-            className="rounded-md border border-[var(--color-border)] p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-bad)]"
+            className="rounded-full border border-[var(--color-border)] p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-bad)]"
             title={tr(
               "activity_delete_tooltip",
               undefined,
@@ -671,7 +638,7 @@ function ActivityDetailModal({
         : entry.phase === "uploading"
           ? tr("activity_phase_uploading", undefined, "Uploading")
           : null;
-  const fmtTime = (ms: number) => new Date(ms).toLocaleString();
+  const fmtTime = (ms: number) => formatDate(ms);
   const rows: Array<[string, string | null]> = [
     [tr("activity_detail_kind", undefined, "Type"), entry.kind],
     [tr("activity_detail_console", undefined, "Console"), consoleName],
@@ -730,7 +697,7 @@ function ActivityDetailModal({
             ))}
         </dl>
         {entry.error && (
-          <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
+          <div className="mt-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs">
             <div className="mb-1 font-medium text-[var(--color-bad)]">
               {tr("activity_detail_error", undefined, "Error")}
             </div>
@@ -778,8 +745,7 @@ function formatRelative(
     const h = Math.floor(diff / 3_600_000);
     return tr("activity_hours_ago", { count: h }, `${h}h ago`);
   }
-  const d = new Date(ms);
-  return d.toLocaleString();
+  return formatDate(ms);
 }
 
 /**
@@ -827,7 +793,7 @@ function ActivityTimeline({ entries }: { entries: ActivityEntry[] }) {
   }
 
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <section className="surface-panel p-5">
       <header className="mb-3 flex items-center gap-2">
         <h3 className="text-sm font-semibold">
           {tr(
@@ -881,8 +847,8 @@ function ActivityTimeline({ entries }: { entries: ActivityEntry[] }) {
                   e.addr && profiles.length > 1
                     ? `${profileNameForAddr(e.addr, profiles)} · `
                     : ""
-                }${e.label} · ${e.outcome} · ${start.toLocaleTimeString()}${
-                  e.endedAtMs ? ` → ${end.toLocaleTimeString()}` : ""
+                }${e.label} · ${e.outcome} · ${formatDate(start, "time")}${
+                  e.endedAtMs ? ` → ${formatDate(end, "time")}` : ""
                 }`;
                 return (
                   <button

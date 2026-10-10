@@ -248,7 +248,7 @@ function FeatureTile({
   body: string;
 }) {
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <div className="surface-panel flex flex-col gap-2 p-5">
       <Icon size={18} className="text-[var(--color-accent)]" />
       <div className="text-sm font-semibold">{title}</div>
       <div className="text-xs leading-relaxed text-[var(--color-muted)]">

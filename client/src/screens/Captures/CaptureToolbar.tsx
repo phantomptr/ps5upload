@@ -21,14 +21,14 @@ export function CaptureToolbar({
 }) {
   return (
     <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-      <p className="flex min-w-0 max-w-3xl flex-wrap items-center gap-2 text-sm leading-relaxed text-[var(--color-muted)]">
+      <p className="flex min-w-0 max-w-3xl items-start gap-2.5 text-sm leading-relaxed text-[var(--color-muted)]">
         {count !== undefined && (
-          <span className="shrink-0 rounded-full bg-[var(--color-surface-3)] px-2 py-0.5 text-xs tabular-nums">
+          <span className="mt-0.5 shrink-0 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2.5 py-0.5 text-xs font-semibold tabular-nums text-[var(--color-text)] shadow-[var(--edge-highlight)]">
             {count}
           </span>
         )}
-        {loading && <Spinner size={14} tone="accent" />}
-        <span className="min-w-0">{description}</span>
+        {loading && <Spinner size={14} tone="accent" className="mt-1 shrink-0" />}
+        <span className="min-w-0 flex-1">{description}</span>
       </p>
       {right && <div className="flex shrink-0 flex-wrap items-center gap-2">{right}</div>}
     </div>

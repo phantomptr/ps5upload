@@ -87,7 +87,7 @@ export function Drawer({
 
   return (
     <div
-      className="anim-scrim fixed inset-0 z-50 bg-[var(--overlay-scrim)]"
+      className="anim-scrim scrim fixed inset-0 z-50"
       onClick={onClose}
     >
       <div
@@ -115,7 +115,7 @@ export function Drawer({
               type="button"
               onClick={onClose}
               aria-label={tr("close", "Close")}
-              className="shrink-0 rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+              className="shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
             >
               <X size={16} aria-hidden="true" />
             </button>

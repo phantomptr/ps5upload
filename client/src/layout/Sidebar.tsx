@@ -47,9 +47,7 @@ export default function Sidebar() {
       cancelled = true;
     };
   }, []);
-  const errorCount = useLogsStore(
-    (s) => s.entries.filter((e) => e.level === "error").length,
-  );
+  const errorCount = useLogsStore((s) => s.errorCount);
   const updateAvailable = useUpdateStore((s) => s.phase.kind === "available");
   // Subscribed, not read once: flipping the switch in Settings must add or
   // remove the row without a reload.

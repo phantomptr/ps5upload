@@ -170,6 +170,12 @@ function parseBlocks(md: string): Block[] {
       while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
         items.push(lines[i].replace(/^\s*[-*+]\s+/, ""));
         i += 1;
+        // An indented line under an item continues it (a wrapped bullet in
+        // CHANGELOG.md); it isn't a new paragraph.
+        while (i < lines.length && isContinuation(lines[i])) {
+          items[items.length - 1] += " " + lines[i].trim();
+          i += 1;
+        }
       }
       blocks.push({ kind: "ul", content: "", items });
       continue;
@@ -179,6 +185,12 @@ function parseBlocks(md: string): Block[] {
       while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
         items.push(lines[i].replace(/^\s*\d+\.\s+/, ""));
         i += 1;
+        // An indented line under an item continues it (a wrapped bullet in
+        // CHANGELOG.md); it isn't a new paragraph.
+        while (i < lines.length && isContinuation(lines[i])) {
+          items[items.length - 1] += " " + lines[i].trim();
+          i += 1;
+        }
       }
       blocks.push({ kind: "ol", content: "", items });
       continue;
@@ -204,6 +216,11 @@ function parseBlocks(md: string): Block[] {
     blocks.push({ kind: "p", content: paraLines.join(" ") });
   }
   return blocks;
+}
+
+/** A list item's wrapped line: indented, not blank, not a new item. */
+function isContinuation(line: string): boolean {
+  return /^\s{2,}\S/.test(line) && !/^\s*([-*+]|\d+\.)\s+/.test(line);
 }
 
 export function MarkdownView({ source }: { source: string }) {
@@ -333,7 +350,7 @@ export function MarkdownView({ source }: { source: string }) {
             return (
               <pre
                 key={key}
-                className="mb-5 overflow-x-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 font-mono text-[13px] leading-relaxed shadow-sm"
+                className="mb-5 overflow-x-auto rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 font-mono text-[13px] leading-relaxed shadow-sm"
               >
                 <code>{b.content}</code>
               </pre>

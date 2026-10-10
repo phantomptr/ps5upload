@@ -101,7 +101,7 @@ function ProfileBody({ addr }: { addr: string }) {
 
   return (
     <div className="space-y-6">
-      {infoError && <ErrorCard title={infoError} />}
+      {infoError && <ErrorCard title={infoError} onRetry={() => void refreshInfo()} />}
       <AvatarSection
         addr={addr}
         info={info}
@@ -279,7 +279,7 @@ function AvatarSection({
       </div>
 
       {noTarget && (
-        <div className="mb-3 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-3 text-xs text-[var(--color-muted)]">
+        <div className="mb-3 rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-surface)] p-3 text-xs text-[var(--color-muted)]">
           {tr(
             "profile.avatar.noUser",
             "No console user found. Sign in to a profile on the PS5, then refresh.",
@@ -423,11 +423,8 @@ function ModeButton({
     <button
       type="button"
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition ${
-        active
-          ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]"
-          : "border-[var(--color-border)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
-      }`}
+      aria-pressed={active}
+      className="chip min-h-8 gap-1.5 px-3.5 text-xs font-medium max-md:min-h-11"
     >
       {icon}
       {label}
@@ -625,7 +622,7 @@ function UserRow({
   }
 
   return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
+    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
       {confirmDialog}
       <div className="flex items-center gap-2">
         <span
@@ -635,7 +632,7 @@ function UserRow({
           {uidHex}
         </span>
         <input
-          className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-sm"
+          className="min-w-0 flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm"
           value={draft}
           maxLength={16}
           placeholder={tr("profile.username.placeholder", "User name")}
@@ -661,7 +658,7 @@ function UserRow({
           onClick={doDelete}
           disabled={deleting}
           title={tr("profile.username.deleteTitle", "Delete User")}
-          className="shrink-0 rounded-md border border-[var(--color-border)] p-1.5 text-[var(--color-warn)] hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+          className="shrink-0 rounded-full border border-[var(--color-border)] p-1.5 text-[var(--color-warn)] hover:bg-[var(--color-surface-3)] disabled:opacity-50"
         >
           {deleting ? <Spinner size={14} /> : <Trash2 size={14} />}
         </button>
@@ -709,12 +706,12 @@ function CreateUserRow({
   }
 
   return (
-    <div className="rounded-md border border-[var(--color-accent)]/40 bg-[var(--color-surface)] p-2">
+    <div className="rounded-[var(--radius-card)] border border-[var(--color-accent)]/40 bg-[var(--color-surface)] p-3">
       <div className="flex items-center gap-2">
         <UserPlus size={14} className="shrink-0 text-[var(--color-accent)]" />
         <input
           autoFocus
-          className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-sm"
+          className="min-w-0 flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm"
           value={name}
           maxLength={16}
           placeholder={tr("profile.username.newPlaceholder", "New user name")}
@@ -980,14 +977,14 @@ function SlotRow({
   }
 
   return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
+    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
       {confirmDialog}
       <div className="flex items-center gap-2">
         <span className="w-12 shrink-0 text-xs tabular-nums text-[var(--color-muted)]">
           {tr("profile.username.slot", { n: slot }, `Slot ${slot}`)}
         </span>
         <input
-          className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-sm"
+          className="min-w-0 flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm"
           value={draft}
           maxLength={31}
           onChange={(e) => {
@@ -1023,7 +1020,7 @@ function SlotRow({
         {editingId ? (
           <>
             <input
-              className="w-52 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 font-mono text-xs"
+              className="w-52 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 font-mono text-xs"
               value={idDraft}
               spellCheck={false}
               placeholder="0x0123456789abcdef"

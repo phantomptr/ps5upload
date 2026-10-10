@@ -47,3 +47,27 @@ describe("MarkdownView tables", () => {
     expect((out.match(/<li[ >]/g) ?? []).length).toBe(2);
   });
 });
+
+describe("MarkdownView lists", () => {
+  it("keeps a wrapped bullet's indented lines in the same item", () => {
+    const out = html(
+      [
+        "- **The limit was too high.** It held each connection to",
+        "  the limit instead of the whole transfer.",
+        "- Second item",
+        "",
+        "After the list.",
+      ].join("\n"),
+    );
+    expect((out.match(/<li[ >]/g) ?? []).length).toBe(2);
+    expect(out).toContain("connection to the limit instead");
+    // The continuation is not a paragraph of its own.
+    expect((out.match(/<p[ >]/g) ?? []).length).toBe(1);
+  });
+
+  it("joins wrapped lines in numbered lists too", () => {
+    const out = html(["1. First step that", "   wraps", "2. Second"].join("\n"));
+    expect((out.match(/<li[ >]/g) ?? []).length).toBe(2);
+    expect(out).toContain("First step that wraps");
+  });
+});

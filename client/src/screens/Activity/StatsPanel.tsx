@@ -10,6 +10,7 @@ import { formatBytes } from "../../lib/format";
 import { pushNotification } from "../../state/notifications";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { activityToCsv, computeStats, type ComputedStats } from "./stats";
+import { formatDate } from "../../lib/formatDate";
 
 /**
  * Stats tab of the Tasks screen: aggregates of the activity history the
@@ -72,7 +73,7 @@ export function StatsPanel({ entries }: { entries: ActivityEntry[] }) {
         </Button>
       </div>
       {entries.length === 0 ? (
-        <div className="rounded-md border border-dashed border-[var(--color-border)] p-6 text-center text-xs text-[var(--color-muted)]">
+        <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-border)] p-6 text-center text-xs text-[var(--color-muted)]">
           {tr(
             "stats_empty",
             undefined,
@@ -142,7 +143,7 @@ function KpiCard({
   sub?: string;
 }) {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
       <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
         {icon}
         {label}
@@ -165,7 +166,7 @@ function DailyChart({
   const tr = useTr();
   const maxCount = Math.max(...days.map((d) => d.count), 1);
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <section className="surface-panel p-5">
       <h3 className="mb-3 text-sm font-semibold">
         {tr("stats_daily", undefined, "Operations per day (last 30)")}
       </h3>
@@ -179,7 +180,7 @@ function DailyChart({
               title={`${d.date}: ${d.count} operations · ${formatBytes(d.bytes)}`}
             >
               <div
-                className="rounded-t bg-[var(--color-accent)] transition-all hover:opacity-80"
+                className="rounded-t-md bg-[image:var(--accent-fill)] transition-all hover:opacity-80"
                 style={{
                   height: `${Math.max(heightPct, 2)}%`,
                   minHeight: d.count > 0 ? "2px" : "0",
@@ -208,7 +209,7 @@ function KindBreakdown({
   const tr = useTr();
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <section className="surface-panel p-5">
       <h3 className="mb-3 text-sm font-semibold">
         {tr("stats_breakdown", undefined, "Operation breakdown")}
       </h3>
@@ -244,7 +245,7 @@ function TopTransfers({
 }) {
   const tr = useTr();
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <section className="surface-panel p-5">
       <h3 className="mb-3 text-sm font-semibold">
         {tr("stats_top_transfers", undefined, "Fastest transfers")}
       </h3>
@@ -267,7 +268,7 @@ function TopTransfers({
                 {t.mbps.toFixed(1)} MiB/s
               </td>
               <td className="px-1 py-0.5 text-right text-[var(--color-muted)]">
-                {new Date(t.whenMs).toLocaleDateString()}
+                {formatDate(t.whenMs, "date")}
               </td>
             </tr>
           ))}

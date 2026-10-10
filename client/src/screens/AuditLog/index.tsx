@@ -4,6 +4,7 @@ import { ShieldCheck } from "lucide-react";
 import { PageHeader } from "../../components";
 import { useTr } from "../../state/lang";
 import { useAuditLogStore, type AuditEntry } from "../../state/auditLog";
+import { formatDate } from "../../lib/formatDate";
 
 /**
  * Top-level Audit log screen (promoted from a Settings card in 2.12.0).
@@ -53,21 +54,21 @@ export default function AuditLogScreen() {
           )}
         </p>
       ) : (
-        <div className="max-h-[calc(100vh-12rem)] overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]">
+        <div className="surface-panel max-h-[calc(100vh-12rem)] overflow-y-auto !rounded-[var(--radius-card)]">
           <div className="overflow-x-auto">
           <table className="w-full min-w-[480px] text-xs">
-            <thead className="sticky top-0 bg-[var(--color-surface-2)] text-xs uppercase tracking-wide text-[var(--color-muted)]">
+            <thead className="glass-bar sticky top-0 text-xs uppercase tracking-wide text-[var(--color-muted)]">
               <tr>
-                <th className="px-2 py-1 text-left">
+                <th className="px-4 py-2.5 text-left font-semibold">
                   {tr("audit_when", undefined, "When")}
                 </th>
-                <th className="px-2 py-1 text-left">
+                <th className="px-4 py-2.5 text-left font-semibold">
                   {tr("audit_kind", undefined, "Action")}
                 </th>
-                <th className="px-2 py-1 text-left">
+                <th className="px-4 py-2.5 text-left font-semibold">
                   {tr("audit_what", undefined, "Detail")}
                 </th>
-                <th className="px-2 py-1 text-left">
+                <th className="px-4 py-2.5 text-left font-semibold">
                   {tr("audit_context", undefined, "Context")}
                 </th>
               </tr>
@@ -80,12 +81,12 @@ export default function AuditLogScreen() {
                     e.failed ? "text-[var(--color-bad)]" : ""
                   }`}
                 >
-                  <td className="px-2 py-1 tabular-nums text-xs">
-                    {new Date(e.ts).toLocaleString()}
+                  <td className="whitespace-nowrap px-4 py-2 tabular-nums text-xs">
+                    {formatDate(e.ts)}
                   </td>
-                  <td className="px-2 py-1 font-mono text-xs">{e.kind}</td>
-                  <td className="px-2 py-1">{e.what}</td>
-                  <td className="px-2 py-1 truncate text-xs text-[var(--color-muted)]">
+                  <td className="px-4 py-2 font-mono text-xs">{e.kind}</td>
+                  <td className="px-4 py-2">{e.what}</td>
+                  <td className="truncate px-4 py-2 text-xs text-[var(--color-muted)]">
                     {e.context ?? ""}
                   </td>
                 </tr>

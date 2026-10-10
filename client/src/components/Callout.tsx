@@ -65,27 +65,30 @@ export function Callout({
       role={isAlert ? "alert" : "status"}
       aria-live={isAlert ? "assertive" : "polite"}
       className={[
-        "flex items-start gap-3 rounded-[var(--radius-card)] border px-4 py-3 text-sm shadow-[var(--edge-highlight),var(--shadow-1)]",
+        "flex items-start gap-3 rounded-[var(--radius-card)] border px-4 py-3 text-sm text-[var(--color-text)] shadow-[var(--edge-highlight),var(--shadow-1)]",
         className,
       ].join(" ")}
-      // Glass tinted by the tone, with an edge in the tone's colour.
+      // Glass tinted by the tone: the tone's soft wash layered over the
+      // raised glass (never a solid fill), with an edge in the tone's colour.
+      // Text stays the normal text colour so it reads in both themes; the
+      // icon carries the tone.
       style={{
-        borderColor: `color-mix(in srgb, ${config.color} 38%, transparent)`,
-        background: `linear-gradient(${config.softColor}, ${config.softColor}), var(--color-surface-raised)`,
+        borderColor: `color-mix(in srgb, ${config.color} 34%, transparent)`,
+        backgroundColor: "var(--color-surface-raised)",
+        backgroundImage: `linear-gradient(${config.softColor}, ${config.softColor})`,
       }}
     >
-      <Icon
-        size={16}
-        className="mt-0.5 shrink-0"
+      <span
+        className="grid h-6 w-6 shrink-0 place-items-center rounded-full"
+        style={{ backgroundColor: config.softColor, color: config.color }}
         aria-hidden="true"
-        style={{ color: config.color }}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="font-medium" style={{ color: config.color }}>
-          {title}
-        </div>
+      >
+        <Icon size={14} />
+      </span>
+      <div className="min-w-0 flex-1 pt-0.5">
+        <div className="break-words font-semibold">{title}</div>
         {children && (
-          <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+          <div className="mt-1 break-words text-xs leading-relaxed text-[var(--color-muted)]">
             {children}
           </div>
         )}
@@ -96,7 +99,7 @@ export function Callout({
           type="button"
           onClick={onDismiss}
           aria-label={tr("dismiss", "Dismiss")}
-          className="shrink-0 rounded p-0.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)]"
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
         >
           <X size={14} aria-hidden="true" />
         </button>

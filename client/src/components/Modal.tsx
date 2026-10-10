@@ -70,6 +70,12 @@ export function Modal({
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  // Callers usually pass an inline arrow; reading it through a ref keeps the
+  // effect below from re-running (and re-grabbing focus) on every render.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   // Lock background scroll while open so a wheel/touch over the scrim can't
   // scroll the page behind it (this modal renders inline, so its scrim's
@@ -97,7 +103,7 @@ export function Modal({
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
     };
     window.addEventListener("keydown", handler);
@@ -109,15 +115,15 @@ export function Modal({
         queueMicrotask(() => prev.focus({ preventScroll: true }));
       }
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
   // Sheet variant: bottom-anchored on mobile, centered on ≥640px.
   const isSheet = variant === "sheet";
   const wrapperCls = isSheet
-    ? "anim-scrim fixed inset-0 z-50 flex items-end justify-center bg-[var(--overlay-scrim)] sm:items-center sm:p-4"
-    : "anim-scrim fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4";
+    ? "anim-scrim scrim fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4"
+    : "anim-scrim scrim fixed inset-0 z-50 flex items-center justify-center p-4";
   const panelCls = isSheet
     ? `anim-sheet-up glass-float elev-3 flex max-h-[90dvh] w-full ${SIZES[size]} flex-col overflow-hidden rounded-t-[var(--radius-panel)] sm:rounded-[var(--radius-panel)] ${panelClassName}`
     : `anim-pop glass-float elev-3 flex max-h-[90dvh] w-full ${SIZES[size]} flex-col overflow-hidden rounded-[var(--radius-panel)] ${panelClassName}`;

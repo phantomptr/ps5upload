@@ -236,7 +236,7 @@ export default function CheatsScreen() {
       />
 
       <ConnectionGate>
-        {error && <ErrorCard title={error} />}
+        {error && <ErrorCard title={error} onRetry={() => void refresh()} />}
 
         {status && (
           <EngineBar
@@ -258,7 +258,7 @@ export default function CheatsScreen() {
             ].map((text, i) => (
               <li
                 key={i}
-                className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+                className="flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
               >
                 <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-accent)] text-[11px] font-semibold text-[var(--color-accent-contrast)]">
                   {i + 1}
@@ -359,7 +359,7 @@ function EngineBar({
   const tr = useTr();
   return (
     <div
-      className={`flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 ${
+      className={`flex flex-wrap items-center gap-3 rounded-[var(--radius-field)] border px-4 py-3 ${
         status.enabled
           ? "border-[var(--color-good)]/40 bg-[var(--color-good)]/5"
           : "border-[var(--color-border)] bg-[var(--color-surface-2)]"

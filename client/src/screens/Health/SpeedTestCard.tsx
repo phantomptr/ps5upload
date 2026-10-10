@@ -101,7 +101,7 @@ export function SpeedTestCard({ host }: { host: string }) {
               value={sizeMib}
               disabled={running}
               onChange={(e) => setSizeMib(Number(e.currentTarget.value))}
-              className="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1 text-sm text-[var(--color-text)]"
+              className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm text-[var(--color-text)]"
             >
               {SIZES.map((s) => (
                 <option key={s} value={s}>
@@ -155,7 +155,7 @@ export function SpeedTestCard({ host }: { host: string }) {
             className="mt-3 grid gap-3 sm:grid-cols-2"
             data-testid="speed-test-result"
           >
-            <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3">
+            <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
               <dt className="text-xs text-[var(--color-muted)]">
                 {tr("speedtest.up", undefined, "To the PS5 (upload)")}
               </dt>
@@ -163,7 +163,7 @@ export function SpeedTestCard({ host }: { host: string }) {
                 {st.uploadBps !== null ? perSec(st.uploadBps) : "—"}
               </dd>
             </div>
-            <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3">
+            <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
               <dt className="text-xs text-[var(--color-muted)]">
                 {tr("speedtest.down", undefined, "From the PS5 (download)")}
               </dt>

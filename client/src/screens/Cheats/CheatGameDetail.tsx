@@ -191,7 +191,7 @@ export function CheatGameDetail({
       </button>
 
       {/* Who the game is. */}
-      <div className="flex flex-col gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 sm:flex-row">
+      <div className="flex flex-col gap-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 sm:flex-row">
         <GameIcon host={hostOf(host)} titleId={game.titleId} size={112} rounded="rounded-lg" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -230,7 +230,7 @@ export function CheatGameDetail({
 
       {/* Step: switch cheats on. Only once some are on the console. */}
       {game.downloaded && (
-        <section className="rounded-lg border border-[var(--color-border)] p-4">
+        <section className="surface-panel p-5">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="text-sm font-semibold">
@@ -312,7 +312,7 @@ export function CheatGameDetail({
       )}
 
       {/* Step: get cheats. */}
-      <section className="rounded-lg border border-[var(--color-border)] p-4">
+      <section className="surface-panel p-5">
         <h3 className="text-sm font-semibold">
           {game.downloaded
             ? tr("cheats_more_title", undefined, "More cheats for this game")
@@ -348,7 +348,7 @@ export function CheatGameDetail({
               return (
                 <li
                   key={`${e.repo_id}/${e.filename}`}
-                  className={`flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 ${
+                  className={`flex flex-wrap items-center gap-3 rounded-[var(--radius-field)] border px-3 py-2 ${
                     match ? "border-[var(--color-good)]/50 bg-[var(--color-good)]/5" : "border-[var(--color-border)]"
                   }`}
                 >

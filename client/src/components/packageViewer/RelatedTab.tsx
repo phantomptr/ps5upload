@@ -32,7 +32,7 @@ export function RelatedTab(props: {
             {g.items.map((i) => (
               <li
                 key={`${i.where}:${i.path ?? i.name}`}
-                className="flex items-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-sm"
+                className="flex items-center gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] px-3 py-2 text-sm"
               >
                 <span className="min-w-0 flex-1 truncate">{i.name}</span>
                 {i.version && <span className="font-mono text-xs text-[var(--color-muted)]">{i.version}</span>}

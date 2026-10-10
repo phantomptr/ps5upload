@@ -8,7 +8,9 @@ import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { writeClipboard } from "../../lib/clipboard";
-import { useDocumentVisible } from "../../lib/visibility";
+import { humanizePs5Error } from "../../lib/humanizeError";
+import { usePoll } from "../../lib/usePoll";
+import { windowRange } from "../../lib/windowing";
 
 /**
  * Live kernel log viewer with noise filtering.
@@ -99,6 +101,9 @@ const CATEGORY_BORDER: Partial<Record<Category, string>> = {
   "etahen-payload": "border-l-2 border-l-[var(--color-warn)]",
 };
 
+/** Row height of one kernel-log line, in rem. */
+const ROW_REM = 1.25;
+
 function classify(line: string): Category {
   for (const { cat, re } of CATEGORY_RULES) {
     if (re.test(line)) return cat;
@@ -122,11 +127,6 @@ export default function KernelLogPanel() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
   const [userScrolled, setUserScrolled] = useState(false);
-  // Pause polling while the window is hidden — same pattern as the
-  // Dashboard pollers. /dev/klog reads while minimized are pure waste,
-  // and the buffer is drained on the next visible tick anyway.
-  // (`docVisible` to avoid clashing with the filtered-lines `visible`.)
-  const docVisible = useDocumentVisible();
 
   // The klog stream belongs to ONE console. Drop the scrollback when the
   // tab switches — without this, console A's lines stay on screen and
@@ -166,12 +166,14 @@ export default function KernelLogPanel() {
     }
   }, [host, payloadStatus]);
 
-  useEffect(() => {
-    if (!playing || !docVisible) return;
-    tick();
-    const id = window.setInterval(tick, 1000);
-    return () => window.clearInterval(id);
-  }, [playing, docVisible, tick]);
+  // Paused while the window is hidden (the buffer is drained on the next
+  // visible tick anyway). Keeps reading during transfers: someone watching
+  // the kernel log is usually debugging exactly that transfer.
+  usePoll(tick, 1000, {
+    host,
+    enabled: playing && payloadStatus === "up",
+    duringTransfers: true,
+  });
 
   const { visible, counts } = useMemo(() => {
     const counts: Partial<Record<Category, number>> = {};
@@ -185,15 +187,44 @@ export default function KernelLogPanel() {
     return { visible, counts };
   }, [entries, hiddenCats]);
 
+  // Windowing: every line is one fixed-height row (no wrapping; long lines
+  // scroll sideways), so only what's on screen is rendered.
+  const [rowHeight, setRowHeight] = useState(18);
+  const [viewport, setViewport] = useState({ top: 0, height: 0 });
+  // The scroll box is only mounted with rows; re-measure when it appears.
+  const listEmpty = visible.length === 0;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => {
+      const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      setRowHeight(Math.round(rootPx * ROW_REM));
+      setViewport({ top: el.scrollTop, height: el.clientHeight });
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [listEmpty]);
+  const range = windowRange(viewport.top, viewport.height, rowHeight, visible.length);
+  // Monospace, so the widest line in `ch` is the track width.
+  const widestCh = useMemo(
+    () => visible.reduce((m, v) => Math.max(m, v.text.length), 0),
+    [visible],
+  );
+
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || userScrolledRef.current) return;
     el.scrollTop = el.scrollHeight;
+    setViewport({ top: el.scrollTop, height: el.clientHeight });
   }, [visible]);
 
   function handleScroll() {
     const el = scrollRef.current;
     if (!el) return;
+    setViewport({ top: el.scrollTop, height: el.clientHeight });
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     const next = distanceFromBottom > 80;
     userScrolledRef.current = next;
@@ -278,14 +309,15 @@ export default function KernelLogPanel() {
       {/* Top action row — Filters/Play/Pause/Copy/Clear. Includes a
           "showing N of M" count so the eye-down-from-tabs flow shows
           state immediately. */}
-      <div className="mb-3 flex items-center justify-between gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs tabular-nums text-[var(--color-muted)]">
           {tr("kernellog_showing", undefined, "showing")} {visible.length}{" "}
           {tr("kernellog_of", undefined, "of")} {entries.length}
         </span>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
-            variant={showFilters ? "primary" : "secondary"}
+            variant="secondary"
+            aria-pressed={showFilters}
             size="sm"
             leftIcon={<Filter size={12} />}
             onClick={() => setShowFilters((v) => !v)}
@@ -330,7 +362,7 @@ export default function KernelLogPanel() {
       </div>
 
       {showFilters && (
-        <div className="mb-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+        <div className="mb-3 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-4 text-xs shadow-[var(--edge-highlight)]">
           <div className="mb-1.5 flex items-center justify-between">
             <span className="font-semibold">
               {tr("kernellog_categories", undefined, "Categories")}
@@ -392,16 +424,25 @@ export default function KernelLogPanel() {
       )}
       {error && (
         <div className="mb-2">
-          <ErrorCard title={error} />
+          <ErrorCard
+            title={tr("klog_read_failed", undefined, "Couldn't read the kernel log")}
+            detail={humanizePs5Error(error)}
+            onDismiss={() => setError(null)}
+            action={
+              <Button size="sm" onClick={() => void tick()}>
+                {tr("retry", undefined, "Retry")}
+              </Button>
+            }
+          />
         </div>
       )}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 font-mono text-xs leading-tight"
+        className="surface-panel relative min-h-[16rem] flex-1 overflow-auto !rounded-[var(--radius-card)] font-mono text-xs"
       >
         {visible.length === 0 ? (
-          <div className="text-[var(--color-muted)]">
+          <div className="p-4 text-[var(--color-muted)]">
             {entries.length === 0
               ? tr(
                   "klog_empty",
@@ -411,17 +452,30 @@ export default function KernelLogPanel() {
               : `All ${entries.length} buffered line${entries.length === 1 ? "" : "s"} are hidden by your filters. Open the Filters panel to enable more categories.`}
           </div>
         ) : (
-          visible.map((v) => (
-            <div
-              key={v.idx}
-              className={`whitespace-pre-wrap break-all px-1 hover:bg-[var(--color-surface-2)] ${
-                CATEGORY_BORDER[v.cat] ?? ""
-              }`}
-              title={CATEGORY_LABEL[v.cat]}
-            >
-              {v.text}
-            </div>
-          ))
+          <div
+            className="relative"
+            style={{
+              height: visible.length * rowHeight,
+              minWidth: `calc(${widestCh}ch + 2rem)`,
+            }}
+          >
+            {visible.slice(range.start, range.end).map((v, i) => (
+              <div
+                key={v.idx}
+                className={`absolute inset-x-0 whitespace-pre px-3 hover:bg-[var(--color-surface-2)] ${
+                  CATEGORY_BORDER[v.cat] ?? ""
+                }`}
+                style={{
+                  top: (range.start + i) * rowHeight,
+                  height: rowHeight,
+                  lineHeight: `${rowHeight}px`,
+                }}
+                title={CATEGORY_LABEL[v.cat]}
+              >
+                {v.text}
+              </div>
+            ))}
+          </div>
         )}
       </div>
       {userScrolled && (
@@ -429,7 +483,7 @@ export default function KernelLogPanel() {
           <button
             type="button"
             onClick={jumpToBottom}
-            className="rounded-md bg-[var(--color-accent)] px-2 py-1 text-xs text-[var(--color-accent-contrast)] transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+            className="chip is-active min-h-8 px-3.5 text-xs"
           >
             {tr("klog_jump_bottom", undefined, "Jump to latest")}
           </button>

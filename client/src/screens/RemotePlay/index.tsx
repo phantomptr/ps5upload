@@ -153,7 +153,7 @@ function ReadinessPanel({
   }
 
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <div className="surface-panel p-5">
       <div className="mb-3 flex items-center justify-between">
         <span className="text-sm font-medium">
           {tr("remotePlay_readiness", undefined, "Before you pair")}
@@ -167,7 +167,7 @@ function ReadinessPanel({
       <ul className="space-y-2">
         {rows.map((r) => (
           <li key={r.key} className="flex items-start gap-2 text-sm">
-            <span className={r.ok ? "text-emerald-500" : "text-amber-500"}>
+            <span className={r.ok ? "text-[var(--color-good)]" : "text-[var(--color-warn)]"}>
               {r.ok ? <Check size={16} /> : <X size={16} />}
             </span>
             <span className="flex-1">
@@ -354,7 +354,7 @@ export default function RemotePlayScreen() {
       />
 
       <ConnectionGate>
-        {error && <ErrorCard title={error} />}
+        {error && <ErrorCard title={error} onRetry={() => void refresh()} />}
 
         <ReadinessPanel
           readiness={readiness}
@@ -367,7 +367,7 @@ export default function RemotePlayScreen() {
         <NpSignInCard onOpenProfile={() => navigate("/profile")} />
 
         {/* Request form */}
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+        <div className="surface-panel p-5">
           <div className="space-y-3">
             <div>
               <label className="mb-1 block text-xs text-[var(--color-muted)]">
@@ -386,7 +386,7 @@ export default function RemotePlayScreen() {
                   undefined,
                   "auto-detect",
                 )}
-                className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-accent)] focus:outline-none"
+                className="w-full rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-2 text-sm text-[var(--color-text)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-accent)] focus:outline-none"
               />
             </div>
             <div className="flex gap-2">
@@ -419,7 +419,7 @@ export default function RemotePlayScreen() {
 
         {/* Status display */}
         {status && (
-          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+          <div className="surface-panel p-5">
             <h3 className="mb-3 text-sm font-medium text-[var(--color-text)]">
               {tr("remotePlay_status", undefined, "Status")}
             </h3>
@@ -534,8 +534,8 @@ export default function RemotePlayScreen() {
               </dd>
             </dl>
             {status.err && (
-              <div className="mt-3 rounded-md border border-[var(--color-error)] bg-[var(--color-error-bg,transparent)] p-3">
-                <p className="text-xs text-[var(--color-error)]">
+              <div className="mt-3 rounded-[var(--radius-card)] border border-[var(--color-bad)] bg-[var(--color-bad-soft)] p-3">
+                <p className="text-xs text-[var(--color-bad)]">
                   {status.err}
                 </p>
               </div>

@@ -76,6 +76,7 @@ import {
   getNotifPruneDays,
   setNotifPruneDays,
 } from "../../state/notifications";
+import { formatDate } from "../../lib/formatDate";
 // useAuditLogStore + AuditEntry moved to screens/AuditLog/index.tsx
 // (2.12.0 — promoted out of Settings junk drawer).
 
@@ -342,7 +343,7 @@ function FakelibCorpusSection() {
               </span>
               <button
                 type="button"
-                className="text-[var(--color-muted)] hover:text-[var(--color-danger)]"
+                className="text-[var(--color-muted)] hover:text-[var(--color-bad)]"
                 onClick={() => void remove(set.id, set.label)}
               >
                 {tr("fakelibs_set_remove", undefined, "Remove")}
@@ -884,7 +885,7 @@ export default function SettingsScreen() {
                   "The main preferences (theme, language, engine, save path, upload defaults, accessibility, sidebar) are mirrored to this JSON file. You can edit it by hand; edits take effect the next time you launch the app. It does not hold everything: use Backup / restore to carry all your preferences.",
                 )}
               </div>
-              <div className="mt-2 truncate rounded-md bg-[var(--color-surface)] px-2 py-1 font-mono text-xs">
+              <div className="mt-2 truncate rounded-[var(--radius-field)] bg-[var(--color-surface)] px-2 py-1 font-mono text-xs">
                 {cfgPath ?? tr("resolving", undefined, "resolving…")}
               </div>
             </div>
@@ -1005,7 +1006,7 @@ function SchedulesPanel() {
           {schedules.map((s) => (
             <li
               key={s.id}
-              className="flex items-center gap-2 rounded-md border border-[var(--color-border)] p-2 text-xs"
+              className="flex items-center gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-xs"
             >
               <Toggle
                 className="flex-1"
@@ -1031,8 +1032,8 @@ function SchedulesPanel() {
                         s.oneShotMs &&
                         tr(
                           "schedule_once_at",
-                          { time: new Date(s.oneShotMs).toLocaleString() },
-                          `once at ${new Date(s.oneShotMs).toLocaleString()}`,
+                          { time: formatDate(s.oneShotMs) },
+                          `once at ${formatDate(s.oneShotMs)}`,
                         )}
                     </span>
                   </>
@@ -1049,7 +1050,7 @@ function SchedulesPanel() {
           ))}
         </ul>
       )}
-      <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-[var(--color-border)] p-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-dashed border-[var(--color-border)] p-3 text-xs">
         <Input
           type="text"
           value={labelDraft}
@@ -1117,11 +1118,8 @@ function NotifPrunePanel() {
             key={o.days}
             type="button"
             onClick={() => pickDays(o.days)}
-            className={`rounded-md border px-2 py-1 text-xs max-md:min-h-11 max-md:px-4 ${
-              days === o.days
-                ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
-            }`}
+            aria-pressed={days === o.days}
+            className="chip min-h-8 px-3.5 text-xs max-md:min-h-11 max-md:px-4"
           >
             {tr(o.labelKey, o.labelFallback)}
           </button>
@@ -1325,7 +1323,7 @@ function BackupRestorePanel() {
           type="button"
           onClick={importBundle}
           disabled={busy}
-          className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface)] disabled:opacity-50 max-md:min-h-11 max-md:px-4"
+          className="inline-flex items-center gap-1 rounded-[var(--radius-card)] border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface)] disabled:opacity-50 max-md:min-h-11 max-md:px-4"
         >
           {tr("settings_backup_import", undefined, "Import bundle…")}
         </button>
@@ -1399,11 +1397,11 @@ function ThemePicker() {
           aria-pressed={theme === o.value}
           className={`flex w-full items-start gap-2 rounded-[var(--radius-card)] border p-3 text-left transition-colors ${
             theme === o.value
-              ? "border-[var(--color-accent)] bg-[var(--color-surface-raised)] shadow-[var(--shadow-1)]"
-              : "border-[var(--color-border)] hover:bg-[var(--color-surface-raised)]"
+              ? "border-[var(--glass-edge)] bg-[var(--color-pill)] shadow-[var(--edge-highlight),var(--shadow-1)]"
+              : "border-[var(--color-border-strong)] hover:bg-[var(--color-surface)]"
           }`}
         >
-          <span className="mt-0.5">{o.icon}</span>
+          <span className="icon-disc !h-7 !w-7" aria-hidden>{o.icon}</span>
           <span className="min-w-0 flex-1">
             <div className="text-sm font-medium">{o.label}</div>
             <div className="text-xs text-[var(--color-muted)]">
@@ -1411,7 +1409,7 @@ function ThemePicker() {
             </div>
           </span>
           {theme === o.value && (
-            <CheckCircle2 size={12} className="text-[var(--color-good)]" />
+            <CheckCircle2 size={14} className="shrink-0 text-[var(--color-accent-bright)]" />
           )}
         </button>
       ))}
@@ -1440,7 +1438,7 @@ function TextSizePicker() {
       {/* Stepper row: each button is a percentage of the designed size. The
           buttons themselves sit OUTSIDE the rem flow (fixed text-[13px]) so
           they stay tappable even when the user has scaled the app very small. */}
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-2" role="group" aria-label={tr("settings_section_text_size", undefined, "Text size")}>
         {UI_SCALE_STEPS.map((step) => {
           const active = Math.abs(step - scale) < 0.001;
           return (
@@ -1449,11 +1447,7 @@ function TextSizePicker() {
               type="button"
               onClick={() => setScale(step)}
               aria-pressed={active}
-              className={`min-w-[3rem] rounded-md border px-2 py-1.5 text-center text-[13px] max-md:min-h-11 ${
-                active
-                  ? "border-[var(--color-accent)] bg-[var(--color-surface)] font-semibold"
-                  : "border-[var(--color-border)] hover:bg-[var(--color-surface)]"
-              }`}
+              className="chip min-h-8 min-w-[3rem] justify-center px-3 py-1.5 text-[13px] max-md:min-h-11"
             >
               {uiScaleLabel(step)}
               {Math.abs(step - 1) < 0.001 && (
@@ -1590,7 +1584,7 @@ function ArtworkCachePanel() {
           {tr("settings_artwork_cache_clear", undefined, "Clear cached artwork")}
         </Button>
       </div>
-      {error && <ErrorCard title={error} />}
+      {error && <ErrorCard title={error} onRetry={() => void clear()} />}
     </div>
   );
 }
@@ -1660,7 +1654,7 @@ function ResetPanel() {
         type="button"
         onClick={doReset}
         disabled={busy}
-        className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-bad)] px-3 py-1.5 text-xs text-[var(--color-bad)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)] disabled:opacity-50 max-md:min-h-11 max-md:px-4"
+        className="inline-flex items-center gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-bad)] px-3 py-1.5 text-xs text-[var(--color-bad)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)] disabled:opacity-50 max-md:min-h-11 max-md:px-4"
       >
         {busy ? (
           <Spinner size={12} tone="inherit" />
@@ -1746,7 +1740,7 @@ function UpdatesPanel() {
         />
       )}
       {phase.kind === "downloaded" && (
-        <div className="rounded-md border border-[var(--color-good)] bg-[var(--color-surface)] p-3 text-xs">
+        <div className="rounded-[var(--radius-card)] border border-[var(--color-good)] bg-[var(--color-surface)] p-3 text-xs">
           <div className="mb-1 font-medium text-[var(--color-good)]">
             {tr(
               "update_downloaded_title",
@@ -1822,7 +1816,7 @@ function UpdatesPanel() {
           type="button"
           onClick={handleCheck}
           disabled={busy || phase.kind === "downloading"}
-          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50 max-md:min-h-11 max-md:px-4"
+          className="inline-flex items-center gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50 max-md:min-h-11 max-md:px-4"
         >
           <RefreshCw size={12} className={busy ? "animate-spin" : ""} />
           {tr("check_updates", undefined, "Check for updates")}
@@ -1832,7 +1826,7 @@ function UpdatesPanel() {
             type="button"
             onClick={handleDownload}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-accent-contrast)] hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-full bg-[image:var(--accent-fill)] px-3.5 py-1.5 text-xs font-semibold text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105 disabled:opacity-50"
           >
             <ExternalLink size={12} />
             {hasPlatformBundle
@@ -1849,7 +1843,7 @@ function UpdatesPanel() {
             type="button"
             onClick={handleDownload}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-accent-contrast)] hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-full bg-[image:var(--accent-fill)] px-3.5 py-1.5 text-xs font-semibold text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105 disabled:opacity-50"
           >
             <Download size={12} />
             {tr(
@@ -2030,7 +2024,7 @@ function ReleaseNotes({
   const tr = useTr();
   if (!notes.trim()) return null;
   return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
       <div className="mb-1 flex items-center justify-between text-xs uppercase tracking-wide text-[var(--color-muted)]">
         <span>
           {tr("whats_new_in", { version }, `What's new in v${version}`)}

@@ -31,6 +31,9 @@ function bundledDocs(): Plugin {
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+// The React runtime packages that go in their own long-lived vendor chunk.
+const REACT_PACKAGES =
+  /[\\/]node_modules[\\/](react|react-dom|react-router|scheduler)[\\/]/;
 // Dev server port (live reload uses the next one up). Desktop dev uses 1420;
 // `make run-android` picks its own so both can run at once.
 // @ts-expect-error process is a nodejs global
@@ -83,7 +86,9 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
-          if (id.includes("react")) return "vendor-react";
+          // Exact package names: a bare "react" substring also caught
+          // lucide-react and anything else with react in its path.
+          if (REACT_PACKAGES.test(id)) return "vendor-react";
           return "vendor";
         },
       },

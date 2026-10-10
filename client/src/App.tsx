@@ -17,11 +17,8 @@ import { isMacOrLinuxDesktop } from "./lib/platform";
  * Code-splitting strategy:
  *
  * Eagerly imported (always-on, small):
+ *   - HomeScreen — where returning users land
  *   - ChangelogScreen — small; the CHANGELOG text itself loads on demand
- *   - ConnectionScreen — first thing users see; adding suspense
- *     here would force a flash on app launch
- *   - SettingsScreen — small enough that lazy-loading isn't worth
- *     the suspense boundary
  *
  * Lazy-loaded via React.lazy (heavy or rarely-used):
  *   - everything else, especially Library (2.2k LOC), Upload, FileSystem
@@ -31,10 +28,13 @@ import { isMacOrLinuxDesktop } from "./lib/platform";
  * library.chunk.js (~150 KB) instead of forcing every user to
  * download all 11 screens upfront.
  */
-import ConnectionScreen from "./screens/Connection";
 import ChangelogScreen from "./screens/Changelog";
-import SettingsScreen from "./screens/Settings";
 import HomeScreen from "./screens/Home";
+
+// Settings (2k lines) and Connection pull in a lot; nobody needs them
+// before the first paint of Home.
+const ConnectionScreen = lazyWithReload(() => import("./screens/Connection"));
+const SettingsScreen = lazyWithReload(() => import("./screens/Settings"));
 
 const MoreScreen = lazyWithReload(() => import("./screens/More"));
 const UploadScreen = lazyWithReload(() => import("./screens/Upload"));
@@ -182,7 +182,14 @@ function AppRoutes({ location }: { location: Location }) {
         <Route index element={<LandingRedirect />} />
         <Route path="/home" element={<HomeScreen />} />
         <Route path="/whats-new" element={<ChangelogScreen />} />
-        <Route path="/connection" element={<ConnectionScreen />} />
+        <Route
+          path="/connection"
+          element={
+            <Suspense fallback={<ScreenLoader />}>
+              <ConnectionScreen />
+            </Suspense>
+          }
+        />
         {/* v5: mobile "everything else" hub. A real route (not a sheet)
              so the Android hardware back button and router history treat
              it like any other screen. */}
@@ -513,7 +520,14 @@ function AppRoutes({ location }: { location: Location }) {
             </Suspense>
           }
         />
-        <Route path="/settings" element={<SettingsScreen />} />
+        <Route
+          path="/settings"
+          element={
+            <Suspense fallback={<ScreenLoader />}>
+              <SettingsScreen />
+            </Suspense>
+          }
+        />
         <Route
           path="/about"
           element={

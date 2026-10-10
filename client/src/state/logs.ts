@@ -34,8 +34,19 @@ export interface LogEntry {
 const LOG_CAP = 500;
 let nextId = 0;
 
+/** One line for `appendMany`. */
+export interface LogInput {
+  level: LogLevel;
+  source: string;
+  message: string;
+  detail?: unknown;
+}
+
 interface LogsState {
   entries: LogEntry[];
+  /** How many of `entries` are errors. Kept in step with the ring so the
+   *  sidebar badge doesn't re-scan all 500 lines on every append. */
+  errorCount: number;
   /** Current filter applied in the UI. Drives the display; doesn't
    *  affect what's stored. */
   filter: LogLevel | "all";
@@ -45,6 +56,10 @@ interface LogsState {
     message: string,
     detail?: unknown,
   ) => void;
+  /** Append a batch in one store update (the engine log bridge gets dozens
+   *  of lines per tick; one update per line re-rendered every subscriber
+   *  and copied the ring each time). */
+  appendMany: (items: LogInput[]) => void;
   clear: () => void;
   setFilter: (f: LogLevel | "all") => void;
 }
@@ -60,29 +75,47 @@ function stringifyDetail(d: unknown): string | undefined {
   }
 }
 
+function countErrors(entries: LogEntry[]): number {
+  let n = 0;
+  for (const e of entries) if (e.level === "error") n++;
+  return n;
+}
+
 export const useLogsStore = create<LogsState>((set, get) => ({
   entries: [],
+  errorCount: 0,
   filter: "all",
-  append: (level, source, message, detail) => {
-    const entry: LogEntry = {
+  append: (level, source, message, detail) =>
+    get().appendMany([{ level, source, message, detail }]),
+  appendMany: (items) => {
+    if (items.length === 0) return;
+    const now = Date.now();
+    const added: LogEntry[] = items.map((i) => ({
       id: nextId++,
-      timestamp: Date.now(),
-      level,
-      source,
-      message,
-      detail: stringifyDetail(detail),
-    };
-    const current = get().entries;
-    const next =
-      current.length >= LOG_CAP
-        ? [...current.slice(current.length - LOG_CAP + 1), entry]
-        : [...current, entry];
-    set({ entries: next });
+      timestamp: now,
+      level: i.level,
+      source: i.source,
+      message: i.message,
+      detail: stringifyDetail(i.detail),
+    }));
+    const { entries: current, errorCount } = get();
+    const overflow = Math.max(0, current.length + added.length - LOG_CAP);
+    // Only the dropped lines need counting, not the whole ring.
+    const dropped =
+      overflow > 0
+        ? countErrors(current.slice(0, Math.min(overflow, current.length)))
+        : 0;
+    const merged = [...current, ...added].slice(overflow);
+    const keptAdded = added.slice(Math.max(0, overflow - current.length));
+    set({
+      entries: merged,
+      errorCount: errorCount - dropped + countErrors(keptAdded),
+    });
     // Mirror to the durable on-disk log (gated by the configured level) so a
     // bug report can package a time window even after a crash. Best-effort.
-    recordToDisk(entry);
+    for (const e of added) recordToDisk(e);
   },
-  clear: () => set({ entries: [] }),
+  clear: () => set({ entries: [], errorCount: 0 }),
   setFilter: (filter) => set({ filter }),
 }));
 

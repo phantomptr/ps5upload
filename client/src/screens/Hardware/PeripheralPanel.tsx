@@ -108,11 +108,11 @@ export default function PeripheralPanel({
   }
 
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <section className="surface-panel min-w-0 p-5 sm:p-6">
       {drive !== "no" && (
         <div data-testid="disc-controls" className="mb-4">
-          <header className="mb-3 flex items-center gap-2">
-            <Disc3 size={14} />
+          <header className="mb-4 flex items-center gap-2.5">
+            <span className="icon-disc" aria-hidden><Disc3 size={14} /></span>
             <h3 className="text-sm font-semibold">
               {tr("peripheral_title", undefined, "Disc drive")}
             </h3>

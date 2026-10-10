@@ -8,7 +8,7 @@ import {
   CheckSquare,
   Square,
   Eye,
-  X,
+  Trash2,
 } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
@@ -22,10 +22,18 @@ import {
 } from "../../api/ps5";
 import { useConnectionStore } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
-import { useScrollLock } from "../../lib/useScrollLock";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
-import { Button, EmptyState, ErrorCard, Spinner, ConnectionGate } from "../../components";
+import {
+  Button,
+  EmptyState,
+  ErrorCard,
+  Modal,
+  Spinner,
+  ConnectionGate,
+} from "../../components";
 import { CaptureToolbar } from "../Captures/CaptureToolbar";
+import { useCaptureDelete } from "../Captures/useCaptureDelete";
+import { humanizePs5Error } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
 import { pickPath } from "../../lib/pickPath";
 import { formatBytes } from "../../lib/format";
@@ -37,6 +45,7 @@ import {
 } from "../../lib/screenshotConvert";
 import { isMobile } from "../../lib/platform";
 import { isTauriEnv } from "../../lib/tauriEnv";
+import { formatDate } from "../../lib/formatDate";
 
 /** Map a full-res shot path to its (smaller) PS5 thumbnail path. The console
  *  stores `/user/av_contents/photo/.../X.jxr` and a thumbnail at
@@ -160,7 +169,7 @@ function ScreenshotThumb({
   return (
     <div
       ref={boxRef}
-      className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded bg-[var(--color-surface-3)]"
+      className="grid h-12 w-16 shrink-0 place-items-center overflow-hidden rounded-[var(--radius-field)] bg-[var(--color-surface-3)]"
     >
       {url ? (
         <img src={url} alt="" className="h-full w-full object-cover" loading="lazy" />
@@ -192,6 +201,18 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const {
+    deleting,
+    deleteSelected,
+    dialog: deleteDialog,
+  } = useCaptureDelete({
+    host,
+    kind: "screenshots",
+    selected,
+    setSelected,
+    setItems,
+    setError,
+  });
   // Per-row in-flight set so a single download shows a spinner and can't be
   // double-fired (previously the row button had no busy feedback at all).
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
@@ -290,7 +311,7 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
       setItems(r.items);
     } catch (e) {
       if (probe.isStale()) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizePs5Error(e instanceof Error ? e.message : String(e)));
     } finally {
       setLoading(false);
     }
@@ -404,8 +425,6 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
     loading: boolean;
     error: string | null;
   } | null>(null);
-  // Lock background scroll while the (inline) screenshot preview is open.
-  useScrollLock(!!preview);
 
   async function openPreview(item: ScreenshotEntry) {
     if (!host?.trim() || !canConvert) return;
@@ -498,16 +517,6 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
     [thumbCache],
   );
 
-  // Esc closes the lightbox.
-  useEffect(() => {
-    if (!preview) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closePreview();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [preview]);
-
   return (
     <div className="app-page">
       {/* The Captures screen puts its Screenshots / Video clips switch here. */}
@@ -518,14 +527,14 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
         description={
           isTauriEnv()
             ? tr(
-                "screenshots_description_v2",
+                "screenshots_description_v3",
                 undefined,
-                "Screenshots saved on the PS5 (its Capture Gallery). Preview them and download them to this computer. To delete one, use Files.",
+                "Screenshots saved on the PS5 (its Capture Gallery). Preview them, download them to this computer, or select some to delete them.",
               )
             : tr(
-                "screenshots_description_browser",
+                "screenshots_description_browser_v2",
                 undefined,
-                "Screenshots saved on the PS5 (its Capture Gallery). Download them to a folder on the computer running ps5upload. To delete one, use Files.",
+                "Screenshots saved on the PS5 (its Capture Gallery). Download them to a folder on the computer running ps5upload, or select some to delete them.",
               )
         }
         right={
@@ -551,6 +560,18 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
                 )}
               </Button>
             )}
+            {selected.size > 0 && (
+              <Button
+                variant="danger"
+                size="sm"
+                loading={deleting}
+                leftIcon={<Trash2 size={12} />}
+                onClick={() => void deleteSelected()}
+                disabled={deleting || bulkBusy}
+              >
+                {tr("captures_bulk_delete", { n: selected.size }, `Delete ${selected.size}`)}
+              </Button>
+            )}
             <Button
               variant="secondary"
               size="sm"
@@ -570,6 +591,17 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
             <ErrorCard
               title={tr("screenshots_error", undefined, "Couldn't list screenshots")}
               detail={error}
+              onDismiss={() => setError(null)}
+              action={
+                <Button
+                  size="sm"
+                  leftIcon={<RefreshCw size={12} />}
+                  onClick={() => void refresh()}
+                  disabled={loading}
+                >
+                  {tr("retry", undefined, "Retry")}
+                </Button>
+              }
             />
           </div>
         )}
@@ -602,25 +634,27 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
                 : tr("screenshots_select_all", undefined, "Select all")}
             </button>
           )}
-          <ul className="space-y-1">
+          <ul className="space-y-2">
             {items?.map((item) => {
               const isSelected = selected.has(item.path);
               return (
                 <li
                   key={item.path}
-                  className={`flex items-center gap-3 rounded-md border p-2 text-xs ${
+                  className={`flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-card)] border px-3 py-2.5 text-xs shadow-[var(--edge-highlight)] transition-colors ${
                     isSelected
-                      ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
-                      : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
+                      ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)]"
+                      : "border-[var(--glass-edge)] bg-[var(--color-surface-raised)]"
                   }`}
                 >
                   <button
                     type="button"
+                    role="checkbox"
+                    aria-checked={isSelected}
                     onClick={() => toggleOne(item.path)}
-                    className="text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
                     aria-label={tr("screenshots_select", undefined, "Toggle select")}
                   >
-                    {isSelected ? <CheckSquare size={12} /> : <Square size={12} />}
+                    {isSelected ? <CheckSquare size={14} /> : <Square size={14} />}
                   </button>
                   <ScreenshotThumb
                     item={item}
@@ -628,13 +662,13 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
                     enabled={canConvert}
                     cache={thumbCache}
                   />
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1 basis-[10rem]">
                     <code className="block truncate text-xs">
                       {item.path.split("/").pop()}
                     </code>
                     <div className="text-xs text-[var(--color-muted)]">
                       {formatBytes(item.size)} ·{" "}
-                      {new Date(item.mtime * 1000).toLocaleString()}
+                      {formatDate(item.mtime * 1000)}
                     </div>
                   </div>
                   {canConvert && (
@@ -711,75 +745,58 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
           </div>
         )}
 
-        {/* Preview lightbox — click the backdrop or press Esc to close. */}
+        {/* Preview: the shared modal (Esc or the backdrop closes it). */}
         {preview && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-6"
-            onClick={closePreview}
-            role="dialog"
-            aria-modal="true"
+          <Modal
+            open
+            onClose={closePreview}
+            title={
+              <span className="truncate font-mono text-sm">
+                {preview.item.path.split("/").pop()}
+              </span>
+            }
+            size="full"
+            panelClassName="sm:max-w-[min(92vw,80rem)]"
+            bodyClassName="p-4"
+            footer={
+              isTauriEnv() ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={busyPaths.has(preview.item.path)}
+                  leftIcon={<Download size={12} />}
+                  onClick={() => void downloadOne(preview.item)}
+                >
+                  {tr("screenshots_download", undefined, "Download")}
+                </Button>
+              ) : undefined
+            }
           >
-            <div
-              className="relative flex max-h-full max-w-full flex-col items-center gap-3"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex w-full items-center justify-between gap-3 text-sm text-white">
-                <span className="min-w-0 truncate font-mono text-xs">
-                  {preview.item.path.split("/").pop()}
-                </span>
-                <div className="flex shrink-0 items-center gap-2">
-                  {isTauriEnv() && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    leftIcon={
-                      busyPaths.has(preview.item.path) ? (
-                        <Spinner size={12} tone="inherit" />
-                      ) : (
-                        <Download size={12} />
-                      )
-                    }
-                    disabled={busyPaths.has(preview.item.path)}
-                    onClick={() => void downloadOne(preview.item)}
-                  >
-                    {tr("screenshots_download", undefined, "Download")}
-                  </Button>
+            <div className="flex min-h-[40vh] items-center justify-center overflow-hidden rounded-[var(--radius-card)] bg-[var(--color-surface-3)]">
+              {preview.loading ? (
+                <div className="flex flex-col items-center gap-2 p-10 text-xs text-[var(--color-muted)]">
+                  <Spinner size={20} />
+                  {tr(
+                    "screenshots_preview_loading",
+                    undefined,
+                    "Downloading + converting (HDR screenshots take a few seconds)…",
                   )}
-                  <button
-                    type="button"
-                    onClick={closePreview}
-                    aria-label={tr("screenshots_preview_close", undefined, "Close")}
-                    className="rounded p-1 text-white/80 hover:text-white"
-                  >
-                    <X size={18} />
-                  </button>
                 </div>
-              </div>
-              <div className="flex min-h-[40vh] min-w-[40vw] items-center justify-center overflow-hidden rounded-md bg-[var(--color-surface-2)]">
-                {preview.loading ? (
-                  <div className="flex flex-col items-center gap-2 p-10 text-xs text-[var(--color-muted)]">
-                    <Spinner size={20} />
-                    {tr(
-                      "screenshots_preview_loading",
-                      undefined,
-                      "Downloading + converting (HDR screenshots take a few seconds)…",
-                    )}
-                  </div>
-                ) : preview.error ? (
-                  <div className="max-w-md p-8 text-center text-xs text-[var(--color-bad)]">
-                    {preview.error}
-                  </div>
-                ) : preview.url ? (
-                  <img
-                    src={preview.url}
-                    alt=""
-                    className="max-h-[80vh] max-w-[88vw] object-contain"
-                  />
-                ) : null}
-              </div>
+              ) : preview.error ? (
+                <div className="max-w-md p-8 text-center text-xs text-[var(--color-bad)]">
+                  {preview.error}
+                </div>
+              ) : preview.url ? (
+                <img
+                  src={preview.url}
+                  alt=""
+                  className="max-h-[72vh] max-w-full object-contain"
+                />
+              ) : null}
             </div>
-          </div>
+          </Modal>
         )}
+        {deleteDialog}
       </ConnectionGate>
     </div>
   );

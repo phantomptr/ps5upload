@@ -116,14 +116,14 @@ export class RootErrorBoundary extends Component<Props, State> {
                 onClick={() =>
                   this.setState({ err: null, componentStack: "" })
                 }
-                className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm font-medium hover:bg-[var(--color-surface-3)]"
+                className="chip min-h-9 px-4 text-sm font-medium"
               >
                 {this.tr("errorboundary_try_again", "Try again")}
               </button>
               <button
                 type="button"
                 onClick={() => window.location.reload()}
-                className="rounded-md bg-[var(--color-bad)] px-3 py-1.5 text-sm font-medium text-[var(--color-accent-contrast)] hover:opacity-90"
+                className="rounded-full border border-[color-mix(in_srgb,var(--color-bad)_45%,transparent)] bg-[var(--color-surface-raised)] px-4 py-1.5 text-sm font-medium text-[var(--color-bad)] hover:bg-[var(--color-bad-soft)]"
               >
                 {this.tr("errorboundary_reload_window", "Reload window")}
               </button>
@@ -145,7 +145,7 @@ export class RootErrorBoundary extends Component<Props, State> {
                     }
                   });
                 }}
-                className="rounded-md border border-[var(--color-accent)] px-3 py-1.5 text-sm font-medium text-[var(--color-accent)] hover:bg-[var(--color-surface)]"
+                className="chip min-h-9 px-4 text-sm font-medium text-[var(--color-accent)]"
               >
                 {this.tr("errorboundary_report_crash", "Report this crash")}
               </button>
