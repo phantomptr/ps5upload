@@ -788,7 +788,7 @@ export default function FileSystemScreen() {
                 body: tr(
                   "fs_install_may_not_launch",
                   undefined,
-                  "The install registered, but the title may not launch — check Installed Apps.",
+                  "The install registered, but the title may not launch. Check it on the Games screen.",
                 ),
               }
             : undefined,
@@ -2079,11 +2079,9 @@ export default function FileSystemScreen() {
     // check, a navigation-away + back + new-download sequence
     // would leave the old runner still polling against the old
     // job and the new runner's setProgress writes would race with
-    // it. Bonus: gives the user a way to abort an in-flight pull
-    // by clicking Stop in the banner — store.requestStop() flips
-    // runId; this loop exits at its next check; the engine job
-    // continues server-side and the .part promotion eventually
-    // happens (no engine cancel API today).
+    // it. The banner's Stop goes through store.requestStop(), which
+    // cancels the engine job and flips runId; this loop exits at its
+    // next check.
     const isLive = () => fsDownload.runId === myRunId;
     while (true) {
       if (!isLive()) return;
@@ -3784,11 +3782,8 @@ function DownloadOpBanner({
         <span className="text-[var(--color-muted)]">
           {formatDuration(elapsedSec)}
         </span>
-        {/* Stop button: bumps the store's runId so the runner exits
-            at its next poll iteration. The engine job continues
-            server-side (no engine-side cancel API yet); the .part
-            file lands but the UI stops observing. Wires up the
-            previously-dead requestStop() action. */}
+        {/* Stop cancels the engine job (the partial download is
+            dropped) and the runner exits at its next poll. */}
         <button
           type="button"
           onClick={() => useFsDownloadOpStore.getState().requestStop(host)}
@@ -3796,10 +3791,10 @@ function DownloadOpBanner({
           title={tr(
             "fs_download_stop_tooltip",
             undefined,
-            "Stop watching this download (engine job continues server-side)",
+            "Cancel this download. The partly downloaded file is removed.",
           )}
         >
-          {tr("fs_download_stop", undefined, "Stop")}
+          {tr("fs_download_stop", undefined, "Cancel")}
         </button>
       </div>
 

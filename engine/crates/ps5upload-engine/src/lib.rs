@@ -9019,72 +9019,46 @@ fn start_ava1_download(
         bytes_finalized: Arc::clone(&progress_bytes_finalized),
         total: Some(dynamic_total),
     };
+    // POST /api/jobs/{id}/cancel flips this; the download stops at its next check and
+    // the job ends failed with `transfer_cancelled`, like a cancelled upload.
     let cancel = register_transfer_cancel(job_id);
     tokio::task::spawn_blocking(move || {
         let _stop_guard = TickerStopGuard::new(stop_ticker);
-        let mut fail_guard =
-            JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
-        if fail_job_unless_console_ready(&jobs, &events_tx, job_id, started_at_ms, &addr) {
-            fail_guard.mark_succeeded();
-            return;
-        }
         let id = *job_id.as_bytes();
-        let result = match &target {
-            Ava1DownloadTarget::Folder(dir) => ps5upload_ava1::download::to_local(
-                &addr,
-                &src,
-                kind,
-                dir,
-                unsafe_read,
-                id,
-                &counters,
-                Some(cancel),
-            ),
-            Ava1DownloadTarget::Zip(zip, compression) => ps5upload_ava1::download::to_zip_with(
-                &addr,
-                &src,
-                kind,
-                zip,
-                unsafe_read,
-                *compression,
-                id,
-                &counters,
-                Some(cancel),
-            ),
-        };
-        match result {
-            Ok(bytes) => {
-                let completed_at_ms = now_ms();
-                let files = progress_files.load(Ordering::Relaxed);
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    JobState::Done {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        tx_id_hex: id.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-                        bytes_sent: bytes,
-                        dest: dest_display,
-                        files_sent: files,
-                        skipped_files: 0,
-                        skipped_bytes: 0,
-                        commit_ack: None,
-                    },
-                );
-            }
-            Err(e) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    job_failed_from_err(started_at_ms, completed_at_ms, &e),
-                );
-            }
-        }
-        fail_guard.mark_succeeded();
+        let ready =
+            || !fail_job_unless_console_ready(&jobs, &events_tx, job_id, started_at_ms, &addr);
+        run_download_job(
+            &jobs,
+            &events_tx,
+            job_id,
+            started_at_ms,
+            dest_display,
+            &progress_files,
+            ready,
+            || match &target {
+                Ava1DownloadTarget::Folder(dir) => ps5upload_ava1::download::to_local(
+                    &addr,
+                    &src,
+                    kind,
+                    dir,
+                    unsafe_read,
+                    id,
+                    &counters,
+                    Some(cancel),
+                ),
+                Ava1DownloadTarget::Zip(zip, compression) => ps5upload_ava1::download::to_zip_with(
+                    &addr,
+                    &src,
+                    kind,
+                    zip,
+                    unsafe_read,
+                    *compression,
+                    id,
+                    &counters,
+                    Some(cancel),
+                ),
+            },
+        );
     });
     (
         StatusCode::ACCEPTED,
@@ -9093,6 +9067,62 @@ fn start_ava1_download(
         }),
     )
         .into_response()
+}
+
+/// Runs a download's transfer and records how the job ended: done, or failed with the
+/// transfer's error (`transfer_cancelled` after a cancel). `ready` records its own
+/// failure and returns false when the console cannot take the job.
+#[allow(clippy::too_many_arguments)]
+fn run_download_job(
+    jobs: &Arc<Mutex<HashMap<Uuid, JobState>>>,
+    events_tx: &broadcast::Sender<String>,
+    job_id: Uuid,
+    started_at_ms: u64,
+    dest_display: String,
+    progress_files: &AtomicU64,
+    ready: impl FnOnce() -> bool,
+    transfer: impl FnOnce() -> anyhow::Result<u64>,
+) {
+    let mut fail_guard =
+        JobFailOnDropGuard::new(Arc::clone(jobs), events_tx.clone(), job_id, started_at_ms);
+    if !ready() {
+        fail_guard.mark_succeeded();
+        return;
+    }
+    let id = *job_id.as_bytes();
+    match transfer() {
+        Ok(bytes) => {
+            let completed_at_ms = now_ms();
+            let files = progress_files.load(Ordering::Relaxed);
+            set_job(
+                jobs,
+                events_tx,
+                job_id,
+                JobState::Done {
+                    started_at_ms,
+                    completed_at_ms,
+                    elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                    tx_id_hex: id.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                    bytes_sent: bytes,
+                    dest: dest_display,
+                    files_sent: files,
+                    skipped_files: 0,
+                    skipped_bytes: 0,
+                    commit_ack: None,
+                },
+            );
+        }
+        Err(e) => {
+            let completed_at_ms = now_ms();
+            set_job(
+                jobs,
+                events_tx,
+                job_id,
+                job_failed_from_err(started_at_ms, completed_at_ms, &e),
+            );
+        }
+    }
+    fail_guard.mark_succeeded();
 }
 
 /// POST /api/transfer/download — PS5 → host file/folder pull.
@@ -10946,6 +10976,122 @@ mod loopback_guard_tests {
 #[cfg(test)]
 mod cancel_registry_tests {
     use super::*;
+
+    /// A folder host serving `dir/host/share` and an engine pool it accepts.
+    async fn download_host(dir: &std::path::Path) -> ps5upload_ava1::Pool {
+        use ava1::host::FolderHost;
+        use ava1::keys::Identity;
+        use ava1::peers::PeerStore;
+        use ava1::server::{self, ServerCtx};
+        use ava1::wire::Message;
+        let ava = dir.join("engine");
+        let key = Identity::load_or_create(&ava.join("identity"))
+            .unwrap()
+            .public();
+        let mut peers = PeerStore::in_memory();
+        peers.add(key, "engine").unwrap();
+        let rpc: ava1::server::RpcHandler = Box::new(|method, _| {
+            if method == ava1::gen::METHOD_NODE_INFO {
+                let info = ava1::gen::NodeInfo {
+                    version: "test".into(),
+                    platform: "rust".into(),
+                    name: "host".into(),
+                    firmware: None,
+                };
+                ava1::session::RpcReply {
+                    status: ava1::gen::STATUS_OK,
+                    body: info.to_bytes().unwrap(),
+                }
+            } else {
+                ava1::session::RpcReply {
+                    status: ava1::gen::ERR_UNKNOWN_METHOD,
+                    body: Vec::new(),
+                }
+            }
+        });
+        let ctx = ServerCtx::new(Identity::generate().unwrap(), "host", peers, rpc).with_jobs(
+            Arc::new(FolderHost {
+                root: dir.join("host/share"),
+                jobs_dir: dir.join("host/jobs"),
+            }),
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        tokio::spawn(server::serve(l, Arc::new(ctx)));
+        ps5upload_ava1::Pool::new(ava).with_addr(addr)
+    }
+
+    /// Runs one download job the way `start_ava1_download` does, cancelling it through
+    /// `POST /api/jobs/{id}/cancel` first when `cancel` is set, and returns its final state.
+    async fn download_job_end(
+        pool: Arc<ps5upload_ava1::Pool>,
+        out: std::path::PathBuf,
+        cancel: bool,
+    ) -> JobState {
+        let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::default();
+        let (events_tx, _rx) = broadcast::channel(16);
+        let job_id = Uuid::new_v4();
+        let flag = register_transfer_cancel(job_id);
+        if cancel {
+            let r = cancel_job(Path(job_id.to_string())).await.into_response();
+            assert_eq!(r.status(), StatusCode::OK);
+        }
+        let jobs2 = Arc::clone(&jobs);
+        tokio::task::spawn_blocking(move || {
+            let files = AtomicU64::new(0);
+            run_download_job(
+                &jobs2,
+                &events_tx,
+                job_id,
+                now_ms(),
+                out.to_string_lossy().into_owned(),
+                &files,
+                || true,
+                || {
+                    ps5upload_ava1::download::to_local_in(
+                        &pool,
+                        "console",
+                        "f.bin",
+                        DownloadKind::File,
+                        &out,
+                        false,
+                        *job_id.as_bytes(),
+                        &ps5upload_ava1::download::Counters::default(),
+                        Some(flag),
+                    )
+                },
+            )
+        })
+        .await
+        .unwrap();
+        let end = jobs.lock().unwrap().get(&job_id).cloned();
+        end.expect("the job recorded how it ended")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_cancelled_download_job_ends_cancelled() {
+        let dir = std::env::temp_dir().join(format!("dl-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("host/share")).unwrap();
+        std::fs::write(dir.join("host/share/f.bin"), vec![7u8; 1 << 20]).unwrap();
+        let pool = Arc::new(download_host(&dir).await);
+
+        // The same job without a cancel completes, so the cancel below is what stopped it.
+        let done = dir.join("done");
+        std::fs::create_dir_all(&done).unwrap();
+        let end = download_job_end(Arc::clone(&pool), done.clone(), false).await;
+        assert!(matches!(end, JobState::Done { .. }), "{end:?}");
+        assert_eq!(std::fs::read(done.join("f.bin")).unwrap().len(), 1 << 20);
+
+        let cancelled = dir.join("cancelled");
+        std::fs::create_dir_all(&cancelled).unwrap();
+        match download_job_end(pool, cancelled.clone(), true).await {
+            JobState::Failed { error, .. } => assert_eq!(error, "transfer_cancelled"),
+            other => panic!("expected a cancelled job, got {other:?}"),
+        }
+        assert!(!cancelled.join("f.bin").exists(), "nothing landed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn register_returns_flag_and_signal_flips_it() {
