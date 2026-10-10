@@ -51,7 +51,7 @@ import {
 } from "../../state/uploadQueue";
 import { isRemotePath } from "../../lib/remotePath";
 import { useTransferStore } from "../../state/transfer";
-import { BottleneckLine, JobLiveNotes, UnsettledLine } from "./Bottleneck";
+import { BottleneckLine, JobLiveNotes, RouteLine, UnsettledLine } from "./Bottleneck";
 import { WhySlowPanel } from "./WhySlow";
 import { RarPasswordPrompt } from "./RarPasswordPrompt";
 import { rarPasswordProblem } from "../../lib/rarPassword";
@@ -888,6 +888,7 @@ export function QueueRow({
               </span>
             )}
           </div>
+          {item.sourceKind === "ps5" && <RouteLine live={item.live} />}
         </div>
 
         {/* The live percentage sits at the row's right edge, where the eye

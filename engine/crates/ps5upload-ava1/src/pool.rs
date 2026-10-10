@@ -462,7 +462,7 @@ impl Pool {
 
     /// The address `session()` connects to: the per-pool override first (A1: the
     /// engine's pools never carry one), then the console's own address.
-    fn addr_for(&self, console: &str) -> String {
+    pub(crate) fn addr_for(&self, console: &str) -> String {
         match &self.addr {
             Some(a) => a.clone(),
             None => ava1_addr(console),

@@ -93,6 +93,8 @@ struct ava1_job {
     int discard_parts;              /* a cancelled local copy: destroy removes the .ava-part files this job itself was writing (final review #9) */
     uint64_t parked_at_ms;
     int op_delivered;               /* an operation job: its terminal status was first delivered at parked_at_ms (the grace starts) */
+    int c2c;                        /* a send to another console (SPEC.md §18): kept the full park age once ended */
+    uint8_t c2c_by[32];             /* ... and the device that asked for it, which may read its status or cancel it */
     uint8_t kind, policy;
     uint32_t flags;
     int staged;

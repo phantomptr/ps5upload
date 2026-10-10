@@ -4252,6 +4252,9 @@ fs_send_route: "Goes straight between the consoles when they can reach each othe
 fs_send_queued: "{n} queued for {name}",
 queue_from_console: "From {name}",
 ps5src_hint_v2: "Copies a file or folder from another console to this one: straight between the consoles when they can reach each other, otherwise through this computer (nothing is stored on it). Easier: select the files in Files and choose Send to another console.",
+queue_route_direct: "Straight between the consoles",
+queue_route_beta: "Beta",
+queue_route_relay: "Through this computer",
 };
 
 export default en;

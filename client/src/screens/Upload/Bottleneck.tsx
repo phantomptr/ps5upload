@@ -1,4 +1,4 @@
-import { Loader2 } from "lucide-react";
+import { ArrowLeftRight, Laptop, Loader2 } from "lucide-react";
 
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
@@ -113,6 +113,35 @@ export function JobLiveNotes({ live }: { live: JobLive | undefined }) {
       <SkippingLine live={live} />
       <BottleneckLine cause={live.bottleneck} />
       <SettlingLine live={live} />
+    </div>
+  );
+}
+
+/** A console-to-console copy's route (#433): straight between the consoles (Beta), or through
+ *  this computer and why. Nothing until the engine knows the route. */
+export function RouteLine({ live }: { live: JobLive | undefined }) {
+  const tr = useTr();
+  if (!live?.route) return null;
+  if (live.route === "direct") {
+    return (
+      <div className="mt-1 flex items-center gap-1.5 text-xs text-[var(--color-muted)]" data-testid="queue-route">
+        <ArrowLeftRight size={12} className="shrink-0 text-[var(--color-accent)]" />
+        <span>{tr("queue_route_direct", undefined, "Straight between the consoles")}</span>
+        <span className="rounded bg-[var(--color-surface-3)] px-1 py-px text-[10px] font-medium uppercase tracking-wide">
+          {tr("queue_route_beta", undefined, "Beta")}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-1 flex min-w-0 items-start gap-1.5 text-xs text-[var(--color-muted)]" data-testid="queue-route">
+      <Laptop size={12} className="mt-0.5 shrink-0" />
+      <span className="min-w-0">
+        {tr("queue_route_relay", undefined, "Through this computer")}
+        {live.routeReason && (
+          <span className="break-words"> · {live.routeReason}</span>
+        )}
+      </span>
     </div>
   );
 }

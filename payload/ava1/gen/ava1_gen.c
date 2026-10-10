@@ -223,10 +223,16 @@ int ava1_client_info_encode(const ava1_client_info_t *m, ava1_w_t *w) {
     uint16_t ext_n = 0;
     ava1_w_fixed(w, m->nonce_c, 16);
     if (m->has_name) ext_n++;
+    if (m->has_token) ext_n++;
     ava1_w_u16(w, ext_n);
     if (m->has_name) {
         size_t at = ava1_w_ext_begin(w, 1);
         ava1_w_str(w, m->name, m->name_len);
+        ava1_w_ext_end(w, at);
+    }
+    if (m->has_token) {
+        size_t at = ava1_w_ext_begin(w, 2);
+        ava1_w_fixed(w, m->token, 16);
         ava1_w_ext_end(w, at);
     }
     return w->err;
@@ -252,6 +258,11 @@ int ava1_client_info_decode(const uint8_t *buf, size_t len, ava1_client_info_t *
             if (m->has_name) return AVA1_E_DUP_EXT;
             m->has_name = 1;
             m->name = ava1_r_str(&vr, &m->name_len);
+            break;
+        case 2:
+            if (m->has_token) return AVA1_E_DUP_EXT;
+            m->has_token = 1;
+            ava1_r_fixed(&vr, m->token, 16);
             break;
         default:
             continue;
@@ -1076,6 +1087,183 @@ int ava1_disk_calibrate_result_count(const uint8_t *p, uint32_t len, uint32_t *c
     *count = 0;
     ava1_r_init(&it, p, len);
     while ((rc = ava1_disk_calibrate_result_next(&it, &tmp)) == 1) (*count)++;
+    return rc;
+}
+
+int ava1_c2c_allow_encode(const ava1_c2c_allow_t *m, ava1_w_t *w) {
+    ava1_w_fixed(w, m->job_id, 16);
+    ava1_w_fixed(w, m->key, 32);
+    ava1_w_str(w, m->root, m->root_len);
+    ava1_w_u16(w, 0);
+    return w->err;
+}
+
+int ava1_c2c_allow_decode(const uint8_t *buf, size_t len, ava1_c2c_allow_t *m) {
+    ava1_r_t r;
+    uint16_t ext_n, i;
+    memset(m, 0, sizeof(*m));
+    ava1_r_init(&r, buf, len);
+    ava1_r_fixed(&r, m->job_id, 16);
+    ava1_r_fixed(&r, m->key, 32);
+    m->root = ava1_r_str(&r, &m->root_len);
+    ext_n = ava1_r_u16(&r);
+    for (i = 0; i < ext_n && !r.err; i++) {
+        uint32_t vlen;
+        (void)ava1_r_u16(&r);
+        vlen = ava1_r_u32(&r);
+        (void)ava1_r_take(&r, vlen);
+    }
+    return ava1_r_finish(&r);
+}
+
+int ava1_c2c_allow_append(ava1_w_t *blob, const ava1_c2c_allow_t *m) {
+    size_t at = ava1_w_len_begin(blob);
+    int rc = ava1_c2c_allow_encode(m, blob);
+    if (rc != 0) return rc;
+    ava1_w_len_end(blob, at);
+    return blob->err;
+}
+
+int ava1_c2c_allow_next(ava1_r_t *it, ava1_c2c_allow_t *out) {
+    uint32_t n;
+    const uint8_t *p;
+    int rc;
+    if (it->err) return it->err;
+    if (it->pos == it->len) return 0;
+    n = ava1_r_u32(it);
+    p = ava1_r_take(it, n);
+    if (it->err) return it->err;
+    rc = ava1_c2c_allow_decode(p, n, out);
+    return rc != 0 ? rc : 1;
+}
+
+int ava1_c2c_allow_count(const uint8_t *p, uint32_t len, uint32_t *count) {
+    ava1_r_t it;
+    ava1_c2c_allow_t tmp;
+    int rc;
+    *count = 0;
+    ava1_r_init(&it, p, len);
+    while ((rc = ava1_c2c_allow_next(&it, &tmp)) == 1) (*count)++;
+    return rc;
+}
+
+int ava1_c2c_ticket_encode(const ava1_c2c_ticket_t *m, ava1_w_t *w) {
+    ava1_w_fixed(w, m->token, 16);
+    ava1_w_u16(w, 0);
+    return w->err;
+}
+
+int ava1_c2c_ticket_decode(const uint8_t *buf, size_t len, ava1_c2c_ticket_t *m) {
+    ava1_r_t r;
+    uint16_t ext_n, i;
+    memset(m, 0, sizeof(*m));
+    ava1_r_init(&r, buf, len);
+    ava1_r_fixed(&r, m->token, 16);
+    ext_n = ava1_r_u16(&r);
+    for (i = 0; i < ext_n && !r.err; i++) {
+        uint32_t vlen;
+        (void)ava1_r_u16(&r);
+        vlen = ava1_r_u32(&r);
+        (void)ava1_r_take(&r, vlen);
+    }
+    return ava1_r_finish(&r);
+}
+
+int ava1_c2c_ticket_append(ava1_w_t *blob, const ava1_c2c_ticket_t *m) {
+    size_t at = ava1_w_len_begin(blob);
+    int rc = ava1_c2c_ticket_encode(m, blob);
+    if (rc != 0) return rc;
+    ava1_w_len_end(blob, at);
+    return blob->err;
+}
+
+int ava1_c2c_ticket_next(ava1_r_t *it, ava1_c2c_ticket_t *out) {
+    uint32_t n;
+    const uint8_t *p;
+    int rc;
+    if (it->err) return it->err;
+    if (it->pos == it->len) return 0;
+    n = ava1_r_u32(it);
+    p = ava1_r_take(it, n);
+    if (it->err) return it->err;
+    rc = ava1_c2c_ticket_decode(p, n, out);
+    return rc != 0 ? rc : 1;
+}
+
+int ava1_c2c_ticket_count(const uint8_t *p, uint32_t len, uint32_t *count) {
+    ava1_r_t it;
+    ava1_c2c_ticket_t tmp;
+    int rc;
+    *count = 0;
+    ava1_r_init(&it, p, len);
+    while ((rc = ava1_c2c_ticket_next(&it, &tmp)) == 1) (*count)++;
+    return rc;
+}
+
+int ava1_c2c_send_encode(const ava1_c2c_send_t *m, ava1_w_t *w) {
+    ava1_w_fixed(w, m->job_id, 16);
+    ava1_w_str(w, m->host, m->host_len);
+    ava1_w_u16(w, m->port);
+    ava1_w_fixed(w, m->key, 32);
+    ava1_w_fixed(w, m->token, 16);
+    ava1_w_str(w, m->src, m->src_len);
+    ava1_w_str(w, m->dest, m->dest_len);
+    ava1_w_u32(w, m->flags);
+    ava1_w_u16(w, 0);
+    return w->err;
+}
+
+int ava1_c2c_send_decode(const uint8_t *buf, size_t len, ava1_c2c_send_t *m) {
+    ava1_r_t r;
+    uint16_t ext_n, i;
+    memset(m, 0, sizeof(*m));
+    ava1_r_init(&r, buf, len);
+    ava1_r_fixed(&r, m->job_id, 16);
+    m->host = ava1_r_str(&r, &m->host_len);
+    m->port = ava1_r_u16(&r);
+    ava1_r_fixed(&r, m->key, 32);
+    ava1_r_fixed(&r, m->token, 16);
+    m->src = ava1_r_str(&r, &m->src_len);
+    m->dest = ava1_r_str(&r, &m->dest_len);
+    m->flags = ava1_r_u32(&r);
+    ext_n = ava1_r_u16(&r);
+    for (i = 0; i < ext_n && !r.err; i++) {
+        uint32_t vlen;
+        (void)ava1_r_u16(&r);
+        vlen = ava1_r_u32(&r);
+        (void)ava1_r_take(&r, vlen);
+    }
+    return ava1_r_finish(&r);
+}
+
+int ava1_c2c_send_append(ava1_w_t *blob, const ava1_c2c_send_t *m) {
+    size_t at = ava1_w_len_begin(blob);
+    int rc = ava1_c2c_send_encode(m, blob);
+    if (rc != 0) return rc;
+    ava1_w_len_end(blob, at);
+    return blob->err;
+}
+
+int ava1_c2c_send_next(ava1_r_t *it, ava1_c2c_send_t *out) {
+    uint32_t n;
+    const uint8_t *p;
+    int rc;
+    if (it->err) return it->err;
+    if (it->pos == it->len) return 0;
+    n = ava1_r_u32(it);
+    p = ava1_r_take(it, n);
+    if (it->err) return it->err;
+    rc = ava1_c2c_send_decode(p, n, out);
+    return rc != 0 ? rc : 1;
+}
+
+int ava1_c2c_send_count(const uint8_t *p, uint32_t len, uint32_t *count) {
+    ava1_r_t it;
+    ava1_c2c_send_t tmp;
+    int rc;
+    *count = 0;
+    ava1_r_init(&it, p, len);
+    while ((rc = ava1_c2c_send_next(&it, &tmp)) == 1) (*count)++;
     return rc;
 }
 
@@ -3728,6 +3916,9 @@ const char *const ava1_message_names[] = {
     "DiskCalibrate",
     "CalPoint",
     "DiskCalibrateResult",
+    "C2cAllow",
+    "C2cTicket",
+    "C2cSend",
     "MgmtText",
     "NodeStatus",
     "FsList",
@@ -3785,7 +3976,7 @@ const char *const ava1_message_names[] = {
     "JobDone",
     "JobCancel",
 };
-const size_t ava1_message_count = 73;
+const size_t ava1_message_count = 76;
 
 int ava1_roundtrip(const char *name, const uint8_t *in, size_t in_len, uint8_t *out, size_t cap,
                    size_t *out_len) {
@@ -3877,6 +4068,21 @@ int ava1_roundtrip(const char *name, const uint8_t *in, size_t in_len, uint8_t *
         ava1_disk_calibrate_result_t m;
         rc = ava1_disk_calibrate_result_decode(in, in_len, &m);
         if (rc == 0) rc = ava1_disk_calibrate_result_encode(&m, &w);
+    }
+    else if (strcmp(name, "C2cAllow") == 0) {
+        ava1_c2c_allow_t m;
+        rc = ava1_c2c_allow_decode(in, in_len, &m);
+        if (rc == 0) rc = ava1_c2c_allow_encode(&m, &w);
+    }
+    else if (strcmp(name, "C2cTicket") == 0) {
+        ava1_c2c_ticket_t m;
+        rc = ava1_c2c_ticket_decode(in, in_len, &m);
+        if (rc == 0) rc = ava1_c2c_ticket_encode(&m, &w);
+    }
+    else if (strcmp(name, "C2cSend") == 0) {
+        ava1_c2c_send_t m;
+        rc = ava1_c2c_send_decode(in, in_len, &m);
+        if (rc == 0) rc = ava1_c2c_send_encode(&m, &w);
     }
     else if (strcmp(name, "MgmtText") == 0) {
         ava1_mgmt_text_t m;

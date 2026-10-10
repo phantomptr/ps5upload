@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <fcntl.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -1087,10 +1088,11 @@ static int encode_status(ava1_job_t *j, uint8_t *out, size_t cap, size_t *out_le
     pthread_mutex_lock(&j->mu);
     memcpy(st.job_id, j->id, 16);
     st.files_done = j->files_done;
-    st.files_total = j->have_manifest ? j->m.files : j->m_in.files;
+    /* A sender's manifest is its own walk (it never arrives in pages). */
+    st.files_total = j->have_manifest || j->kind == AVA1_JOB_DOWNLOAD ? j->m.files : j->m_in.files;
     st.bytes_received = j->bytes_received;
     st.bytes_durable = j->bytes_durable;
-    st.bytes_total = j->have_manifest ? j->m.bytes : j->m_in.bytes;
+    st.bytes_total = j->have_manifest || j->kind == AVA1_JOB_DOWNLOAD ? j->m.bytes : j->m_in.bytes;
     st.workers = j->want_workers;
     if (j->unswept_n) {
         st.has_unswept = 1;
@@ -1099,6 +1101,10 @@ static int encode_status(ava1_job_t *j, uint8_t *out, size_t cap, size_t *out_le
     if (j->sweep_err) { /* the files cannot be made durable: the sender must hear it */
         st.has_code = 1;
         st.code = AVA1_ERR_IO;
+    }
+    if (!st.has_code && j->finished && j->final_status != AVA1_STATUS_OK) { /* how a failed job ended */
+        st.has_code = 1;
+        st.code = j->final_status;
     }
     st.has_state = 1;
     st.state = !j->finished || (j->kind == AVA1_JOB_COPY && j->copy_move && !j->copy_delete_done)
@@ -1118,6 +1124,154 @@ static int encode_status(ava1_job_t *j, uint8_t *out, size_t cap, size_t *out_le
     pthread_mutex_unlock(&j->mu);
     *out_len = w.len;
     return rc == 0 ? AVA1_STATUS_OK : AVA1_ERR_INTERNAL;
+}
+
+/* ---- console to console (SPEC.md §18) ------------------------------------------- */
+
+#define C2C_LANES 4
+
+typedef struct {
+    ava1_job_t *j;
+    uint8_t sid[16];
+} c2c_run_t;
+
+static void c2c_cancel_peer(const uint8_t sid[16], const uint8_t job[16]) {
+    ava1_job_cancel_t c;
+    uint8_t b[64];
+    ava1_w_t w;
+    memset(&c, 0, sizeof c);
+    memcpy(c.job_id, job, 16);
+    c.reason = AVA1_ERR_CANCELLED;
+    ava1_w_init(&w, b, sizeof b);
+    if (ava1_job_cancel_encode(&c, &w) == 0) (void)ava1_server_send(sid, 0, AVA1_TYPE_JOB_CANCEL, 0, 0, b, w.len);
+}
+
+/* Watches one send to another console until it ends: a link that drops fails the job (the
+ * engine decides whether to try again or carry it itself), a cancel here cancels it there,
+ * and the session goes with the job. */
+static void *c2c_main(void *arg) {
+    c2c_run_t *r = arg;
+    ava1_job_t *j = r->j;
+    for (;;) {
+        int fin, stop;
+        ava1_job_t *listed = ava1_job_find(j->id);
+        pthread_mutex_lock(&j->mu);
+        fin = j->finished;
+        stop = j->stopping || listed != j; /* replaced (a relay took the job over) is as good as cancelled */
+        pthread_mutex_unlock(&j->mu);
+        if (listed) ava1_job_put(listed);
+        if (fin) break;
+        if (stop) {
+            c2c_cancel_peer(r->sid, j->id);
+            break;
+        }
+        if (!ava1_server_alive(r->sid)) ava1_data_fail_soon(j, AVA1_ERR_IO, "the connection to the other console dropped");
+        ava1_platform_sleep_ms(200);
+    }
+    ava1_platform_sleep_ms(200); /* the last frames (a JobDone, a JobCancel) go out before the hangup */
+    ava1_server_hangup(r->sid);
+    ava1_job_put(j);
+    free(r);
+    return NULL;
+}
+
+/* job.c2c.send: dial the other console with its ticket, open the job there as an upload and
+ * send it like a download. Answers with the job's Status once it runs. */
+static int c2c_send(const uint8_t *body, uint32_t len, const uint8_t peer[32], uint8_t *out, size_t cap,
+                    size_t *out_len) {
+    ava1_c2c_send_t c;
+    ava1_job_open_t o, q;
+    ava1_job_open_ack_t ack;
+    char host[64], src[AVA1_MAX_PATH + 1], dest[AVA1_MAX_PATH + 1], msg[160] = "", why[200] = "";
+    uint8_t sid[16], b[AVA1_MAX_PATH + 128];
+    struct stat st;
+    ava1_w_t w;
+    ava1_job_t *j;
+    c2c_run_t *r = NULL;
+    int rc;
+    if (ava1_c2c_send_decode(body, len, &c) != 0) return AVA1_ERR_PROTOCOL;
+    if (c.host_len == 0 || c.host_len >= sizeof host || c.src_len == 0 || c.src_len > AVA1_MAX_PATH ||
+        c.dest_len == 0 || c.dest_len > AVA1_MAX_PATH || memchr(c.host, 0, c.host_len) || memchr(c.src, 0, c.src_len) ||
+        memchr(c.dest, 0, c.dest_len))
+        return AVA1_ERR_PATH;
+    memcpy(host, c.host, c.host_len);
+    host[c.host_len] = 0;
+    memcpy(src, c.src, c.src_len);
+    src[c.src_len] = 0;
+    memcpy(dest, c.dest, c.dest_len);
+    dest[c.dest_len] = 0;
+    if (!D.running) return AVA1_ERR_BUSY;
+    if (stat(src, &st) != 0) {
+        ava1_rpc_msg(out, cap, out_len, "%s: %s", src, strerror(errno));
+        return AVA1_ERR_PATH;
+    }
+    /* A retry of the same job replaces the earlier send (its watcher hangs up). */
+    if ((j = ava1_job_find(c.job_id)) != NULL) {
+        if (j->c2c) ava1_recv_cancel(j);
+        ava1_job_put(j);
+    }
+    if (ava1_server_dial(host, c.port, c.key, c.token, c.job_id, C2C_LANES, sid, why, sizeof why) != 0) {
+        ava1_rpc_msg(out, cap, out_len, "%s", why);
+        return AVA1_ERR_IO;
+    }
+    memset(&o, 0, sizeof o);
+    memcpy(o.job_id, c.job_id, 16);
+    o.kind = AVA1_JOB_DOWNLOAD;
+    o.flags = c.flags & AVA1_JF_UNSAFE_READ;
+    o.root = (const uint8_t *)src;
+    o.root_len = (uint16_t)strlen(src);
+    o.has_credit = 1; /* no window until the other console's JobOpenAck grants one */
+    o.credit = 0;
+    if (!(j = ava1_send_open(&o, c.key, &ack, msg, sizeof msg))) {
+        ava1_server_hangup(sid);
+        ava1_rpc_msg(out, cap, out_len, "%s", msg[0] ? msg : "the send could not start");
+        return ack.status ? ack.status : AVA1_ERR_INTERNAL;
+    }
+    pthread_mutex_lock(&j->mu);
+    j->c2c = 1;
+    memcpy(j->c2c_by, peer, 32);
+    pthread_mutex_unlock(&j->mu);
+    /* The open goes out before the job is attached: its manifest pages follow it on the same
+     * connection, so the other console reads them in order. */
+    memset(&q, 0, sizeof q);
+    memcpy(q.job_id, c.job_id, 16);
+    q.kind = AVA1_JOB_UPLOAD;
+    q.policy = AVA1_POLICY_REPLACE;
+    q.flags = S_ISDIR(st.st_mode) ? 0 : AVA1_JF_SINGLE_FILE;
+    q.root = (const uint8_t *)dest;
+    q.root_len = (uint16_t)strlen(dest);
+    ava1_w_init(&w, b, sizeof b);
+    rc = ava1_job_open_encode(&q, &w);
+    if (rc == 0) rc = ava1_server_send(sid, 0, AVA1_TYPE_JOB_OPEN, 0, 0, b, w.len);
+    if (rc == 0) {
+        pthread_mutex_lock(&j->cmu);
+        j->emit = net_emit;
+        j->emit_ctx = NULL;
+        pthread_mutex_unlock(&j->cmu);
+        rc = ava1_job_attach(j, sid, 0);
+    }
+    if (rc == 0) r = calloc(1, sizeof *r);
+    if (!r) {
+        ava1_recv_cancel(j);
+        ava1_job_put(j);
+        ava1_server_hangup(sid);
+        ava1_rpc_msg(out, cap, out_len, "the other console stopped answering");
+        return AVA1_ERR_IO;
+    }
+    ava1_send_start(j);
+    rc = encode_status(j, out, cap, out_len);
+    r->j = j; /* the watcher takes our reference */
+    memcpy(r->sid, sid, 16);
+    if (ava1_data_spawn(c2c_main, r) != 0) {
+        ava1_recv_cancel(j);
+        c2c_cancel_peer(sid, j->id);
+        ava1_job_put(j);
+        ava1_server_hangup(sid);
+        free(r);
+        *out_len = 0;
+        return AVA1_ERR_INTERNAL;
+    }
+    return rc;
 }
 
 int ava1_data_rpc(uint16_t method, const uint8_t *body, uint32_t len, uint8_t *out, size_t cap,
@@ -1183,7 +1337,7 @@ int ava1_data_rpc(uint16_t method, const uint8_t *body, uint32_t len, uint8_t *o
         int st = AVA1_STATUS_OK;
         if (ava1_job_ref_decode(body, len, &r) != 0) return AVA1_ERR_PROTOCOL;
         if (!(j = ava1_job_find(r.job_id))) return AVA1_ERR_UNKNOWN_JOB;
-        if (memcmp(j->owner, peer, 32) != 0) {
+        if (memcmp(j->owner, peer, 32) != 0 && !(j->c2c && memcmp(j->c2c_by, peer, 32) == 0)) {
             ava1_job_put(j);
             return AVA1_ERR_UNKNOWN_JOB;
         }
@@ -1202,6 +1356,25 @@ int ava1_data_rpc(uint16_t method, const uint8_t *body, uint32_t len, uint8_t *o
         return ava1_op_list_rpc(peer, out, cap, out_len);
     case AVA1_METHOD_DISK_CALIBRATE:
         return ava1_calibrate(body, len, out, cap, out_len);
+    case AVA1_METHOD_C2C_ALLOW: {
+        ava1_c2c_allow_t a;
+        ava1_c2c_ticket_t t;
+        char root[AVA1_MAX_PATH + 1];
+        ava1_w_t w;
+        if (ava1_c2c_allow_decode(body, len, &a) != 0) return AVA1_ERR_PROTOCOL;
+        if (a.root_len == 0 || a.root_len > AVA1_MAX_PATH || memchr(a.root, 0, a.root_len)) return AVA1_ERR_PATH;
+        memcpy(root, a.root, a.root_len);
+        root[a.root_len] = 0;
+        memset(&t, 0, sizeof t);
+        /* The job will be the asking device's own: it reads its status and resumes it either way. */
+        if (ava1_server_c2c_allow(a.key, a.job_id, peer, root, t.token) != 0) return AVA1_ERR_INTERNAL;
+        ava1_w_init(&w, out, cap);
+        if (ava1_c2c_ticket_encode(&t, &w) != 0) return AVA1_ERR_INTERNAL;
+        *out_len = w.len;
+        return AVA1_STATUS_OK;
+    }
+    case AVA1_METHOD_C2C_SEND:
+        return c2c_send(body, len, peer, out, cap, out_len);
     default:
         return -1; /* not ours: the embedder's handler runs (ava1_glue.c, Task 21) */
     }

@@ -1366,6 +1366,23 @@ pub(crate) fn merge_live_notes(
             ps5upload_ava1::progress::bottleneck_name(bn).into(),
         );
     }
+    match n.route.load(Relaxed) {
+        ps5upload_core::transfer::LIVE_ROUTE_DIRECT => {
+            o.insert("route".into(), "direct".into());
+        }
+        ps5upload_core::transfer::LIVE_ROUTE_RELAY => {
+            o.insert("route".into(), "relay".into());
+            if let Some(why) = n
+                .route_reason
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+            {
+                o.insert("route_reason".into(), why.into());
+            }
+        }
+        _ => {}
+    }
     if n.settling.load(Relaxed) {
         o.insert("settling".into(), true.into());
         // How many files the console still has to make permanent, and the most it had: the
@@ -1658,6 +1675,7 @@ async fn ps5_to_ps5_handler(
     let durable_bytes = Arc::new(AtomicU64::new(0));
     let total = Arc::new(AtomicU64::new(0));
     let live = live_notes_for(job_id);
+    let route_notes = live.clone();
     let stop_ticker = spawn_progress_ticker(
         Arc::clone(&jobs),
         events_tx.clone(),
@@ -1711,7 +1729,9 @@ async fn ps5_to_ps5_handler(
             ps5upload_ava1::console::require_ava1(c)
         }) {
             Err(f) => Err(anyhow::Error::from(f)),
-            Ok(()) => ps5upload_ava1::relay::ps5_to_ps5(
+            // #433: straight between the consoles when they reach each other, else through
+            // this computer; the route (and why) shows on the job while it runs and after.
+            Ok(()) => ps5upload_ava1::c2c::ps5_to_ps5_routed(
                 &req.from,
                 &req.src,
                 &req.to,
@@ -1719,25 +1739,48 @@ async fn ps5_to_ps5_handler(
                 tx_id,
                 progress.clone(),
                 cancel,
+                |route| match route {
+                    ps5upload_ava1::c2c::Route::Direct => route_notes.route.store(
+                        ps5upload_core::transfer::LIVE_ROUTE_DIRECT,
+                        Ordering::Relaxed,
+                    ),
+                    ps5upload_ava1::c2c::Route::Relay { reason } => {
+                        *route_notes
+                            .route_reason
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) = Some(reason.clone());
+                        route_notes.route.store(
+                            ps5upload_core::transfer::LIVE_ROUTE_RELAY,
+                            Ordering::Relaxed,
+                        );
+                    }
+                },
             ),
         };
         let completed_at_ms = now_ms();
         let state = match result {
-            Ok(r) => JobState::Done {
-                started_at_ms,
-                completed_at_ms,
-                elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                tx_id_hex: ava1::hex::encode(&tx_id),
-                bytes_sent: progress.bytes_sent.load(Ordering::Relaxed),
-                dest: req.dest,
-                files_sent: r.files as u64,
-                skipped_files: 0,
-                skipped_bytes: 0,
-                commit_ack: Some(serde_json::json!({
-                    "protocol": "ava1", "files": r.files, "bytes": r.bytes,
-                    "resent": r.resent, "max_lanes": r.max_lanes,
-                })),
-            },
+            Ok((r, route)) => {
+                let (route, reason) = match route {
+                    ps5upload_ava1::c2c::Route::Direct => ("direct", None),
+                    ps5upload_ava1::c2c::Route::Relay { reason } => ("relay", Some(reason)),
+                };
+                JobState::Done {
+                    started_at_ms,
+                    completed_at_ms,
+                    elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                    tx_id_hex: ava1::hex::encode(&tx_id),
+                    bytes_sent: progress.bytes_sent.load(Ordering::Relaxed),
+                    dest: req.dest,
+                    files_sent: r.files as u64,
+                    skipped_files: 0,
+                    skipped_bytes: 0,
+                    commit_ack: Some(serde_json::json!({
+                        "protocol": "ava1", "files": r.files, "bytes": r.bytes,
+                        "resent": r.resent, "max_lanes": r.max_lanes,
+                        "route": route, "route_reason": reason,
+                    })),
+                }
+            }
             Err(e) => job_failed_from_err(started_at_ms, completed_at_ms, &e),
         };
         stop_ticker.store(true, Ordering::Release);

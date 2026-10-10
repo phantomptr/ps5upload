@@ -70,3 +70,22 @@ describe("job live notes", () => {
     expect(jobLiveFromSnapshot({ commit_ack: { warning: null } })).toBeUndefined();
   });
 });
+
+describe("a console-to-console copy's route (#433)", () => {
+  it("is direct while running and after, with no reason", () => {
+    expect(jobLiveFromSnapshot({ route: "direct" })).toMatchObject({ route: "direct" });
+    expect(jobLiveFromSnapshot({ commit_ack: { route: "direct", route_reason: null } })?.routeReason).toBeUndefined();
+  });
+
+  it("through this computer carries why", () => {
+    const live = jobLiveFromSnapshot({
+      commit_ack: { route: "relay", route_reason: "the consoles could not connect to each other" },
+    });
+    expect(live?.route).toBe("relay");
+    expect(live?.routeReason).toBe("the consoles could not connect to each other");
+  });
+
+  it("ignores a route word it does not know", () => {
+    expect(jobLiveFromSnapshot({ route: "carrier pigeon" })).toBeUndefined();
+  });
+});

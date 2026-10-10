@@ -113,4 +113,19 @@ int ava1_server_post_room(const uint8_t sid[16]);
 /* The ids of the session's live lanes (1..AVA1_MAX_LANES); returns how many. */
 int ava1_server_lanes(const uint8_t sid[16], uint16_t out[AVA1_MAX_LANES]);
 
+/* Console to console (SPEC.md §18). On the receiving console: a ticket for `key` to send one
+ * job `job` into `root`, acting for `owner` (the device asking); the token goes to the sender.
+ * 0, or -1. */
+int ava1_server_c2c_allow(const uint8_t key[32], const uint8_t job[16], const uint8_t owner[32], const char *root,
+                          uint8_t token[16]);
+/* On the sending console: dials host:port, proves the peer is `expect`, shows `token`, joins up
+ * to `lanes` lanes and runs the session like an accepted one, except that the peer may make no
+ * call and send nothing but its answers about `job` (it is the receiver of that one job).
+ * 0 and *sid_out, or -1 with why. */
+int ava1_server_dial(const char *host, uint16_t port, const uint8_t expect[32], const uint8_t token[16],
+                     const uint8_t job[16], uint16_t lanes, uint8_t sid_out[16], char *why, size_t cap);
+/* The session is live (not ended, not hung up). */
+int ava1_server_alive(const uint8_t sid[16]);
+/* Ends a session: its connections are shut down and its jobs parked as their readers leave. */
+void ava1_server_hangup(const uint8_t sid[16]);
 #endif

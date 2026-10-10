@@ -25,6 +25,8 @@ pub const METHOD_JOB_COPY: u16 = 16;
 pub const METHOD_JOB_STATUS: u16 = 17;
 pub const METHOD_JOB_CANCEL: u16 = 18;
 pub const METHOD_DISK_CALIBRATE: u16 = 19;
+pub const METHOD_C2C_ALLOW: u16 = 22;
+pub const METHOD_C2C_SEND: u16 = 23;
 pub const ERR_PATH: u16 = 9;
 pub const ERR_NO_SPACE: u16 = 10;
 pub const ERR_UNKNOWN_JOB: u16 = 11;
@@ -1710,6 +1712,7 @@ impl Message for ServerInfo {
 pub struct ClientInfo {
     pub nonce_c: [u8; 16],
     pub name: Option<String>,
+    pub token: Option<[u8; 16]>,
 }
 
 impl Message for ClientInfo {
@@ -1719,8 +1722,10 @@ impl Message for ClientInfo {
         w.fixed(&self.nonce_c);
         let mut ext_n: u16 = 0;
         if self.name.is_some() { ext_n += 1; }
+        if self.token.is_some() { ext_n += 1; }
         w.u16(ext_n);
         if let Some(v) = &self.name { w.ext(1, |w| { w.str(v) })?; }
+        if let Some(v) = &self.token { w.ext(2, |w| { w.fixed(v); Ok(()) })?; }
         Ok(())
     }
 
@@ -1738,6 +1743,12 @@ impl Message for ClientInfo {
                     if m.name.is_some() { return Err(DecodeError::DupExt(1)); }
                     let mut vr = Reader::new(v);
                     m.name = Some(vr.str()?);
+                    vr.finish()?;
+                }
+                2 => {
+                    if m.token.is_some() { return Err(DecodeError::DupExt(2)); }
+                    let mut vr = Reader::new(v);
+                    m.token = Some(vr.fixed::<16>()?);
                     vr.finish()?;
                 }
                 _ => {}
@@ -2219,6 +2230,123 @@ impl Message for DiskCalibrateResult {
         let mut r = Reader::new(b);
         let mut m = Self::default();
         m.points = r.records::<CalPoint>()?;
+        let ext_n = r.u16()?;
+        for _ in 0..ext_n {
+            let tag = r.u16()?;
+            let len = r.u32()? as usize;
+            let v = r.take(len)?;
+            let _ = (tag, v);
+        }
+        r.finish()?;
+        Ok(m)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct C2cAllow {
+    pub job_id: [u8; 16],
+    pub key: [u8; 32],
+    pub root: String,
+}
+
+impl Message for C2cAllow {
+    const NAME: &'static str = "C2cAllow";
+
+    fn encode_into(&self, w: &mut Writer) -> Result<(), EncodeError> {
+        w.fixed(&self.job_id);
+        w.fixed(&self.key);
+        w.str(&self.root)?;
+        w.u16(0);
+        Ok(())
+    }
+
+    fn decode(b: &[u8]) -> Result<Self, DecodeError> {
+        let mut r = Reader::new(b);
+        let mut m = Self::default();
+        m.job_id = r.fixed::<16>()?;
+        m.key = r.fixed::<32>()?;
+        m.root = r.str()?;
+        let ext_n = r.u16()?;
+        for _ in 0..ext_n {
+            let tag = r.u16()?;
+            let len = r.u32()? as usize;
+            let v = r.take(len)?;
+            let _ = (tag, v);
+        }
+        r.finish()?;
+        Ok(m)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct C2cTicket {
+    pub token: [u8; 16],
+}
+
+impl Message for C2cTicket {
+    const NAME: &'static str = "C2cTicket";
+
+    fn encode_into(&self, w: &mut Writer) -> Result<(), EncodeError> {
+        w.fixed(&self.token);
+        w.u16(0);
+        Ok(())
+    }
+
+    fn decode(b: &[u8]) -> Result<Self, DecodeError> {
+        let mut r = Reader::new(b);
+        let mut m = Self::default();
+        m.token = r.fixed::<16>()?;
+        let ext_n = r.u16()?;
+        for _ in 0..ext_n {
+            let tag = r.u16()?;
+            let len = r.u32()? as usize;
+            let v = r.take(len)?;
+            let _ = (tag, v);
+        }
+        r.finish()?;
+        Ok(m)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct C2cSend {
+    pub job_id: [u8; 16],
+    pub host: String,
+    pub port: u16,
+    pub key: [u8; 32],
+    pub token: [u8; 16],
+    pub src: String,
+    pub dest: String,
+    pub flags: u32,
+}
+
+impl Message for C2cSend {
+    const NAME: &'static str = "C2cSend";
+
+    fn encode_into(&self, w: &mut Writer) -> Result<(), EncodeError> {
+        w.fixed(&self.job_id);
+        w.str(&self.host)?;
+        w.u16(self.port);
+        w.fixed(&self.key);
+        w.fixed(&self.token);
+        w.str(&self.src)?;
+        w.str(&self.dest)?;
+        w.u32(self.flags);
+        w.u16(0);
+        Ok(())
+    }
+
+    fn decode(b: &[u8]) -> Result<Self, DecodeError> {
+        let mut r = Reader::new(b);
+        let mut m = Self::default();
+        m.job_id = r.fixed::<16>()?;
+        m.host = r.str()?;
+        m.port = r.u16()?;
+        m.key = r.fixed::<32>()?;
+        m.token = r.fixed::<16>()?;
+        m.src = r.str()?;
+        m.dest = r.str()?;
+        m.flags = r.u32()?;
         let ext_n = r.u16()?;
         for _ in 0..ext_n {
             let tag = r.u16()?;
@@ -3228,7 +3356,7 @@ impl Message for JnlDone {
 }
 
 /// Every message and struct, by name (conformance tests).
-pub const ALL: &[&str] = &["Hs1", "Hs2", "Hs3", "Welcome", "PairPakeClient", "PairPakeServer", "PairConfirm", "PairResult", "Join", "JoinAck", "Ping", "Pong", "Error", "Bye", "RpcRequest", "RpcResponse", "JobOpen", "JobOpenAck", "ManifestPage", "ManifestEnd", "JobMap", "Resume", "Chunk", "Bundle", "Received", "Credit", "Durable", "FileRoot", "FileRetry", "Status", "JobDone", "JobCancel", "NodeInfo", "HelloInfo", "ServerInfo", "ClientInfo", "PairingOpen", "CryptoBench", "CryptoBenchResult", "ManifestEntry", "FileRun", "FileRange", "BundleRecord", "RootItem", "JobCopy", "JobRef", "DiskCalibrate", "CalPoint", "DiskCalibrateResult", "MgmtText", "NodeStatus", "FsList", "FsEntry", "FsListResult", "FsPath", "FsStat", "FsFreeSpace", "FsMkdir", "FsRename", "FsChmod", "FsRead", "FsReadResult", "FsWrite", "JobRun", "JobEntry", "JobListResult", "JnlOpen", "JnlBatch", "PackRef", "JnlSweep", "JnlReset", "JnlSnapshot", "JnlDone", ];
+pub const ALL: &[&str] = &["Hs1", "Hs2", "Hs3", "Welcome", "PairPakeClient", "PairPakeServer", "PairConfirm", "PairResult", "Join", "JoinAck", "Ping", "Pong", "Error", "Bye", "RpcRequest", "RpcResponse", "JobOpen", "JobOpenAck", "ManifestPage", "ManifestEnd", "JobMap", "Resume", "Chunk", "Bundle", "Received", "Credit", "Durable", "FileRoot", "FileRetry", "Status", "JobDone", "JobCancel", "NodeInfo", "HelloInfo", "ServerInfo", "ClientInfo", "PairingOpen", "CryptoBench", "CryptoBenchResult", "ManifestEntry", "FileRun", "FileRange", "BundleRecord", "RootItem", "JobCopy", "JobRef", "DiskCalibrate", "CalPoint", "DiskCalibrateResult", "C2cAllow", "C2cTicket", "C2cSend", "MgmtText", "NodeStatus", "FsList", "FsEntry", "FsListResult", "FsPath", "FsStat", "FsFreeSpace", "FsMkdir", "FsRename", "FsChmod", "FsRead", "FsReadResult", "FsWrite", "JobRun", "JobEntry", "JobListResult", "JnlOpen", "JnlBatch", "PackRef", "JnlSweep", "JnlReset", "JnlSnapshot", "JnlDone", ];
 
 #[doc(hidden)]
 pub fn sample(name: &str, rng: &mut SplitMix) -> Option<Vec<u8>> {
@@ -3268,7 +3396,7 @@ pub fn sample(name: &str, rng: &mut SplitMix) -> Option<Vec<u8>> {
         "NodeInfo" => NodeInfo { version: rng.ascii(20), platform: rng.ascii(20), name: rng.ascii(20), firmware: if rng.below(2) == 1 { Some(rng.ascii(20)) } else { None }, }.to_bytes().ok(),
         "HelloInfo" => HelloInfo { version_min: rng.next_u64() as u16, version_max: rng.next_u64() as u16, caps: rng.next_u64(), }.to_bytes().ok(),
         "ServerInfo" => ServerInfo { version: rng.next_u64() as u16, caps: rng.next_u64(), session_id: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, pair_commit: { let mut a = [0u8; 32]; rng.fill(&mut a); a }, name: if rng.below(2) == 1 { Some(rng.ascii(20)) } else { None }, }.to_bytes().ok(),
-        "ClientInfo" => ClientInfo { nonce_c: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, name: if rng.below(2) == 1 { Some(rng.ascii(20)) } else { None }, }.to_bytes().ok(),
+        "ClientInfo" => ClientInfo { nonce_c: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, name: if rng.below(2) == 1 { Some(rng.ascii(20)) } else { None }, token: if rng.below(2) == 1 { Some({ let mut a = [0u8; 16]; rng.fill(&mut a); a }) } else { None }, }.to_bytes().ok(),
         "PairingOpen" => PairingOpen { seconds: rng.next_u64() as u16, }.to_bytes().ok(),
         "CryptoBench" => CryptoBench { mib: rng.next_u64() as u16, }.to_bytes().ok(),
         "CryptoBenchResult" => CryptoBenchResult { bytes: rng.next_u64(), micros: rng.next_u64(), open_micros: if rng.below(2) == 1 { Some(rng.next_u64()) } else { None }, backend: if rng.below(2) == 1 { Some(rng.ascii(20)) } else { None }, }.to_bytes().ok(),
@@ -3282,6 +3410,9 @@ pub fn sample(name: &str, rng: &mut SplitMix) -> Option<Vec<u8>> {
         "DiskCalibrate" => DiskCalibrate { dir: rng.ascii(20), files: rng.next_u64() as u32, size: rng.next_u64() as u32, }.to_bytes().ok(),
         "CalPoint" => CalPoint { workers: rng.next_u64() as u8, files_per_s: rng.next_u64() as u32, create_us: rng.next_u64() as u32, fsync_us: rng.next_u64() as u32, }.to_bytes().ok(),
         "DiskCalibrateResult" => DiskCalibrateResult { points: vec![CalPoint::default(); rng.below(3) as usize], }.to_bytes().ok(),
+        "C2cAllow" => C2cAllow { job_id: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, key: { let mut a = [0u8; 32]; rng.fill(&mut a); a }, root: rng.ascii(20), }.to_bytes().ok(),
+        "C2cTicket" => C2cTicket { token: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, }.to_bytes().ok(),
+        "C2cSend" => C2cSend { job_id: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, host: rng.ascii(20), port: rng.next_u64() as u16, key: { let mut a = [0u8; 32]; rng.fill(&mut a); a }, token: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, src: rng.ascii(20), dest: rng.ascii(20), flags: rng.next_u64() as u32, }.to_bytes().ok(),
         "MgmtText" => MgmtText { body: { let n = rng.below(41) as usize; let mut v = vec![0u8; n]; rng.fill(&mut v); v }, more: if rng.below(2) == 1 { Some(rng.next_u64() as u8) } else { None }, }.to_bytes().ok(),
         "NodeStatus" => NodeStatus { version: rng.ascii(20), ps5_kernel: rng.ascii(20), instance_id: rng.next_u64(), started_at_unix: rng.next_u64(), command_count: rng.next_u64(), startup_reason: rng.next_u64() as u16, ucred_elevated: rng.next_u64() as u8, max_transfer_streams: rng.next_u64() as u8, fan_threshold: rng.next_u64() as u16, fan_reapply_sec: rng.next_u64() as u16, prior_instance: if rng.below(2) == 1 { Some(rng.ascii(20)) } else { None }, }.to_bytes().ok(),
         "FsList" => FsList { path: rng.ascii(20), offset: rng.next_u64() as u32, limit: rng.next_u64() as u16, }.to_bytes().ok(),
@@ -3365,6 +3496,9 @@ pub fn roundtrip(name: &str, bytes: &[u8]) -> Option<Result<Vec<u8>, String>> {
         "DiskCalibrate" => rt::<DiskCalibrate>(bytes),
         "CalPoint" => rt::<CalPoint>(bytes),
         "DiskCalibrateResult" => rt::<DiskCalibrateResult>(bytes),
+        "C2cAllow" => rt::<C2cAllow>(bytes),
+        "C2cTicket" => rt::<C2cTicket>(bytes),
+        "C2cSend" => rt::<C2cSend>(bytes),
         "MgmtText" => rt::<MgmtText>(bytes),
         "NodeStatus" => rt::<NodeStatus>(bytes),
         "FsList" => rt::<FsList>(bytes),

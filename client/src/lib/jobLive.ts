@@ -13,6 +13,9 @@
 //                                 finished (the engine sees `unswept` > 0): "Finishing on the console"
 //   settle_files_left/_total      with `settling`: how many files the console still has to make
 //                                 permanent, and the most it had (the "N of M" and the time left)
+//   route / route_reason          a console-to-console copy (#433): "direct" between the consoles,
+//                                 or "relay" through this computer and why (live while running, and
+//                                 in the finished job's commit_ack)
 //
 // The contract is written down in protocol/ava1/CLIENT_CONTRACT.md.
 
@@ -30,6 +33,9 @@ export interface JobLive {
   settleTotal?: number;
   /** A finished job that carries the engine's "console did not confirm saving" warning. */
   unsettled?: boolean;
+  /** A console-to-console copy's route, and why it went through this computer. */
+  route?: "direct" | "relay";
+  routeReason?: string;
 }
 
 /** The snapshot fields this module reads (all optional). */
@@ -41,7 +47,14 @@ export interface JobLiveFields {
   settling?: boolean | null;
   settle_files_left?: number | null;
   settle_files_total?: number | null;
-  commit_ack?: { bottleneck?: string | null; warning?: string | null } | null;
+  route?: string | null;
+  route_reason?: string | null;
+  commit_ack?: {
+    bottleneck?: string | null;
+    warning?: string | null;
+    route?: string | null;
+    route_reason?: string | null;
+  } | null;
 }
 
 /** Maps the engine's bottleneck word (`ps5upload_ava1::progress::bottleneck_name`) to a
@@ -81,7 +94,11 @@ export function jobLiveFromSnapshot(
   const settling = snap.settling === true;
   const warning = snap.commit_ack?.warning;
   const unsettled = typeof warning === "string" && warning.trim() !== "";
-  if (!skipping && !bottleneck && !settling && !unsettled) return undefined;
+  const routeWord = snap.route ?? snap.commit_ack?.route;
+  const route = routeWord === "direct" || routeWord === "relay" ? routeWord : undefined;
+  const reasonWord = (snap.route_reason ?? snap.commit_ack?.route_reason ?? "").trim();
+  const routeReason = route === "relay" && reasonWord ? reasonWord : undefined;
+  if (!skipping && !bottleneck && !settling && !unsettled && !route) return undefined;
   const counted =
     settling && typeof snap.settle_files_left === "number" && Number.isFinite(snap.settle_files_left);
   const settleLeft = counted ? Math.max(0, snap.settle_files_left as number) : 0;
@@ -96,5 +113,7 @@ export function jobLiveFromSnapshot(
     settling,
     ...(counted ? { settleLeft, settleTotal } : {}),
     ...(unsettled ? { unsettled } : {}),
+    ...(route ? { route } : {}),
+    ...(routeReason ? { routeReason } : {}),
   };
 }

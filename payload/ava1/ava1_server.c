@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -20,6 +21,7 @@
 #include "ava1_conn.h"
 #include "ava1_frame.h"
 #include "ava1_gen.h"
+#include "ava1_manifest.h"
 #include "ava1_noise.h"
 #include "ava1_platform.h"
 #include "ava1_store.h"
@@ -82,6 +84,14 @@ typedef struct {
      * control thread leaves, but no lane may join it and it is no longer counted. */
     int superseded;
     conn_t *members[MEMBERS];
+    /* This console dialled the peer (ava1_server_dial): its lanes are ours, no Join comes in. */
+    int outbound;
+    /* Admitted by a console-to-console ticket (SPEC.md §18): one job into one root, as the
+     * device that asked for the ticket, and nothing else (no RPC, no other job). */
+    int restricted;
+    uint8_t r_job[16];
+    uint8_t r_owner[32];
+    char r_root[AVA1_MAX_PATH + 1];
     /* The live connection per lane (lane 0 = control); each holds a reference
      * (ava1_server_send/_post/_lanes). */
     conn_t *conn[AVA1_MAX_LANES + 1];
@@ -122,6 +132,18 @@ static struct {
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static __thread uint8_t rpc_peer[32];
+
+/* Console-to-console tickets (SPEC.md §18), under mu. One admits one key, with its token,
+ * for one job into one root; it lasts TICKET_MS from its last use, so a sender whose link
+ * dropped can come back to resume. */
+#define TICKETS 8
+#define TICKET_MS (10u * 60u * 1000u)
+static struct {
+    int used;
+    uint8_t key[32], token[16], job[16], owner[32];
+    char root[AVA1_MAX_PATH + 1];
+    uint64_t until_ms;
+} tickets[TICKETS];
 
 const uint8_t *ava1_server_rpc_peer(void) { return rpc_peer; }
 /* Serialises peers-file writes. Taken before mu, and held across the write so two
@@ -221,9 +243,17 @@ static void member_drop(conn_t *k) {
  * threads) and their per-address counts given back at once. */
 static void supersede_locked(int keep, const uint8_t peer[32]) {
     int i, m;
+    const sess_t *k = &S.sessions[keep];
     for (i = 0; i < MAX_SESSIONS; i++) {
         sess_t *s = &S.sessions[i];
         if (i == keep || !s->used || s->superseded || memcmp(s->peer_key, peer, 32) != 0) continue;
+        /* A console this one dialled is not that device reconnecting; a ticket's session (another
+         * console sending) replaces only an earlier session for the same job, so two sends from
+         * one console run side by side. */
+        if (s->outbound) continue;
+        if ((k->restricted || s->restricted) &&
+            !(k->restricted && s->restricted && memcmp(k->r_job, s->r_job, 16) == 0))
+            continue;
         s->superseded = 1;
         for (m = 0; m < MEMBERS; m++) {
             if (!s->members[m]) continue;
@@ -327,6 +357,47 @@ static unsigned unpaired_locked(void) {
         if ((s->used && !s->paired && !s->superseded) || (!s->used && s->reserved && s->unpaired_hold)) n++;
     }
     return n;
+}
+
+int ava1_server_c2c_allow(const uint8_t key[32], const uint8_t job[16], const uint8_t owner[32], const char *root,
+                          uint8_t token[16]) {
+    int i, slot = 0;
+    uint64_t t = now_ms();
+    if (strlen(root) > AVA1_MAX_PATH || ava1_platform_random(token, 16) != 0) return -1;
+    pthread_mutex_lock(&mu);
+    /* The same sender and job again (a retry) replaces its ticket; else a free or expired
+     * slot; else the one that expires first. */
+    for (i = 0; i < TICKETS; i++) {
+        if (tickets[i].used && memcmp(tickets[i].key, key, 32) == 0 && memcmp(tickets[i].job, job, 16) == 0) {
+            slot = i;
+            break;
+        }
+        if (!tickets[i].used || tickets[i].until_ms <= t) slot = i;
+        else if (tickets[slot].used && tickets[slot].until_ms > t && tickets[i].until_ms < tickets[slot].until_ms)
+            slot = i;
+    }
+    tickets[slot].used = 1;
+    memcpy(tickets[slot].key, key, 32);
+    memcpy(tickets[slot].token, token, 16);
+    memcpy(tickets[slot].job, job, 16);
+    memcpy(tickets[slot].owner, owner, 32);
+    snprintf(tickets[slot].root, sizeof tickets[slot].root, "%s", root);
+    tickets[slot].until_ms = t + TICKET_MS;
+    pthread_mutex_unlock(&mu);
+    return 0;
+}
+
+/* Caller holds mu. The live ticket for this key and token, renewed, or -1. */
+static int ticket_take_locked(const uint8_t key[32], const uint8_t token[16]) {
+    int i;
+    uint64_t t = now_ms();
+    for (i = 0; i < TICKETS; i++)
+        if (tickets[i].used && tickets[i].until_ms > t && memcmp(tickets[i].key, key, 32) == 0 &&
+            crypto_verify16(tickets[i].token, token) == 0) {
+            tickets[i].until_ms = t + TICKET_MS;
+            return i;
+        }
+    return -1;
 }
 
 /* Fills a slot from sess_reserve; k is its control connection. */
@@ -746,7 +817,8 @@ static int do_rpc(conn_t *k, int idx, const uint8_t sid[16], uint32_t ch, const 
         return 1;
     }
     pthread_mutex_lock(&mu);
-    paired = S.sessions[idx].paired;
+    /* A ticket admits a job, never a call; and a console this one dialled to send to may call nothing here. */
+    paired = S.sessions[idx].paired && !S.sessions[idx].restricted && !S.sessions[idx].outbound;
     slot = paired && S.sessions[idx].rpc_inflight < RPC_WORKERS;
     if (slot) S.sessions[idx].rpc_inflight++;
     pthread_mutex_unlock(&mu);
@@ -809,19 +881,47 @@ static int do_rpc(conn_t *k, int idx, const uint8_t sid[16], uint32_t ch, const 
     return 0;
 }
 
+/* Caller holds mu. A frame a ticket's session may send: its job's, and an open only of an
+ * upload into the ticket's root. */
+static int ticket_frame_ok(const sess_t *s, uint8_t type, const uint8_t *body, size_t len) {
+    if (len < 16 || memcmp(body, s->r_job, 16) != 0) return 0;
+    if (type == AVA1_TYPE_JOB_OPEN) {
+        ava1_job_open_t o;
+        if (ava1_job_open_decode(body, len, &o) != 0 || o.kind != AVA1_JOB_UPLOAD || o.has_src) return 0;
+        return o.root_len == strlen(s->r_root) && memcmp(o.root, s->r_root, o.root_len) == 0;
+    }
+    return 1;
+}
+
 /* 0 = keep going; nonzero = close the connection. */
 static int handle_frame(conn_t *k, int idx, const uint8_t sid[16], uint16_t lane, uint8_t type,
                         uint8_t flags, uint32_t ch, const uint8_t *body, size_t len) {
     if (is_data_type(type)) {
-        int paired;
+        int paired, allowed = 1;
         uint8_t peer[32];
         if (lane != 0) return 0; /* lane data frames are handled in serve_loop */
         pthread_mutex_lock(&mu);
         paired = sess_is_locked(idx, sid) && S.sessions[idx].paired;
-        if (paired) memcpy(peer, S.sessions[idx].peer_key, 32);
+        if (paired && S.sessions[idx].restricted) {
+            /* A ticket's session acts for the device that asked for the ticket, on its one job. */
+            memcpy(peer, S.sessions[idx].r_owner, 32);
+            allowed = ticket_frame_ok(&S.sessions[idx], type, body, len);
+        } else if (paired && S.sessions[idx].outbound) {
+            /* The console we send to answers our one job as its receiver, and does nothing else. */
+            memcpy(peer, S.sessions[idx].peer_key, 32);
+            allowed = len >= 16 && memcmp(body, S.sessions[idx].r_job, 16) == 0 && type != AVA1_TYPE_JOB_OPEN &&
+                      type != AVA1_TYPE_RESUME && type != AVA1_TYPE_MANIFEST_PAGE &&
+                      type != AVA1_TYPE_MANIFEST_END && type != AVA1_TYPE_FILE_ROOT;
+        } else if (paired) {
+            memcpy(peer, S.sessions[idx].peer_key, 32);
+        }
         pthread_mutex_unlock(&mu);
         if (!paired) { /* SPEC.md §5: nothing but PairConfirm before the pairing is accepted */
             (void)send_error(&k->io, AVA1_ERR_NOT_PAIRED, "pair first");
+            return 1;
+        }
+        if (!allowed) {
+            (void)send_error(&k->io, AVA1_ERR_NOT_PAIRED, "the ticket does not cover this");
             return 1;
         }
         if (!S.cfg.data || !S.cfg.data->on_control) return 0;
@@ -904,6 +1004,13 @@ static int serve_tick(void *arg) {
  * reading has its connection broken (shut down), which ends the read below too. */
 static void serve_loop(conn_t *k, int idx, const uint8_t sid[16], uint16_t lane, uint32_t gen, uint8_t *buf) {
     serve_t x;
+    int restricted, outbound;
+    uint8_t r_job[16];
+    pthread_mutex_lock(&mu);
+    restricted = S.sessions[idx].restricted;
+    outbound = S.sessions[idx].outbound;
+    memcpy(r_job, S.sessions[idx].r_job, 16);
+    pthread_mutex_unlock(&mu);
     memset(&x, 0, sizeof x);
     x.k = k;
     x.idx = idx;
@@ -930,9 +1037,11 @@ static void serve_loop(conn_t *k, int idx, const uint8_t sid[16], uint16_t lane,
             /* A lane data frame's body never touches the 64 KiB control buffer: it is
              * admitted against credit, read into its own heap buffer and handed over. */
             const ava1_data_hooks_t *dh = S.cfg.data;
+            if (outbound) break; /* we send on our lanes; the receiver has nothing to send on them */
             if (!dh || !dh->admit || !dh->on_lane || dh->admit(sid, lane, blen) != 0) break;
             heap = ava1_frame_alloc(blen, NULL); /* pooled: released with ava1_frame_free(heap, ava1_frame_cap(blen)) */
-            if (!heap || ava1_conn_recv_body(&k->io, heap, blen) != 0) {
+            if (!heap || ava1_conn_recv_body(&k->io, heap, blen) != 0 ||
+                (restricted && (blen < 16 || memcmp(heap, r_job, 16) != 0))) { /* a ticket's one job only */
                 (void)ava1_frame_free(heap, ava1_frame_cap(blen));
                 dh->on_lane(sid, lane, h.type, h.channel, NULL, blen);
                 break;
@@ -974,7 +1083,7 @@ static void run_control(conn_t *k, uint8_t *buf, size_t len) {
     uint8_t type, flags;
     uint32_t ch;
     ava1_w_t w;
-    int known, open, busy = 0, notify = 0, idx, filled = 0, ci_ok;
+    int known, open, busy = 0, notify = 0, idx, filled = 0, ci_ok, ticket = -1;
     uint32_t pair_code = 0;
 
     memset(&ns, 0, sizeof ns);
@@ -1042,6 +1151,16 @@ static void run_control(conn_t *k, uint8_t *buf, size_t len) {
     pthread_mutex_lock(&mu);
     known = ava1_peers_contains(&S.peers, ns.rs);
     open = now_ms() < S.pairing_until_ms;
+    /* Another console with a ticket for one job (SPEC.md §18). */
+    if (!known && ci.has_token) ticket = ticket_take_locked(ns.rs, ci.token);
+    if (ticket >= 0) {
+        known = 1;
+        open = 0;
+        S.sessions[idx].restricted = 1;
+        memcpy(S.sessions[idx].r_job, tickets[ticket].job, 16);
+        memcpy(S.sessions[idx].r_owner, tickets[ticket].owner, 32);
+        snprintf(S.sessions[idx].r_root, sizeof S.sessions[idx].r_root, "%s", tickets[ticket].root);
+    }
     /* Message 3 has just proved the client holds ns.rs: any session that key still has
      * is replaced, before the limits below. */
     if (known || open) supersede_locked(idx, ns.rs);
@@ -1068,7 +1187,7 @@ static void run_control(conn_t *k, uint8_t *buf, size_t len) {
     memset(&wel, 0, sizeof wel);
     wel.knows_you = known ? 1 : 0;
     memcpy(wel.nonce_s, nonce_s, 16); /* the reveal; the client checks it against si.pair_commit */
-    if (known && S.cfg.has_launch && memcmp(ns.rs, S.cfg.launch_key, 32) == 0) {
+    if (known && ticket < 0 && S.cfg.has_launch && memcmp(ns.rs, S.cfg.launch_key, 32) == 0) {
         wel.has_launch_proof = 1;
         ava1_launch_proof(S.cfg.launch_token, ns.h, wel.launch_proof);
     }
@@ -1077,8 +1196,18 @@ static void run_control(conn_t *k, uint8_t *buf, size_t len) {
     /* Registered BEFORE the Welcome goes out: a client opens its lanes the moment it is
      * welcomed, and a Join that beat the registration was refused as an unknown session. If
      * the send then fails, the control connection is dead and the session ends with it. */
-    sess_fill(idx, k, sid, c2s, s2c, known, ns.rs, peer_name);
-    filled = 1;
+    {
+        sess_t r = S.sessions[idx]; /* sess_fill starts the slot afresh: the ticket's terms carry over */
+        sess_fill(idx, k, sid, c2s, s2c, known, ns.rs, peer_name);
+        filled = 1;
+        pthread_mutex_lock(&mu);
+        S.sessions[idx].restricted = r.restricted;
+        memcpy(S.sessions[idx].r_job, r.r_job, 16);
+        memcpy(S.sessions[idx].r_owner, r.r_owner, 32);
+        memcpy(S.sessions[idx].r_root, r.r_root, sizeof r.r_root);
+        pthread_mutex_unlock(&mu);
+        crypto_wipe(&r, sizeof r);
+    }
     pthread_mutex_lock(&mu);
     S.sessions[idx].pair_code = pair_code;
     memcpy(S.sessions[idx].h, ns.h, 64);
@@ -1159,6 +1288,7 @@ static void run_lane(conn_t *k, uint8_t *buf, size_t len) {
     }
     pthread_mutex_lock(&mu);
     idx = sess_find_locked(j.session_id);
+    if (idx >= 0 && S.sessions[idx].outbound) idx = -1; /* the peer knows its keys: it must not add lanes to ours */
     if (idx >= 0) {
         sess_t *s = &S.sessions[idx];
         ava1_join_tag(s->c2s, j.session_id, j.lane_id, j.client_nonce, expect);
@@ -1445,5 +1575,347 @@ void ava1_server_stop(void) {
     S.listen_fd = -1;
     pthread_mutex_lock(&mu);
     S.accept_started = 0;
+    pthread_mutex_unlock(&mu);
+}
+
+/* ---- console to console: the session this console dials (SPEC.md §18) ---------------- */
+
+typedef struct {
+    conn_t *k;
+    int idx;
+    uint8_t sid[16];
+    uint16_t lane;
+    uint32_t gen;
+} outbound_t;
+
+static int connect_to(const char *host, uint16_t port, uint32_t ms, char *why, size_t cap) {
+    struct sockaddr_in a;
+    struct pollfd p;
+    int fd, one = 1, err = 0, fl;
+    socklen_t elen = sizeof err;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    if (inet_pton(AF_INET, host, &a.sin_addr) != 1) {
+        snprintf(why, cap, "%s is not an IPv4 address", host);
+        return -1;
+    }
+    if ((fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        snprintf(why, cap, "socket: %s", strerror(errno));
+        return -1;
+    }
+    (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+#ifdef SO_NOSIGPIPE
+    (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#endif
+    (void)ava1_conn_tune_buffers(fd, NULL, NULL); /* before connect: the window scale is set at the handshake */
+    fl = fcntl(fd, F_GETFL, 0);
+    (void)fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    if (connect(fd, (struct sockaddr *)&a, sizeof a) != 0) {
+        if (errno != EINPROGRESS) {
+            err = errno;
+        } else {
+            p.fd = fd;
+            p.events = POLLOUT;
+            p.revents = 0;
+            if (poll(&p, 1, (int)ms) != 1) err = ETIMEDOUT;
+            else if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) != 0) err = errno;
+        }
+    }
+    if (err) {
+        snprintf(why, cap, "cannot reach %s: %s", host, strerror(err));
+        close(fd);
+        return -1;
+    }
+    (void)fcntl(fd, F_SETFL, fl);
+    return fd;
+}
+
+/* A connection this console opened, counted like an accepted one (it is not counted per address). */
+static conn_t *conn_new_outbound(int fd) {
+    conn_t *k = calloc(1, sizeof *k);
+    int admit;
+    if (!k) return NULL;
+    pthread_mutex_lock(&mu);
+    admit = S.conns < MAX_CONNS;
+    if (admit) S.conns++;
+    pthread_mutex_unlock(&mu);
+    if (!admit) {
+        free(k);
+        return NULL;
+    }
+    ava1_conn_init(&k->io, fd);
+    k->refs = 1;
+    k->member = -1;
+    return k;
+}
+
+/* Why a peer refused us, from its sealed or plain Error frame. */
+static void error_text(const uint8_t *b, size_t len, char *why, size_t cap) {
+    ava1_error_t e;
+    if (ava1_error_decode(b, len, &e) == 0)
+        snprintf(why, cap, "refused: %.*s", (int)(e.message_len > 160 ? 160 : e.message_len), (const char *)e.message);
+    else snprintf(why, cap, "refused");
+}
+
+/* Noise XX as the initiator on k, then the Welcome. 0, or -1 with why. */
+static int dial_handshake(conn_t *k, const uint8_t expect[32], const uint8_t token[16], uint8_t sid[16],
+                          uint8_t c2s[32], uint8_t s2c[32], char *peer_name, uint8_t *buf, char *why, size_t cap) {
+    ava1_noise_t ns;
+    ava1_identity_t eph;
+    ava1_hello_info_t hello;
+    ava1_server_info_t si;
+    ava1_client_info_t ci;
+    ava1_hs2_t m2;
+    ava1_welcome_t wel;
+    uint8_t secret[32], pl[512], msg[600], commit[32];
+    size_t pn, mn, len;
+    uint8_t type, flags;
+    uint32_t ch;
+    ava1_w_t w;
+    int rc = -1;
+    memset(&ns, 0, sizeof ns);
+    memset(&eph, 0, sizeof eph);
+    snprintf(why, cap, "the handshake failed");
+    if (ava1_platform_random(secret, 32) != 0) goto out;
+    ava1_identity_from_secret(&eph, secret);
+    ava1_noise_init(&ns, 1, &S.cfg.identity, &eph, PROLOGUE, sizeof PROLOGUE);
+    memset(&hello, 0, sizeof hello);
+    hello.version_min = hello.version_max = AVA1_PROTOCOL_VERSION;
+    hello.caps = S.cfg.caps;
+    ava1_w_init(&w, pl, sizeof pl);
+    if (ava1_hello_info_encode(&hello, &w) != 0 || ava1_noise_write(&ns, pl, w.len, msg, sizeof msg, &mn) != 0 ||
+        send_noise(&k->io, AVA1_TYPE_HS1, msg, mn) != 0)
+        goto out;
+    if (ava1_conn_recv(&k->io, &type, &flags, &ch, buf, CTRL_MAX, &len) != 0) goto out;
+    if (type == AVA1_TYPE_ERROR) {
+        error_text(buf, len, why, cap);
+        goto out;
+    }
+    if (type != AVA1_TYPE_HS2 || ava1_hs2_decode(buf, len, &m2) != 0 ||
+        ava1_noise_read(&ns, m2.noise, m2.noise_len, pl, sizeof pl, &pn) != 0 ||
+        ava1_server_info_decode(pl, pn, &si) != 0)
+        goto out;
+    /* The console the caller named, proved by message 2, or nothing goes out. */
+    if (!ava1_ct_eq32(ns.rs, expect)) {
+        snprintf(why, cap, "the console that answered is not the one expected");
+        goto out;
+    }
+    memcpy(sid, si.session_id, 16);
+    memcpy(commit, si.pair_commit, 32);
+    clean_name(si.has_name ? si.name : NULL, si.has_name ? si.name_len : 0, peer_name);
+    memset(&ci, 0, sizeof ci);
+    if (ava1_platform_random(ci.nonce_c, 16) != 0) goto out;
+    ci.has_name = 1;
+    ci.name = (const uint8_t *)S.cfg.name;
+    ci.name_len = (uint16_t)strlen(S.cfg.name);
+    ci.has_token = 1;
+    memcpy(ci.token, token, 16);
+    ava1_w_init(&w, pl, sizeof pl);
+    if (ava1_client_info_encode(&ci, &w) != 0 || ava1_noise_write(&ns, pl, w.len, msg, sizeof msg, &mn) != 0 ||
+        send_noise(&k->io, AVA1_TYPE_HS3, msg, mn) != 0 || ava1_noise_split(&ns, c2s, s2c) != 0)
+        goto out;
+    ava1_control_key(c2s, k->io.send_key);
+    ava1_control_key(s2c, k->io.recv_key);
+    k->io.keyed = 1;
+    if (ava1_conn_recv(&k->io, &type, &flags, &ch, buf, CTRL_MAX, &len) != 0) goto out;
+    if (type == AVA1_TYPE_ERROR) {
+        error_text(buf, len, why, cap);
+        goto out;
+    }
+    if (type != AVA1_TYPE_WELCOME || ava1_welcome_decode(buf, len, &wel) != 0) goto out;
+    ava1_pair_commit(wel.nonce_s, pl);
+    if (!ava1_ct_eq32(pl, commit)) goto out;
+    if (!wel.knows_you) {
+        snprintf(why, cap, "the other console did not accept the ticket");
+        goto out;
+    }
+    why[0] = 0;
+    rc = 0;
+out:
+    ava1_noise_wipe(&ns);
+    crypto_wipe(&eph, sizeof eph);
+    crypto_wipe(secret, sizeof secret);
+    crypto_wipe(pl, sizeof pl);
+    crypto_wipe(msg, sizeof msg);
+    return rc;
+}
+
+/* One lane of the dialled session: Join, JoinAck, the keys, and the first sealed frame. */
+static int dial_lane(conn_t *k, const uint8_t sid[16], uint16_t lane, const uint8_t c2s[32], const uint8_t s2c[32],
+                     uint8_t *buf) {
+    ava1_join_t j;
+    ava1_join_ack_t ack;
+    uint8_t out[96], want[16];
+    ava1_w_t w;
+    size_t len;
+    uint8_t type, flags;
+    uint32_t ch;
+    memset(&j, 0, sizeof j);
+    memcpy(j.session_id, sid, 16);
+    j.lane_id = lane;
+    if (ava1_platform_random(j.client_nonce, 16) != 0) return -1;
+    ava1_join_tag(c2s, sid, lane, j.client_nonce, j.tag);
+    ava1_w_init(&w, out, sizeof out);
+    if (ava1_join_encode(&j, &w) != 0 || ava1_conn_send(&k->io, AVA1_TYPE_JOIN, 0, out, w.len) != 0) return -1;
+    if (ava1_conn_recv(&k->io, &type, &flags, &ch, buf, CTRL_MAX, &len) != 0 || type != AVA1_TYPE_JOIN_ACK ||
+        ava1_join_ack_decode(buf, len, &ack) != 0 || ack.lane_id != lane)
+        return -1;
+    ava1_join_ack_tag(s2c, sid, lane, j.client_nonce, ack.server_nonce, want);
+    if (crypto_verify16(want, ack.tag) != 0) return -1;
+    ava1_lane_key(c2s, lane, j.client_nonce, ack.server_nonce, k->io.send_key);
+    ava1_lane_key(s2c, lane, j.client_nonce, ack.server_nonce, k->io.recv_key);
+    k->io.keyed = 1;
+    return send_liveness(&k->io, AVA1_TYPE_PING, 0, now_ms() * 1000u) == 0 ? 0 : -1; /* publishes the lane there */
+}
+
+static void outbound_close(conn_t *k) {
+    member_drop(k);
+    ava1_conn_drain(&k->io, 250);
+    shutdown(k->io.fd, SHUT_RDWR);
+    conn_put(k);
+}
+
+static void *outbound_main(void *arg) {
+    outbound_t o = *(outbound_t *)arg;
+    uint8_t *buf = malloc(CTRL_MAX);
+    free(arg);
+    if (buf) serve_loop(o.k, o.idx, o.sid, o.lane, o.gen, buf);
+    free(buf);
+    conn_withdraw(o.idx, o.sid, o.lane, o.k);
+    if (o.lane != 0) {
+        if (S.cfg.data && S.cfg.data->on_lane_change) S.cfg.data->on_lane_change(o.sid, o.lane, 0);
+    } else {
+        if (S.cfg.data && S.cfg.data->on_session_end) S.cfg.data->on_session_end(o.sid);
+        sess_remove(o.idx, o.sid);
+    }
+    outbound_close(o.k);
+    return NULL;
+}
+
+/* Publishes k as the session's `lane` and starts its reader. 0, or -1 (k is then closed). */
+static int outbound_start(conn_t *k, int idx, const uint8_t sid[16], uint16_t lane) {
+    outbound_t *o = calloc(1, sizeof *o);
+    int ok;
+    pthread_mutex_lock(&mu);
+    ok = o && sess_is_locked(idx, sid) && !S.sessions[idx].superseded;
+    if (ok) {
+        member_add_locked(idx, k);
+        o->gen = lane ? ++S.sessions[idx].lane_gen[lane] : 0;
+    }
+    pthread_mutex_unlock(&mu);
+    if (!ok) {
+        free(o);
+        outbound_close(k);
+        return -1;
+    }
+    o->k = k;
+    o->idx = idx;
+    memcpy(o->sid, sid, 16);
+    o->lane = lane;
+    conn_publish(idx, sid, lane, k);
+    if (lane && S.cfg.data && S.cfg.data->on_lane_change) S.cfg.data->on_lane_change(sid, lane, 1);
+    if (spawn_detached(outbound_main, o) != 0) {
+        conn_withdraw(idx, sid, lane, k);
+        if (lane && S.cfg.data && S.cfg.data->on_lane_change) S.cfg.data->on_lane_change(sid, lane, 0);
+        free(o);
+        outbound_close(k);
+        return -1;
+    }
+    return 0;
+}
+
+int ava1_server_dial(const char *host, uint16_t port, const uint8_t expect[32], const uint8_t token[16],
+                     const uint8_t job[16], uint16_t lanes, uint8_t sid_out[16], char *why, size_t cap) {
+    uint8_t sid[16], c2s[32], s2c[32];
+    char peer_name[64] = "";
+    uint8_t *buf = malloc(CTRL_MAX);
+    conn_t *k = NULL;
+    int fd, idx = -1, rc = -1;
+    uint16_t l, up = 0;
+    memset(c2s, 0, sizeof c2s);
+    memset(s2c, 0, sizeof s2c);
+    if (!buf) {
+        snprintf(why, cap, "out of memory");
+        return -1;
+    }
+    if (lanes == 0) lanes = 1;
+    if (lanes > AVA1_MAX_LANES) lanes = AVA1_MAX_LANES;
+    if ((fd = connect_to(host, port, cfg_or(S.cfg.handshake_ms, 5000), why, cap)) < 0) goto out;
+    if (!(k = conn_new_outbound(fd))) {
+        close(fd);
+        snprintf(why, cap, "too many connections");
+        goto out;
+    }
+    set_timeouts(fd, cfg_or(S.cfg.handshake_ms, 5000));
+    k->io.deadline_ms = now_ms() + cfg_or(S.cfg.handshake_ms, 5000);
+    if (dial_handshake(k, expect, token, sid, c2s, s2c, peer_name, buf, why, cap) != 0) goto out;
+    if ((idx = sess_reserve()) < 0) {
+        snprintf(why, cap, "too many sessions");
+        goto out;
+    }
+    sess_fill(idx, k, sid, c2s, s2c, 1, expect, peer_name);
+    pthread_mutex_lock(&mu);
+    S.sessions[idx].outbound = 1;
+    memcpy(S.sessions[idx].r_job, job, 16); /* the one job the peer may speak about */
+    pthread_mutex_unlock(&mu);
+    member_drop(k); /* outbound_start lists it again */
+    if (outbound_start(k, idx, sid, 0) != 0) {
+        k = NULL;
+        sess_remove(idx, sid);
+        snprintf(why, cap, "cannot start a thread");
+        goto out;
+    }
+    k = NULL;
+    for (l = 1; l <= lanes; l++) {
+        conn_t *kl;
+        int lfd = connect_to(host, port, cfg_or(S.cfg.handshake_ms, 5000), why, cap);
+        if (lfd < 0) break;
+        if (!(kl = conn_new_outbound(lfd))) {
+            close(lfd);
+            break;
+        }
+        set_timeouts(lfd, cfg_or(S.cfg.handshake_ms, 5000));
+        kl->io.deadline_ms = now_ms() + cfg_or(S.cfg.handshake_ms, 5000);
+        if (dial_lane(kl, sid, l, c2s, s2c, buf) != 0) {
+            outbound_close(kl);
+            break;
+        }
+        if (outbound_start(kl, idx, sid, l) != 0) break;
+        up++;
+    }
+    if (up == 0) { /* a session with no lane cannot carry a byte */
+        ava1_server_hangup(sid);
+        if (!why[0]) snprintf(why, cap, "no data lane could join");
+        goto out;
+    }
+    memcpy(sid_out, sid, 16);
+    rc = 0;
+out:
+    if (k) outbound_close(k);
+    crypto_wipe(c2s, sizeof c2s);
+    crypto_wipe(s2c, sizeof s2c);
+    free(buf);
+    return rc;
+}
+
+int ava1_server_alive(const uint8_t sid[16]) {
+    int alive;
+    pthread_mutex_lock(&mu);
+    alive = sess_find_locked(sid) >= 0;
+    pthread_mutex_unlock(&mu);
+    return alive;
+}
+
+void ava1_server_hangup(const uint8_t sid[16]) {
+    int i, m;
+    pthread_mutex_lock(&mu);
+    for (i = 0; i < MAX_SESSIONS; i++) {
+        sess_t *s = &S.sessions[i];
+        if (!s->used || memcmp(s->sid, sid, 16) != 0) continue;
+        s->superseded = 1; /* no send reaches it any more; its readers end at their next tick */
+        for (m = 0; m < MEMBERS; m++)
+            if (s->members[m]) shutdown(s->members[m]->io.fd, SHUT_RDWR);
+    }
     pthread_mutex_unlock(&mu);
 }

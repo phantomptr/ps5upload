@@ -676,11 +676,44 @@ static int on_frame(ava1_job_t *j, uint8_t type, const uint8_t *body, size_t len
         pthread_mutex_unlock(&j->mu);
         return 0;
     }
+    case AVA1_TYPE_JOB_OPEN_ACK: {
+        /* Sending to another console (SPEC.md §18): we opened the job there, and its answer
+         * carries the window. A download never gets one (it sends its own). */
+        ava1_job_open_ack_t a;
+        if (ava1_job_open_ack_decode(body, len, &a) != 0) return 1;
+        if (a.status != AVA1_STATUS_OK) {
+            char why[sizeof j->message];
+            snprintf(why, sizeof why, "the other console refused: %.*s", a.has_message ? (int)a.message_len : 0,
+                     a.has_message ? (const char *)a.message : "");
+            ava1_data_fail_soon(j, a.status, why);
+            return 0;
+        }
+        pthread_mutex_lock(&j->mu);
+        credit_locked(s, a.credit);
+        pthread_cond_broadcast(&j->cv);
+        pthread_mutex_unlock(&j->mu);
+        return 0;
+    }
     case AVA1_TYPE_JOB_DONE:
     case AVA1_TYPE_JOB_CANCEL:
         /* The peer concluded the job: stop, never answer with a JobDone of our own (C10). */
         ava1_log_job_event(type == AVA1_TYPE_JOB_DONE ? "peer-done" : "peer-cancel", j, AVA1_STATUS_OK);
         pthread_mutex_lock(&j->mu);
+        if (!j->finished) { /* how it ended there is how it ended: a status reader asks us */
+            ava1_job_done_t d;
+            if (type == AVA1_TYPE_JOB_DONE && ava1_job_done_decode(body, len, &d) == 0) {
+                j->final_status = d.status;
+                j->files_done = d.files;
+                j->bytes_durable = d.bytes;
+                if (d.status != AVA1_STATUS_OK)
+                    snprintf(j->message, sizeof j->message, "%.*s", d.has_message ? (int)d.message_len : 0,
+                             d.has_message ? (const char *)d.message : "");
+            } else if (type == AVA1_TYPE_JOB_CANCEL) {
+                j->final_status = AVA1_ERR_CANCELLED;
+                snprintf(j->message, sizeof j->message, "cancelled by the receiver");
+            }
+            __atomic_store_n(&j->parked_at_ms, ava1_mono_ms(), __ATOMIC_RELEASE);
+        }
         s->stop = 1;
         j->finished = 1;
         pthread_cond_broadcast(&j->cv);

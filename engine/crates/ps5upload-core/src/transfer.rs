@@ -189,6 +189,10 @@ pub struct LiveNotes {
     /// most it reported: the numerator and denominator of "Finishing on the console: N left".
     pub unswept: std::sync::atomic::AtomicU32,
     pub unswept_peak: std::sync::atomic::AtomicU32,
+    /// A console-to-console job's route (`LIVE_ROUTE_*`; 0 = not known yet), and why it
+    /// went through this computer when it did.
+    pub route: std::sync::atomic::AtomicU8,
+    pub route_reason: std::sync::Mutex<Option<String>>,
     /// The job's telemetry (where its time went, the console's own end-of-job line), as the
     /// transport last reported it. The engine writes it into the per-job record when the job
     /// ends (review 009 #4).
@@ -196,6 +200,8 @@ pub struct LiveNotes {
 }
 
 pub const LIVE_PHASE_SKIPPING: u8 = 1;
+pub const LIVE_ROUTE_DIRECT: u8 = 1;
+pub const LIVE_ROUTE_RELAY: u8 = 2;
 
 /// An entry's name, reading UTF-8 even when the zip doesn't say so.
 ///

@@ -4195,6 +4195,10 @@ export interface JobSnapshot {
    *  Absent on engines that do not send the counts. */
   settle_files_left?: number;
   settle_files_total?: number;
+  /** A console-to-console copy (#433): "direct" between the consoles or "relay" through this
+   *  computer, and why not direct. Absent until the route is known (and on other jobs). */
+  route?: string;
+  route_reason?: string;
   /** The final status of a finished job (AVA1: protocol, files, bytes, bottleneck, ...). */
   commit_ack?: { bottleneck?: string } & Record<string, unknown>;
   /** Files actually sent (Done only). */

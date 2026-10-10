@@ -963,6 +963,7 @@ async fn the_c_server_refuses_a_client_without_its_pairing_nonce() {
     let with = gen::ClientInfo {
         nonce_c: [1; 16],
         name: Some("x".into()),
+        token: None,
     }
     .to_bytes()
     .unwrap();
@@ -1007,6 +1008,7 @@ async fn the_c_server_notifies_only_once_welcome_is_sent() {
         let ci = gen::ClientInfo {
             nonce_c: [7; 16],
             name: Some("ghost".into()),
+            token: None,
         };
         let noise = hs.write(&ci.to_bytes().unwrap()).unwrap();
         w.send_msg(0, &gen::Hs3 { noise }).await.unwrap();

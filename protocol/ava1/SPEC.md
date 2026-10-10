@@ -306,6 +306,8 @@ delays liveness.
 | 17 | `job.status` | `JobRef{job_id}` | `Status`, ext `state` |
 | 18 | `job.cancel` | `JobRef{job_id}` | empty |
 | 19 | `disk.calibrate` | `DiskCalibrate{dir, files, size}` | `DiskCalibrateResult` (§16.10) |
+| 22 | `c2c.allow` | `C2cAllow{job_id, key, root}` | `C2cTicket{token}` (§18) |
+| 23 | `c2c.send` | `C2cSend{job_id, host, port, key, token, src, dest, flags}` | `Status`, ext `state` (§18) |
 | 4–141 | management methods | see §7.3 and `MGMT_METHODS.md` | see §7.3 |
 
 `Status.state` is 0 while the job runs, 1 when it finished OK and 2 when it failed (the cause is
@@ -1179,3 +1181,41 @@ only in case) fail the job terminally (`ava1_7z_unsupported`, `ava1_rar_unsuppor
 coder method falls back to FTX2, since FTX2 has the same problem with the others (it writes both duplicates, or
 hits the same decoder memory limit). A RAR's listing order is compared with its extraction order only when a
 non-solid resume skips entries by position; any other pass binds entries by path.
+
+## 18. Console to console
+
+One console can send a job straight to another, without the bytes passing through the device
+that asked (`engine/crates/ps5upload-ava1/src/c2c.rs`). Neither console is paired with the other;
+the device paired with both (the engine) introduces them for one job.
+
+18.1 `c2c.allow` (22), on the receiving console B: `C2cAllow{job_id, key, root}`, where `key` is the
+sending console A's identity. B answers `C2cTicket{token}`: 16 random bytes. A ticket admits that
+one key, showing that token, for that one job into that one `root`, acting for the device that
+called `c2c.allow` (the job on B is that device's own, so it reads its `job.status` and can resume
+it over any route). A ticket lasts 10 minutes from its last use; the same key and job again
+replaces it. A node holds at most 8.
+
+18.2 `c2c.send` (23), on A: `C2cSend{job_id, host, port, key, token, src, dest, flags}`. A dials
+`host:port` (IPv4), runs the handshake as the client and refuses unless the static key the server
+proves in message 2 is `key`. Its `ClientInfo` carries the ticket in ext tag 2 `token`. B admits a
+key it does not know only with a live ticket for it: it answers `Welcome{knows_you = 1}` and marks
+the session restricted. A joins up to 4 lanes (§9), sends `JobOpen{job_id, JOB_UPLOAD,
+POLICY_REPLACE, JF_SINGLE_FILE when src is a file, root = dest}` and then runs the job as the
+sender (§11–§13), exactly like a download's sender except that its window is the grant in B's
+`JobOpenAck` and the job ends with B's `JobDone`. The reply is the sending job's `Status` once it
+runs; a dial, handshake or ticket failure is `ERR_IO` with the reason as text. A's job is listed
+under `job_id` and its `job.status` / `job.cancel` answer the device that called `c2c.send`. When
+the session drops before the job ends, A fails the job (`ERR_IO`); a cancel on A sends B a
+`JobCancel`. Either way B keeps its journal, so a later `c2c.send` or upload with the same
+`job_id` resumes.
+
+18.3 A restricted session may send no RPC (`ERR_NOT_PAIRED`), and only data frames whose
+`job_id` is the ticket's: a `JobOpen` only of kind `JOB_UPLOAD` without `src` into the ticket's
+`root`. Any other frame closes it. A ticket's session replaces (§8) only an earlier session for
+the same job from the same key, so one console's sends of different jobs run side by side.
+
+18.4 The session A dialled is held to the same rule from A's side: B may send no RPC, nothing
+on the lanes, and on the control connection only a receiver's frames (`JobOpenAck`, `JobMap`,
+`Received`, `Credit`, `FileRetry`, `Durable`, `Status`, `JobDone`, `JobCancel`) for the one job;
+anything else closes it. No lane may join it, and no handshake to A replaces it.
+

@@ -172,6 +172,7 @@ where
     let ci = ClientInfo {
         nonce_c,
         name: Some(my_name.to_string()),
+        token: None,
     }
     .to_bytes()?;
     w.send_msg(
@@ -761,6 +762,7 @@ mod tests {
             ClientInfo {
                 nonce_c: [1; 16],
                 name: Some("x".into()),
+                token: None,
             }
             .to_bytes()
             .unwrap()[16..]
@@ -777,6 +779,7 @@ mod tests {
         let ci = ClientInfo {
             nonce_c: [1; 16],
             name: Some("x".into()),
+            token: None,
         }
         .to_bytes()
         .unwrap();

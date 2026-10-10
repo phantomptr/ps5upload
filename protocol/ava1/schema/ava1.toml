@@ -215,7 +215,9 @@ ext = [{ tag = 1, name = "name", ty = "str" }]
 [[struct]]
 name = "ClientInfo"
 fields = [{ name = "nonce_c", ty = "b16" }]   # the client's pairing-code contribution (SPEC.md §4.6)
-ext = [{ tag = 1, name = "name", ty = "str" }]
+# token: a console sending to another one (SPEC.md §18) shows the ticket that console's
+# c2c.allow handed out; it admits that one key for that one job.
+ext = [{ tag = 1, name = "name", ty = "str" }, { tag = 2, name = "token", ty = "b16" }]
 
 [[struct]]
 name = "PairingOpen"
@@ -265,6 +267,14 @@ value = 18
 name = "METHOD_DISK_CALIBRATE"
 ty = "u16"
 value = 19
+[[const]]
+name = "METHOD_C2C_ALLOW"   # this console may receive one job from another console (SPEC.md §18)
+ty = "u16"
+value = 22
+[[const]]
+name = "METHOD_C2C_SEND"    # this console sends to another console, directly (SPEC.md §18)
+ty = "u16"
+value = 23
 [[const]]
 name = "ERR_PATH"
 ty = "u16"
@@ -615,6 +625,30 @@ fields = [
 [[struct]]
 name = "DiskCalibrateResult"
 fields = [{ name = "points", ty = "records", of = "CalPoint" }]
+
+# Console to console (SPEC.md §18). key: the sending console's identity; root: where the
+# job may write. The reply's token goes to the sender, which shows it in its ClientInfo.
+[[struct]]
+name = "C2cAllow"
+fields = [{ name = "job_id", ty = "b16" }, { name = "key", ty = "b32" }, { name = "root", ty = "str" }]
+
+[[struct]]
+name = "C2cTicket"
+fields = [{ name = "token", ty = "b16" }]
+
+# key: the receiving console's identity (the handshake must prove it); dest: its root.
+[[struct]]
+name = "C2cSend"
+fields = [
+  { name = "job_id", ty = "b16" },
+  { name = "host", ty = "str" },
+  { name = "port", ty = "u16" },
+  { name = "key", ty = "b32" },
+  { name = "token", ty = "b16" },
+  { name = "src", ty = "str" },
+  { name = "dest", ty = "str" },
+  { name = "flags", ty = "u32" },
+]
 
 
 # ── Management RPCs (SPEC.md §7.3, MGMT_METHODS.md) ───────────────────────────

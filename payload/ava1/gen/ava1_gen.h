@@ -29,6 +29,8 @@
 #define AVA1_METHOD_JOB_STATUS 17ULL
 #define AVA1_METHOD_JOB_CANCEL 18ULL
 #define AVA1_METHOD_DISK_CALIBRATE 19ULL
+#define AVA1_METHOD_C2C_ALLOW 22ULL
+#define AVA1_METHOD_C2C_SEND 23ULL
 #define AVA1_ERR_PATH 9ULL
 #define AVA1_ERR_NO_SPACE 10ULL
 #define AVA1_ERR_UNKNOWN_JOB 11ULL
@@ -274,6 +276,8 @@ typedef struct {
     int has_name;
     const uint8_t *name;
     uint16_t name_len;
+    int has_token;
+    uint8_t token[16];
 } ava1_client_info_t;
 
 int ava1_client_info_encode(const ava1_client_info_t *m, ava1_w_t *w);
@@ -459,6 +463,52 @@ int ava1_disk_calibrate_result_decode(const uint8_t *buf, size_t len, ava1_disk_
 int ava1_disk_calibrate_result_append(ava1_w_t *blob, const ava1_disk_calibrate_result_t *m);
 int ava1_disk_calibrate_result_next(ava1_r_t *it, ava1_disk_calibrate_result_t *out);
 int ava1_disk_calibrate_result_count(const uint8_t *p, uint32_t len, uint32_t *count);
+
+typedef struct {
+    uint8_t job_id[16];
+    uint8_t key[32];
+    const uint8_t *root;
+    uint16_t root_len;
+} ava1_c2c_allow_t;
+
+int ava1_c2c_allow_encode(const ava1_c2c_allow_t *m, ava1_w_t *w);
+int ava1_c2c_allow_decode(const uint8_t *buf, size_t len, ava1_c2c_allow_t *m);
+
+int ava1_c2c_allow_append(ava1_w_t *blob, const ava1_c2c_allow_t *m);
+int ava1_c2c_allow_next(ava1_r_t *it, ava1_c2c_allow_t *out);
+int ava1_c2c_allow_count(const uint8_t *p, uint32_t len, uint32_t *count);
+
+typedef struct {
+    uint8_t token[16];
+} ava1_c2c_ticket_t;
+
+int ava1_c2c_ticket_encode(const ava1_c2c_ticket_t *m, ava1_w_t *w);
+int ava1_c2c_ticket_decode(const uint8_t *buf, size_t len, ava1_c2c_ticket_t *m);
+
+int ava1_c2c_ticket_append(ava1_w_t *blob, const ava1_c2c_ticket_t *m);
+int ava1_c2c_ticket_next(ava1_r_t *it, ava1_c2c_ticket_t *out);
+int ava1_c2c_ticket_count(const uint8_t *p, uint32_t len, uint32_t *count);
+
+typedef struct {
+    uint8_t job_id[16];
+    const uint8_t *host;
+    uint16_t host_len;
+    uint16_t port;
+    uint8_t key[32];
+    uint8_t token[16];
+    const uint8_t *src;
+    uint16_t src_len;
+    const uint8_t *dest;
+    uint16_t dest_len;
+    uint32_t flags;
+} ava1_c2c_send_t;
+
+int ava1_c2c_send_encode(const ava1_c2c_send_t *m, ava1_w_t *w);
+int ava1_c2c_send_decode(const uint8_t *buf, size_t len, ava1_c2c_send_t *m);
+
+int ava1_c2c_send_append(ava1_w_t *blob, const ava1_c2c_send_t *m);
+int ava1_c2c_send_next(ava1_r_t *it, ava1_c2c_send_t *out);
+int ava1_c2c_send_count(const uint8_t *p, uint32_t len, uint32_t *count);
 
 typedef struct {
     const uint8_t *body;
