@@ -114,7 +114,6 @@ function PkgRow({
   entry,
   host,
   installed,
-  installDisabled,
   deleteDisabled,
   alternativeKey,
   selectedForInstallAll,
@@ -127,7 +126,6 @@ function PkgRow({
   entry: PkgEntry;
   host: string;
   installed: boolean;
-  installDisabled: boolean;
   deleteDisabled: boolean;
   alternativeKey?: string;
   selectedForInstallAll?: boolean;
@@ -393,7 +391,6 @@ function PkgRow({
                   size="sm"
                   leftIcon={<Download size={13} />}
                   onClick={onRetryStream}
-                  disabled={installDisabled}
                   title={tr(
                     "pkglib.retry_stream_hint",
                     undefined,
@@ -410,15 +407,6 @@ function PkgRow({
                   installed ? <RotateCcw size={13} /> : <Download size={13} />
                 }
                 onClick={onInstall}
-                disabled={installDisabled}
-                title={
-                  installDisabled
-                    ? tr(
-                        "pkglib.install.busyHint",
-                        "Installing replaces the PS5 payload, which would interrupt an active upload. Wait for the current upload (or install) to finish first.",
-                      )
-                    : undefined
-                }
               >
                 {installed
                   ? tr("pkglib.reinstall", "Reinstall")
@@ -461,7 +449,6 @@ function PkgRow({
             type="checkbox"
             checked={!!selectedForInstallAll}
             onChange={onSelectAlternative}
-            disabled={installDisabled}
             className="mt-0.5 accent-[var(--color-accent)]"
           />
           <span className="min-w-0 leading-snug">
@@ -1345,10 +1332,6 @@ export default function InstallPackageScreen() {
     }
     return [...grouped.values()];
   }, [entries]);
-  // Installs go into the console's queue, which runs them one at a time, so a
-  // busy console never blocks the Install button — the click just queues.
-  const installBlocked = false;
-
   const renderPkgRow = (entry: PkgEntry) => {
     // A row whose install is waiting or running in the console queue shows it
     // (and can't be deleted from under the queued install).
@@ -1366,7 +1349,6 @@ export default function InstallPackageScreen() {
         entry={entry}
         host={host}
         installed={installed}
-        installDisabled={installBlocked}
         deleteDisabled={installing || !!queued}
         alternativeKey={alternativeKey}
         selectedForInstallAll={

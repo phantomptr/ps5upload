@@ -1000,9 +1000,8 @@ interface PkgLibraryState {
   entries: PkgEntry[];
   loading: boolean;
   error: string | null;
-  /** True while an install is mid-flight (including the time it spends queued
-   *  behind an active upload). Installs swap the payload in/out, so the UI
-   *  blocks refresh/other installs until it settles. */
+  /** True while this console's queue is running an install. The Install
+   *  screen holds refreshes and package deletes until it settles. */
   installing: boolean;
   /** Human-readable "what's happening" line shown while an install or .pkg
    *  upload is QUEUED behind an active transfer (the PS5 can only do one at a

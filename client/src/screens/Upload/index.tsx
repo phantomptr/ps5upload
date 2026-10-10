@@ -86,7 +86,7 @@ import { isRemotePath } from "../../lib/remotePath";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { useUploadQueueStore } from "../../state/uploadQueue";
 import { SendAsImageCard } from "./SendAsImageCard";
-import { pkgLibraryStore, usePkgLibrary } from "../../state/pkgLibrary";
+import { pkgLibraryStore } from "../../state/pkgLibrary";
 import { pkgStorageFor } from "../../lib/pkgStorage";
 import { useInstallSettingsStore } from "../../state/installSettings";
 import { useRecentHostMetricsStore } from "../../state/recentHostMetrics";
@@ -1138,20 +1138,11 @@ function Step2Options(props: {
   // the user confirms the destination console.
   const rosterProfiles = useRosterStore((s) => s.profiles);
   const multiConsole = rosterProfiles.length > 1;
-  // An install streams the DPI loader to the single-payload loader, which
-  // replaces the payload that owns the transfer port — so starting an upload
-  // mid-install would just fail (or race the payload swap). Disable while an
-  // install is running, symmetric to InstallPackage disabling install during
-  // an upload. Per-console store: disable upload only when THIS PS5 is
-  // mid-install, not when some other console is.
-  const installing = usePkgLibrary(stepHost, (s) => s.installing);
+  // No separate install check: an install leaves the helper alone (the
+  // installer daemon runs beside it), and it runs as a console-queue item,
+  // so `queueRunning` already covers it and Add to queue stays open.
   const uploadDisabled =
-    detecting ||
-    inFlight ||
-    preflightBusy ||
-    queueRunning ||
-    installing ||
-    !!detectError;
+    detecting || inFlight || preflightBusy || queueRunning || !!detectError;
 
   return (
     <>
