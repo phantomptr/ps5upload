@@ -239,11 +239,26 @@ export function daysSinceLastSeen(
  *  "N days ago". Drives the Installed-Apps not-played surface (#116). The
  *  honest phrasing is "seen" — it's when ps5upload last observed the title
  *  running, not Sony's console-side last-played (which the app can't read
- *  cheaply). `now` injectable for tests. */
-export function formatLastSeen(ms: number | undefined, now = Date.now()): string {
+ *  cheaply). `now` injectable for tests. `locale` is the app language (a BCP-47
+ *  tag); it defaults to English so callers without one stay deterministic. */
+export function formatLastSeen(
+  ms: number | undefined,
+  now = Date.now(),
+  locale = "en",
+): string {
   const d = daysSinceLastSeen(ms, now);
   if (d === null) return "never";
-  if (d === 0) return "today";
-  if (d === 1) return "yesterday";
-  return `${d} days ago`;
+  try {
+    // `numeric: "auto"` turns 0 and -1 days into "today" / "yesterday" (and
+    // their equivalents in other languages); older reads "N days ago".
+    return new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(
+      d === 0 ? 0 : -d,
+      "day",
+    );
+  } catch {
+    // Unknown locale tag: fall back to English.
+    if (d === 0) return "today";
+    if (d === 1) return "yesterday";
+    return `${d} days ago`;
+  }
 }

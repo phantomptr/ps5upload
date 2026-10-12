@@ -153,6 +153,17 @@ describe("formatLastSeen", () => {
     expect(formatLastSeen(now - DAY, now)).toBe("yesterday");
     expect(formatLastSeen(now - 5 * DAY, now)).toBe("5 days ago");
   });
+  it("localizes the label to the app language", () => {
+    expect(formatLastSeen(now, now, "es")).toBe("hoy");
+    expect(formatLastSeen(now - DAY, now, "es")).toBe("ayer");
+    expect(formatLastSeen(now - 5 * DAY, now, "es")).toBe("hace 5 días");
+    expect(formatLastSeen(now - DAY, now, "de")).toBe("gestern");
+  });
+  it("falls back to English for an unknown locale tag", () => {
+    expect(formatLastSeen(now, now, "not a locale")).toBe("today");
+    expect(formatLastSeen(now - DAY, now, "not a locale")).toBe("yesterday");
+    expect(formatLastSeen(now - 5 * DAY, now, "not a locale")).toBe("5 days ago");
+  });
 });
 
 describe("formatPlayTime", () => {

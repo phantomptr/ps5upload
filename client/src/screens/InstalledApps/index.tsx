@@ -83,7 +83,7 @@ import { useMakeWay } from "../../lib/useMakeWay";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { audit } from "../../state/auditLog";
-import { useTr } from "../../state/lang";
+import { useLangStore, useTr } from "../../state/lang";
 import { transferAddr, mgmtAddr, hostOf } from "../../lib/addr";
 import { useImageRetry } from "../../lib/useImageRetry";
 import { transferScreenBusy } from "../../lib/ps5Transfers";
@@ -362,6 +362,7 @@ export const AppCard = memo(function AppCard({
    *  bookkeeping around a cold start doesn't run for a foreground nudge. */
 }) {
   const tr = useTr();
+  const lang = useLangStore((s) => s.lang);
   const navigate = useNavigate();
   const canPlay = !title.system;
   // On-console folder this title lives in — only folder/disc kinds carry a
@@ -493,7 +494,7 @@ export const AppCard = memo(function AppCard({
               {playSeconds && playSeconds > 0
                 ? tr(
                     "installed_playtime_line",
-                    { time: formatPlayTime(playSeconds), seen: formatLastSeen(lastSeenMs) },
+                    { time: formatPlayTime(playSeconds), seen: formatLastSeen(lastSeenMs, undefined, lang) },
                     `${formatPlayTime(playSeconds)} · last seen ${formatLastSeen(lastSeenMs)}`,
                   )
                 : tr("installed_playtime_never", undefined, "not seen playing")}
