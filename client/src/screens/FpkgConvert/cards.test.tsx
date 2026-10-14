@@ -110,6 +110,26 @@ describe("OptionsCard for an image", () => {
   });
 });
 
+describe("OptionsCard verification", () => {
+  const props = {
+    outputDir: "/out",
+    onChangeOutput: () => {},
+    onOutputTyped: () => {},
+    canBrowse: true,
+    compression: "balanced" as const,
+    onCompression: () => {},
+    estimates: undefined,
+    locked: false,
+  };
+  it("offers full verification, off by default, for a package and for an image", () => {
+    for (const make of ["pkg", "image"] as const) {
+      const out = renderToStaticMarkup(<OptionsCard {...props} make={make} />);
+      expect(out).toContain("Full verification");
+      expect(out).toMatch(/role="switch"[^>]*aria-checked="false"/);
+    }
+  });
+});
+
 describe("OptionsCard free space", () => {
   const props = {
     outputDir: "/out",

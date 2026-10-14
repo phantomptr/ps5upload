@@ -237,6 +237,9 @@ pub struct BuildControl<'a> {
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
     /// Called as each [`Stage`] begins.
     pub stage: Option<&'a mut dyn FnMut(Stage)>,
+    /// Seed for a fast self-check, which sweeps a sample of the data blocks instead of all of
+    /// them (see [`verify::verify_streaming_sampled`]); `None` sweeps every block.
+    pub sample: Option<u64>,
 }
 
 /// Build the package. `progress` receives short phase lines.
@@ -789,7 +792,13 @@ fn build_mode(
     };
 
     enter(control, Stage::Verify);
-    progress("verifying");
+    match control.sample {
+        Some(seed) => progress(&format!(
+            "verifying (fast: sampled blocks, seed {seed}, policy {})",
+            crate::sample::POLICY
+        )),
+        None => progress("verifying"),
+    }
     // The streaming verifier reads the package block by block, so the self-check of a
     // 155 GB package does not need 155 GB of memory.
     let mut verify_bytes = |done: u64, total: u64| {
@@ -797,7 +806,12 @@ fn build_mode(
             f(done, total);
         }
     };
-    let report = verify::verify_streaming(&partial, &request.passcode, &mut verify_bytes)?;
+    let report = verify::verify_streaming_sampled(
+        &partial,
+        &request.passcode,
+        control.sample,
+        &mut verify_bytes,
+    )?;
     if !report.ok() {
         return format_err(format!("the built package failed verification:\n{report}"));
     }

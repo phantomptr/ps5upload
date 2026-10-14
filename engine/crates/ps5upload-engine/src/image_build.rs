@@ -10,8 +10,9 @@
 //!
 //! The ideas taken from Dump Forge, implemented here: every image is planned (names checked,
 //! size known) before a byte is written; it is written to a `.partial` and read back through
-//! its own reader before it gets its name; and the read-back compares every file's BLAKE3
-//! hash, not only the list of names and sizes. The source is hashed while the writer reads it,
+//! its own reader before it gets its name; and the read-back compares BLAKE3 hashes, not only
+//! the list of names and sizes: of every slice by default or on request (full), of a seeded
+//! sample otherwise (fast, see `ps5upload_fpkg::sample`). The source is hashed while the writer reads it,
 //! so it is normally read once.
 
 use std::collections::HashMap;
@@ -19,6 +20,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use ps5upload_fpkg::sample::{self, VerifyMode, VerifySummary, SLICE};
 use ps5upload_fpkg::source::{SourceFile, SourceTree};
 
 /// The filesystems a game image can have.
@@ -140,13 +142,15 @@ pub(crate) fn output_names(
     }
 }
 
-/// Wraps a source and hashes each file as a writer reads it front to back, so verifying does
-/// not read the source a second time. A file read any other way is hashed afterwards.
+/// Wraps a source and hashes each file in 8 MiB slices as a writer reads it front to back, so
+/// verifying does not read the source a second time. A file read any other way is hashed
+/// afterwards.
 struct HashingTree<'a> {
     inner: &'a mut dyn SourceTree,
     sizes: HashMap<String, u64>,
-    in_flight: HashMap<String, (u64, blake3::Hasher)>,
-    done: HashMap<String, blake3::Hash>,
+    /// Bytes seen so far, the slice being hashed, and the slices finished.
+    in_flight: HashMap<String, (u64, blake3::Hasher, Vec<blake3::Hash>)>,
+    done: HashMap<String, Vec<blake3::Hash>>,
 }
 
 impl<'a> HashingTree<'a> {
@@ -170,12 +174,21 @@ impl<'a> HashingTree<'a> {
         };
         if offset == 0 {
             self.in_flight
-                .insert(path.to_string(), (0, blake3::Hasher::new()));
+                .insert(path.to_string(), (0, blake3::Hasher::new(), Vec::new()));
         }
         let finished = match self.in_flight.get_mut(path) {
-            Some((next, hasher)) if *next == offset => {
-                hash_update(hasher, bytes);
-                *next += bytes.len() as u64;
+            Some((next, hasher, slices)) if *next == offset => {
+                let mut rest = bytes;
+                while !rest.is_empty() && *next < size {
+                    let room = (SLICE - *next % SLICE) as usize;
+                    let (head, tail) = rest.split_at(room.min(rest.len()));
+                    hash_update(hasher, head);
+                    *next += head.len() as u64;
+                    if *next % SLICE == 0 || *next >= size {
+                        slices.push(std::mem::replace(hasher, blake3::Hasher::new()).finalize());
+                    }
+                    rest = tail;
+                }
                 *next >= size
             }
             // Out of order: forget it, it is hashed afterwards.
@@ -186,14 +199,14 @@ impl<'a> HashingTree<'a> {
             None => return,
         };
         if finished {
-            if let Some((_, h)) = self.in_flight.remove(path) {
-                self.done.insert(path.to_string(), h.finalize());
+            if let Some((_, _, slices)) = self.in_flight.remove(path) {
+                self.done.insert(path.to_string(), slices);
             }
         }
     }
 
-    /// Every file's hash: the ones seen whole while writing, the rest read now.
-    fn hashes(mut self, cancel: &AtomicBool) -> Result<HashMap<String, blake3::Hash>, String> {
+    /// Every file's slice hashes: the ones seen whole while writing, the rest read now.
+    fn hashes(mut self, cancel: &AtomicBool) -> Result<HashMap<String, Vec<blake3::Hash>>, String> {
         let missing: Vec<(String, u64)> = self
             .sizes
             .iter()
@@ -201,8 +214,21 @@ impl<'a> HashingTree<'a> {
             .map(|(p, s)| (p.clone(), *s))
             .collect();
         for (path, size) in missing {
-            let h = hash_file(self.inner, &path, size, DEFAULT_VERIFY_CHUNK, cancel)?;
-            self.done.insert(path, h);
+            let mut slices = Vec::new();
+            hash_slices(
+                self.inner,
+                &path,
+                size,
+                0,
+                size.div_ceil(SLICE),
+                DEFAULT_VERIFY_CHUNK,
+                cancel,
+                &mut |_, h| {
+                    slices.push(h);
+                    Ok(())
+                },
+            )?;
+            self.done.insert(path, slices);
         }
         Ok(self.done)
     }
@@ -266,30 +292,48 @@ fn hash_update(h: &mut blake3::Hasher, bytes: &[u8]) {
     }
 }
 
-fn hash_file(
+/// The BLAKE3 hash of each [`SLICE`] of a file (`size` bytes) from slice `from` up to `to`,
+/// handed to `on_slice` as each one ends. Reads are `chunk` bytes and may span slices, so a
+/// read-back chunk above the slice size still reads that much at a time.
+#[allow(clippy::too_many_arguments)]
+fn hash_slices(
     tree: &mut dyn SourceTree,
     path: &str,
     size: u64,
+    from: u64,
+    to: u64,
     chunk: u64,
     cancel: &AtomicBool,
-) -> Result<blake3::Hash, String> {
+    on_slice: &mut dyn FnMut(u64, blake3::Hash) -> Result<(), String>,
+) -> Result<(), String> {
     let mut h = blake3::Hasher::new();
-    let mut at = 0u64;
-    while at < size {
+    let end = (to * SLICE).min(size);
+    let mut at = from * SLICE;
+    while at < end {
         if cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
-        let want = (size - at).min(chunk) as usize;
+        let want = (end - at).min(chunk) as usize;
         let buf = tree
             .read_range(path, at, want)
             .map_err(|e| format!("{path}: {e}"))?;
         if buf.is_empty() {
-            return Err(format!("{path} ended at {at} of its {size} bytes"));
+            return Err(format!("{path} ended at {at} of its {end} bytes"));
         }
-        hash_update(&mut h, &buf);
-        at += buf.len() as u64;
+        let mut rest = &buf[..(buf.len() as u64).min(end - at) as usize];
+        while !rest.is_empty() {
+            let room = (SLICE - at % SLICE) as usize;
+            let (head, tail) = rest.split_at(room.min(rest.len()));
+            hash_update(&mut h, head);
+            at += head.len() as u64;
+            if at.is_multiple_of(SLICE) || at >= end {
+                let done = std::mem::replace(&mut h, blake3::Hasher::new()).finalize();
+                on_slice((at - 1) / SLICE, done)?;
+            }
+            rest = tail;
+        }
     }
-    Ok(h.finalize())
+    Ok(())
 }
 
 /// Opens a finished image through the reader for its kind.
@@ -319,17 +363,20 @@ fn open_image(
     opened.map_err(|e| format!("the image could not be read back: {e}"))
 }
 
-/// Reads the image back and compares it with the source: the same files at the same sizes,
-/// the same empty folders, and every file's BLAKE3 hash. `chunk` bytes per read.
+/// Reads the image back and compares it with the source: the same files at the same sizes and
+/// the same empty folders always, and the BLAKE3 hash of each 8 MiB slice of file data the
+/// `mode` reads (all of it, or a seeded sample). `chunk` bytes per read.
+#[allow(clippy::too_many_arguments)]
 fn verify(
     image: &mut dyn SourceTree,
-    want: &HashMap<String, blake3::Hash>,
+    want: &HashMap<String, Vec<blake3::Hash>>,
     want_sizes: &HashMap<String, u64>,
     want_empty: &[String],
+    mode: VerifyMode,
     chunk: u64,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, u64),
-) -> Result<(), String> {
+) -> Result<VerifySummary, String> {
     let got: Vec<SourceFile> = image.files().to_vec();
     if got.len() != want_sizes.len() {
         return Err(format!(
@@ -354,9 +401,6 @@ fn verify(
             "the image read back with empty folders {got_empty:?} where the folder has {want_empty:?}"
         ));
     }
-    let total: u64 = want_sizes.values().sum();
-    let mut done = 0u64;
-    progress(0, total);
     for f in &got {
         let Some(&size) = want_sizes.get(&f.path) else {
             return Err(format!(
@@ -370,17 +414,71 @@ fn verify(
                 f.path, f.size
             ));
         }
-        let h = hash_file(image, &f.path, f.size, chunk, cancel)?;
-        if Some(&h) != want.get(&f.path) {
-            return Err(format!(
-                "{} differs between the image and the folder",
-                f.path
-            ));
-        }
-        done += f.size;
-        progress(done, total);
     }
-    Ok(())
+    let listed: Vec<(String, u64)> = got.iter().map(|f| (f.path.clone(), f.size)).collect();
+    let summary = sample::summary(&listed, mode);
+    // The slices to read: every one, or the ones the sampling plan names.
+    let mut slices: Vec<(usize, u64)> = Vec::new();
+    match mode {
+        VerifyMode::Full => {
+            for (i, f) in got.iter().enumerate() {
+                slices.extend((0..f.size.div_ceil(SLICE)).map(|s| (i, s)));
+            }
+        }
+        VerifyMode::Fast { seed, seam } => {
+            for s in sample::plan(&listed, seed, seam) {
+                match s.slice {
+                    Some(n) => slices.push((s.file_idx, n)),
+                    None => {
+                        let n = got[s.file_idx].size.div_ceil(SLICE);
+                        slices.extend((0..n).map(|k| (s.file_idx, k)));
+                    }
+                }
+            }
+        }
+    }
+    let total = summary.checked_bytes;
+    let mut done = 0u64;
+    progress(0, total);
+    // Runs of consecutive slices of one file are read together, `chunk` bytes at a time.
+    let mut runs: Vec<(usize, u64, u64)> = Vec::new();
+    for (i, s) in slices {
+        match runs.last_mut() {
+            Some((ri, _, to)) if *ri == i && *to == s => *to += 1,
+            _ => runs.push((i, s, s + 1)),
+        }
+    }
+    for (i, from, to) in runs {
+        let f = &got[i];
+        let wanted = want.get(&f.path);
+        hash_slices(
+            image,
+            &f.path,
+            f.size,
+            from,
+            to,
+            chunk,
+            cancel,
+            &mut |s, h| {
+                let (at, len) = (s * SLICE, SLICE.min(f.size - s * SLICE));
+                if wanted.and_then(|w| w.get(s as usize)) != Some(&h) {
+                    let range = if f.size > SLICE {
+                        format!(" (bytes {at}..{})", at + len)
+                    } else {
+                        String::new()
+                    };
+                    return Err(format!(
+                        "{} differs between the image and the folder{range}",
+                        f.path
+                    ));
+                }
+                done += len;
+                progress(done, total);
+                Ok(())
+            },
+        )?;
+    }
+    Ok(summary)
 }
 
 /// A libSceAmpr game's folder with its `ampr_emu.index` regenerated from the files that go
@@ -537,12 +635,15 @@ impl Planned {
 /// Builds `source` as an image at `output`: planned, written to `<output>.partial` (straight
 /// into a `.ffpfsc` container when `inner_name` is given), read back and hash-checked, then
 /// renamed. `stage(id, done, total)` reports `plan`, `write` (or `compress`) and `verify`.
-/// `verify_chunk`: how much the read-back check reads per call (see [`verify_chunk`]).
+/// `verify_chunk`: how much the read-back check reads per call (see [`verify_chunk`]); `mode`:
+/// how much of the data it reads back.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build(
     format: ImageFormat,
     inner_name: Option<&str>,
     source: &mut dyn SourceTree,
     output: &Path,
+    mode: VerifyMode,
     verify_chunk: u64,
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
@@ -605,21 +706,24 @@ pub(crate) fn build(
         let hashes = hashing.hashes(cancel)?;
 
         let mut image = open_image(&partial, format, inner_name.is_some())?;
-        verify(
+        let summary = verify(
             &mut *image,
             &hashes,
             &want_sizes,
             &want_empty,
+            mode,
             verify_chunk,
             cancel,
             &mut |d, t| stage("verify", d, t),
         )?;
         drop(image);
         std::fs::rename(&partial, output).map_err(|e| e.to_string())?;
+        crate::engine_log::record("info", format!("verify: {}", log_line(&summary)));
         let mut detail = format!(
-            "{}, {} files, {data} data bytes, hash-checked",
+            "{}, {} files, {data} data bytes, {}",
             format.extension(),
-            want_sizes.len()
+            want_sizes.len(),
+            summary.describe()
         );
         if let Some(free) = planned.free_bytes() {
             detail.push_str(&format!(", {free} bytes free"));
@@ -637,6 +741,16 @@ pub(crate) fn build(
         let _ = std::fs::remove_file(&partial);
     }
     settle(result, cancel.load(Ordering::Relaxed))
+}
+
+/// What the log says of a read-back: `fast, 2.1 GiB of 80.9 GiB in 41 samples (seed 7), policy 1`.
+fn log_line(s: &VerifySummary) -> String {
+    match s.mode {
+        VerifyMode::Full => "full, every byte".into(),
+        VerifyMode::Fast { .. } => {
+            format!("fast, {}", s.describe().replacen("fast-checked ", "", 1))
+        }
+    }
 }
 
 /// A failed build that was cancelled says so; a cancel that came after the image was
@@ -669,11 +783,13 @@ pub(crate) fn lz4_spool(output: &Path) -> PathBuf {
 /// compressed, so the `.ffpfsc` container has nothing left to gain. The volumes are spooled
 /// beside the output and removed once the image is written and read back, or has failed.
 /// `stage` reports `pack` before the image's own stages.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_packed(
     format: ImageFormat,
     source: &mut dyn SourceTree,
     output: &Path,
     packs: &Lz4Packs,
+    mode: VerifyMode,
     verify_chunk: u64,
     cancel: &AtomicBool,
     stage: &mut dyn FnMut(&str, u64, u64),
@@ -709,6 +825,7 @@ pub(crate) fn build_packed(
             None,
             &mut overlay,
             output,
+            mode,
             verify_chunk,
             cancel,
             stage,
@@ -842,6 +959,7 @@ mod tests {
                     inner.as_deref(),
                     &mut tree,
                     &out,
+                    VerifyMode::Full,
                     DEFAULT_VERIFY_CHUNK,
                     &cancel,
                     &mut |s, _, _| {
@@ -882,6 +1000,7 @@ mod tests {
             None,
             &mut tree,
             &out,
+            VerifyMode::Full,
             DEFAULT_VERIFY_CHUNK,
             &cancel,
             &mut |_, _, _| {}
@@ -920,16 +1039,177 @@ mod tests {
         let _ = h.read("sce_sys/param.json").unwrap();
         let all = h.hashes(&cancel).unwrap();
         let mut again = FolderSource::open(&src).unwrap();
-        let direct = hash_file(
+        let mut direct = Vec::new();
+        hash_slices(
             &mut again,
             "eboot.bin",
             300_000,
+            0,
+            1,
             DEFAULT_VERIFY_CHUNK,
             &cancel,
+            &mut |_, h| {
+                direct.push(h);
+                Ok(())
+            },
         )
         .unwrap();
         assert_eq!(all["eboot.bin"], direct);
         assert_eq!(all.len(), 4);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Fast verification reads a seeded sample: damage in a slice the plan leaves out passes it
+    /// and fails a full check, damage in the first or last slice fails both (naming the bytes),
+    /// and a small file is read whole.
+    #[test]
+    fn a_fast_verify_catches_what_it_samples_and_a_full_one_everything() {
+        const MIB: usize = 1 << 20;
+        let root = std::env::temp_dir().join(format!("ps5upload-imgf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = game(&root);
+        // 48 MiB in six slices, each stamped with a marker the image can be searched for.
+        let mut big = vec![0u8; 48 * MIB];
+        for (i, b) in big.iter_mut().enumerate() {
+            *b = (i % 253) as u8;
+        }
+        for s in 0..6usize {
+            let at = s * (SLICE as usize) + 4 * MIB;
+            big[at..at + 16].copy_from_slice(format!("SLICEMARK-{s:06}").as_bytes());
+        }
+        std::fs::write(src.join("data/big.bin"), &big).unwrap();
+        let out = root.join("f.exfat");
+        let mut tree = FolderSource::open(&src).unwrap();
+        build(
+            ImageFormat::Exfat,
+            None,
+            &mut tree,
+            &out,
+            VerifyMode::Full,
+            DEFAULT_VERIFY_CHUNK,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        // A fast build says so in its detail.
+        let mut again = FolderSource::open(&src).unwrap();
+        let fast = build(
+            ImageFormat::Exfat,
+            None,
+            &mut again,
+            &root.join("g.exfat"),
+            VerifyMode::Fast {
+                seed: 3,
+                seam: false,
+            },
+            DEFAULT_VERIFY_CHUNK,
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        assert!(fast.detail.contains("fast-checked"), "{}", fast.detail);
+        let image_bytes = std::fs::read(&out).unwrap();
+        let mut tree = FolderSource::open(&src).unwrap();
+        let sizes: HashMap<String, u64> = tree
+            .files()
+            .iter()
+            .map(|f| (f.path.clone(), f.size))
+            .collect();
+        let listed: Vec<(String, u64)> = sizes.iter().map(|(p, s)| (p.clone(), *s)).collect();
+        let empty: Vec<String> = tree.empty_dirs().to_vec();
+        let hashes = HashingTree::new(&mut tree)
+            .hashes(&AtomicBool::new(false))
+            .unwrap();
+        let seed = 21;
+        let mode = VerifyMode::Fast { seed, seam: false };
+        let planned = sample::plan(&listed, seed, false);
+        let big_idx = listed.iter().position(|f| f.0 == "data/big.bin").unwrap();
+        let sampled = |s: u64| {
+            planned
+                .iter()
+                .any(|p| p.file_idx == big_idx && p.slice == Some(s))
+        };
+        assert!(sampled(0) && sampled(5));
+        let hidden = (1..5usize)
+            .find(|s| !sampled(*s as u64))
+            .expect("the plan leaves a slice out");
+
+        // Flips one byte of slice `s` in a copy of the image and verifies it in `mode`,
+        // `chunk` bytes per read.
+        let check_with = |s: usize, mode: VerifyMode, chunk: u64| {
+            let mark = format!("SLICEMARK-{s:06}");
+            let at = image_bytes
+                .windows(16)
+                .position(|w| w == mark.as_bytes())
+                .expect("the marker is in the image");
+            let mut damaged = image_bytes.clone();
+            damaged[at + 100] ^= 0xFF;
+            let path = root.join("damaged.exfat");
+            std::fs::write(&path, damaged).unwrap();
+            let mut image = open_image(&path, ImageFormat::Exfat, false).unwrap();
+            verify(
+                &mut *image,
+                &hashes,
+                &sizes,
+                &empty,
+                mode,
+                chunk,
+                &AtomicBool::new(false),
+                &mut |_, _| {},
+            )
+        };
+        let check = |s: usize, mode: VerifyMode| check_with(s, mode, DEFAULT_VERIFY_CHUNK);
+        // A sampled slice: caught, with the bytes named.
+        for s in [0usize, 5] {
+            let e = check(s, mode).unwrap_err();
+            let (a, b) = (s as u64 * SLICE, (s as u64 + 1) * SLICE);
+            assert!(
+                e.contains("data/big.bin differs between the image and the folder")
+                    && e.contains(&format!("(bytes {a}..{b})")),
+                "{e}"
+            );
+        }
+        // A slice left out: the sample passes, the full check does not.
+        let summary = check(hidden, mode).expect("the sample does not reach it");
+        assert!(summary.checked_bytes < summary.total_bytes && summary.samples > 0);
+        assert!(check(hidden, VerifyMode::Full).is_err());
+        // A 32 MiB read spans four slices and still names the one that differs.
+        let e = check_with(5, VerifyMode::Full, 32 << 20).unwrap_err();
+        assert!(
+            e.contains(&format!("(bytes {}..{})", 5 * SLICE, 6 * SLICE)),
+            "{e}"
+        );
+        // Small files are read whole, so damage in one is always caught: here the image is
+        // checked against a source whose small file differs.
+        let mut wrong = hashes.clone();
+        wrong.get_mut("eboot.bin").unwrap()[0] = blake3::hash(b"other");
+        let mut image = open_image(&out, ImageFormat::Exfat, false).unwrap();
+        let e = verify(
+            &mut *image,
+            &wrong,
+            &sizes,
+            &empty,
+            mode,
+            DEFAULT_VERIFY_CHUNK,
+            &AtomicBool::new(false),
+            &mut |_, _| {},
+        )
+        .unwrap_err();
+        assert!(e.contains("eboot.bin differs"), "{e}");
+        // The structure is checked in both modes: a missing size is a mismatch either way.
+        let mut short = sizes.clone();
+        short.insert("eboot.bin".into(), 1);
+        assert!(verify(
+            &mut *image,
+            &hashes,
+            &short,
+            &empty,
+            mode,
+            DEFAULT_VERIFY_CHUNK,
+            &AtomicBool::new(false),
+            &mut |_, _| {},
+        )
+        .is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -947,6 +1227,7 @@ mod tests {
             None,
             &mut tree,
             &out,
+            VerifyMode::Full,
             DEFAULT_VERIFY_CHUNK,
             &AtomicBool::new(false),
             &mut |_, _, _| {},
@@ -1004,6 +1285,7 @@ mod tests {
                 level: 9,
                 block_shift: 16,
             },
+            VerifyMode::Full,
             DEFAULT_VERIFY_CHUNK,
             &cancel,
             &mut |s, _, _| {
@@ -1085,6 +1367,7 @@ mod tests {
             None,
             &mut indexed,
             &out,
+            VerifyMode::Full,
             DEFAULT_VERIFY_CHUNK,
             &AtomicBool::new(false),
             &mut |_, _, _| {},
@@ -1122,6 +1405,7 @@ mod tests {
                 level: 9,
                 block_shift: 16,
             },
+            VerifyMode::Full,
             DEFAULT_VERIFY_CHUNK,
             &AtomicBool::new(false),
             &mut |_, _, _| {},
@@ -1143,6 +1427,7 @@ mod tests {
                     level: 9,
                     block_shift: 16,
                 },
+                VerifyMode::Full,
                 DEFAULT_VERIFY_CHUNK,
                 &AtomicBool::new(false),
                 &mut |_, _, _| {},

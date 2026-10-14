@@ -65,6 +65,10 @@ pub(crate) struct BuildReq {
     /// A PlayGo language code (`fr-FR`, …) the package declares as its only one.
     #[serde(default)]
     language: Option<String>,
+    /// Read the whole package back to verify it. Off (the default): the structure is checked
+    /// in full and a seeded sample of the data blocks.
+    #[serde(default)]
+    full_verify: bool,
 }
 
 /// The language a build asked for, trimmed; none when blank.
@@ -397,6 +401,7 @@ pub(crate) async fn fpkg_build_handler(
             }),
             cancel: Some(&cancel),
             stage: Some(&mut on_stage),
+            sample: (!req.full_verify).then(ps5upload_fpkg::sample::fresh_seed),
         };
         // The build's phase lines go to the engine log, where the Log tab shows them.
         let mut phase = |line: &str| {
@@ -541,6 +546,9 @@ pub(crate) struct CompressReq {
     /// zlib level 1–9; the library default when absent.
     #[serde(default)]
     level: Option<u32>,
+    /// Decode every block to verify the output; by default a seeded sample (and the table).
+    #[serde(default)]
+    full_verify: bool,
 }
 
 /// POST /api/ffpfsc/compress — compress a game image into a `.ffpfsc` for ShadowMountPlus.
@@ -665,6 +673,7 @@ pub(crate) async fn ffpfsc_compress_handler(
         if let Some(level) = req.level {
             options.level = level;
         }
+        options.sample = (!req.full_verify).then(ps5upload_fpkg::sample::fresh_seed);
         let mut progress = |done: u64, _total: u64| bytes.store(done, Ordering::Relaxed);
         let mut control = ffpfsc::Control {
             progress: Some(&mut progress),
@@ -760,6 +769,10 @@ pub(crate) struct ExfatBuildReq {
     /// when absent, which measured fastest.
     #[serde(default)]
     verify_chunk_kib: Option<u32>,
+    /// Read every byte of the image back to verify it. Off (the default): names, sizes and
+    /// folders are checked in full and a seeded sample of the data.
+    #[serde(default)]
+    full_verify: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -835,6 +848,11 @@ pub(crate) async fn exfat_build_handler(
         Ok(c) => c,
         Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
     };
+    // A fast read-back also covers UFS2's indirect-block seam.
+    let mode = ps5upload_fpkg::sample::VerifyMode::from_full(
+        req.full_verify,
+        format == crate::image_build::ImageFormat::Ffpkg,
+    );
     let packs = match &req.ampr_lz4 {
         None => None,
         Some(_) if format != crate::image_build::ImageFormat::Exfat || req.compress => {
@@ -1031,6 +1049,7 @@ pub(crate) async fn exfat_build_handler(
                 &mut *tree,
                 &output,
                 packs,
+                mode,
                 verify_chunk,
                 &cancel,
                 &mut report,
@@ -1042,6 +1061,7 @@ pub(crate) async fn exfat_build_handler(
                     inner_name.as_deref(),
                     &mut indexed,
                     &output,
+                    mode,
                     verify_chunk,
                     &cancel,
                     &mut report,
@@ -1051,6 +1071,7 @@ pub(crate) async fn exfat_build_handler(
                     inner_name.as_deref(),
                     &mut *tree,
                     &output,
+                    mode,
                     verify_chunk,
                     &cancel,
                     &mut report,

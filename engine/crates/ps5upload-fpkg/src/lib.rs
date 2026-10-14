@@ -34,6 +34,7 @@ pub mod plan;
 pub mod playgo;
 pub mod remote_source;
 pub mod rsa;
+pub mod sample;
 pub mod sdk_rules;
 pub mod self_repair;
 pub mod si;

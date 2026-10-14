@@ -87,6 +87,10 @@ pub struct WrapOptions {
     pub inner_name: Option<String>,
     /// Build timestamp (seconds); the current time when absent.
     pub time: Option<i64>,
+    /// Seed for a fast read-back: only the first and last block and a seeded ~1% (at most
+    /// 128 MiB) are decoded and matched; the header and block table are always checked.
+    /// `None` decodes every block.
+    pub sample: Option<u64>,
 }
 
 impl Default for WrapOptions {
@@ -97,6 +101,7 @@ impl Default for WrapOptions {
             threads: 0,
             inner_name: None,
             time: None,
+            sample: None,
         }
     }
 }
@@ -475,7 +480,7 @@ pub fn wrap(
     .and_then(|(report, crcs)| {
         // Decoded and matched against the checksums taken as the source was read, so the
         // check costs no second pass over the source — on a slow disk, a third of the time.
-        check(&partial, Expect::Crcs(&crcs))?;
+        check(&partial, Expect::Crcs(&crcs), options.sample)?;
         std::fs::rename(&partial, output)?;
         Ok(WrapReport {
             output: output.to_path_buf(),
@@ -647,7 +652,7 @@ pub fn verify(image: &Path, source: Option<&Path>) -> Result<Inspection> {
         Some(p) => Expect::Source(File::open(p)?),
         None => Expect::Nothing,
     };
-    check(image, expect)
+    check(image, expect, None)
 }
 
 /// Where a single-file image keeps its file, read off the header, inode and uroot.
@@ -721,7 +726,7 @@ pub(crate) fn layout<R: Read + Seek>(f: &mut R) -> Result<Layout> {
     })
 }
 
-fn check(image: &Path, mut expect: Expect) -> Result<Inspection> {
+fn check(image: &Path, mut expect: Expect, sample: Option<u64>) -> Result<Inspection> {
     let mut f = File::open(image)?;
     let Layout {
         name,
@@ -738,31 +743,38 @@ fn check(image: &Path, mut expect: Expect) -> Result<Inspection> {
         }
     }
     let has_expectation = !matches!(expect, Expect::Nothing);
-    // The next block's expected content, in order.
-    let mut index = 0usize;
-    let mut next_want = |n: usize| -> Result<Want> {
-        let w = match &mut expect {
+    // The first and last block and a seeded ~1% (at most 128 MiB) when sampling.
+    let picked = sample.map(|seed| crate::sample::pick(raw_size.div_ceil(BLOCK), seed, 2048));
+    // Block `i`'s expected content, `n` bytes of it; the source is only sought when the
+    // blocks asked for are not in order.
+    let mut src_at = 0u64;
+    let mut want_of = |i: u64, n: usize| -> Result<Want> {
+        Ok(match &mut expect {
             Expect::Nothing => Want::Nothing,
             Expect::Source(src) => {
+                if src_at != i * BLOCK {
+                    src.seek(SeekFrom::Start(i * BLOCK))?;
+                }
                 let mut e = vec![0u8; n];
                 src.read_exact(&mut e)?;
+                src_at = i * BLOCK + n as u64;
                 Want::Bytes(e)
             }
-            Expect::Crcs(c) => Want::Crc(c[index]),
-        };
-        index += 1;
-        Ok(w)
+            Expect::Crcs(c) => Want::Crc(c[i as usize]),
+        })
     };
     if !compressed && has_expectation {
         // Stored as it is: compare in place.
-        f.seek(SeekFrom::Start(base))?;
         let mut got = vec![0u8; BLOCK as usize];
-        let mut left = raw_size;
-        while left > 0 {
-            let n = left.min(BLOCK) as usize;
+        let all: Box<dyn Iterator<Item = u64>> = match &picked {
+            Some(v) => Box::new(v.iter().copied()),
+            None => Box::new(0..raw_size.div_ceil(BLOCK)),
+        };
+        for i in all {
+            let n = (raw_size - i * BLOCK).min(BLOCK) as usize;
+            f.seek(SeekFrom::Start(base + i * BLOCK))?;
             f.read_exact(&mut got[..n])?;
-            next_want(n)?.check(&got[..n])?;
-            left -= n as u64;
+            want_of(i, n)?.check(&got[..n])?;
         }
     }
     if !compressed {
@@ -790,10 +802,44 @@ fn check(image: &Path, mut expect: Expect) -> Result<Inspection> {
     if *offsets.last().unwrap() != stored {
         return format_err("the container's last offset is not the stored size");
     }
+    if let Some(picked) = &picked {
+        // The table is always walked whole; only the decode and match are sampled.
+        if offsets
+            .windows(2)
+            .any(|w| w[1] <= w[0] || w[1] - w[0] > BLOCK)
+        {
+            return format_err("a block offset does not move forward by 1 to 64 KiB");
+        }
+        for &i in picked {
+            let (from, to) = (offsets[i as usize], offsets[i as usize + 1]);
+            let mut stored_block = vec![0u8; (to - from) as usize];
+            f.seek(SeekFrom::Start(base + from))?;
+            f.read_exact(&mut stored_block)?;
+            let plain = if stored_block.len() == BLOCK as usize {
+                stored_block
+            } else {
+                let mut d = Vec::with_capacity(BLOCK as usize);
+                ZlibDecoder::new(&stored_block[..]).read_to_end(&mut d)?;
+                if d.len() != BLOCK as usize {
+                    return format_err("a compressed block does not decode to 64 KiB");
+                }
+                d
+            };
+            let n = (raw_size - i * BLOCK).min(BLOCK) as usize;
+            want_of(i, n)?.check(&plain[..n])?;
+        }
+        return Ok(Inspection {
+            inner_name: name,
+            raw_size,
+            stored_size: stored,
+            compressed,
+        });
+    }
     // Every block decoded on every core, each checked against the source as it comes.
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
     let mut pairs = offsets.windows(2);
     let mut left = raw_size;
+    let mut block = 0u64;
     f.seek(SeekFrom::Start(base + offsets[0]))?;
     let mut f = std::io::BufReader::with_capacity(8 << 20, f);
     pipeline(
@@ -810,7 +856,8 @@ fn check(image: &Path, mut expect: Expect) -> Result<Inspection> {
             f.read_exact(&mut stored_block)?;
             let n = left.min(BLOCK) as usize;
             left -= n as u64;
-            Ok(Some((stored_block, n, next_want(n)?)))
+            block += 1;
+            Ok(Some((stored_block, n, want_of(block - 1, n)?)))
         },
         |(stored_block, n, expected)| {
             let plain = if stored_block.len() == BLOCK as usize {
@@ -974,6 +1021,54 @@ mod tests {
         img[at] ^= 0xFF;
         std::fs::write(&out, &img).unwrap();
         assert!(verify(&out, Some(&src)).is_err());
+    }
+
+    /// A sampled read-back decodes the first and last block and a seeded few; damage anywhere
+    /// else passes it and fails the full check.
+    #[test]
+    fn a_sampled_check_reads_the_ends_and_a_full_check_all() {
+        let d = temp("sampled");
+        let src = d.join("PPSA00004.exfat");
+        // 400 blocks of varied, compressible data.
+        let data: Vec<u8> = (0..400 * BLOCK as u32)
+            .map(|i| ((i >> 9) % 251) as u8)
+            .collect();
+        std::fs::write(&src, &data).unwrap();
+        let out = d.join("s.ffpfsc");
+        wrap(&src, &out, &WrapOptions::default(), &mut Control::default()).unwrap();
+        let seed = 5;
+        let picked = crate::sample::pick(400, seed, 2048);
+        assert!(picked.len() < 400 && picked[0] == 0 && *picked.last().unwrap() == 399);
+        let hidden = (0..400u64).find(|b| !picked.contains(b)).unwrap();
+        let flip = |block: u64, name: &str| {
+            let image = std::fs::read(&out).unwrap();
+            let f = &mut File::open(&out).unwrap();
+            let l = layout(f).unwrap();
+            let mut ph = [0u8; 0x30];
+            f.seek(SeekFrom::Start(l.base)).unwrap();
+            f.read_exact(&mut ph).unwrap();
+            let table_at =
+                (l.base + u64::from_le_bytes(ph[0x18..0x20].try_into().unwrap())) as usize;
+            let off = u64::from_le_bytes(
+                image[table_at + block as usize * 8..][..8]
+                    .try_into()
+                    .unwrap(),
+            );
+            let mut img = image;
+            img[(l.base + off) as usize + 2] ^= 0xFF;
+            let path = d.join(name);
+            std::fs::write(&path, img).unwrap();
+            path
+        };
+        let source = || Expect::Source(File::open(&src).unwrap());
+        let missed = flip(hidden, "hidden.ffpfsc");
+        assert!(check(&missed, source(), Some(seed)).is_ok());
+        assert!(check(&missed, source(), None).is_err());
+        let first = flip(0, "first.ffpfsc");
+        assert!(check(&first, source(), Some(seed)).is_err());
+        let last = flip(399, "last.ffpfsc");
+        assert!(check(&last, source(), Some(seed)).is_err());
+        assert!(check(&out, source(), Some(seed)).is_ok());
     }
 
     #[test]

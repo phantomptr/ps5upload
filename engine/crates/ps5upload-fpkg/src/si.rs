@@ -88,9 +88,57 @@ pub fn chunk_crc_table(file: &mut PkgFile, zip_start: u64) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Whether `stored` (a `playgo-chunk.crc`) holds the right CRC for a seeded sample of the
+/// blocks [`chunk_crc_table`] covers: the first, the last and about 1% (at most 2048, so
+/// 128 MiB read). Its length is always checked.
+pub fn chunk_crc_sampled(
+    file: &mut PkgFile,
+    zip_start: u64,
+    stored: &[u8],
+    seed: u64,
+) -> Result<bool> {
+    let blocks = zip_start.div_ceil(BLOCK);
+    if stored.len() as u64 != blocks * 4 {
+        return Ok(false);
+    }
+    for i in crate::sample::pick(blocks, seed, 2048) {
+        let start = i * BLOCK;
+        let len = (zip_start - start).min(BLOCK) as usize;
+        if crc32c(&file.read_at(start, len)?).to_le_bytes() != stored[i as usize * 4..][..4] {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A sampled check matches the full table when it is right, misses a wrong CRC it does
+    /// not draw, and always catches a wrong first or last one or a wrong length.
+    #[test]
+    fn chunk_crc_sampled_checks_its_draw_and_the_length() {
+        let path = std::env::temp_dir().join(format!("ps5upload-crc-{}", std::process::id()));
+        let bytes: Vec<u8> = (0..BLOCK * 300).map(|i| (i * 7 % 251) as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut f = PkgFile::open(&path).unwrap();
+        let zip_start = BLOCK * 300 - 100;
+        let table = chunk_crc_table(&mut f, zip_start).unwrap();
+        assert!(chunk_crc_sampled(&mut f, zip_start, &table, 7).unwrap());
+        let drawn = crate::sample::pick(300, 7, 2048);
+        let hidden = (0..300u64).find(|i| !drawn.contains(i)).unwrap() as usize;
+        for (i, caught) in [(hidden, false), (0, true), (299, true)] {
+            let mut wrong = table.clone();
+            wrong[i * 4] ^= 1;
+            assert_eq!(
+                !chunk_crc_sampled(&mut f, zip_start, &wrong, 7).unwrap(),
+                caught
+            );
+        }
+        assert!(!chunk_crc_sampled(&mut f, zip_start, &table[4..], 7).unwrap());
+        let _ = std::fs::remove_file(&path);
+    }
 
     fn sample(name: &str) -> Option<PkgFile> {
         let dir = std::env::var("PS5UPLOAD_SAMPLE_PKGS")

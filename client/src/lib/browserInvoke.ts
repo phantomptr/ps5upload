@@ -747,6 +747,7 @@ export async function browserInvoke<T>(
         compression: args["compression"],
         firmware: args["firmware"],
         language: args["language"],
+        full_verify: args["fullVerify"] ?? false,
       });
     }
     case "ps5_elfldr_health": {
@@ -779,6 +780,7 @@ export async function browserInvoke<T>(
         source: args["source"],
         output_dir: args["outputDir"],
         level: args["level"],
+        full_verify: args["fullVerify"] ?? false,
       });
     }
     case "exfat_build": {
@@ -789,6 +791,7 @@ export async function browserInvoke<T>(
         compress: args["compress"] ?? false,
         ampr_lz4: args["amprLz4"],
         verify_chunk_kib: args["verifyChunkKib"],
+        full_verify: args["fullVerify"] ?? false,
       });
     }
     case "job_status": {

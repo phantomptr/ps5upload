@@ -682,6 +682,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
   start: async (req, { install, host, method = "stream", password, deleteAfter }) => {
     const then = install ? method : null;
     if (get().pipeline.phase === "running") return;
+    const fullVerify = useConvertPrefs.getState().fullVerify;
     deleteAfterInstall = install && !!deleteAfter;
     if (needsPrep(req.source)) {
       beginRun(
@@ -693,7 +694,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
       void prepareThenStart(
         req.source,
         req.outputDir,
-        (local) => fpkg.build({ ...req, source: local }),
+        (local) => fpkg.build({ ...req, source: local, fullVerify }),
         then,
         password,
       );
@@ -701,7 +702,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     }
     beginRun(install ? "convert-install" : "convert", req.source, host, "check");
     try {
-      const { job_id } = await fpkg.build(req);
+      const { job_id } = await fpkg.build({ ...req, fullVerify });
       update({ jobId: job_id });
       poll(job_id, then);
     } catch (error) {
@@ -711,16 +712,17 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
 
   compress: async (source, outputDir) => {
     if (get().pipeline.phase === "running") return;
+    const fullVerify = useConvertPrefs.getState().fullVerify;
     // Compressing reads the image from this machine's disk, so a server image is copied
     // first (unlike a build, which reads it in place).
     if (isRemotePath(source) || isArchiveSource(source)) {
       beginRun("ffpfsc", source, null, isRemotePath(source) ? "copy" : "extract");
-      void prepareThenStart(source, outputDir, (local) => fpkg.compress(local, outputDir), null);
+      void prepareThenStart(source, outputDir, (local) => fpkg.compress(local, outputDir, fullVerify), null);
       return;
     }
     beginRun("ffpfsc", source, null, "compress");
     try {
-      const { job_id } = await fpkg.compress(source, outputDir);
+      const { job_id } = await fpkg.compress(source, outputDir, fullVerify);
       update({ jobId: job_id });
       poll(job_id, null);
     } catch (error) {
@@ -744,6 +746,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         thenCompress,
         lz4,
         useConvertPrefs.getState().verifyChunkKib,
+        useConvertPrefs.getState().fullVerify,
       );
       update({ jobId: job_id });
       poll(job_id, null);

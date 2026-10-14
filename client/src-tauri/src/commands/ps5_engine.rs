@@ -2241,6 +2241,7 @@ pub async fn fpkg_inspect(source: String, output_dir: Option<String>) -> Result<
 /// to poll with `job_status`; the finished job carries the package's path.
 /// POST /api/fpkg/build.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn fpkg_build(
     source: String,
     output_dir: Option<String>,
@@ -2249,6 +2250,8 @@ pub async fn fpkg_build(
     compression: Option<String>,
     firmware: Option<String>,
     language: Option<String>,
+    // Read everything back to verify; absent means the fast, sampled check.
+    full_verify: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/fpkg/build");
@@ -2262,6 +2265,7 @@ pub async fn fpkg_build(
             "compression": compression,
             "firmware": firmware,
             "language": language,
+            "full_verify": full_verify.unwrap_or(false),
         }),
     )
     .await
@@ -2345,6 +2349,7 @@ pub async fn ffpfsc_compress(
     source: String,
     output_dir: Option<String>,
     level: Option<u32>,
+    full_verify: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/ffpfsc/compress");
@@ -2354,6 +2359,7 @@ pub async fn ffpfsc_compress(
             "source": source,
             "output_dir": output_dir,
             "level": level,
+            "full_verify": full_verify.unwrap_or(false),
         }),
     )
     .await
@@ -2370,6 +2376,7 @@ pub async fn exfat_build(
     ampr_lz4: Option<JsonValue>,
     // The read-back check's chunk in KiB; the engine's default when absent.
     verify_chunk_kib: Option<u32>,
+    full_verify: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2382,6 +2389,7 @@ pub async fn exfat_build(
             "compress": compress.unwrap_or(false),
             "ampr_lz4": ampr_lz4,
             "verify_chunk_kib": verify_chunk_kib,
+            "full_verify": full_verify.unwrap_or(false),
         }),
     )
     .await

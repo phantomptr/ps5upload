@@ -85,6 +85,8 @@ export interface FpkgBuildRequest {
   firmware?: string;
   /** The one PlayGo language the package declares (`de-DE`, …); every language when absent. */
   language?: string;
+  /** Re-read every byte to check the package; the engine's fast check when false or absent. */
+  fullVerify?: boolean;
 }
 
 /** `stored` = no compression: the fallback for a console that refuses a compressed package. */
@@ -103,6 +105,7 @@ export const fpkg = {
       compression: req.compression,
       firmware: req.firmware,
       language: req.language,
+      fullVerify: req.fullVerify ?? false,
     }),
   /** Unpack a .zip / .7z / .rar into an unpack folder in `outputDir`, as a job; the job's
    *  `dest` is the game found inside. A RAR's password goes with it, never stored. */
@@ -119,8 +122,8 @@ export const fpkg = {
   deletePackage: (path: string) => invoke<{ ok: boolean }>("fpkg_delete", { path }),
   /** Compress an .exfat / .ffpkg game image into a .ffpfsc for ShadowMountPlus.
    *  Starts a job; the output lands next to the source unless outputDir says otherwise. */
-  compress: (source: string, outputDir?: string) =>
-    invoke<{ job_id: string }>("ffpfsc_compress", { source, outputDir }),
+  compress: (source: string, outputDir?: string, fullVerify = false) =>
+    invoke<{ job_id: string }>("ffpfsc_compress", { source, outputDir, fullVerify }),
   /** Write a game folder as one .exfat image for ShadowMountPlus. Starts a job; the image
    *  lands in the output folder, named after the game folder. */
   /** One job: the image is planned, written (straight into a .ffpfsc when `compress`), read
@@ -135,6 +138,8 @@ export const fpkg = {
     /** The read-back check's KiB per read (Convert's preference); the engine's default
      *  when absent. */
     verifyChunkKib?: number,
+    /** Read the whole image back (Convert's preference); the fast sampled check when false. */
+    fullVerify = false,
   ) =>
     invoke<{ job_id: string }>("exfat_build", {
       source,
@@ -145,5 +150,6 @@ export const fpkg = {
         ? { level: lz4.level, profile_toml: lz4.profileToml, install_runtime: lz4.installRuntime ?? false }
         : undefined,
       verifyChunkKib,
+      fullVerify,
     }),
 };

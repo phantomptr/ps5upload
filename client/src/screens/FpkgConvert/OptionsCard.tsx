@@ -6,7 +6,7 @@ import { Button, Card } from "../../components";
 import { PLAYGO_LANGUAGES } from "../../lib/playgoLanguages";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
-import { ImageChoice, type Lz4Choice } from "./ImageOptions";
+import { FullVerifyOption, ImageChoice, type Lz4Choice } from "./ImageOptions";
 import { prettyBytes } from "./RunCard";
 
 /** The most room a conversion needs on the output drive: the package, which the compressed
@@ -148,6 +148,7 @@ export function OptionsCard(props: OptionsCardProps) {
             </div>
           </div>
         )}
+        <FullVerifyOption disabled={props.locked} />
       </div>
     </Card>
   );

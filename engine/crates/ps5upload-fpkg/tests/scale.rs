@@ -119,6 +119,7 @@ fn the_streaming_writer_reports_progress() {
         stage: None,
         bytes: Some(&mut |done, total| samples.push((done, total))),
         cancel: None,
+        sample: None,
     };
     let report = build::build_controlled(
         &request(source.path(), out.path()),
@@ -575,6 +576,7 @@ fn a_cancelled_build_leaves_nothing_behind() {
         stage: None,
         bytes: None,
         cancel: Some(&cancel),
+        sample: None,
     };
     let error = match build::build_controlled(
         &request(source.path(), out.path()),
@@ -625,4 +627,71 @@ fn in_image(
         !(f.size > 0 && ps5upload_fpkg::cnt_write::CONTAINER_ONLY.contains(&f.path.as_str()))
     });
     files
+}
+
+/// The fast self-check sweeps a sample of the game's data blocks: damage in a batch the seeded
+/// draw leaves out passes it and fails the full sweep; damage in the first or last data batch,
+/// or in any block of the format's own past the data, fails both.
+#[test]
+fn a_sampled_sweep_reads_back_a_sample_and_a_full_sweep_all_of_it() {
+    use ps5upload_fpkg::{sample, verify, BLOCK};
+    let source = TempDir::new("sample-source");
+    let out = TempDir::new("sample-out");
+    write_tree(source.path());
+    let big = std::fs::File::create(source.path().join("data/big.bin")).unwrap();
+    big.set_len(28 << 20).unwrap();
+    drop(big);
+    let report = build::build(&request(source.path(), out.path()), &mut |_| {}).unwrap();
+    assert!(report.verify.ok(), "{}", report.verify);
+    let bytes = std::fs::read(&report.path).unwrap();
+    let fih = ps5upload_fpkg::fih::parse(&bytes[..BLOCK as usize]).unwrap();
+    let count = fih.pfs_size / BLOCK;
+    // pfs_image.dat's blocks come first; the layout descriptor, superblock and tables follow.
+    let mut pkg = ps5upload_fpkg::PkgFile::open(&report.path).unwrap();
+    let cnt = ps5upload_fpkg::cnt::read(&mut pkg, fih.cnt_offset).unwrap();
+    let outer = ps5upload_fpkg::outer::open(&mut pkg, &fih, &cnt, "").unwrap();
+    let nodes = outer.dinodes();
+    let ino = outer
+        .dirents(&nodes[2])
+        .into_iter()
+        .find(|d| d.name == "pfs_image.dat")
+        .unwrap()
+        .ino;
+    let data = nodes[ino as usize].blocks as u64;
+    assert!(data < count);
+    let batch = sample::SLICE / BLOCK;
+    let batches = data.div_ceil(batch);
+    let seed = 11;
+    let picked = sample::pick(batches, seed, 128);
+    let left_out = (0..batches)
+        .find(|b| !picked.contains(b))
+        .expect("a package this size has a batch the draw leaves out");
+
+    let sweep = |path: &Path, seed: Option<u64>| {
+        let r = verify::verify_streaming_sampled(path, "", seed, &mut |_, _| {}).unwrap();
+        r.checks
+            .iter()
+            .find(|c| c.name.starts_with("outer blocks"))
+            .map(|c| c.ok)
+            .unwrap()
+    };
+    let flip = |block: u64, name: &str| {
+        let mut damaged = bytes.clone();
+        damaged[(fih.pfs_offset + block * BLOCK) as usize + 100] ^= 0xFF;
+        let path = out.path().join(name);
+        std::fs::write(&path, damaged).unwrap();
+        path
+    };
+    // Past the first batch's metadata and the last batch's tail: plain data blocks.
+    let hidden = flip(left_out * batch + batch / 2, "hidden.pkg");
+    assert!(sweep(&hidden, Some(seed)), "the sample does not reach it");
+    assert!(!sweep(&hidden, None), "the full sweep does");
+    for (block, name) in [
+        (data - 1, "last-data.pkg"),
+        (data, "naps.pkg"),
+        (count - 1, "end.pkg"),
+    ] {
+        assert!(!sweep(&flip(block, name), Some(seed)), "{name}");
+    }
+    assert!(sweep(&report.path, Some(seed)) && sweep(&report.path, None));
 }

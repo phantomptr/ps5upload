@@ -370,6 +370,19 @@ pub fn verify_streaming(
     passcode: &str,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<Report> {
+    verify_streaming_sampled(path, passcode, None, progress)
+}
+
+/// [`verify_streaming`], with the data-block sweep sampled when given a `seed`: the structure
+/// (header, tables, inodes, indirect blocks, the playgo CRCs) is always checked in full, and
+/// only the per-block decrypt and SHA3 is limited to the first and last 8 MiB batch of blocks
+/// plus a seeded draw of about 1% of the batches (at most 128). `None` sweeps every block.
+pub fn verify_streaming_sampled(
+    path: &Path,
+    passcode: &str,
+    seed: Option<u64>,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<Report> {
     let mut file = PkgFile::open(path)?;
     let fih_block = file.read_at(0, BLOCK as usize)?;
     let fih = fih::parse(&fih_block)?;
@@ -462,7 +475,27 @@ pub fn verify_streaming(
     // the native mode, as stored in the plaintext one.
     let mut bad = 0u64;
     let mut done = 0u64;
-    for index in 0..count {
+    // The game's data comes first; everything past it is the format's own (the layout
+    // descriptor, the superblock, every table and directory) and is always swept. Only the
+    // data is sampled; no pfs_image.dat found means every block is swept.
+    let uroot_bytes = read_block(&mut file, nodes[2].direct[0].block as u64)?;
+    let uroot = outer::OuterImage::parse_dirents(&uroot_bytes, nodes[2].size);
+    let data = uroot
+        .iter()
+        .find(|d| d.name == "pfs_image.dat")
+        .and_then(|d| nodes.get(d.ino as usize))
+        .map_or(0, |n| (n.blocks as u64).min(count));
+    const BATCH: u64 = crate::sample::SLICE / BLOCK;
+    let batches = seed.map(|seed| crate::sample::pick(data.div_ceil(BATCH), seed, 128));
+    let span = |b: u64| b * BATCH..((b + 1) * BATCH).min(data);
+    let sweep = batches.as_ref().map_or(count, |v| {
+        v.iter().map(|b| span(*b).end - span(*b).start).sum::<u64>() + (count - data)
+    });
+    let indices: Box<dyn Iterator<Item = u64>> = match batches {
+        None => Box::new(0..count),
+        Some(v) => Box::new(v.into_iter().flat_map(span).chain(data..count)),
+    };
+    for index in indices {
         // The superblock is not encrypted; it was matched against the game digest above.
         if index != sb_index {
             let raw = file.read_at(fih.pfs_offset + index * BLOCK, BLOCK as usize)?;
@@ -486,10 +519,10 @@ pub fn verify_streaming(
         }
         done += 1;
         if done.is_multiple_of(256) {
-            progress(done * BLOCK, count * BLOCK);
+            progress(done * BLOCK, sweep * BLOCK);
         }
     }
-    progress(done * BLOCK, count * BLOCK);
+    progress(done * BLOCK, sweep * BLOCK);
     r.push(
         if plaintext_mode {
             "outer blocks match their imagedigs entry"
@@ -497,12 +530,16 @@ pub fn verify_streaming(
             "outer blocks decrypt to their imagedigs entry"
         },
         bad == 0,
-        format!("{} of {count} failed", bad),
+        match seed {
+            None => format!("{} of {count} failed", bad),
+            Some(seed) => format!(
+                "{bad} of {sweep} sampled failed ({count} blocks, seed {seed}, policy {})",
+                crate::sample::POLICY
+            ),
+        },
     );
 
-    // The uroot dirents and the flat-path table, read on demand like everything else.
-    let uroot_bytes = read_block(&mut file, nodes[2].direct[0].block as u64)?;
-    let uroot = outer::OuterImage::parse_dirents(&uroot_bytes, nodes[2].size);
+    // The uroot dirents (read above) and the flat-path table.
     let names: Vec<String> = uroot.iter().map(|d| d.name.clone()).collect();
     r.push(
         "outer uroot holds pfs_image.dat and naps_pkg_layout.dat",
@@ -542,12 +579,12 @@ pub fn verify_streaming(
             match s.members.iter().find(|m| m.name == crc_name) {
                 Some(m) => {
                     let stored = file.read_at(m.offset, m.size as usize)?;
-                    let expected = si::chunk_crc_table(&mut file, s.zip_start)?;
-                    r.push(
-                        "si playgo-chunk.crc",
-                        stored == expected,
-                        format!("{} bytes", m.size),
-                    );
+                    // Sampled with the sweep: the whole table would read the package again.
+                    let ok = match seed {
+                        None => stored == si::chunk_crc_table(&mut file, s.zip_start)?,
+                        Some(seed) => si::chunk_crc_sampled(&mut file, s.zip_start, &stored, seed)?,
+                    };
+                    r.push("si playgo-chunk.crc", ok, format!("{} bytes", m.size));
                 }
                 None => r.push("si playgo-chunk.crc", false, format!("{crc_name} missing")),
             }

@@ -40,4 +40,26 @@ describe("convertPrefs", () => {
     const { useConvertPrefs } = await import("./convertPrefs");
     expect(useConvertPrefs.getState().compression).toBe("balanced");
   });
+
+  it("defaults to the fast check", async () => {
+    const { useConvertPrefs } = await import("./convertPrefs");
+    expect(useConvertPrefs.getState().fullVerify).toBe(false);
+  });
+
+  it("remembers full verification across loads", async () => {
+    const first = await import("./convertPrefs");
+    first.useConvertPrefs.getState().setFullVerify(true);
+    expect(stored.get("ps5upload.convert.full_verify")).toBe("1");
+    vi.resetModules();
+    const second = await import("./convertPrefs");
+    expect(second.useConvertPrefs.getState().fullVerify).toBe(true);
+    second.useConvertPrefs.getState().setFullVerify(false);
+    expect(stored.get("ps5upload.convert.full_verify")).toBe("0");
+  });
+
+  it("reads anything but 1 as the fast check", async () => {
+    const { parseFullVerify } = await import("./convertPrefs");
+    expect(parseFullVerify("1")).toBe(true);
+    for (const v of [null, "", "0", "true", "yes"]) expect(parseFullVerify(v)).toBe(false);
+  });
 });
