@@ -34,6 +34,12 @@ typedef enum {
     UNREGISTER_UNAVAILABLE = 3,   /* no uninstall API, and the title is still there */
 } unregister_verdict_t;
 
+/* The helper tile also has a Sony home/library icon. Removing our appmeta alone does not
+ * prove Sony removed that icon. Preserve the staged files when the API refused or is absent. */
+static inline int unregister_tile_confirmed(const unregister_outcome_t *o) {
+    return o->api_called && o->sony_rc == 0 && !o->still_present;
+}
+
 /* A refusal of a package uninstall is final. For our own folder registration the teardown
  * that matters already happened (nullfs, trackers, appmeta), so a Sony refusal only counts
  * when the title is still listed: Sony refuses some titles it barely knows, and reporting

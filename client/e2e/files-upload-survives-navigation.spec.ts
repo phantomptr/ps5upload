@@ -132,7 +132,9 @@ test("an Add files upload keeps its progress across a screen change", async ({
   await primary.getByRole("link", { name: "Files", exact: true }).click();
   await expect(progress).toBeVisible({ timeout: 15_000 });
   await expect(progress).toContainText("25%");
-  await expect(main.getByRole("button", { name: "Add files" })).toBeDisabled();
+  // Further picks join the queue while the current copy stays active.
+  await expect(main.getByRole("button", { name: "Add files" })).toBeEnabled();
+  await expect(page.getByTestId("fs-upload-queue")).toContainText("big.exfat");
 
   // From another screen it is visible as a running task.
   await primary.getByRole("link", { name: "Tasks", exact: true }).click();

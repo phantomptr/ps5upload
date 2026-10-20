@@ -29,9 +29,8 @@ void webui_api_settings_init(const webui_settings_t *s);
 
 /* A paired PC unregistered the tile (APP_UNREGISTER of WEBUI_TILE_TITLE_ID): the same as Settings ->
  * tile off. Saves tile:false to WEBUI_SETTINGS_PATH (so the next start does not register it again)
- * and asks the tile thread to remove it (webui_tile_request(0): unregister, then the tile folder and
- * the staged /user/app copy are deleted). Returns at once; 0, or -1 when the save failed (the
- * removal is requested either way). */
+ * and waits for the tile worker to finish removing it. Returns 0 only after persistence and
+ * confirmed Sony removal plus folder cleanup; -1 on any failure. */
 int webui_api_tile_off(void);
 
 /* Paired-helper tile get/set; never changes LAN access. JSON reply length, or -1. */

@@ -111,6 +111,14 @@ pub struct SmpStatus {
 /// Sync — run this on a `spawn_blocking` task from an async caller.
 /// Never fails outright: individual probe failures are recorded in
 /// `SmpStatus::errors` instead of aborting the whole snapshot.
+// HyperHEN embeds SMP as hyperhen_mount.elf (upstream src/main.c PAYLOAD_NAME).
+// The generic HyperHEN process is insufficient: utility-only firmware routes lack automount.
+fn is_mount_process(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.contains(SMP_PROCESS_NAME_HINT)
+        || matches!(name.as_str(), "hyperhen_mount" | "hyperhen_mount.elf")
+}
+
 pub fn collect_status(addr: &str) -> Result<SmpStatus> {
     let mut errors: Vec<String> = Vec::new();
 
@@ -140,12 +148,7 @@ pub fn collect_status(addr: &str) -> Result<SmpStatus> {
     // substring on lowercased name to handle "shadowmountplus.elf"
     // vs "shadowmountplus" depending on how the kernel records it.
     let running = match proc_list(addr) {
-        Ok(list) => {
-            let needle = SMP_PROCESS_NAME_HINT.to_ascii_lowercase();
-            list.procs
-                .iter()
-                .any(|p| p.name.to_ascii_lowercase().contains(&needle))
-        }
+        Ok(list) => list.procs.iter().any(|p| is_mount_process(&p.name)),
         Err(e) => {
             errors.push(format!("proc list: {e}"));
             false
@@ -406,5 +409,31 @@ mod tests {
         ));
         assert!(!is_payload_enoent("Permission denied"));
         assert!(!is_payload_enoent("connection reset"));
+    }
+}
+
+#[cfg(test)]
+mod mount_process_tests {
+    use super::is_mount_process;
+
+    #[test]
+    fn integrated_automount_is_distinct_from_the_utility_daemon() {
+        for name in [
+            "shadowmountplus",
+            "ShadowMountPlus.elf",
+            "hyperhen_mount",
+            "hyperhen_mount.elf",
+        ] {
+            assert!(is_mount_process(name), "{name}");
+        }
+        for name in [
+            "HyperHEN.elf",
+            "hyperhen_daemon",
+            "hyperhen_elfldr.elf",
+            "kstuff",
+            "",
+        ] {
+            assert!(!is_mount_process(name), "{name}");
+        }
     }
 }

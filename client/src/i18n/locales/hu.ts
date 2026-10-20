@@ -609,7 +609,7 @@ queue_title: "Sor",
 "batch_add": "{count} hozzáadása a sorhoz",
 "batch_scan": "Játékok hozzáadása mappából…",
 "cq_pick_folders": "Játékmappák kiválasztása…",
-"cq_pick_files": "Képfájlok vagy archívumok kiválasztása…",
+"cq_pick_files": "Csomagok, képfájlok vagy archívumok…",
 "cq_not_games": "{count} mappa nem játék volt, ezért kihagytuk.",
 "batch_scan_pick": "Válaszd ki a játékokat tartalmazó mappát",
 "batch_mount": "Képfájlok csatolása feltöltés után",
@@ -3963,7 +3963,7 @@ installed_section_disc_hint_v2: "Regisztrált játékok, amelyek lemezképfájlr
 installed_section_disc_v2: "Játékok lemezképfájlokból",
 keep_ps5_awake_mode_hint_v2: "Rendszeresen visszaállítja a PS5 automatikus készenléti időzítőjét, hogy ne kerüljön pihenő módba. A „Feltöltés és telepítés közben” a hosszú feltöltéseket védi (a sikertelen feltöltések gyakori oka; alapértelmezett). A „Mindig, amíg csatlakoztatva van” minden futó segédprogrammal rendelkező konzolt távol tart a pihenő módtól, amíg az alkalmazás nyitva van. A PS5 kézi pihenő módba tétele minden módban működik.",
 kernellog_categories_explainer: "Kezdetben minden kategória látható. A Sony kategóriák a konzol saját alrendszerei, amelyek minden jailbreakelt PS5-ön folyamatosan naplóznak, bármilyen payload fut is; nem a ps5upload okozza őket. A zaj csökkentéséhez vedd ki a pipát mellőlük.",
-library_disk_image_files: "Lemezképfájlok (.exfat / .ffpkg / .ffpfs)",
+library_disk_image_files: "Lemezképfájlok (.exfat / .ffpkg / .ffpfs / .ffpfsc)",
 payloads_cached_body: "{kb} KB letöltve a helyi gyorsítótárba.",
 payloads_cached_title: "{id} {tag} gyorsítótárazva",
 payloads_description_catalog_v2: "Válogatott, külső fejlesztésű PS5 homebrew payloadok. Ellenőrizd a legújabb kiadást, töltsd le egyszer, majd egy kattintással küldd a PS5-re. A verziók helyben tárolódnak, így USB payload pendrive-ra is felteheted őket.",
@@ -4995,6 +4995,7 @@ c2c_test_deep_bad: "A 4 KiB-os tesztküldés nem érkezett meg: {detail}",
 "cheats_import_state": "Előbb kapcsold ki a csalásmotort. Importálás előtt távolítsd el a játék meglévő csalásait a mentett kapcsolóállapot törléséhez. A fájlokat soha nem írja felül. Az importált kapcsolók kikapcsolva maradnak; csak az egyező játékverziónál engedélyezd őket.",
 "saves_android_destination": "A mentések dátumozott ZIP-ek a telefon Download mappájában (/storage/emulated/0/Download). A visszaállítás titkosított fájlokat másol, a fiókot és a játékazonosítót nem módosítja.",
 
+library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount+ szükséges. Szerkesztés előtt bontsd ki őket a Fájlok alatt.",
 };
 
 export default hu;

@@ -3489,7 +3489,10 @@ static int handle_app_unregister(runtime_state_t *state, const char *request_bod
          * Settings. Saved, so the next helper start does not register it again; the tile thread
          * unregisters it and deletes its folders (webui_tile_remove). */
         static const char ack[] = "{\"sony_uninstall_rc\":0,\"tile_off\":true}";
-        (void)webui_api_tile_off();
+        if (webui_api_tile_off() != 0) {
+            static const char reason[] = "tile_removal_failed: removal or saving tile:false failed; recovery files kept when possible";
+            return mgmt_reply(MGMT_FRAME_ERROR, reason, sizeof reason - 1);
+        }
         pop_notification("PS5Upload tile removed");
         return mgmt_reply(MGMT_FRAME_APP_UNREGISTER_ACK, ack, (uint64_t)(sizeof ack - 1));
     }

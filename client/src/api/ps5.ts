@@ -3119,7 +3119,7 @@ export interface LibraryEntry {
    *  (UFS2 volume), `ffpfs` = .ffpfs (PFS save-data volume,
    *  experimental). Null for game entries. Drives the label + mount
    *  behavior in the Library row. */
-  imageFormat?: "exfat" | "ffpkg" | "ffpfs" | null;
+  imageFormat?: "exfat" | "ffpkg" | "ffpfs" | "ffpfsc" | null;
   /** For `game` kind: PS5 title id (e.g. "PPSA00000") read from the
    *  game's sce_sys/param.json during scan. Used to dedup rows when
    *  the same game appears at multiple paths -- typically when a
@@ -3144,7 +3144,7 @@ export interface LibraryEntry {
  *     against extracted fragments since fragments don't carry
  *     `sce_sys/param.json`.
  *   - **Disk image** = a file whose name (case-insensitive) ends in
- *     `.exfat` or `.ffpkg`.
+ *     `.exfat`, `.ffpkg`, `.ffpfs` or `.ffpfsc`.
  *
  *  Determinism guarantees:
  *   - Listings are sorted by (kind, name) before they drive traversal
@@ -3235,15 +3235,18 @@ export async function scanLibrary(
   > =>
     scanLimit(async () => {
       try {
-        const res = await invoke<{
-          entries?: Array<{
-            name?: string;
-            kind?: string;
-            size?: number;
-            mtime?: number;
-          }>;
-        }>("ps5_list_dir", { addr, path, offset: 0, limit: 512 });
-        const out = res.entries ?? [];
+        type Entry = { name?: string; kind?: string; size?: number; mtime?: number };
+        const out: Entry[] = [];
+        // The helper paginates directory listings. A busy games directory can
+        // put every image beyond the first page; honor the same scan budget.
+        while (out.length < MAX_ENTRIES_PER_VOLUME) {
+          const res = await invoke<{ entries?: Entry[]; truncated?: boolean }>(
+            "ps5_list_dir", { addr, path, offset: out.length, limit: 512 },
+          );
+          const page = res.entries ?? [];
+          out.push(...page);
+          if (!res.truncated || page.length === 0) break;
+        }
         // Stable sort: dir/file kind first, then name. Eliminates
         // non-determinism from the payload returning entries in
         // inode or readdir order instead of alphabetical.
@@ -3282,14 +3285,16 @@ export async function scanLibrary(
         if (!e.name) continue;
         if (e.kind === "file") {
           const lower = e.name.toLowerCase();
-          const imageFormat: "exfat" | "ffpkg" | "ffpfs" | null =
+          const imageFormat: LibraryEntry["imageFormat"] =
             lower.endsWith(".exfat")
               ? "exfat"
               : lower.endsWith(".ffpkg")
                 ? "ffpkg"
                 : lower.endsWith(".ffpfs")
                   ? "ffpfs"
-                  : null;
+                  : lower.endsWith(".ffpfsc")
+                    ? "ffpfsc"
+                    : null;
           if (imageFormat) {
             const full = path === "/" ? `/${e.name}` : `${path}/${e.name}`;
             byPath.set(full, {

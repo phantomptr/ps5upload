@@ -148,7 +148,24 @@ struct CatalogueEntry {
 ///     use on the platform.
 ///   - etahen / itemzflow: best-effort entries; users can edit this
 ///     table to point at the variant they prefer.
+const CATALOGUE_HOSTS: &[&str] = &["github.com", "git.etawen.dev", "theghostonline.dev"];
 const CATALOGUE: &[CatalogueEntry] = &[
+    CatalogueEntry {
+        id: "elfldr",
+        display_name: "elfldr",
+        role: "ELF loader — load before ps5upload.elf",
+        description: "Initial ELF loader for WebKit/payload-listener setups. Download elfldr-ps5.elf and load it through your jailbreak or autoloader before the PS5Upload helper. Sending requires an already working loader; this cannot bootstrap a closed port. This is the upstream build; PS5Upload can replace the standard running loader with its bundled patched build once the helper is connected.",
+        repo_host: "github.com",
+        repo_owner: "ps5-payload-dev",
+        repo_name: "elfldr",
+        asset_name_hint: "elfldr-ps5.elf",
+        on_console_marker_path: None,
+        process_name_hint: Some("elfldr.elf"),
+        ports: &[9021],
+        autoload_priority: 1,
+        autoload_delay_ms: 1000,
+        homepage: "https://github.com/ps5-payload-dev/elfldr",
+    },
     CatalogueEntry {
         // display_name says "kstuff-lite (EchoStretch)" so this entry
         // must point at EchoStretch/kstuff-lite, not EchoStretch/kstuff
@@ -420,7 +437,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         display_name: "LZ4 Compression (theghostonline)",
         role: "Compresses games on the PS5 itself",
         description: "Shrinks a game that is already on the PS5 by LZ4-packing its AMPR assets, entirely on the console: the game never leaves it. Works on folder games and on mounted .exfat/.ffpfs images, packs in place with rollback, verifies every file, and can undo. Needs ShadowMount+ for image sources. Open its page on port 5920 from the Connection screen's scene tools once it is running. ps5upload's Convert does the same packing on this computer when the game is here instead.",
-        repo_host: "github.com",
+        repo_host: "theghostonline.dev",
         repo_owner: "theghostonline",
         repo_name: "PS5-LZ4-Compression",
         asset_name_hint: "lz4-compression",
@@ -429,7 +446,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         ports: &[5920],
         autoload_priority: 9,
         autoload_delay_ms: 500,
-        homepage: "https://github.com/theghostonline/PS5-LZ4-Compression",
+        homepage: "https://theghostonline.dev/theghostonline/PS5-LZ4-Compression",
     },
     CatalogueEntry {
         id: "np-fake-signin",
@@ -1298,8 +1315,7 @@ pub async fn payloads_release(
     // fail fast. A CUSTOM repo's host was typed + approved by the user at
     // add-time (validated by `is_plausible_repo_host`), so it isn't subject to
     // this fixed list — that's the whole point of "custom".
-    const ALLOWED_HOSTS: &[&str] = &["github.com", "git.etawen.dev"];
-    if !entry.is_custom && !ALLOWED_HOSTS.contains(&entry.repo_host.as_str()) {
+    if !entry.is_custom && !CATALOGUE_HOSTS.contains(&entry.repo_host.as_str()) {
         return Err(format!(
             "catalog entry {} declares repo_host={:?} which is not in the allowlist",
             entry.id, entry.repo_host
@@ -1451,8 +1467,7 @@ pub async fn payloads_releases(
     }
 
     // Allowlist guard for catalogue entries only — see payloads_release.
-    const ALLOWED_HOSTS: &[&str] = &["github.com", "git.etawen.dev"];
-    if !entry.is_custom && !ALLOWED_HOSTS.contains(&entry.repo_host.as_str()) {
+    if !entry.is_custom && !CATALOGUE_HOSTS.contains(&entry.repo_host.as_str()) {
         return Err(format!(
             "catalog entry {} declares repo_host={:?} which is not in the allowlist",
             entry.id, entry.repo_host
@@ -1891,6 +1906,17 @@ mod tests {
     }
 
     #[test]
+    fn catalogue_hosts_allowed_and_loader_asset_pinned() {
+        for entry in CATALOGUE {
+            assert!(CATALOGUE_HOSTS.contains(&entry.repo_host), "{}", entry.id);
+        }
+        let lz4 = find_entry("lz4-compression").expect("LZ4 catalogue entry");
+        assert_eq!(lz4.repo_host, "theghostonline.dev");
+        let loader = find_entry("elfldr").unwrap();
+        assert_eq!(loader.asset_name_hint, "elfldr-ps5.elf");
+    }
+
+    #[test]
     fn catalogue_ids_unique() {
         let mut ids: Vec<&str> = CATALOGUE.iter().map(|e| e.id).collect();
         ids.sort();
@@ -2234,7 +2260,9 @@ mod tests {
             .filter(|e| e.autoload_priority == 1)
             .collect();
         assert!(p0.iter().all(|e| e.id.starts_with("kstuff-")));
-        assert!(p1.iter().all(|e| e.id == "shadowmountplus"));
+        assert!(p1
+            .iter()
+            .all(|e| matches!(e.id, "shadowmountplus" | "elfldr")));
     }
 
     #[test]

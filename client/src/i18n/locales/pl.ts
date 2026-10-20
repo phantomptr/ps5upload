@@ -591,7 +591,7 @@ queue_title: "Kolejka",
 "batch_add": "Dodaj do kolejki: {count}",
 "batch_scan": "Dodaj gry z folderu…",
 "cq_pick_folders": "Wybierz foldery gier…",
-"cq_pick_files": "Wybierz obrazy lub archiwa…",
+"cq_pick_files": "Wybierz pakiety, obrazy lub archiwa…",
 "cq_not_games": "Pominięto foldery niebędące grami: {count}.",
 "batch_scan_pick": "Wybierz folder z grami",
 "batch_mount": "Zamontuj obrazy po wysłaniu",
@@ -3903,7 +3903,7 @@ installed_section_disc_hint_v2: "Zarejestrowane gry uruchamiane z obrazu dysku. 
 installed_section_disc_v2: "Gry z obrazów dysków",
 keep_ps5_awake_mode_hint_v2: "Okresowo resetuje licznik automatycznego czuwania PS5, aby nie przeszła w tryb spoczynku. „Podczas wysyłania i instalacji” chroni długie wysyłania (częsta przyczyna nieudanych wysyłań; domyślnie). „Zawsze podczas połączenia” utrzymuje każdą konsolę z działającym helperem poza trybem spoczynku, dopóki aplikacja jest otwarta. Ręczne przełączenie PS5 w tryb spoczynku działa w każdym trybie.",
 kernellog_categories_explainer: "Na początku widoczne są wszystkie kategorie. Kategorie Sony to własne podsystemy konsoli, które stale logują na każdej odblokowanej PS5 niezależnie od uruchomionego payloadu; nie powoduje ich ps5upload. Odznacz je, aby ograniczyć szum.",
-library_disk_image_files: "Pliki obrazów dysków (.exfat / .ffpkg / .ffpfs)",
+library_disk_image_files: "Pliki obrazów dysków (.exfat / .ffpkg / .ffpfs / .ffpfsc)",
 payloads_cached_body: "Pobrano {kb} KB do lokalnej pamięci podręcznej.",
 payloads_cached_title: "Zapisano w pamięci podręcznej {id} {tag}",
 payloads_description_catalog_v2: "Wybrane payloady homebrew PS5 od zewnętrznych autorów. Sprawdź najnowsze wydanie, pobierz raz, a potem wysyłaj na PS5 jednym kliknięciem. Wersje są przechowywane lokalnie, więc możesz też umieścić je na pendrivie z payloadami.",
@@ -4935,6 +4935,7 @@ c2c_test_deep_bad: "Testowa wysyłka 4 KiB nie dotarła: {detail}",
 "cheats_import_state": "Najpierw wyłącz silnik cheatów. Przed importem usuń istniejące cheaty tego tytułu, aby wyczyścić zapisany stan przełączników. Pliki nie są zastępowane. Importowane przełączniki są wyłączone; włączaj je tylko dla pasującej wersji gry.",
 "saves_android_destination": "Kopie to datowane pliki ZIP w folderze Download telefonu (/storage/emulated/0/Download). Przywracanie kopiuje zaszyfrowane pliki bez zmiany konta lub ID tytułu.",
 
+library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać. Aby je edytować, otwórz Pliki i najpierw je rozpakuj.",
 };
 
 export default pl;

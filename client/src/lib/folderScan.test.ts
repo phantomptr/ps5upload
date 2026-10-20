@@ -131,6 +131,7 @@ describe("Games in a picked folder", () => {
         { path: "/g/Game A", isDir: true },
         { path: "/g/b.ffpkg", isDir: false },
         { path: "/g/c.7z", isDir: false },
+        { path: "/g/d.pkg", isDir: false },
       ],
       skipped: 1,
     });

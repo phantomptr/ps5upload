@@ -370,7 +370,7 @@ queue_title: "Antrean",
 "batch_add": "Tambahkan {count} ke antrean",
 "batch_scan": "Tambahkan game dari folder…",
 "cq_pick_folders": "Pilih folder game…",
-"cq_pick_files": "Pilih image atau arsip…",
+"cq_pick_files": "Pilih paket, image, atau arsip…",
 "cq_not_games": "{count} folder bukan game dan dilewati.",
 "batch_scan_pick": "Pilih folder yang berisi game Anda",
 "batch_mount": "Pasang image setelah diunggah",
@@ -3677,7 +3677,7 @@ installed_section_disc_hint_v2: "Game terdaftar yang berjalan dari image disk. G
 installed_section_disc_v2: "Game dari image disk",
 keep_ps5_awake_mode_hint_v2: "Secara berkala mengatur ulang timer siaga otomatis PS5 agar tidak masuk mode istirahat. “Saat mengunggah dan memasang” melindungi unggahan panjang (penyebab umum unggahan gagal; bawaan). “Selalu saat terhubung” menjaga setiap konsol dengan helper yang berjalan tetap keluar dari mode istirahat selama aplikasi terbuka. Mengistirahatkan PS5 secara manual tetap berfungsi di semua mode.",
 kernellog_categories_explainer: "Setiap kategori awalnya ditampilkan. Kategori Sony adalah subsistem konsol itu sendiri, yang terus menulis log di setiap PS5 yang di-jailbreak apa pun payload yang berjalan; itu bukan disebabkan oleh ps5upload. Hapus centangnya untuk mengurangi kebisingan.",
-library_disk_image_files: "File image disk (.exfat / .ffpkg / .ffpfs)",
+library_disk_image_files: "File image disk (.exfat / .ffpkg / .ffpfs / .ffpfsc)",
 payloads_cached_body: "{kb} KB diunduh ke cache lokal.",
 payloads_cached_title: "{id} {tag} di-cache",
 payloads_description_catalog_v2: "Payload homebrew PS5 pihak ketiga pilihan. Periksa rilis terbaru, unduh sekali, lalu kirim ke PS5 dengan satu klik. Versi di-cache secara lokal sehingga kamu juga bisa menaruhnya di stik payload USB.",
@@ -4689,6 +4689,7 @@ c2c_test_deep_bad: "Kiriman uji 4 KiB tidak tiba: {detail}",
 "cheats_import_state": "Matikan mesin cheat dahulu. Hapus cheat yang ada untuk judul ini agar status sakelar tersimpan dibersihkan sebelum impor. File tidak pernah ditimpa. Sakelar impor tetap mati; aktifkan hanya untuk versi game yang cocok.",
 "saves_android_destination": "Cadangan berupa ZIP bertanggal di folder Download ponsel (/storage/emulated/0/Download). Pemulihan menyalin file terenkripsi tanpa mengubah akun atau ID judul.",
 
+library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermain. Untuk mengedit, buka Berkas dan ekstrak terlebih dahulu.",
 };
 
 export default id;

@@ -1071,6 +1071,8 @@ interface PkgLibraryState {
       onTask?: (taskId: string) => void;
       /** What the queue row is called instead of the file's own name. */
       displayName?: string;
+      category?: string;
+      contentId?: string;
     },
   ) => Promise<{
     ok: boolean;
@@ -3616,7 +3618,7 @@ const makePkgLibraryStore = () =>
       const owns = !!onTask && !streamTaskCallbacks.has(key);
       if (owns) streamTaskCallbacks.set(key, onTask);
       try {
-        return await enqueueInstall({ host, request, displayName: name }).done;
+        return await enqueueInstall({ host, request, displayName: name, category: opts?.category, contentId: opts?.contentId }).done;
       } finally {
         // Removed without running (Stop, Clear, refused): don't leak it.
         if (owns && streamTaskCallbacks.get(key) === onTask) streamTaskCallbacks.delete(key);

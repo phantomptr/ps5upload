@@ -377,7 +377,7 @@ queue_title: "队列",
 "batch_add": "将 {count} 个加入队列",
 "batch_scan": "从文件夹添加游戏…",
 "cq_pick_folders": "选择游戏文件夹…",
-"cq_pick_files": "选择镜像或压缩包…",
+"cq_pick_files": "选择软件包、镜像或压缩包…",
 "cq_not_games": "{count} 个文件夹不是游戏，已跳过。",
 "batch_scan_pick": "选择存放游戏的文件夹",
 "batch_mount": "上传后挂载镜像",
@@ -3624,7 +3624,7 @@ installed_section_disc_hint_v2: "从磁盘镜像运行的已注册游戏。只�
 installed_section_disc_v2: "来自磁盘镜像的游戏",
 keep_ps5_awake_mode_hint_v2: "定期重置 PS5 的自动待机计时器，使其无法进入休息模式。“上传和安装期间”保护长时间上传（上传失败的常见原因；默认）。“连接期间始终保持”在应用打开期间让每台运行助手的主机都不进入休息模式。在任何模式下，仍可手动让 PS5 进入休息模式。",
 kernellog_categories_explainer: "所有类别一开始都显示。Sony 类别是主机自身的子系统，无论运行什么 payload，在每台越狱的 PS5 上都会持续记录日志；它们不是由 ps5upload 引起的。取消勾选以减少噪音。",
-library_disk_image_files: "磁盘镜像文件（.exfat / .ffpkg / .ffpfs）",
+library_disk_image_files: "磁盘镜像文件（.exfat / .ffpkg / .ffpfs / .ffpfsc）",
 payloads_cached_body: "已将 {kb} KB 下载到本地缓存。",
 payloads_cached_title: "已缓存 {id} {tag}",
 payloads_description_catalog_v2: "精选的第三方 PS5 自制 payload。检查最新版本，下载一次，然后一键发送到 PS5。版本会缓存在本地，因此也可以放到 USB payload 盘上。",
@@ -4636,6 +4636,7 @@ c2c_test_deep_bad: "4 KiB 测试发送未到达：{detail}",
 "cheats_import_state": "请先关闭金手指引擎，并移除该游戏现有的金手指以清除已保存的开关状态，再导入。不会覆盖现有文件。导入的开关保持关闭，仅在游戏版本匹配时手动启用。",
 "saves_android_destination": "备份是带日期的 ZIP，保存在手机的 Download 文件夹（/storage/emulated/0/Download）。恢复只复制加密文件，不会更改所属账号或游戏 ID。",
 
+library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需编辑，请先在“文件”中解压。",
 };
 
 export default zh_CN;

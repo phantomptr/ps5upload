@@ -371,7 +371,7 @@ queue_title: "Hàng đợi",
 "batch_add": "Thêm {count} vào hàng đợi",
 "batch_scan": "Thêm game từ thư mục…",
 "cq_pick_folders": "Chọn các thư mục game…",
-"cq_pick_files": "Chọn ảnh đĩa hoặc tệp nén…",
+"cq_pick_files": "Chọn gói, ảnh đĩa hoặc tệp nén…",
 "cq_not_games": "Đã bỏ qua {count} thư mục không phải game.",
 "batch_scan_pick": "Chọn thư mục chứa game",
 "batch_mount": "Gắn image sau khi tải lên",
@@ -3670,7 +3670,7 @@ installed_section_disc_hint_v2: "Các trò chơi đã đăng ký chạy từ ả
 installed_section_disc_v2: "Trò chơi từ ảnh đĩa",
 keep_ps5_awake_mode_hint_v2: "Định kỳ đặt lại bộ hẹn giờ chờ tự động của PS5 để máy không thể vào chế độ nghỉ. “Trong khi tải lên và cài đặt” bảo vệ các lượt tải lên dài (nguyên nhân thường gặp khiến tải lên thất bại; mặc định). “Luôn khi đã kết nối” giữ mọi máy có trình trợ giúp đang chạy không vào chế độ nghỉ khi ứng dụng còn mở. Tự đưa PS5 vào chế độ nghỉ vẫn hoạt động ở mọi chế độ.",
 kernellog_categories_explainer: "Mọi danh mục đều hiện lúc đầu. Các danh mục Sony là hệ thống con của chính máy, chúng ghi nhật ký liên tục trên mọi PS5 đã jailbreak bất kể payload nào đang chạy; chúng không do ps5upload gây ra. Bỏ chọn chúng để giảm nhiễu.",
-library_disk_image_files: "Tệp ảnh đĩa (.exfat / .ffpkg / .ffpfs)",
+library_disk_image_files: "Tệp ảnh đĩa (.exfat / .ffpkg / .ffpfs / .ffpfsc)",
 payloads_cached_body: "Đã tải {kb} KB vào bộ nhớ đệm cục bộ.",
 payloads_cached_title: "Đã lưu đệm {id} {tag}",
 payloads_description_catalog_v2: "Các payload homebrew PS5 bên thứ ba được tuyển chọn. Kiểm tra bản phát hành mới nhất, tải một lần, rồi gửi tới PS5 chỉ với một cú nhấp. Các phiên bản được lưu đệm cục bộ nên bạn cũng có thể chép chúng vào USB payload.",
@@ -4682,6 +4682,7 @@ c2c_test_deep_bad: "Lượt gửi thử 4 KiB không tới: {detail}",
 "cheats_import_state": "Tắt bộ máy cheat trước. Xóa cheat hiện có của tựa game này để xóa trạng thái công tắc đã lưu trước khi nhập. Không ghi đè tệp hiện có. Công tắc nhập vẫn tắt; chỉ bật cho đúng phiên bản game.",
 "saves_android_destination": "Bản sao lưu là ZIP có ngày trong thư mục Download của điện thoại (/storage/emulated/0/Download). Khôi phục chỉ sao chép tệp mã hóa, không đổi tài khoản hay ID tựa game.",
 
+library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để chỉnh sửa, hãy mở Tệp và giải nén trước.",
 };
 
 export default vi;

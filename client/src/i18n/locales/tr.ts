@@ -370,7 +370,7 @@ queue_title: "Kuyruk",
 "batch_add": "{count} öğeyi kuyruğa ekle",
 "batch_scan": "Klasörden oyun ekle…",
 "cq_pick_folders": "Oyun klasörleri seç…",
-"cq_pick_files": "İmaj veya arşiv seç…",
+"cq_pick_files": "Paket, kalıp veya arşiv seç…",
 "cq_not_games": "{count} klasör oyun değildi ve atlandı.",
 "batch_scan_pick": "Oyunlarınızın olduğu klasörü seçin",
 "batch_mount": "Yüklemeden sonra imajları bağla",
@@ -3675,7 +3675,7 @@ installed_section_disc_hint_v2: "Bir disk imajından çalışan kayıtlı oyunla
 installed_section_disc_v2: "Disk imajlarından oyunlar",
 keep_ps5_awake_mode_hint_v2: "PS5'in otomatik bekleme zamanlayıcısını düzenli olarak sıfırlar, böylece dinlenme moduna geçemez. “Yükleme ve kurulum sırasında” uzun yüklemeleri korur (başarısız yüklemelerin yaygın bir nedeni; varsayılan). “Bağlıyken her zaman”, uygulama açık olduğu sürece yardımcısı çalışan her konsolu dinlenme modundan uzak tutar. PS5'i elle dinlenme moduna almak her modda çalışır.",
 kernellog_categories_explainer: "Her kategori başlangıçta gösterilir. Sony kategorileri konsolun kendi alt sistemleridir; hangi yük çalışırsa çalışsın her jailbreak'li PS5'te sürekli kayıt üretirler ve ps5upload'dan kaynaklanmazlar. Gürültüyü azaltmak için işaretlerini kaldırın.",
-library_disk_image_files: "Disk imajı dosyaları (.exfat / .ffpkg / .ffpfs)",
+library_disk_image_files: "Disk imajı dosyaları (.exfat / .ffpkg / .ffpfs / .ffpfsc)",
 payloads_cached_body: "{kb} KB yerel önbelleğe indirildi.",
 payloads_cached_title: "{id} {tag} önbelleğe alındı",
 payloads_description_catalog_v2: "Seçilmiş üçüncü taraf PS5 homebrew yükleri. En son sürümü denetleyin, bir kez indirin, sonra tek tıkla PS5'inize gönderin. Sürümler yerel olarak önbelleğe alınır, böylece bunları bir USB yük belleğine de koyabilirsiniz.",
@@ -4687,6 +4687,7 @@ c2c_test_deep_bad: "4 KiB'lik test gönderimi ulaşmadı: {detail}",
 "cheats_import_state": "Önce hile motorunu kapatın. Kayıtlı anahtar durumunu temizlemek için içe aktarmadan önce bu oyunun mevcut hilelerini kaldırın. Dosyaların üzerine yazılmaz. İçe aktarılan anahtarlar kapalı kalır; yalnızca eşleşen oyun sürümünde açın.",
 "saves_android_destination": "Yedekler telefonun Download klasöründe tarihli ZIP dosyalarıdır (/storage/emulated/0/Download). Geri yükleme şifreli dosyaları kopyalar; hesabı veya oyun kimliğini değiştirmez.",
 
+library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için ShadowMount+ gerekir. Düzenlemek için Dosyalar bölümünde önce açın.",
 };
 
 export default tr;

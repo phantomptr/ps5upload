@@ -371,7 +371,7 @@ queue_title: "대기열",
 "batch_add": "대기열에 {count}개 추가",
 "batch_scan": "폴더에서 게임 추가…",
 "cq_pick_folders": "게임 폴더 선택…",
-"cq_pick_files": "이미지 또는 압축 파일 선택…",
+"cq_pick_files": "패키지, 이미지 또는 압축 파일 선택…",
 "cq_not_games": "폴더 {count}개는 게임이 아니어서 건너뛰었습니다.",
 "batch_scan_pick": "게임이 들어 있는 폴더 선택",
 "batch_mount": "업로드 후 이미지 마운트",
@@ -3687,7 +3687,7 @@ installed_section_disc_hint_v2: "디스크 이미지에서 실행되는 등록�
 installed_section_disc_v2: "디스크 이미지 게임",
 keep_ps5_awake_mode_hint_v2: "PS5의 자동 대기 타이머를 주기적으로 초기화해 휴식 모드로 들어가지 않게 합니다. “업로드 및 설치 중”은 긴 업로드를 보호합니다(업로드 실패의 흔한 원인, 기본값). “연결 중 항상”은 앱이 열려 있는 동안 헬퍼가 실행 중인 모든 본체가 휴식 모드에 들어가지 않게 합니다. 어느 모드에서든 PS5를 직접 휴식 모드로 전환할 수 있습니다.",
 kernellog_categories_explainer: "모든 카테고리는 처음에 표시됩니다. Sony 카테고리는 본체 자체의 하위 시스템으로, 어떤 페이로드가 실행 중이든 탈옥된 모든 PS5에서 계속 로그를 남깁니다. ps5upload 때문이 아닙니다. 체크를 해제하면 노이즈가 줄어듭니다.",
-library_disk_image_files: "디스크 이미지 파일(.exfat / .ffpkg / .ffpfs)",
+library_disk_image_files: "디스크 이미지 파일(.exfat / .ffpkg / .ffpfs / .ffpfsc)",
 payloads_cached_body: "{kb} KB를 로컬 캐시에 다운로드했습니다.",
 payloads_cached_title: "{id} {tag} 캐시됨",
 payloads_description_catalog_v2: "엄선한 서드파티 PS5 홈브루 페이로드입니다. 최신 릴리스를 확인하고 한 번 다운로드한 뒤, 한 번의 클릭으로 PS5에 보내세요. 버전은 로컬에 캐시되므로 USB 페이로드 스틱에 넣을 수도 있습니다.",
@@ -4699,6 +4699,7 @@ c2c_test_deep_bad: "4 KiB 테스트 전송이 도착하지 않았습니다: {det
 "cheats_import_state": "치트 엔진을 먼저 끄세요. 가져오기 전에 해당 타이틀의 기존 치트를 삭제하여 저장된 스위치 상태를 지우세요. 기존 파일을 덮어쓰지 않습니다. 가져온 스위치는 꺼진 상태이며 일치하는 게임 버전에서만 직접 켜세요.",
 "saves_android_destination": "백업은 날짜가 붙은 ZIP으로 휴대폰 Download 폴더(/storage/emulated/0/Download)에 저장됩니다. 복원은 암호화된 파일을 복사하며 계정이나 타이틀 ID를 바꾸지 않습니다.",
 
+library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가 필요합니다. 편집하려면 파일에서 먼저 압축을 푸세요.",
 };
 
 export default ko;

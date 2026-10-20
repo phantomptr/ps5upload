@@ -64,6 +64,7 @@ int webui_tile_remove(void);
 /* Asks for the tile to be present (tile = 1) or gone (0). Returns at once: one detached worker
  * applies the LATEST request and repeats while new ones arrive, so ensure and remove never run
  * at the same time and a fast on/off/on ends in the last state asked for. Failures are logged. */
+int webui_tile_remove_wait(uint16_t port);
 void webui_tile_request(int tile, uint16_t port);
 
 /* What the page shows after a tile switch: *busy 1 while the worker still applies a request,

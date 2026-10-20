@@ -93,6 +93,22 @@ pub(crate) fn stem_of(source: &Path) -> String {
         }
         _ => name,
     };
+    // Common batch layout: <game>/game.pkg. Using only the generic file
+    // stem makes unrelated queue entries compete for game.exfat.
+    let name = if name.eq_ignore_ascii_case("game")
+        && source
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("pkg"))
+    {
+        source
+            .parent()
+            .and_then(Path::file_name)
+            .map(|s| s.to_string_lossy().into_owned())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(name)
+    } else {
+        name
+    };
     let stem: String = name
         .chars()
         .map(|c| {
@@ -656,6 +672,7 @@ pub(crate) fn build(
     if source.files().is_empty() {
         return Err(format!("{} has no files in it", source.describe()));
     }
+    let started = std::time::Instant::now();
     stage("plan", 0, 0);
     let planned = Planned::plan(format, &*source, cancel)?;
     let want_sizes: HashMap<String, u64> = source
@@ -677,6 +694,7 @@ pub(crate) fn build(
         .open(&partial)
         .map_err(|e| format!("{}: {e}", partial.display()))?;
     let result = (|| -> Result<ImageBuilt, String> {
+        let planned_at = started.elapsed();
         let mut hashing = HashingTree::new(source);
         let write_stage = if inner_name.is_some() {
             "compress"
@@ -710,6 +728,7 @@ pub(crate) fn build(
         drop(file);
         let hashes = hashing.hashes(cancel)?;
 
+        let written_at = started.elapsed();
         let mut image = open_image(&partial, format, inner_name.is_some())?;
         let summary = verify(
             &mut *image,
@@ -724,6 +743,12 @@ pub(crate) fn build(
         drop(image);
         std::fs::rename(&partial, output).map_err(|e| e.to_string())?;
         crate::engine_log::record("info", format!("verify: {}", log_line(&summary)));
+        crate::engine_log::record("info", format!(
+            "image build: format={} compressed={} files={} data_bytes={} output_bytes={} plan_ms={} write_ms={} verify_ms={} verify_mode={mode:?}",
+            format.extension(), inner_name.is_some(), want_sizes.len(), data, stored,
+            planned_at.as_millis(), (written_at - planned_at).as_millis(),
+            (started.elapsed() - written_at).as_millis(),
+        ));
         let mut detail = format!(
             "{}, {} files, {data} data bytes, {}",
             format.extension(),
@@ -857,6 +882,23 @@ pub(crate) fn build_packed(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nested_generic_packages_keep_game_folder_names() {
+        assert_eq!(
+            output_names(Path::new("/games/007/game.pkg"), ImageFormat::Exfat, false).0,
+            "007.exfat"
+        );
+        assert_eq!(
+            output_names(
+                Path::new("/games/Saros/game.pkg"),
+                ImageFormat::Exfat,
+                false
+            )
+            .0,
+            "Saros.exfat"
+        );
+    }
+
     #[test]
     fn verify_chunk_takes_1_to_64_mib_in_kib_and_defaults_to_8() {
         assert_eq!(verify_chunk(None).unwrap(), 8 << 20);

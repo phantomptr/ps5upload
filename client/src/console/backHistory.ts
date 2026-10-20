@@ -76,6 +76,7 @@ export function createBackHistory(env: HistoryEnv, runBack: () => void, opts: Ba
   let levels = 0;
   let guard = env.startsOnGuard();
   let ignorePops = 0;
+  let backPending = false;
   let lastBackAt = -Infinity;
   let scheduled = false;
   const startedAt = env.now();
@@ -103,6 +104,7 @@ export function createBackHistory(env: HistoryEnv, runBack: () => void, opts: Ba
   };
 
   const off = env.onPop(() => {
+    backPending = false;
     if (env.atGuard?.()) {
       guard = true; // nothing was popped (WebKit's load-time popstate)
       return;
@@ -147,7 +149,11 @@ export function createBackHistory(env: HistoryEnv, runBack: () => void, opts: Ba
       };
     },
     requestBack() {
+      // Keyboard and native browser Back can describe the same press before popstate.
+      if (backPending) return;
+      userInput = true;
       if (guard && ignorePops === 0) {
+        backPending = true;
         env.back();
         return;
       }

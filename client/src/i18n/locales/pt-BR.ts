@@ -370,7 +370,7 @@ queue_title: "Fila",
 "batch_add": "Adicionar {count} à fila",
 "batch_scan": "Adicionar jogos de uma pasta…",
 "cq_pick_folders": "Escolher pastas de jogos…",
-"cq_pick_files": "Escolher imagens ou arquivos compactados…",
+"cq_pick_files": "Escolher pacotes, imagens ou arquivos…",
 "cq_not_games": "{count} pasta(s) não eram jogos e foram ignoradas.",
 "batch_scan_pick": "Escolha a pasta com seus jogos",
 "batch_mount": "Montar imagens após o envio",
@@ -3685,7 +3685,7 @@ installed_section_disc_hint_v2: "Jogos registrados que rodam a partir de uma ima
 installed_section_disc_v2: "Jogos de imagens de disco",
 keep_ps5_awake_mode_hint_v2: "Reinicia periodicamente o temporizador de repouso automático do PS5 para que ele não entre em modo repouso. “Durante envios e instalações” protege envios longos (uma causa comum de envios com falha; padrão). “Sempre enquanto conectado” mantém fora do modo repouso cada console com um auxiliar em execução enquanto o app estiver aberto. Colocar o PS5 em repouso manualmente funciona em qualquer modo.",
 kernellog_categories_explainer: "Todas as categorias começam visíveis. As da Sony são subsistemas do próprio console, que registram logs o tempo todo em qualquer PS5 desbloqueado, seja qual for o payload em execução; não são causadas pelo ps5upload. Desmarque-as para reduzir o ruído.",
-library_disk_image_files: "Arquivos de imagem de disco (.exfat / .ffpkg / .ffpfs)",
+library_disk_image_files: "Arquivos de imagem de disco (.exfat / .ffpkg / .ffpfs / .ffpfsc)",
 payloads_cached_body: "{kb} KB baixados para o cache local.",
 payloads_cached_title: "{id} {tag} em cache",
 payloads_description_catalog_v2: "Payloads homebrew de terceiros para PS5 selecionados. Verifique a versão mais recente, baixe uma vez e envie para o seu PS5 com um clique. As versões ficam em cache local, então você também pode colocá-las em um pendrive de payloads.",
@@ -4697,6 +4697,7 @@ c2c_test_deep_bad: "O envio de teste de 4 KiB não chegou: {detail}",
 "cheats_import_state": "Desligue primeiro o motor de cheats. Remova os cheats existentes deste título para limpar o estado salvo antes da importação. Arquivos nunca são substituídos. As opções importadas ficam desligadas; ative-as apenas na versão correspondente.",
 "saves_android_destination": "Os backups são ZIPs datados na pasta Download do telefone (/storage/emulated/0/Download). Restaurar copia arquivos criptografados sem alterar a conta ou o ID do título.",
 
+library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para jogar. Para editar, abra Arquivos e descompacte primeiro.",
 };
 
 export default pt_BR;

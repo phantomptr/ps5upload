@@ -6,6 +6,22 @@ What's new in ps5upload, written for humans.
 
 ## 7.1.10
 
+- **Compressed images in Game files.** `.ffpfsc` files now appear, including images beyond the
+  first directory page. Open their folder in Files to decompress before editing; compressed
+  images use ShadowMount+ for playback.
+- **Truthful tile removal (#480).** Removing PS5Upload's own tile now waits for the removal
+  result and reports save/uninstall failures. Update the helper for this fix.
+- **Bulk conversion and copying (#479, #481).** Convert recognizes packages inside game
+  subfolders, names generic `game.pkg` image outputs after the game folder, and accepts supported
+  image/package sources for image conversion. Files can queue further picks during a copy;
+  desktop Stream can select multiple packages and queues bases before updates and DLC.
+- **Payload setup.** Repair the LZ4 Compression catalogue source, add the upstream elfldr
+  download, recognize HyperHEN's specific mount process, and make Quick bring-up easier to find.
+- **Back navigation.** Duplicate Back requests now share one pending history navigation.
+  Firmware-specific controller mapping still needs the reporter's input log.
+- **Conversion diagnostics.** Record stage timings and compression settings for performance
+  reports. No compression or small-file speed improvement is claimed.
+
 - **Keep Rename first in the Files menu.** Properties and permissions remain available just
   below it, with Delete last. The phone menu now preserves its familiar action order.
 - **Reliable coverage checks.** Transfer speed thresholds run on normal builds; instrumented

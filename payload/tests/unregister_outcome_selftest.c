@@ -82,6 +82,12 @@ int main(void) {
     pkg_refused_gone.ours = 0;
     assert(unregister_verdict(&pkg_refused_gone) == UNREGISTER_REFUSED);
 
+    /* A Sony home tile needs more than removal of our own registration metadata. */
+    assert(unregister_tile_confirmed(&done));
+    assert(!unregister_tile_confirmed(&ours_refused_gone));
+    assert(!unregister_tile_confirmed(&left));
+    assert(!unregister_tile_confirmed(&no_api_gone));
+
     /* Presence follows the engine's installed list. */
     unregister_presence_t p = {0};
     assert(!unregister_still_listed(&p));

@@ -679,7 +679,7 @@ export default function LibraryScreen() {
                       title={tr(
                         "library_disk_image_files",
                         undefined,
-                        "Disk image files (.exfat / .ffpkg / .ffpfs)",
+                        "Disk image files (.exfat / .ffpkg / .ffpfs / .ffpfsc)",
                       )}
                       count={split.images.length}
                     />
@@ -695,6 +695,9 @@ export default function LibraryScreen() {
                         undefined,
                         "Mount to play a game, or Edit files to change what's inside it — adding DLC, swapping assets, or applying a backport patch. Edits are written straight into the image.",
                       )}
+                    </p>
+                    <p className="mb-2 text-xs text-[var(--color-muted)]">
+                      {tr("library_compressed_hint", undefined, "Compressed images need ShadowMount+ to play. To edit, open Files and decompress first.")}
                     </p>
                     <FpkgKstuffTip />
                     <CappedRows
@@ -936,7 +939,9 @@ function LibraryRowImpl({
   const kindLabel =
     entry.kind === "game"
       ? tr("library_row_kind_game", undefined, "Game")
-      : entry.imageFormat === "ffpkg"
+      : entry.imageFormat === "ffpfsc"
+        ? ".ffpfsc"
+        : entry.imageFormat === "ffpkg"
         ? tr("library_row_kind_ffpkg", undefined, ".ffpkg image")
         : entry.imageFormat === "ffpfs"
           ? tr("library_row_kind_ffpfs", undefined, ".ffpfs image")
@@ -2371,7 +2376,7 @@ function LibraryRowImpl({
                   change what's inside), and users only discovered editing by
                   opening a menu they had no reason to open. Showing both is
                   what makes the distinction visible at all. */}
-                {smpRunning && !isMounted && (
+                {smpRunning && !isMounted && entry.imageFormat !== "ffpfsc" && (
                   <Button
                     variant="secondary"
                     size="sm"
@@ -2390,6 +2395,14 @@ function LibraryRowImpl({
                   >
                     {tr("library_edit_files_short", undefined, "Edit files")}
                   </Button>
+                )}
+                {entry.imageFormat === "ffpfsc" && (
+                  <Link
+                    className="text-xs underline"
+                    to={`/files?path=${encodeURIComponent(entry.path.slice(0, entry.path.lastIndexOf("/")) || "/")}`}
+                  >
+                    {tr("fs_unpack_action", undefined, "Decompress to .exfat…")}
+                  </Link>
                 )}
                 <Button
                   variant="primary"
@@ -2418,10 +2431,12 @@ function LibraryRowImpl({
                    * with a non-.exfat / non-.ffpkg / non-.ffpfs
                    * extension that still got into the library scan via
                    * the size / existence checks. */
-                  disabled={busy !== null || !entry.imageFormat}
+                  disabled={busy !== null || !entry.imageFormat || (entry.imageFormat === "ffpfsc" && !smpRunning)}
                   loading={busy === "mount"}
                   title={
-                    !entry.imageFormat
+                    entry.imageFormat === "ffpfsc" && !smpRunning
+                      ? tr("library_compressed_hint", undefined, "Compressed images need ShadowMount+ to play. To edit, open Files and decompress first.")
+                      : !entry.imageFormat
                       ? tr(
                           "library_mount_unsupported_tooltip",
                           undefined,

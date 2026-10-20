@@ -79,7 +79,7 @@ export function QueueCard(p: QueueCardProps) {
             {tr("cq_pick_folders", undefined, "Pick game folders…")}
           </Button>
           <Button size="sm" variant="ghost" leftIcon={<ListPlus size={14} />} onClick={p.onPickFiles}>
-            {tr("cq_pick_files", undefined, "Pick images or archives…")}
+            {tr("cq_pick_files", undefined, "Pick packages, images or archives…")}
           </Button>
         </div>
 

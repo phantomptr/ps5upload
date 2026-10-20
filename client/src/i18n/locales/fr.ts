@@ -370,7 +370,7 @@ queue_title: "File d’attente",
 "batch_add": "Ajouter {count} à la file",
 "batch_scan": "Ajouter les jeux d'un dossier…",
 "cq_pick_folders": "Choisir des dossiers de jeux…",
-"cq_pick_files": "Choisir des images ou des archives…",
+"cq_pick_files": "Choisir des paquets, images ou archives…",
 "cq_not_games": "{count} dossier(s) n'étaient pas des jeux et ont été ignorés.",
 "batch_scan_pick": "Choisissez le dossier qui contient vos jeux",
 "batch_mount": "Monter les images après le téléversement",
@@ -3686,7 +3686,7 @@ installed_section_disc_hint_v2: "Jeux enregistrés qui s'exécutent depuis une i
 installed_section_disc_v2: "Jeux depuis des images disque",
 keep_ps5_awake_mode_hint_v2: "Réinitialise régulièrement la minuterie de veille automatique de la PS5 pour qu'elle ne passe pas en mode repos. « Pendant les envois et installations » protège les longs transferts (une cause fréquente d'échec ; par défaut). « Toujours quand connecté » garde hors du mode repos chaque console dont l'assistant tourne, tant que l'application est ouverte. Mettre la PS5 en mode repos manuellement fonctionne dans tous les modes.",
 kernellog_categories_explainer: "Toutes les catégories sont affichées au départ. Celles de Sony sont les sous-systèmes propres à la console, qui journalisent en permanence sur toute PS5 jailbreakée quel que soit le payload en cours ; elles ne sont pas causées par ps5upload. Décochez-les pour réduire le bruit.",
-library_disk_image_files: "Fichiers image disque (.exfat / .ffpkg / .ffpfs)",
+library_disk_image_files: "Fichiers image disque (.exfat / .ffpkg / .ffpfs / .ffpfsc)",
 payloads_cached_body: "{kb} Ko téléchargés dans le cache local.",
 payloads_cached_title: "{id} {tag} mis en cache",
 payloads_description_catalog_v2: "Une sélection de payloads homebrew PS5 tiers. Vérifiez la dernière version, téléchargez-la une fois, puis envoyez-la à votre PS5 en un clic. Les versions sont mises en cache localement, vous pouvez donc aussi les mettre sur une clé USB de payloads.",
@@ -4698,6 +4698,7 @@ c2c_test_deep_bad: "L’envoi test de 4 Kio n’est pas arrivé : {detail}",
 "cheats_import_state": "Désactivez d’abord le moteur de cheats. Supprimez les cheats existants de ce titre pour effacer leurs options mémorisées avant l’import. Aucun fichier n’est remplacé. Les options importées restent désactivées ; activez-les uniquement pour la bonne version.",
 "saves_android_destination": "Les sauvegardes sont des ZIP datés dans Téléchargements du téléphone (/storage/emulated/0/Download). La restauration copie les fichiers chiffrés sans modifier leur compte ni l’identifiant du titre.",
 
+library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour jouer. Pour les modifier, ouvrez Fichiers et décompressez-les d’abord.",
 };
 
 export default fr;

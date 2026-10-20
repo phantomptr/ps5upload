@@ -258,9 +258,11 @@ int webui_tile_remove(void) {
         fprintf(stderr, "webui tile: unregister failed: %s; keeping %s\n", err ? err : "unknown", WEBUI_TILE_DIR);
         rc = -1;
     } else {
-        if (outcome.sony_rc) {
-            fprintf(stderr, "webui tile: Sony uninstall rc=0x%08x (the tile may linger)\n",
+        if (!unregister_tile_confirmed(&outcome)) {
+            fprintf(stderr, "webui tile: removal unconfirmed rc=0x%08x; keeping recovery files\n",
                     (unsigned)outcome.sony_rc);
+            pthread_mutex_unlock(&g_op_mu);
+            return -1;
         }
         /* unregister_title keeps the staged /user/app/PSUP00001 (sce_sys, icon, mount.lnk). On FW 13.x
          * register goes through AppInstallAll, which installs everything staged there: left behind,
@@ -281,6 +283,7 @@ int webui_tile_remove(void) {
 /* One worker at a time applies the latest request: g_req_gen counts requests, the worker loops
  * until it has applied the newest one. */
 static pthread_mutex_t g_req_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_req_done = PTHREAD_COND_INITIALIZER;
 static unsigned g_req_gen;
 static int g_req_tile;
 static uint16_t g_req_port;
@@ -304,6 +307,7 @@ static void *tile_worker(void *arg) {
         g_last_failed = rc != 0;
     }
     g_worker_running = 0;
+    pthread_cond_broadcast(&g_req_done);
     pthread_mutex_unlock(&g_req_mu);
     return NULL;
 }
@@ -335,8 +339,22 @@ void webui_tile_request(int tile, uint16_t port) {
         pthread_attr_destroy(&attr);
     }
     if (rc == 0) g_worker_running = 1;
-    else fprintf(stderr, "webui tile: cannot start the tile thread (%d)\n", rc);
+    else {
+        g_last_failed = 1;
+        fprintf(stderr, "webui tile: cannot start the tile thread (%d)\n", rc);
+    }
     pthread_mutex_unlock(&g_req_mu);
+}
+
+/* The PC uninstall ACK means completed, unlike the Settings endpoint's explicit busy state.
+ * Called with the settings mutex held, so another toggle cannot supersede this request. */
+int webui_tile_remove_wait(uint16_t port) {
+    webui_tile_request(0, port);
+    pthread_mutex_lock(&g_req_mu);
+    while (g_worker_running) pthread_cond_wait(&g_req_done, &g_req_mu);
+    int rc = g_last_failed || g_req_tile != 0 ? -1 : 0;
+    pthread_mutex_unlock(&g_req_mu);
+    return rc;
 }
 
 #endif /* WEBUI_TILE_HOST_TEST */

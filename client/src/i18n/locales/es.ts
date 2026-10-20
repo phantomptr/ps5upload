@@ -370,7 +370,7 @@ queue_title: "Cola",
 "batch_add": "Añadir {count} a la cola",
 "batch_scan": "Añadir juegos de una carpeta…",
 "cq_pick_folders": "Elegir carpetas de juegos…",
-"cq_pick_files": "Elegir imágenes o archivos comprimidos…",
+"cq_pick_files": "Elegir paquetes, imágenes o archivos…",
 "cq_not_games": "{count} carpeta(s) no eran juegos y se omitieron.",
 "batch_scan_pick": "Elige la carpeta que contiene tus juegos",
 "batch_mount": "Montar imágenes tras la subida",
@@ -3618,7 +3618,7 @@ installed_section_disc_hint_v2: "Juegos registrados que se ejecutan desde una im
 installed_section_disc_v2: "Juegos desde imágenes de disco",
 keep_ps5_awake_mode_hint_v2: "Reinicia periódicamente el temporizador de reposo automático de la PS5 para que no entre en modo reposo. «Durante subidas e instalaciones» protege las subidas largas (una causa habitual de subidas fallidas; predeterminado). «Siempre mientras esté conectada» mantiene fuera del modo reposo cada consola con un helper en ejecución mientras la app esté abierta. Poner la PS5 en reposo manualmente funciona en cualquier modo.",
 kernellog_categories_explainer: "Todas las categorías se muestran al principio. Las de Sony son subsistemas propios de la consola, que registran constantemente en cualquier PS5 con jailbreak sea cual sea el payload en ejecución; no las causa ps5upload. Desmárcalas para reducir el ruido.",
-library_disk_image_files: "Archivos de imagen de disco (.exfat / .ffpkg / .ffpfs)",
+library_disk_image_files: "Archivos de imagen de disco (.exfat / .ffpkg / .ffpfs / .ffpfsc)",
 payloads_cached_body: "{kb} KB descargados a la caché local.",
 payloads_cached_title: "{id} {tag} en caché",
 payloads_description_catalog_v2: "Payloads homebrew de terceros para PS5 seleccionados. Busca la última versión, descárgala una vez y envíala a tu PS5 con un clic. Las versiones se guardan en caché local, así que también puedes ponerlas en una memoria USB de payloads.",
@@ -4630,6 +4630,7 @@ c2c_test_deep_bad: "El envío de prueba de 4 KiB no llegó: {detail}",
 "cheats_import_state": "Apaga el motor de trucos. Elimina los trucos existentes de este título para borrar su estado guardado antes de importar. Nunca se reemplazan archivos. Los trucos importados quedan apagados; actívalos solo con la versión correspondiente.",
 "saves_android_destination": "Las copias son ZIP con fecha en Descargas del teléfono (/storage/emulated/0/Download). Restaurar copia archivos cifrados; no cambia su cuenta ni ID de título.",
 
+library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para jugar. Para editarlas, abre Archivos y descomprímelas primero.",
 };
 
 export default es;

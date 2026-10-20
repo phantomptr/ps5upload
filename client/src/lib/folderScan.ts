@@ -75,7 +75,7 @@ export async function gameFoldersAmong(folders: string[]): Promise<{ games: stri
 }
 
 /** What "Add games from a folder…" converts: the folder itself when it is a game (never its
- *  sce_sys, sce_module…), else its child games, game images and archives. `skipped`: child
+ *  sce_sys, sce_module…), else its child games, packages, images and archives, including files one wrapper level below. `skipped`: child
  *  folders that are not games. */
 export async function gamesInFolder(
   folder: string,
@@ -86,10 +86,21 @@ export async function gamesInFolder(
   const dirs = children.filter((e) => e.isDir).map((e) => e.path);
   const flags = new Map((await gameFlags(dirs)).map((f, i) => [dirs[i], f]));
   const sources: { path: string; isDir: boolean }[] = [];
+  let skipped = 0;
+  const eligible = (e: BatchEntry) => ["image", "archive", "package"].includes(classifyScanEntry(nameOf(e.path), false));
   for (const e of children) {
-    const kind = classifyScanEntry(nameOf(e.path), e.isDir);
-    if (e.isDir ? flags.get(e.path) : kind === "image" || kind === "archive")
-      sources.push({ path: e.path, isDir: e.isDir });
+    if (!e.isDir) {
+      if (eligible(e)) sources.push({ path: e.path, isDir: false });
+    } else if (flags.get(e.path)) {
+      sources.push({ path: e.path, isDir: true });
+    } else {
+      // One wrapper level: Games/<title>/game.pkg. Never descend into a game dump,
+      // hidden directories, or an unbounded tree (including symlink cycles).
+      const nested = await scanChildren(e.path).catch(() => []);
+      const files = nested.filter((x) => !x.isDir && eligible(x));
+      sources.push(...files.map((x) => ({ path: x.path, isDir: false })));
+      if (files.length === 0) skipped++;
+    }
   }
-  return { sources, skipped: dirs.length - sources.filter((s) => s.isDir).length };
+  return { sources, skipped };
 }

@@ -1,3 +1,5 @@
+import { planStreamSelection } from "../../lib/streamSelection";
+import { invoke } from "../../lib/invokeLogged";
 import { formatDate } from "../../lib/formatDate";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -992,14 +994,23 @@ export default function InstallPackageScreen() {
             filters: [{ name: "PlayStation Package", extensions: ["pkg", "fpkg"] }],
           })
         : await openDialog({
-            multiple: false,
+            multiple: true,
             filters: [{ name: "PlayStation Package", extensions: ["pkg", "fpkg"] }],
           });
-      const p = Array.isArray(sel) ? sel[0] : sel;
-      if (!p) return;
-      const sourcePath = String(p);
-      const streamName = sourcePath.split(/[\\/]/).pop() ?? sourcePath;
-      await runStreamInstall(sourcePath, streamName);
+      if (!sel || (Array.isArray(sel) && !sel.length)) return;
+      const targetHost = host;
+      const plan = await planStreamSelection(Array.isArray(sel) ? sel : [sel],
+        (path) => invoke("pkg_metadata_split", { path }));
+      if (plan.length > 1 && !await confirm({
+        title: tr("queue_title", undefined, "Queue"),
+        message: plan.map((item) => `${item.name}${item.category ? ` (${item.category})` : ""}`).join("\n"),
+        confirmLabel: tr("pkglib.url.confirm", "Start install"),
+      })) return;
+      // All metadata is ready before the first item starts. The existing queue
+      // owns serial execution, failure feedback, retry and cancellation.
+      await Promise.all(plan.map((item) => installStream(item.path, targetHost, {
+        displayName: item.name, category: item.category, contentId: item.contentId,
+      })));
     } catch (e) {
       setPickError(`${e}`);
     }

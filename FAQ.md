@@ -1079,8 +1079,44 @@ of a UFS `.ffpkg` regardless of what you asked for — when that happens
 the app tells you the mount came back read-only, and writes will fail
 until you convert or re-create the image.
 
+**Q: Which image formats can I edit?**
+
+| Format | Play on the console | Edit |
+| --- | --- | --- |
+| `.exfat` | ShadowMount+ or compatible integrated mount service | Game files → Edit files; or mount locally on a supported OS |
+| `.ffpkg`, `.ffpfs` | ShadowMount+ or compatible integrated mount service | Game files → Edit files, when the console permits a writable mount |
+| `.ffpfsc` | ShadowMount+ or compatible integrated mount service | Open its folder in Files → Decompress to .exfat; edit the extracted image, then recompress on the computer if desired |
+| `.pkg` | Install Package | Convert supports unpacking packages made with the debug key; arbitrary encrypted retail packages are not editable sources |
+
+Compressed images appear in Game files alongside uncompressed images. Decompression keeps the
+original file and requires space for the full extracted image. The direct Edit files action
+is not offered for compressed containers. A successful read-only mount does not establish
+that a firmware permits writable mounting.
+
+**Q: Can I queue more files or convert a folder of packages?**
+
+In Files, Add files and Add folder remain available while a copy runs. Further picks keep
+their destination and conflict choices in the queue; a failure or cancellation pauses it.
+Pending picks can be removed. After an app restart, review the saved queue and press Resume.
+
+Convert → Queue → Add games from a folder accepts `PS5 Games/<game>/game.pkg`, alongside
+actual game folders and supported images/archives. Generic `game.pkg` outputs use the parent
+folder's name. Review the queue before starting; unsupported/encrypted inputs fail individually,
+and existing output files are not overwritten. Desktop Stream & install accepts multiple
+packages, reads their headers first, and queues bases before updates and DLC.
+
+**Q: A transfer or conversion gets slow near the end. What should I report?**
+
+Include app/helper versions, source and destination drive types, file count and size range,
+and the stage shown when it slows (transfer, compression or verification). Export a bug report
+while it is happening. Small-file work and verification can behave very differently from large
+sequential copies; a percentage alone cannot identify the bottleneck. Conversion logs now
+record planning, writing and verification times, sizes, and compression settings. Comparisons
+need the same source, settings and storage. The current small-file and compression reports
+remain investigations; no throughput improvement is claimed for this release.
+
 **Q: ShadowMount+ mounts my game read-only — how do I edit it?**
-Use **Games → Game files → the image → ⋯ → Edit files…**. That is a *checkout*: the
+Use **Games → Game files → the image → Edit files** for an uncompressed image. That is a *checkout*: the
 app moves the image out of ShadowMount+'s scan folder, waits for
 ShadowMount+ to let go of it, and mounts it read-write where you choose.
 When you press **Finish editing** it unmounts (which is what flushes your

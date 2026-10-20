@@ -370,7 +370,7 @@ queue_title: "Coda",
 "batch_add": "Aggiungi {count} alla coda",
 "batch_scan": "Aggiungi giochi da una cartella…",
 "cq_pick_folders": "Scegli cartelle di giochi…",
-"cq_pick_files": "Scegli immagini o archivi…",
+"cq_pick_files": "Scegli pacchetti, immagini o archivi…",
 "cq_not_games": "{count} cartella/e non erano giochi e sono state saltate.",
 "batch_scan_pick": "Scegli la cartella che contiene i giochi",
 "batch_mount": "Monta le immagini dopo il caricamento",
@@ -3618,7 +3618,7 @@ installed_section_disc_hint_v2: "Giochi registrati che si avviano da un'immagine
 installed_section_disc_v2: "Giochi da immagini disco",
 keep_ps5_awake_mode_hint_v2: "Azzera periodicamente il timer di standby automatico della PS5 così non entra in modalità riposo. “Durante caricamenti e installazioni” protegge i caricamenti lunghi (una causa comune di caricamenti falliti; predefinito). “Sempre quando connesso” tiene fuori dalla modalità riposo ogni console con un helper in esecuzione finché l'app è aperta. Mettere manualmente la PS5 in riposo funziona in ogni modalità.",
 kernellog_categories_explainer: "Tutte le categorie sono inizialmente visibili. Quelle Sony sono sottosistemi della console stessa, che scrivono log di continuo su ogni PS5 con jailbreak qualunque payload sia in esecuzione; non sono causate da ps5upload. Deselezionale per ridurre il rumore.",
-library_disk_image_files: "File immagine disco (.exfat / .ffpkg / .ffpfs)",
+library_disk_image_files: "File immagine disco (.exfat / .ffpkg / .ffpfs / .ffpfsc)",
 payloads_cached_body: "{kb} KB scaricati nella cache locale.",
 payloads_cached_title: "{id} {tag} in cache",
 payloads_description_catalog_v2: "Payload homebrew PS5 di terze parti selezionati. Cerca l'ultima versione, scaricala una volta, poi inviala alla PS5 con un clic. Le versioni restano in cache locale, così puoi anche metterle su una chiavetta USB di payload.",
@@ -4630,6 +4630,7 @@ c2c_test_deep_bad: "L’invio di prova di 4 KiB non è arrivato: {detail}",
 "cheats_import_state": "Spegni prima il motore dei cheat. Rimuovi i cheat esistenti del titolo per cancellare lo stato salvato prima dell’importazione. I file non vengono mai sostituiti. Le opzioni importate restano disattivate; attivale solo per la versione corretta.",
 "saves_android_destination": "I backup sono ZIP datati nella cartella Download del telefono (/storage/emulated/0/Download). Il ripristino copia file cifrati senza cambiarne account o ID titolo.",
 
+library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per giocare. Per modificarle, apri File e decomprimile prima.",
 };
 
 export default it;

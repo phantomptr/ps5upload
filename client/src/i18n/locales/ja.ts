@@ -371,7 +371,7 @@ queue_title: "キュー",
 "batch_add": "{count} 件をキューに追加",
 "batch_scan": "フォルダーからゲームを追加…",
 "cq_pick_folders": "ゲームフォルダーを選択…",
-"cq_pick_files": "イメージまたはアーカイブを選択…",
+"cq_pick_files": "パッケージ、イメージ、アーカイブを選択…",
 "cq_not_games": "{count} 個のフォルダーはゲームではないためスキップしました。",
 "batch_scan_pick": "ゲームが入っているフォルダーを選択",
 "batch_mount": "アップロード後にイメージをマウント",
@@ -3689,7 +3689,7 @@ installed_section_disc_hint_v2: "ディスクイメージから実行される�
 installed_section_disc_v2: "ディスクイメージのゲーム",
 keep_ps5_awake_mode_hint_v2: "PS5 の自動スタンバイタイマーを定期的にリセットし、休止モードに入らないようにします。「アップロードとインストール中」は長時間のアップロードを保護します（アップロード失敗のよくある原因です。既定）。「接続中は常に」は、アプリが開いている間、ヘルパーが動作しているすべての本体を休止モードに入らせません。どのモードでも、手動で PS5 を休止させることはできます。",
 kernellog_categories_explainer: "すべてのカテゴリーは最初は表示されています。Sony のカテゴリーは本体自身のサブシステムで、どのペイロードが動作していても、脱獄したすべての PS5 で常にログを出力します。ps5upload が原因ではありません。チェックを外すとノイズを減らせます。",
-library_disk_image_files: "ディスクイメージファイル（.exfat / .ffpkg / .ffpfs）",
+library_disk_image_files: "ディスクイメージファイル（.exfat / .ffpkg / .ffpfs / .ffpfsc）",
 payloads_cached_body: "{kb} KB をローカルキャッシュにダウンロードしました。",
 payloads_cached_title: "{id} {tag} をキャッシュしました",
 payloads_description_catalog_v2: "厳選されたサードパーティ製の PS5 自作ペイロード。最新リリースを確認し、一度ダウンロードすれば、ワンクリックで PS5 に送信できます。バージョンはローカルにキャッシュされるので、USB ペイロードスティックに入れることもできます。",
@@ -4701,6 +4701,7 @@ c2c_test_deep_bad: "4 KiB のテスト送信が届きませんでした: {detail
 "cheats_import_state": "チートエンジンをオフにし、このタイトルの既存チートを削除して保存済みスイッチ状態を消してからインポートしてください。既存ファイルは上書きされません。インポートしたスイッチはオフのままです。対応するゲームバージョンでのみ有効にしてください。",
 "saves_android_destination": "バックアップは日付付き ZIP として端末の Download フォルダー（/storage/emulated/0/Download）に保存されます。復元は暗号化ファイルをコピーするだけで、アカウントやタイトル ID は変更しません。",
 
+library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が必要です。編集するには「ファイル」で先に展開してください。",
 };
 
 export default ja;

@@ -371,7 +371,7 @@ queue_title: "Warteschlange",
 "batch_add": "{count} zur Warteschlange",
 "batch_scan": "Spiele aus einem Ordner hinzufügen…",
 "cq_pick_folders": "Spielordner auswählen…",
-"cq_pick_files": "Images oder Archive auswählen…",
+"cq_pick_files": "Pakete, Images oder Archive auswählen…",
 "cq_not_games": "{count} Ordner waren keine Spiele und wurden übersprungen.",
 "batch_scan_pick": "Ordner mit deinen Spielen wählen",
 "batch_mount": "Images nach dem Hochladen einhängen",
@@ -3676,7 +3676,7 @@ installed_section_disc_hint_v2: "Registrierte Spiele, die von einem Disk-Image l
 installed_section_disc_v2: "Spiele aus Disk-Images",
 keep_ps5_awake_mode_hint_v2: "Setzt regelmäßig den Auto-Standby-Timer der PS5 zurück, damit sie nicht in den Ruhemodus fällt. „Beim Hochladen und Installieren“ schützt lange Uploads (eine häufige Ursache fehlgeschlagener Uploads; Standard). „Immer solange verbunden“ hält jede Konsole mit laufendem Helfer aus dem Ruhemodus heraus, solange die App geöffnet ist. Die PS5 manuell in den Ruhemodus zu versetzen funktioniert in jedem Modus.",
 kernellog_categories_explainer: "Jede Kategorie ist anfangs eingeblendet. Die Sony-Kategorien sind die eigenen Subsysteme der Konsole, die auf jeder gejailbreakten PS5 ständig protokollieren, egal welcher Payload läuft; sie werden nicht von ps5upload verursacht. Hake sie ab, um das Rauschen zu verringern.",
-library_disk_image_files: "Disk-Image-Dateien (.exfat / .ffpkg / .ffpfs)",
+library_disk_image_files: "Disk-Image-Dateien (.exfat / .ffpkg / .ffpfs / .ffpfsc)",
 payloads_cached_body: "{kb} KB in den lokalen Cache heruntergeladen.",
 payloads_cached_title: "{id} {tag} gecacht",
 payloads_description_catalog_v2: "Ausgewählte Homebrew-Payloads von Drittanbietern für die PS5. Nach der neuesten Version suchen, einmal herunterladen und dann mit einem Klick an deine PS5 senden. Versionen werden lokal gecacht, sodass du sie auch auf einen USB-Payload-Stick legen kannst.",
@@ -4688,6 +4688,7 @@ c2c_test_deep_bad: "Die 4-KiB-Testsendung ist nicht angekommen: {detail}",
 "cheats_import_state": "Zuerst die Cheat-Engine ausschalten. Vorhandene Cheats dieses Titels vor dem Import entfernen, um gespeicherte Schalter zu löschen. Dateien werden nie ersetzt. Importierte Schalter bleiben aus; nur für die passende Spielversion aktivieren.",
 "saves_android_destination": "Datierte ZIP-Backups liegen im Download-Ordner dieses Telefons (/storage/emulated/0/Download). Wiederherstellen kopiert verschlüsselte Dateien und ändert weder Konto noch Titel-ID.",
 
+library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spielen. Zum Bearbeiten zuerst unter Dateien entpacken.",
 };
 
 export default de;

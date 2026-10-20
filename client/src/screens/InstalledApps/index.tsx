@@ -1367,9 +1367,9 @@ export default function InstalledAppsScreen() {
   // While the probe is still in flight we know neither "running" nor "off",
   // so the warning must stay hidden — surfacing it only once we've confirmed
   // ShadowMount+ is actually not running.
-  const smpChecking = smp === "checking";
-  const smpRunning = smp !== null && smp !== "checking" && smp.running === true;
-  const discNeedsSmp = discs.length > 0 && !smpRunning && !smpChecking;
+  const smpAbsent = smp !== null && smp !== "checking" && !smp.running &&
+    !smp.errors.some((e) => e.startsWith("proc list:"));
+  const discNeedsSmp = discs.length > 0 && smpAbsent;
 
   // One pass instead of a linear find per card on every render.
   const sdkById = useMemo(
@@ -1387,7 +1387,7 @@ export default function InstalledAppsScreen() {
     launching: launchingId === t.titleId,
     running: running.has(t.titleId),
     stopping: stoppingId === t.titleId,
-    discNeedsSmp: kindOf(t) === "disc" && !smpRunning && !smpChecking,
+    discNeedsSmp: kindOf(t) === "disc" && smpAbsent,
     playSeconds: playOf(t.titleId).seconds,
     lastSeenMs: playOf(t.titleId).lastSeenMs,
     onUninstall: handleUninstall,

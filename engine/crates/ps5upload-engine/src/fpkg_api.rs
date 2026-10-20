@@ -691,13 +691,17 @@ pub(crate) async fn ffpfsc_compress_handler(
                 crate::engine_log::record(
                     "info",
                     format!(
-                        "ffpfsc: {} -> {} ({} -> {} bytes, {}/{} blocks compressed, verified)",
+                        "ffpfsc: {} -> {} ({} -> {} bytes, {}/{} blocks compressed, verified; elapsed_ms={} level={} workers={} full_verify={})",
                         source.display(),
                         report.output.display(),
                         report.raw_size,
                         report.image_size,
                         report.compressed_blocks,
-                        report.blocks
+                        report.blocks,
+                        completed_at_ms.saturating_sub(started_at_ms),
+                        options.level,
+                        std::thread::available_parallelism().map_or(4, |n| n.get()),
+                        options.sample.is_none(),
                     ),
                 );
                 set_job(

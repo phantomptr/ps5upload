@@ -658,6 +658,7 @@ export default function ConnectionScreen() {
             </Button>
           </div>
         )}
+        {host.trim() && isTauriEnv() && <BringUpPanel />}
         <StepCard
           index={1}
           title={tr("connection_step1_title", undefined, "Tell the app where your PS5 is")}
@@ -820,7 +821,7 @@ export default function ConnectionScreen() {
             cold boot is one button instead of the manual step sequence above.
             Not in the browser: its playlists send ELFs from this machine, which
             the web UI cannot; step 2 sends the helper there. */}
-        {host.trim() && isTauriEnv() && <BringUpPanel />}
+
 
         {/* Power control whenever an address is set, as on Home: Wake is the
             action needed exactly when the console does not answer. */}

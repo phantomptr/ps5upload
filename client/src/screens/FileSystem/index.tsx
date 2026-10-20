@@ -143,7 +143,6 @@ import { pollFsDownload } from "../../state/fsDownloadPoll";
 import { useElapsed } from "../../lib/useElapsed";
 import {
   cancelFsUpload,
-  FS_UPLOAD_BUSY,
   fsUploadForHost,
   runFsUpload,
   dismissFsUploadStopped,
@@ -151,6 +150,8 @@ import {
   useFsUploadStore,
   type FsUploadActive,
 } from "../../state/fsUpload";
+import { enqueueFsUpload, fsUploadReservations, pauseFsUploadQueue, resumeFsUploadQueue, removeFsUploadQueued, useFsUploadQueue } from "../../state/fsUploadQueue";
+import { nameKey } from "../../state/fsUploadPlan";
 import { fsUploadDeps } from "../../state/fsUploadRuntime";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
@@ -397,6 +398,7 @@ export default function FileSystemScreen() {
   // state/fsUpload): it keeps running, and stays visible here, across navigation. Narrow
   // selectors on purpose: the byte counters tick twice a second and only the progress
   // detail below reads them.
+  const uploadQueue = useFsUploadQueue((s) => s.byHost[hostOf(host)]);
   const uploadName = useFsUploadStore(
     (s) => fsUploadForHost(s, host).active?.name ?? null,
   );
@@ -1203,7 +1205,7 @@ export default function FileSystemScreen() {
 
   /** Stops an "Add files" upload: the engine ends the transfer job, and the batch stops
    *  before the next file. What already landed stays; the half-written file does not. */
-  const cancelUpload = () => cancelFsUpload(host, fsUploadDeps);
+  const cancelUpload = () => { pauseFsUploadQueue(host); return cancelFsUpload(host, fsUploadDeps); };
 
   /** Toolbar: pick one or more local files and copy them into this folder. */
   const addFilesHere = async () => {
@@ -1235,7 +1237,7 @@ export default function FileSystemScreen() {
   // (a .pkg too: this screen copies it, it does not offer to install it).
   const dropActive = useWebviewDropAll(
     (paths) => void addPicked(paths),
-    !loading && !!host?.trim() && busyEntry === null,
+    !loading && !!host?.trim() && localBusy === null,
   );
 
   /** Upload picked files and folders (local or on a saved server) into this folder.
@@ -1248,17 +1250,6 @@ export default function FileSystemScreen() {
   const addPicked = async (picked: string[], kind?: "file" | "folder") => {
     if (picked.length === 0) return;
     setError(null);
-    // One run per console: say so now, before asking about any conflict.
-    if (fsUploadForHost(useFsUploadStore.getState(), host).active) {
-      setError(
-        tr(
-          "fs_upload_already_running",
-          undefined,
-          "A copy to this PS5 is already running. Wait for it to finish, or cancel it.",
-        ),
-      );
-      return;
-    }
     // The console can change while this waits on the listing or on the user: the plan is
     // then for another console's folder, so it is dropped (an open question answers Cancel).
     const probe = guard.capture();
@@ -1277,9 +1268,14 @@ export default function FileSystemScreen() {
       return;
     }
     if (probe.isStale()) return;
+    const taken = new Map(existing.map((e) => [nameKey(e.name), e]));
+    for (const e of fsUploadReservations(host, destDir)) {
+      if (!taken.has(nameKey(e.name))) taken.set(nameKey(e.name), e);
+    }
+    existing = [...taken.values()];
     const plan = await planFsUpload(items, existing, askConflict, generateTxIdHex);
     if (probe.isStale() || !plan || plan.steps.length === 0) return;
-    const r = await runFsUpload(
+    enqueueFsUpload(
       { host, addr, destDir, srcPaths: [], steps: plan.steps },
       {
         ...fsUploadDeps,
@@ -1293,16 +1289,9 @@ export default function FileSystemScreen() {
             { body: humanizePs5Error(raw) || raw },
           ),
       },
+      existing,
     );
-    // Another run started while this one was being planned: the store refused it.
-    if (!r.ok && r.error === FS_UPLOAD_BUSY)
-      setError(
-        tr(
-          "fs_upload_already_running",
-          undefined,
-          "A copy to this PS5 is already running. Wait for it to finish, or cancel it.",
-        ),
-      );
+
   };
 
   /** Row action: overwrite one existing file with a local one. */
@@ -2659,7 +2648,7 @@ export default function FileSystemScreen() {
                 undefined,
                 "Pick files to copy onto the PS5",
               )}
-              disabled={loading || !host?.trim() || busyEntry !== null}
+              disabled={loading || !host?.trim() || localBusy !== null}
               onMainClick={() => void addFilesHere()}
               onPick={(p) => void addPicked([p], "file")}
             />
@@ -2669,7 +2658,7 @@ export default function FileSystemScreen() {
               leftIcon={<FolderUp size={12} />}
               onClick={() => void addFolderHere()}
               className="max-sm:min-w-10! max-sm:px-0 max-sm:[&>span]:sr-only"
-              disabled={loading || !host?.trim() || busyEntry !== null}
+              disabled={loading || !host?.trim() || localBusy !== null}
               title={tr(
                 "fs_add_folder_dialog_title",
                 undefined,
@@ -3096,6 +3085,23 @@ export default function FileSystemScreen() {
           </div>
         )}
 
+        {uploadQueue && uploadQueue.items.length > 0 && (
+          <div className="mb-3 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-xs" data-testid="fs-upload-queue">
+            <strong>{tr("queue_title", undefined, "Queue")} · {uploadQueue.items.length}</strong>
+            {uploadQueue.error && <p role="alert">{uploadQueue.error}</p>}
+            {uploadQueue.items.map((item, index) => (
+              <div key={item.id} className="mt-2 flex items-center gap-2">
+                <span className="min-w-0 flex-1 break-all">{item.request.steps?.flatMap((s) => s.kind === "list" ? s.files.map((f) => f.name) : [s.name]).join(", ")} → {item.request.destDir}</span>
+                <Button size="sm" variant="ghost" disabled={uploadQueue.running && index === 0} onClick={() => removeFsUploadQueued(host, item.id)}>
+                  {tr("queue_remove", undefined, "Remove from queue")}
+                </Button>
+              </div>
+            ))}
+            {uploadQueue.paused && !uploadStopped && (
+              <Button size="sm" onClick={() => resumeFsUploadQueue(host, fsUploadDeps)}>{tr("queue_resume", undefined, "Resume")}</Button>
+            )}
+          </div>
+        )}
         {busyEntry && bulkOp.op === null && (
           <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-3 flex flex-wrap items-center gap-2 p-2 text-xs">
             <Spinner size={12} tone="accent" />
@@ -3212,7 +3218,9 @@ export default function FileSystemScreen() {
             <div className="mt-2 flex gap-2">
               <Button
                 size="sm"
-                onClick={() => void resumeFsUpload(host, fsUploadDeps)}
+                onClick={() => void resumeFsUpload(host, fsUploadDeps).then((r) => {
+                  if (r.ok) resumeFsUploadQueue(host, fsUploadDeps);
+                })}
               >
                 {tr("upload_dialog_resume", undefined, "Resume")}
               </Button>

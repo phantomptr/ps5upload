@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Send,
@@ -458,6 +459,12 @@ export default function CatalogPanel() {
             )}
           </p>
         </div>
+        <p className="text-xs text-[var(--color-muted)]">
+          <Link to="/connection" className="underline">
+            {tr("connection_elfldr_first_title", undefined, "Load elfldr first.")}
+          </Link>{" "}
+          {tr("connection_elfldr_first_short", undefined, "With an autoloader or PLDMGR, put elfldr before ps5upload.elf, or the helper drops after a few seconds.")}
+        </p>
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
           <div className="text-xs text-[var(--color-muted)]">
             {tr(

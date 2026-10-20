@@ -371,7 +371,7 @@ queue_title: "佇列",
 "batch_add": "將 {count} 個加入佇列",
 "batch_scan": "從資料夾加入遊戲…",
 "cq_pick_folders": "選擇遊戲資料夾…",
-"cq_pick_files": "選擇映像或壓縮檔…",
+"cq_pick_files": "選擇套件、映像或封存檔…",
 "cq_not_games": "{count} 個資料夾不是遊戲，已略過。",
 "batch_scan_pick": "選擇存放遊戲的資料夾",
 "batch_mount": "上傳後掛載映像檔",
@@ -3618,7 +3618,7 @@ installed_section_disc_hint_v2: "從磁碟映像執行的已註冊遊戲。只�
 installed_section_disc_v2: "來自磁碟映像的遊戲",
 keep_ps5_awake_mode_hint_v2: "定期重設 PS5 的自動待機計時器，使其無法進入休息模式。「上傳與安裝期間」保護長時間上傳（上傳失敗的常見原因；預設）。「連線時永遠保持」在應用程式開啟期間讓每台執行輔助程式的主機都不進入休息模式。在任何模式下，仍可手動讓 PS5 進入休息模式。",
 kernellog_categories_explainer: "所有類別一開始都會顯示。Sony 類別是主機本身的子系統，無論執行什麼 payload，在每台越獄的 PS5 上都會持續記錄日誌；它們不是由 ps5upload 造成的。取消勾選以減少雜訊。",
-library_disk_image_files: "磁碟映像檔（.exfat / .ffpkg / .ffpfs）",
+library_disk_image_files: "磁碟映像檔（.exfat / .ffpkg / .ffpfs / .ffpfsc）",
 payloads_cached_body: "已將 {kb} KB 下載到本機快取。",
 payloads_cached_title: "已快取 {id} {tag}",
 payloads_description_catalog_v2: "精選的第三方 PS5 自製 payload。檢查最新版本，下載一次，然後一鍵傳送到 PS5。版本會快取在本機，因此也可以放到 USB payload 隨身碟上。",
@@ -4630,6 +4630,7 @@ c2c_test_deep_bad: "4 KiB 測試傳送未抵達：{detail}",
 "cheats_import_state": "請先關閉金手指引擎，並移除該遊戲現有的金手指以清除已儲存的開關狀態，再匯入。不會覆寫現有檔案。匯入的開關保持關閉，僅在遊戲版本相符時手動啟用。",
 "saves_android_destination": "備份為含日期的 ZIP，儲存在手機的 Download 資料夾（/storage/emulated/0/Download）。還原僅複製加密檔案，不會變更所屬帳號或遊戲 ID。",
 
+library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需編輯，請先在「檔案」中解壓縮。",
 };
 
 export default zh_TW;
