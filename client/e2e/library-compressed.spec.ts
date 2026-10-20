@@ -21,5 +21,5 @@ test("Game files finds compressed images and directs editing through decompressi
   await expect(main.getByText("game.FFPFSC", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(main.getByRole("button", { name: "Mount", exact: true })).toBeDisabled();
   await expect(main.getByRole("button", { name: "Edit files", exact: true })).toHaveCount(0);
-  await expect(main.getByRole("link", { name: "Decompress to .exfat…" })).toHaveAttribute("href", "/files?path=%2Fdata");
+  await expect(main.getByRole("link", { name: "Open in Files" })).toHaveAttribute("href", "/files?path=%2Fdata");
 });

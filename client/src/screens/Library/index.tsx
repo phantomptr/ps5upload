@@ -2400,8 +2400,9 @@ function LibraryRowImpl({
                   <Link
                     className="text-xs underline"
                     to={`/files?path=${encodeURIComponent(entry.path.slice(0, entry.path.lastIndexOf("/")) || "/")}`}
+                    title={tr("fs_unpack_action", undefined, "Decompress to .exfat…")}
                   >
-                    {tr("fs_unpack_action", undefined, "Decompress to .exfat…")}
+                    {tr("saves_open_in_files", undefined, "Open in Files")}
                   </Link>
                 )}
                 <Button
