@@ -323,7 +323,7 @@ describe("QueueCard adding", () => {
     const html = card();
     expect(html).toContain("Add games from a folder…");
     expect(html).toContain("Pick game folders…");
-    expect(html).toContain("Pick images or archives…");
+    expect(html).toContain("Pick packages, images or archives…");
   });
 
   it("takes what to make and what to do after from ③, with no second set of choices", () => {

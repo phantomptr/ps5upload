@@ -5,7 +5,7 @@ import { scanLibrary } from "./ps5";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => true }));
 const call = vi.mocked(invoke);
-beforeEach(() => call.mockReset());
+beforeEach(() => { call.mockReset(); });
 
 it("finds compressed images, case insensitively, alongside raw images", async () => {
   call.mockImplementation(async (cmd, args) => {
