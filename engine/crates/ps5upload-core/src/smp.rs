@@ -105,12 +105,6 @@ pub struct SmpStatus {
     pub errors: Vec<String>,
 }
 
-/// Collect a full SMP status snapshot for the PS5 at `addr`
-/// (the console's host).
-///
-/// Sync — run this on a `spawn_blocking` task from an async caller.
-/// Never fails outright: individual probe failures are recorded in
-/// `SmpStatus::errors` instead of aborting the whole snapshot.
 // HyperHEN embeds SMP as hyperhen_mount.elf (upstream src/main.c PAYLOAD_NAME).
 // The generic HyperHEN process is insufficient: utility-only firmware routes lack automount.
 fn is_mount_process(name: &str) -> bool {
@@ -119,6 +113,12 @@ fn is_mount_process(name: &str) -> bool {
         || matches!(name.as_str(), "hyperhen_mount" | "hyperhen_mount.elf")
 }
 
+/// Collect a full SMP status snapshot for the PS5 at `addr`
+/// (the console's host).
+///
+/// Sync — run this on a `spawn_blocking` task from an async caller.
+/// Never fails outright: individual probe failures are recorded in
+/// `SmpStatus::errors` instead of aborting the whole snapshot.
 pub fn collect_status(addr: &str) -> Result<SmpStatus> {
     let mut errors: Vec<String> = Vec::new();
 

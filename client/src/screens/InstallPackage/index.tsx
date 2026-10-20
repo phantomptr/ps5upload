@@ -61,7 +61,7 @@ import { openInFileSystem } from "../../state/fsNavigation";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
-import { pickLocalPath, pickLocalPaths } from "../../state/localPicker";
+import { pickLocalPaths } from "../../state/localPicker";
 import {
   usePkgLibrary,
   isFinishedPkg,
