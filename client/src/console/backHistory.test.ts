@@ -255,3 +255,17 @@ describe("back history on the PS5 (close at the first screen)", () => {
     expect(onRoot).toHaveBeenCalledTimes(1);
   });
 });
+
+
+it("coalesces two Back requests before the asynchronous history pop", () => {
+  const f = fakeEnv();
+  const p = page(f);
+  p.open();
+  p.open();
+  f.tick(2000);
+  p.h.requestBack();
+  p.h.requestBack();
+  expect(f.env.back).toHaveBeenCalledTimes(1);
+  f.flush();
+  expect(p.depth()).toBe(1);
+});

@@ -136,3 +136,27 @@ describe("Games in a picked folder", () => {
     });
   });
 });
+
+
+describe("Nested package conversion intake", () => {
+  it("finds packages inside each game wrapper, without entering actual game folders", async () => {
+    const tree: Record<string, string[]> = {
+      "/games": ["007/", "Saros/", "Dump/"],
+      "/games/007": ["game.pkg", "notes.txt"],
+      "/games/Saros": ["game.pkg"],
+      "/games/Dump/sce_sys": ["param.json"],
+    };
+    listDir.mockImplementation(async (p: string) => {
+      if (!(p in tree)) throw new Error("not found");
+      return tree[p].map((n) => ({ name: n.replace(/\/$/, ""), path: `${p}/${n.replace(/\/$/, "")}`, is_dir: n.endsWith("/"), size: 1 }));
+    });
+    expect(await gamesInFolder("/games")).toEqual({
+      sources: [
+        { path: "/games/007/game.pkg", isDir: false },
+        { path: "/games/Saros/game.pkg", isDir: false },
+        { path: "/games/Dump", isDir: true },
+      ],
+      skipped: 0,
+    });
+  });
+});
