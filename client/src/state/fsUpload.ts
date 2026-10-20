@@ -49,6 +49,8 @@ export interface FsUploadActive {
  *  The console keeps what already landed (and the partial file), so a resume sends only
  *  the rest. Saved to disk, so it is still offered after the app restarts. */
 export interface FsUploadStopped {
+  /** Owning queued pick, so a restart resumes it only once. */
+  queueId?: string;
   /** What ended it: a failure, the user's Stop, or the app closing or crashing mid-run. */
   why: "failed" | "user" | "interrupted";
   /** The engine's error, raw; "" when nothing failed. */
@@ -222,6 +224,7 @@ export function listUnsupported(e: unknown): boolean {
 export const FS_UPLOAD_BUSY = "an upload is already running";
 
 export interface FsUploadRequest {
+  queueId?: string;
   host: string;
   addr: string;
   destDir: string;
@@ -316,6 +319,7 @@ export async function runFsUpload(
     const cur = rest[0];
     const stepsDone = doneBefore + doneItems;
     return {
+      queueId: req.queueId,
       why,
       error,
       reason,
@@ -558,6 +562,7 @@ export async function resumeFsUpload(
   return runFsUpload(
     {
       host,
+      queueId: st.queueId,
       addr: st.addr,
       destDir: st.destDir,
       srcPaths: st.srcPaths,

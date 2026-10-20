@@ -67,3 +67,31 @@ it("does not start a paused queue until explicitly resumed", async () => {
   resumeFsUploadQueue(host, e.deps);
   await vi.waitFor(() => expect(fsUploadQueueFor(host).items).toHaveLength(0));
 });
+
+it("restores waiting picks paused and leaves the interrupted pick to Resume", async () => {
+  const pending = request("waiting.bin");
+  const interrupted = { ...request("active.bin"), queueId: "active" };
+  const saved = new Map<string, string>([
+    ["ps5upload.fsUpload.v1", JSON.stringify({ [host]: {
+      ...interrupted, why: "interrupted", error: "", reason: null,
+      name: "active.bin", count: 1, doneCount: 0,
+    } })],
+    ["ps5upload.fsUploadQueue.v1", JSON.stringify({ [host]: {
+      items: [
+        { id: "active", request: interrupted, allowedExisting: [] },
+        { id: "waiting", request: pending, allowedExisting: [] },
+      ], running: true, paused: false, error: null,
+    } })],
+  ]);
+  vi.stubGlobal("window", {
+    localStorage: { getItem: (k: string) => saved.get(k) ?? null,
+      setItem: (k: string, v: string) => saved.set(k, v) },
+  });
+  try {
+    vi.resetModules();
+    const restored = await import("./fsUploadQueue");
+    expect(restored.fsUploadQueueFor(host).items.map((i) => i.id)).toEqual(["waiting"]);
+    expect(restored.fsUploadQueueFor(host).paused).toBe(true);
+    expect(restored.fsUploadQueueFor(host).running).toBe(false);
+  } finally { vi.unstubAllGlobals(); }
+});

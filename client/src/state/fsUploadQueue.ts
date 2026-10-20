@@ -18,7 +18,13 @@ const KEY = "ps5upload.fsUploadQueue.v1";
 function load(): Record<string, Slot> {
   try {
     const saved = JSON.parse(safeGetItem(KEY) ?? "{}") as Record<string, Slot>;
-    return Object.fromEntries(Object.entries(saved).filter(([, s]) => s && Array.isArray(s.items)).map(([host, s]) => [host, { ...s, running: false, paused: true }]));
+    return Object.fromEntries(Object.entries(saved).filter(([, s]) => s && Array.isArray(s.items)).map(([host, s]) => [host, {
+      ...s,
+      // The transfer store restores an in-flight pick as a resumable stopped run.
+      // Leave its progress/resume there instead of sending the original pick twice.
+      items: s.items.filter((item) => item.id !== fsUploadForHost(useFsUploadStore.getState(), host).stopped?.queueId),
+      running: false, paused: true,
+    }]));
   } catch { return {}; }
 }
 export const useFsUploadQueue = create<{ byHost: Record<string, Slot> }>(() => ({ byHost: load() }));
@@ -40,7 +46,7 @@ const runners = new Map<string, FsUploadDeps>();
 let seq = 0;
 export function enqueueFsUpload(req: FsUploadRequest, deps: FsUploadDeps, existing: FsExistingEntry[]): string {
   const id = `fsq-${Date.now()}-${++seq}`;
-  const item = { id, request: structuredClone(req), allowedExisting: existing.map((e) => nameKey(e.name)) };
+  const item = { id, request: JSON.parse(JSON.stringify({ ...req, queueId: id })) as FsUploadRequest, allowedExisting: existing.map((e) => nameKey(e.name)) };
   patch(req.host, { items: [...fsUploadQueueFor(req.host).items, item] });
   runners.set(hostOf(req.host), deps);
   void drainFsUploadQueue(req.host, deps);

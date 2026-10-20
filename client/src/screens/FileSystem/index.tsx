@@ -151,7 +151,7 @@ import {
   type FsUploadActive,
 } from "../../state/fsUpload";
 import { enqueueFsUpload, fsUploadReservations, pauseFsUploadQueue, resumeFsUploadQueue, removeFsUploadQueued, useFsUploadQueue } from "../../state/fsUploadQueue";
-import { nameKey } from "../../state/fsUploadPlan";
+import { nameKey, type FsExistingEntry } from "../../state/fsUploadPlan";
 import { fsUploadDeps } from "../../state/fsUploadRuntime";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
@@ -1268,12 +1268,12 @@ export default function FileSystemScreen() {
       return;
     }
     if (probe.isStale()) return;
-    const taken = new Map(existing.map((e) => [nameKey(e.name), e]));
+    const taken = new Map<string, FsExistingEntry>(existing.map((e) => [nameKey(e.name), e]));
     for (const e of fsUploadReservations(host, destDir)) {
       if (!taken.has(nameKey(e.name))) taken.set(nameKey(e.name), e);
     }
-    existing = [...taken.values()];
-    const plan = await planFsUpload(items, existing, askConflict, generateTxIdHex);
+    const plannedExisting = [...taken.values()];
+    const plan = await planFsUpload(items, plannedExisting, askConflict, generateTxIdHex);
     if (probe.isStale() || !plan || plan.steps.length === 0) return;
     enqueueFsUpload(
       { host, addr, destDir, srcPaths: [], steps: plan.steps },
@@ -1289,9 +1289,8 @@ export default function FileSystemScreen() {
             { body: humanizePs5Error(raw) || raw },
           ),
       },
-      existing,
+      plannedExisting,
     );
-
   };
 
   /** Row action: overwrite one existing file with a local one. */

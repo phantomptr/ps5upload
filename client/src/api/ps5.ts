@@ -3117,7 +3117,8 @@ export interface LibraryEntry {
   /** For `image` kind only: the disk image type derived from the file
    *  extension. `exfat` = .exfat (exFAT volume), `ffpkg` = .ffpkg
    *  (UFS2 volume), `ffpfs` = .ffpfs (PFS save-data volume,
-   *  experimental). Null for game entries. Drives the label + mount
+   *  experimental), `ffpfsc` = compressed container (SMP playback, decompress to edit).
+   *  Null for game entries. Drives the label + mount
    *  behavior in the Library row. */
   imageFormat?: "exfat" | "ffpkg" | "ffpfs" | "ffpfsc" | null;
   /** For `game` kind: PS5 title id (e.g. "PPSA00000") read from the
@@ -3135,7 +3136,7 @@ export interface LibraryEntry {
   mtime?: number;
 }
 
-/** Walk every writable PS5 volume recursively and return all games
+/** Walk every non-placeholder PS5 volume recursively and return all games
  *  and disk images found anywhere on them.
  *
  *  Detection rules:
