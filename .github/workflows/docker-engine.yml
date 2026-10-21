@@ -112,6 +112,7 @@ jobs:
         with:
           context: .
           file: engine/Dockerfile.webui
+          build-args: PS5UPLOAD_BASE_URL=/ps5/
           platforms: linux/amd64
           push: false
           load: true
@@ -119,7 +120,9 @@ jobs:
           cache-from: type=gha,scope=webui
           cache-to: type=gha,mode=min,scope=webui
 
-      - name: Smoke-test the image
+      - name: Smoke-test the prefixed image
+        env:
+          SMOKE_BASE_PATH: /ps5
         run: scripts/docker-smoke.sh ps5upload-engine-webui:smoke --webui
 
   # ── Resolve + validate the tag ONCE, hand the trusted values to build/merge ─

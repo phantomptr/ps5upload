@@ -10473,7 +10473,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
 
     // The Collection's automatic refresh (a no-op until a folder is added).
     collection_api::spawn_auto_refresh();
-    // Install sessions live in their own state (served by pkg_install::router below); the helper
+    // Install sessions live in their own state (served by pkg_install::api_router below); the helper
     // log mirror also reads it, to stay off a console while an install runs.
     let pkg_state = std::sync::Arc::new(pkg_install::PkgInstallState::restored());
     // Copies each connected console's helper log into the event journal.
@@ -10953,6 +10953,14 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/debug/crash", get(debug_crash))
         .with_state(state);
 
+    // All browser APIs must be merged before nesting under the URL prefix.
+    // Package-host URLs stay at the root because the console fetches them directly.
+    let app = app
+        .merge(pkg_install::api_router(pkg_state.clone()))
+        .merge(remote_download::router(std::sync::Arc::new(
+            remote_download::DownloadRegistry::default(),
+        )));
+
     // SPA fallback: serve the embedded React bundle for every path that doesn't
     // match an explicit /api/* route above.  Only compiled when the `webui`
     // feature is on (Docker / self-hosted image); the regular build keeps the
@@ -10998,17 +11006,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .allow_headers(Any);
 
     let app = app
-        // .pkg install — sessions live in their own state because the
-        // HTTP-host serving handler needs Mutex-guarded session lookup
-        // independent of the main engine state. Merged at this point
-        // so the pkg routes share the same listener + CORS + body limit.
-        .merge(pkg_install::router(pkg_state))
-        // Downloading a link to disk before installing it. Separate state for
-        // the same reason as the install sessions: its progress is polled
-        // independently of everything else the engine is doing.
-        .merge(remote_download::router(std::sync::Arc::new(
-            remote_download::DownloadRegistry::default(),
-        )))
+        .merge(pkg_install::host_router(pkg_state))
         // Tauri's renderer performs a few direct fetches to the sidecar for
         // liveness, job polling and streamed resources. Emit CORS headers only
         // for origins accepted by the same narrow trust rule as the guard

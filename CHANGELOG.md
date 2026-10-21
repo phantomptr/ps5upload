@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## 7.1.12
+## 7.1.13
 
 - **SMB collection moves.** Close metadata readers before moving inspected game folders, and
   wait for pending closes before renames and directory removal. Denied SMB operations no longer
@@ -16,11 +16,14 @@ What's new in ps5upload, written for humans.
   them to the engine, and review them before sending to the PS5. Send a selected ELF payload
   through the engine to a running loader after an explicit Send action. Archive intake remains
   available in the native app.
-- **Reverse proxy hosting (#490).** Docker healthchecks respect the configured URL path prefix.
+- **Reverse proxy hosting (#490).** Docker healthchecks, package uploads, and remote downloads
+  respect the configured URL path prefix; console package downloads remain at the root.
   New setup instructions cover dedicated hostnames, subpaths, proxy limits, allowlists, and the
   direct connection the PS5 needs for package downloads.
 - **Queue sizes.** Show known sizes on individual pending rows and label unknown sizes clearly.
   These are estimates, not a promise that the destination has enough free space.
+
+Version 7.1.12 was stopped during release validation; these changes ship in 7.1.13.
 
 ## 7.1.11
 

@@ -755,7 +755,13 @@ fn payload_restore_bytes(
     Ok(stamp(&image))
 }
 
+#[cfg(test)]
 pub fn router(state: PkgInstallStateHandle) -> Router {
+    api_router(state.clone()).merge(host_router(state))
+}
+
+/// Browser APIs follow the configured URL prefix; console download URLs do not.
+pub fn api_router(state: PkgInstallStateHandle) -> Router {
     Router::new()
         // Packages routinely exceed the app-wide 64 MiB JSON/form limit.
         // Multipart is consumed incrementally above, so disabling buffering's
@@ -818,6 +824,11 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // disagree. Read-only; safe to poll from the package list.
         .route("/api/pkg/install/preflight", get(install_preflight_handler))
         .route("/api/pkg/payload-restore", post(payload_restore_handler))
+        .with_state(state)
+}
+
+pub fn host_router(state: PkgInstallStateHandle) -> Router {
+    Router::new()
         // The session UUID is the lookup key. We allow ANY {filename} so the
         // URL can carry the pkg's canonical `<ContentID>.pkg` name that
         // Sony's installer cross-checks against the pkg header. Without
