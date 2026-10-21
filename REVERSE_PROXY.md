@@ -89,4 +89,3 @@ location /ps5/ {
 Open `/ps5/`. The API is `/ps5/api/...`; the container healthcheck probes that
 same prefix. A healthcheck failure with a full URL in PS5UPLOAD_BASE_URL is a
 configuration error: use `/` for a hostname, or rebuild with `/ps5/` for a path.
-

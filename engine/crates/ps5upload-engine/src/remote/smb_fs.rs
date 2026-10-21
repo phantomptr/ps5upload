@@ -344,6 +344,11 @@ mod tests {
             // An extracted game is a populated directory, not an empty folder.
             if fs.stat("/w/game/sce_sys/param.json").await.is_ok() {
                 let size = fs.stat("/w/game/sce_sys/param.json").await.unwrap().size;
+                // Collection inspection opens metadata before it tries to move the folder.
+                // Dropping that reader must close the SMB handle, not leave it in the session.
+                let metadata = fs.open("/w/game/sce_sys/param.json").await.unwrap();
+                assert!(!metadata.read_at(0, 1024).await.unwrap().is_empty());
+                drop(metadata);
                 fs.rename("/w/game", "/w/PS5/game")
                     .await
                     .expect("move an intact game directory");
