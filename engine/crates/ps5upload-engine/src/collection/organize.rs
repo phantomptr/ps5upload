@@ -1193,7 +1193,11 @@ mod tests {
         put(&root.join("PPSA01234-app/sce_sys"), "param.json", 2);
         put(&root.join("PPSA01234-app/Media"), "internal.pkg", 3);
         let found = scan(&LocalTree, root);
-        assert_eq!(found.len(), 6, "one package, four images and one intact folder: {found:?}");
+        assert_eq!(
+            found.len(),
+            6,
+            "one package, four images and one intact folder: {found:?}"
+        );
         assert!(found.contains(&root.join("PPSA01234-app")));
         assert!(!found.iter().any(|p| p.ends_with("internal.pkg")));
         assert_eq!(containers(&LocalTree, root), vec![root.clone()]);
@@ -1208,32 +1212,125 @@ mod tests {
         }
         put(&root.join("dump/sce_sys"), "param.json", 2);
         put(&root.join("dump/Media"), "asset.bin", 23);
-        let metadata = info("Example", "PPSA01234", "UP0000-PPSA01234_00-EXAMPLE", "base", "1.00");
+        let metadata = info(
+            "Example",
+            "PPSA01234",
+            "UP0000-PPSA01234_00-EXAMPLE",
+            "base",
+            "1.00",
+        );
         let facts = |p: &Path| Facts {
-            path: p.to_path_buf(), parts: vec![p.to_path_buf()], size: 12,
-            info: PkgInfo { platform: "PS5".into(), ..metadata.clone() },
+            path: p.to_path_buf(),
+            parts: vec![p.to_path_buf()],
+            size: 12,
+            info: PkgInfo {
+                platform: "PS5".into(),
+                ..metadata.clone()
+            },
         };
-        let sources = ["image.exfat", "image.ffpkg", "image.ffpfs", "image.ffpfsc", "dump"]
-            .iter().map(|p| root.join(p)).collect();
+        let sources = [
+            "image.exfat",
+            "image.ffpkg",
+            "image.ffpfs",
+            "image.ffpfsc",
+            "dump",
+        ]
+        .iter()
+        .map(|p| root.join(p))
+        .collect();
         let plan = plan_files(&LocalTree, root, sources, &facts);
         assert_eq!(plan.moves.len(), 5);
         for ext in ["exfat", "ffpkg", "ffpfs", "ffpfsc"] {
-            let mv = plan.moves.iter().find(|m| m.from == format!("image.{ext}")).unwrap();
+            let mv = plan
+                .moves
+                .iter()
+                .find(|m| m.from == format!("image.{ext}"))
+                .unwrap();
             assert!(mv.to.ends_with(&format!(".{ext}")), "{mv:?}");
-            assert!(!mv.duplicate, "different representations are not identical files");
+            assert!(
+                !mv.duplicate,
+                "different representations are not identical files"
+            );
         }
-        let folder = plan.moves.iter().find(|m| m.from == "dump").unwrap().to.clone();
+        let folder = plan
+            .moves
+            .iter()
+            .find(|m| m.from == "dump")
+            .unwrap()
+            .to
+            .clone();
         let log = root.join("undo.json");
         let run = apply(&LocalTree, root, plan.moves, &log, "", None).unwrap();
         assert!(run.failed.is_empty(), "{:?}", run.failed);
-        assert_eq!(std::fs::read(root.join(&folder).join("Media/asset.bin")).unwrap(), vec![7; 23]);
+        assert_eq!(
+            std::fs::read(root.join(&folder).join("Media/asset.bin")).unwrap(),
+            vec![7; 23]
+        );
         let again = plan_with(&LocalTree, root, &facts);
         assert!(again.moves.is_empty(), "{:?}", again.moves);
-        assert_eq!(again.skipped.iter().filter(|s| s.reason == SKIP_IN_PLACE).count(), 5);
+        assert_eq!(
+            again
+                .skipped
+                .iter()
+                .filter(|s| s.reason == SKIP_IN_PLACE)
+                .count(),
+            5
+        );
         let undone = revert(&log, &local).unwrap();
         assert!(undone.problems.is_empty(), "{:?}", undone.problems);
         assert_eq!(undone.reverted.len(), 5);
-        assert_eq!(std::fs::read(root.join("dump/Media/asset.bin")).unwrap(), vec![7; 23]);
+        assert_eq!(
+            std::fs::read(root.join("dump/Media/asset.bin")).unwrap(),
+            vec![7; 23]
+        );
+    }
+
+    #[test]
+    fn extracted_folder_never_merges_with_an_existing_directory() {
+        let l = lib("folder-collision");
+        let root = &l.0;
+        let dest = "PS5/PPSA01234 - Example/Example - PPSA01234 - v1.00 - US - BASE";
+        put(&root.join("dump/sce_sys"), "param.json", 2);
+        put(&root.join(dest), "keep.bin", 7);
+        let facts = |p: &Path| Facts {
+            path: p.to_path_buf(),
+            parts: vec![p.to_path_buf()],
+            size: 2,
+            info: PkgInfo {
+                platform: "PS5".into(),
+                ..info("Example", "PPSA01234", "", "base", "1.00")
+            },
+        };
+        let plan = plan_files(&LocalTree, root, vec![root.join("dump")], &facts);
+        assert_eq!(plan.moves.len(), 1);
+        assert_ne!(plan.moves[0].to, dest);
+        assert!(!plan.moves[0].to.ends_with(".pkg"));
+        let log = root.join("undo.json");
+        let run = apply(&LocalTree, root, plan.moves, &log, "", None).unwrap();
+        assert!(run.failed.is_empty());
+        assert_eq!(
+            std::fs::read(root.join(dest).join("keep.bin")).unwrap(),
+            vec![7; 7]
+        );
+        assert!(!root.join(dest).join("sce_sys").exists());
+    }
+
+    #[test]
+    fn configured_child_root_is_excluded_from_the_parent_plan() {
+        let l = lib("overlap");
+        put(&l.0, "outside.exfat", 2);
+        put(&l.0.join("separate"), "owned.exfat", 2);
+        let roots = vec![
+            (l.0.clone(), "parent".into()),
+            (l.0.join("separate"), "child".into()),
+        ];
+        let plan = plan_cached(&LocalTree, &l.0, None, &roots);
+        assert_eq!(
+            plan.skipped.len(),
+            1,
+            "only the parent's invalid image should be reported"
+        );
+        assert_eq!(plan.skipped[0].path, "outside.exfat");
     }
 
     #[test]
