@@ -188,6 +188,7 @@ jobs:
           interfaces = 127.0.0.1
           bind interfaces only = yes
           log file = $share/samba.log
+          log level = 3
           [games]
           path = $share/data
           guest ok = yes
@@ -204,7 +205,10 @@ jobs:
             sudo cat "$share/samba.log" || true
             exit 1
           fi
-          cargo test -p ps5upload-engine smb_meets_the_remote_contract -- --ignored --nocapture
+          if ! cargo test -p ps5upload-engine smb_meets_the_remote_contract -- --ignored --nocapture; then
+            sudo tail -n 250 "$share/samba.log"
+            exit 1
+          fi
 
       - name: cargo nextest
         working-directory: engine

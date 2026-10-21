@@ -12,9 +12,12 @@ use tokio::sync::Mutex;
 use super::store::{Connection, Secret};
 use super::{Entry, Page, RemoteError, RemoteFile, RemoteFs, PAGE};
 
+type PendingCloses = Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<Result<(), smb2::Error>>>>>;
+
 pub struct SmbFs {
     session: Mutex<(smb2::SmbClient, smb2::Tree)>,
     host: String,
+    pending_closes: PendingCloses,
 }
 
 #[derive(Serialize)]
@@ -114,7 +117,30 @@ impl SmbFs {
         Ok(Self {
             session: Mutex::new((client, tree)),
             host: addr,
+            pending_closes: Arc::default(),
         })
+    }
+
+    async fn finish_closes(&self) -> Result<(), RemoteError> {
+        let pending = std::mem::take(
+            &mut *self
+                .pending_closes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        let mut error = None;
+        for close in pending {
+            match close.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    error.get_or_insert_with(|| map_err(&self.host, e));
+                }
+                Err(e) => {
+                    error.get_or_insert_with(|| RemoteError::Io(format!("SMB close failed: {e}")));
+                }
+            }
+        }
+        error.map_or(Ok(()), Err)
     }
 
     async fn entries(&self, path: &str) -> Result<Vec<Entry>, RemoteError> {
@@ -139,9 +165,25 @@ impl SmbFs {
 }
 
 struct SmbFile {
-    reader: Arc<smb2::FileReader>,
+    reader: Option<smb2::FileReader>,
+    runtime: tokio::runtime::Handle,
+    pending_closes: PendingCloses,
     size: u64,
     host: String,
+}
+
+// smb2's FileReader::drop deliberately does not send CLOSE. A metadata read must not
+// leave a live server handle inside a game directory until the entire session ends.
+impl Drop for SmbFile {
+    fn drop(&mut self) {
+        if let Some(reader) = self.reader.take() {
+            let close = self.runtime.spawn(async move { reader.close().await });
+            self.pending_closes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(close);
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -155,6 +197,8 @@ impl RemoteFile for SmbFile {
         }
         let len = len.min(self.size - offset);
         self.reader
+            .as_ref()
+            .expect("live SMB reader")
             .read_at(offset, len)
             .await
             .map_err(|e| map_err(&self.host, e))
@@ -206,6 +250,7 @@ impl RemoteFs for SmbFs {
     }
 
     async fn open(&self, path: &str) -> Result<Arc<dyn RemoteFile>, RemoteError> {
+        self.finish_closes().await?;
         let s = self.session.lock().await;
         let (client, tree) = &*s;
         let reader = client
@@ -214,7 +259,9 @@ impl RemoteFs for SmbFs {
             .map_err(|e| map_err(&self.host, e))?;
         let size = reader.size();
         Ok(Arc::new(SmbFile {
-            reader: Arc::new(reader),
+            reader: Some(reader),
+            runtime: tokio::runtime::Handle::current(),
+            pending_closes: self.pending_closes.clone(),
             size,
             host: self.host.clone(),
         }))
@@ -267,6 +314,8 @@ impl RemoteFs for SmbFs {
     /// SMB2 SET_INFO FileRenameInformation with ReplaceIfExists = false (the crate's only
     /// form): the server itself refuses a taken name with OBJECT_NAME_COLLISION.
     async fn rename(&self, from: &str, to: &str) -> Result<(), RemoteError> {
+        // Finish closes started by inspection before asking the server to move its folder.
+        self.finish_closes().await?;
         let mut s = self.session.lock().await;
         let (client, tree) = &mut *s;
         client
@@ -281,6 +330,7 @@ impl RemoteFs for SmbFs {
                 "the share itself cannot be removed".into(),
             ));
         }
+        self.finish_closes().await?;
         let mut s = self.session.lock().await;
         let (client, tree) = &mut *s;
         client
