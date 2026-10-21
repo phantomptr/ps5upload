@@ -478,3 +478,17 @@ describe("payload_check passes the status failure's reason and power through", (
     expect(statusFailureFields("")).toEqual({});
   });
 });
+
+
+describe("remote conversion preflight", () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it.each(["fpkg_inspect", "fpkg_build", "fpkg_estimate"])("%s allows console metadata reads beyond one minute", async (cmd) => {
+    const deadline = vi.spyOn(AbortSignal, "timeout");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ files: 42 }), { status: 200 })));
+    await browserInvoke(cmd, { source: "ps5://console/data/game.exfat", outputDir: "/games" });
+    expect(deadline).toHaveBeenCalledWith(3_600_000);
+    const call = vi.mocked(fetch).mock.calls[0];
+    expect(JSON.parse(call[1]?.body as string).source).toBe("ps5://console/data/game.exfat");
+  });
+});

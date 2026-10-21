@@ -67,6 +67,7 @@ mod net_health;
 mod pkg_install;
 mod pkg_sidecar;
 mod pldmgr_api;
+mod profile_image;
 mod remote;
 mod remote_download;
 mod remote_pkg;
@@ -8217,7 +8218,7 @@ async fn profile_avatar_preview_handler(Json(req): Json<ProfilePreviewReq>) -> i
     let mode = ps5upload_core::profile::SquareMode::parse(req.mode.as_deref().unwrap_or("crop"));
     let path = req.image_path;
     let r: Result<Vec<u8>, anyhow::Error> = tokio::task::spawn_blocking(move || {
-        let bytes = std::fs::read(&path).map_err(|e| anyhow::anyhow!("read image {path}: {e}"))?;
+        let bytes = profile_image::read(&path)?;
         ps5upload_core::profile::avatar_preview_png(&bytes, mode)
     })
     .await
@@ -8297,8 +8298,7 @@ async fn profile_avatar_handler(
     let started = std::time::Instant::now();
     crate::log_info!("profile_avatar: addr={addr} image={image_path} mode={mode:?} uid={uid}");
     let r = tokio::task::spawn_blocking(move || {
-        let bytes = std::fs::read(&image_path)
-            .map_err(|e| anyhow::anyhow!("read image {image_path}: {e}"))?;
+        let bytes = profile_image::read(&image_path)?;
         ps5upload_core::profile::profile_apply_avatar(&addr, uid, username.as_deref(), &bytes, mode)
     })
     .await
