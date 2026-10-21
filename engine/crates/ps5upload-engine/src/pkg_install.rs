@@ -499,7 +499,18 @@ impl Drop for RemoveOnDrop {
     }
 }
 
-async fn pkg_upload_handler(mut form: axum::extract::Multipart) -> Response<Body> {
+async fn pkg_upload_handler(form: axum::extract::Multipart) -> Response<Body> {
+    stage_browser_upload(form, true).await
+}
+
+async fn file_upload_handler(form: axum::extract::Multipart) -> Response<Body> {
+    stage_browser_upload(form, false).await
+}
+
+async fn stage_browser_upload(
+    mut form: axum::extract::Multipart,
+    packages_only: bool,
+) -> Response<Body> {
     use tokio::io::AsyncWriteExt;
 
     cleanup_stale_pkg_uploads();
@@ -529,7 +540,7 @@ async fn pkg_upload_handler(mut form: axum::extract::Multipart) -> Response<Body
         };
         let filename = sanitize_pkg_filename(field.file_name().unwrap_or("package.pkg"));
         // The parser validates CNT/FIH magic; the suffix is only a picker hint.
-        if !is_install_package_filename(&filename) {
+        if packages_only && !is_install_package_filename(&filename) {
             continue;
         }
         let dest = dir.join(&filename);
@@ -593,7 +604,7 @@ async fn pkg_upload_handler(mut form: axum::extract::Multipart) -> Response<Body
     let _ = tokio::fs::remove_dir_all(&dir).await;
     json_response(
         StatusCode::BAD_REQUEST,
-        serde_json::json!({ "error": "no .pkg or .fpkg file in the upload" }),
+        serde_json::json!({ "error": if packages_only { "no .pkg or .fpkg file in the upload" } else { "no file in the upload" } }),
     )
 }
 
@@ -754,6 +765,11 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
             post(pkg_upload_handler).layer(DefaultBodyLimit::disable()),
         )
         .route("/api/pkg/upload/{id}", delete(pkg_upload_delete_handler))
+        .route(
+            "/api/files/upload",
+            post(file_upload_handler).layer(DefaultBodyLimit::disable()),
+        )
+        .route("/api/files/upload/{id}", delete(pkg_upload_delete_handler))
         .route("/api/pkg/parse-split", post(parse_split_handler))
         // Read-only UFS2 image inspector for .ffpkg / .ufs files.
         // Lets the renderer surface "what's in this image?" before

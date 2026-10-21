@@ -4632,6 +4632,17 @@ c2c_test_deep_bad: "4 KiB 測試傳送未抵達：{detail}",
 "saves_android_destination": "備份為含日期的 ZIP，儲存在手機的 Download 資料夾（/storage/emulated/0/Download）。還原僅複製加密檔案，不會變更所屬帳號或遊戲 ID。",
 
 library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需編輯，請先在「檔案」中解壓縮。",
+  "profile.avatar.horizontal": "Horizontal position",
+  "profile.avatar.vertical": "Vertical position",
+  "profile.avatar.center": "Center image",
+  "browserFile.staging": "Uploading to server…",
+  "browserFile.choose": "From this device…",
+  "browserFile.hint": "Choose or drop files from this device. They upload to the server first, then appear below for review before sending to the PS5. Keep this tab open until that upload finishes.",
+  "browserPayload.size": "Choose an ELF payload of 64 MiB or smaller.",
+  "browserPayload.file": "Payload file",
+  "browserPayload.port": "Loader port",
+  "browserPayload.hint": "Send an ELF payload from this device through the server to the selected PS5. Start the ELF loader first. Sending bytes does not confirm that the payload started.",
+  "browserPayload.sent": "Sent {n} bytes to the loader.",
 };
 
 export default zh_TW;

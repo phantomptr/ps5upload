@@ -34,6 +34,7 @@
 mod activity;
 mod ampr_trace;
 mod ava1_api;
+mod browser_payload;
 mod bundled_payload;
 mod c2c_api;
 mod collection;
@@ -7304,6 +7305,8 @@ struct ProfileAvatarReq {
     uid: Option<u32>,
     #[serde(default)]
     username: Option<String>,
+    #[serde(default)]
+    crop: Option<ps5upload_core::profile::CropPosition>,
 }
 
 #[derive(Deserialize)]
@@ -7311,6 +7314,8 @@ struct ProfilePreviewReq {
     image_path: String,
     #[serde(default)]
     mode: Option<String>,
+    #[serde(default)]
+    crop: Option<ps5upload_core::profile::CropPosition>,
 }
 
 // ─── User create / delete ───────────────────────────────────────────────
@@ -8215,7 +8220,8 @@ async fn fw_spoof_status_handler(
 }
 
 async fn profile_avatar_preview_handler(Json(req): Json<ProfilePreviewReq>) -> impl IntoResponse {
-    let mode = ps5upload_core::profile::SquareMode::parse(req.mode.as_deref().unwrap_or("crop"));
+    let mode = ps5upload_core::profile::SquareMode::parse(req.mode.as_deref().unwrap_or("crop"))
+        .with_crop(req.crop);
     let path = req.image_path;
     let r: Result<Vec<u8>, anyhow::Error> = tokio::task::spawn_blocking(move || {
         let bytes = profile_image::read(&path)?;
@@ -8291,7 +8297,8 @@ async fn profile_avatar_handler(
     Json(req): Json<ProfileAvatarReq>,
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
-    let mode = ps5upload_core::profile::SquareMode::parse(req.mode.as_deref().unwrap_or("crop"));
+    let mode = ps5upload_core::profile::SquareMode::parse(req.mode.as_deref().unwrap_or("crop"))
+        .with_crop(req.crop);
     let uid = req.uid.unwrap_or(0);
     let username = req.username;
     let image_path = req.image_path;
@@ -10806,6 +10813,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             "/api/remote/connections/{id}/test",
             post(remote::api::test_saved_handler),
         )
+        .merge(browser_payload::router())
         .route("/api/remote/test", post(remote::api::test_form_handler))
         .route("/api/remote/list", post(remote::api::list_dir_handler))
         .route(
@@ -11176,6 +11184,13 @@ pub fn healthcheck() -> i32 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(19113);
+    let base = std::env::var("PS5UPLOAD_BASE_URL").unwrap_or_default();
+    let base = base.trim_matches('/');
+    let path = if base.is_empty() {
+        "/api/jobs".to_string()
+    } else {
+        format!("/{base}/api/jobs")
+    };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let timeout = std::time::Duration::from_secs(3);
     let ok = (|| -> std::io::Result<bool> {
@@ -11183,10 +11198,8 @@ pub fn healthcheck() -> i32 {
         stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(timeout))?;
         stream.write_all(
-            format!(
-                "GET /api/jobs HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-            )
-            .as_bytes(),
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
         )?;
         let mut head = [0u8; 16];
         let n = stream.read(&mut head)?;

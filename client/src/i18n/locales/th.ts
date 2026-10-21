@@ -4691,6 +4691,17 @@ c2c_test_deep_bad: "การส่งทดสอบ 4 KiB ไปไม่ถ�
 "saves_android_destination": "ข้อมูลสำรองเป็น ZIP ลงวันที่ในโฟลเดอร์ Download ของโทรศัพท์ (/storage/emulated/0/Download) การคืนค่าคัดลอกไฟล์ที่เข้ารหัส ไม่เปลี่ยนบัญชีหรือรหัสเกม",
 
 library_compressed_hint: "อิมเมจที่บีบอัดต้องใช้ ShadowMount+ เพื่อเล่น หากต้องการแก้ไข ให้เปิดไฟล์และคลายการบีบอัดก่อน",
+  "profile.avatar.horizontal": "Horizontal position",
+  "profile.avatar.vertical": "Vertical position",
+  "profile.avatar.center": "Center image",
+  "browserFile.staging": "Uploading to server…",
+  "browserFile.choose": "From this device…",
+  "browserFile.hint": "Choose or drop files from this device. They upload to the server first, then appear below for review before sending to the PS5. Keep this tab open until that upload finishes.",
+  "browserPayload.size": "Choose an ELF payload of 64 MiB or smaller.",
+  "browserPayload.file": "Payload file",
+  "browserPayload.port": "Loader port",
+  "browserPayload.hint": "Send an ELF payload from this device through the server to the selected PS5. Start the ELF loader first. Sending bytes does not confirm that the payload started.",
+  "browserPayload.sent": "Sent {n} bytes to the loader.",
 };
 
 export default th;

@@ -778,6 +778,8 @@ pub struct ProfileAvatarReq {
     pub uid: Option<u32>,
     #[serde(default)]
     pub username: Option<String>,
+    #[serde(default)]
+    pub crop: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -785,6 +787,8 @@ pub struct ProfilePreviewReq {
     pub image_path: String,
     #[serde(default)]
     pub mode: Option<String>,
+    #[serde(default)]
+    pub crop: Option<serde_json::Value>,
 }
 
 /// Foreground user + local users + offline-account name slots.
@@ -1371,7 +1375,8 @@ pub async fn fw_spoof_status(req: CheatsAddrReq) -> Result<JsonValue, String> {
 pub async fn profile_avatar_preview(req: ProfilePreviewReq) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/profile/avatar/preview");
-    let body = serde_json::json!({ "image_path": req.image_path, "mode": req.mode });
+    let body =
+        serde_json::json!({ "image_path": req.image_path, "mode": req.mode, "crop": req.crop });
     post_json(&url, &body).await
 }
 
@@ -1385,6 +1390,7 @@ pub async fn profile_apply_avatar(req: ProfileAvatarReq) -> Result<JsonValue, St
         "addr": req.addr,
         "image_path": req.image_path,
         "mode": req.mode,
+        "crop": req.crop,
         "uid": req.uid,
         "username": req.username,
     });

@@ -5005,6 +5005,17 @@ c2c_test_deep_bad: "The 4 KiB test send did not arrive: {detail}",
 "saves_android_destination": "Backups are dated ZIPs in this phone’s Download folder (/storage/emulated/0/Download). Restore copies encrypted files; it does not change their account or title ID.",
 
 library_compressed_hint: "Compressed images need ShadowMount+ to play. To edit, open Files and decompress first.",
+  "profile.avatar.horizontal": "Horizontal position",
+  "profile.avatar.vertical": "Vertical position",
+  "profile.avatar.center": "Center image",
+  "browserFile.staging": "Uploading to server…",
+  "browserFile.choose": "From this device…",
+  "browserFile.hint": "Choose or drop files from this device. They upload to the server first, then appear below for review before sending to the PS5. Keep this tab open until that upload finishes.",
+  "browserPayload.size": "Choose an ELF payload of 64 MiB or smaller.",
+  "browserPayload.file": "Payload file",
+  "browserPayload.port": "Loader port",
+  "browserPayload.hint": "Send an ELF payload from this device through the server to the selected PS5. Start the ELF loader first. Sending bytes does not confirm that the payload started.",
+  "browserPayload.sent": "Sent {n} bytes to the loader.",
 };
 
 export default en;

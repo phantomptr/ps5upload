@@ -35,12 +35,28 @@ pub enum SquareMode {
     /// Center-crop to the largest centered square (fills the frame, loses
     /// the edges of the longer axis).
     Crop,
+    /// Crop at a percentage of the available horizontal and vertical travel.
+    CropAt(CropPosition),
     /// Pad the shorter axis with transparency to the longer axis (keeps the
     /// whole image, adds transparent bars).
     Fit,
 }
 
+/// Position within the available crop travel; 50 centers the image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub struct CropPosition {
+    pub x: u32,
+    pub y: u32,
+}
+
 impl SquareMode {
+    pub fn with_crop(self, crop: Option<CropPosition>) -> Self {
+        match (self, crop) {
+            (Self::Crop, Some(position)) => Self::CropAt(position),
+            _ => self,
+        }
+    }
+
     /// Parse the `mode` query/JSON value. Anything but "fit" → Crop (the
     /// default), matching the reference tool.
     pub fn parse(s: &str) -> SquareMode {
@@ -92,9 +108,13 @@ fn resize_rgba(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
 /// Center-crop an RGBA8 image to its largest centered square. Returns the
 /// square buffer and its side length.
 fn center_crop_square(src: &[u8], sw: u32, sh: u32) -> (Vec<u8>, u32) {
+    positioned_crop_square(src, sw, sh, CropPosition { x: 50, y: 50 })
+}
+
+fn positioned_crop_square(src: &[u8], sw: u32, sh: u32, position: CropPosition) -> (Vec<u8>, u32) {
     let side = sw.min(sh);
-    let x0 = (sw - side) / 2;
-    let y0 = (sh - side) / 2;
+    let x0 = ((sw - side) as u64 * position.x.min(100) as u64 / 100) as u32;
+    let y0 = ((sh - side) as u64 * position.y.min(100) as u64 / 100) as u32;
     let row = (side * 4) as usize;
     let mut dst = vec![0u8; (side as usize) * (side as usize) * 4];
     for y in 0..side {
@@ -335,6 +355,7 @@ pub fn build_avatar_files(
 
     let (square, side) = match mode {
         SquareMode::Crop => center_crop_square(&raw, w, h),
+        SquareMode::CropAt(position) => positioned_crop_square(&raw, w, h, position),
         SquareMode::Fit => fit_square(&raw, w, h),
     };
 
@@ -377,6 +398,7 @@ pub fn avatar_preview_png(image_bytes: &[u8], mode: SquareMode) -> Result<Vec<u8
     let raw = rgba.into_raw();
     let (square, side) = match mode {
         SquareMode::Crop => center_crop_square(&raw, w, h),
+        SquareMode::CropAt(position) => positioned_crop_square(&raw, w, h, position),
         SquareMode::Fit => fit_square(&raw, w, h),
     };
     let preview = if side == 440 {

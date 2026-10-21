@@ -4701,6 +4701,17 @@ c2c_test_deep_bad: "4 KiB 테스트 전송이 도착하지 않았습니다: {det
 "saves_android_destination": "백업은 날짜가 붙은 ZIP으로 휴대폰 Download 폴더(/storage/emulated/0/Download)에 저장됩니다. 복원은 암호화된 파일을 복사하며 계정이나 타이틀 ID를 바꾸지 않습니다.",
 
 library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가 필요합니다. 편집하려면 파일에서 먼저 압축을 푸세요.",
+  "profile.avatar.horizontal": "Horizontal position",
+  "profile.avatar.vertical": "Vertical position",
+  "profile.avatar.center": "Center image",
+  "browserFile.staging": "Uploading to server…",
+  "browserFile.choose": "From this device…",
+  "browserFile.hint": "Choose or drop files from this device. They upload to the server first, then appear below for review before sending to the PS5. Keep this tab open until that upload finishes.",
+  "browserPayload.size": "Choose an ELF payload of 64 MiB or smaller.",
+  "browserPayload.file": "Payload file",
+  "browserPayload.port": "Loader port",
+  "browserPayload.hint": "Send an ELF payload from this device through the server to the selected PS5. Start the ELF loader first. Sending bytes does not confirm that the payload started.",
+  "browserPayload.sent": "Sent {n} bytes to the loader.",
 };
 
 export default ko;

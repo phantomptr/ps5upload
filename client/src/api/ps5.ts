@@ -367,9 +367,10 @@ export async function backupDelete(
 export async function profileAvatarPreview(
   imagePath: string,
   mode: SquareMode,
+  crop?: { x: number; y: number },
 ): Promise<string> {
   const res = await invoke<{ data_url: string }>("profile_avatar_preview", {
-    req: { image_path: imagePath, mode },
+    req: { image_path: imagePath, mode, crop },
   });
   return res.data_url;
 }
@@ -404,12 +405,14 @@ export async function profileApplyAvatar(
   uid?: number | null,
   username?: string | null,
   addr?: string,
+  crop?: { x: number; y: number },
 ): Promise<AvatarApplied> {
   return invoke<AvatarApplied>("profile_apply_avatar", {
     req: {
       addr: addr ?? null,
       image_path: imagePath,
       mode,
+      crop,
       uid: uid ?? null,
       username: username ?? null,
     },

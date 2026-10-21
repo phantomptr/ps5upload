@@ -163,13 +163,6 @@ jobs:
       # of these sit in network sleeps); doctests, which nextest does not run, follow separately.
       # Timing-sensitive binaries are serialized by engine/.config/nextest.toml.
       # Bounded per step: a hung test fails here in minutes instead of holding the job.
-      - name: cargo nextest
-        working-directory: engine
-        timeout-minutes: 25
-        env:
-          RUST_BACKTRACE: 1
-        run: cargo nextest run --profile ci ${{ matrix.select }}
-
       - name: Check SMB moves against a writable Samba share
         if: matrix.part == 'engine'
         working-directory: engine
@@ -202,6 +195,13 @@ jobs:
           sudo smbd -D -s "$share/smb.conf"
           trap 'sudo pkill -F /run/samba/smbd.pid || true; sudo rm -rf "$share"' EXIT
           cargo test -p ps5upload-engine smb_meets_the_remote_contract -- --ignored --nocapture
+
+      - name: cargo nextest
+        working-directory: engine
+        timeout-minutes: 25
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo nextest run --profile ci ${{ matrix.select }}
 
       - name: cargo test --doc
         working-directory: engine

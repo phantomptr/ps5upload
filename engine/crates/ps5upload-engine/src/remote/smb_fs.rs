@@ -53,7 +53,8 @@ fn map_err(host: &str, e: smb2::Error) -> RemoteError {
     use smb2::ErrorKind as K;
     let msg = e.to_string();
     match e.kind() {
-        K::AuthRequired | K::SigningRequired | K::AccessDenied => RemoteError::Auth(msg),
+        K::AuthRequired | K::SigningRequired => RemoteError::Auth(msg),
+        K::AccessDenied => RemoteError::Io(format!("SMB permission denied: {msg}")),
         K::NotFound | K::NotADirectory => RemoteError::NotFound(msg),
         K::AlreadyExists => RemoteError::Exists(msg),
         K::ConnectionLost | K::TimedOut => RemoteError::Unreachable(format!("{host}: {msg}")),
@@ -83,6 +84,7 @@ async fn sign_in(
             smb2::ErrorKind::Io | smb2::ErrorKind::TimedOut | smb2::ErrorKind::ConnectionLost => {
                 RemoteError::Unreachable(format!("{addr}: {e}"))
             }
+            smb2::ErrorKind::AccessDenied => RemoteError::Auth(e.to_string()),
             _ => map_err(&addr, e),
         })?;
     Ok((client, addr))

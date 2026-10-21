@@ -133,6 +133,7 @@ function AvatarSection({
   const [readingImage, setReadingImage] = useState(false);
   const imageInput = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<SquareMode>("crop");
+  const [crop, setCrop] = useState({ x: 50, y: 50 });
   const [preview, setPreview] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [targetUid, setTargetUid] = useState<number | null>(null);
@@ -188,7 +189,7 @@ function AvatarSection({
     setPreview(null);
     void (async () => {
       try {
-        const url = await profileAvatarPreview(imagePath, mode);
+        const url = await profileAvatarPreview(imagePath, mode, crop);
         if (!cancelled) setPreview(url);
       } catch (e) {
         if (!cancelled) {
@@ -200,11 +201,12 @@ function AvatarSection({
     return () => {
       cancelled = true;
     };
-  }, [imagePath, mode]);
+  }, [imagePath, mode, crop]);
 
   async function readBrowserImage(file?: File) {
     if (!file) return; // Cancelling the picker keeps the current selection.
     setImagePath(null);
+    setCrop({ x: 50, y: 50 });
     setBrowserFileName(null);
     setApplyOk(null);
     setApplyError(null);
@@ -256,6 +258,7 @@ function AvatarSection({
     });
     if (typeof sel === "string") {
       setBrowserFileName(null);
+      setCrop({ x: 50, y: 50 });
       setImagePath(sel);
     }
   }
@@ -285,6 +288,7 @@ function AvatarSection({
         targetUid,
         u?.username || null,
         addr,
+        crop,
       );
       setApplyOk(
         tr(
@@ -382,13 +386,13 @@ function AvatarSection({
               active={mode === "crop"}
               icon={<Crop size={13} />}
               label={tr("profile.avatar.crop", "Crop")}
-              onClick={() => setMode("crop")}
+              onClick={() => { if (!applying) setMode("crop"); }}
             />
             <ModeButton
               active={mode === "fit"}
               icon={<Maximize2 size={13} />}
               label={tr("profile.avatar.fit", "Fit")}
-              onClick={() => setMode("fit")}
+              onClick={() => { if (!applying) setMode("fit"); }}
             />
           </div>
           <p className="text-xs text-[var(--color-muted)]">
@@ -402,6 +406,17 @@ function AvatarSection({
                   "Fit the whole image into a square (adds transparent bars).",
                 )}
           </p>
+
+          {imagePath && mode === "crop" && <div className="space-y-2">
+            {(["x", "y"] as const).map((axis) => <label key={axis} className="block text-xs">
+              {axis === "x" ? tr("profile.avatar.horizontal", "Horizontal position") : tr("profile.avatar.vertical", "Vertical position")}
+              <input type="range" min={0} max={100} value={crop[axis]} disabled={applying}
+                className="block w-full" onChange={(event) => setCrop((position) => ({ ...position, [axis]: Number(event.target.value) }))} />
+            </label>)}
+            <Button variant="secondary" disabled={applying} onClick={() => setCrop({ x: 50, y: 50 })}>
+              {tr("profile.avatar.center", "Center image")}
+            </Button>
+          </div>}
 
           {/* Target user */}
           <Select

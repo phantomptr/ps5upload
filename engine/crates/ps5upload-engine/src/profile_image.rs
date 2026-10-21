@@ -96,6 +96,7 @@ mod tests {
                         base64::engine::general_purpose::STANDARD.encode(&png)
                     ),
                     mode: Some(mode.into()),
+                    crop: None,
                 }))
                 .await
                 .into_response();
@@ -119,6 +120,7 @@ mod tests {
             crate::profile_avatar_preview_handler(axum::Json(crate::ProfilePreviewReq {
                 image_path: "data:image/png;base64,aGk=".into(),
                 mode: None,
+                crop: None,
             }))
             .await
             .into_response();

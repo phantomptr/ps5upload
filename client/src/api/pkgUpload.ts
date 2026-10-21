@@ -21,9 +21,18 @@ async function responseError(response: Response): Promise<string> {
  * after both the direct Stream attempt and any staged fallback have finished.
  */
 export async function stageBrowserPkg(file: File): Promise<BrowserPkgUpload> {
+  return stageBrowserFileAt(file, "/api/pkg/upload");
+}
+
+/** Stage any browser-selected file for the normal Upload review. */
+export async function stageBrowserFile(file: File): Promise<BrowserPkgUpload> {
+  return stageBrowserFileAt(file, "/api/files/upload");
+}
+
+async function stageBrowserFileAt(file: File, endpoint: string): Promise<BrowserPkgUpload> {
   const form = new FormData();
-  form.append("pkg", file, file.name);
-  const response = await fetch(`${getEngineUrl()}/api/pkg/upload`, {
+  form.append(endpoint === "/api/pkg/upload" ? "pkg" : "file", file, file.name);
+  const response = await fetch(`${getEngineUrl()}${endpoint}`, {
     method: "POST",
     body: form,
   });

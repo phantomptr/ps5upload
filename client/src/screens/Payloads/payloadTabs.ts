@@ -2,17 +2,9 @@ export type PayloadTabId = "catalog" | "send" | "ps5";
 
 const ALL_TABS: readonly PayloadTabId[] = ["catalog", "send", "ps5"];
 
-/**
- * The Payloads tabs this build can use.
- *
- * Catalog and Send download ELFs to this machine and write them to the
- * console's loader socket, which the browser build cannot do (payload_send and
- * payloads_* have no browser mapping). "On your PS5" only talks to the console
- * through the engine (process list, file reads, the integrations' engine
- * routes), so it is the one tab the web UI keeps.
- */
+/** Catalog downloads use the native shell; browser Send forwards selected ELF bytes through the engine. */
 export function payloadTabsFor(native: boolean): readonly PayloadTabId[] {
-  return native ? ALL_TABS : ALL_TABS.filter((t) => t === "ps5");
+  return native ? ALL_TABS : ALL_TABS.filter((t) => t !== "catalog");
 }
 
 /** The tab a bare /payloads opens on: what is on the console once one is connected,

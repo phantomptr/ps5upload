@@ -1,3 +1,4 @@
+import BrowserFilePicker from "./BrowserFilePicker";
 import { consoleAddr } from "../../lib/addr";
 import { useEffect, useMemo, useState } from "react";
 import { PackagePanel } from "../../components/PackagePanel";
@@ -747,6 +748,11 @@ export default function UploadScreen() {
       />
 
       <PayloadReadinessBanner />
+
+      {!isTauriEnv() && <BrowserFilePicker onFiles={(paths) => {
+        if (paths.length === 1 && !source && batchRows.length === 0) void pickFile(paths[0]);
+        else addToBatch(paths.map((path) => ({ path, isDir: false })));
+      }} />}
 
       <Step1Picker
         active={!source}

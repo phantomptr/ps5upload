@@ -205,10 +205,16 @@ phone or another computer?" below walks through it from start to finish.
 - **Upload works**, but the file picker browses the **engine's** disk, not your browser machine's.
   Mount your games into the container (`-v /host/games:/pkgs:ro`) and set
   `PS5UPLOAD_BROWSE_ROOTS=/pkgs` (comma-separated for several) so the picker opens there.
-  **Install Package → From this device** uploads a package from your browser machine instead.
+  **Upload → From this device** stages files from your browser machine on the engine, then
+  opens the normal review before sending to the PS5. Keep the tab open until staging finishes.
+  This needs free space on the engine; temporary uploads expire after seven days.
+  **Install Package → From this device** stages packages for immediate installation.
 - An upload keeps running when you close the tab; reopening shows it. Only one tab runs the queue.
-- Desktop-only and hidden in the browser: **archive uploads**, **Payloads** (sending a file from
-  disk), saving a save backup or downloading files to your computer, and attaching files to a bug
+- **Payloads → Send payload** accepts an ELF from your browser machine and forwards it through
+  the engine to the selected console's loader (9021 by default). Sending bytes does not confirm
+  execution. Catalog downloads and the other payload formats still use the native app.
+- Desktop-only and hidden in the browser: saving a save backup or downloading files to your
+  computer, and attaching files to a bug
   report. Everything that works on the PS5 itself is the same as on desktop.
 - The docker image can be built using `PS5UPLOAD_BASE_URL` to change the root path of the app.
 

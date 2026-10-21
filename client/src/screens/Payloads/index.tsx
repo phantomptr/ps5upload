@@ -5,6 +5,7 @@ import TabbedShell, { type TabbedShellTab } from "../../layout/TabbedShell";
 import { useTr } from "../../state/lang";
 import CatalogPanel from "./CatalogPanel";
 import SendPanel from "./SendPanel";
+import BrowserSendPanel from "./BrowserSendPanel";
 import OnPs5Panel from "./hub/OnPs5Panel";
 import { useConnectionStore } from "../../state/connection";
 import { isTauriEnv } from "../../lib/tauriEnv";
@@ -23,7 +24,7 @@ import {
  *     playlists and recent-sends history.
  *   - **ps5** ("On your PS5"): a card per payload running or installed on the
  *     console; ShadowMount+, nanoDNS, Payload Manager and HearBridge open
- *     their own panel from the card. The only tab the browser build shows.
+ *     their own panel from the card. Available in the browser and native apps.
  *
  * The integrations used to be tabs of their own; `?tab=manager|shadowmount|
  * nanodns` now opens their card, and `?tab=ports` moved to Processes.
@@ -61,7 +62,7 @@ export default function PayloadsScreen() {
       icon: Rocket,
       key: "payloads_tab_send",
       fallback: "Send payload",
-      description: tr(
+      description: !native ? tr("browserPayload.hint", "Send an ELF payload from this device through the server to the selected PS5. Start the ELF loader first. Sending bytes does not confirm that the payload started.") : tr(
         "payloads_description_send_v2",
         undefined,
         "Send any PS5 payload file — .elf, .bin, .js, .lua, or .jar (kstuff, custom homebrew loaders, browser-stage exploits, plugin scripts, BD-JB JARs) — to your PS5. Same flow as the Connection screen, just pointed at a file you choose. The port follows the file type (.elf/.bin 9021, .jar 9025, .lua 9026, .js 50000); change it only if your loader listens elsewhere.",
@@ -82,7 +83,7 @@ export default function PayloadsScreen() {
   const tabs = allTabs.filter((t) => available.includes(t.id));
 
   const renderPanel = (id: TabId) => {
-    if (id === "send") return <SendPanel />;
+    if (id === "send") return native ? <SendPanel /> : <BrowserSendPanel />;
     if (id === "ps5") return <OnPs5Panel />;
     return <CatalogPanel />;
   };
