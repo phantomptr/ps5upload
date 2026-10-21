@@ -190,6 +190,9 @@ fn identify_raw(path: &Path, kind: &str) -> Option<PkgInfo> {
         "mount.ffpfs" => Some(pfs_image(path)),
         "folder" | "mount.exfat" | "mount.ffpkg" | "mount.ffpfsc" => {
             Some(match crate::inspect::inspect_local(path) {
+                Ok(g) if g.partial && g.identity.title_id.is_empty() => {
+                    failed("no readable sce_sys/param.json or param.sfo")
+                }
                 Ok(g) => from_inspection(&g),
                 Err(e) => failed(format!("{e:#}")),
             })
