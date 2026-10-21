@@ -1196,7 +1196,7 @@ Yes. Save the server under **Connections** (SMB, FTP, FTPS or SFTP), then in **C
 Folders** press **Add a folder on <server>** and pick the folder. It is scanned where it is:
 packages, game folders and covers are read over the network, and nothing is copied to this
 computer. Its games install straight from the server, and **Convert…** reads them in place.
-**Organize packages** works there too, renaming on the server itself; Move to Trash, junk
+**Organize collection** works there too, renaming on the server itself; Move to Trash, junk
 clean-up and Copy install link work on this computer's folders only. A mounted share also still
 works as an ordinary folder.
 
@@ -1228,20 +1228,27 @@ carries a random code, there is no folder listing, and only the packages you sha
 reached. A link lasts until you stop it (one at a time, or **Stop all**) or the app quits;
 nothing stays published after that. **Copy all links** copies every one at once.
 
-**Q: What does Organize packages do, and can I undo it?**
-It renames every package `Title - Game ID - vVersion - Region - KIND.pkg` and files it under
-`Platform / Game ID - Title`, inside the folder it already sits in. DLC is filed with its game,
-a second copy of the same release is filed beside it and marked `DUPLICATE`, split packages
-(`_0`, `_1`, …) move together, and a package whose kind had to be inferred is marked `_UNSURE`.
-You see every move first and can untick any. Nothing is overwritten or deleted and files are
-only renamed, never copied. Every run can be undone from **Earlier runs** in the same window.
-A folder on a saved server (SMB, FTP, SFTP, WebDAV) is organized on the server: each move is a
-rename there, a package never moves to another server or folder, and a connection that drops
-stops the run where it is, with Undo still putting back whatever moved. On WebDAV a folder the
-run emptied is left in place (empty), and the result lists it: a WebDAV delete of a folder takes
-everything in it, so ps5upload never deletes one there. FTP has no rename that
-refuses a taken name, so there the name is checked first; a file another program writes to that
-exact name in the instant between the check and the rename could be replaced.
+**Q: What does Organize collection do, and can I undo it?**
+It organizes packages, images (`.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`) and extracted game folders
+under `Platform / Game ID - Title`, relative to each configured collection root. Packages and
+images are named `Title - Game ID - vVersion - Region - KIND` with their original format's
+extension. Extracted game folders move intact with the same name and no added extension;
+their internal files are never individually organized. Archives must be extracted first.
+DLC is filed with its game, split packages (`_0`, `_1`, …) move together, and inferred package
+kinds are marked `_UNSURE`. Extra copies of the same release and format are marked `DUPLICATE`.
+
+You see every move first and can untick any. Items with unreadable or missing metadata are
+listed as left alone, with a reason. Already organized items stay put. Existing names are
+reserved rather than merged or overwritten. Moves rename items, never copy them. Every run
+can be undone from **Earlier runs** in the same window. A collection root that is itself an
+extracted game stays put; choose its parent folder to organize it.
+
+A folder on a saved server (SMB, FTP, SFTP, WebDAV) is organized on that server. Items stay
+within their configured root, and a connection that drops stops the run where it is, with
+Undo still putting back whatever moved. On WebDAV emptied folders are left in place because
+its directory delete could remove contents. FTP checks destination names before renaming;
+another program creating the exact same destination between that check and the rename could
+have its file replaced.
 
 **Q: What are the junk files, and is cleaning them safe?**
 A Mac writes a hidden `._` file beside every file it copies to an exFAT drive (each one takes a

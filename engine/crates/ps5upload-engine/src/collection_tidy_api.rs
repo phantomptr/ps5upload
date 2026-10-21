@@ -371,56 +371,27 @@ impl Trees {
     }
 }
 
-/// Every collection folder holding packages, across the roots, with what could not be
-/// reached. The index already knows which top-level folders hold packages; walking the roots
-/// to find out reads every file of every game folder (measured: 189,000 files, a minute on an
-/// external drive) to learn nothing new.
+/// The configured roots are independent organization boundaries. Discover current contents
+/// when planning instead of filtering roots through a possibly stale, package-only index.
 fn all_containers(trees: &mut Trees) -> (Vec<PathBuf>, Vec<String>) {
-    let roots = roots();
-    let mut problems = Vec::new();
-    let Some(lib) = library() else {
-        let mut out = Vec::new();
-        for (r, _) in &roots {
-            match trees.get(r) {
-                Ok(t) => out.extend(organize::containers(t, r)),
-                Err(e) => problems.push(format!("{}: {e}", label(r))),
-            }
-        }
-        return (out, problems);
-    };
-    // A package lying loose in a root has no container: the root itself is its folder.
-    let mut wanted: Vec<PathBuf> = lib
-        .games
-        .values()
-        .flat_map(|g| g.locations.iter())
-        .filter(|l| l.kind == "pkg")
-        .filter_map(|l| {
-            let (root, _) = roots.iter().find(|(_, key)| *key == l.root)?;
-            Some(if l.container.is_empty() {
-                root.clone()
-            } else {
-                root.join(&l.container)
-            })
-        })
-        .collect();
-    wanted.sort();
-    wanted.dedup();
     let mut out = Vec::new();
-    for c in wanted {
-        let here = trees.get(&c).and_then(|t| {
-            t.list(&c)
-                .map(|_| ())
-                .ok_or_else(|| t.trouble().unwrap_or_else(|| "not found".into()))
-        });
-        match here {
-            Ok(()) => out.push(c),
-            Err(e) if connection_of(&c).is_some() => {
-                problems.push(format!("{}: {e}", label(&c)));
-            }
-            // A local folder that is gone is simply not organized (the next scan drops it).
-            Err(_) => {}
+    let mut problems = Vec::new();
+    for (root, _) in roots() {
+        if out.contains(&root) {
+            continue;
+        }
+        match trees.get(&root) {
+            Ok(tree) if tree.list(&root).is_some() => out.push(root),
+            Ok(tree) => problems.push(format!(
+                "{}: {}",
+                label(&root),
+                tree.trouble()
+                    .unwrap_or_else(|| "directory could not be listed".into())
+            )),
+            Err(e) => problems.push(format!("{}: {e}", label(&root))),
         }
     }
+    out.sort();
     (out, problems)
 }
 
@@ -463,12 +434,9 @@ pub async fn post_organize_plan() -> Response {
         return err(
             StatusCode::BAD_REQUEST,
             if problems.is_empty() {
-                "no folder in the collection holds packages".to_string()
+                "no collection root could be read".to_string()
             } else {
-                format!(
-                    "no folder with packages could be read: {}",
-                    problems.join("; ")
-                )
+                format!("no collection root could be read: {}", problems.join("; "))
             },
         );
     }

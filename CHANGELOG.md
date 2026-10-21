@@ -4,6 +4,12 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Organize the whole collection.** Include supported images and extracted game folders as
+  well as packages. File them under each configured collection root, preserve image formats
+  and intact game folders, and report skipped items without claiming they are already organized.
+
 ## 7.1.10
 
 - **Compressed images in Game files.** `.ffpfsc` files now appear, including images beyond the

@@ -332,7 +332,7 @@ export default function CollectionScreen() {
                   label: tr(
                     "collection.org_menu",
                     undefined,
-                    "Organize packages…",
+                    "Organize collection\u2026",
                   ),
                   disabled: scanning,
                   onSelect: () => setOrganizeOpen(true),
