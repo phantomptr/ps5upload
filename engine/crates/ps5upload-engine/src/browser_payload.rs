@@ -16,7 +16,7 @@ struct Target {
     port: u16,
 }
 
-pub fn router() -> Router {
+pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
     Router::new().route(
         "/api/payload/send",
         post(send).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
