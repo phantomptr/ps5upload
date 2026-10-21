@@ -760,7 +760,7 @@ export async function browserInvoke<T>(
       return postJson<T>("/api/fpkg/inspect", {
         source: args["source"],
         output_dir: args["outputDir"],
-      });
+      }, true);
     }
     case "fpkg_build": {
       return postJson<T>("/api/fpkg/build", {
@@ -772,7 +772,7 @@ export async function browserInvoke<T>(
         firmware: args["firmware"],
         language: args["language"],
         full_verify: args["fullVerify"] ?? false,
-      });
+      }, true);
     }
     case "ps5_elfldr_health": {
       return getJson<T>(`/api/ps5/elfldr/health?host=${encodeURIComponent(String(args["host"] ?? ""))}`);
@@ -784,7 +784,7 @@ export async function browserInvoke<T>(
       return postJson<T>("/api/fpkg/estimate", {
         source: args["source"],
         output_dir: args["outputDir"],
-      });
+      }, true);
     }
     case "fpkg_delete": {
       return postJson<T>("/api/fpkg/delete", { path: args["path"] });

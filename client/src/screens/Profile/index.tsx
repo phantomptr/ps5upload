@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CircleUserRound,
   ImageIcon,
@@ -129,6 +129,9 @@ function AvatarSection({
   const tr = useTr();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [imagePath, setImagePath] = useState<string | null>(null);
+  const [browserFileName, setBrowserFileName] = useState<string | null>(null);
+  const [readingImage, setReadingImage] = useState(false);
+  const imageInput = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<SquareMode>("crop");
   const [preview, setPreview] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -182,6 +185,7 @@ function AvatarSection({
     }
     let cancelled = false;
     setPreviewError(null);
+    setPreview(null);
     void (async () => {
       try {
         const url = await profileAvatarPreview(imagePath, mode);
@@ -198,7 +202,40 @@ function AvatarSection({
     };
   }, [imagePath, mode]);
 
+  async function readBrowserImage(file?: File) {
+    if (!file) return; // Cancelling the picker keeps the current selection.
+    setImagePath(null);
+    setBrowserFileName(null);
+    setApplyOk(null);
+    setApplyError(null);
+    if (!file.size || file.size > 8 * 1024 * 1024) {
+      setApplyError(tr("profile.avatar.imageSize", "Choose an image of 8 MiB or smaller."));
+      return;
+    }
+    setReadingImage(true);
+    try {
+      const data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => typeof reader.result === "string"
+          ? resolve(reader.result) : reject(new Error("Could not read image"));
+        reader.onerror = () => reject(reader.error ?? new Error("Could not read image"));
+        reader.onabort = () => reject(new Error("Image selection cancelled"));
+        reader.readAsDataURL(file);
+      });
+      setImagePath(data);
+      setBrowserFileName(file.name);
+    } catch (e) {
+      setApplyError(`${e}`);
+    } finally {
+      setReadingImage(false);
+    }
+  }
+
   async function pickImage() {
+    if (!isTauriEnv()) {
+      imageInput.current?.click();
+      return;
+    }
     setApplyOk(null);
     setApplyError(null);
     // `pickPath`, not plugin-dialog's `open` directly (#278). On Android the
@@ -217,7 +254,10 @@ function AvatarSection({
         },
       ],
     });
-    if (typeof sel === "string") setImagePath(sel);
+    if (typeof sel === "string") {
+      setBrowserFileName(null);
+      setImagePath(sel);
+    }
   }
 
   async function applyAvatar() {
@@ -264,7 +304,7 @@ function AvatarSection({
     }
   }
 
-  const fileName = imagePath ? imagePath.split(/[\\/]/).pop() : null;
+  const fileName = browserFileName ?? (imagePath ? imagePath.split(/[\\/]/).pop() : null);
   const noTarget = !loadingInfo && users.length === 0 && foreground == null;
 
   return (
@@ -315,11 +355,20 @@ function AvatarSection({
         {/* Controls */}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            {isTauriEnv() && (
-              <Button variant="secondary" size="sm" onClick={pickImage}>
-                {tr("profile.avatar.pick", "Choose image…")}
-              </Button>
-            )}
+            <input
+              ref={imageInput}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/bmp,image/gif"
+              hidden
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                void readBrowserImage(file);
+              }}
+            />
+            <Button variant="secondary" size="sm" onClick={pickImage} disabled={applying || readingImage}>
+              {tr("profile.avatar.pick", "Choose image…")}
+            </Button>
             {fileName && (
               <span className="truncate text-xs text-[var(--color-muted)]">
                 {fileName}
@@ -382,7 +431,7 @@ function AvatarSection({
             <Button
               variant="primary"
               size="sm"
-              disabled={!imagePath || targetUid == null || applying}
+              disabled={!imagePath || !preview || !!previewError || targetUid == null || applying || readingImage}
               loading={applying}
               onClick={applyAvatar}
             >

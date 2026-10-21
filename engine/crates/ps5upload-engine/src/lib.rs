@@ -8296,7 +8296,12 @@ async fn profile_avatar_handler(
     let username = req.username;
     let image_path = req.image_path;
     let started = std::time::Instant::now();
-    crate::log_info!("profile_avatar: addr={addr} image={image_path} mode={mode:?} uid={uid}");
+    let image_label = if image_path.starts_with("data:") {
+        "browser upload"
+    } else {
+        &image_path
+    };
+    crate::log_info!("profile_avatar: addr={addr} image={image_label} mode={mode:?} uid={uid}");
     let r = tokio::task::spawn_blocking(move || {
         let bytes = profile_image::read(&image_path)?;
         ps5upload_core::profile::profile_apply_avatar(&addr, uid, username.as_deref(), &bytes, mode)
@@ -10895,14 +10900,19 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             post(profile_local_username_handler),
         )
         .route("/api/profile/activate", post(profile_activate_handler))
-        .route("/api/profile/avatar", post(profile_avatar_handler))
+        .route(
+            "/api/profile/avatar",
+            post(profile_avatar_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)),
+        )
         .route(
             "/api/profile/avatar/current",
             get(profile_avatar_current_handler),
         )
         .route(
             "/api/profile/avatar/preview",
-            post(profile_avatar_preview_handler),
+            post(profile_avatar_preview_handler)
+                .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)),
         )
         .route(
             "/api/transfer/dir-reconcile",

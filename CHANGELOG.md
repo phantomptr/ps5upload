@@ -6,6 +6,11 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+- **Browser avatar upload (#486).** Choose an image from the browser device, preview crop or
+  fit, and confirm applying it to the selected console user. Works with Docker engines too.
+- **Remote conversion inspection (#485).** Allow slow console image reads to complete beyond
+  the ordinary one-minute request deadline, including build preflight and size estimates.
+
 - **Organize the whole collection.** Include supported images and extracted game folders as
   well as packages. File them under each configured collection root, preserve image formats
   and intact game folders, and report skipped items without claiming they are already organized.
