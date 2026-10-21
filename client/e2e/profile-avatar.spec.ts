@@ -37,7 +37,7 @@ test("browser avatar selection previews local bytes and applies only after confi
   await page.getByRole("button", { name: "Fit", exact: true }).click();
   await expect.poll(() => previews.at(-1)?.mode).toBe("fit");
   await page.getByRole("button", { name: "Apply avatar", exact: true }).click();
-  const dialog = page.getByRole("dialog");
+  const dialog = page.getByRole("alertdialog", { name: "Change avatar?" });
   await expect(dialog).toBeVisible();
   expect(applies).toHaveLength(0);
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
