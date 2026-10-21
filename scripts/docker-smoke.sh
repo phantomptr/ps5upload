@@ -12,7 +12,7 @@ image="$1"
 webui="${2:-}"
 name="ps5upload-smoke-$$"
 port="${SMOKE_PORT:-19313}"
-base="http://127.0.0.1:${port}"
+base="http://127.0.0.1:${port}${SMOKE_BASE_PATH:-}"
 
 cleanup() {
   if [ "${ok:-0}" != 1 ]; then docker logs "$name" 2>&1 | tail -40 || true; fi

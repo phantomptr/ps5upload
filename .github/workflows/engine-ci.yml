@@ -173,7 +173,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends samba
           share=$(mktemp -d /tmp/ps5upload-smb-XXXXXX)
           chmod 777 "$share"
-          mkdir -p "$share/w/game/sce_sys" "$share/w/PS5"
+          mkdir -p "$share/w/game/sce_sys" "$share/w/PS5" "$share/run"
           printf 'a' > "$share/w/a"
           printf 'bb' > "$share/w/b"
           printf '{"titleId":"PPSA12385"}' > "$share/w/game/sce_sys/param.json"
@@ -181,6 +181,7 @@ jobs:
           cat > "$share/smb.conf" <<EOF
           [global]
           server role = standalone server
+          pid directory = $share/run
           map to guest = Bad User
           smb ports = 1445
           interfaces = 127.0.0.1
@@ -193,7 +194,15 @@ jobs:
           force user = nobody
           EOF
           sudo smbd -D -s "$share/smb.conf"
-          trap 'sudo pkill -F /run/samba/smbd.pid || true; sudo rm -rf "$share"' EXIT
+          trap 'sudo pkill -F "$share/run/smbd.pid" || true; sudo rm -rf "$share"' EXIT
+          for attempt in $(seq 1 20); do
+            if (echo > /dev/tcp/127.0.0.1/1445) 2>/dev/null; then break; fi
+            sleep 1
+          done
+          if ! (echo > /dev/tcp/127.0.0.1/1445) 2>/dev/null; then
+            sudo cat "$share/samba.log" || true
+            exit 1
+          fi
           cargo test -p ps5upload-engine smb_meets_the_remote_contract -- --ignored --nocapture
 
       - name: cargo nextest

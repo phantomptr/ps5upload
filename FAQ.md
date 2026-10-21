@@ -213,7 +213,7 @@ phone or another computer?" below walks through it from start to finish.
 - **Payloads → Send payload** accepts an ELF from your browser machine and forwards it through
   the engine to the selected console's loader (9021 by default). Sending bytes does not confirm
   execution. Catalog downloads and the other payload formats still use the native app.
-- Desktop-only and hidden in the browser: saving a save backup or downloading files to your
+- Desktop-only and hidden in the browser: archive uploads, saving a save backup or downloading files to your
   computer, and attaching files to a bug
   report. Everything that works on the PS5 itself is the same as on desktop.
 - The docker image can be built using `PS5UPLOAD_BASE_URL` to change the root path of the app.

@@ -407,12 +407,15 @@ jobs:
         with:
           context: .
           file: engine/Dockerfile.webui
+          build-args: PS5UPLOAD_BASE_URL=/ps5/
           platforms: ${{ matrix.platform }}
           load: true
           tags: ps5upload-smoke:local
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ env.PLATFORM_PAIR }}
 
-      - name: Smoke-test the image
+      - name: Smoke-test the prefixed image
+        env:
+          SMOKE_BASE_PATH: /ps5
         run: scripts/docker-smoke.sh ps5upload-smoke:local --webui
 
       - name: Build and push by digest

@@ -27,7 +27,7 @@ import {
   Toggle,
 } from "../../components";
 import { queueItemViewPath } from "../../lib/queueView";
-import { queueRemainingBytes } from "../../lib/queueSize";
+import { queueItemBytes, queueRemainingBytes } from "../../lib/queueSize";
 import { usePackageViewer } from "../../state/packageViewer";
 import { GameIcon } from "../../components/GameIcon";
 import { PlatformBadge } from "../../components/PlatformBadge";
@@ -825,6 +825,9 @@ export function QueueRow({
                 <span className="truncate font-mono">→ {item.resolvedDest}</span>
               </>
             )}
+            {isPending && <span>· {queueItemBytes(item) > 0
+              ? formatBytes(queueItemBytes(item))
+              : tr("queue_size_unknown", "Size not known yet")}</span>}
             {!isInstall && !finished && (
               <span>
                 ·{" "}

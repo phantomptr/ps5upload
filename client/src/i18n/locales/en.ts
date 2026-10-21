@@ -5016,6 +5016,8 @@ library_compressed_hint: "Compressed images need ShadowMount+ to play. To edit, 
   "browserPayload.port": "Loader port",
   "browserPayload.hint": "Send an ELF payload from this device through the server to the selected PS5. Start the ELF loader first. Sending bytes does not confirm that the payload started.",
   "browserPayload.sent": "Sent {n} bytes to the loader.",
+  "browserFile.archive": "Archive uploads require the native app. Choose a plain file or disk image.",
+  "queue_size_unknown": "Size not known yet",
 };
 
 export default en;
