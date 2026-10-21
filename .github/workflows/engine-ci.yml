@@ -173,11 +173,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends samba
           share=$(mktemp -d /tmp/ps5upload-smb-XXXXXX)
           chmod 777 "$share"
-          mkdir -p "$share/w/game/sce_sys" "$share/w/PS5" "$share/run"
-          printf 'a' > "$share/w/a"
-          printf 'bb' > "$share/w/b"
-          printf '{"titleId":"PPSA12385"}' > "$share/w/game/sce_sys/param.json"
-          chmod -R a+rwX "$share"
+          mkdir -p "$share/data/w/game/sce_sys" "$share/data/w/PS5" "$share/run"
+          printf 'a' > "$share/data/w/a"
+          printf 'bb' > "$share/data/w/b"
+          printf '{"titleId":"PPSA12385"}' > "$share/data/w/game/sce_sys/param.json"
+          printf 'SMB contract fixture\n' > "$share/data/readme.txt"
+          chmod -R a+rwX "$share/data"
           cat > "$share/smb.conf" <<EOF
           [global]
           server role = standalone server
@@ -188,7 +189,7 @@ jobs:
           bind interfaces only = yes
           log file = $share/samba.log
           [games]
-          path = $share
+          path = $share/data
           guest ok = yes
           read only = no
           force user = nobody
