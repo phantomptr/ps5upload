@@ -19,8 +19,8 @@ describe("Payloads in the browser build", () => {
     expect(payloadTabsFor(true)).toEqual(["catalog", "send", "ps5"]);
   });
 
-  it("offers only On your PS5, which works through the engine", () => {
-    expect(payloadTabsFor(false)).toEqual(["ps5"]);
+  it("offers browser payload sending alongside On your PS5", () => {
+    expect(payloadTabsFor(false)).toEqual(["send", "ps5"]);
   });
 
   it("opens on On your PS5 once a console is connected", () => {
