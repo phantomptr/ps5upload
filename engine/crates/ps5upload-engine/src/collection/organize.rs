@@ -402,11 +402,13 @@ fn discover(
     (found, skipped)
 }
 
+#[cfg(test)]
 pub fn scan(tree: &dyn Tree, container: &Path) -> Vec<PathBuf> {
     discover(tree, container, &[]).0
 }
 
 /// A configured root is the organization boundary, regardless of its child folder names.
+#[cfg(test)]
 pub fn containers(tree: &dyn Tree, root: &Path) -> Vec<PathBuf> {
     if tree.list(root).is_some() {
         vec![root.to_path_buf()]
