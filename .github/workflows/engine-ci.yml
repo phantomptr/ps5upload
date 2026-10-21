@@ -170,6 +170,39 @@ jobs:
           RUST_BACKTRACE: 1
         run: cargo nextest run --profile ci ${{ matrix.select }}
 
+      - name: Check SMB moves against a writable Samba share
+        if: matrix.part == 'engine'
+        working-directory: engine
+        env:
+          PS5UPLOAD_SAMBA_TEST: 127.0.0.1:1445
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends samba
+          share=$(mktemp -d /tmp/ps5upload-smb-XXXXXX)
+          chmod 777 "$share"
+          mkdir -p "$share/w/game/sce_sys" "$share/w/PS5"
+          printf 'a' > "$share/w/a"
+          printf 'bb' > "$share/w/b"
+          printf '{"titleId":"PPSA12385"}' > "$share/w/game/sce_sys/param.json"
+          chmod -R a+rwX "$share"
+          cat > "$share/smb.conf" <<EOF
+          [global]
+          server role = standalone server
+          map to guest = Bad User
+          smb ports = 1445
+          interfaces = 127.0.0.1
+          bind interfaces only = yes
+          log file = $share/samba.log
+          [games]
+          path = $share
+          guest ok = yes
+          read only = no
+          force user = nobody
+          EOF
+          sudo smbd -D -s "$share/smb.conf"
+          trap 'sudo pkill -F /run/samba/smbd.pid || true; sudo rm -rf "$share"' EXIT
+          cargo test -p ps5upload-engine smb_meets_the_remote_contract -- --ignored --nocapture
+
       - name: cargo test --doc
         working-directory: engine
         timeout-minutes: 10

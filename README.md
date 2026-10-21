@@ -301,8 +301,9 @@ with **Settings → Engine URL**.
 - An upload keeps running when you close the tab.
 - **No password.** Anyone allowed can read, write and delete on your PS5. Keep it on a trusted
   LAN, never on the internet.
-- You may build the docker container with the `PS5UPLOAD_BASE_URL` to host the webui through a
-  reverse proxy. This cannot be changed on runtime.
+- For a dedicated reverse-proxy hostname, leave `PS5UPLOAD_BASE_URL` unset. It is a build-time
+  **path prefix**, not a full URL. See [reverse-proxy setup](docs/reverse-proxy.md) for nginx,
+  proxy authentication, Docker bridge networking, and sub-path hosting.
 - **Scripting it:** [ps5upctl](https://github.com/yuanzhengze/ps5upctl) is a community
   command-line client for the engine API (unofficial; the API can change between versions).
 

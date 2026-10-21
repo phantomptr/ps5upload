@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn a_denied_rename_is_not_a_failed_sign_in() {
         let error = smb2::Error::Protocol {
-            status: smb2::types::NtStatus::ACCESS_DENIED,
+            status: smb2::types::status::NtStatus::ACCESS_DENIED,
             command: smb2::types::Command::SetInfo,
         };
         let mapped = map_err("nas", error);
@@ -339,6 +339,27 @@ mod tests {
         // with STATUS_NOT_SUPPORTED, so seed the files inside the container.
         if fs.stat("/w/a").await.is_ok() {
             crate::remote::contract::check_writes(&fs, "/w").await;
+            // An extracted game is a populated directory, not an empty folder.
+            if fs.stat("/w/game/sce_sys/param.json").await.is_ok() {
+                let size = fs.stat("/w/game/sce_sys/param.json").await.unwrap().size;
+                fs.rename("/w/game", "/w/PS5/game")
+                    .await
+                    .expect("move an intact game directory");
+                assert_eq!(
+                    fs.stat("/w/PS5/game/sce_sys/param.json")
+                        .await
+                        .unwrap()
+                        .size,
+                    size
+                );
+                assert!(matches!(
+                    fs.stat("/w/game").await,
+                    Err(RemoteError::NotFound(_))
+                ));
+                fs.rename("/w/PS5/game", "/w/game")
+                    .await
+                    .expect("undo intact game move");
+            }
         }
     }
 }
