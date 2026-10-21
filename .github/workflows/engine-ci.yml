@@ -168,9 +168,12 @@ jobs:
         working-directory: engine
         env:
           PS5UPLOAD_SAMBA_TEST: 127.0.0.1:1445
+          PS5UPLOAD_SAMBA_USER: runner
+          PS5UPLOAD_SAMBA_PASS: ci-smb-fixture-only
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends samba
+          printf 'ci-smb-fixture-only\nci-smb-fixture-only\n' | sudo smbpasswd -a -s runner
           share=$(mktemp -d /tmp/ps5upload-smb-XXXXXX)
           chmod 777 "$share"
           mkdir -p "$share/data/w/game/sce_sys" "$share/data/w/PS5" "$share/run"
@@ -183,7 +186,6 @@ jobs:
           [global]
           server role = standalone server
           pid directory = $share/run
-          map to guest = Bad User
           smb ports = 1445
           interfaces = 127.0.0.1
           bind interfaces only = yes
@@ -191,9 +193,10 @@ jobs:
           log level = 10
           [games]
           path = $share/data
-          guest ok = yes
+          valid users = runner
+          guest ok = no
           read only = no
-          force user = nobody
+          force user = runner
           EOF
           sudo smbd -D -s "$share/smb.conf"
           trap 'sudo pkill -F "$share/run/smbd.pid" || true; sudo rm -rf "$share"' EXIT
