@@ -5272,3 +5272,31 @@ mod host_net_tests {
         assert!(allow_firewall_decision(&r).is_err());
     }
 }
+
+#[cfg(test)]
+mod browser_file_intake_tests {
+    use super::*;
+    #[tokio::test]
+    async fn a_browser_can_stage_a_non_package_file_and_remove_only_its_upload() {
+        let state = Arc::new(PkgInstallState::restored());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server =
+            tokio::spawn(async move { axum::serve(listener, router(state)).await.unwrap() });
+        let result = tokio::task::spawn_blocking(move || {
+            let body = "--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"../notes.txt\"\r\nContent-Type: application/octet-stream\r\n\r\nhello from browser\r\n--boundary--\r\n";
+            let mut response = ureq::post(format!("http://{address}/api/files/upload"))
+                .header("content-type", "multipart/form-data; boundary=boundary")
+                .send(body.as_bytes()).expect("stage browser file");
+            let result: serde_json::Value = serde_json::from_str(&response.body_mut().read_to_string().unwrap()).unwrap();
+            assert_eq!(result["filename"], "notes.txt");
+            let path = result["path"].as_str().unwrap();
+            assert_eq!(std::fs::read(path).unwrap(), b"hello from browser");
+            let id = result["upload_id"].as_str().unwrap();
+            ureq::delete(format!("http://{address}/api/files/upload/{id}")).call().unwrap();
+            assert!(!std::path::Path::new(path).exists());
+        }).await;
+        server.abort();
+        result.unwrap();
+    }
+}

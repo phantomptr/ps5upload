@@ -293,6 +293,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_denied_rename_is_not_a_failed_sign_in() {
+        let error = smb2::Error::Protocol {
+            status: smb2::types::NtStatus::ACCESS_DENIED,
+            command: smb2::types::Command::SetInfo,
+        };
+        let mapped = map_err("nas", error);
+        assert!(!matches!(mapped, RemoteError::Auth(_)));
+        assert!(mapped.to_string().contains("permission"));
+    }
+
+    #[test]
     fn server_addresses_from_what_people_type() {
         assert_eq!(server_addr("nas", 445), "nas:445");
         assert_eq!(server_addr("smb://nas/games", 445), "nas:445");

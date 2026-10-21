@@ -12968,13 +12968,29 @@ mod avatar_crop_position_tests {
         use base64::Engine as _;
         // A tiny red/green/blue portrait PNG, supplied by the browser.
         let png = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAADCAIAAADdv/LVAAAADklEQVR4nGP4zwAEEAIAEfoC/qsosSMAAAAASUVORK5CYII=").unwrap();
-        let source = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png));
-        let render = |y| serde_json::from_value::<ProfilePreviewReq>(serde_json::json!({"image_path":source,"mode":"crop","crop":{"x":50,"y":y}})).unwrap();
-        let top = profile_avatar_preview_handler(Json(render(0))).await.into_response();
-        let center = profile_avatar_preview_handler(Json(render(50))).await.into_response();
+        let source = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png)
+        );
+        let render = |y| {
+            serde_json::from_value::<ProfilePreviewReq>(
+                serde_json::json!({"image_path":source,"mode":"crop","crop":{"x":50,"y":y}}),
+            )
+            .unwrap()
+        };
+        let top = profile_avatar_preview_handler(Json(render(0)))
+            .await
+            .into_response();
+        let center = profile_avatar_preview_handler(Json(render(50)))
+            .await
+            .into_response();
         assert_eq!(top.status(), StatusCode::OK);
-        let top = axum::body::to_bytes(top.into_body(), usize::MAX).await.unwrap();
-        let center = axum::body::to_bytes(center.into_body(), usize::MAX).await.unwrap();
+        let top = axum::body::to_bytes(top.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let center = axum::body::to_bytes(center.into_body(), usize::MAX)
+            .await
+            .unwrap();
         assert_ne!(top, center, "crop position must change the preview");
     }
 }
