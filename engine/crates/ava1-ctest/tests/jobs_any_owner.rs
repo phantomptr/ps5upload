@@ -246,7 +246,9 @@ async fn table_holds_32_jobs_and_seen_console_jobs_make_room() {
     let mut mine = Vec::new();
     for n in 0..32u8 {
         let id = [0x40 + n; 16];
-        // At most eight operations run at once: a quick one is retried while the others end.
+        // An immediately finished job.run reply already delivers its result and makes
+        // its slot evictable. Hold this operation until the initial reply is running.
+        t.srv.knob("op_hold", 1);
         let mut st = gen::ERR_BUSY as i32;
         for _ in 0..200 {
             st = if n % 2 == 0 {
@@ -259,7 +261,9 @@ async fn table_holds_32_jobs_and_seen_console_jobs_make_room() {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        t.srv.knob("op_hold", 0);
         assert_eq!(st, gen::STATUS_OK as i32, "job {n}");
+        all_finished(&[id]).await;
         if n % 2 == 0 {
             pc.push(id)
         } else {

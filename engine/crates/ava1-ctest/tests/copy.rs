@@ -175,7 +175,8 @@ async fn reaper_keeps_a_running_copy_and_ages_a_finished_one() {
         2000,
         3000,
     );
-    srv.knob("park_ms", 250);
+    // Keep the terminal result until this test has observed it, even on a busy runner.
+    srv.knob("park_ms", 30_000);
     let s = connect(&srv.addr(), me, mine, "rust", calm())
         .await
         .unwrap();
@@ -191,6 +192,7 @@ async fn reaper_keeps_a_running_copy_and_ages_a_finished_one() {
         "a running copy was reaped or finished too soon"
     );
     assert_eq!(wait_finished(&s, id).await.state, Some(1));
+    srv.knob("park_ms", 250);
     let reference = JobRef { job_id: id }.to_bytes().unwrap();
     for _ in 0..40 {
         let reply = s.rpc(gen::METHOD_JOB_STATUS, &reference).await.unwrap();

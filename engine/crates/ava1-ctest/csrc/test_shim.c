@@ -2203,12 +2203,19 @@ int ava1_test_apply_reserve(size_t n, int take) {
 
 /* ---- P3 Task 5: job.run operations wrapped around stub legacy handlers -------------------- */
 
+/* Hold operations until their initial running reply has been read by a test. */
+static int g_stub_op_hold;
+
 /* A slow stub: `loops` rounds of 20 ms, each reporting one unit of progress and honouring
  * job.cancel the way backup.c does (mgmt_op_cancelled / mgmt_op_progress). */
 static int stub_slow(const char *b, const char *cancel_token, int cancel_frame_type) {
     uint32_t i, loops = 0;
     const char *p = strstr(b, "\"loops\":");
     if (p) loops = (uint32_t)strtoul(p + 8, NULL, 10);
+    while (__atomic_load_n(&g_stub_op_hold, __ATOMIC_SEQ_CST)) {
+        if (mgmt_op_cancelled()) return stub_send_frame((uint16_t)cancel_frame_type, cancel_token, strlen(cancel_token));
+        usleep(1000);
+    }
     mgmt_op_total(loops, (uint64_t)loops * 100u);
     for (i = 0; i < loops; i++) {
         if (mgmt_op_cancelled()) return stub_send_frame((uint16_t)cancel_frame_type, cancel_token, strlen(cancel_token));
@@ -2356,6 +2363,7 @@ int ava1_test_server_start_data(const uint8_t secret[32], const char *peers_path
     __atomic_store_n(&ava1_copy_test_delete_delay_ms, 0, __ATOMIC_SEQ_CST);
     __atomic_store_n(&ava1_copy_test_delete_active, 0, __ATOMIC_SEQ_CST);
     if (ava1_data_start(&dc) != 0) return -100;
+    __atomic_store_n(&g_stub_op_hold, 0, __ATOMIC_SEQ_CST);
     install_ops();
     ava1_apply_fault = t_fault;
     memset(&cfg, 0, sizeof cfg);
@@ -2632,6 +2640,7 @@ int ava1_test_data_knob(const char *name, uint32_t v) {
     else if (!strcmp(name, "reserve_fail")) ava1_data_test_reserve_fail = (int)v;
     else if (!strcmp(name, "lane_alloc_fail")) ava1_data_test_lane_alloc_fail = (int)v;
     else if (!strcmp(name, "fb_force")) ava1_data_test_fb_force = (int)v;
+    else if (!strcmp(name, "op_hold")) __atomic_store_n(&g_stub_op_hold, (int)v, __ATOMIC_SEQ_CST);
     else if (!strcmp(name, "park_ms")) __atomic_store_n(&c->park_ms, v, __ATOMIC_SEQ_CST);
     else if (!strcmp(name, "deny_write")) __atomic_store_n(&g_deny_write, (int)v, __ATOMIC_SEQ_CST);
     else if (!strcmp(name, "budget_free")) {

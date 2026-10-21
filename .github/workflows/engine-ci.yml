@@ -172,7 +172,7 @@ jobs:
           PS5UPLOAD_SAMBA_PASS: ci-smb-fixture-only
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends samba
+          sudo apt-get install -y --no-install-recommends samba samba-vfs-modules attr
           printf 'ci-smb-fixture-only\nci-smb-fixture-only\n' | sudo smbpasswd -a -s runner
           share=$(mktemp -d /tmp/ps5upload-smb-XXXXXX)
           chmod 777 "$share"
@@ -182,6 +182,7 @@ jobs:
           printf '{"titleId":"PPSA12385"}' > "$share/data/w/game/sce_sys/param.json"
           printf 'SMB contract fixture\n' > "$share/data/readme.txt"
           chmod -R a+rwX "$share/data"
+          setfattr -n 'user.DosStream.apple.provenance:$DATA' -v 'fixture' "$share/data/w/game"
           cat > "$share/smb.conf" <<EOF
           [global]
           server role = standalone server
@@ -190,7 +191,10 @@ jobs:
           interfaces = 127.0.0.1
           bind interfaces only = yes
           log file = $share/samba.log
-          log level = 10
+          log level = 3
+          vfs objects = catia fruit streams_xattr
+          fruit:metadata = stream
+          fruit:posix_rename = yes
           [games]
           path = $share/data
           valid users = runner
@@ -210,7 +214,7 @@ jobs:
           fi
           if ! cargo test -p ps5upload-engine smb_meets_the_remote_contract -- --ignored --nocapture; then
             sudo find "$share/data" -maxdepth 3 -printf '%M %u %g %p\n'
-            sudo tail -n 1200 "$share/samba.log"
+            sudo tail -n 250 "$share/samba.log"
             exit 1
           fi
 

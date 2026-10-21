@@ -50,6 +50,6 @@ test("browser files stage to the server and enter review without starting a tran
   await picker.click();
   await (await chooser).setFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("hello") });
   await expect.poll(() => staged).toBe(1);
-  await expect(page.getByText("notes.txt", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("/tmp/test-upload/notes.txt", { exact: true }).first()).toBeVisible();
   expect(transfers).toBe(0);
 });

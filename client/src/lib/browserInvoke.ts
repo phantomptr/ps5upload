@@ -1494,6 +1494,7 @@ export async function browserInvoke<T>(
       return postJson<T>("/api/profile/avatar/preview", {
         image_path: args["req"]?.image_path,
         mode: args["req"]?.mode,
+        crop: args["req"]?.crop,
       });
 
     case "profile_apply_avatar":
@@ -1503,6 +1504,7 @@ export async function browserInvoke<T>(
           addr: args["req"]?.addr,
           image_path: args["req"]?.image_path,
           mode: args["req"]?.mode,
+          crop: args["req"]?.crop,
           uid: args["req"]?.uid,
           username: args["req"]?.username,
         },
