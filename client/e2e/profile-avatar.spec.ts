@@ -36,6 +36,10 @@ test("browser avatar selection previews local bytes and applies only after confi
   expect(previews.at(-1)?.image_path).toBe(`data:image/png;base64,${png}`);
   await page.getByRole("button", { name: "Fit", exact: true }).click();
   await expect.poll(() => previews.at(-1)?.mode).toBe("fit");
+  await page.getByRole("button", { name: "Crop", exact: true }).click();
+  const vertical = page.getByRole("slider", { name: "Vertical position" });
+  await vertical.fill("0");
+  await expect.poll(() => previews.at(-1)?.crop).toEqual({ x: 50, y: 0 });
   await page.getByRole("button", { name: "Apply avatar", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "Change avatar?" });
   await expect(dialog).toBeVisible();
@@ -46,7 +50,7 @@ test("browser avatar selection previews local bytes and applies only after confi
   await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
   await expect.poll(() => applies.length).toBe(1);
   await expect(page.getByText("Avatar applied (11 files written).", { exact: true })).toBeVisible();
-  expect(applies[0]).toMatchObject({ image_path: `data:image/png;base64,${png}`, mode: "fit", uid: 123, username: "Tester" });
+  expect(applies[0]).toMatchObject({ image_path: `data:image/png;base64,${png}`, mode: "crop", crop: { x: 50, y: 0 }, uid: 123, username: "Tester" });
   // A failed preview must not allow applying a stale successful selection.
   rejectPreview = true;
   const input = page.locator('input[type="file"]');
