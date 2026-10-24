@@ -7,10 +7,10 @@ export function CaptureSortSelect({ value, onChange }: {
 }) {
   const tr = useTr();
   return (
-    <label className="flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
-      <span>{tr("collection.sort", undefined, "Sort")}</span>
+    <label className="flex min-w-0 max-w-full items-center gap-1.5 text-xs text-[var(--color-muted)]">
+      <span className="shrink-0">{tr("collection.sort", undefined, "Sort")}</span>
       <select
-        className="select w-auto! text-xs"
+        className="select w-auto! min-w-0 max-w-full text-xs"
         value={value}
         onChange={(e) => onChange(e.target.value as CaptureSort)}
         aria-label={tr("collection.sort", undefined, "Sort")}

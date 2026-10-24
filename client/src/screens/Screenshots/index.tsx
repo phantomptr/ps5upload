@@ -604,46 +604,13 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
         right={
           <>
             <CaptureSortSelect value={sort} onChange={setSort} />
-            {selected.size > 0 && (
-              <Button
-                variant="primary"
-                size="sm"
-                leftIcon={
-                  bulkBusy ? (
-                    <Spinner size={12} tone="inherit" />
-                  ) : (
-                    <Download size={12} />
-                  )
-                }
-                onClick={downloadSelected}
-                disabled={bulkBusy}
-              >
-                {tr(
-                  "screenshots_bulk_download",
-                  { n: selected.size },
-                  `Download ${selected.size}`,
-                )}
-              </Button>
-            )}
-            {selected.size > 0 && (
-              <Button
-                variant="danger"
-                size="sm"
-                loading={deleting}
-                leftIcon={<Trash2 size={12} />}
-                onClick={() => void deleteSelected()}
-                disabled={deleting || bulkBusy}
-              >
-                {tr("captures_bulk_delete", { n: selected.size }, `Delete ${selected.size}`)}
-              </Button>
-            )}
             {isTauriEnv() && !isMobile() && (
-              <label className="flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
-                <span>{tr("screenshots_png_mode", undefined, "Convert as")}</span>
+              <label className="flex min-w-0 max-w-full items-center gap-1.5 text-xs text-[var(--color-muted)]">
+                <span className="shrink-0">{tr("screenshots_png_mode", undefined, "Convert as")}</span>
                 <select
                   value={pngMode}
                   onChange={(e) => choosePngMode(e.target.value as ScreenshotPngMode)}
-                  className="select w-auto! text-xs"
+                  className="select w-auto! min-w-0 max-w-full text-xs"
                   aria-label={tr("screenshots_png_mode", undefined, "Convert as")}
                   title={tr(
                     "screenshots_png_mode_hint_v2",
@@ -658,15 +625,50 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
                 </select>
               </label>
             )}
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<RefreshCw size={12} />}
-              onClick={refresh}
-              disabled={loading || !host?.trim() || payloadStatus !== "up"}
-            >
-              {tr("refresh", undefined, "Refresh")}
-            </Button>
+            <div className="flex max-w-full flex-wrap items-center gap-2">
+              {selected.size > 0 && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  leftIcon={
+                    bulkBusy ? (
+                      <Spinner size={12} tone="inherit" />
+                    ) : (
+                      <Download size={12} />
+                    )
+                  }
+                  onClick={downloadSelected}
+                  disabled={bulkBusy}
+                >
+                  {tr(
+                    "screenshots_bulk_download",
+                    { n: selected.size },
+                    `Download ${selected.size}`,
+                  )}
+                </Button>
+              )}
+              {selected.size > 0 && (
+                <Button
+                  variant="danger"
+                  size="sm"
+                  loading={deleting}
+                  leftIcon={<Trash2 size={12} />}
+                  onClick={() => void deleteSelected()}
+                  disabled={deleting || bulkBusy}
+                >
+                  {tr("captures_bulk_delete", { n: selected.size }, `Delete ${selected.size}`)}
+                </Button>
+              )}
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<RefreshCw size={12} />}
+                onClick={refresh}
+                disabled={loading || !host?.trim() || payloadStatus !== "up"}
+              >
+                {tr("refresh", undefined, "Refresh")}
+              </Button>
+            </div>
           </>
         }
       />

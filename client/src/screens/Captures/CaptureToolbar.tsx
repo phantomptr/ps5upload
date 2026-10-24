@@ -20,8 +20,8 @@ export function CaptureToolbar({
   right?: ReactNode;
 }) {
   return (
-    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-      <p className="flex min-w-0 max-w-3xl items-start gap-2.5 text-sm leading-relaxed text-[var(--color-muted)]">
+    <div className="mb-4 flex min-w-0 flex-wrap items-start justify-between gap-3">
+      <p className="flex min-w-[min(100%,20rem)] max-w-3xl flex-[1_1_20rem] items-start gap-2.5 text-sm leading-relaxed text-[var(--color-muted)]">
         {count !== undefined && (
           <span className="mt-0.5 shrink-0 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2.5 py-0.5 text-xs font-semibold tabular-nums text-[var(--color-text)] shadow-[var(--edge-highlight)]">
             {count}
@@ -30,7 +30,7 @@ export function CaptureToolbar({
         {loading && <Spinner size={14} tone="accent" className="mt-1 shrink-0" />}
         <span className="min-w-0 flex-1">{description}</span>
       </p>
-      {right && <div className="flex shrink-0 flex-wrap items-center gap-2">{right}</div>}
+      {right && <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">{right}</div>}
     </div>
   );
 }
