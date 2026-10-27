@@ -314,6 +314,132 @@ fn a_package_becomes_an_image_and_another_package() {
     }
 }
 
+/// A package made elsewhere can contain OS junk that our folder scanner would omit.
+/// Keep the raw afid layout while hiding that junk, including directories it leaves empty.
+#[test]
+fn packages_with_os_junk_convert_with_the_same_visible_tree() {
+    use ps5upload_fpkg::stream::{self, KrakenSpool, Progress, StreamRequest};
+    use std::sync::atomic::AtomicBool;
+
+    let data = [
+        ("eboot.bin", pattern(5000, 1)),
+        ("data/big.bin", pattern(300_000, 2)),
+        ("only-junk/.DS_Store", pattern(127, 3)),
+        ("System Volume Information/tracking.bin", pattern(4000, 4)),
+        ("data/.Trashes/old.bin", pattern(6000, 5)),
+        ("._eboot.bin", pattern(7000, 6)),
+        ("data/zero.bin", Vec::new()),
+    ];
+    let files: Vec<_> = data
+        .iter()
+        .map(|(path, bytes)| source::SourceFile {
+            path: (*path).into(),
+            size: bytes.len() as u64,
+        })
+        .collect();
+    let empty: Vec<String> = [
+        "System Volume Information/K4W-21-25",
+        "data/nested/sYsTeM vOlUmE iNfOrMaTiOn/empty",
+        "fakelib",
+        "sce_sys/trophy2",
+        "sce_sys/uds",
+    ]
+    .map(String::from)
+    .into();
+    let want_empty = [
+        "data/nested",
+        "fakelib",
+        "only-junk",
+        "sce_sys/trophy2",
+        "sce_sys/uds",
+    ];
+
+    for kraken in [false, true] {
+        let out = TempDir::new(&format!("junk-{kraken}"));
+        let pkg = out.path().join("junk.pkg");
+        // Bypass FolderSource's filter so the fixture really stores the ignored entries.
+        let plan = plan::build_tree(&files, &empty, kraken).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&pkg)
+            .unwrap();
+        let request = StreamRequest {
+            plan: &plan,
+            passcode: DEFAULT_PASSCODE,
+            seed: ps5upload_fpkg::PLAINTEXT_MARKER,
+            image_mode: ImageMode::PlaintextNoAuth,
+            time: (1_700_000_000, 0),
+            content_id: CONTENT_ID,
+            content_version: 0x0100_0100,
+            param_json: Vec::new(),
+            icon_png: Vec::new(),
+            icon_dds: Vec::new(),
+            extras: Vec::new(),
+            playgo_chunks: 1,
+            kraken_spool: kraken.then_some(KrakenSpool::InPlace),
+            level: Level::Fast,
+            metadata_codec: MetaCodec::Stored,
+        };
+        stream::write_package(
+            &mut file,
+            &request,
+            &mut |path, offset, len| {
+                let bytes = &data.iter().find(|(p, _)| *p == path).unwrap().1;
+                let start = (offset as usize).min(bytes.len());
+                let end = start.saturating_add(len).min(bytes.len());
+                Ok(bytes[start..end].to_vec())
+            },
+            &mut Progress {
+                phase: &mut |_| {},
+                bytes: &mut |_, _| {},
+                stage: &mut |_| {},
+            },
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        drop(file);
+
+        let mut tree = source::open(&pkg).unwrap();
+        assert_eq!(tree.empty_dirs(), want_empty, "kraken={kraken}");
+        let names: Vec<_> = tree.files().iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "data/big.bin",
+                "data/zero.bin",
+                "eboot.bin",
+                "sce_sys/keystone"
+            ],
+            "kraken={kraken}"
+        );
+        // Ignored files still occupy physical space in a flat package. Check the bytes
+        // after them, not just the filtered names, so their afids cannot shift offsets.
+        for (path, bytes) in data.iter().take(2).chain(data.iter().skip(6)) {
+            assert_eq!(&tree.read(path).unwrap(), bytes, "{path} kraken={kraken}");
+        }
+        let image = out.path().join("game.exfat");
+        ps5upload_fpkg::exfat_write::build_exfat(
+            tree.as_mut(),
+            &image,
+            None,
+            &mut |_, _| {},
+            &|| false,
+        )
+        .unwrap();
+        let mut converted = source::open(&image).unwrap();
+        assert_eq!(converted.files(), tree.files(), "kraken={kraken}");
+        assert_eq!(converted.empty_dirs(), tree.empty_dirs(), "kraken={kraken}");
+        for f in tree.files().to_vec() {
+            assert_eq!(
+                converted.read(&f.path).unwrap(),
+                tree.read(&f.path).unwrap()
+            );
+        }
+    }
+}
+
 /// A large file streams: reading all of it in pieces holds a few blocks, never the file.
 #[test]
 fn a_large_file_streams_in_bounded_memory() {

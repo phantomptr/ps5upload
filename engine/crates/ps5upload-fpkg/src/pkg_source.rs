@@ -34,7 +34,7 @@ use crate::crypto::{derive_ekpfs, derive_xts_keys, sha3};
 use crate::inner::{inode_offset, inode_table_len, MetaCodec, INODE_LEN};
 use crate::kraken_image::{self, DescribedBlock};
 use crate::outer::{self, Dinode, OuterImage};
-use crate::source::{SourceFile, SourceTree};
+use crate::source::{is_junk, SourceFile, SourceTree};
 use crate::xts::{Xts, SIGNED_SECTOR_FLAG};
 use crate::{fih, le16, le32, le64, plan, Error, PkgFile, ReadSeek, Result, BLOCK};
 
@@ -748,6 +748,11 @@ impl PkgSource {
             .collect();
         paired.sort_by(|a, b| a.0.path.cmp(&b.0.path));
         for (f, loc) in paired {
+            // Map every afid before filtering: ignored files still occupy space in a flat
+            // package. The visible tree follows the folder and image readers' junk rules.
+            if f.path.split('/').any(is_junk) {
+                continue;
+            }
             self.files.push(f);
             self.locations.push(loc);
         }
@@ -978,11 +983,11 @@ impl Walk<'_> {
             let path = format!("{prefix}{name}");
             match kind {
                 DIRENT_DIR => {
-                    children += 1;
+                    children += usize::from(!is_junk(&name));
                     self.dir(child, &format!("{path}/"), depth + 1, seen, files, empty)?;
                 }
                 DIRENT_FILE => {
-                    children += 1;
+                    children += usize::from(!is_junk(&name));
                     let f = self.inode(child)?;
                     if f.mode & 0x8000 == 0 {
                         return Err(bad(format!("{path} is listed as a file but is not one")));
@@ -1001,7 +1006,7 @@ impl Walk<'_> {
                 }
             }
         }
-        if children == 0 && !prefix.is_empty() {
+        if children == 0 && !prefix.is_empty() && !prefix.split('/').any(is_junk) {
             empty.push(prefix.trim_end_matches('/').to_string());
         }
         Ok(())

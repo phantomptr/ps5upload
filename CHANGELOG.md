@@ -4,6 +4,13 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Packages with Windows bookkeeping folders convert to game images again.** An empty
+  `System Volume Information` folder made the read-back check fail after compression. Package
+  sources now omit the same OS junk as game folders and image readers, while keeping real
+  empty game folders and the original package's file offsets.
+
 ## 8.5.0
 
 - **A shorter sidebar.** Screens that belong together now live together; every old link still
