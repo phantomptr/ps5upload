@@ -409,6 +409,28 @@ const CATALOGUE: &[CatalogueEntry] = &[
         homepage: "https://github.com/itsPLK/ps5-webkit-autoloader",
     },
     CatalogueEntry {
+        // Desstann's PKG Folderizer installer — one-shot ELF that downloads
+        // the latest Folderizer build from desstannsoftware.com and unpacks
+        // it into /data/homebrew/PPSA99180 for ShadowMount+. Same pattern as
+        // the WebKit Autoloader installer: send it, it installs, it exits.
+        // The release ships a single .elf asset; the hint matches the fixed
+        // filename prefix across versions.
+        id: "pkg-folderizer-installer",
+        display_name: "PKG Folderizer installer (Desstann)",
+        role: "Installs PKG Folderizer onto the console",
+        description: "Downloads the latest PKG Folderizer from desstannsoftware.com and installs it into /data/homebrew/PPSA99180 so ShadowMount+ can show it on the home screen. One-shot installer ELF: send it, it installs, it exits. Needs internet on the console, kstuff, and an ELF loader; run ShadowMount+ afterwards if it is not already up.",
+        repo_host: "github.com",
+        repo_owner: "desstannoz",
+        repo_name: "pkg-folderizer-installer",
+        asset_name_hint: "pkg-folderizer-installer",
+        on_console_marker_path: Some("/data/homebrew/PPSA99180/sce_sys/param.json"),
+        process_name_hint: None,
+        ports: &[],
+        autoload_priority: 9,
+        autoload_delay_ms: 500,
+        homepage: "https://desstannsoftware.com/#pkg-folderizer",
+    },
+    CatalogueEntry {
         // itsPLK's Payload Manager: keeps payloads on the console
         // (/data/pldmgr), launches them from its own web page on :8084 and
         // at boot. ps5upload's Payloads → Payload Manager tab talks to it,
