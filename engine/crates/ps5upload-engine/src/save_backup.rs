@@ -768,6 +768,23 @@ pub fn is_ps4_save_path(save_path: &str, title_id: &str) -> bool {
     )
 }
 
+/// `src` as a real path inside the save-backup folder `root` (where the wizard copies the PS4's
+/// files), or why not. The engine's API has no sign-in, so a request must not be able to name any
+/// other folder on this computer and have its files copied onto the PS5. Both are resolved
+/// first (`..`, symlinks), so neither can step outside.
+pub fn src_in_backups(root: &str, src: &str) -> Result<PathBuf, String> {
+    let root = std::fs::canonicalize(root.trim())
+        .map_err(|e| format!("the save backup folder {root}: {e}"))?;
+    let real = std::fs::canonicalize(src.trim()).map_err(|e| format!("{src}: {e}"))?;
+    if real == root || !real.starts_with(&root) {
+        return Err(format!(
+            "{src} is not inside the save backup folder ({})",
+            root.display()
+        ));
+    }
+    Ok(real)
+}
+
 /// Put a PS4 save (the files a PS4 keeps for `title_id`, copied to the local folder `src`) into
 /// the PS5 user's PS4 save folder of that game. Only into a folder the console already made
 /// (the game was played and saved there once), never while the game runs, and only after the
@@ -775,7 +792,7 @@ pub fn is_ps4_save_path(save_path: &str, title_id: &str) -> bool {
 fn import_ps4(
     host: &str,
     title_id: &str,
-    src: &Path,
+    src: &str,
     save_path: &str,
     user_id: u32,
 ) -> Result<(), String> {
@@ -783,6 +800,8 @@ fn import_ps4(
     if s.dir.trim().is_empty() {
         return Err("Choose a folder for save backups first (Saves › Automatic backups): the PS5's own save is kept there before it is replaced.".into());
     }
+    let src = src_in_backups(&s.dir, src)?;
+    let src = src.as_path();
     if !plain(title_id) || !is_ps4_save_path(save_path, title_id) {
         return Err(format!(
             "{save_path} is not a PS4 save folder of {title_id} on the PS5"
@@ -843,7 +862,7 @@ pub async fn post_import_ps4(Json(b): Json<ImportPs4Body>) -> Response {
         import_ps4(
             b.addr.trim(),
             &title,
-            Path::new(b.src_dir.trim()),
+            &b.src_dir,
             b.save_path.trim(),
             b.user_id,
         )
@@ -996,6 +1015,39 @@ pub async fn post_restore(Json(b): Json<RestoreBody>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The import takes only a folder inside the save backup folder (code scanning alert #234:
+    /// the API has no sign-in, so a path from a request must not reach the rest of the disk).
+    #[test]
+    fn a_ps4_import_reads_only_inside_the_backup_folder() {
+        let base = std::env::temp_dir().join(format!("ps5u-src-{}", std::process::id()));
+        let root = base.join("backups");
+        let inside = root
+            .join("PS4 10.0.0.2 1 2026-10-30 1200")
+            .join("CUSA00001");
+        std::fs::create_dir_all(&inside).unwrap();
+        let outside = base.join("elsewhere");
+        std::fs::create_dir_all(&outside).unwrap();
+        let r = root.to_str().unwrap();
+        assert_eq!(
+            src_in_backups(r, inside.to_str().unwrap()).unwrap(),
+            std::fs::canonicalize(&inside).unwrap()
+        );
+        assert!(src_in_backups(r, outside.to_str().unwrap()).is_err());
+        assert!(src_in_backups(r, r).is_err());
+        // Stepping out with .. is caught once resolved.
+        let dotdot = format!("{}/../elsewhere", r);
+        assert!(src_in_backups(r, &dotdot).is_err());
+        // A link inside that points out is caught too.
+        #[cfg(unix)]
+        {
+            let link = root.join("link");
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            assert!(src_in_backups(r, link.to_str().unwrap()).is_err());
+        }
+        assert!(src_in_backups(r, "/no/such/folder").is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn only_a_ps4_save_folder_is_put_on_the_ps5() {

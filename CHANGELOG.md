@@ -47,6 +47,11 @@ What's new in ps5upload, written for humans.
   app's pop-out window could lay its page out bigger than the window, so every picture size
   looked the same and the picture was cut. The pop-out now fits the player to the part of the
   window that shows. If it still happens for you, a bug report now includes the sizes involved.
+- **Security: moving saves from a PS4 reads only from the save backup folder.** The engine took
+  the folder to copy from straight from the request, so something on your network could have
+  pointed it at any folder on this computer and had its files copied onto the PS5 (found by code
+  scanning). It now has to be inside the save backup folder, where the wizard puts the PS4's
+  files, with links and `..` resolved first.
 
 ## 9.9.0
 
