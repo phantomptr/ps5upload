@@ -1824,6 +1824,17 @@ PS5, give it the old account ID in Accounts › Users (activate it), then restor
 backup. Keep the file private. It has no passwords or Remote Play keys. Make one again whenever
 you add a user or change an account.
 
+**Q: Can I move my saves from a PS4 to my PS5?**
+Experimental, from 9.9.0: Saves › **Move saves from a PS4**. Turn on the jailbroken PS4's FTP
+server (GoldHEN's, usually port 2121), enter its address, pick its user and games, and copy them
+to this computer (your save-backups folder; set one in Automatic backups first). Then pick the
+PS5 user: it must have the PS4 account's ID (Accounts sets it; a save follows the account ID),
+and each game must already have a save on that user (start it once on the PS5 and save). Each
+PS5 save is backed up before it is replaced, so you can put it back from the game's save backups.
+The PS4 is never written to, and no users, system files or trophies are changed. PS4-format saves
+on a PS5 have mixed reports: try one game first. Moving trophies is not offered: it needs
+renaming system folders and rebuilding the database, which can leave a user unusable.
+
 **Q: Can I move a save between consoles, profiles or game regions?**
 
 Saves backup and restore copies the existing encrypted save files. It does **not**

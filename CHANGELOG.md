@@ -4,6 +4,23 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 9.9.0
+
+- **Move saves from a PS4 (experimental).** Saves › **Move saves from a PS4** reads a jailbroken
+  PS4's saves over its FTP server (GoldHEN's, usually port 2121), copies the games you pick to
+  this computer, then puts them into a PS5 user's PS4 save folders. It is built to be safe:
+  - The PS4 is only read; nothing is written, renamed or deleted there.
+  - Everything is copied to your save-backups folder first and checked against the PS4's sizes;
+    nothing reaches the PS5 until that is done.
+  - On the PS5 only saves are written, only for the games you pick, and only into a save folder
+    the console already made (start the game once on the PS5 and save, if a game is not ready).
+    No users, system files, folder names or trophies are touched.
+  - Each game's PS5 save is backed up first (marked "Before a PS4 save"), a running game is
+    refused, and anything that does not look like a PS4 save is refused.
+  - A save follows the account ID: the wizard shows the PS5 user's ID and stops if you enter a
+    PS4 account ID that differs.
+  PS4-format saves on a PS5 have mixed reports, so try one game first.
+
 ## 9.8.0
 
 - **Instant replay in Remote Play.** Turn it on in Remote Play › Settings › **Instant replay**

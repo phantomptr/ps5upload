@@ -11070,6 +11070,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             post(save_backup::post_snapshot),
         )
         .route(
+            "/api/save-backup/import-ps4",
+            post(save_backup::post_import_ps4),
+        )
+        .route(
             "/api/shared/{name}",
             get(shared_state::get_doc).put(shared_state::put_doc),
         )

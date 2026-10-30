@@ -105,6 +105,11 @@ export function SaveBackupsList({ host, save }: { host: string; save: SaveEntry 
           <li key={b.file} className="flex items-center justify-between gap-3 text-xs">
             <span className="tabular-nums">
               {stampLabel(b.stamp)} · {formatBytes(b.size)}
+              {b.tag === "beforeps" && (
+                <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]">
+                  {tr("save_backup_before_ps4", undefined, "Before a PS4 save")}
+                </span>
+              )}
               {b.tag === "snap" && (
                 <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]" data-testid="save-backup-snap">
                   {tr("save_backup_snap_label", undefined, "Taken while playing")}

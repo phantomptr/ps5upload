@@ -652,60 +652,208 @@ fn restore(
         // Check and unpack the backup before anything on the console changes.
         unzip_strict(&zip, &tmp, title_id).map_err(|e| format!("unzip: {e:#}"))?;
         restore_prepare(&tmp.join(title_id)).map_err(|e| format!("prepare: {e:#}"))?;
-        // Keep what is there now, so the restore can be undone.
-        if !s.dir.trim().is_empty() {
-            let current = SaveEntry {
-                title_id: title_id.to_string(),
-                user_id: user_id as i32,
-                path: save_path.to_string(),
-                size: 0,
-                mtime: 0,
-                kind: String::new(),
-            };
-            back_up_one(host, &current, &s.dir, s.keep, None, &|| Ok(()))
-                .map_err(|e| format!("could not back up the current save first: {e}"))?;
-        }
-        // Empty the save folder but keep the folder itself: the console refuses a fresh mkdir
-        // under its save root, and an existing folder sidesteps that.
-        let listing = get(&format!(
-            "/api/ps5/list-dir?addr={}&path={}&offset=0&limit=256",
-            enc(host),
-            enc(save_path)
-        ))?;
-        for e in listing
-            .get("entries")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-        {
-            let Some(name) = e.get("name").and_then(Value::as_str) else {
-                continue;
-            };
-            if name == "." || name == ".." {
-                continue;
-            }
-            post(
-                "/api/ps5/fs/delete",
-                json!({ "addr": host, "path": format!("{save_path}/{name}") }),
-            )?;
-        }
-        let start = post(
-            "/api/transfer/dir",
-            json!({
-                "addr": host,
-                "src_dir": tmp.join(title_id).to_string_lossy(),
-                "dest_root": save_path,
-                "excludes": [],
-            }),
-        )?;
-        let job = start
-            .get("job_id")
-            .and_then(Value::as_str)
-            .ok_or("upload did not start")?;
-        wait_job(job)
+        put_in_place(
+            host,
+            title_id,
+            &tmp.join(title_id),
+            save_path,
+            user_id,
+            &s,
+            None,
+        )
     })();
     let _ = cleanup_temp_dir(&tmp_s);
     result
+}
+
+/// Replace what is in the console's save folder `save_path` with the files of the local folder
+/// `src`: the save there now is backed up first (tagged `tag`, so it can be put back), then the
+/// folder is emptied (kept itself: the console refuses a fresh mkdir under its save root) and
+/// `src`'s files are uploaded into it.
+fn put_in_place(
+    host: &str,
+    title_id: &str,
+    src: &Path,
+    save_path: &str,
+    user_id: u32,
+    s: &Settings,
+    tag: Option<&str>,
+) -> Result<(), String> {
+    // Keep what is there now, so the change can be undone.
+    if !s.dir.trim().is_empty() {
+        let current = SaveEntry {
+            title_id: title_id.to_string(),
+            user_id: user_id as i32,
+            path: save_path.to_string(),
+            size: 0,
+            mtime: 0,
+            kind: String::new(),
+        };
+        back_up_one(host, &current, &s.dir, s.keep, tag, &|| Ok(()))
+            .map_err(|e| format!("could not back up the current save first: {e}"))?;
+    }
+    let listing = get(&format!(
+        "/api/ps5/list-dir?addr={}&path={}&offset=0&limit=256",
+        enc(host),
+        enc(save_path)
+    ))?;
+    for e in listing
+        .get("entries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let Some(name) = e.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        if name == "." || name == ".." {
+            continue;
+        }
+        post(
+            "/api/ps5/fs/delete",
+            json!({ "addr": host, "path": format!("{save_path}/{name}") }),
+        )?;
+    }
+    let start = post(
+        "/api/transfer/dir",
+        json!({
+            "addr": host,
+            "src_dir": src.to_string_lossy(),
+            "dest_root": save_path,
+            "excludes": [],
+        }),
+    )?;
+    let job = start
+        .get("job_id")
+        .and_then(Value::as_str)
+        .ok_or("upload did not start")?;
+    wait_job(job)
+}
+
+// ── PS4 saves onto the PS5 ──────────────────────────────────────────────
+
+/// The tag of the backup taken of a PS5 save before a PS4 save replaced it.
+pub const BEFORE_PS4_TAG: &str = "beforeps";
+
+/// A PS4 save folder as the PS4 keeps it: one or more `sdimg_<name>` images, each with its
+/// sealed key `<name>.bin` beside it, and nothing that is a folder. Err says what is off.
+pub fn check_ps4_save_folder(names: &[(String, bool)]) -> Result<(), String> {
+    if names.iter().any(|(_, dir)| *dir) {
+        return Err("it holds a folder, and a PS4 save folder holds only files".into());
+    }
+    let images: Vec<&str> = names
+        .iter()
+        .filter_map(|(n, _)| n.strip_prefix("sdimg_"))
+        .collect();
+    if images.is_empty() {
+        return Err("it has no save image (sdimg_…)".into());
+    }
+    for img in &images {
+        let key = format!("{img}.bin");
+        if !names.iter().any(|(n, _)| *n == key) {
+            return Err(format!("the save image sdimg_{img} has no key ({key})"));
+        }
+    }
+    Ok(())
+}
+
+/// Whether `save_path` is a PS4 save folder of `title_id` on the console
+/// (`/user/home/<8 hex>/savedata/<TITLE>`, not a PS5 one under savedata_prospero).
+pub fn is_ps4_save_path(save_path: &str, title_id: &str) -> bool {
+    let parts: Vec<&str> = save_path.trim_end_matches('/').split('/').collect();
+    matches!(
+        parts.as_slice(),
+        ["", "user", "home", uid, "savedata", t]
+            if uid.len() == 8 && uid.chars().all(|c| c.is_ascii_hexdigit()) && *t == title_id
+    )
+}
+
+/// Put a PS4 save (the files a PS4 keeps for `title_id`, copied to the local folder `src`) into
+/// the PS5 user's PS4 save folder of that game. Only into a folder the console already made
+/// (the game was played and saved there once), never while the game runs, and only after the
+/// save there now is backed up.
+fn import_ps4(
+    host: &str,
+    title_id: &str,
+    src: &Path,
+    save_path: &str,
+    user_id: u32,
+) -> Result<(), String> {
+    let s = settings();
+    if s.dir.trim().is_empty() {
+        return Err("Choose a folder for save backups first (Saves › Automatic backups): the PS5's own save is kept there before it is replaced.".into());
+    }
+    if !plain(title_id) || !is_ps4_save_path(save_path, title_id) {
+        return Err(format!(
+            "{save_path} is not a PS4 save folder of {title_id} on the PS5"
+        ));
+    }
+    let names: Vec<(String, bool)> = std::fs::read_dir(src)
+        .map_err(|e| format!("read {}: {e}", src.display()))?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let dir = e.file_type().ok()?.is_dir();
+            Some((e.file_name().into_string().ok()?, dir))
+        })
+        .collect();
+    check_ps4_save_folder(&names)
+        .map_err(|e| format!("{} does not look like a PS4 save: {e}", src.display()))?;
+    if title_running(host, title_id)? {
+        return Err(format!(
+            "{title_id} is running on the PS5. Close the game, then try again."
+        ));
+    }
+    // The folder must be there already: the console refuses to make one under its save root.
+    let there = get(&format!(
+        "/api/ps5/list-dir?addr={}&path={}&offset=0&limit=1",
+        enc(host),
+        enc(save_path)
+    ));
+    if there.is_err() {
+        return Err(format!("{title_id} has no save on this PS5 user yet: start the game on the PS5 once and save, then try again."));
+    }
+    put_in_place(
+        host,
+        title_id,
+        src,
+        save_path,
+        user_id,
+        &s,
+        Some(BEFORE_PS4_TAG),
+    )?;
+    crate::log_info!("save backup: PS4 save of {title_id} put on {host} ({save_path})");
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct ImportPs4Body {
+    pub addr: String,
+    pub title_id: String,
+    /// The PS4 save folder of the game on the PS5 (from the saves list, kind "ps4").
+    pub save_path: String,
+    pub user_id: u32,
+    /// The local folder with the PS4's files of that game.
+    pub src_dir: String,
+}
+
+/// `POST /api/save-backup/import-ps4` — put a PS4 save onto the PS5 (see `import_ps4`).
+pub async fn post_import_ps4(Json(b): Json<ImportPs4Body>) -> Response {
+    let title = b.title_id.trim().to_ascii_uppercase();
+    let r = tokio::task::spawn_blocking(move || {
+        import_ps4(
+            b.addr.trim(),
+            &title,
+            Path::new(b.src_dir.trim()),
+            b.save_path.trim(),
+            b.user_id,
+        )
+    })
+    .await;
+    match r {
+        Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
+        Ok(Err(e)) => json_error(StatusCode::BAD_GATEWAY, e),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 // ── HTTP ────────────────────────────────────────────────────────────────
@@ -848,6 +996,53 @@ pub async fn post_restore(Json(b): Json<RestoreBody>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_ps4_save_folder_is_put_on_the_ps5() {
+        let f = |v: &[(&str, bool)]| {
+            v.iter()
+                .map(|(n, d)| (n.to_string(), *d))
+                .collect::<Vec<_>>()
+        };
+        assert!(check_ps4_save_folder(&f(&[
+            ("sdimg_SAVEDATA00", false),
+            ("SAVEDATA00.bin", false)
+        ]))
+        .is_ok());
+        // An image without its key, no image, or a folder inside: refused.
+        assert!(check_ps4_save_folder(&f(&[("sdimg_SAVEDATA00", false)])).is_err());
+        assert!(check_ps4_save_folder(&f(&[("notes.txt", false)])).is_err());
+        assert!(check_ps4_save_folder(&f(&[
+            ("sdimg_A", false),
+            ("A.bin", false),
+            ("sce_sys", true)
+        ]))
+        .is_err());
+    }
+
+    #[test]
+    fn only_a_ps4_save_path_of_that_game() {
+        assert!(is_ps4_save_path(
+            "/user/home/1de82450/savedata/CUSA00001",
+            "CUSA00001"
+        ));
+        assert!(!is_ps4_save_path(
+            "/user/home/1de82450/savedata_prospero/CUSA00001",
+            "CUSA00001"
+        ));
+        assert!(!is_ps4_save_path(
+            "/user/home/1de82450/savedata/CUSA00002",
+            "CUSA00001"
+        ));
+        assert!(!is_ps4_save_path(
+            "/user/home/xyz/savedata/CUSA00001",
+            "CUSA00001"
+        ));
+        assert!(!is_ps4_save_path(
+            "/system_data/savedata/CUSA00001",
+            "CUSA00001"
+        ));
+    }
     use ps5upload_core::save_archive::auto_backup_stem;
 
     fn save(path: &str, mtime: i64) -> SaveEntry {
