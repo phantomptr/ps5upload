@@ -22,6 +22,11 @@ import { gamepadsOf } from "../lib/nativePad";
 import { profileFor } from "../lib/padProfiles";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { setGameMode } from "../lib/gameMode";
+import { applyControls } from "../lib/gameControls";
+import { DEFAULT_PICTURE, readPicture, type PictureTools } from "../lib/rpPicture";
+import { pushNotification } from "./notifications";
+import { trStatic } from "../lib/trStatic";
+import { currentControls, rpControls } from "./gameControls";
 
 /** How Remote Play looks and behaves on this device. */
 export interface RpPrefs {
@@ -59,6 +64,8 @@ export interface RpPrefs {
   /** Instant replay: the engine keeps the last this-many seconds (15, 30 or 60) to save with
    *  Save replay; 0 = off. */
   replayS: number;
+  /** Picture tools: sharpen, colour, 21:9 crop, sharp pixels (lib/rpPicture.ts). */
+  picture: PictureTools;
 }
 
 export const DEFAULT_RP_PREFS: RpPrefs = {
@@ -80,6 +87,7 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   autoQuality: true,
   mic: false,
   replayS: 0,
+  picture: DEFAULT_PICTURE,
 };
 
 /** The smallest sound buffer the Sound buffer setting offers. */
@@ -95,7 +103,8 @@ const PREFS_KEY = "ps5upload.rp_prefs.v1";
 export function loadRpPrefs(): RpPrefs {
   try {
     const raw = safeGetItem(PREFS_KEY);
-    return { ...DEFAULT_RP_PREFS, ...(raw ? (JSON.parse(raw) as Partial<RpPrefs>) : {}) };
+    const p = { ...DEFAULT_RP_PREFS, ...(raw ? (JSON.parse(raw) as Partial<RpPrefs>) : {}) };
+    return { ...p, picture: readPicture(p.picture) };
   } catch {
     return DEFAULT_RP_PREFS;
   }
@@ -169,7 +178,11 @@ export function rpGamepads(): Array<Gamepad | null> {
 
 function readPad(): PadState {
   const s = useRemotePlayStore.getState();
-  const keys = padFromKeys(rpInput.held, s.keymap);
+  const controls = currentControls();
+  // A macro's key plays the macro, not whatever button the key map gives it.
+  const macroKeys = controls?.macros.length ? new Set(controls.macros.map((m) => m.key)) : null;
+  const held = macroKeys ? new Set([...rpInput.held].filter((k) => !macroKeys.has(k))) : rpInput.held;
+  const keys = padFromKeys(held, s.keymap);
   // A controller drives the console while you are looking at the stream, not while you use
   // another screen or another app. A picture-in-picture window is the stream on show whatever
   // has the focus: there the controller plays it while you use another app, where the system
@@ -180,11 +193,14 @@ function readPad(): PadState {
     !rpInput.mapping && (pip || (s.onScreen && typeof document !== "undefined" && document.hasFocus()))
       ? padFromGamepads(rpGamepads(), profileFor)
       : IDLE_PAD;
-  return {
+  const merged = {
     ...mergePads(mergePads(keys, pads), rpInput.touchPad),
     touch: rpInput.touch ?? rpInput.touchPad.touch ?? null,
     motion: rpInput.motion,
   };
+  // The running game's turbo, mouse aim and macros (Game panel › Controls).
+  const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+  return applyControls(merged, controls, rpInput.held, rpControls, now);
 }
 
 export const useRemotePlayStore = create<RpState>((set, get) => ({
@@ -219,6 +235,14 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       fit: prefs.fit,
       mic: prefs.mic,
       replayS: prefs.replayS,
+      picture: prefs.picture,
+      onPictureOff: (why) =>
+        pushNotification(
+          "warning",
+          why === "slow"
+            ? trStatic("rp_picture_off_slow", "Picture tools turned off: this device could not keep up.")
+            : trStatic("rp_picture_off_failed", "Picture tools turned off: this device has no WebGL 2."),
+        ),
       rumble: () => get().prefs.rumble,
       onPhase: (p) => {
         if (get().stream !== stream) return;
@@ -253,6 +277,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       s.setAudioBuffer(audioBufferFor(prefs));
       s.setFit(prefs.fit);
       s.setReplay(prefs.replayS);
+      s.setPicture(prefs.picture);
     }
   },
 

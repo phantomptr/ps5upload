@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DEFAULT_PICTURE, type PictureTools } from "../../lib/rpPicture";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router";
 import {
@@ -74,6 +75,9 @@ import { GamePanel } from "./game/GamePanel";
 import { LaunchStatus } from "./game/LaunchStatus";
 import { DropChoice, DropZone, useStreamDropZone } from "./game/DropToInstall";
 import { useStreamLaunchRunner } from "./game/streamLaunch";
+import { rpControls, useGameControlsStore } from "../../state/gameControls";
+import { mouseMoved } from "../../lib/gameControls";
+import { useRunningTitleIds } from "../../state/runningApps";
 import { useGameLaunch } from "../../lib/useGameLaunch";
 import { hostOf } from "../../lib/addr";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
@@ -399,6 +403,64 @@ function FitMenu({
   );
 }
 
+/** Settings › Picture: sharpen, colour, a 21:9 crop and sharp pixels (lib/rpPicture.ts). They
+ *  apply at once; with all of them off the picture is drawn exactly as the console sends it. */
+function PictureToolsSetting() {
+  const tr = useTr();
+  const pic = useRemotePlayStore((s) => s.prefs.picture);
+  const setPrefs = useRemotePlayStore((s) => s.setPrefs);
+  const set = (p: Partial<PictureTools>) => setPrefs({ picture: { ...pic, ...p } });
+  const slider = (key: "sharpen" | "brightness" | "contrast" | "saturation", label: string, min: number) => (
+    <label className="flex items-center gap-3 text-sm">
+      <span className="w-28 shrink-0">{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={min === 0 ? 100 : 50}
+        value={pic[key]}
+        onChange={(e) => set({ [key]: Number(e.target.value) })}
+        className="w-40 accent-[var(--color-accent)]"
+        aria-label={label}
+        data-testid={`rp-picture-${key}`}
+      />
+      <span className="w-8 text-xs tabular-nums text-[var(--color-muted)]">{pic[key]}</span>
+    </label>
+  );
+  return (
+    <fieldset className="space-y-2" data-testid="rp-picture">
+      <legend className="mb-1 text-sm font-medium">{tr("rp_picture_title", undefined, "Picture")}</legend>
+      {slider("sharpen", tr("rp_picture_sharpen", undefined, "Sharpen"), 0)}
+      {slider("brightness", tr("rp_picture_brightness", undefined, "Brightness"), -50)}
+      {slider("contrast", tr("rp_picture_contrast", undefined, "Contrast"), -50)}
+      {slider("saturation", tr("rp_picture_saturation", undefined, "Colour"), -50)}
+      <Toggle
+        checked={pic.crop219}
+        onChange={(v) => set({ crop219: v })}
+        label={tr("rp_picture_crop", undefined, "Crop to 21:9")}
+        hint={tr(
+          "rp_picture_crop_hint",
+          undefined,
+          "Cuts the black bars off a game made for ultrawide screens, so it fills an ultrawide screen.",
+        )}
+      />
+      <Toggle
+        checked={pic.pixelated}
+        onChange={(v) => set({ pixelated: v })}
+        label={tr("rp_picture_pixelated", undefined, "Sharp pixels")}
+        hint={tr("rp_picture_pixelated_hint", undefined, "Scales with hard edges instead of smoothing: for retro games.")}
+      />
+      <button
+        type="button"
+        onClick={() => setPrefs({ picture: DEFAULT_PICTURE })}
+        className="text-xs text-[var(--color-muted)] underline-offset-2 hover:underline"
+        data-testid="rp-picture-reset"
+      >
+        {tr("rp_picture_reset", undefined, "Reset the picture")}
+      </button>
+    </fieldset>
+  );
+}
+
 /** What the app asks of this device's OS while a stream plays (only the app can ask). */
 function GameModeNote() {
   const tr = useTr();
@@ -601,6 +663,7 @@ function SettingsPanel({ running }: { running: boolean }) {
           />
         )}
         <MicSetting />
+        <PictureToolsSetting />
         <div className="space-y-1">
           <Select
             label={tr("rp_replay_setting", undefined, "Instant replay")}
@@ -785,6 +848,45 @@ export function StreamPanel() {
   const playing = running && phase === "playing";
   // Play a title on the stream (from a game's page, or the Game panel): stream, helper, launch.
   const launcher = useGameLaunch();
+  // The running game, for its controls (turbo, mouse aim, macros): from the shared running-games
+  // watch, nothing polled for it here.
+  const runningTitles = useRunningTitleIds(running ? (target?.host ?? null) : null);
+  const setControlsTitle = useGameControlsStore((s) => s.setTitle);
+  useEffect(() => {
+    setControlsTitle(running ? ([...runningTitles][0] ?? null) : null);
+  }, [running, runningTitles, setControlsTitle]);
+  const mouseAim = useGameControlsStore((s) => (s.title ? !!s.byTitle[s.title]?.mouse : false));
+  // Mouse aim: while the pointer is captured on the picture, its movement and buttons are the
+  // right stick and the triggers.
+  useEffect(() => {
+    if (!running || !mouseAim) return;
+    const locked = () => !!stage.current && document.pointerLockElement === stage.current;
+    const move = (e: MouseEvent) => {
+      if (locked()) mouseMoved(rpControls.mouse, e.movementX, e.movementY);
+    };
+    const button = (e: MouseEvent, down: boolean) => {
+      if (!locked() && down) return;
+      if (e.button === 0) rpControls.mouse.left = down;
+      if (e.button === 2) rpControls.mouse.right = down;
+    };
+    const down = (e: MouseEvent) => button(e, true);
+    const up = (e: MouseEvent) => button(e, false);
+    const lost = () => {
+      if (!locked()) rpControls.mouse.left = rpControls.mouse.right = false;
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mousedown", down);
+    document.addEventListener("mouseup", up);
+    document.addEventListener("pointerlockchange", lost);
+    return () => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mousedown", down);
+      document.removeEventListener("mouseup", up);
+      document.removeEventListener("pointerlockchange", lost);
+      rpControls.mouse.left = rpControls.mouse.right = false;
+    };
+  }, [running, mouseAim]);
+
   // A package dropped on the picture is installed on this console (when the stream ends, by
   // default).
   const dropZone = useStreamDropZone(running ? (target?.host ?? null) : null, running);
