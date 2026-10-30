@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Camera, Square, Video } from "lucide-react";
+import { Camera, History, Square, Video } from "lucide-react";
 
 import { canRecordClips, clipClock } from "../../lib/rpCapture";
 import { useTr } from "../../state/lang";
 import { useRpCaptureStore, type CaptureNotice } from "../../state/rpCapture";
+import { useRemotePlayStore } from "../../state/remotePlay";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -19,6 +20,9 @@ function useCapture() {
   const saving = useRpCaptureStore((s) => s.saving);
   const screenshot = useRpCaptureStore((s) => s.screenshot);
   const toggleRecording = useRpCaptureStore((s) => s.toggleRecording);
+  const saveReplay = useRpCaptureStore((s) => s.saveReplay);
+  const replaying = useRpCaptureStore((s) => s.replaying);
+  const replayOn = useRemotePlayStore((s) => s.prefs.replayS > 0);
   const canRecord = useMemo(() => canRecordClips(), []);
   const recording = recordingSince !== null;
   return {
@@ -26,6 +30,12 @@ function useCapture() {
     recording,
     saving,
     canRecord,
+    replayOn,
+    replaying,
+    saveReplay: () => void saveReplay(),
+    replayLabel: replaying
+      ? tr("rp_replay_saving", undefined, "Saving the replay…")
+      : tr("rp_replay_save", undefined, "Save replay"),
     screenshot: () => void screenshot(),
     toggleRecording,
     shotLabel: tr("rp_screenshot", undefined, "Screenshot"),
@@ -77,6 +87,23 @@ export function CaptureBarButtons() {
           {c.recording ? <Square size={13} /> : <Video size={16} />}
         </button>
       )}
+      {c.replayOn && (
+        <button
+          type="button"
+          aria-label={c.replayLabel}
+          title={c.replayLabel}
+          disabled={c.replaying}
+          onClick={(e) => {
+            e.stopPropagation();
+            c.saveReplay();
+          }}
+          {...keep}
+          className={`${round(false)} disabled:opacity-50`}
+          data-testid="rp-replay-save"
+        >
+          <History size={16} />
+        </button>
+      )}
     </>
   );
 }
@@ -123,6 +150,23 @@ export function CaptureRow({ onDone, icons }: { onDone?: () => void; icons?: boo
             data-testid="rp-record"
           >
             {c.recording ? <Square size={13} /> : <Video size={16} />}
+          </button>
+        )}
+        {c.replayOn && (
+          <button
+            type="button"
+            aria-label={c.replayLabel}
+            disabled={c.replaying}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDone?.();
+              c.saveReplay();
+            }}
+            {...keep}
+            className={round(false)}
+            data-testid="rp-replay-save"
+          >
+            <History size={16} />
           </button>
         )}
       </>

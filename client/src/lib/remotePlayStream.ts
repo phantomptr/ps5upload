@@ -456,6 +456,8 @@ export interface StreamOptions {
   /** Set the session up for the microphone (experimental; Settings). Only then is `mic`
    *  in the start message, so a session without it starts exactly as before. */
   mic?: boolean;
+  /** Instant replay window in seconds (15/30/60), 0 = off. */
+  replayS?: number;
   /** How the picture fills the place it is shown in (default: the whole picture). */
   fit?: PictureFit;
   /** False: the console's rumble is not played on the controllers. */
@@ -618,12 +620,29 @@ export class RemotePlayStream {
     // Until the first frame, a 16:9 picture.
     this.canvas.style.setProperty("--rp-shape", String(16 / 9));
     this.setFit(o.fit ?? "fit");
+    this.replayS = o.replayS ?? 0;
     // Not `desynchronized`: Chromium honours it only on Windows and ChromeOS, where the canvas
     // is presented through its own swap chain/overlay instead of the page's compositor. The
     // Windows app (only there) showed the picture enlarged from the top-left corner, cropped on
     // the right and bottom (#538): the canvas's CSS size and object-fit were not applied. The
     // page's compositor, as on every other platform, scales it to its box.
     this.ctx = this.canvas.getContext("2d", { alpha: false });
+  }
+
+  /** The video's codec string as its decoder was set up with ("" before the first picture). */
+  get videoCodec(): string {
+    return this.codec;
+  }
+
+  /** The instant replay window asked for now (it can change while the stream runs). */
+  private replayS = 0;
+
+  /** Instant replay on (seconds) or off (0), for the running session; also the next start's. */
+  setReplay(seconds: number): void {
+    if (this.replayS === seconds) return;
+    this.replayS = seconds;
+    const ws = this.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ replay_s: seconds }));
   }
 
   /** How the picture fills the place it is shown in (see PictureFit). */
@@ -732,6 +751,7 @@ export class RemotePlayStream {
           attach_only: attachOnly,
           low_latency: !!this.o.lowLatency,
           ...(this.o.mic ? { mic: true } : {}),
+          ...(this.replayS ? { replay_s: this.replayS } : {}),
         }),
       );
       // Attaching turns the console's mic off in the engine: a page that has it on says so.

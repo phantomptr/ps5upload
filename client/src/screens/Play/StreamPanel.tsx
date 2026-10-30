@@ -601,6 +601,30 @@ function SettingsPanel({ running }: { running: boolean }) {
           />
         )}
         <MicSetting />
+        <div className="space-y-1">
+          <Select
+            label={tr("rp_replay_setting", undefined, "Instant replay")}
+            block={false}
+            className="w-56"
+            value={String(prefs.replayS)}
+            onChange={(e) => setPrefs({ replayS: Number(e.target.value) })}
+            data-testid="rp-replay-setting"
+            options={[
+              { value: "0", label: tr("rp_replay_off", undefined, "Off") },
+              ...[15, 30, 60].map((n) => ({
+                value: String(n),
+                label: tr("rp_replay_last", { n }, `Keep the last ${n} seconds`),
+              })),
+            ]}
+          />
+          <p className="text-xs text-[var(--color-muted)]">
+            {tr(
+              "rp_replay_hint",
+              undefined,
+              "While you play, the last seconds are kept on this computer; Save replay (on the bar) saves them as a video. Nothing is saved until you press it.",
+            )}
+          </p>
+        </div>
         <Select
           label={tr("rp_touch_controls", undefined, "On-screen controller")}
           block={false}

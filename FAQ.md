@@ -2067,6 +2067,13 @@ Yes, from 9.5.0. While the computer plays, press the phone button on the stream'
 **Q: Motion controls?**
 Remote Play › Settings › **Motion controls (experimental)** (phones) sends the phone's gyro and tilt as the controller's motion sensors, for games with gyro aiming; the phone controller page has a **Motion** button too. Browsers give motion only to secure pages, so it works in the apps but not on the QR code's page in a phone browser.
 
+**Q: Can Remote Play save what just happened (instant replay)?**
+Yes, from 9.8.0. Remote Play › Settings › **Instant replay**: choose how much to keep (15, 30 or
+60 seconds). While you play, PS5Upload keeps those last seconds on this computer as the PS5 sent
+them; **Save replay** (the clock-with-arrow button on the bar, or in the phone's menu) saves them
+as an MP4 with sound, where your screenshots and clips go. Nothing is saved until you press it,
+and turning the setting off drops what was kept.
+
 **Q: How do I take a screenshot or record a clip in Remote Play?**
 Use the **camera** (Screenshot) and **video** (Record a clip) buttons on the picture's bar (desktop, also in full screen), or in the **⋯** menu on a phone. A screenshot is a PNG at the stream's own size (1920×1080 or 1280×720), whatever size the picture is shown at. A clip records the picture and the game's sound (also while the player is muted); a red **Recording** light with the time shows on the picture, and pressing it (or the button again) stops and saves the clip. Clips are MP4 where the device records MP4, else WebM, and stop by themselves after 10 minutes (they are held in memory until saved). Files are named like `PS5 Living room 2026-10-30 21-14-05.png`. The desktop and Android apps save straight into **Downloads**, the iPhone app into its folder in the Files app, and the web UI downloads them through the browser. Recording needs a device that can record video from a web page; where it can't, only Screenshot shows.
 

@@ -93,6 +93,9 @@ struct StartReq {
     /// A shorter video queue for this page (see VIDEO_QUEUE_LOW_LATENCY).
     #[serde(default)]
     low_latency: bool,
+    /// Instant replay: keep the last this-many seconds (15, 30 or 60; 0 / none = off).
+    #[serde(default)]
+    replay_s: Option<u64>,
 }
 
 impl StartReq {
@@ -115,6 +118,9 @@ struct ClientMsg {
     keyframe: bool,
     #[serde(default)]
     mic: Option<bool>,
+    /// Instant replay switched on (seconds) or off (0) during the session.
+    #[serde(default)]
+    replay_s: Option<u64>,
     /// The page's clock, echoed back as `{"pong": …}`.
     #[serde(default)]
     ping: Option<serde_json::Value>,
@@ -161,6 +167,8 @@ struct Live {
     /// The microphone: on/off and Opus frames for the stream, in order.
     mic: Mutex<std::collections::VecDeque<MicInput>>,
     mic_on: AtomicBool,
+    /// Instant replay's frames, while it is on (rp_replay.rs).
+    replay: Mutex<Option<crate::rp_replay::Replay>>,
 }
 
 /// The console serves one Remote Play session at a time; so do we.
@@ -232,6 +240,34 @@ fn is_keyframe(au: &[u8], hevc: bool) -> bool {
 }
 
 impl Live {
+    /// Instant replay on (with that window) or off; a new window starts over.
+    fn set_replay(&self, seconds: Option<u64>) {
+        let want = crate::rp_replay::window_s(seconds);
+        if let Ok(mut g) = self.replay.lock() {
+            if g.as_ref().map(|r| r.window_s()) != want {
+                *g = want.map(crate::rp_replay::Replay::new);
+            }
+        }
+    }
+
+    fn record(&self, kind: u8, t_us: u64, key: bool, data: &[u8]) {
+        if let Ok(mut g) = self.replay.lock() {
+            if let Some(r) = g.as_mut() {
+                r.push(kind, t_us, key, data);
+            }
+        }
+    }
+
+    /// The replay as the page reads it, or None when it is off or holds nothing yet.
+    fn replay_snapshot(&self) -> Option<Vec<u8>> {
+        let vh = self.video_header.lock().ok()?.clone()?;
+        let ah = self.audio_header.lock().ok().and_then(|g| g.clone());
+        let g = self.replay.lock().ok()?;
+        let r = g.as_ref()?;
+        r.frames().next()?;
+        Some(crate::rp_replay::encode(&vh, ah.as_deref(), r))
+    }
+
     fn new(host: String, hevc: bool, keep_alive: Duration) -> Self {
         Live {
             host,
@@ -252,6 +288,7 @@ impl Live {
             mic_enabled: AtomicBool::new(false),
             mic: Default::default(),
             mic_on: AtomicBool::new(false),
+            replay: Mutex::new(None),
         }
     }
 
@@ -416,6 +453,12 @@ impl StreamSink for Sink {
             live.send_ctl(bin(0, au));
             return true;
         }
+        live.record(
+            crate::rp_replay::KIND_VIDEO,
+            self.t0.elapsed().as_micros() as u64,
+            is_keyframe(au, live.hevc),
+            au,
+        );
         let Some(tx) = live.video_tx() else {
             return true; // nobody watching: the session waits for a page
         };
@@ -439,6 +482,13 @@ impl StreamSink for Sink {
             if let Ok(mut h) = self.live.audio_header.lock() {
                 *h = Some(frame.to_vec());
             }
+        } else {
+            self.live.record(
+                crate::rp_replay::KIND_AUDIO,
+                self.t0.elapsed().as_micros() as u64,
+                false,
+                frame,
+            );
         }
         self.live.send_ctl(bin(if header { 3 } else { 4 }, frame));
         true
@@ -468,7 +518,17 @@ impl StreamSink for Sink {
             .is_some_and(|t| t.elapsed() > self.live.keep_alive)
     }
     fn wants_keyframe(&mut self) -> bool {
-        self.live.want_key.swap(false, Ordering::Relaxed)
+        let page = self.live.want_key.swap(false, Ordering::Relaxed);
+        // Instant replay needs a keyframe every few seconds (a clip can only start at one).
+        let now = self.t0.elapsed().as_micros() as u64;
+        let replay = self
+            .live
+            .replay
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|r| r.wants_keyframe(now)))
+            .unwrap_or(false);
+        page || replay
     }
     fn mic(&mut self) -> Option<MicInput> {
         self.live.mic.lock().ok()?.pop_front()
@@ -504,6 +564,24 @@ pub async fn current() -> Json<serde_json::Value> {
         Some(l) => l.snapshot(),
         None => serde_json::json!({"host": null}),
     })
+}
+
+/// `GET /api/ps5/rp/replay`: the instant replay's frames (rp_replay.rs), for the page to save as
+/// a clip. 404 when no session runs, replay is off, or nothing is held yet.
+pub async fn replay() -> Response {
+    let snap = live().and_then(|l| l.replay_snapshot());
+    match snap {
+        Some(b) => (
+            [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+            Bytes::from(b),
+        )
+            .into_response(),
+        None => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "no replay: start one, or wait for the first keyframe"})),
+        )
+            .into_response(),
+    }
 }
 
 async fn close(socket: &mut WebSocket, reason: &'static str) {
@@ -548,6 +626,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             .min(MAX_KEEP_ALIVE),
     ));
     live.mic_enabled.store(cfg.mic, Ordering::Relaxed);
+    live.set_replay(start.replay_s);
     let l = live.clone();
     tokio::task::spawn_blocking(move || {
         let mut sink = Sink {
@@ -731,6 +810,9 @@ async fn session(mut socket: WebSocket) {
                         }
                         if let Some(on) = m.mic {
                             live.set_mic(id, on);
+                        }
+                        if m.replay_s.is_some() {
+                            live.set_replay(m.replay_s);
                         }
                     }
                 }

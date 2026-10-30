@@ -4,6 +4,16 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 9.8.0
+
+- **Instant replay in Remote Play.** Turn it on in Remote Play › Settings › **Instant replay**
+  (the last 15, 30 or 60 seconds), and **Save replay** on the stream's bar (and in the phone's
+  menu) saves what just happened as an MP4, with sound. The picture is saved exactly as the PS5
+  sent it, never re-encoded; the sound is turned into AAC where the device can (so Apple's Photos
+  takes it), Opus elsewhere. While it is on, the console is asked for a fresh keyframe every few
+  seconds so a replay starts close to where you want it; nothing is saved until you press the
+  button, and it works the same in the desktop apps, on phones and in the web UI.
+
 ## 9.7.0
 
 - **Play any game on Remote Play, in one press.** A game's page has **Play on Remote Play** next

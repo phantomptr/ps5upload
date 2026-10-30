@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import { MAX_CLIP_MS, captureFileName, recorderType, saveCapture } from "../lib/rpCapture";
 import { useRemotePlayStore } from "./remotePlay";
+import { log } from "./logs";
 
 /** What the last screenshot or clip came to, shown on the picture for a moment. */
 export type CaptureNotice =
@@ -13,8 +14,12 @@ interface CaptureState {
   recordingSince: number | null;
   /** A clip is being written out. */
   saving: boolean;
+  /** The instant replay is being turned into a file. */
+  replaying: boolean;
   notice: CaptureNotice | null;
   screenshot: () => Promise<void>;
+  /** Save the instant replay (the last seconds the engine kept) as an MP4. */
+  saveReplay: () => Promise<void>;
   /** Start a recording, or stop the one running and save it. */
   toggleRecording: () => void;
   stopRecording: () => void;
@@ -45,6 +50,7 @@ export const useRpCaptureStore = create<CaptureState>((set, get) => {
   return {
     recordingSince: null,
     saving: false,
+    replaying: false,
     notice: null,
 
     async screenshot() {
@@ -57,6 +63,23 @@ export const useRpCaptureStore = create<CaptureState>((set, get) => {
         notify({ kind: "shot", name, path: await saveCapture(blob, name) });
       } catch {
         notify({ kind: "error", what: "shot" });
+      }
+    },
+
+    async saveReplay() {
+      if (get().replaying) return;
+      const { target, stream } = useRemotePlayStore.getState();
+      set({ replaying: true });
+      const name = captureFileName(target?.name ?? "", new Date(), "mp4").replace(/^PS5/, "PS5 replay");
+      try {
+        const { fetchReplayMp4 } = await import("../lib/rpReplay");
+        const blob = await fetchReplayMp4({ codec: stream?.videoCodec || undefined });
+        notify({ kind: "clip", name, path: await saveCapture(blob, name) });
+      } catch (e) {
+        log.warn("remote-play", `replay: ${e instanceof Error ? e.message : String(e)}`);
+        notify({ kind: "error", what: "clip" });
+      } finally {
+        set({ replaying: false });
       }
     },
 

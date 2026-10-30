@@ -56,6 +56,9 @@ export interface RpPrefs {
   /** Microphone for voice chat (experimental): sessions are set up for it and the mic button
    *  shows. Off, a session starts exactly as it did before the mic existed. */
   mic: boolean;
+  /** Instant replay: the engine keeps the last this-many seconds (15, 30 or 60) to save with
+   *  Save replay; 0 = off. */
+  replayS: number;
 }
 
 export const DEFAULT_RP_PREFS: RpPrefs = {
@@ -76,6 +79,7 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   lowLatency: false,
   autoQuality: true,
   mic: false,
+  replayS: 0,
 };
 
 /** The smallest sound buffer the Sound buffer setting offers. */
@@ -214,6 +218,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       attach: opts?.attach,
       fit: prefs.fit,
       mic: prefs.mic,
+      replayS: prefs.replayS,
       rumble: () => get().prefs.rumble,
       onPhase: (p) => {
         if (get().stream !== stream) return;
@@ -247,6 +252,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       s.setVolume(prefs.muted ? 0 : prefs.volume);
       s.setAudioBuffer(audioBufferFor(prefs));
       s.setFit(prefs.fit);
+      s.setReplay(prefs.replayS);
     }
   },
 
