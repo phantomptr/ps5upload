@@ -3,7 +3,8 @@
  * inlined, to engine/crates/ps5upload-engine/src/pad_page.html, which the engine embeds and serves
  * at GET /pad to a phone that scanned the computer's QR code (pad_link.rs). Commit the result.
  *
- * - English only: state/lang is swapped for src/pad/langStub.ts (all locales inlined would be
+ * - English only: state/lang is swapped for src/pad/langStub.ts and lib/trStatic for
+ *   src/pad/trStaticStub.ts (all locales inlined would be
  *   megabytes). The phone app's own controller screen (PadRemote) is translated.
  * - Budget: the build fails over 600 KiB raw.
  */
@@ -16,17 +17,20 @@ const RAW_BUDGET = 600 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/pad_page.html", import.meta.url));
 const LANG = fileURLToPath(new URL("./src/state/lang.ts", import.meta.url));
 const STUB = fileURLToPath(new URL("./src/pad/langStub.ts", import.meta.url));
+const TR_STATIC = fileURLToPath(new URL("./src/lib/trStatic.ts", import.meta.url));
+const TR_STATIC_STUB = fileURLToPath(new URL("./src/pad/trStaticStub.ts", import.meta.url));
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** state/lang → the English-only stub. */
+/** state/lang and lib/trStatic → the English-only stubs. */
 function englishOnly(): Plugin {
   return {
     name: "ps5upload-pad-english-only",
     enforce: "pre",
     async resolveId(source, importer, opts) {
       const r = await this.resolve(source, importer, { ...opts, skipSelf: true });
-      return r && r.id === LANG ? STUB : null;
+      if (r?.id === LANG) return STUB;
+      return r?.id === TR_STATIC ? TR_STATIC_STUB : null;
     },
   };
 }

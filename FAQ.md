@@ -2072,6 +2072,9 @@ Drop the .pkg or .fpkg on the Remote Play picture. By default it installs when y
 because an install shares the network with the stream and can make it stutter; **Install now**
 starts it at once. Progress shows in Activity like any install.
 
+**Q: Can friends watch me play from their own phones?**
+Yes, from 9.11.0. While the computer plays, open the phone panel on the stream's bar and choose **To watch**: anyone on the same network scans that code and the stream plays in their browser (tap **Sound** for audio), up to four at once. They only watch; **Hand the controller** next to a watcher lets them play, and **Take the controller back** ends it. A watcher's device has to play the stream's video: the computer picks HEVC when it can play it, and a watcher's device that plays only H.264 says so instead of showing the picture. Each watcher gets a full copy of the stream from your computer.
+
 **Q: Can I use my phone as the controller for Remote Play on my computer?**
 Yes, from 9.5.0. While the computer plays, press the phone button on the stream's bar (**Use a phone as a controller**) and scan the QR code with the phone's camera: the phone opens a controller, full screen and sideways, that plays along with the computer's own controls (up to four phones). Or, in the PS5Upload app on the phone, Remote Play shows that the computer is playing: tap **Use this device as its controller** and allow it on the computer. A controller attached to the phone works through it too. Only the controller page and its connection are open to your network, and they need the QR code's key or your OK on the computer; **Close the link** lets every phone go. Rumble vibrates an Android phone.
 

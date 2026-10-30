@@ -11290,6 +11290,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         )
         .route("/api/ps5/rp/pad-link/decide", post(pad_link::decide))
         .route("/api/ps5/rp/pad-link/kick", post(pad_link::kick))
+        .route("/api/ps5/rp/pad-link/control", post(pad_link::control))
         .route("/api/ps5/rp/pad-relay", get(pad_link::relay))
         .route("/api/ps5/power/ddp-status", get(ps5_power_ddp_status))
         .route("/api/ps5/power/pair", post(ps5_power_pair))

@@ -26,6 +26,13 @@ export interface PadClientOptions {
   onLight?: (rgb: [number, number, number]) => void;
   /** The phone's latest motion reading, while motion controls are on. */
   motion?: () => MotionReading | null;
+  /** Watch party: this page watches the stream (binary picture and sound arrive) and plays only
+   *  once the computer hands it the controller. */
+  watch?: {
+    onFrame: (data: ArrayBuffer) => void;
+    onCodec: (hevc: boolean) => void;
+    onControl: (on: boolean) => void;
+  };
 }
 
 /** The message a stage status from the engine is. */
@@ -69,6 +76,8 @@ export class PadClient {
   private closed = false;
   /** The engine said no and why: the socket closing after that is not a lost connection. */
   private refused = false;
+  /** A watcher holds the controller (a player always does). */
+  private control = false;
 
   constructor(private o: PadClientOptions) {}
 
@@ -82,8 +91,27 @@ export class PadClient {
       return;
     }
     this.ws = ws;
+    ws.binaryType = "arraybuffer";
+    this.control = !this.o.watch;
     ws.onmessage = (e) => {
-      if (typeof e.data !== "string") return;
+      if (typeof e.data !== "string") {
+        if (e.data instanceof ArrayBuffer) this.o.watch?.onFrame(e.data);
+        return;
+      }
+      if (this.o.watch) {
+        try {
+          const v = JSON.parse(e.data) as { watch?: { hevc?: boolean }; control?: boolean };
+          if (v.watch) this.o.watch.onCodec(!!v.watch.hevc);
+          if (typeof v.control === "boolean") {
+            this.control = v.control;
+            this.o.watch.onControl(v.control);
+            if (v.control) this.send(true);
+            return;
+          }
+        } catch {
+          // Not JSON: not for us.
+        }
+      }
       const m = readStatus(e.data);
       if (!m) return;
       if ("rumble" in m) {
@@ -119,7 +147,7 @@ export class PadClient {
   /** Send the pad when it changed (or always, `force`). The on-screen controller calls it too. */
   send(force: boolean): void {
     const ws = this.ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !this.control) return;
     const p = this.current();
     if (!force && samePad(p, this.last)) return;
     this.last = p;

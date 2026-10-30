@@ -4,6 +4,15 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 9.11.0
+
+- **Watch party in Remote Play.** The phone panel on the stream's bar now has a second code,
+  **To watch**: anyone on your network scans it and watches the stream on a phone, tablet or
+  computer browser, with sound after a tap (up to four). Watchers only watch until you press
+  **Hand the controller** next to one of them; **Take the controller back** returns it. Each
+  watcher gets its own copy of the stream, so on a busy network fewer watchers keep your own
+  picture smooth.
+
 ## 9.10.0
 
 - **Per-game controls in Remote Play.** The Game panel's new **Controls** tab sets the running

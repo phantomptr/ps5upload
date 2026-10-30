@@ -169,7 +169,20 @@ struct Live {
     mic_on: AtomicBool,
     /// Instant replay's frames, while it is on (rp_replay.rs).
     replay: Mutex<Option<crate::rp_replay::Replay>>,
+    /// Watchers (pad_link.rs, watch party): each gets its own copy of the picture and sound.
+    spectators: Mutex<Vec<Spectator>>,
 }
+
+/// A watcher's queue. `need_key`: it cannot use a frame until the next keyframe (it just
+/// joined, or fell behind and was skipped ahead).
+struct Spectator {
+    id: u64,
+    tx: mpsc::Sender<Message>,
+    need_key: bool,
+}
+
+/// Frames queued for a watcher before it is skipped to the next keyframe (about 2 s at 60 fps).
+const SPECTATOR_QUEUE: usize = 120;
 
 /// The console serves one Remote Play session at a time; so do we.
 static LIVE: Mutex<Option<Arc<Live>>> = Mutex::new(None);
@@ -185,6 +198,38 @@ fn live() -> Option<Arc<Live>> {
 pub(crate) fn push_pad(source: u64, state: Option<ControllerState>) {
     if let Some(l) = live() {
         l.push_pad(source, state);
+    }
+}
+
+/// A watcher joins the session: its queue, with the codec headers already in it, and a
+/// keyframe asked for. None when no session runs.
+pub(crate) fn add_spectator(id: u64) -> Option<mpsc::Receiver<Message>> {
+    let l = live()?;
+    let (tx, rx) = mpsc::channel(SPECTATOR_QUEUE);
+    let vh = l.video_header.lock().ok().and_then(|g| g.clone());
+    let ah = l.audio_header.lock().ok().and_then(|g| g.clone());
+    let _ = tx.try_send(text(serde_json::json!({ "watch": { "hevc": l.hevc } })));
+    if let Some(h) = vh {
+        let _ = tx.try_send(bin(0, &h));
+    }
+    if let Some(h) = ah {
+        let _ = tx.try_send(bin(3, &h));
+    }
+    l.spectators.lock().ok()?.push(Spectator {
+        id,
+        tx,
+        need_key: true,
+    });
+    l.want_key.store(true, Ordering::Relaxed);
+    Some(rx)
+}
+
+/// A watcher left.
+pub(crate) fn remove_spectator(id: u64) {
+    if let Some(l) = live() {
+        if let Ok(mut g) = l.spectators.lock() {
+            g.retain(|s| s.id != id);
+        }
     }
 }
 
@@ -240,6 +285,35 @@ fn is_keyframe(au: &[u8], hevc: bool) -> bool {
 }
 
 impl Live {
+    /// Every watcher gets `kind`'s message; a video access unit only from a keyframe on, and a
+    /// watcher that fell behind skips to the next keyframe (it never slows the session).
+    fn to_spectators(&self, kind: u8, data: &[u8], key: bool) {
+        let Ok(mut g) = self.spectators.lock() else {
+            return;
+        };
+        if g.is_empty() {
+            return;
+        }
+        let mut lagging = false;
+        for sp in g.iter_mut() {
+            if kind == 1 {
+                if sp.need_key && !key {
+                    continue;
+                }
+                sp.need_key = false;
+            }
+            if let Err(mpsc::error::TrySendError::Full(_)) = sp.tx.try_send(bin(kind, data)) {
+                if kind == 1 {
+                    sp.need_key = true;
+                    lagging = true;
+                }
+            }
+        }
+        if lagging {
+            self.want_key.store(true, Ordering::Relaxed);
+        }
+    }
+
     /// Instant replay on (with that window) or off; a new window starts over.
     fn set_replay(&self, seconds: Option<u64>) {
         let want = crate::rp_replay::window_s(seconds);
@@ -289,6 +363,7 @@ impl Live {
             mic: Default::default(),
             mic_on: AtomicBool::new(false),
             replay: Mutex::new(None),
+            spectators: Mutex::new(Vec::new()),
         }
     }
 
@@ -451,14 +526,17 @@ impl StreamSink for Sink {
                 *h = Some(au.to_vec());
             }
             live.send_ctl(bin(0, au));
+            live.to_spectators(0, au, false);
             return true;
         }
+        let key = is_keyframe(au, live.hevc);
         live.record(
             crate::rp_replay::KIND_VIDEO,
             self.t0.elapsed().as_micros() as u64,
-            is_keyframe(au, live.hevc),
+            key,
             au,
         );
+        live.to_spectators(1, au, key);
         let Some(tx) = live.video_tx() else {
             return true; // nobody watching: the session waits for a page
         };
@@ -491,6 +569,8 @@ impl StreamSink for Sink {
             );
         }
         self.live.send_ctl(bin(if header { 3 } else { 4 }, frame));
+        self.live
+            .to_spectators(if header { 3 } else { 4 }, frame, false);
         true
     }
     fn rumble(&mut self, left: u8, right: u8) {
@@ -839,6 +919,46 @@ pub async fn player() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watchers_start_at_a_keyframe_and_a_slow_one_skips_ahead() {
+        let live = Live::new("10.0.0.9".into(), false, Duration::from_secs(60));
+        let (fast_tx, mut fast) = mpsc::channel(8);
+        let (slow_tx, mut slow) = mpsc::channel(1);
+        live.spectators.lock().unwrap().extend([
+            Spectator {
+                id: 1,
+                tx: fast_tx,
+                need_key: true,
+            },
+            Spectator {
+                id: 2,
+                tx: slow_tx,
+                need_key: true,
+            },
+        ]);
+        // A delta frame before any keyframe is useless to a new watcher: not sent.
+        live.to_spectators(1, b"delta", false);
+        assert!(fast.try_recv().is_err());
+        // The keyframe goes to both; the slow one's queue is now full.
+        live.to_spectators(1, b"key", true);
+        assert!(fast.try_recv().is_ok());
+        // Sound goes along; the full one just misses it.
+        live.to_spectators(4, b"opus", false);
+        assert!(fast.try_recv().is_ok());
+        // The next frame overflows the slow one: it waits for a keyframe, one is asked for, and
+        // the fast one is not held back.
+        live.want_key.store(false, Ordering::Relaxed);
+        live.to_spectators(1, b"delta2", false);
+        assert!(fast.try_recv().is_ok());
+        assert!(live.spectators.lock().unwrap()[1].need_key);
+        assert!(live.want_key.load(Ordering::Relaxed));
+        let _ = slow.try_recv(); // the keyframe it had
+        live.to_spectators(1, b"delta3", false);
+        assert!(slow.try_recv().is_err());
+        live.to_spectators(1, b"key2", true);
+        assert!(slow.try_recv().is_ok());
+    }
 
     const KEY: &[u8] = &[0, 0, 0, 1, 0x65, 1, 2]; // H.264 IDR slice
     const DELTA: &[u8] = &[0, 0, 0, 1, 0x41, 1, 2]; // H.264 non-IDR slice

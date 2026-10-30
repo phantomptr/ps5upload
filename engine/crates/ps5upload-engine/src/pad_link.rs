@@ -37,6 +37,8 @@ const ASK_WAIT: Duration = Duration::from_secs(90);
 const MAX_PENDING: usize = 4;
 /// Phones playing at once.
 const MAX_PADS: usize = 4;
+/// Watchers at once (watch party): each is a full copy of the stream on the LAN.
+const MAX_WATCHERS: usize = 4;
 /// How often a phone hears whether the session is playing.
 const STATE_EVERY: Duration = Duration::from_secs(1);
 
@@ -98,6 +100,10 @@ struct Pad {
     name: String,
     since_ms: u128,
     tx: mpsc::Sender<Message>,
+    /// A watcher (watch party): it sees the stream, and plays only once handed the controller.
+    watch: bool,
+    /// The computer handed this watcher the controller.
+    control: bool,
 }
 
 struct Pending {
@@ -212,7 +218,7 @@ fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
             },
             // What the phone app connects to (it asks; the computer allows).
             "pad_ws": base.as_ref().map(|b| format!("{}/api/pad/ws", b.replacen("http://", "ws://", 1))),
-            "pads": l.pads.iter().map(|p| serde_json::json!({"id": p.id, "name": p.name, "since_ms": p.since_ms})).collect::<Vec<_>>(),
+            "pads": l.pads.iter().map(|p| serde_json::json!({"id": p.id, "name": p.name, "since_ms": p.since_ms, "watch": p.watch, "control": p.control})).collect::<Vec<_>>(),
             "pending": l.pending.iter().map(|p| serde_json::json!({"id": p.id, "name": p.name})).collect::<Vec<_>>(),
         })
     })
@@ -294,6 +300,29 @@ pub async fn kick(Json(r): Json<KickReq>) -> Json<serde_json::Value> {
     Json(serde_json::json!({"ok": true}))
 }
 
+#[derive(serde::Deserialize)]
+pub struct ControlReq {
+    id: u64,
+    on: bool,
+}
+
+/// `POST /api/ps5/rp/pad-link/control {id, on}`: hand a watcher the controller, or take it back.
+pub async fn control(Json(r): Json<ControlReq>) -> Json<serde_json::Value> {
+    let ok = with_link(|l| {
+        let Some(p) = l.pads.iter_mut().find(|p| p.id == r.id && p.watch) else {
+            return false;
+        };
+        p.control = r.on;
+        let _ = p.tx.try_send(say(serde_json::json!({ "control": r.on })));
+        true
+    });
+    if ok && !r.on {
+        // Let go of whatever it held.
+        crate::rp_stream_api::push_pad(r.id, None);
+    }
+    Json(serde_json::json!({ "ok": ok }))
+}
+
 /// Tell every phone something (rumble, light bar).
 pub fn broadcast(text: &str) {
     let Ok(g) = LINK.lock() else {
@@ -317,6 +346,9 @@ pub struct PadQuery {
     t: Option<String>,
     #[serde(default)]
     name: Option<String>,
+    /// `w=1`: join to watch (watch party), not to play.
+    #[serde(default)]
+    w: Option<u8>,
 }
 
 /// A phone's name as it gave it: printable, short.
@@ -396,9 +428,31 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
             return;
         }
     }
+    let watch = q.w == Some(1);
+    // A watcher gets the stream itself (rp_stream_api's copy for it); none without a session.
+    let mut frames = if watch {
+        match crate::rp_stream_api::add_spectator(id) {
+            Some(r) => Some(r),
+            None => {
+                let _ = socket
+                    .send(say(
+                        serde_json::json!({"stage": "refused", "why": "no_stream"}),
+                    ))
+                    .await;
+                return;
+            }
+        }
+    } else {
+        None
+    };
     let (tx, mut rx) = mpsc::channel::<Message>(64);
     let joined = with_link(|l| {
-        if l.pads.len() >= MAX_PADS {
+        let (cap, count) = if watch {
+            (MAX_WATCHERS, l.pads.iter().filter(|p| p.watch).count())
+        } else {
+            (MAX_PADS, l.pads.iter().filter(|p| !p.watch).count())
+        };
+        if count >= cap {
             return false;
         }
         let since_ms = std::time::SystemTime::now()
@@ -410,22 +464,40 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
             name: name.clone(),
             since_ms,
             tx,
+            watch,
+            control: false,
         });
         true
     });
     if !joined {
+        if watch {
+            crate::rp_stream_api::remove_spectator(id);
+        }
         let _ = socket
             .send(say(serde_json::json!({"stage": "refused", "why": "full"})))
             .await;
         return;
     }
-    crate::log_info!("pad_link: {name} joined as controller {id}");
+    crate::log_info!(
+        "pad_link: {name} joined as {} {id}",
+        if watch { "watcher" } else { "controller" }
+    );
     let mut tick = tokio::time::interval(STATE_EVERY);
     loop {
         tokio::select! {
             out = rx.recv() => match out {
                 Some(Message::Close(_)) | None => break,
                 Some(m) => if socket.send(m).await.is_err() { break },
+            },
+            // A watcher's picture and sound (pending forever for a controller).
+            f = async {
+                match frames.as_mut() {
+                    Some(r) => r.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => match f {
+                Some(m) => if socket.send(m).await.is_err() { break },
+                None => frames = None,
             },
             _ = tick.tick() => {
                 let s = crate::rp_stream_api::live_state();
@@ -438,7 +510,11 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
                     #[derive(serde::Deserialize)]
                     struct In { #[serde(default)] pad: Option<ControllerState> }
                     if let Ok(In { pad: Some(p) }) = serde_json::from_str::<In>(t.as_str()) {
-                        crate::rp_stream_api::push_pad(id, Some(p));
+                        // A watcher plays only while it holds the controller.
+                        let plays = with_link(|l| l.pads.iter().any(|x| x.id == id && (!x.watch || x.control)));
+                        if plays {
+                            crate::rp_stream_api::push_pad(id, Some(p));
+                        }
                     }
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
@@ -447,6 +523,9 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
         }
     }
     crate::rp_stream_api::push_pad(id, None);
+    if watch {
+        crate::rp_stream_api::remove_spectator(id);
+    }
     with_link(|l| l.pads.retain(|p| p.id != id));
     crate::log_info!("pad_link: controller {id} ({name}) left");
 }

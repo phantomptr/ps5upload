@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
-import { Expand, RotateCw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Expand, RotateCw, Volume2 } from "lucide-react";
 
 import { askMotion, motionAvailable, startMotion } from "../lib/motion";
 import { PadClient, type PadLinkStage } from "../lib/padClient";
 import { TouchControls } from "../screens/Play/TouchControls";
 import { useTr } from "../state/lang";
 import { rpInput } from "../state/remotePlay";
+import { WatchPlayer, type WatchProblem } from "./watchPlayer";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -25,6 +26,7 @@ function stageText(tr: Tr, s: PadLinkStage, computer: string): string {
       if (s.why === "denied") return tr("pad_denied", undefined, "The computer said no.");
       if (s.why === "key") return tr("pad_old_code", undefined, "This code has expired. Scan the new one on the computer.");
       if (s.why === "full") return tr("pad_full", undefined, "Four phones are playing already.");
+      if (s.why === "no_stream") return tr("pad_watch_no_stream", undefined, "Nothing is streaming on the computer right now.");
       return tr("pad_refused", undefined, "The computer did not let this phone in.");
     case "lost":
       return tr("pad_lost", undefined, "Lost the connection to the computer.");
@@ -46,7 +48,18 @@ async function fillScreen(): Promise<void> {
  * controller full screen and sideways, as when the phone plays itself, and any controller
  * attached to the phone (Backbone, Kishi, GameSir...) plays too.
  */
-export function PadApp({ url, computer, onLeave }: { url: string; computer: string; onLeave?: () => void }) {
+export function PadApp({
+  url,
+  computer,
+  onLeave,
+  watch = false,
+}: {
+  url: string;
+  computer: string;
+  onLeave?: () => void;
+  /** Watch party: watch the stream; play only once the computer hands over the controller. */
+  watch?: boolean;
+}) {
   const tr = useTr();
   const [stage, setStage] = useState<PadLinkStage>({ kind: "connecting" });
   const [attempt, setAttempt] = useState(0);
@@ -54,6 +67,12 @@ export function PadApp({ url, computer, onLeave }: { url: string; computer: stri
   const [light, setLight] = useState<[number, number, number] | null>(null);
   const [client, setClient] = useState<PadClient | null>(null);
   const [motionOn, setMotionOn] = useState(false);
+  // Watch party: the picture, whether this page holds the controller, and what went wrong.
+  const player = useRef<WatchPlayer | null>(null);
+  const screen = useRef<HTMLDivElement>(null);
+  const [control, setControl] = useState(!watch);
+  const [problem, setProblem] = useState<WatchProblem | null>(null);
+  const [sound, setSound] = useState(false);
 
   useEffect(() => {
     if (!motionOn) return;
@@ -67,17 +86,29 @@ export function PadApp({ url, computer, onLeave }: { url: string; computer: stri
   }, [motionOn]);
 
   useEffect(() => {
+    const p = watch ? new WatchPlayer(setProblem) : null;
+    player.current = p;
+    if (p) screen.current?.appendChild(p.canvas);
+    setControl(!watch);
+    setSound(false);
     const c = new PadClient({
       url,
       onStage: setStage,
       touchPad: () => rpInput.touchPad,
       onLight: setLight,
       motion: () => rpInput.motion,
+      watch: p
+        ? { onFrame: (d) => p.onMessage(d), onCodec: (h) => p.setHevc(h), onControl: setControl }
+        : undefined,
     });
     setClient(c);
     c.start();
-    return () => c.stop();
-  }, [url, attempt]);
+    return () => {
+      c.stop();
+      p?.stop();
+      p?.canvas.remove();
+    };
+  }, [url, attempt, watch]);
 
   useEffect(() => {
     const update = () => setPortrait(window.innerHeight > window.innerWidth);
@@ -107,7 +138,11 @@ export function PadApp({ url, computer, onLeave }: { url: string; computer: stri
           }}
         />
         <span className="truncate" data-testid="pad-stage">
-          {stageText(tr, stage, computer)}
+          {watch && live && stage.kind === "joined" && stage.host
+            ? control
+              ? tr("pad_watch_control", undefined, "Watching, and you have the controller")
+              : tr("pad_watch_watching", { host: stage.host }, `Watching ${stage.host}`)
+            : stageText(tr, stage, computer)}
         </span>
         {live && typeof document !== "undefined" && !!document.documentElement.requestFullscreen && !document.fullscreenElement && (
           <button
@@ -141,7 +176,35 @@ export function PadApp({ url, computer, onLeave }: { url: string; computer: stri
         )}
       </div>
 
-      {live && <TouchControls stream={client} layout="overlay" />}
+      {/* Watch party: the stream itself, under everything. */}
+      <div ref={screen} className="absolute inset-0 z-0 flex items-center justify-center" aria-hidden />
+      {watch && live && !sound && (
+        <button
+          type="button"
+          onClick={() => {
+            player.current?.startSound();
+            setSound(true);
+          }}
+          className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-white/90 px-3 py-1.5 text-xs font-medium text-black"
+          data-testid="watch-sound"
+        >
+          <Volume2 size={14} />
+          {tr("pad_watch_sound", undefined, "Sound")}
+        </button>
+      )}
+      {watch && problem && (
+        <p className="absolute inset-x-4 top-1/2 z-10 -translate-y-1/2 text-center text-sm text-white/85" data-testid="watch-problem">
+          {problem === "no_hevc"
+            ? tr(
+                "pad_watch_no_hevc",
+                undefined,
+                "This device can't play this stream's picture: the computer streams HEVC, and this device plays only H.264.",
+              )
+            : tr("pad_watch_decode", undefined, "The picture could not be played here.")}
+        </p>
+      )}
+
+      {live && control && <TouchControls stream={client} layout="overlay" />}
 
       {live && portrait && (
         <div className="pointer-events-none absolute inset-x-0 bottom-6 z-20 flex justify-center">
