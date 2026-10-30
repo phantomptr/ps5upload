@@ -473,7 +473,7 @@ jobs:
           # host-side build scripts and proc macros, and one job instead of two takes one of the
           # 5 concurrent macOS runners this ~30-job workflow queues for. Windows keeps one target
           # per job: two targets in one run failed there with "can't find crate for `core`".
-          - os: macos-14
+          - os: macos-15
             targets: aarch64-apple-darwin,x86_64-apple-darwin
             target_args: --target aarch64-apple-darwin --target x86_64-apple-darwin
           - os: windows-2022
@@ -565,7 +565,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14, windows-2022]
+        os: [ubuntu-24.04, macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -819,7 +819,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14, windows-2022]
+        os: [ubuntu-24.04, macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1055,7 +1055,7 @@ jobs:
   payload-selftests:
     name: payload host self-tests (make test-payload)
     needs: payload
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
