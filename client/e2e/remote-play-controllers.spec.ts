@@ -72,7 +72,7 @@ test("a controller the browser does not recognize is mapped by pressing its butt
   });
 
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("heading", { name: "Remote Play" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const row = page.getByTestId("rp-pad");
   await expect(row).toContainText("GameSir G8 Galileo");
@@ -140,7 +140,7 @@ test("the computer shows a QR code for a phone, and lets a phone that asks in", 
   });
 
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("heading", { name: "Remote Play" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
   await page.getByTestId("rp-start").click();
   await expect(page.getByTestId("rp-toolbar")).toBeVisible();
 

@@ -55,7 +55,7 @@ test("turbo repeats a held button, and a macro key plays its presses", async ({ 
     });
   });
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("heading", { name: "Remote Play" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
   await page.getByTestId("rp-start").click();
   await page.getByTestId("rp-toolbar").hover();
   await page.getByTestId("rp-game").click();

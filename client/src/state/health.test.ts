@@ -85,3 +85,10 @@ describe("health, shared by Home and the Health screen", () => {
     expect(healthProblems(null)).toEqual([]);
   });
 });
+
+describe("healthProblems with a malformed report", () => {
+  it("is no problems, not a crash, when the report has no list", () => {
+    expect(healthProblems({} as never)).toEqual([]);
+    expect(healthProblems(null)).toEqual([]);
+  });
+});

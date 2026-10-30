@@ -102,7 +102,7 @@ async function streaming(page: Page, seen: Seen) {
     });
   });
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("heading", { name: "Remote Play" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
   await page.getByTestId("rp-start").click();
   await expect(page.getByTestId("rp-toolbar")).toBeVisible();
 }

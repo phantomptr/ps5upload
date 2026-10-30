@@ -19,9 +19,9 @@ describe("openCommandPalette", () => {
 describe("the palette's screens", () => {
   const where = { betaEnabled: false, inBrowser: false, macOrLinux: true };
 
-  it("lists Home and Bug report, then pinned screens in pin order, then the rest", () => {
+  it("lists Home, Play and Bug report, then pinned screens in pin order, then the rest", () => {
     const order = paletteScreens(["/payloads", "/files"], where).map((i) => i.to);
-    expect(order.slice(0, 4)).toEqual(["/home", "/bug-report", "/payloads", "/files"]);
+    expect(order.slice(0, 5)).toEqual(["/home", "/play", "/bug-report", "/payloads", "/files"]);
     // Each screen once.
     expect(new Set(order).size).toBe(order.length);
     const plain = paletteScreens([], where).map((i) => i.to);
@@ -30,11 +30,11 @@ describe("the palette's screens", () => {
 
   it("keeps the usual order with nothing pinned, and skips pins this build can't show", () => {
     const plain = paletteScreens([], where).map((i) => i.to);
-    expect(plain.slice(0, 2)).toEqual(["/home", "/bug-report"]);
+    expect(plain.slice(0, 3)).toEqual(["/home", "/play", "/bug-report"]);
     // Shell has no browser path: pinned or not, the browser build leaves it out.
     const browser = paletteScreens(["/shell", "/files"], { ...where, inBrowser: true }).map((i) => i.to);
     expect(browser).not.toContain("/shell");
-    expect(browser[2]).toBe("/files");
+    expect(browser[3]).toBe("/files");
   });
 });
 

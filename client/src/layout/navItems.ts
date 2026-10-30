@@ -157,16 +157,8 @@ export const NAV_ITEMS: NavItem[] = [
     fallback: "Payloads",
     icon: Boxes,
   },
-  // The console's users and accounts, their avatars, and Remote Play (which needs an
-  // activated, signed-in account, so it lives with them).
-  // Remote Play in the app: the console's screen streamed here. Pairing and the console
-  // settings it needs stay in Accounts.
-  {
-    to: "/play",
-    key: "play_title",
-    fallback: "Remote Play",
-    icon: MonitorPlay,
-  },
+  // The console's users and accounts, their avatars and the offline sign-in (Play is at the top,
+  // with Home: see PLAY_NAV_ITEM).
   {
     to: "/accounts",
     key: "accounts_title",
@@ -231,7 +223,16 @@ export const HOME_NAV_ITEM: NavItem = {
   icon: LayoutDashboard,
 };
 
-/** Bug report: right under Home, outside the sections and never hidden — when something goes
+/** Play (10.0.0): the console's screen streamed here, the app's centre. Right under Home,
+ *  outside the sections and never hidden; everything else works without it. */
+export const PLAY_NAV_ITEM: NavItem = {
+  to: "/play",
+  key: "play_title",
+  fallback: "Play",
+  icon: MonitorPlay,
+};
+
+/** Bug report: under Home and Play, outside the sections and never hidden — when something goes
  *  wrong, the way to report it must be where anyone can find it. */
 export const BUG_REPORT_NAV_ITEM: NavItem = {
   to: "/bug-report",
@@ -241,7 +242,7 @@ export const BUG_REPORT_NAV_ITEM: NavItem = {
 };
 
 /** Above every section, in this order; none can be hidden. */
-export const FIXED_NAV_ITEMS: readonly NavItem[] = [HOME_NAV_ITEM, BUG_REPORT_NAV_ITEM];
+export const FIXED_NAV_ITEMS: readonly NavItem[] = [HOME_NAV_ITEM, PLAY_NAV_ITEM, BUG_REPORT_NAV_ITEM];
 
 /** Whether a screen is pinned (never hidden, never counted as hidden). */
 export function isFixedNav(to: string): boolean {
@@ -252,7 +253,7 @@ export function isFixedNav(to: string): boolean {
  *  this build doesn't show now — a beta screen with beta off — doesn't take a place). */
 export const MAX_PINNED = 12;
 
-/** Whether the user can pin this screen: any screen in the sections. Home and Bug report are
+/** Whether the user can pin this screen: any screen in the sections. Home, Play and Bug report are
  *  already always at the top, so pinning them would only duplicate them. */
 export function isPinnableNav(to: string): boolean {
   return !isFixedNav(to) && NAV_ITEMS.some((i) => i.to === to);

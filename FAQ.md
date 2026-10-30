@@ -2033,6 +2033,12 @@ helper stops during those 30 seconds, the helper pauses that game's cheats and s
 a cheat that crashes a game can't do it again on every start. Switch any of that game's cheats to
 resume.
 
+**Q: What is Play? Where did Remote Play go?**
+From 10.0.0, Remote Play is called **Play** and sits right under Home in the sidebar (and in the phone tab bar). It is the same thing: your PS5's screen streamed into the app, played with a controller, the keyboard or touch, and it wakes the console from rest mode on its own. Home shows a **Play** card (Play, or Continue the last game); a game's page has **Play** (start the game and stream it here) next to **Launch on PS5** (start it on the TV only); search has "Play {game}". Everything else in the app works without it, and the Home card can be hidden (Play › Set up brings it back). "Remote Play" is still the name of Sony's feature underneath, so the console's own setting and Sony's PS Remote Play app keep that name.
+
+**Q: How do I set Play up? (np-fake-signin, pairing, and the rest)**
+Open **Play › Set up** (or Set up Play on Home). It is a checklist that reads the console every few seconds and ticks each step by itself: connect to the PS5 (the helper running), sign in to a user, give that user an account ID (Accounts), sign the account in offline with np-fake-signin (run from the checklist; restart the PS5 afterwards and the step ticks once it is back), turn Remote Play on (one button, and allow it for the user on newer firmware), let the PS5 be woken from rest mode (only the console shows these settings, so you tick that one yourself), pair this app (one button), and play. The open step is always the next one to do.
+
 **Q: How does Remote Play work on a phone?**
 Held upright, the picture is at the top and its controls are under it: **Full screen**, **Stop**
 and a **⋯** menu with Stats, Screenshot, Record a clip, Picture in picture, Settings and volume. In full screen held upright,
@@ -2044,10 +2050,10 @@ menu. The screen stays awake while you play, and Settings has the controller's s
 In the Android app, full screen hides the status and navigation bars (swipe from an edge to see them) and holds the phone in landscape.
 
 **Q: Part of the Remote Play picture is cut off, or it looks stretched.**
-**Picture size** decides how the picture fits the screen: **Fit** shows the whole picture with black bars where the shapes differ (the default), **Fill** fills the screen and crops the edges, **Stretch** stretches the picture to the whole screen. It shows in full screen: on the page the picture's box is the picture's own shape, so all three look the same there. **Fit** never cuts anything off: like a video player, the whole picture always shows, with black bars at the sides or top and bottom when the shapes differ. On a 16:9 screen (the picture's own shape) all three look the same. Change it in full screen without leaving it: the **Picture size** menu on the bar (desktop), or the Fit / Fill / Stretch row in the **⋯** menu (phones). It's also in Remote Play › Settings, and it applies at once. Before 9.2.0, the Windows app could show the picture enlarged with its right and bottom cut off (#538); update to fix it.
+**Picture size** decides how the picture fits the screen: **Fit** shows the whole picture with black bars where the shapes differ (the default), **Fill** fills the screen and crops the edges, **Stretch** stretches the picture to the whole screen. It shows in full screen: on the page the picture's box is the picture's own shape, so all three look the same there. **Fit** never cuts anything off: like a video player, the whole picture always shows, with black bars at the sides or top and bottom when the shapes differ. On a 16:9 screen (the picture's own shape) all three look the same. Change it in full screen without leaving it: the **Picture size** menu on the bar (desktop), or the Fit / Fill / Stretch row in the **⋯** menu (phones). It's also in Play › Settings, and it applies at once. Before 9.2.0, the Windows app could show the picture enlarged with its right and bottom cut off (#538); update to fix it.
 
 **Q: Does my phone controller (Backbone, Razer Kishi, GameSir, Scuf Nomad...) work with Remote Play?**
-Yes. Phone controllers, USB-C or Bluetooth, are game controllers to the phone, so Remote Play reads them like any other: connect it, press a button, and it plays (the on-screen controller hides). If the browser doesn't recognise one, it still plays in the usual layout; if a button is wrong, open Remote Play › Settings › Controllers › **Map buttons** and press each button as asked (any step can be skipped). **Set an extra button** gives a back button or paddle any PS5 button. Mappings are saved per controller. In the Android app the app also hands controllers to the page itself, for phones whose system browser misses them; on iPhone the app makes sure the page has the focus controllers need.
+Yes. Phone controllers, USB-C or Bluetooth, are game controllers to the phone, so Remote Play reads them like any other: connect it, press a button, and it plays (the on-screen controller hides). If the browser doesn't recognise one, it still plays in the usual layout; if a button is wrong, open Play › Settings › Controllers › **Map buttons** and press each button as asked (any step can be skipped). **Set an extra button** gives a back button or paddle any PS5 button. Mappings are saved per controller. In the Android app the app also hands controllers to the page itself, for phones whose system browser misses them; on iPhone the app makes sure the page has the focus controllers need.
 
 **Q: What is the Game panel in Remote Play?**
 The **Game** button on the stream bar (or **Game** in the phone's **⋯** menu) opens a panel over
@@ -2079,10 +2085,10 @@ Yes, from 9.11.0. While the computer plays, open the phone panel on the stream's
 Yes, from 9.5.0. While the computer plays, press the phone button on the stream's bar (**Use a phone as a controller**) and scan the QR code with the phone's camera: the phone opens a controller, full screen and sideways, that plays along with the computer's own controls (up to four phones). Or, in the PS5Upload app on the phone, Remote Play shows that the computer is playing: tap **Use this device as its controller** and allow it on the computer. A controller attached to the phone works through it too. Only the controller page and its connection are open to your network, and they need the QR code's key or your OK on the computer; **Close the link** lets every phone go. Rumble vibrates an Android phone.
 
 **Q: Motion controls?**
-Remote Play › Settings › **Motion controls (experimental)** (phones) sends the phone's gyro and tilt as the controller's motion sensors, for games with gyro aiming; the phone controller page has a **Motion** button too. Browsers give motion only to secure pages, so it works in the apps but not on the QR code's page in a phone browser.
+Play › Settings › **Motion controls (experimental)** (phones) sends the phone's gyro and tilt as the controller's motion sensors, for games with gyro aiming; the phone controller page has a **Motion** button too. Browsers give motion only to secure pages, so it works in the apps but not on the QR code's page in a phone browser.
 
 **Q: Can Remote Play save what just happened (instant replay)?**
-Yes, from 9.8.0. Remote Play › Settings › **Instant replay**: choose how much to keep (15, 30 or
+Yes, from 9.8.0. Play › Settings › **Instant replay**: choose how much to keep (15, 30 or
 60 seconds). While you play, PS5Upload keeps those last seconds on this computer as the PS5 sent
 them; **Save replay** (the clock-with-arrow button on the bar, or in the phone's menu) saves them
 as an MP4 with sound, where your screenshots and clips go. Nothing is saved until you press it,
@@ -2095,24 +2101,24 @@ the mouse once you click the picture (Esc lets the pointer go); a macro plays a 
 one key. Each game keeps its own, on this device. The PS5 sees an ordinary controller.
 
 **Q: Can I sharpen the Remote Play picture or crop an ultrawide game?**
-Remote Play › Settings › **Picture**: Sharpen, Brightness, Contrast, Colour, Crop to 21:9 and
+Play › Settings › **Picture**: Sharpen, Brightness, Contrast, Colour, Crop to 21:9 and
 Sharp pixels, applied at once. If the device cannot keep up (or has no WebGL 2) they turn off by
 themselves and say so.
 
 **Q: Can Remote Play upscale the picture to my screen?**
-Yes, from 9.11.0 (experimental): Remote Play › Settings › Picture › **Upscale to the screen (FSR 1)**. The PS5 streams at most 1080p; on a bigger or 4K screen the picture is normally scaled up by plain smoothing, which looks soft. With this on, each frame is upscaled on the graphics card to the picture's own size on your screen with AMD FidelityFX Super Resolution 1 (edge-aware upscaling, then sharpening). It is plain shader code, so it works the same on AMD, NVIDIA, Intel and Apple GPUs, and phones. **Sharpen** sets how crisp it is. It does nothing when the picture is not shown bigger than the stream, and it turns itself off with a notice if the device can't keep up. Screenshots and clips are saved at the upscaled size. NVIDIA's RTX Video Super Resolution and Apple's MetalFX can't be used here: they only work on video players or native apps, not on the app's stream picture.
+Yes, from 9.11.0 (experimental): Play › Settings › Picture › **Upscale to the screen (FSR 1)**. The PS5 streams at most 1080p; on a bigger or 4K screen the picture is normally scaled up by plain smoothing, which looks soft. With this on, each frame is upscaled on the graphics card to the picture's own size on your screen with AMD FidelityFX Super Resolution 1 (edge-aware upscaling, then sharpening). It is plain shader code, so it works the same on AMD, NVIDIA, Intel and Apple GPUs, and phones. **Sharpen** sets how crisp it is. It does nothing when the picture is not shown bigger than the stream, and it turns itself off with a notice if the device can't keep up. Screenshots and clips are saved at the upscaled size. NVIDIA's RTX Video Super Resolution and Apple's MetalFX can't be used here: they only work on video players or native apps, not on the app's stream picture.
 
 **Q: How do I take a screenshot or record a clip in Remote Play?**
-Use the **camera** (Screenshot) and **video** (Record a clip) buttons on the picture's bar (desktop, also in full screen), or in the **⋯** menu on a phone. A screenshot is a PNG at the stream's own size (1920×1080 or 1280×720), whatever size the picture is shown at. A clip records the picture and the game's sound (also while the player is muted); a red **Recording** light with the time shows on the picture, and pressing it (or the button again) stops and saves the clip. Clips are MP4 where the device records MP4, else WebM, and stop by themselves after 10 minutes (they are held in memory until saved). Files are named like `PS5 Living room 2026-10-30 21-14-05.png`. On a phone they go to the photo library (**Remote Play › Settings › Save screenshots and clips to Photos**, on by default): the iPhone and iPad app adds them to **Photos** (it asks once, for adding only; it never reads your photos), the Android app to the gallery's **PS5Upload** album (Pictures/PS5Upload and Movies/PS5Upload, Android 10 and later), and a phone's browser shows **Save to Photos**, which opens the share sheet where **Save Image** or **Save Video** puts it there. With that off, if Photos access was refused, or on older Android, the apps save into **Downloads** (the iPhone app into its folder in the Files app). The desktop app saves straight into **Downloads**, and the web UI on a computer downloads them through the browser. Recording needs a device that can record video from a web page; where it can't, only Screenshot shows.
+Use the **camera** (Screenshot) and **video** (Record a clip) buttons on the picture's bar (desktop, also in full screen), or in the **⋯** menu on a phone. A screenshot is a PNG at the stream's own size (1920×1080 or 1280×720), whatever size the picture is shown at. A clip records the picture and the game's sound (also while the player is muted); a red **Recording** light with the time shows on the picture, and pressing it (or the button again) stops and saves the clip. Clips are MP4 where the device records MP4, else WebM, and stop by themselves after 10 minutes (they are held in memory until saved). Files are named like `PS5 Living room 2026-10-30 21-14-05.png`. On a phone they go to the photo library (**Play › Settings › Save screenshots and clips to Photos**, on by default): the iPhone and iPad app adds them to **Photos** (it asks once, for adding only; it never reads your photos), the Android app to the gallery's **PS5Upload** album (Pictures/PS5Upload and Movies/PS5Upload, Android 10 and later), and a phone's browser shows **Save to Photos**, which opens the share sheet where **Save Image** or **Save Video** puts it there. With that off, if Photos access was refused, or on older Android, the apps save into **Downloads** (the iPhone app into its folder in the Files app). The desktop app saves straight into **Downloads**, and the web UI on a computer downloads them through the browser. Recording needs a device that can record video from a web page; where it can't, only Screenshot shows.
 
 **Q: How much delay does Remote Play have, and what does Low latency do?**
-With **Stats** on, the picture shows a **Latency** line, for example `Latency ≈ 9 ms engine + 4 ms decode`: the round trip between this device and the engine (measured once a second; near zero in the desktop app, a network hop in the web UI or on a phone) and how long a frame takes from arriving to being drawn. The leg from the PS5 to the engine isn't included: the two have no shared clock, so it can't be measured honestly. **Remote Play › Settings › Low latency** (off by default) uses the smallest sound buffer, keeps the engine's picture queue for this device at 2 frames instead of 6, and skips to the next whole picture sooner when decoding falls behind. Frames are drawn as soon as they're decoded either way. The trade: on a busy network more frames are dropped and the sound can crackle. The sound part applies at once; the picture part at the next start.
+With **Stats** on, the picture shows a **Latency** line, for example `Latency ≈ 9 ms engine + 4 ms decode`: the round trip between this device and the engine (measured once a second; near zero in the desktop app, a network hop in the web UI or on a phone) and how long a frame takes from arriving to being drawn. The leg from the PS5 to the engine isn't included: the two have no shared clock, so it can't be measured honestly. **Play › Settings › Low latency** (off by default) uses the smallest sound buffer, keeps the engine's picture queue for this device at 2 frames instead of 6, and skips to the next whole picture sooner when decoding falls behind. Frames are drawn as soon as they're decoded either way. The trade: on a busy network more frames are dropped and the sound can crackle. The sound part applies at once; the picture part at the next start.
 
 **Q: Remote Play says "The network is dropping frames". What should I do?**
-With **Lower quality on a busy network** on (the default), when a 1080p stream keeps losing frames for about 10 seconds the picture offers **Switch to 720p** once per session. 720p needs about two-thirds the bandwidth. Switching restarts the stream, because the resolution is fixed for a session, and the PS5 holds its last session for about 12 seconds after it ends, so expect roughly 15 seconds of waiting; the app waits that out and starts again by itself (**Cancel** stops it). It's offered rather than done for you because that pause can come at a bad moment in a game. The choice is kept (Picture becomes 720p in Settings); switch back there. It never steps down twice or back up by itself. Turn the setting off in Remote Play › Settings to never be asked. A wired connection for the PS5 (and 5 GHz Wi-Fi for this device) helps most.
+With **Lower quality on a busy network** on (the default), when a 1080p stream keeps losing frames for about 10 seconds the picture offers **Switch to 720p** once per session. 720p needs about two-thirds the bandwidth. Switching restarts the stream, because the resolution is fixed for a session, and the PS5 holds its last session for about 12 seconds after it ends, so expect roughly 15 seconds of waiting; the app waits that out and starts again by itself (**Cancel** stops it). It's offered rather than done for you because that pause can come at a bad moment in a game. The choice is kept (Picture becomes 720p in Settings); switch back there. It never steps down twice or back up by itself. Turn the setting off in Play › Settings to never be asked. A wired connection for the PS5 (and 5 GHz Wi-Fi for this device) helps most.
 
 **Q: Can I use voice chat (a microphone) in Remote Play?**
-Experimental, from 9.5.0. First turn on **Microphone (experimental)** in Remote Play › Settings
+Experimental, from 9.5.0. First turn on **Microphone (experimental)** in Play › Settings
 (off by default; it applies from the next start). Without it, a session starts exactly as before.
 Then press the **Microphone** button on the picture's bar (desktop and full screen), or **Mic** in
 the **⋯** menu (phones). It's off until you press it; the first press asks
@@ -2154,12 +2160,12 @@ On Linux the app's window plays video through the system's GStreamer, and some d
 Chrome and Chromium carry their own decoder, so Remote Play also works from them through the web UI.
 The app now checks for a decoder before it wakes the console and, without one, says what to install.
 
-**Q: What is Remote Play, and how do I set it up?**
+**Q: What does Play (Remote Play) do, step by step?**
 Remote Play streams a PS5 into the app (desktop, web UI and Android) and lets you play it with a
 controller connected to the computer, the keyboard, or touch. It wakes a console in rest mode and
 signs your user in on its own, and keeps playing while you use other screens. One console streams
-at a time. **Accounts › Remote Play** has the same steps as a checklist that shows what is done
-and fixes what it can:
+at a time. **Play › Set up** has the same steps as a checklist that ticks itself and does what it
+can (see "How do I set Play up?"):
 
 1. **Sign in to a user on the PS5.** Use a user without a login passcode; a passcode stops the
    automatic sign-in after a wake.
@@ -2171,9 +2177,10 @@ and fixes what it can:
    firmware 10.00 and later allow it for the user.
 5. **Let the PS5 be woken**: Settings › System › Power Saving › Features Available in Rest Mode ›
    Stay Connected to the Internet and Enable Turning On PS5 from Network.
-6. **Pair the app**: Connection › Wake & sign in › Set up. One click; the keys stay on this
-   computer. Do it again after resetting the console or changing the user.
-7. **Play**: Remote Play › Start.
+6. **Pair the app**: the Pair button in Play › Set up (or Connection › Wake & sign in › Set up).
+   One click; the keys stay on this computer. Do it again after resetting the console or
+   changing the user.
+7. **Play**: Play › Start.
 
 If the picture stays black or stutters, use a wired connection or 5 GHz Wi-Fi, try 720p or 30 fps,
 and let the app through this computer's firewall on the local network (TCP and UDP 9295–9304). A

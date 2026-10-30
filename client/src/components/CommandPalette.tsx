@@ -8,6 +8,8 @@ import { ArrowRight, Search } from "lucide-react";
 
 import { useThemeStore } from "../state/theme";
 import { profileNameForHost, selectConsoleByAddress, useRosterStore } from "../state/roster";
+import { useConnectionStore } from "../state/connection";
+import { hostOf } from "../lib/addr";
 import { pushNotification } from "../state/notifications";
 import { activateFocusTrap } from "../lib/focusTrap";
 import { useTr, type Translator } from "../state/lang";
@@ -79,12 +81,12 @@ interface Command {
   /** Optional secondary line for context. */
   hint?: string;
   /** Group label for visual sectioning. */
-  group: "Navigation" | "Theme" | "Connection" | "Window" | "Games" | "Pins";
+  group: "Navigation" | "Theme" | "Connection" | "Window" | "Games" | "Play" | "Pins";
   run: () => void | Promise<void>;
 }
 
 /**
- * The palette's screens: Home and Bug report, then the user's pinned screens in pin order,
+ * The palette's screens: Home, Play and Bug report, then the user's pinned screens in pin order,
  * then the rest in sidebar order (same visibility rules as the sidebar).
  */
 export function paletteScreens(
@@ -157,6 +159,16 @@ function useCommands(close: () => void, open: boolean): Command[] {
   );
   const pinned = useNavSidebarStore((s) => s.pinned);
   const togglePinned = useNavSidebarStore((s) => s.togglePinned);
+  // Play (10.0.0): "Play <game>" for what the selected console has installed, once it is paired.
+  const host = useConnectionStore((s) => s.host)?.trim() ?? "";
+  const paired = profiles.some((p) => p.host === host && !!p.wake_regist_key && !!p.wake_rp_key);
+  const playable = useMemo(
+    () =>
+      paired && host
+        ? installed.filter((g) => g.hosts.some((h) => hostOf(h) === hostOf(host)))
+        : [],
+    [installed, host, paired],
+  );
 
   return useMemo<Command[]>(() => {
     // Nav labels reuse the same i18n keys as Sidebar (which already
@@ -327,8 +339,22 @@ function useCommands(close: () => void, open: boolean): Command[] {
           },
         }),
       ),
+      // Play a game on the selected console, streamed here. Listed only when searching.
+      ...playable.map(
+        (g): Command => ({
+          id: `play:${g.title_id}`,
+          label: tr("cmdpalette_play_game", { title: g.title || g.title_id }, `Play ${g.title || g.title_id}`),
+          keywords: [g.title_id, "play", "stream"],
+          group: "Play",
+          hint: g.title_id,
+          run: () => {
+            navigate(`/play?launch=${encodeURIComponent(g.title_id)}&name=${encodeURIComponent(g.title || g.title_id)}`);
+            close();
+          },
+        }),
+      ),
     ];
-  }, [navigate, toggleTheme, close, tr, games, pinned, togglePinned]);
+  }, [navigate, toggleTheme, close, tr, games, pinned, togglePinned, playable]);
 }
 
 /** The event a button sends to open the palette (it is otherwise opened by
@@ -434,7 +460,7 @@ export function CommandPalette() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return commands.filter((c) => c.group !== "Games" && c.group !== "Pins");
+    if (!q) return commands.filter((c) => c.group !== "Games" && c.group !== "Play" && c.group !== "Pins");
     return commands.filter((c) => {
       if (c.label.toLowerCase().includes(q)) return true;
       if (c.keywords?.some((k) => k.toLowerCase().includes(q))) return true;

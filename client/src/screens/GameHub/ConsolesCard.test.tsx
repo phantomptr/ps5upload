@@ -67,8 +67,9 @@ describe("the game page's console rows", () => {
     expect(html).toContain("now");
     expect(html).toContain("as of 2 h ago");
     expect(html).toContain("Install update 01.004");
-    // Play only on the connected console.
-    expect(html.match(/Play</g)?.length).toBe(1);
+    // Launch only on the connected console; not paired, so Play here (its setup) beside it.
+    expect(html.match(/Launch on PS5</g)?.length).toBe(1);
+    expect(html.match(/Play here</g)?.length).toBe(1);
   });
 
   it("offers Close game instead of Play on the console the game is running on", () => {

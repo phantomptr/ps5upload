@@ -1824,22 +1824,17 @@ export function StreamPanel() {
       {profile && !paired && !running && (
         <Callout
           tone="info"
-          title={tr("rp_not_paired", undefined, "Set up Wake & sign in for this console first")}
+          title={tr("play_not_ready", undefined, "Set up Play for this console first")}
           action={
-            <div className="flex gap-2">
-              <Button size="sm" variant="primary" onClick={() => navigate("/connection")}>
-                {tr("rp_open_connection", undefined, "Open Connection")}
-              </Button>
-              <Button size="sm" onClick={() => navigate("/accounts#remote-play")}>
-                {tr("rp_setup_guide", undefined, "Setup guide")}
-              </Button>
-            </div>
+            <Button size="sm" variant="primary" onClick={() => navigate("/play/setup")} data-testid="play-open-setup">
+              {tr("play_setup_title", undefined, "Set up Play")}
+            </Button>
           }
         >
           {tr(
-            "rp_not_paired_body",
+            "play_not_ready_body",
             undefined,
-            "That pairs this app with the PS5 once. The same keys then start a stream; nothing else is needed.",
+            "A few steps, once per console: the checklist does what it can for you and ticks each step as it's done.",
           )}
         </Callout>
       )}

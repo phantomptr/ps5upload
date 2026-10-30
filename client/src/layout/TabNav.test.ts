@@ -4,19 +4,20 @@ import { NAV_ITEMS, FIXED_NAV_ITEMS, groupNavItems } from "./navItems";
 import { tabForPath, type TabId } from "./TabNav";
 
 // The tabs must file every screen where the sidebar does: one section, one tab.
-const SECTION_TAB: Record<string, TabId> = {
+// Diagnostics has no tab since Play took it (10.0.0): its screens are in More (null).
+const SECTION_TAB: Record<string, TabId | null> = {
   nav_section_connect: "home",
   nav_section_app: "home",
   nav_section_files: "files",
   nav_section_games_mods: "games",
   nav_section_console: "console",
-  nav_section_diagnostics: "tasks",
+  nav_section_diagnostics: null,
 };
 
 describe("TabNav groups follow the sidebar's sections", () => {
   it("knows every section", () => {
     for (const g of groupNavItems(NAV_ITEMS)) {
-      expect(SECTION_TAB[g.section.key], g.section.key).toBeDefined();
+      expect(g.section.key in SECTION_TAB, g.section.key).toBe(true);
     }
   });
 
@@ -36,8 +37,11 @@ describe("TabNav groups follow the sidebar's sections", () => {
 
   it("covers pinned items, redirects and sub-routes", () => {
     for (const item of FIXED_NAV_ITEMS) expect(tabForPath(item.to), item.to).not.toBeNull();
+    expect(FIXED_NAV_ITEMS.map((i) => i.to)).toEqual(["/home", "/play", "/bug-report"]);
     expect(tabForPath("/games/PPSA01234")).toBe("games");
-    expect(tabForPath("/activity")).toBe("tasks");
+    expect(tabForPath("/activity")).toBeNull();
+    expect(tabForPath("/play")).toBe("play");
+    expect(tabForPath("/bug-report")).toBe("home");
     expect(tabForPath("/file-system")).toBe("files");
     expect(tabForPath("/more")).toBeNull();
   });

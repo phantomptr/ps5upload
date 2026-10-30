@@ -117,12 +117,7 @@ function AccountsBody({ addr }: { addr: string }) {
       <UsernameSection addr={addr} info={info} onChanged={refreshInfo} />
       <UserInfoBackup addr={addr} />
 
-      <RemotePlaySection
-        onShowAccounts={() =>
-          document.getElementById(USERS_ANCHOR)?.scrollIntoView?.({ block: "start", behavior: "smooth" })
-        }
-        signIn={<NpSignInSection addr={addr} info={info} />}
-      />
+      <RemotePlaySection signIn={<NpSignInSection addr={addr} info={info} />} />
     </div>
   );
 }

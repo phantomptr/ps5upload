@@ -71,7 +71,8 @@ describe("the sidebar's sections", () => {
     // Home and Bug report sit above the sections, not inside one.
     expect(paths(groups)).not.toContain(HOME_NAV_ITEM.to);
     expect(paths(groups)).not.toContain("/bug-report");
-    expect(FIXED_NAV_ITEMS.map((i) => i.to)).toEqual(["/home", "/bug-report"]);
+    expect(paths(groups)).not.toContain("/play");
+    expect(FIXED_NAV_ITEMS.map((i) => i.to)).toEqual(["/home", "/play", "/bug-report"]);
   });
 
   it("leaves hidden screens out", () => {

@@ -250,33 +250,53 @@ function ConsoleRow({
             </Button>
           );
         }
+        // Play (10.0.0): with the console paired, Play starts the game and streams it here, and
+        // Launch on PS5 just starts it on the TV. Not paired: Launch on PS5 leads, and Play here
+        // opens Play's setup. Nothing needs Play.
+        if (playBlocked) {
+          return (
+            <Button key="play" size="sm" variant="primary" leftIcon={<Play size={13} />} disabled title={playBlocked}>
+              {tr("installed_needs_smp", undefined, "Needs SMP")}
+            </Button>
+          );
+        }
         return [
-          <Button
-            key="play"
-            size="sm"
-            variant="primary"
-            leftIcon={launching ? <Spinner size={13} /> : <Play size={13} />}
-            disabled={launching || !!playBlocked}
-            title={playBlocked}
-            onClick={onPlay}
-          >
-            {playBlocked
-              ? tr("installed_needs_smp", undefined, "Needs SMP")
-              : launching
-                ? tr("game_hub_launching", undefined, "Starting…")
-                : tr("game_play", undefined, "Play")}
-          </Button>,
-          onPlayStream && !playBlocked && (
+          onPlayStream && (
             <Button
               key="play-stream"
               size="sm"
-              variant="secondary"
+              variant="primary"
               leftIcon={<MonitorPlay size={13} />}
               disabled={launching}
               onClick={onPlayStream}
               data-testid="game-play-stream"
             >
-              {tr("game_play_stream", undefined, "Play on Remote Play")}
+              {tr("game_play_here", undefined, "Play")}
+            </Button>
+          ),
+          <Button
+            key="play"
+            size="sm"
+            variant={onPlayStream ? "secondary" : "primary"}
+            leftIcon={launching ? <Spinner size={13} /> : <Play size={13} />}
+            disabled={launching}
+            onClick={onPlay}
+            data-testid="game-launch"
+          >
+            {launching
+              ? tr("game_hub_launching", undefined, "Starting…")
+              : tr("game_launch_on_ps5", undefined, "Launch on PS5")}
+          </Button>,
+          !onPlayStream && (
+            <Button
+              key="play-setup"
+              size="sm"
+              variant="ghost"
+              leftIcon={<MonitorPlay size={13} />}
+              onClick={() => navigate("/play/setup")}
+              data-testid="game-play-setup"
+            >
+              {tr("game_play_here_setup", undefined, "Play here")}
             </Button>
           ),
         ];

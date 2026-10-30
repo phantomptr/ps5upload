@@ -1,12 +1,12 @@
 // Tabs are Links, not NavLinks: a NavLink sets aria-current from its own path alone, so the
 // Games tab told screen readers nothing while Collection, Saves or Captures was open.
-import { Link, NavLink, useLocation } from "react-router";
+import { Link, useLocation } from "react-router";
 import {
   LayoutDashboard,
   Gamepad2,
   FolderTree,
   Cpu,
-  Activity,
+  MonitorPlay,
   MoreHorizontal,
 } from "lucide-react";
 import { useTr } from "../state/lang";
@@ -29,7 +29,7 @@ import { NAV_ITEMS, groupNavItems } from "./navItems";
  *   `/console`, `/tasks` routes.
  */
 
-export type TabId = "home" | "games" | "files" | "console" | "tasks";
+export type TabId = "home" | "games" | "play" | "files" | "console";
 
 interface TabDef {
   /** v5 tab id (also used as the i18n key suffix). */
@@ -51,7 +51,7 @@ const TAB_DEFS: TabDef[] = [
     icon: LayoutDashboard,
     to: "/home",
     sections: ["nav_section_connect", "nav_section_app"],
-    extra: ["/home", "/dashboard", "/first-run"],
+    extra: ["/home", "/dashboard", "/first-run", "/bug-report"],
   },
   {
     id: "games",
@@ -59,6 +59,14 @@ const TAB_DEFS: TabDef[] = [
     to: "/games",
     sections: ["nav_section_games_mods"],
     extra: ["/library", "/installed", "/screenshots", "/videos"],
+  },
+  // Play (10.0.0): a tab of its own, where Activity was (Activity is in More).
+  {
+    id: "play",
+    icon: MonitorPlay,
+    to: "/play",
+    sections: [],
+    extra: ["/play"],
   },
   {
     id: "files",
@@ -73,13 +81,6 @@ const TAB_DEFS: TabDef[] = [
     to: "/console",
     sections: ["nav_section_console"],
     extra: ["/hardware", "/fan-curve", "/nanodns", "/nano-dns", "/send-payload", "/shadowmount"],
-  },
-  {
-    id: "tasks",
-    icon: Activity,
-    to: "/tasks",
-    sections: ["nav_section_diagnostics"],
-    extra: ["/activity", "/stats", "/kernel-log", "/bug-report"],
   },
 ];
 
@@ -185,9 +186,12 @@ export function TabBottomNav() {
             hardware back button and router history treat it like any
             other screen (mobile-design §3.4), and it lets the screen
             use <main>'s scroller instead of nesting its own. */}
-        <NavLink
+        {/* More lights for /more and for the screens only it reaches (Activity, since Play took
+            that tab in 10.0.0). */}
+        <Link
           to="/more"
           aria-label={tr("v5_tab_more", undefined, "More")}
+          aria-current={activeTab === null ? "page" : undefined}
           className={[
             "nav-pill flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-[0.6875rem] font-medium",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]",
@@ -195,7 +199,7 @@ export function TabBottomNav() {
         >
           <MoreHorizontal size={21} strokeWidth={1.8} className="nav-pill-icon" aria-hidden />
           <span className="max-w-full truncate px-0.5">{tr("v5_tab_more", undefined, "More")}</span>
-        </NavLink>
+        </Link>
       </nav>
     </>
   );

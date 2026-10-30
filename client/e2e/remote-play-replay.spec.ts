@@ -147,7 +147,7 @@ test("Save replay turns the engine's last seconds into an MP4 that plays", async
     });
   });
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("heading", { name: "Remote Play" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
   snapshot = Buffer.from(await makeSnapshot(page));
   await page.getByTestId("rp-start").click();
   // The session is asked to keep the last 30 seconds.

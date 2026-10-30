@@ -32,7 +32,7 @@ export interface SaveBackupFile {
   /** `YYYY-MM-DD_HHMMSS` (UTC for backups the engine made), `_snap` after it for a snapshot. */
   stamp: string;
   size: number;
-  /** `snap`: taken while the game ran (Remote Play › Game › Snapshot). */
+  /** `snap`: taken while the game ran (Play › Game › Snapshot). */
   tag?: string;
 }
 

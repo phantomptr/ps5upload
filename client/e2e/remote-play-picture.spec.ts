@@ -103,7 +103,7 @@ async function open(browser: Browser, c: Case): Promise<{ page: Page; close: () 
     });
   });
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("heading", { name: "Remote Play" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
   return { page, close: () => ctx.close() };
 }
 

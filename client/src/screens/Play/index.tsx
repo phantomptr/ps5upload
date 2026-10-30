@@ -1,16 +1,21 @@
-import { KeyRound, MonitorPlay } from "lucide-react";
-import { useNavigate } from "react-router";
+import { ListChecks, MonitorPlay } from "lucide-react";
+import { useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 
 import { Button, PageHeader } from "../../components";
 import { useTr } from "../../state/lang";
+import "../../state/playSetup";
 import { useRemotePlayStore } from "../../state/remotePlay";
+import { useConnectionStore } from "../../state/connection";
+import { useRosterStore } from "../../state/roster";
+import { useStreamLaunch } from "./game/streamLaunch";
 import { COMPACT_QUERY, useMedia } from "./immersive";
 import { StreamPanel } from "./StreamPanel";
 
 /**
- * Remote Play: a console's screen streamed into the app, played with a controller or the
- * keyboard (the chiaki-ng port, engine rp_stream). Pairing Sony's own PS Remote Play app, and
- * the console settings Remote Play needs, are in Accounts' Remote Play section.
+ * Play (was "Remote Play" before 10.0.0): a console's screen streamed into the app, played with a
+ * controller or the keyboard (the chiaki-ng port, engine rp_stream). Getting a console ready is
+ * Play › Set up (setup/); pairing Sony's own PS Remote Play app is in Accounts.
  */
 export default function PlayScreen() {
   const tr = useTr();
@@ -19,6 +24,25 @@ export default function PlayScreen() {
   const streaming = useRemotePlayStore(
     (s) => !!s.stream && s.phase !== null && s.phase !== "ended",
   );
+  // /play?launch=<TITLE>[&name=…] (search, links): start that game and stream it; a console not
+  // set up for Play goes to its setup instead.
+  const [params, setParams] = useSearchParams();
+  const launch = params.get("launch")?.trim().toUpperCase() ?? "";
+  const launchName = params.get("name")?.trim() ?? "";
+  const host = useConnectionStore((s) => s.host)?.trim() ?? "";
+  const paired = useRosterStore((s) => {
+    const p = s.profiles.find((x) => x.host === host);
+    return !!(p?.wake_regist_key && p?.wake_rp_key);
+  });
+  useEffect(() => {
+    if (!/^[A-Z]{4}\d{5}$/.test(launch)) return;
+    setParams({}, { replace: true });
+    if (!host || !paired) {
+      navigate("/play/setup");
+      return;
+    }
+    useStreamLaunch.getState().request(host, { titleId: launch, titleName: launchName || launch });
+  }, [launch, launchName, host, paired, navigate, setParams]);
   // On a phone the picture and its controller need the height: while playing, the header is
   // just the title.
   const lean = compact && streaming;
@@ -26,7 +50,7 @@ export default function PlayScreen() {
     <div className="app-page space-y-4">
       <PageHeader
         icon={MonitorPlay}
-        title={tr("play_title", undefined, "Remote Play")}
+        title={tr("play_title", undefined, "Play")}
         description={
           lean
             ? undefined
@@ -40,10 +64,10 @@ export default function PlayScreen() {
           <Button
             variant="ghost"
             size="sm"
-            leftIcon={<KeyRound size={14} />}
-            onClick={() => navigate("/accounts#remote-play")}
+            leftIcon={<ListChecks size={14} />}
+            onClick={() => navigate("/play/setup")}
           >
-            {tr("play_setup", undefined, "Remote Play Setup")}
+            {tr("play_setup_short", undefined, "Set up")}
           </Button>
         }
       />

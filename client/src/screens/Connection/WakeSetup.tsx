@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { Button } from "../../components";
 import { useTr } from "../../state/lang";
-import { pairForWake } from "../../api/ps5";
+import { pairConsole } from "../../lib/pairConsole";
 import { useRosterStore, withConsolePrefix } from "../../state/roster";
 import { pushNotification } from "../../state/notifications";
 import { audit } from "../../state/auditLog";
@@ -152,14 +152,7 @@ export default function WakeSetup({
     setPairing(true);
     setPairError(null);
     try {
-      const r = await pairForWake(host, addr);
-      setWakeCredential(profileId, r.credential);
-      // Both keys arrive from the same handshake, already padded to the
-      // 16-byte form the session code parses.
-      if (isValidSessionKey(r.regist_key) && isValidSessionKey(r.rp_key)) {
-        setWakeSessionKeys(profileId, r.regist_key, r.rp_key);
-      }
-      setPairedAs(r.nickname || null);
+      setPairedAs(await pairConsole(host, profileId, addr));
       pushNotification(
         "success",
         tr("power_wake_ready_toast", undefined, "This console can now be woken"),
@@ -171,7 +164,6 @@ export default function WakeSetup({
           ),
         },
       );
-      audit("system_wake", withConsolePrefix(host, "paired for wake"));
     } catch (e) {
       // The engine's pairing errors are already specific and actionable
       // ("no signed-in user with an activated PSN account…"), so show them

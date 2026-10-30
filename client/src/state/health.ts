@@ -81,9 +81,8 @@ export async function scanHealthIfStale(
 
 /** The checks that need attention: problems first, then warnings. */
 export function healthProblems(report: HealthReport | null): HealthCheck[] {
-  if (!report) return [];
-  return [
-    ...report.checks.filter((c) => c.status === "fail"),
-    ...report.checks.filter((c) => c.status === "warn"),
-  ];
+  // A report without its list (an older or failing engine) is no problems, not a crash: Home
+  // renders this, and one odd answer must not take the whole app down.
+  const checks = Array.isArray(report?.checks) ? report.checks : [];
+  return [...checks.filter((c) => c.status === "fail"), ...checks.filter((c) => c.status === "warn")];
 }

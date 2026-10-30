@@ -33,6 +33,7 @@ import { ServersCard } from "./ServersCard";
 import { HealthCard } from "./HealthCard";
 import { LowSpaceCard } from "./LowSpaceCard";
 import { WhatsNewCard } from "./WhatsNewCard";
+import { PlayCard } from "./PlayCard";
 import { RecentGames } from "./RecentGames";
 import { greetingPart } from "./greeting";
 import { initials, useGreetedUser } from "./consoleUser";
@@ -176,6 +177,9 @@ export default function HomeScreen() {
       <div className="@container">
         <div className="grid gap-6 @4xl:grid-cols-[minmax(0,1fr)_21rem]">
           <div className="@container min-w-0 space-y-6">
+            {/* Play (10.0.0): first on Home. Hidden on request; nothing below needs it. */}
+            <PlayCard />
+
             {/* The main actions: six even tiles, each a plain glass card. */}
             <section
               aria-label={tr("v5_home_quick_actions", "Quick actions")}

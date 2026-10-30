@@ -4,6 +4,24 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.0.0
+
+- **Remote Play is now Play, at the centre of the app.** It sits right under Home in the sidebar
+  and in the phone tab bar (Activity moved to More), with a **Play** card at the top of Home:
+  one press to play (it wakes the console if it's resting), **Continue** the last game, or
+  **Set up Play** with how far along you are. The card can be hidden; nothing else needs Play.
+- **Play › Set up: a checklist that ticks itself.** Connect, sign in to a user, an account ID,
+  the offline sign-in (np-fake-signin, run from the list; it ticks once the restarted console
+  is back), Remote Play on, rest-mode settings, pairing (one button, right there) and the first
+  picture. The console is read every few seconds, so each step ticks by itself and the next one
+  opens. It replaces the guide that was in Accounts.
+- **Play wherever a game is.** A game's page has **Play** (start it and stream it here) next to
+  **Launch on PS5**; without Play set up, **Play here** opens the setup. Search has
+  "Play {game}" for what the console has installed, and an install's notification opens the
+  game with Play ready. "Remote Play" stays the name of Sony's own setting and app.
+- **Fixed: one odd health-check answer could crash Home.** A report without its list of checks
+  took the whole app down; it now counts as nothing to report.
+
 ## 9.11.0
 
 - **Per-game controls in Remote Play.** The Game panel's new **Controls** tab sets the running

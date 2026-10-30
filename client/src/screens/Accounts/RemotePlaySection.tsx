@@ -11,7 +11,7 @@ import {
   Copy,
   Check,
 } from "lucide-react";
-import { Button, ErrorCard, Spinner } from "../../components";
+import { Button, Callout, ErrorCard, Spinner } from "../../components";
 import { writeClipboard } from "../../lib/clipboard";
 import { useTr } from "../../state/lang";
 import { useConnectionStore } from "../../state/connection";
@@ -24,12 +24,10 @@ import {
   remoteplayStatus,
   remoteplayCancel,
   remoteplayReadiness,
-  remoteplayEnable,
   type RemotePlayStatus,
   type RemotePlayReadiness,
 } from "../../api/ps5";
 import { humanizePs5Error } from "../../lib/humanizeError";
-import { RemotePlayGuide } from "./RemotePlayGuide";
 
 /** The anchor old /remote-play links land on: /accounts#remote-play scrolls here. */
 export const REMOTE_PLAY_ANCHOR = "remote-play";
@@ -57,10 +55,8 @@ export function formatFirmware(magic: number): string {
  * sign-in; both now sit on one page, in the order they are done.
  */
 export function RemotePlaySection({
-  onShowAccounts,
   signIn,
 }: {
-  onShowAccounts: () => void;
   signIn?: ReactNode;
 }) {
   const tr = useTr();
@@ -97,22 +93,6 @@ export function RemotePlaySection({
   useEffect(() => {
     void refreshReadiness();
   }, [refreshReadiness]);
-
-  const handleEnable = useCallback(
-    async (scope: "service" | "user") => {
-      if (!addr) return;
-      setBusy(true);
-      setError(null);
-      try {
-        setReadiness(await remoteplayEnable(scope, addr));
-      } catch (e) {
-        setError(humanizePs5Error(e instanceof Error ? e.message : String(e)));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [addr],
-  );
 
   // An old /remote-play link lands on /accounts#remote-play: bring the section into view once.
   const { hash } = useLocation();
@@ -264,15 +244,15 @@ export function RemotePlaySection({
 
         {error && <ErrorCard title={error} onRetry={() => void refresh()} />}
 
-        <RemotePlayGuide
-          readiness={readiness}
-          onEnable={handleEnable}
-          onShowAccounts={onShowAccounts}
-          onShowSignIn={() =>
-            document.getElementById(SIGN_IN_ANCHOR)?.scrollIntoView?.({ block: "start", behavior: "smooth" })
+        {/* Setting a console up for Play is one checklist now (Play › Set up). */}
+        <Callout
+          tone="info"
+          title={tr("play_setup_from_accounts", undefined, "Setting up Play? Play › Set up walks through every step and ticks each one by itself.")}
+          action={
+            <Button size="sm" variant="primary" onClick={() => navigate("/play/setup")} data-testid="accounts-play-setup">
+              {tr("play_setup_title", undefined, "Set up Play")}
+            </Button>
           }
-          busy={busy}
-          tr={tr}
         />
 
         {signIn && (
