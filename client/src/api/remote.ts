@@ -14,7 +14,7 @@ export interface Connection {
   share: string;
   user: string;
   start_path: string;
-  /** SFTP/FTP: paths are the server's own, from its "/"; without it (saved before 9.12) they are
+  /** SFTP/FTP: paths are the server's own, from its "/"; without it (saved before 9.10) they are
    *  under the folder the server signs in to. */
   from_root?: boolean;
   host_key: string | null;

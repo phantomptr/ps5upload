@@ -528,7 +528,7 @@ mod tests {
             conn.host_key = Some(fingerprint);
         }
 
-        // Saved before 9.12: paths are under the login folder, so /srv is out of reach.
+        // Saved before 9.10: paths are under the login folder, so /srv is out of reach.
         let old = SftpFs::connect(&conn, &secret).await.unwrap();
         assert_eq!(old.login_dir().as_deref(), Some("/config"));
         assert!(matches!(
