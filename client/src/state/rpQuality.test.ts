@@ -5,7 +5,7 @@ import { useRemotePlayStore } from "./remotePlay";
 import { useRpQualityStore, wasOffered } from "./rpQuality";
 
 const target = { host: "192.168.1.100", name: "Living room", registKey: "00", rpKey: "00" };
-const fakeStream = () => ({ setVolume() {}, setAudioBuffer() {}, setFit() {}, setReplay() {} }) as unknown as RemotePlayStream;
+const fakeStream = () => ({ setVolume() {}, setAudioBuffer() {}, setFit() {}, setReplay() {}, setPicture() {} }) as unknown as RemotePlayStream;
 
 describe("the 720p offer and switch", () => {
   beforeEach(() => {

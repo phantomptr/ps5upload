@@ -45,13 +45,15 @@ interface Case {
   h264?: boolean;
   fit?: Fit;
   full?: boolean;
+  /** Picture tools (lib/rpPicture.ts) set before the stream starts. */
+  picture?: Record<string, unknown>;
 }
 
 async function open(browser: Browser, c: Case): Promise<{ page: Page; close: () => Promise<void> }> {
   const ctx = await browser.newContext({ viewport: { width: 1919, height: 1040 }, deviceScaleFactor: c.dpr });
   const page = await ctx.newPage();
   await page.addInitScript(
-    ({ fit, h264 }) => {
+    ({ fit, h264, picture }) => {
       window.localStorage.setItem("ps5upload.host", "192.168.1.100");
       window.localStorage.setItem(
         "ps5upload.roster.v1",
@@ -68,14 +70,14 @@ async function open(browser: Browser, c: Case): Promise<{ page: Page; close: () 
           ],
         }),
       );
-      window.localStorage.setItem("ps5upload.rp_prefs.v1", JSON.stringify({ fit }));
+      window.localStorage.setItem("ps5upload.rp_prefs.v1", JSON.stringify({ fit, ...(picture ? { picture } : {}) }));
       if (h264 && typeof VideoDecoder !== "undefined") {
         const orig = VideoDecoder.isConfigSupported.bind(VideoDecoder);
         VideoDecoder.isConfigSupported = (cfg: VideoDecoderConfig) =>
           /^(hev1|hvc1)/.test(cfg.codec) ? Promise.resolve({ supported: false, config: cfg }) : orig(cfg);
       }
     },
-    { fit: c.fit ?? "fit", h264: !!c.h264 },
+    { fit: c.fit ?? "fit", h264: !!c.h264, picture: c.picture ?? null },
   );
   await page.route(
     (url) => url.pathname.startsWith("/api/"),
@@ -258,3 +260,28 @@ test("Remote Play picture size is a setting that applies while playing", async (
     await close();
   }
 });
+
+// Picture tools (9.10): the frame goes through the GPU pass (rpPicture.ts) before it reaches the
+// page's canvas: cropped to the middle 21:9 band and brightened, here on a real decoded frame.
+test("Remote Play picture tools crop to 21:9 and brighten the real picture", async ({ browser }) => {
+  const { page, close } = await open(browser, {
+    dpr: 1,
+    size: "1920x1080",
+    h264: true,
+    picture: { crop219: true, brightness: 40 },
+  });
+  try {
+    await page.getByTestId("rp-start").click();
+    const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
+    // 1920 wide, the middle 21:9 band high (1920 * 9 / 21, even).
+    await expect.poll(() => canvas.evaluate((c: HTMLCanvasElement) => `${c.width}x${c.height}`), { timeout: 20_000 }).toBe("1920x822");
+    // The fixture's grey (0x40) is brighter now.
+    const mid = await canvas.evaluate((c: HTMLCanvasElement) =>
+      Array.from(c.getContext("2d")!.getImageData(c.width / 2, c.height / 2, 1, 1).data.slice(0, 3)),
+    );
+    for (const v of mid) expect(v).toBeGreaterThan(0x40 + 60);
+  } finally {
+    await close();
+  }
+});
+

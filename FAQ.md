@@ -2085,6 +2085,17 @@ them; **Save replay** (the clock-with-arrow button on the bar, or in the phone's
 as an MP4 with sound, where your screenshots and clips go. Nothing is saved until you press it,
 and turning the setting off drops what was kept.
 
+**Q: Can I use turbo, macros or a mouse in Remote Play?**
+Yes, from 9.10.0, per game: open the **Game** panel on the stream bar › **Controls** while the
+game runs. Turbo repeats chosen buttons while you hold them; Mouse aim moves the right stick with
+the mouse once you click the picture (Esc lets the pointer go); a macro plays a few presses from
+one key. Each game keeps its own, on this device. The PS5 sees an ordinary controller.
+
+**Q: Can I sharpen the Remote Play picture or crop an ultrawide game?**
+Remote Play › Settings › **Picture**: Sharpen, Brightness, Contrast, Colour, Crop to 21:9 and
+Sharp pixels, applied at once. If the device cannot keep up (or has no WebGL 2) they turn off by
+themselves and say so.
+
 **Q: How do I take a screenshot or record a clip in Remote Play?**
 Use the **camera** (Screenshot) and **video** (Record a clip) buttons on the picture's bar (desktop, also in full screen), or in the **⋯** menu on a phone. A screenshot is a PNG at the stream's own size (1920×1080 or 1280×720), whatever size the picture is shown at. A clip records the picture and the game's sound (also while the player is muted); a red **Recording** light with the time shows on the picture, and pressing it (or the button again) stops and saves the clip. Clips are MP4 where the device records MP4, else WebM, and stop by themselves after 10 minutes (they are held in memory until saved). Files are named like `PS5 Living room 2026-10-30 21-14-05.png`. The desktop and Android apps save straight into **Downloads**, the iPhone app into its folder in the Files app, and the web UI downloads them through the browser. Recording needs a device that can record video from a web page; where it can't, only Screenshot shows.
 

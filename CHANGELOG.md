@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 9.10.0
+
+- **Per-game controls in Remote Play.** The Game panel's new **Controls** tab sets the running
+  game's own controls, kept per game on this device and switched by themselves with the game:
+  **turbo** on any face button, shoulder, trigger or arrow (2–30 presses a second while held),
+  **mouse aim** (with the pointer captured, the mouse moves the right stick, left click is R2 and
+  right click L2; sensitivity and invert), and **macros** (a key plays a few presses in a row;
+  pressing one of its buttons yourself stops it).
+- **Picture tools in Remote Play.** Remote Play › Settings › **Picture**: sharpen, brightness,
+  contrast, colour, **Crop to 21:9** (cuts the black bars off a game made for ultrawide screens)
+  and **Sharp pixels** (hard-edged scaling for retro games). They apply at once, on the GPU, and
+  screenshots and replays show them; with all of them off the picture is drawn exactly as before.
+  A device that cannot keep up, or has no WebGL 2, gets the plain picture back with a notice.
+
 ## 9.9.0
 
 - **Move saves from a PS4 (experimental).** Saves › **Move saves from a PS4** reads a jailbroken
