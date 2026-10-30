@@ -221,7 +221,31 @@ function noticeText(tr: Tr, n: CaptureNotice): string {
       ? tr("rp_shot_failed", undefined, "Couldn't save the screenshot.")
       : tr("rp_clip_failed", undefined, "Couldn't record or save the clip.");
   }
+  if (n.kind === "ready") {
+    return n.what === "shot"
+      ? tr("rp_shot_ready", undefined, "Screenshot taken")
+      : tr("rp_clip_ready", undefined, "Clip recorded");
+  }
+  if (n.photos) {
+    // iPhone/iPad: Photos; Android: the gallery's PS5Upload album.
+    if (n.path === "Photos") {
+      return n.kind === "shot"
+        ? tr("rp_shot_photos", undefined, "Screenshot saved to Photos")
+        : tr("rp_clip_photos", undefined, "Clip saved to Photos");
+    }
+    const album = n.path ?? "";
+    return n.kind === "shot"
+      ? tr("rp_shot_gallery", { album }, `Screenshot saved to the gallery (${album})`)
+      : tr("rp_clip_gallery", { album }, `Clip saved to the gallery (${album})`);
+  }
   const where = n.path ?? n.name;
+  if (n.denied) {
+    return tr(
+      "rp_capture_photos_denied",
+      { where },
+      `PS5Upload may not add to Photos (Settings › PS5Upload › Photos), so it was saved here: ${where}`,
+    );
+  }
   return n.kind === "shot"
     ? tr("rp_shot_saved", { where }, `Screenshot saved: ${where}`)
     : tr("rp_clip_saved", { where }, `Clip saved: ${where}`);
@@ -266,7 +290,8 @@ export function CaptureOverlay({ top }: { top?: string }) {
             : tr("rp_recording", { time: clock }, `Recording ${clock}`)}
         </button>
       )}
-      {notice && (
+      {notice?.kind === "ready" && <ReadyNotice />}
+      {notice && notice.kind !== "ready" && (
         <div
           role="status"
           className="pointer-events-none absolute bottom-3 left-1/2 z-30 max-w-[calc(100%-2rem)] -translate-x-1/2 truncate rounded-full bg-black/70 px-3 py-1.5 text-xs text-white"
@@ -276,5 +301,59 @@ export function CaptureOverlay({ top }: { top?: string }) {
         </div>
       )}
     </>
+  );
+}
+
+/** A phone's browser: the capture waits for a tap, since only a tap may open the share sheet
+ *  (whose Save Image / Save Video puts it in Photos). */
+function ReadyNotice() {
+  const tr = useTr();
+  const notice = useRpCaptureStore((s) => s.notice);
+  const saveReady = useRpCaptureStore((s) => s.saveReady);
+  const clear = useRpCaptureStore((s) => s.clearNotice);
+  if (notice?.kind !== "ready") return null;
+  const btn = "rounded-full bg-white/20 px-3 py-1 font-medium";
+  return (
+    <div
+      role="status"
+      {...keep}
+      className="absolute bottom-3 left-1/2 z-30 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-2 rounded-full bg-black/75 py-1 ps-3 pe-1 text-xs text-white"
+      data-testid="rp-capture-ready"
+    >
+      <span className="truncate">{noticeText(tr, notice)}</span>
+      <button
+        type="button"
+        className={btn}
+        onClick={(e) => {
+          e.stopPropagation();
+          void saveReady(true);
+        }}
+        data-testid="rp-capture-share"
+      >
+        {tr("rp_capture_to_photos", undefined, "Save to Photos")}
+      </button>
+      <button
+        type="button"
+        className={btn}
+        onClick={(e) => {
+          e.stopPropagation();
+          void saveReady(false);
+        }}
+        data-testid="rp-capture-download"
+      >
+        {tr("rp_capture_download", undefined, "Download")}
+      </button>
+      <button
+        type="button"
+        aria-label={tr("rp_capture_dismiss", undefined, "Dismiss")}
+        className="rounded-full px-2 py-1 text-white/80"
+        onClick={(e) => {
+          e.stopPropagation();
+          clear();
+        }}
+      >
+        ×
+      </button>
+    </div>
   );
 }

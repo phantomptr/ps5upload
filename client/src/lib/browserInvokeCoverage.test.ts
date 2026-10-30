@@ -53,6 +53,7 @@ const NATIVE_ONLY: Record<string, string> = {
   read_text_file: "native: reads a host path",
   save_text_file: "native: writes a host path",
   save_binary_file: "native: writes a Remote Play screenshot or clip to a host path (the browser downloads it)",
+  save_to_photos: "native: adds a Remote Play screenshot or clip to the phone's photo library (a phone browser uses the share sheet)",
   save_archive_zip: "native: host temp-dir staging",
   save_auto_backup_slot: "native: writes to a folder on this computer",
   save_archive_unzip: "native: host temp-dir staging",

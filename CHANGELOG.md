@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 9.12.0
+
+- **Remote Play screenshots and clips go to Photos on a phone.** The iPhone and iPad app adds them
+  to Photos (it asks once, for adding only), the Android app to the gallery's PS5Upload album, and
+  a phone's browser offers **Save to Photos** (the share sheet's Save Image / Save Video) or a
+  plain download. Remote Play › Settings › **Save screenshots and clips to Photos** turns it off;
+  if Photos access is refused, they still save to Downloads and the app says so.
+- **Fixed: an SFTP or FTP server's start folder outside your home folder said "No such file".**
+  Paths were taken as inside the folder the server signs you in to, so `/mnt/games` was looked
+  for as `/home/you/mnt/games`, and nothing above home could be browsed, even as root. New SFTP
+  and FTP servers now use the server's own paths (**Browse the whole server**, on by default)
+  and open in your home folder when no start folder is given. A server saved before keeps the old
+  paths until you edit it and turn that on (re-add any games or favorites saved from it then).
+
 ## 9.11.0
 
 - **Watch party in Remote Play.** The phone panel on the stream's bar now has a second code,

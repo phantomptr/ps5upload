@@ -515,6 +515,7 @@ pub fn run() {
             commands::save_text_file,
             // Remote Play screenshots and clips (raw bytes, not text).
             commands::save_binary_file,
+            commands::save_to_photos,
             commands::dragout_stage_dir,
             commands::read_text_file,
             // ── Automatic crash/error report collection ─────────────

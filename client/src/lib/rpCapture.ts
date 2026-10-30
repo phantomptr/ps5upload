@@ -4,8 +4,12 @@
 // shown at), and a clip is that canvas's captureStream() plus a tap on the game's sound
 // (RemotePlayStream.captureMedia) through MediaRecorder. Saving: a download in a browser; in the
 // app, straight into Downloads (Documents on iPhone) with no dialog, so a screenshot taken
-// mid-game never stops the game for a question.
+// mid-game never stops the game for a question. On a phone it goes to the photo library instead
+// (Save to Photos, on by default): the phone apps add it themselves (commands/save_photos.rs); a
+// phone's browser offers the system share sheet, whose Save Image / Save Video puts it there.
 
+import { log } from "../state/logs";
+import { isMobile } from "./platform";
 import { isTauriEnv } from "./tauriEnv";
 
 /** Characters no file system takes in a name, and control characters. */
@@ -67,9 +71,64 @@ export function clipClock(ms: number): string {
   return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
-/** Save a screenshot or clip. Returns where it went in the app (a path), or null for a
+/** Where a saved screenshot or clip went. */
+export interface SavedCapture {
+  /** A path or folder in the app ("Photos", "Pictures/PS5Upload", a file path), or null for a
+   *  browser download (the browser says where). */
+  where: string | null;
+  /** In the photo library. */
+  photos: boolean;
+  /** Photos was asked and said no, so it went to a file instead. */
+  denied?: boolean;
+}
+
+/** The phone apps save straight into the photo library. */
+export function appSavesToPhotos(): boolean {
+  return isTauriEnv() && isMobile();
+}
+
+/** A phone's browser can hand this file to the system share sheet (Save Image / Save Video). */
+export function canShareToPhotos(file: File): boolean {
+  if (isTauriEnv() || !isMobile() || typeof navigator === "undefined") return false;
+  try {
+    return typeof navigator.canShare === "function" && typeof navigator.share === "function" && navigator.canShare({ files: [file] });
+  } catch {
+    return false;
+  }
+}
+
+/** The capture as a file, with a type the photo library takes. */
+export function captureFile(blob: Blob, name: string): File {
+  const type = blob.type || (name.endsWith(".png") ? "image/png" : name.endsWith(".webm") ? "video/webm" : "video/mp4");
+  return new File([blob], name, { type });
+}
+
+/** Save a screenshot or clip: into the photo library when `toPhotos` and this is a phone app
+ *  (a refusal falls back to a file), else as a file. Throws when it could not be saved. */
+export async function saveCapture(blob: Blob, name: string, toPhotos = false): Promise<SavedCapture> {
+  let denied = false;
+  if (toPhotos && appSavesToPhotos()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const where = await invoke<string>("save_to_photos", new Uint8Array(await blob.arrayBuffer()), {
+        headers: {
+          "x-name": encodeURIComponent(name),
+          "x-mime": encodeURIComponent(captureFile(blob, name).type),
+        },
+      });
+      return { where, photos: true };
+    } catch (e) {
+      denied = String(e).includes("photos_denied");
+      log.warn("remote-play", `save to Photos: ${String(e)}`);
+    }
+  }
+  const where = await saveFile(blob, name);
+  return denied ? { where, photos: false, denied } : { where, photos: false };
+}
+
+/** Save a screenshot or clip as a file. Returns where it went in the app (a path), or null for a
  *  browser download (the browser says where). Throws when it could not be saved. */
-export async function saveCapture(blob: Blob, name: string): Promise<string | null> {
+export async function saveFile(blob: Blob, name: string): Promise<string | null> {
   if (!isTauriEnv()) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

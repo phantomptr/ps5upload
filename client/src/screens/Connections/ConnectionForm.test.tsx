@@ -50,6 +50,25 @@ function disabledButton(out: string, label: string): boolean {
 }
 
 describe("connection form", () => {
+  it("browses the whole server for a new SFTP/FTP connection, and sends it only for those", () => {
+    const sftp = { ...emptyForm(), protocol: "sftp" as const, port: 22, name: "n", host: "h", startPath: " /mnt/games " };
+    expect(toRequest(sftp).connection).toMatchObject({ from_root: true, start_path: "/mnt/games" });
+    expect(toRequest({ ...sftp, protocol: "ftp" }).connection.from_root).toBe(true);
+    expect(toRequest({ ...sftp, fromRoot: false }).connection.from_root).toBe(false);
+    expect(toRequest({ ...sftp, protocol: "smb" }).connection.from_root).toBe(false);
+    expect(toRequest({ ...sftp, protocol: "webdav" }).connection.from_root).toBe(false);
+    expect(html({ protocol: "sftp", port: 22 })).toContain("Browse the whole server");
+    expect(html({ protocol: "smb", port: 445 })).not.toContain("Browse the whole server");
+  });
+
+  it("warns that saved links need adding again when an old connection switches", () => {
+    const relink = "add them again after this change";
+    expect(html({ protocol: "sftp", port: 22, fromRoot: true }, { savedFromRoot: false })).toContain(relink);
+    expect(html({ protocol: "sftp", port: 22, fromRoot: false }, { savedFromRoot: false })).not.toContain(relink);
+    expect(html({ protocol: "sftp", port: 22, fromRoot: true }, { savedFromRoot: true })).not.toContain(relink);
+    expect(html({ protocol: "sftp", port: 22, fromRoot: true }, { savedFromRoot: null })).not.toContain(relink);
+  });
+
   it("keeps a custom port when switching protocol", () => {
     const smb = { ...emptyForm(), protocol: "smb" as const, port: 445 };
     expect(switchProtocol(smb, "ftp").port).toBe(21);

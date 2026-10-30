@@ -83,6 +83,11 @@ pub trait RemoteFile: Send + Sync {
 #[allow(clippy::double_must_use)] // async_trait expands to a must_use future
 #[async_trait::async_trait]
 pub trait RemoteFs: Send + Sync {
+    /// SFTP/FTP: the folder the server signed in to, as a server path (the start folder a
+    /// connection that browses the whole server opens at when none is given).
+    fn login_dir(&self) -> Option<String> {
+        None
+    }
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError>;
     async fn stat(&self, path: &str) -> Result<Entry, RemoteError>;
     async fn open(&self, path: &str) -> Result<Arc<dyn RemoteFile>, RemoteError>;
@@ -453,6 +458,11 @@ impl RemoteFile for MemFile {
 #[cfg(test)]
 #[async_trait::async_trait]
 impl RemoteFs for MemFs {
+    /// As an SFTP or FTP server signs a user in to their home.
+    fn login_dir(&self) -> Option<String> {
+        Some("/home/me".into())
+    }
+
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError> {
         self.check_up()?;
         if self.list_fails() {

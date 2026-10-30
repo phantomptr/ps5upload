@@ -925,3 +925,71 @@ for (const [w, h] of [
       .toBe(true);
   });
 }
+
+test.describe("Remote Play in a phone's browser", () => {
+  test.use({
+    viewport: { width: 844, height: 390 },
+    hasTouch: true,
+    isMobile: true,
+    userAgent:
+      "Mozilla/5.0 (Linux; Android 15; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36",
+  });
+
+  test("a screenshot waits for a tap: Save to Photos opens the share sheet, Download downloads", async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.addInitScript(() => {
+      const shared: Array<{ name: string; type: string; size: number }> = [];
+      (window as unknown as { __shared: typeof shared }).__shared = shared;
+      let first = true;
+      Object.defineProperty(navigator, "canShare", { value: (d: ShareData) => !!d.files?.length, configurable: true });
+      Object.defineProperty(navigator, "share", {
+        configurable: true,
+        value: async (d: ShareData) => {
+          // The first time the player closes the sheet without choosing.
+          if (first) {
+            first = false;
+            throw new DOMException("closed", "AbortError");
+          }
+          for (const f of d.files ?? []) shared.push({ name: f.name, type: f.type, size: f.size });
+        },
+      });
+    });
+    await rpPage(page, { res: "1280x720", touchControls: "off" });
+    await rpEngine(page);
+    await page.goto("/play", { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: "Remote Play" })).toBeVisible({ timeout: 30_000 });
+
+    // The setting is there on a phone, on by default.
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(page.getByRole("switch", { name: "Save screenshots and clips to Photos" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await page.getByTestId("rp-start").click();
+    await expect(page.getByTestId("rp-menu-handle")).toBeVisible({ timeout: 30_000 });
+
+    // Sideways on a phone the bar is behind the handle.
+    const shoot = async () => {
+      await page.getByTestId("rp-menu-handle").tap();
+      await page.getByTestId("rp-screenshot").tap();
+    };
+    const shared = () => page.evaluate(() => (window as unknown as { __shared: unknown[] }).__shared);
+
+    await shoot();
+    const ready = page.getByTestId("rp-capture-ready");
+    await expect(ready).toContainText("Screenshot taken");
+    // Closing the sheet keeps the notice for another try.
+    await page.getByTestId("rp-capture-share").click();
+    await expect(ready).toBeVisible();
+    await page.getByTestId("rp-capture-share").click();
+    await expect.poll(shared).toEqual([expect.objectContaining({ type: "image/png", name: expect.stringMatching(/^PS5 Living room .+\.png$/) })]);
+    await expect(ready).toHaveCount(0);
+
+    // Or a download.
+    await shoot();
+    const dl = page.waitForEvent("download");
+    await page.getByTestId("rp-capture-download").click();
+    expect((await dl).suggestedFilename()).toMatch(/\.png$/);
+    await expect(page.getByTestId("rp-capture-notice")).toContainText("Screenshot saved");
+  });
+});

@@ -14,6 +14,9 @@ export interface Connection {
   share: string;
   user: string;
   start_path: string;
+  /** SFTP/FTP: paths are the server's own, from its "/"; without it (saved before 9.12) they are
+   *  under the folder the server signs in to. */
+  from_root?: boolean;
   host_key: string | null;
   /** WebDAV over HTTPS: the server's self-signed certificate is accepted unverified. */
   insecure_tls?: boolean;
@@ -28,6 +31,7 @@ export interface ConnectionInput {
   share?: string;
   user?: string;
   start_path?: string;
+  from_root?: boolean;
   insecure_tls?: boolean;
 }
 

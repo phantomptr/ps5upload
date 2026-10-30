@@ -27,6 +27,7 @@ import { useRosterStore } from "../../state/roster";
 import { deviceName, meshFor, othersRemotePlaying, remotePlayPads, useMeshStore } from "../../state/mesh";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { isLinuxDesktop, isMobile } from "../../lib/platform";
+import { appSavesToPhotos } from "../../lib/rpCapture";
 import { setScreenWakeReason } from "../../lib/androidScreenWake";
 import { gameModeKind } from "../../lib/gameMode";
 import {
@@ -688,6 +689,26 @@ function SettingsPanel({ running }: { running: boolean }) {
             )}
           </p>
         </div>
+        {isMobile() && (
+          <Toggle
+            checked={prefs.toPhotos}
+            onChange={(v) => setPrefs({ toPhotos: v })}
+            label={tr("rp_to_photos", undefined, "Save screenshots and clips to Photos")}
+            hint={
+              appSavesToPhotos()
+                ? tr(
+                    "rp_to_photos_hint_app",
+                    undefined,
+                    "Straight into Photos (on Android, the gallery's PS5Upload album). Off, they go to Downloads.",
+                  )
+                : tr(
+                    "rp_to_photos_hint_web",
+                    undefined,
+                    "After each one, tap Save to Photos and choose Save Image or Save Video. Off, they download.",
+                  )
+            }
+          />
+        )}
         <Select
           label={tr("rp_touch_controls", undefined, "On-screen controller")}
           block={false}

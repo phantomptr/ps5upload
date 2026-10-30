@@ -271,9 +271,12 @@ pub struct FtpFs {
     )>,
     target: Target,
     host: String,
-    /// The folder the server signs in to. Paths here are relative to it, so "/" is the user's
-    /// own folder even on a server that does not confine them to it.
+    /// What paths are under: the folder the server signs in to, so "/" is the user's own folder
+    /// even on a server that does not confine them to it; or "" for a connection from the
+    /// server's `/` (`Connection::from_root`).
     home: String,
+    /// The folder the server signs in to.
+    login: String,
     readers: Readers,
     /// The server lists with MLSD (from FEAT). Asked once: on FTPS a command the server rejects
     /// leaves the data connection's TLS handshake waiting forever, so trying MLSD and falling
@@ -313,7 +316,12 @@ impl FtpFs {
         };
         let mut session = sign_in(&target).await?;
         let host = addr_of(conn);
-        let home = session.pwd().await.unwrap_or_else(|_| "/".into());
+        let login = session.pwd().await.unwrap_or_else(|_| "/".into());
+        let home = if conn.from_root {
+            String::new()
+        } else {
+            login.clone()
+        };
         let mlsd = session
             .feat()
             .await
@@ -328,6 +336,7 @@ impl FtpFs {
             target,
             host,
             home,
+            login,
             readers: Arc::new(Mutex::new(Vec::new())),
             mlsd,
             session: Mutex::new(session),
@@ -549,6 +558,10 @@ impl RemoteFile for FtpFile {
 
 #[async_trait::async_trait]
 impl RemoteFs for FtpFs {
+    fn login_dir(&self) -> Option<String> {
+        Some(self.login.clone())
+    }
+
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError> {
         let all = self.entries(path).await?;
         let from = cursor

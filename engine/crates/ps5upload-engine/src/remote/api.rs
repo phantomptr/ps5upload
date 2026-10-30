@@ -12,7 +12,7 @@ use serde_json::json;
 use super::hints::hint_for;
 use super::path;
 use super::pool::{global, Remote};
-use super::store::{default_port, Connection, Protocol, Secret};
+use super::store::{default_port, Connection, ConnectionView, Protocol, Secret};
 use super::RemoteError;
 
 #[derive(Deserialize)]
@@ -28,6 +28,9 @@ pub struct ConnectionInput {
     pub user: String,
     #[serde(default)]
     pub start_path: String,
+    /// SFTP/FTP: paths from the server's `/` ([`Connection::from_root`]).
+    #[serde(default)]
+    pub from_root: bool,
     /// WebDAV over HTTPS: accept a self-signed certificate.
     #[serde(default)]
     pub insecure_tls: bool,
@@ -85,6 +88,8 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
             .map(|password| Secret::Password { password })
     };
     let insecure_tls = c.protocol == Protocol::Webdavs && c.insecure_tls;
+    let from_root =
+        c.from_root && matches!(c.protocol, Protocol::Sftp | Protocol::Ftp | Protocol::Ftps);
     Ok((
         Connection {
             id: String::new(),
@@ -95,6 +100,7 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
             share: c.share.trim().trim_matches(['/', '\\']).to_string(),
             user,
             start_path: c.start_path.trim().to_string(),
+            from_root,
             host_key: None,
             insecure_tls,
         },
@@ -135,9 +141,33 @@ pub(crate) async fn add_connection(r: &Remote, body: ConnectionBody) -> Response
         Err(resp) => return *resp,
     };
     match r.store.add(conn, secret.unwrap_or(Secret::None)) {
-        Ok(v) => Json(v).into_response(),
+        Ok(v) => Json(login_start(r, v).await).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+/// A connection that browses the whole server, saved without a start folder, starts in the
+/// folder the server signs in to (as an SSH or FTP client does), asked of the server once
+/// here. Unreachable or not yet trusted: it stays empty, and browsing starts at `/`.
+async fn login_start(r: &Remote, v: ConnectionView) -> ConnectionView {
+    let id = v.conn.id.clone();
+    if !v.conn.from_root || !v.conn.start_path.is_empty() {
+        return v;
+    }
+    let Some((conn, secret)) = r.store.get(&id) else {
+        return v;
+    };
+    let fs = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        r.pool.connector().connect(&conn, &secret),
+    )
+    .await;
+    let Some(dir) = fs.ok().and_then(|f| f.ok()).and_then(|f| f.login_dir()) else {
+        return v;
+    };
+    let mut c = conn;
+    c.start_path = dir;
+    r.store.update(&id, c, None).unwrap_or(v)
 }
 
 pub(crate) async fn update_connection(r: &Remote, id: &str, body: ConnectionBody) -> Response {
@@ -150,7 +180,7 @@ pub(crate) async fn update_connection(r: &Remote, id: &str, body: ConnectionBody
     }
     r.pool.invalidate(id);
     match r.store.update(id, conn, secret) {
-        Ok(v) => Json(v).into_response(),
+        Ok(v) => Json(login_start(r, v).await).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -230,7 +260,13 @@ pub(crate) async fn accept_host_key(r: &Remote, id: &str, fingerprint: &str) -> 
     }
     r.pool.invalidate(id);
     match r.store.set_host_key(id, fingerprint) {
-        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Ok(()) => {
+            // Now trusted: a whole-server connection saved without a start folder can learn it.
+            if let Some(v) = r.store.list().into_iter().find(|v| v.conn.id == id) {
+                login_start(r, v).await;
+            }
+            Json(json!({ "ok": true })).into_response()
+        }
         Err(_) => remote_err(&RemoteError::UnknownConnection(id.to_string())),
     }
 }
@@ -352,6 +388,41 @@ mod tests {
             json!({"connection": {"name":"NAS","protocol":"smb","host":"10.0.0.5","share":"games","user":"me"},
                     "password":"hunter2"}),
         )
+    }
+
+    /// SFTP/FTP saved to browse the whole server start in the sign-in folder when no start
+    /// folder is given; a typed one is kept; other protocols never browse from the root.
+    #[tokio::test]
+    async fn a_whole_server_connection_starts_in_the_sign_in_folder() {
+        let r = remote_with(MemFs::new(&[("/a", b"x")]), None);
+        let sftp = |start: &str| {
+            form(
+                json!({"connection": {"name":"Box","protocol":"sftp","host":"10.0.0.6","user":"me",
+                "start_path": start, "from_root": true}, "password":"pw"}),
+            )
+        };
+        let added = body(add_connection(&r, sftp("")).await).await;
+        assert_eq!(added["from_root"], true);
+        assert_eq!(added["start_path"], "/home/me");
+        let typed = body(add_connection(&r, sftp("/mnt/games")).await).await;
+        assert_eq!(typed["start_path"], "/mnt/games");
+        let smb = form(
+            json!({"connection": {"name":"NAS","protocol":"smb","host":"10.0.0.5",
+            "share":"games","from_root": true}}),
+        );
+        let smb = body(add_connection(&r, smb).await).await;
+        assert_eq!(smb["from_root"], false);
+        assert_eq!(smb["start_path"], "");
+    }
+
+    /// A connection saved before `from_root` existed keeps its sign-in-folder paths, so links
+    /// saved under them stay valid.
+    #[test]
+    fn a_connection_saved_before_reads_as_not_from_root() {
+        let old: Connection = serde_json::from_value(json!({"id":"abc","name":"Box",
+            "protocol":"sftp","host":"h","port":22,"user":"me","start_path":"/games"}))
+        .unwrap();
+        assert!(!old.from_root);
     }
 
     #[tokio::test]

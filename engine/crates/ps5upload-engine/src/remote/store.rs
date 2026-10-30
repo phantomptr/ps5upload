@@ -46,6 +46,13 @@ pub struct Connection {
     pub user: String,
     #[serde(default)]
     pub start_path: String,
+    /// SFTP and FTP: paths are the server's own, from its `/` (as an SSH or FTP client shows
+    /// them), so the start folder and browsing can be anywhere the account may read. Off (every
+    /// connection saved before 9.12, which the missing field reads as): paths are under the
+    /// folder the server signs in to, so `/` is that folder and nothing above it is reachable.
+    /// Links saved under those paths stay valid only while it is off.
+    #[serde(default)]
+    pub from_root: bool,
     /// SFTP: the host-key fingerprint the user accepted ("SHA256:…").
     #[serde(default)]
     pub host_key: Option<String>,
@@ -387,6 +394,7 @@ pub(crate) fn conn(name: &str, protocol: Protocol) -> Connection {
         share: "games".into(),
         user: "me".into(),
         start_path: String::new(),
+        from_root: false,
         host_key: None,
         insecure_tls: false,
     }

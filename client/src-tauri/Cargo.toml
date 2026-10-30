@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "9.11.0"
+version = "9.12.0"
 description = "The all-in-one PS5 companion app."
 license = "GPL-3.0-or-later"
 edition = "2021"
@@ -150,6 +150,9 @@ jni = "0.21"
 # (commands/system_bars.rs focus_webview). Already in the tree through wry.
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6"
+# Remote Play captures into Photos (commands/save_photos.rs): the completion blocks. Already in
+# the tree through objc2's AppKit/UIKit crates.
+block2 = "0.6"
 # Linux: ask Feral GameMode (gamemoded) for full speed while Remote Play plays
 # (commands/game_mode.rs). Already in the tree through tauri-plugin-notification
 # (notify-rust), default features and all, so this adds no new crate.

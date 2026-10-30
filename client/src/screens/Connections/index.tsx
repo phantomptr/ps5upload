@@ -40,6 +40,7 @@ function formOf(c: Connection): FormValue {
     guest: !c.user,
     user: c.user,
     startPath: c.start_path,
+    fromRoot: !!c.from_root,
     insecureTls: !!c.insecure_tls,
   };
 }
@@ -268,6 +269,7 @@ export function ServersSection() {
             testResult={testResult}
             busy={busy}
             hasSavedSecret={!!current?.has_secret}
+            savedFromRoot={current ? !!current.from_root : null}
             onTest={() => void onTest()}
             onSave={() => void onSave()}
             onCancel={() => setEditing(null)}

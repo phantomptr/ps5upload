@@ -377,6 +377,9 @@ pub(crate) mod testing {
 
     #[async_trait::async_trait]
     impl RemoteFs for SharedMem {
+        fn login_dir(&self) -> Option<String> {
+            self.0.login_dir()
+        }
         async fn list(
             &self,
             p: &str,

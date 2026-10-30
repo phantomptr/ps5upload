@@ -20,6 +20,8 @@ export interface FormValue {
   keyName: string;
   keyPassphrase: string;
   startPath: string;
+  /** SFTP/FTP: browse the whole server (paths from its "/"), not just the sign-in folder. */
+  fromRoot: boolean;
   /** WebDAV over HTTPS: accept a self-signed certificate. */
   insecureTls: boolean;
 }
@@ -32,6 +34,11 @@ export const DEFAULT_PORT: Record<Protocol, number> = {
   webdav: 80,
   webdavs: 443,
 };
+
+/** The protocols whose paths can start at the server's "/" or at the sign-in folder. */
+export function hasServerRoot(p: Protocol): boolean {
+  return p === "sftp" || p === "ftp" || p === "ftps";
+}
 
 /** Both WebDAV flavours. */
 export function isWebdav(p: Protocol): boolean {
@@ -53,6 +60,7 @@ export function emptyForm(): FormValue {
     keyName: "",
     keyPassphrase: "",
     startPath: "",
+    fromRoot: true,
     insecureTls: false,
   };
 }
@@ -73,6 +81,7 @@ export function toRequest(v: FormValue): { connection: ConnectionInput; secret: 
     share: v.protocol === "smb" ? v.share.trim() : "",
     user: v.guest ? "" : v.user.trim(),
     start_path: v.startPath.trim(),
+    from_root: hasServerRoot(v.protocol) && v.fromRoot,
     insecure_tls: v.protocol === "webdavs" && v.insecureTls,
   };
   const secret: SecretInput = {};
@@ -95,6 +104,8 @@ export interface ConnectionFormProps {
   busy: boolean;
   /** Editing a connection whose password or key is already saved. */
   hasSavedSecret: boolean;
+  /** Editing: whether the saved connection browses the whole server (null for a new one). */
+  savedFromRoot?: boolean | null;
   onTest: () => void;
   onSave: () => void;
   onCancel: () => void;
@@ -211,10 +222,50 @@ export function ConnectionFormView(p: ConnectionFormProps) {
         <Input
           label={tr("conn_start_path", undefined, "Start folder (optional)")}
           value={v.startPath}
-          placeholder={isWebdav(v.protocol) ? "/remote.php/dav/files/USER" : "/games"}
+          placeholder={
+            isWebdav(v.protocol)
+              ? "/remote.php/dav/files/USER"
+              : hasServerRoot(v.protocol) && v.fromRoot
+                ? "/mnt/games"
+                : "/games"
+          }
           onChange={(e) => set({ startPath: e.target.value })}
+          data-testid="conn-start-path"
         />
       </div>
+
+      {hasServerRoot(v.protocol) && (
+        <div className="space-y-1" data-testid="conn-from-root">
+          <Toggle
+            checked={v.fromRoot}
+            onChange={(fromRoot) => set({ fromRoot })}
+            label={tr("conn_from_root", undefined, "Browse the whole server")}
+            hint={
+              v.fromRoot
+                ? tr(
+                    "conn_from_root_on",
+                    undefined,
+                    "Folders are the server's own paths, as an SSH or FTP client shows them (/home/you, /mnt/games): the start folder and browsing can be anywhere this account may read. With no start folder, it opens where the server signs you in.",
+                  )
+                : tr(
+                    "conn_from_root_off",
+                    undefined,
+                    "Only the folder the server signs you in to and what is inside it: / is that folder, and the start folder is inside it.",
+                  )
+            }
+          />
+          {p.savedFromRoot === false && v.fromRoot && (
+            <p className="flex items-start gap-1.5 text-xs text-[var(--color-warn)]" data-testid="conn-from-root-relink">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+              {tr(
+                "conn_from_root_relink",
+                undefined,
+                "Games, favorites and links already saved from this server use the old paths: add them again after this change.",
+              )}
+            </p>
+          )}
+        </div>
+      )}
 
       {v.protocol === "webdavs" && (
         <Toggle

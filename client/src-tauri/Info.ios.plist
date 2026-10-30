@@ -27,6 +27,9 @@
 	<true/>
 	<key>GCSupportsGameMode</key>
 	<true/>
+	<!-- Remote Play screenshots and clips saved to Photos (add-only: the app never reads them). -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save your Remote Play screenshots and clips to Photos.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your PS5 on your home network to send games and manage the console.</string>
 </dict>

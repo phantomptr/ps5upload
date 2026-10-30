@@ -880,6 +880,7 @@ mod tests {
             share: String::new(),
             user: "u".into(),
             start_path: "/d".into(),
+            from_root: false,
             host_key: None,
             insecure_tls: false,
         };

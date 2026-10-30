@@ -138,7 +138,7 @@ pub async fn save_binary_file(request: tauri::ipc::Request<'_>) -> Result<String
 
 /// The bytes of an IPC body: raw where the webview sends raw bodies, a JSON
 /// array of numbers where it falls back to JSON messages.
-fn body_bytes(body: &tauri::ipc::InvokeBody) -> Result<Vec<u8>, String> {
+pub(super) fn body_bytes(body: &tauri::ipc::InvokeBody) -> Result<Vec<u8>, String> {
     match body {
         tauri::ipc::InvokeBody::Raw(v) => Ok(v.clone()),
         tauri::ipc::InvokeBody::Json(serde_json::Value::Array(a)) => a
@@ -155,7 +155,7 @@ fn body_bytes(body: &tauri::ipc::InvokeBody) -> Result<Vec<u8>, String> {
 }
 
 /// `%XX` escapes back to bytes, read as UTF-8 (what `encodeURIComponent` wrote).
-fn percent_decode(s: &str) -> String {
+pub(super) fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;

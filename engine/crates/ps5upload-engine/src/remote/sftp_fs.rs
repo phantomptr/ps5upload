@@ -83,7 +83,9 @@ fn sftp_err(host: &str, e: russh_sftp::client::error::Error) -> RemoteError {
 
 pub struct SftpFs {
     host: String,
+    /// What paths are under: the login folder, or "" for a connection from the server's `/`.
     home: String,
+    login: String,
     sftp: Arc<SftpSession>,
     /// Keeps the SSH connection open for as long as the session is in use.
     _ssh: client::Handle<Tofu>,
@@ -164,11 +166,17 @@ impl SftpFs {
                 .map_err(|e| RemoteError::Io(format!("the server has no SFTP: {e}")))
         })
         .await?;
-        let home = sftp.canonicalize(".").await.unwrap_or_else(|_| "/".into());
+        let login = sftp.canonicalize(".").await.unwrap_or_else(|_| "/".into());
+        let home = if conn.from_root {
+            String::new()
+        } else {
+            login.clone()
+        };
         crate::log_info!("remote sftp: signed in to {addr}");
         Ok(Self {
             host: addr,
             home,
+            login,
             sftp: Arc::new(sftp),
             _ssh: ssh,
         })
@@ -254,6 +262,10 @@ impl RemoteFile for SftpFile {
 
 #[async_trait::async_trait]
 impl RemoteFs for SftpFs {
+    fn login_dir(&self) -> Option<String> {
+        Some(self.login.clone())
+    }
+
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError> {
         let all = self.entries(path).await?;
         let from = cursor
@@ -490,5 +502,56 @@ mod tests {
             SftpFs::connect(&conn, &secret).await,
             Err(RemoteError::HostKey { changed: true, .. })
         ));
+    }
+
+    /// A folder outside the user's home (Discord report, 2026-10-30: the start folder "No such
+    /// file"). `docker run -d -p 2223:2222 -e USER_NAME=t -e USER_PASSWORD=t
+    /// -e PASSWORD_ACCESS=true lscr.io/linuxserver/openssh-server` (home /config, not chrooted),
+    /// with `/srv/games/sub/a.txt` ("hello\n") readable by t; then
+    /// `PS5UPLOAD_SFTP_ROOT_TEST=127.0.0.1:2223`.
+    #[tokio::test]
+    #[ignore = "needs an SFTP server; see the doc comment"]
+    async fn sftp_from_root_reaches_folders_outside_home() {
+        let Ok(addr) = std::env::var("PS5UPLOAD_SFTP_ROOT_TEST") else {
+            return;
+        };
+        let (host, port) = addr.split_once(':').unwrap();
+        let mut conn = crate::remote::store::conn("t", crate::remote::store::Protocol::Sftp);
+        conn.host = host.into();
+        conn.port = port.parse().unwrap();
+        conn.user = "t".into();
+        let secret = Secret::Password {
+            password: "t".into(),
+        };
+        if let Err(RemoteError::HostKey { fingerprint, .. }) = SftpFs::connect(&conn, &secret).await
+        {
+            conn.host_key = Some(fingerprint);
+        }
+
+        // Saved before 9.12: paths are under the login folder, so /srv is out of reach.
+        let old = SftpFs::connect(&conn, &secret).await.unwrap();
+        assert_eq!(old.login_dir().as_deref(), Some("/config"));
+        assert!(matches!(
+            old.list("/srv/games", None).await,
+            Err(RemoteError::NotFound(_))
+        ));
+
+        conn.from_root = true;
+        let fs = SftpFs::connect(&conn, &secret).await.unwrap();
+        assert_eq!(fs.login_dir().as_deref(), Some("/config"));
+        let names: Vec<String> = fs
+            .list("/srv/games", None)
+            .await
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert!(names.contains(&"sub".to_string()), "{names:?}");
+        assert_eq!(fs.stat("/srv/games/sub/a.txt").await.unwrap().size, 6);
+        let f = fs.open("/srv/games/sub/a.txt").await.unwrap();
+        assert_eq!(f.read_at(0, 6).await.unwrap(), b"hello\n");
+        // The login folder is still where it was, now by its own path.
+        assert!(fs.list("/config", None).await.is_ok());
     }
 }

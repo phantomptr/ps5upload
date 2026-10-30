@@ -66,6 +66,8 @@ export interface RpPrefs {
   replayS: number;
   /** Picture tools: sharpen, colour, 21:9 crop, sharp pixels (lib/rpPicture.ts). */
   picture: PictureTools;
+  /** On a phone, screenshots and clips go to the photo library (lib/rpCapture.ts saveCapture). */
+  toPhotos: boolean;
 }
 
 export const DEFAULT_RP_PREFS: RpPrefs = {
@@ -88,6 +90,7 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   mic: false,
   replayS: 0,
   picture: DEFAULT_PICTURE,
+  toPhotos: true,
 };
 
 /** The smallest sound buffer the Sound buffer setting offers. */
