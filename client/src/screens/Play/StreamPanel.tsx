@@ -404,7 +404,7 @@ function FitMenu({
   );
 }
 
-/** Settings › Picture: sharpen, colour, a 21:9 crop and sharp pixels (lib/rpPicture.ts). They
+/** Settings › Picture: sharpen, colour, a 21:9 crop, upscaling and sharp pixels (lib/rpPicture.ts). They
  *  apply at once; with all of them off the picture is drawn exactly as the console sends it. */
 function PictureToolsSetting() {
   const tr = useTr();
@@ -442,6 +442,16 @@ function PictureToolsSetting() {
           "rp_picture_crop_hint",
           undefined,
           "Cuts the black bars off a game made for ultrawide screens, so it fills an ultrawide screen.",
+        )}
+      />
+      <Toggle
+        checked={pic.upscale}
+        onChange={(v) => set({ upscale: v })}
+        label={tr("rp_picture_upscale", undefined, "Upscale to the screen (FSR 1, experimental)")}
+        hint={tr(
+          "rp_picture_upscale_hint",
+          undefined,
+          "Brings the picture up to your screen's own resolution on the graphics card with AMD FidelityFX Super Resolution 1, which works on any GPU: crisper on a big or 4K screen. Sharpen sets how crisp. Off with Sharp pixels.",
         )}
       />
       <Toggle

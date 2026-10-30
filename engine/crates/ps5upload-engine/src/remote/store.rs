@@ -48,7 +48,7 @@ pub struct Connection {
     pub start_path: String,
     /// SFTP and FTP: paths are the server's own, from its `/` (as an SSH or FTP client shows
     /// them), so the start folder and browsing can be anywhere the account may read. Off (every
-    /// connection saved before 9.10, which the missing field reads as): paths are under the
+    /// connection saved before 9.11, which the missing field reads as): paths are under the
     /// folder the server signs in to, so `/` is that folder and nothing above it is reachable.
     /// Links saved under those paths stay valid only while it is off.
     #[serde(default)]

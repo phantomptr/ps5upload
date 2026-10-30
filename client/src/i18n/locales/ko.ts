@@ -5968,6 +5968,8 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_phone_qr": "휴대폰 카메라용 QR 코드",
 "rp_phone_how": "휴대폰 카메라로 스캔하세요. 휴대폰에 컨트롤러가 열리면 가로로 돌리세요. 이 컴퓨터의 조작과 함께 플레이됩니다.",
 "rp_phone_app": "휴대폰의 PS5Upload 앱에서 리모트 플레이에 이 컴퓨터가 표시됩니다. '이 기기를 컨트롤러로 사용'을 탭한 다음 여기서 허용하세요.",
+"rp_picture_upscale": "화면에 맞게 업스케일 (FSR 1, 실험적)",
+"rp_picture_upscale_hint": "어떤 GPU에서나 작동하는 AMD FidelityFX Super Resolution 1로 그래픽 카드에서 화면의 해상도까지 화면을 올립니다. 큰 화면이나 4K 화면에서 더 선명합니다. 선명하게로 정도를 정합니다. 선명한 픽셀과 함께는 꺼집니다.",
 "conn_from_root": "서버 전체 탐색",
 "conn_from_root_on": "폴더는 SSH나 FTP 클라이언트가 보여 주는 서버 자체의 경로입니다(/home/you, /mnt/games). 시작 폴더와 탐색은 이 계정이 읽을 수 있는 곳이면 어디든 가능합니다. 시작 폴더가 없으면 서버에 로그인한 곳에서 열립니다.",
 "conn_from_root_off": "서버에 로그인한 폴더와 그 안만 볼 수 있습니다. /가 그 폴더이며 시작 폴더는 그 안에 있습니다.",

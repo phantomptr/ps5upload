@@ -5967,6 +5967,8 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_phone_qr": "Code QR pour l'appareil photo du téléphone",
 "rp_phone_how": "Scannez-le avec l'appareil photo du téléphone. Le téléphone ouvre une manette ; tournez-le à l'horizontale. Il joue en même temps que les commandes de cet ordinateur.",
 "rp_phone_app": "Dans l'app PS5Upload sur un téléphone, Remote Play affiche cet ordinateur : touchez « Utiliser cet appareil comme sa manette », puis autorisez-le ici.",
+"rp_picture_upscale": "Mettre à l'échelle de l'écran (FSR 1, expérimental)",
+"rp_picture_upscale_hint": "Amène l'image à la résolution de ton écran sur la carte graphique avec AMD FidelityFX Super Resolution 1, qui fonctionne sur tout GPU : plus net sur un grand écran ou un écran 4K. Netteté règle le niveau. Désactivé avec Pixels nets.",
 "conn_from_root": "Parcourir tout le serveur",
 "conn_from_root_on": "Les dossiers sont les chemins du serveur lui-même, comme un client SSH ou FTP les montre (/home/toi, /mnt/games) : le dossier de départ et la navigation peuvent être partout où ce compte peut lire. Sans dossier de départ, il s'ouvre là où le serveur te connecte.",
 "conn_from_root_off": "Seulement le dossier où le serveur te connecte et son contenu : / est ce dossier, et le dossier de départ est dedans.",

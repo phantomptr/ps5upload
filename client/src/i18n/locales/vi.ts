@@ -5953,6 +5953,8 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_phone_qr": "Mã QR cho camera điện thoại",
 "rp_phone_how": "Quét mã này bằng camera điện thoại. Điện thoại sẽ mở một tay cầm; hãy xoay ngang. Nó chơi cùng với điều khiển của máy tính này.",
 "rp_phone_app": "Trong ứng dụng PS5Upload trên điện thoại, Remote Play hiển thị máy tính này: chạm \"Dùng thiết bị này làm tay cầm của nó\", rồi cho phép tại đây.",
+"rp_picture_upscale": "Nâng độ phân giải theo màn hình (FSR 1, thử nghiệm)",
+"rp_picture_upscale_hint": "Đưa hình lên đúng độ phân giải màn hình của bạn trên card đồ họa bằng AMD FidelityFX Super Resolution 1, chạy trên mọi GPU: nét hơn trên màn hình lớn hoặc 4K. Làm nét chỉnh độ nét. Tắt khi bật Điểm ảnh sắc nét.",
 "conn_from_root": "Duyệt toàn bộ máy chủ",
 "conn_from_root_on": "Thư mục là đường dẫn riêng của máy chủ, như máy khách SSH hoặc FTP hiển thị (/home/ban, /mnt/games): thư mục bắt đầu và việc duyệt có thể ở bất kỳ đâu tài khoản này được đọc. Không có thư mục bắt đầu thì mở ở nơi máy chủ đăng nhập bạn vào.",
 "conn_from_root_off": "Chỉ thư mục mà máy chủ đăng nhập bạn vào và những gì bên trong: / là thư mục đó, và thư mục bắt đầu nằm trong nó.",

@@ -5958,6 +5958,8 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_phone_qr": "Telefon kamerası için QR kod",
 "rp_phone_how": "Bunu telefonun kamerasıyla tarayın. Telefon bir kumanda açar; yan çevirin. Bu bilgisayarın kontrolleriyle birlikte oynar.",
 "rp_phone_app": "Bir telefondaki PS5Upload uygulamasında Remote Play bu bilgisayarı gösterir: \"Bu cihazı kumandası olarak kullan\"a dokunun, sonra burada izin verin.",
+"rp_picture_upscale": "Ekrana ölçekle (FSR 1, deneysel)",
+"rp_picture_upscale_hint": "Görüntüyü, her GPU'da çalışan AMD FidelityFX Super Resolution 1 ile ekran kartında ekranının kendi çözünürlüğüne getirir: büyük veya 4K ekranda daha net. Keskinleştir ne kadar olacağını belirler. Keskin pikseller açıkken kapalıdır.",
 "conn_from_root": "Sunucunun tamamına göz at",
 "conn_from_root_on": "Klasörler, bir SSH veya FTP istemcisinin gösterdiği gibi sunucunun kendi yollarıdır (/home/sen, /mnt/games): başlangıç klasörü ve gezinme, bu hesabın okuyabildiği her yerde olabilir. Başlangıç klasörü yoksa sunucunun seni oturum açtırdığı yerde açılır.",
 "conn_from_root_off": "Yalnızca sunucunun seni oturum açtırdığı klasör ve içindekiler: / o klasördür ve başlangıç klasörü onun içindedir.",

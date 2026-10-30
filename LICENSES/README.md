@@ -10,6 +10,7 @@ licenses. This folder holds the texts that do not live next to the code; the REA
 | `playactor-ISC.txt` | The Remote Play registration and control-session code ported from playactor (`rp_regist.rs`, `rp_regist_keys.rs`, `rp_session.rs`) |
 | `UnRAR-license.txt`, `UnRAR-exception.md` | The UnRAR source compiled into the separate `ps5upload-unrar` program for `.rar` extraction (the engine runs it over pipes, never links it), and the GPLv3 §7 permission to combine it |
 | `Noto-OFL-1.1.txt` | The Noto Sans font subsets in `client/src/assets/fonts/` |
+| `FidelityFX-FSR-MIT.txt` | The Remote Play upscaling shaders (EASU, RCAS) ported from AMD FidelityFX Super Resolution 1 in `client/src/lib/rpPicture.ts` |
 
 License texts kept next to the code:
 

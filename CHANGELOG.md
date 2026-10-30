@@ -4,14 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## 9.10.1
-
-- **Remote Play pop-out on Windows: the picture showed only its top-left part.** The desktop
-  app's pop-out window could lay its page out bigger than the window, so every picture size
-  looked the same and the picture was cut. The pop-out now fits the player to the part of the
-  window that shows. If it still happens for you, a bug report now includes the sizes involved.
-
-## 9.10.0
+## 9.11.0
 
 - **Per-game controls in Remote Play.** The Game panel's new **Controls** tab sets the running
   game's own controls, kept per game on this device and switched by themselves with the game:
@@ -43,6 +36,17 @@ What's new in ps5upload, written for humans.
   and FTP servers now use the server's own paths (**Browse the whole server**, on by default)
   and open in your home folder when no start folder is given. A server saved before keeps the old
   paths until you edit it and turn that on (re-add any games or favorites saved from it then).
+- **Upscale the Remote Play picture to your screen (experimental).** Remote Play › Settings ›
+  Picture › **Upscale to the screen (FSR 1)** brings the 720p/1080p stream up to the picture's
+  own size on your screen, on the graphics card, with AMD FidelityFX Super Resolution 1:
+  edge-aware upscaling, then sharpening (Sharpen sets how much). It is plain shader code, so it
+  works the same on AMD, NVIDIA, Intel and Apple GPUs and on phones. Measured against plain
+  smoothing it comes clearly closer to the original picture, with crisper edges. A device that
+  can't keep up gets the plain picture back with a notice.
+- **Remote Play pop-out on Windows: the picture showed only its top-left part.** The desktop
+  app's pop-out window could lay its page out bigger than the window, so every picture size
+  looked the same and the picture was cut. The pop-out now fits the player to the part of the
+  window that shows. If it still happens for you, a bug report now includes the sizes involved.
 
 ## 9.9.0
 

@@ -6199,6 +6199,8 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_phone_qr": "Kod QR dla aparatu telefonu",
 "rp_phone_how": "Zeskanuj go aparatem telefonu. Telefon otworzy kontroler; obróć go poziomo. Gra razem ze sterowaniem tego komputera.",
 "rp_phone_app": "W aplikacji PS5Upload na telefonie Remote Play pokazuje ten komputer: stuknij „Użyj tego urządzenia jako jego kontrolera”, a potem zezwól tutaj.",
+"rp_picture_upscale": "Skaluj do ekranu (FSR 1, eksperymentalne)",
+"rp_picture_upscale_hint": "Podnosi obraz do rozdzielczości twojego ekranu na karcie graficznej za pomocą AMD FidelityFX Super Resolution 1, który działa na każdym GPU: ostrzej na dużym lub 4K ekranie. Wyostrzenie ustala, jak bardzo. Wyłączone przy Ostrych pikselach.",
 "conn_from_root": "Przeglądaj cały serwer",
 "conn_from_root_on": "Foldery to własne ścieżki serwera, tak jak pokazuje je klient SSH lub FTP (/home/ty, /mnt/games): folder startowy i przeglądanie mogą być wszędzie, gdzie to konto może czytać. Bez folderu startowego otwiera się tam, gdzie serwer cię loguje.",
 "conn_from_root_off": "Tylko folder, do którego loguje cię serwer, i jego zawartość: / to ten folder, a folder startowy jest w nim.",

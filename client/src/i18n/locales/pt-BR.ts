@@ -5966,6 +5966,8 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_phone_qr": "Código QR para a câmera do celular",
 "rp_phone_how": "Escaneie com a câmera do celular. O celular abre um controle; vire-o na horizontal. Ele joga junto com os controles deste computador.",
 "rp_phone_app": "No app PS5Upload em um celular, a Reprodução Remota mostra este computador: toque em \"Usar este dispositivo como controle dele\" e depois permita aqui.",
+"rp_picture_upscale": "Ampliar para a tela (FSR 1, experimental)",
+"rp_picture_upscale_hint": "Leva a imagem à resolução da sua tela na placa de vídeo com AMD FidelityFX Super Resolution 1, que funciona em qualquer GPU: mais nítida em uma tela grande ou 4K. Nitidez define o quanto. Desligado com Pixels nítidos.",
 "conn_from_root": "Navegar pelo servidor inteiro",
 "conn_from_root_on": "As pastas são os caminhos do próprio servidor, como um cliente SSH ou FTP mostra (/home/voce, /mnt/games): a pasta inicial e a navegação podem estar em qualquer lugar que esta conta possa ler. Sem pasta inicial, abre onde o servidor faz seu login.",
 "conn_from_root_off": "Só a pasta em que o servidor faz seu login e o que há nela: / é essa pasta, e a pasta inicial fica dentro dela.",

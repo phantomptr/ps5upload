@@ -5904,6 +5904,8 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_phone_qr": "供手機相機掃描的 QR 碼",
 "rp_phone_how": "用手機相機掃描此碼。手機會開啟一個控制器；請橫放手機。它會與這台電腦的操作一起控制遊戲。",
 "rp_phone_app": "在手機上的 PS5Upload 應用程式中，遙控遊玩會顯示這台電腦：點一下「將此裝置當作它的控制器」，然後在這裡允許。",
+"rp_picture_upscale": "放大到螢幕解析度（FSR 1，實驗性）",
+"rp_picture_upscale_hint": "在顯示卡上用 AMD FidelityFX Super Resolution 1 把畫面提升到螢幕本身的解析度，任何 GPU 都能用：在大螢幕或 4K 螢幕上更清晰。銳化控制清晰程度。開啟「銳利像素」時不生效。",
 "conn_from_root": "瀏覽整台伺服器",
 "conn_from_root_on": "資料夾是伺服器自己的路徑，與 SSH 或 FTP 用戶端顯示的一致（/home/you、/mnt/games）：起始資料夾和瀏覽可以是此帳號能讀取的任何位置。不填起始資料夾時，從伺服器登入後所在的資料夾開啟。",
 "conn_from_root_off": "只能存取伺服器登入後所在的資料夾及其內容：/ 就是該資料夾，起始資料夾也在其中。",

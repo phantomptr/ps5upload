@@ -5960,6 +5960,8 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_phone_qr": "Kode QR untuk kamera ponsel",
 "rp_phone_how": "Pindai ini dengan kamera ponsel. Ponsel membuka kontroler; miringkan ke samping. Ponsel bermain bersama kontrol komputer ini.",
 "rp_phone_app": "Di aplikasi PS5Upload pada ponsel, Remote Play menampilkan komputer ini: ketuk \"Gunakan perangkat ini sebagai kontrolernya\", lalu izinkan di sini.",
+"rp_picture_upscale": "Skala ke layar (FSR 1, eksperimental)",
+"rp_picture_upscale_hint": "Menaikkan gambar ke resolusi layarmu di kartu grafis dengan AMD FidelityFX Super Resolution 1, yang berjalan di GPU apa pun: lebih tajam di layar besar atau 4K. Ketajaman mengatur seberapa tajam. Mati bersama Piksel tajam.",
 "conn_from_root": "Jelajahi seluruh server",
 "conn_from_root_on": "Folder adalah path milik server sendiri, seperti yang ditampilkan klien SSH atau FTP (/home/kamu, /mnt/games): folder awal dan penjelajahan bisa di mana saja yang boleh dibaca akun ini. Tanpa folder awal, terbuka di tempat server memasukkanmu.",
 "conn_from_root_off": "Hanya folder tempat server memasukkanmu dan isinya: / adalah folder itu, dan folder awal ada di dalamnya.",

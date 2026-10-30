@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-// Per-game controls (9.10): the Game panel's Controls tab sets the running game's turbo buttons,
+// Per-game controls (9.11): the Game panel's Controls tab sets the running game's turbo buttons,
 // mouse aim and macros; they change what the console gets, and each game keeps its own.
 
 const status = {
@@ -9,7 +9,7 @@ const status = {
   prior_instance: "clean",
   ps5_kernel: "r229358/releases/13.60",
   ucred_elevated: true,
-  version: "9.10.0",
+  version: "9.11.0",
 };
 const CROSS = 1;
 
@@ -32,7 +32,7 @@ test("turbo repeats a held button, and a macro key plays its presses", async ({ 
     async (route) => {
       const path = new URL(route.request().url()).pathname;
       let body: unknown = {};
-      if (path === "/api/version") body = { version: "9.10.0", caps: {} };
+      if (path === "/api/version") body = { version: "9.11.0", caps: {} };
       if (path === "/api/ps5/status") body = status;
       if (path === "/api/ps5/rp/session") body = { host: null };
       if (path === "/api/ps5/process/list")

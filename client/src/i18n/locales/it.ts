@@ -5904,6 +5904,8 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_phone_qr": "Codice QR per la fotocamera del telefono",
 "rp_phone_how": "Scansionalo con la fotocamera del telefono. Il telefono apre un controller; ruotalo in orizzontale. Gioca insieme ai comandi di questo computer.",
 "rp_phone_app": "Nell'app PS5Upload su un telefono, Remote Play mostra questo computer: tocca \"Usa questo dispositivo come suo controller\", poi autorizzalo qui.",
+"rp_picture_upscale": "Scala allo schermo (FSR 1, sperimentale)",
+"rp_picture_upscale_hint": "Porta l'immagine alla risoluzione del tuo schermo sulla scheda grafica con AMD FidelityFX Super Resolution 1, che funziona su qualsiasi GPU: più nitida su uno schermo grande o 4K. Nitidezza regola quanto. Disattivato con Pixel netti.",
 "conn_from_root": "Sfoglia tutto il server",
 "conn_from_root_on": "Le cartelle sono i percorsi del server stesso, come li mostra un client SSH o FTP (/home/tu, /mnt/games): la cartella iniziale e la navigazione possono essere ovunque questo account possa leggere. Senza cartella iniziale, si apre dove il server ti fa accedere.",
 "conn_from_root_off": "Solo la cartella in cui il server ti fa accedere e il suo contenuto: / è quella cartella, e la cartella iniziale è al suo interno.",

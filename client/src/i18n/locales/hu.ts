@@ -6257,6 +6257,8 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_phone_qr": "QR-kód a telefon kamerájához",
 "rp_phone_how": "Olvasd be a telefon kamerájával. A telefon megnyit egy kontrollert; fordítsd fekvőre. Együtt játszik a számítógép vezérlőivel.",
 "rp_phone_app": "Egy telefonon a PS5Upload alkalmazásban a Remote Play mutatja ezt a számítógépet: koppints az „Eszköz használata kontrollerként” gombra, majd engedélyezd itt.",
+"rp_picture_upscale": "Felskálázás a képernyőre (FSR 1, kísérleti)",
+"rp_picture_upscale_hint": "A videókártyán az AMD FidelityFX Super Resolution 1-gyel a képernyőd saját felbontására hozza a képet, ami bármely GPU-n működik: élesebb nagy vagy 4K képernyőn. Az Élesítés szabja meg, mennyire. Éles pixelekkel kikapcsol.",
 "conn_from_root": "Az egész szerver böngészése",
 "conn_from_root_on": "A mappák a szerver saját útvonalai, ahogy egy SSH- vagy FTP-kliens mutatja (/home/te, /mnt/games): a kezdőmappa és a böngészés bárhol lehet, amit ez a fiók olvashat. Kezdőmappa nélkül ott nyílik meg, ahová a szerver beléptet.",
 "conn_from_root_off": "Csak az a mappa, ahová a szerver beléptet, és a tartalma: a / ez a mappa, és a kezdőmappa ezen belül van.",

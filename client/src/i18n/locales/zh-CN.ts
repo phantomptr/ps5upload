@@ -5910,6 +5910,8 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_phone_qr": "供手机相机扫描的 QR 码",
 "rp_phone_how": "用手机相机扫描此码。手机会打开一个手柄；请横放手机。它会与这台电脑的操作一起控制游戏。",
 "rp_phone_app": "在手机上的 PS5Upload 应用中，远程游玩会显示这台电脑：点按“将此设备作为它的手柄”，然后在这里允许。",
+"rp_picture_upscale": "放大到屏幕分辨率（FSR 1，实验性）",
+"rp_picture_upscale_hint": "在显卡上用 AMD FidelityFX Super Resolution 1 把画面提升到屏幕本身的分辨率，任何 GPU 都能用：在大屏或 4K 屏上更清晰。锐化控制清晰程度。开启“锐利像素”时不生效。",
 "conn_from_root": "浏览整台服务器",
 "conn_from_root_on": "文件夹是服务器自己的路径，与 SSH 或 FTP 客户端显示的一致（/home/you、/mnt/games）：起始文件夹和浏览可以是此账户能读取的任何位置。不填起始文件夹时，从服务器登录后所在的文件夹打开。",
 "conn_from_root_off": "只能访问服务器登录后所在的文件夹及其内容：/ 就是该文件夹，起始文件夹也在其中。",

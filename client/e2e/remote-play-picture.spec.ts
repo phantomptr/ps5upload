@@ -261,7 +261,7 @@ test("Remote Play picture size is a setting that applies while playing", async (
   }
 });
 
-// Picture tools (9.10): the frame goes through the GPU pass (rpPicture.ts) before it reaches the
+// Picture tools (9.11): the frame goes through the GPU pass (rpPicture.ts) before it reaches the
 // page's canvas: cropped to the middle 21:9 band and brightened, here on a real decoded frame.
 test("Remote Play picture tools crop to 21:9 and brighten the real picture", async ({ browser }) => {
   const { page, close } = await open(browser, {
@@ -285,3 +285,33 @@ test("Remote Play picture tools crop to 21:9 and brighten the real picture", asy
   }
 });
 
+
+// Upscaling (FSR 1): the real 1080p picture on a 2x screen is drawn at the picture's size on
+// screen, in device pixels, and keeps its shape (its layout does not move).
+test("Remote Play upscales the real picture to its size on screen", async ({ browser }) => {
+  const { page, close } = await open(browser, { dpr: 2, size: "1920x1080", h264: true, picture: { upscale: true } });
+  try {
+    await page.getByTestId("rp-start").click();
+    const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
+    const read = () =>
+      canvas.evaluate((c: HTMLCanvasElement) => {
+        const r = c.getBoundingClientRect();
+        return {
+          px: [c.width, c.height],
+          box: [Math.round(r.width * devicePixelRatio), Math.round(r.height * devicePixelRatio)],
+          shape: Number(c.style.getPropertyValue("--rp-shape")),
+          lit: Array.from(c.getContext("2d")!.getImageData(c.width / 2, c.height / 2, 1, 1).data.slice(0, 3)),
+        };
+      });
+    await expect.poll(async () => (await read()).px[0], { timeout: 20_000 }).toBeGreaterThan(1920 * 1.1);
+    const r = await read();
+    // Drawn at the box's device pixels (within rounding), the picture's own 16:9 shape kept.
+    expect(Math.abs(r.px[0] - r.box[0])).toBeLessThanOrEqual(2);
+    expect(Math.abs(r.px[1] - r.box[1])).toBeLessThanOrEqual(2);
+    expect(r.shape).toBeCloseTo(16 / 9, 3);
+    // The picture is there (the fixture's grey, not black).
+    expect(r.lit[1]).toBeGreaterThan(0x20);
+  } finally {
+    await close();
+  }
+});

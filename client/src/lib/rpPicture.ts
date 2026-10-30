@@ -1,8 +1,12 @@
-// Remote Play picture tools: sharpen, brightness, contrast, saturation and a 21:9 crop, done on
-// the GPU (WebGL) for each decoded frame, only while a tool is on. The result is drawn into the
-// stream's own canvas, so the page, its fit layout, screenshots and clips all see it unchanged.
-// With every tool off the stream draws frames exactly as before. "Sharp pixels" is CSS
-// (image-rendering) and needs nothing here.
+// Remote Play picture tools: sharpen, brightness, contrast, saturation, a 21:9 crop and upscaling
+// to the screen, done on the GPU (WebGL) for each decoded frame, only while a tool is on. The
+// result is drawn into the stream's own canvas, so the page, its fit layout, screenshots and
+// clips all see it unchanged. With every tool off the stream draws frames exactly as before.
+// "Sharp pixels" is CSS (image-rendering) and needs nothing here.
+//
+// Upscaling is AMD FidelityFX Super Resolution 1 (EASU, then RCAS), ported from ffx_fsr1.h
+// (MIT, Advanced Micro Devices; LICENSES/FidelityFX-FSR-MIT.txt). It is plain shader code, so it
+// runs the same on any GPU with WebGL 2.
 
 export interface PictureTools {
   /** 0–100: how much the picture is sharpened. */
@@ -15,6 +19,8 @@ export interface PictureTools {
   crop219: boolean;
   /** Scale with hard edges (retro games): CSS only. */
   pixelated: boolean;
+  /** Upscale to the picture's size on screen with FSR 1 (Sharpen sets its sharpening). */
+  upscale: boolean;
 }
 
 export const DEFAULT_PICTURE: PictureTools = {
@@ -24,11 +30,44 @@ export const DEFAULT_PICTURE: PictureTools = {
   saturation: 0,
   crop219: false,
   pixelated: false,
+  upscale: false,
 };
 
 /** Whether any tool needs the GPU pass (pixelated is CSS). */
 export function needsPass(p: PictureTools): boolean {
-  return p.sharpen > 0 || p.brightness !== 0 || p.contrast !== 0 || p.saturation !== 0 || p.crop219;
+  return (
+    p.sharpen > 0 || p.brightness !== 0 || p.contrast !== 0 || p.saturation !== 0 || p.crop219 || upscales(p)
+  );
+}
+
+/** Upscaling is asked for and can apply (sharp pixels wants the pixels as they are). */
+export function upscales(p: PictureTools): boolean {
+  return p.upscale && !p.pixelated;
+}
+
+/** Most an upscale goes: per side, and in all (4K). */
+const UPSCALE_MAX_SIDE = 3;
+const UPSCALE_MAX_PIXELS = 3840 * 2160;
+
+/**
+ * The size to upscale a `src` picture to, for a box of `box` device pixels on screen, or null
+ * when it would gain nothing (the box is not at least 1.1× the picture). Never smaller than the
+ * picture; at most 3× per side and 3840×2160 in all.
+ */
+export function upscaleSize(
+  src: { w: number; h: number },
+  box: { w: number; h: number } | null,
+): { w: number; h: number } | null {
+  if (!box || src.w <= 0 || src.h <= 0) return null;
+  if (box.w < src.w * 1.1 && box.h < src.h * 1.1) return null;
+  let w = Math.min(Math.max(box.w, src.w), src.w * UPSCALE_MAX_SIDE);
+  let h = Math.min(Math.max(box.h, src.h), src.h * UPSCALE_MAX_SIDE);
+  if (w * h > UPSCALE_MAX_PIXELS) {
+    const k = Math.sqrt(UPSCALE_MAX_PIXELS / (w * h));
+    w = Math.max(src.w, w * k);
+    h = Math.max(src.h, h * k);
+  }
+  return { w: Math.round(w), h: Math.round(h) };
 }
 
 /** The part of a `w`×`h` frame shown: all of it, or the middle 21:9 band. */
@@ -50,6 +89,7 @@ export function readPicture(v: unknown): PictureTools {
     saturation: n(o.saturation, -50, 50),
     crop219: o.crop219 === true,
     pixelated: o.pixelated === true,
+    upscale: o.upscale === true,
   };
 }
 
@@ -86,7 +126,159 @@ void main() {
   o = vec4(clamp(c, 0.0, 1.0), 1.0);
 }`;
 
-/** The GPU pass: draws a frame through the shader onto its own canvas, which the stream then
+/** A full-screen triangle strip in pixel space (no flip: these passes read and write GL space). */
+const VS_PX = `#version 300 es
+in vec2 p;
+void main() {
+  gl_Position = vec4(p, 0.0, 1.0);
+}`;
+
+/** FSR 1 EASU (edge-adaptive spatial upsampling), ported from ffx_fsr1.h FsrEasuF: a 12-tap
+ *  Lanczos-like filter steered along the local edge, clamped to its 2×2 neighbourhood. */
+const FS_EASU = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform sampler2D t;
+uniform vec2 scale; // input size / output size
+uniform ivec2 maxp; // input size - 1
+
+vec3 at(ivec2 q) { return texelFetch(t, clamp(q, ivec2(0), maxp), 0).rgb; }
+float luma(vec3 c) { return c.b * 0.5 + (c.r * 0.5 + c.g); }
+
+void set(inout vec2 dir, inout float len, float w, float lA, float lB, float lC, float lD, float lE) {
+  float dc = lD - lC;
+  float cb = lC - lB;
+  float lenX = max(abs(dc), abs(cb));
+  lenX = lenX > 0.0 ? 1.0 / lenX : 0.0;
+  float dirX = lD - lB;
+  dir.x += dirX * w;
+  lenX = clamp(abs(dirX) * lenX, 0.0, 1.0);
+  lenX *= lenX;
+  len += lenX * w;
+  float ec = lE - lC;
+  float ca = lC - lA;
+  float lenY = max(abs(ec), abs(ca));
+  lenY = lenY > 0.0 ? 1.0 / lenY : 0.0;
+  float dirY = lE - lA;
+  dir.y += dirY * w;
+  lenY = clamp(abs(dirY) * lenY, 0.0, 1.0);
+  lenY *= lenY;
+  len += lenY * w;
+}
+
+void tap(inout vec3 aC, inout float aW, vec2 off, vec2 dir, vec2 len2, float lob, float clp, vec3 c) {
+  vec2 v = vec2(off.x * dir.x + off.y * dir.y, off.x * (-dir.y) + off.y * dir.x) * len2;
+  float d2 = min(v.x * v.x + v.y * v.y, clp);
+  float wB = 2.0 / 5.0 * d2 - 1.0;
+  float wA = lob * d2 - 1.0;
+  wB *= wB;
+  wA *= wA;
+  wB = 25.0 / 16.0 * wB - (25.0 / 16.0 - 1.0);
+  float w = wB * wA;
+  aC += c * w;
+  aW += w;
+}
+
+void main() {
+  vec2 pp = gl_FragCoord.xy * scale - 0.5;
+  vec2 fp = floor(pp);
+  pp -= fp;
+  ivec2 f0 = ivec2(fp);
+  //    b c
+  //  e f g h
+  //  i j k l
+  //    n o
+  vec3 b = at(f0 + ivec2(0, -1)), c = at(f0 + ivec2(1, -1));
+  vec3 e = at(f0 + ivec2(-1, 0)), f = at(f0), g = at(f0 + ivec2(1, 0)), h = at(f0 + ivec2(2, 0));
+  vec3 i = at(f0 + ivec2(-1, 1)), j = at(f0 + ivec2(0, 1)), k = at(f0 + ivec2(1, 1)), l = at(f0 + ivec2(2, 1));
+  vec3 n = at(f0 + ivec2(0, 2)), oo = at(f0 + ivec2(1, 2));
+  float bL = luma(b), cL = luma(c), eL = luma(e), fL = luma(f), gL = luma(g), hL = luma(h);
+  float iL = luma(i), jL = luma(j), kL = luma(k), lL = luma(l), nL = luma(n), oL = luma(oo);
+
+  vec2 dir = vec2(0.0);
+  float len = 0.0;
+  set(dir, len, (1.0 - pp.x) * (1.0 - pp.y), bL, eL, fL, gL, jL);
+  set(dir, len, pp.x * (1.0 - pp.y), cL, fL, gL, hL, kL);
+  set(dir, len, (1.0 - pp.x) * pp.y, fL, iL, jL, kL, nL);
+  set(dir, len, pp.x * pp.y, gL, jL, kL, lL, oL);
+
+  vec2 dir2 = dir * dir;
+  float dirR = dir2.x + dir2.y;
+  bool zro = dirR < 1.0 / 32768.0;
+  dirR = zro ? 1.0 : inversesqrt(dirR);
+  dir.x = zro ? 1.0 : dir.x;
+  dir *= dirR;
+  len = len * 0.5;
+  len *= len;
+  float stretch = (dir.x * dir.x + dir.y * dir.y) / max(abs(dir.x), abs(dir.y));
+  vec2 len2 = vec2(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);
+  float lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;
+  float clp = 1.0 / lob;
+
+  vec3 aC = vec3(0.0);
+  float aW = 0.0;
+  tap(aC, aW, vec2(0.0, -1.0) - pp, dir, len2, lob, clp, b);
+  tap(aC, aW, vec2(1.0, -1.0) - pp, dir, len2, lob, clp, c);
+  tap(aC, aW, vec2(-1.0, 1.0) - pp, dir, len2, lob, clp, i);
+  tap(aC, aW, vec2(0.0, 1.0) - pp, dir, len2, lob, clp, j);
+  tap(aC, aW, vec2(0.0, 0.0) - pp, dir, len2, lob, clp, f);
+  tap(aC, aW, vec2(-1.0, 0.0) - pp, dir, len2, lob, clp, e);
+  tap(aC, aW, vec2(1.0, 1.0) - pp, dir, len2, lob, clp, k);
+  tap(aC, aW, vec2(2.0, 1.0) - pp, dir, len2, lob, clp, l);
+  tap(aC, aW, vec2(2.0, 0.0) - pp, dir, len2, lob, clp, h);
+  tap(aC, aW, vec2(1.0, 0.0) - pp, dir, len2, lob, clp, g);
+  tap(aC, aW, vec2(1.0, 2.0) - pp, dir, len2, lob, clp, oo);
+  tap(aC, aW, vec2(0.0, 2.0) - pp, dir, len2, lob, clp, n);
+
+  vec3 mn = min(min(f, g), min(j, k));
+  vec3 mx = max(max(f, g), max(j, k));
+  o = vec4(clamp(aC / aW, mn, mx), 1.0);
+}`;
+
+/** FSR 1 RCAS (robust contrast-adaptive sharpening), ported from ffx_fsr1.h FsrRcasF with its
+ *  noise damping (compressed video): sharpens as far as it can without clipping. */
+const FS_RCAS = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform sampler2D t;
+uniform ivec2 maxp;
+uniform float sharp; // exp2(-stops)
+
+vec3 at(ivec2 q) { return texelFetch(t, clamp(q, ivec2(0), maxp), 0).rgb; }
+float luma(vec3 c) { return c.b * 0.5 + (c.r * 0.5 + c.g); }
+
+void main() {
+  ivec2 q = ivec2(gl_FragCoord.xy);
+  //   b
+  // d e f
+  //   h
+  vec3 b = at(q + ivec2(0, -1)), d = at(q + ivec2(-1, 0)), e = at(q);
+  vec3 f = at(q + ivec2(1, 0)), h = at(q + ivec2(0, 1));
+  float bL = luma(b), dL = luma(d), eL = luma(e), fL = luma(f), hL = luma(h);
+  float nz = 0.25 * (bL + dL + fL + hL) - eL;
+  float range = max(max(max(bL, dL), max(eL, fL)), hL) - min(min(min(bL, dL), min(eL, fL)), hL);
+  nz = range > 0.0 ? clamp(abs(nz) / range, 0.0, 1.0) : 0.0;
+  nz = -0.5 * nz + 1.0;
+  vec3 mn4 = min(min(b, d), min(f, h));
+  vec3 mx4 = max(max(b, d), max(f, h));
+  vec3 hitMin = mn4 / max(4.0 * mx4, vec3(1.0 / 32768.0));
+  vec3 hitMax = (1.0 - mx4) / min(4.0 * mn4 - 4.0, vec3(-1.0 / 32768.0));
+  vec3 lobeRGB = max(-hitMin, hitMax);
+  float lobe = max(-(0.25 - 1.0 / 16.0), min(max(max(lobeRGB.r, lobeRGB.g), lobeRGB.b), 0.0)) * sharp;
+  lobe *= nz;
+  float rcpL = 1.0 / (4.0 * lobe + 1.0);
+  o = vec4(clamp((lobe * (b + d + f + h) + e) * rcpL, 0.0, 1.0), 1.0);
+}`;
+
+/** A texture to render into and read back from, at a size. */
+interface Target {
+  tex: WebGLTexture;
+  fb: WebGLFramebuffer;
+  w: number;
+  h: number;
+}
+
+/** The GPU pass: draws a frame through the shaders onto its own canvas, which the stream then
  *  draws into the page's canvas. Throws when WebGL 2 is not there. */
 export class PicturePass {
   readonly canvas: HTMLCanvasElement | OffscreenCanvas;
@@ -94,6 +286,14 @@ export class PicturePass {
   private prog: WebGLProgram;
   private tex: WebGLTexture;
   private u: Record<string, WebGLUniformLocation | null> = {};
+  /** Upscaling: its programs and the two textures between the passes, made when first used. */
+  private up: {
+    easu: WebGLProgram;
+    rcas: WebGLProgram;
+    u: Record<string, WebGLUniformLocation | null>;
+    a: Target;
+    b: Target;
+  } | null = null;
 
   constructor() {
     this.canvas =
@@ -103,6 +303,25 @@ export class PicturePass {
       | null;
     if (!gl) throw new Error("no WebGL 2");
     this.gl = gl;
+    this.prog = this.program(VS, FS);
+    gl.useProgram(this.prog);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    this.tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    for (const n of ["src", "px", "sharp", "bright", "contr", "satur", "t"]) this.u[n] = gl.getUniformLocation(this.prog, n);
+  }
+
+  /** A linked program; the corner positions are attribute 0 in every one. */
+  private program(vs: string, fs: string): WebGLProgram {
+    const gl = this.gl;
     const sh = (type: number, src: string) => {
       const s = gl.createShader(type)!;
       gl.shaderSource(s, src);
@@ -111,48 +330,121 @@ export class PicturePass {
       return s;
     };
     const prog = gl.createProgram()!;
-    gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
-    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs));
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+    gl.bindAttribLocation(prog, 0, "p");
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog) ?? "program");
-    this.prog = prog;
-    gl.useProgram(prog);
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-    const loc = gl.getAttribLocation(prog, "p");
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-    this.tex = gl.createTexture()!;
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    for (const n of ["src", "px", "sharp", "bright", "contr", "satur", "t"]) this.u[n] = gl.getUniformLocation(prog, n);
+    return prog;
   }
 
-  /** Draw `frame` (w×h) with `p`; the result is on `canvas`, out.w × out.h. */
-  render(frame: TexImageSource, w: number, h: number, p: PictureTools): { w: number; h: number } {
+  private target(): Target {
+    const gl = this.gl;
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fb = gl.createFramebuffer()!;
+    return { tex, fb, w: 0, h: 0 };
+  }
+
+  /** `t` sized `w`×`h` and bound for drawing into. */
+  private drawInto(t: Target, w: number, h: number): void {
+    const gl = this.gl;
+    if (t.w !== w || t.h !== h) {
+      gl.bindTexture(gl.TEXTURE_2D, t.tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t.tex, 0);
+      t.w = w;
+      t.h = h;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
+    gl.viewport(0, 0, w, h);
+  }
+
+  private upscaler(): NonNullable<PicturePass["up"]> {
+    if (!this.up) {
+      const gl = this.gl;
+      const easu = this.program(VS_PX, FS_EASU);
+      const rcas = this.program(VS_PX, FS_RCAS);
+      this.up = {
+        easu,
+        rcas,
+        u: {
+          eT: gl.getUniformLocation(easu, "t"),
+          eScale: gl.getUniformLocation(easu, "scale"),
+          eMax: gl.getUniformLocation(easu, "maxp"),
+          rT: gl.getUniformLocation(rcas, "t"),
+          rMax: gl.getUniformLocation(rcas, "maxp"),
+          rSharp: gl.getUniformLocation(rcas, "sharp"),
+        },
+        a: this.target(),
+        b: this.target(),
+      };
+    }
+    return this.up;
+  }
+
+  /** Draw `frame` (w×h) with `p`; the result is on `canvas`, out.w × out.h. `to`: the size to
+   *  upscale to (upscaleSize), or null for the picture's own size. */
+  render(
+    frame: TexImageSource,
+    w: number,
+    h: number,
+    p: PictureTools,
+    to: { w: number; h: number } | null = null,
+  ): { w: number; h: number } {
     const gl = this.gl;
     const crop = cropRect(w, h, p.crop219);
-    if (this.canvas.width !== w || this.canvas.height !== crop.h) {
-      this.canvas.width = w;
-      this.canvas.height = crop.h;
+    const up = to && upscales(p) ? this.upscaler() : null;
+    const out = up && to ? to : { w, h: crop.h };
+    if (this.canvas.width !== out.w || this.canvas.height !== out.h) {
+      this.canvas.width = out.w;
+      this.canvas.height = out.h;
     }
-    gl.viewport(0, 0, w, crop.h);
+    // The colour pass, at the picture's own size: onto the canvas, or into the first texture.
+    if (up) this.drawInto(up.a, w, crop.h);
+    else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, w, crop.h);
+    }
     gl.useProgram(this.prog);
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
     gl.uniform4f(this.u.src, 0, crop.y / h, 1, crop.h / h);
     gl.uniform2f(this.u.px, 1 / w, 1 / h);
-    gl.uniform1f(this.u.sharp, p.sharpen / 100);
+    // Upscaling sharpens in its own pass (RCAS), after the picture is at the screen's size.
+    gl.uniform1f(this.u.sharp, up ? 0 : p.sharpen / 100);
     gl.uniform1f(this.u.bright, p.brightness / 100);
     gl.uniform1f(this.u.contr, 1 + p.contrast / 100);
     gl.uniform1f(this.u.satur, 1 + p.saturation / 50);
     gl.uniform1i(this.u.t, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    return { w, h: crop.h };
+    if (!up) return out;
+
+    // EASU: to the screen's size, into the second texture.
+    this.drawInto(up.b, out.w, out.h);
+    gl.useProgram(up.easu);
+    gl.bindTexture(gl.TEXTURE_2D, up.a.tex);
+    gl.uniform1i(up.u.eT, 0);
+    gl.uniform2f(up.u.eScale, w / out.w, crop.h / out.h);
+    gl.uniform2i(up.u.eMax, w - 1, crop.h - 1);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    // RCAS: sharpened onto the canvas. Sharpen 0 is FSR's mild 2 stops, 100 its strongest.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, out.w, out.h);
+    gl.useProgram(up.rcas);
+    gl.bindTexture(gl.TEXTURE_2D, up.b.tex);
+    gl.uniform1i(up.u.rT, 0);
+    gl.uniform2i(up.u.rMax, out.w - 1, out.h - 1);
+    gl.uniform1f(up.u.rSharp, Math.pow(2, -(2 - (2 * p.sharpen) / 100)));
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    return out;
   }
 
   dispose(): void {

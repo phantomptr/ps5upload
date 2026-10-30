@@ -5,7 +5,7 @@
 // access unit, 3 audio header, 4 audio frame), JSON status lines out, pad state in. This file
 // turns that into pixels on a canvas, sound, and input; the screen only drives it.
 
-import { DEFAULT_PICTURE, PicturePass, needsPass, type PictureTools } from "./rpPicture";
+import { DEFAULT_PICTURE, PicturePass, cropRect, needsPass, upscaleSize, upscales, type PictureTools } from "./rpPicture";
 import type { MotionReading } from "./motion";
 import { getEngineUrl } from "../state/engine";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
@@ -341,7 +341,8 @@ export const FIT_ORDER: PictureFit[] = ["fit", "fill", "stretch"];
 /** The canvas's classes for a fit. It never takes a pointer: presses belong to the stage it is
  *  on and to the controls drawn over it. The browser sizes the picture, as a video player does:
  *  rp-picture (index.css) against the place it is in, by the fit in its data-fit and the
- *  picture's shape in --rp-shape. Nothing here measures the place. */
+ *  picture's shape in --rp-shape. Nothing here measures the place to lay it out (upscaling reads
+ *  the box's size only to pick how many pixels to draw). */
 export function canvasClass(fit: PictureFit): string {
   return `rp-picture pointer-events-none ${FIT_CLASS[fit] ?? FIT_CLASS.fit}`;
 }
@@ -605,10 +606,44 @@ export class RemotePlayStream {
   private passOff: "failed" | "slow" | null = null;
   private slowFrames = 0;
 
+  /** Upscaling: the picture's box on screen, in CSS pixels (times the pixel ratio of the
+   *  window it is in, at each frame, is what it is upscaled to). */
+  private boxCss: { w: number; h: number } | null = null;
+  private boxWatch: ResizeObserver | null = null;
+
+  /** Watch the picture's size on screen while upscaling is on (layout stays CSS: the box is
+   *  sized by the picture's shape and its place, never by the canvas's pixel size). */
+  private watchBox(on: boolean): void {
+    if (!on) {
+      this.boxWatch?.disconnect();
+      this.boxWatch = null;
+      this.boxCss = null;
+      return;
+    }
+    if (this.boxWatch || typeof ResizeObserver === "undefined") return;
+    // CSS size, not device-pixel-content-box: the ratio is read per frame instead, which also
+    // follows the window to a screen with another scaling (no resize there).
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[entries.length - 1].contentRect;
+      this.boxCss = { w: r.width, h: r.height };
+    });
+    ro.observe(this.canvas);
+    this.boxWatch = ro;
+  }
+
+  /** The picture's box on screen in device pixels, or null when not known. */
+  private boxPx(): { w: number; h: number } | null {
+    const b = this.boxCss;
+    if (!b) return null;
+    const r = this.canvas.ownerDocument.defaultView?.devicePixelRatio ?? 1;
+    return { w: Math.round(b.w * r), h: Math.round(b.h * r) };
+  }
+
   /** Set the picture tools; they apply from the next frame. */
   setPicture(p: PictureTools): void {
     this.tools = p;
     this.canvas.style.imageRendering = p.pixelated ? "pixelated" : "";
+    this.watchBox(upscales(p));
     if (!needsPass(p)) {
       this.pass?.dispose();
       this.pass = null;
@@ -971,6 +1006,7 @@ export class RemotePlayStream {
     }
     window.clearInterval(this.statsTimer);
     window.clearTimeout(this.reconnectTimer);
+    this.watchBox(false);
     this.resetMedia();
     try {
       this.worklet?.disconnect();
@@ -1098,16 +1134,22 @@ export class RemotePlayStream {
         // The canvas is the picture's own size (its visible part, at the display aspect), taken
         // from each frame, never from the size asked for: the console may send another.
         const c = this.canvas;
-        const w = frame.displayWidth;
+        let w = frame.displayWidth;
         let h = frame.displayHeight;
+        // The picture's own shape (before any upscale), which its layout follows.
+        let shape = w / h;
         // Picture tools on: the frame goes through the GPU pass first (rpPicture.ts).
         const pass = this.picturePass();
         let src: CanvasImageSource = frame;
         if (pass) {
           try {
             const t0 = performance.now();
-            const out = pass.render(frame, w, h, this.tools);
+            const band = cropRect(w, h, this.tools.crop219).h;
+            shape = w / band;
+            const to = upscales(this.tools) ? upscaleSize({ w, h: band }, this.boxPx()) : null;
+            const out = pass.render(frame, w, h, this.tools, to);
             src = pass.canvas;
+            w = out.w;
             h = out.h;
             // A device that cannot keep up gets the plain picture back.
             this.slowFrames = performance.now() - t0 > 12 ? this.slowFrames + 1 : 0;
@@ -1115,13 +1157,15 @@ export class RemotePlayStream {
           } catch {
             this.picturePassOff("failed");
             src = frame;
+            w = frame.displayWidth;
             h = frame.displayHeight;
+            shape = w / h;
           }
         }
         if (c.width !== w || c.height !== h) {
           c.width = w;
           c.height = h;
-          c.style.setProperty("--rp-shape", String(c.width / c.height));
+          c.style.setProperty("--rp-shape", String(shape));
         }
         this.ctx?.drawImage(src, 0, 0, c.width, c.height);
         frame.close();

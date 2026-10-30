@@ -5959,6 +5959,8 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_phone_qr": "QR-Code für die Handykamera",
 "rp_phone_how": "Scanne ihn mit der Handykamera. Das Handy öffnet einen Controller; dreh es quer. Es spielt zusammen mit der Steuerung dieses Computers.",
 "rp_phone_app": "In der PS5Upload-App auf einem Handy zeigt Remote Play diesen Computer: Tippe auf „Dieses Gerät als Controller nutzen“ und lass es dann hier zu.",
+"rp_picture_upscale": "Auf den Bildschirm hochskalieren (FSR 1, experimentell)",
+"rp_picture_upscale_hint": "Bringt das Bild auf der Grafikkarte mit AMD FidelityFX Super Resolution 1, das auf jeder GPU läuft, auf die Auflösung deines Bildschirms: schärfer auf einem großen oder 4K-Bildschirm. Schärfen legt fest, wie scharf. Aus bei Scharfe Pixel.",
 "conn_from_root": "Den ganzen Server durchsuchen",
 "conn_from_root_on": "Ordner sind die Pfade des Servers selbst, wie ein SSH- oder FTP-Client sie zeigt (/home/du, /mnt/games): Startordner und Durchsuchen können überall sein, wo dieses Konto lesen darf. Ohne Startordner öffnet es dort, wo der Server dich anmeldet.",
 "conn_from_root_off": "Nur der Ordner, in dem der Server dich anmeldet, und was darin ist: / ist dieser Ordner, und der Startordner liegt darin.",

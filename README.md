@@ -471,6 +471,7 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 **Libraries:**
 * Desktop client: [Tauri](https://tauri.app/), [React](https://react.dev/), [react-router](https://reactrouter.com/), [Zustand](https://github.com/pmndrs/zustand), [lucide-react](https://lucide.dev/) icons, built with [Vite](https://vitejs.dev/) and [Tailwind CSS](https://tailwindcss.com/)
 * Remote Play instant replay: [Mediabunny](https://mediabunny.dev/) (MPL-2.0, used unmodified from npm) writes the saved clip as MP4
+* Remote Play upscaling: [AMD FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT) — **ported**: its EASU and RCAS shaders rewritten as WebGL 2 GLSL in `client/src/lib/rpPicture.ts`
 * Engine: [tokio](https://tokio.rs/), [axum](https://github.com/tokio-rs/axum), [serde](https://serde.rs/), [anyhow](https://github.com/dtolnay/anyhow), [uuid](https://github.com/uuid-rs/uuid), [zip](https://github.com/zip-rs/zip2), and the other crates in the `Cargo.lock` files
 * [UnRAR](https://www.rarlab.com/) (Alexander Roshal) — `.rar` extraction on **desktop**, compiled from the source the `unrar_sys` crate bundles into its own program, `ps5upload-unrar`, which holds only ps5upload's own code and UnRAR and which the engine runs over pipes (UnRAR is never linked into the engine); used to *extract only*, never to compress.
 

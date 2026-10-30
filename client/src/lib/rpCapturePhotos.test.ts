@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Save to Photos in the phone apps (9.10): the native command adds it to the photo library; a
+// Save to Photos in the phone apps (9.11): the native command adds it to the photo library; a
 // refusal falls back to a file in Downloads, and says Photos was refused.
 
 const env = vi.hoisted(() => ({ tauri: true, mobile: true }));

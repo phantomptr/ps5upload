@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
-// Watch party (9.10): the computer playing shows a second code, to watch; a phone that scans it
+// Watch party (9.11): the computer playing shows a second code, to watch; a phone that scans it
 // gets the stream's picture (the engine forwards the session's own messages, rp_stream_api.rs
 // to_spectators) and plays only once the computer hands it the controller.
 
@@ -34,7 +34,7 @@ test("the computer shows a watch code and hands a watcher the controller", async
       const req = route.request();
       const path = new URL(req.url()).pathname;
       let body: unknown = {};
-      if (path === "/api/version") body = { version: "9.10.0", caps: {} };
+      if (path === "/api/version") body = { version: "9.11.0", caps: {} };
       if (path === "/api/ps5/rp/session") body = { host: null };
       if (path === "/api/ps5/rp/pad-link/control") {
         const b = req.postDataJSON() as { on: boolean };
