@@ -4,6 +4,13 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 9.10.1
+
+- **Remote Play pop-out on Windows: the picture showed only its top-left part.** The desktop
+  app's pop-out window could lay its page out bigger than the window, so every picture size
+  looked the same and the picture was cut. The pop-out now fits the player to the part of the
+  window that shows. If it still happens for you, a bug report now includes the sizes involved.
+
 ## 9.10.0
 
 - **Per-game controls in Remote Play.** The Game panel's new **Controls** tab sets the running
