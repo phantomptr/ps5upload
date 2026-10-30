@@ -132,6 +132,6 @@ export default defineConfig({
     setupFiles: ["./src/test-setup.ts"],
     // Playwright owns real-browser journeys; Vitest must not import those
     // files into its jsdom/node runner.
-    exclude: ["e2e/**", "**/node_modules/**", "**/.git/**"],
+    exclude: ["e2e/**", "site-shots/**", "**/node_modules/**", "**/.git/**"],
   },
 });
