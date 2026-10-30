@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PS5Upload — move games to your PS5, fast</title>
-  <meta name="description" content="PS5Upload sends files, installs packages and manages games on a jailbroken PS5 from your computer or phone. Free and open source, for macOS, Windows, Linux, Android, iPhone and Docker." />
+  <title>PS5Upload — play and manage your PS5 from any screen</title>
+  <meta name="description" content="PS5Upload streams your PS5 to your computer, phone or browser and manages it from there: play, install, move games and saves, all in one app. Free and open source for macOS, Windows, Linux, Android, iPhone and Docker." />
   <meta property="og:title" content="PS5Upload" />
-  <meta property="og:description" content="Move games to your PS5, fast. Free and open source, for macOS, Windows, Linux, Android, iPhone and Docker." />
-  <meta property="og:image" content="https://ps5upload.phantomptr.com/assets/home-dark.webp" />
+  <meta property="og:description" content="Play and manage your PS5 from any screen. Free and open source for macOS, Windows, Linux, Android, iPhone and Docker." />
+  <meta property="og:image" content="https://ps5upload.phantomptr.com/assets/shots/play-dark.webp" />
   <meta property="og:type" content="website" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="color-scheme" content="light dark" />
@@ -24,10 +24,11 @@
         <span>PS5Upload</span>
       </a>
       <nav class="nav" aria-label="Sections">
-        <a href="#features">Features</a>
+        <a href="#play">Play</a>
+        <a href="#tour">Features</a>
+        <a href="#guide">Guide</a>
         <a href="#download">Download</a>
         <a href="#news">News</a>
-        <a href="#community">Community</a>
       </nav>
       <div class="top-actions">
         <a class="btn small coffee" href="https://ko-fi.com/B0B81S0WUA" title="PS5Upload is free. A coffee for me, or tokens for the AI that writes the code, keeps it going.">☕ <span>Coffee or tokens</span></a>
@@ -42,145 +43,413 @@
   </header>
 
   <main id="main">
-    <section class="hero wrap">
-      <div class="hero-text">
-        <p class="eyebrow" id="hero-version">Free and open source</p>
-        <h1>Move games to your PS5, fast.</h1>
-        <p class="lead">
-          PS5Upload sends files, installs packages and manages games on a jailbroken PS5,
-          from your computer or your phone. Encrypted, resumable transfers at the full speed of
-          your network.
-        </p>
-        <div class="hero-cta">
-          <a class="btn primary" id="hero-download" href="https://github.com/phantomptr/ps5upload/releases">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0-4-4m4 4 4-4M5 21h14"/></svg>
-            <span id="hero-download-label">Download</span>
+    <!-- Hero: Play first, with the app around it. -->
+    <section class="hero">
+      <div class="hero-glow" aria-hidden="true"></div>
+      <div class="wrap hero-row">
+        <div class="hero-text">
+          <p class="eyebrow" id="hero-version">Free and open source</p>
+          <h1>Your PS5, on <span class="grad">every screen</span>.</h1>
+          <p class="lead">
+            Play your PS5 from your computer, phone or browser, and manage everything on it from
+            the same app: install games, move files, keep your saves and set it all up with a
+            checklist that ticks itself.
+          </p>
+          <div class="hero-cta">
+            <a class="btn primary" id="hero-download" href="https://github.com/phantomptr/ps5upload/releases">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0-4-4m4 4 4-4M5 21h14"/></svg>
+              <span id="hero-download-label">Download</span>
+            </a>
+            <a class="btn" href="#guide">Get started</a>
+          </div>
+          <p class="fine" id="hero-fine">macOS · Windows · Linux · Android · iPhone · Docker</p>
+        </div>
+        <div class="hero-stage">
+          <figure class="device laptop">
+            <div class="screen">
+              <picture>
+                <source srcset="assets/shots/play-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="play" />
+                <img src="assets/shots/play-light.webp" alt="Play: a PS5 game streamed into PS5Upload on a computer, with its controls bar." width="1600" height="1000" data-theme-img="play" />
+              </picture>
+            </div>
+          </figure>
+          <figure class="device phone hero-phone">
+            <div class="screen">
+              <picture>
+                <source srcset="assets/shots/m-home-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="m-home" />
+                <img src="assets/shots/m-home-light.webp" alt="PS5Upload on a phone: Home with the Play card." width="390" height="844" data-theme-img="m-home" />
+              </picture>
+            </div>
+          </figure>
+        </div>
+      </div>
+      <ul class="wrap badges" aria-label="At a glance">
+        <li><b>6</b> platforms</li>
+        <li><b>21</b> languages</li>
+        <li><b>1</b> app for play and management</li>
+        <li><b>0</b> cost: free and open source</li>
+      </ul>
+    </section>
+
+    <!-- Play -->
+    <section class="section" id="play" aria-labelledby="play-title">
+      <div class="wrap">
+        <p class="kicker">New in 10.0</p>
+        <h2 id="play-title">Play is the heart of the app</h2>
+        <p class="section-lead">Your console's screen, streamed to the device in front of you. It wakes the PS5 from rest mode, signs your user in, and you play with a controller, the keyboard or touch.</p>
+      </div>
+      <div class="wrap tour">
+        <div class="tour-row">
+          <div class="tour-text">
+            <h3>One press from Home</h3>
+            <p>The Play card sits at the top of Home: press Play, or pick up your last game where you left it. Every game's page has Play too, which starts the game and streams it in one go.</p>
+            <ul class="ticks">
+              <li>Wakes the console and signs in for you</li>
+              <li>Keeps playing while you use other screens</li>
+              <li>Fit, Fill or Stretch the picture; full screen and picture in picture</li>
+            </ul>
+          </div>
+          <figure class="shot tilt-l">
+            <picture>
+              <source srcset="assets/shots/home-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="home" />
+              <img src="assets/shots/home-light.webp" alt="Home with the Play card at the top." width="1600" height="1000" loading="lazy" data-theme-img="home" />
+            </picture>
+          </figure>
+        </div>
+        <div class="tour-row flip">
+          <div class="tour-text">
+            <h3>Set up once, with a checklist that ticks itself</h3>
+            <p>Play › Set up walks through everything a console needs, in order. It reads the console every few seconds and ticks each step as it's done; where the app can do the step, the button is right there.</p>
+            <ol class="mini-steps">
+              <li>Connect to your PS5</li>
+              <li>Sign in to a user and give it an account ID</li>
+              <li>Sign the account in, offline</li>
+              <li>Turn Remote Play on</li>
+              <li>Pair this app with the console</li>
+            </ol>
+          </div>
+          <figure class="shot tilt-r">
+            <picture>
+              <source srcset="assets/shots/setup-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="setup" />
+              <img src="assets/shots/setup-light.webp" alt="Play › Set up: a checklist with the done steps ticked and the next one open." width="1600" height="1000" loading="lazy" data-theme-img="setup" />
+            </picture>
+          </figure>
+        </div>
+        <div class="tour-row">
+          <div class="tour-text">
+            <h3>Play together</h3>
+            <p>Scan a code and a phone becomes a controller, or a screen for friends to watch from the couch. Hand a watcher the controller when it's their turn.</p>
+            <ul class="ticks">
+              <li>Phones as controllers, up to four</li>
+              <li>Watch party with sound, up to four watchers</li>
+              <li>Instant replay, screenshots and clips, saved to your phone's photos</li>
+            </ul>
+          </div>
+          <figure class="shot tilt-l">
+            <picture>
+              <source srcset="assets/shots/phones-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="phones" />
+              <img src="assets/shots/phones-light.webp" alt="The phone panel: a code to scan, to use a phone as a controller or to watch." width="1600" height="1000" loading="lazy" data-theme-img="phones" />
+            </picture>
+          </figure>
+        </div>
+      </div>
+      <div class="wrap">
+        <div class="grid chips">
+          <div class="chip-card"><span class="ico">🎮</span><b>Per-game controls</b><span>Turbo, mouse aim and macros, kept for each game.</span></div>
+          <div class="chip-card"><span class="ico">✨</span><b>Upscale to your screen</b><span>AMD FSR 1 on the graphics card, on any GPU.</span></div>
+          <div class="chip-card"><span class="ico">🎨</span><b>Picture tools</b><span>Sharpen, brightness, colour and a 21:9 crop.</span></div>
+          <div class="chip-card"><span class="ico">⏪</span><b>Instant replay</b><span>Save the last 15 to 60 seconds as a video.</span></div>
+          <div class="chip-card"><span class="ico">🎙️</span><b>Voice</b><span>Your microphone to the console, for party chat.</span></div>
+          <div class="chip-card"><span class="ico">🧩</span><b>Game panel</b><span>Cheats, the console's state and controls, beside the picture.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Feature tour -->
+    <section class="section alt" id="tour" aria-labelledby="tour-title">
+      <div class="wrap">
+        <p class="kicker">Everything in one app</p>
+        <h2 id="tour-title">Fill it, sort it, keep it</h2>
+        <p class="section-lead">Everything between your devices and your PS5, built on its own fast transfer protocol.</p>
+      </div>
+      <div class="wrap tour">
+        <div class="tour-row">
+          <div class="tour-text">
+            <h3>Upload &amp; Install</h3>
+            <p>Drop a package, a game folder, an image or an archive: the app works out what it is and does the right thing. Transfers are resumable and run at the full speed of your network, with thousands of small files packed together so they never crawl.</p>
+            <ul class="ticks">
+              <li>Install from your computer, a link or a network share</li>
+              <li>A queue that carries on while you do other things</li>
+              <li>Updates and add-ons install from each game's page</li>
+            </ul>
+          </div>
+          <figure class="shot tilt-l">
+            <picture>
+              <source srcset="assets/shots/upload-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="upload" />
+              <img src="assets/shots/upload-light.webp" alt="Upload &amp; Install: drop anything and it is detected." width="1600" height="1000" loading="lazy" data-theme-img="upload" />
+            </picture>
+          </figure>
+        </div>
+        <div class="tour-row flip">
+          <div class="tour-text">
+            <h3>All your games, in one place</h3>
+            <p>One grid for the games on your drives, your network shares and every console, with their updates and add-ons. Each game's page shows where it is and what you can do with it: Play, Launch on PS5, install, move or update.</p>
+          </div>
+          <figure class="shot tilt-r">
+            <picture>
+              <source srcset="assets/shots/games-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="games" />
+              <img src="assets/shots/games-light.webp" alt="Games: a grid of game covers with their sizes and where they are." width="1600" height="1000" loading="lazy" data-theme-img="games" />
+            </picture>
+          </figure>
+        </div>
+        <div class="tour-row">
+          <div class="tour-text">
+            <h3>Saves and files</h3>
+            <p>Back your saves up on a schedule, restore them, and take a snapshot before you try something new. Browse the console's drives like a folder on your computer: copy, move and open files both ways.</p>
+          </div>
+          <figure class="shot tilt-l">
+            <picture>
+              <source srcset="assets/shots/files-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="files" />
+              <img src="assets/shots/files-light.webp" alt="Files: the console's drives and folders, browsed like a folder on your computer." width="1600" height="1000" loading="lazy" data-theme-img="files" />
+            </picture>
+          </figure>
+        </div>
+        <div class="tour-row flip">
+          <div class="tour-text">
+            <h3>Workshop</h3>
+            <p>Turn a game folder into a package or a disk image, look inside one, and make images smaller with compression. Everything runs on your computer and goes to the console when it's ready.</p>
+          </div>
+          <figure class="shot tilt-r">
+            <picture>
+              <source srcset="assets/shots/workshop-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="workshop" />
+              <img src="assets/shots/workshop-light.webp" alt="Workshop: convert a game folder into a package or an image." width="1600" height="1000" loading="lazy" data-theme-img="workshop" />
+            </picture>
+          </figure>
+        </div>
+      </div>
+      <div class="wrap">
+        <div class="everywhere">
+          <div class="everywhere-text">
+            <h3>On every device you have</h3>
+            <p>Native apps for macOS, Windows, Linux, Android and iPhone, and a Docker image that serves the same app as a web page from a NAS or server. Several consoles? Add them all and switch with a tap.</p>
+            <div class="os-row" aria-label="Platforms">
+              <span>macOS</span><span>Windows</span><span>Linux</span><span>Android</span><span>iPhone</span><span>Docker</span>
+            </div>
+          </div>
+          <div class="phones">
+            <figure class="device phone">
+              <div class="screen">
+                <picture>
+                  <source srcset="assets/shots/m-play-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="m-play" />
+                  <img src="assets/shots/m-play-light.webp" alt="Play on a phone, with the on-screen controller." width="390" height="844" loading="lazy" data-theme-img="m-play" />
+                </picture>
+              </div>
+            </figure>
+            <figure class="device phone">
+              <div class="screen">
+                <picture>
+                  <source srcset="assets/shots/m-games-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="m-games" />
+                  <img src="assets/shots/m-games-light.webp" alt="Games on a phone." width="390" height="844" loading="lazy" data-theme-img="m-games" />
+                </picture>
+              </div>
+            </figure>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Guide -->
+    <section class="section" id="guide" aria-labelledby="guide-title">
+      <div class="wrap">
+        <p class="kicker">Guide</p>
+        <h2 id="guide-title">Get started in five steps</h2>
+        <p class="section-lead">From download to your first game on screen. Most of it happens once.</p>
+        <ol class="steps">
+          <li class="step">
+            <span class="num">1</span>
+            <div>
+              <h3>Install the app</h3>
+              <p>Download it for your computer or phone below. On a NAS or server, run the Docker image and open it in a browser instead.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="num">2</span>
+            <div>
+              <h3>Load the helper on the PS5</h3>
+              <p>Start your PS5's payload loader as you usually do, then press <b>Update helper</b> in the app (or Connection). The helper is how the app talks to the console.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="num">3</span>
+            <div>
+              <h3>Connect</h3>
+              <p>Type the console's address on the Connection screen, or let the app find it on your network. The status at the bottom turns green when it's there.</p>
+              <figure class="shot small">
+                <picture>
+                  <source srcset="assets/shots/connection-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="connection" />
+                  <img src="assets/shots/connection-light.webp" alt="The Connection screen with a console found and connected." width="1600" height="1000" loading="lazy" data-theme-img="connection" />
+                </picture>
+              </figure>
+            </div>
+          </li>
+          <li class="step">
+            <span class="num">4</span>
+            <div>
+              <h3>Set up Play</h3>
+              <p>Open <b>Play › Set up</b> and follow the checklist. Each step ticks by itself when it's done; the one only the console can show (its rest-mode settings) you tick yourself.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="num">5</span>
+            <div>
+              <h3>Play, and fill it up</h3>
+              <p>Press <b>Play</b> on Home. To add a game, drop it on <b>Upload &amp; Install</b>; it shows up in <b>Games</b> with Play ready when it's installed.</p>
+            </div>
+          </li>
+        </ol>
+      </div>
+
+      <div class="wrap">
+        <h3 class="guides-title">How do I…</h3>
+        <div class="guides">
+          <details class="guide" open>
+            <summary>Play with a phone as the controller</summary>
+            <div>
+              <ol>
+                <li>Start Play on your computer.</li>
+                <li>Press the phone button on the picture's bar.</li>
+                <li>Scan the code with the phone's camera. The phone opens a controller; turn it sideways.</li>
+              </ol>
+              <p class="muted">In the PS5Upload app on a phone, Play shows the computer that's playing: tap <i>Use this device as its controller</i>.</p>
+            </div>
+          </details>
+          <details class="guide">
+            <summary>Let friends watch</summary>
+            <div>
+              <ol>
+                <li>In the phone panel, choose <b>To watch</b>.</li>
+                <li>Friends scan the code: the stream plays in their browser, with sound after a tap.</li>
+                <li>Press <b>Hand the controller</b> next to someone to let them play.</li>
+              </ol>
+            </div>
+          </details>
+          <details class="guide">
+            <summary>Install a game or an update</summary>
+            <div>
+              <ol>
+                <li>Drop the package on <b>Upload &amp; Install</b>, or pick it with Browse.</li>
+                <li>It joins the queue and installs; you can keep using the app.</li>
+                <li>For an update or add-on, open the game's page in <b>Games</b> and install it from there.</li>
+              </ol>
+            </div>
+          </details>
+          <details class="guide">
+            <summary>Back up and restore saves</summary>
+            <div>
+              <ol>
+                <li>Open <b>Save Data</b> and choose a folder for backups.</li>
+                <li>Back up one game, or turn on automatic backups.</li>
+                <li>To go back, pick a backup and press Restore (close the game first).</li>
+              </ol>
+              <p class="muted">While playing, the game panel takes a snapshot of the running game's save in one press.</p>
+            </div>
+          </details>
+          <details class="guide">
+            <summary>Make the picture sharper on a big screen</summary>
+            <div>
+              <ol>
+                <li>In Play, open <b>Settings › Picture</b>.</li>
+                <li>Turn on <b>Upscale to the screen</b>, and set <b>Sharpen</b> to taste.</li>
+              </ol>
+              <p class="muted">It runs on your graphics card and turns itself off if the device can't keep up.</p>
+            </div>
+          </details>
+          <details class="guide">
+            <summary>Use it from a browser (Docker)</summary>
+            <div>
+              <ol>
+                <li>Run the Docker image on your NAS or server (the command is below).</li>
+                <li>Open port 19113 on that machine in a browser.</li>
+                <li>The whole app is there, including Play.</li>
+              </ol>
+            </div>
+          </details>
+          <details class="guide">
+            <summary>Something isn't working</summary>
+            <div>
+              <ol>
+                <li>Open <b>Bug Report</b> in the sidebar: it builds a report with the app's logs.</li>
+                <li>Attach it to an issue on GitHub, or ask on Discord.</li>
+              </ol>
+              <p class="muted">The in-app <b>Help</b> screen answers most questions, in your language.</p>
+            </div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt" id="download" aria-labelledby="download-title">
+      <div class="wrap">
+        <div class="section-head">
+          <div>
+            <h2 id="download-title">Download</h2>
+            <p class="section-lead" id="download-lead">The newest release for every platform.</p>
+          </div>
+          <a class="btn small" id="release-link" href="https://github.com/phantomptr/ps5upload/releases">Release notes</a>
+        </div>
+        <div class="grid downloads" id="downloads">
+          <p class="muted">Loading the latest release…</p>
+        </div>
+        <div class="card docker">
+          <div>
+            <h3>Docker (the app as a web page on your NAS or server)</h3>
+            <p class="muted">Serves the full app on your network. Open port 19113 in a browser. Fill in your PS5's address and the network allowed to use it, or start from <a href="https://github.com/phantomptr/ps5upload/blob/main/engine/compose.yaml">engine/compose.yaml</a>.</p>
+          </div>
+          <div class="copy">
+            <code id="docker-cmd">docker run -d --name ps5upload --network host -v ps5upload-data:/data -e PS5_ADDR=&lt;your PS5's IP&gt; -e PS5UPLOAD_ALLOW_IP=&lt;your LAN, e.g. 192.168.1.0/24&gt; ghcr.io/phantomptr/ps5upload-engine-webui:latest</code>
+            <button class="btn small" type="button" data-copy="docker-cmd">Copy</button>
+          </div>
+        </div>
+        <details class="more">
+          <summary>The PS5 helper and the engine on its own</summary>
+          <div id="extras" class="extras"></div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" id="news" aria-labelledby="news-title">
+      <div class="wrap">
+        <div class="section-head">
+          <h2 id="news-title">News</h2>
+          <a class="btn small" href="https://github.com/phantomptr/ps5upload/blob/main/CHANGELOG.md">Full changelog</a>
+        </div>
+        <div id="news-list" class="news">
+          <p class="muted">Loading releases…</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt" id="community" aria-labelledby="community-title">
+      <div class="wrap">
+        <h2 id="community-title">Community</h2>
+        <div class="grid community">
+          <a class="card link-card" href="https://discord.gg/fzK3xddtrM">
+            <h3>Discord</h3>
+            <p>Help, setup questions and ideas. Release announcements land here first.</p>
           </a>
-          <a class="btn" href="#download">All downloads</a>
+          <a class="card link-card" href="https://github.com/phantomptr/ps5upload/issues">
+            <h3>Report a bug</h3>
+            <p>Open an issue on GitHub. The app's Bug Report screen builds a report with logs to attach.</p>
+          </a>
+          <a class="card link-card" href="https://x.com/phantomptr">
+            <h3>X</h3>
+            <p>Follow @phantomptr for releases.</p>
+          </a>
+          <a class="card link-card" href="https://ko-fi.com/B0B81S0WUA">
+            <h3>Coffee or tokens</h3>
+            <p>PS5Upload is free. If it saves you time, a coffee for me or AI tokens for the code keeps it going, and please support the people behind the other tools you use too.</p>
+          </a>
         </div>
-        <p class="fine">Free and open source. <a href="https://ko-fi.com/B0B81S0WUA">☕ Coffee or tokens</a> if it saves you time.</p>
-        <p class="fine" id="hero-fine">macOS · Windows · Linux · Android · iPhone · Docker</p>
-      </div>
-      <figure class="shot hero-shot">
-        <picture>
-          <source srcset="assets/home-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="home" />
-          <img src="assets/home-light.webp" alt="The PS5Upload Home screen: upload, install, games, files, saves and convert, with the console's status beside them." width="1800" height="1125" data-theme-img="home" />
-        </picture>
-      </figure>
-    </section>
-
-    <section class="section wrap" id="features" aria-labelledby="features-title">
-      <h2 id="features-title">Everything between your computer and your PS5</h2>
-      <p class="section-lead">One app for the whole round trip, built on its own fast transfer protocol.</p>
-      <div class="grid features">
-        <article class="card">
-          <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0L8 7m4-4 4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg></span>
-          <h3>Fast uploads</h3>
-          <p>Folders, game images and archives go straight to the console over an encrypted, resumable connection. Thousands of small files are packed together so they don't crawl.</p>
-        </article>
-        <article class="card">
-          <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8 12 3 3 8l9 5 9-5Zm-18 0v8l9 5 9-5V8M12 13v8"/></svg></span>
-          <h3>Install packages</h3>
-          <p>Stream a .pkg from your computer, a link or a NAS while it installs, or copy it first. Updates and DLC install from each game's own page. PS4 fake packages are fine on any firmware; PS5 fake game packages start only on firmware up to 11.60.</p>
-        </article>
-        <article class="card">
-          <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7m9-2v6m-3-3h6"/></svg></span>
-          <h3>Convert games</h3>
-          <p>Turn a game folder into a package, an exFAT image or a compressed .ffpfsc for ShadowMount+, with AMPR LZ4 asset packs to make images smaller.</p>
-        </article>
-        <article class="card">
-          <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v16M9 4v16M14 4l5 16"/></svg></span>
-          <h3>All your games, once</h3>
-          <p>One grid: the games on your drives and network shares, with their updates, DLC and duplicates, plus what each console has installed and keeps on its drives. Each game's page has everything you can do with it.</p>
-        </article>
-        <article class="card">
-          <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="3"/><path d="M6 12h4M8 10v4M15 11h.01M18 13h.01"/></svg></span>
-          <h3>Games, saves and files</h3>
-          <p>Play and close games straight from the grid, uninstall or dump them, back up and restore saves, browse the console's drives, and copy straight from one PS5 to another.</p>
-        </article>
-        <article class="card">
-          <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg></span>
-          <h3>Desktop, phone or browser</h3>
-          <p>Native apps for macOS, Windows, Linux, Android and iPhone (sideloaded), and a Docker image that serves the same app as a web page from your NAS. In 21 languages.</p>
-        </article>
-      </div>
-    </section>
-
-    <section class="section wrap" aria-label="More screens">
-      <div class="grid screens">
-        <figure class="shot">
-          <picture>
-            <source srcset="assets/upload-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="upload" />
-            <img src="assets/upload-light.webp" alt="Upload &amp; Install: drop a package, game, image, archive or file and it is detected automatically." width="1400" height="875" loading="lazy" data-theme-img="upload" />
-          </picture>
-          <figcaption>Drop anything on Upload &amp; Install: what it is gets detected.</figcaption>
-        </figure>
-        <figure class="shot">
-          <picture>
-            <source srcset="assets/convert-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="convert" />
-            <img src="assets/convert-light.webp" alt="Convert: make a package or a game image from a game folder." width="1400" height="875" loading="lazy" data-theme-img="convert" />
-          </picture>
-          <figcaption>Convert a folder into a package or a ShadowMount+ image.</figcaption>
-        </figure>
-      </div>
-    </section>
-
-    <section class="section wrap" id="download" aria-labelledby="download-title">
-      <div class="section-head">
-        <div>
-          <h2 id="download-title">Download</h2>
-          <p class="section-lead" id="download-lead">The newest release for every platform.</p>
-        </div>
-        <a class="btn small" id="release-link" href="https://github.com/phantomptr/ps5upload/releases">Release notes</a>
-      </div>
-      <div class="grid downloads" id="downloads">
-        <p class="muted">Loading the latest release…</p>
-      </div>
-      <div class="card docker">
-        <div>
-          <h3>Docker (web UI on your NAS or server)</h3>
-          <p class="muted">Serves the full app as a web page on your network. Open port 19113 in a browser. Fill in your PS5's IP and the LAN range allowed to use it (the engine has no password), or start from <a href="https://github.com/phantomptr/ps5upload/blob/main/engine/compose.yaml">engine/compose.yaml</a>.</p>
-        </div>
-        <div class="copy">
-          <code id="docker-cmd">docker run -d --name ps5upload --network host -v ps5upload-data:/data -e PS5_ADDR=&lt;your PS5's IP&gt; -e PS5UPLOAD_ALLOW_IP=&lt;your LAN, e.g. 192.168.1.0/24&gt; ghcr.io/phantomptr/ps5upload-engine-webui:latest</code>
-          <button class="btn small" type="button" data-copy="docker-cmd">Copy</button>
-        </div>
-      </div>
-      <details class="more">
-        <summary>The PS5 helper and the engine on its own</summary>
-        <div id="extras" class="extras"></div>
-      </details>
-    </section>
-
-    <section class="section wrap" id="news" aria-labelledby="news-title">
-      <div class="section-head">
-        <h2 id="news-title">News</h2>
-        <a class="btn small" href="https://github.com/phantomptr/ps5upload/blob/main/CHANGELOG.md">Full changelog</a>
-      </div>
-      <div id="news-list" class="news">
-        <p class="muted">Loading releases…</p>
-      </div>
-    </section>
-
-    <section class="section wrap" id="community" aria-labelledby="community-title">
-      <h2 id="community-title">Community</h2>
-      <div class="grid community">
-        <a class="card link-card" href="https://discord.gg/fzK3xddtrM">
-          <h3>Discord</h3>
-          <p>Help, setup questions and ideas. Release announcements land here first.</p>
-        </a>
-        <a class="card link-card" href="https://github.com/phantomptr/ps5upload/issues">
-          <h3>Report a bug</h3>
-          <p>Open an issue on GitHub. The app's Bug report screen builds a report with logs to attach.</p>
-        </a>
-        <a class="card link-card" href="https://x.com/phantomptr">
-          <h3>X</h3>
-          <p>Follow @phantomptr for releases.</p>
-        </a>
-        <a class="card link-card" href="https://ko-fi.com/B0B81S0WUA">
-          <h3>Coffee or tokens</h3>
-          <p>PS5Upload is free. If it saves you time, a coffee for me or AI tokens for the code keeps it going. And it is one tool among many: the PS5 scene is full of great work, so please support the people behind the other tools too.</p>
-        </a>
       </div>
     </section>
   </main>
@@ -188,7 +457,7 @@
   <footer class="foot">
     <div class="wrap foot-row">
       <span>Made by <a href="https://phantomptr.com/">PhantomPtr</a>. PS5Upload is free software under the GPL-3.0.</span>
-      <span class="muted">Not affiliated with Sony Interactive Entertainment. Use it on consoles you own.</span>
+      <span class="muted">Not affiliated with Sony Interactive Entertainment.</span>
     </div>
   </footer>
 

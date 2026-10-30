@@ -48,6 +48,8 @@ export default tseslint.config(
       // browser-globals config here gives false positives ("console"
       // unknown). They're tooling, not shipped code.
       "scripts/**",
+      // The website's screenshot tooling (Node), same reason.
+      "site-shots/*.mjs",
       // Plain-ES5 boot guard served as-is, outside the TS/ESM toolchain.
       "public/**",
     ],

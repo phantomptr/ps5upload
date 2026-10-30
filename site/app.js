@@ -41,7 +41,7 @@ function applyTheme(theme) {
     s.media = theme ? "not all" : "(prefers-color-scheme: dark)";
   });
   document.querySelectorAll("img[data-theme-img]").forEach((img) => {
-    img.src = `assets/${img.dataset.themeImg}-${dark ? "dark" : "light"}.webp`;
+    img.src = `assets/shots/${img.dataset.themeImg}-${dark ? "dark" : "light"}.webp`;
   });
 }
 applyTheme(store.get("ps5upload.site.theme"));

@@ -282,3 +282,6 @@ payload/third_party/sdk-crt/build/
 
 # ─── Release announcement drafts (make release-post) ─────────────────────
 .release_posts/
+
+# Website screenshot run output (client/site-shots: the WebP copies go to site/assets/shots).
+client/site-shots/out/
