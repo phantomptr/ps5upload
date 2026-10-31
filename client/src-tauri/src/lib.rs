@@ -139,6 +139,10 @@ pub fn run() {
     // yet), so set_var is sound; edition 2021 keeps it safe (non-unsafe).
     // Only ever set when unset, so an explicit user choice wins in either
     // direction — including forcing a rescue back OFF.
+    // The bare AppImage on Wayland + NVIDIA: restart once with the system's libwayland-client
+    // (what the .zip's PS5Upload.sh does before launch). Before anything else starts.
+    #[cfg(target_os = "linux")]
+    linux_gpu::reexec_with_system_wayland();
     #[cfg(target_os = "linux")]
     for (key, value) in linux_gpu::webkit_workarounds(linux_gpu::probe()) {
         if std::env::var_os(key).is_none() {
@@ -688,6 +692,7 @@ pub fn run() {
             };
             // Desktop: never wait on it without a limit (exit_guard.rs: an 8.1.1 Mac froze
             // here after "Install and restart"). Past the limit the children are killed.
+            exit_guard::set_exiting();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             exit_guard::run_bounded(exit_guard::CLEANUP_LIMIT, cleanup);
             #[cfg(any(target_os = "android", target_os = "ios"))]

@@ -1835,9 +1835,22 @@ The PS4 is never written to, and no users, system files or trophies are changed.
 on a PS5 have mixed reports: try one game first. Moving trophies is not offered: it needs
 renaming system folders and rebuilding the database, which can leave a user unusable.
 
+**Q: Can a friend's save work on my PS5 under my account?**
+Experimental, from 10.0.1, PS5 saves only. A save is tied to the account that made it, so copying
+your friend's save files over, or switching to their account ID, doesn't work. Instead your
+friend opens the save in PS5Upload and presses **Share** (Saves, on the game): the app saves the
+save's contents, decrypted, as a `.zip` without the owner's account details. On your PS5, start the
+game once and save so you have a save of your own, close it, then press **Use a shared save** on
+that game and pick the `.zip`. The contents go into your own save, and the PS5 encrypts it again
+as yours: no account ID change needed. Your save is backed up first (set a folder in Saves ›
+Automatic backups) and put back if anything fails. Both consoles need PS5Upload, and the game
+must be the same title ID (same region). Some games check more inside the save itself; if one
+won't load it, restore your backup from the game's save backups.
+
 **Q: Can I move a save between consoles, profiles or game regions?**
 
-Saves backup and restore copies the existing encrypted save files. It does **not**
+Saves backup and restore copies the existing encrypted save files (to give a save to another
+account, see **Share** above). It does **not**
 re-sign saves, change their owning account, or convert title IDs/regions. A backup
 must match the target title and account, and the target environment must accept
 its encryption. Renaming a GTA V (or other game's) title folder does not convert it.
@@ -2692,7 +2705,9 @@ The engine is the part of the app that talks to the PS5; it runs in the backgrou
 computer. When the app cannot reach it, a notice at the top of every screen says why, from what
 it can see: the engine stopped, its program is missing (security software quarantined it), its
 address is held by something that does not answer (another program, or a firewall or antivirus
-filtering local connections), or requests went to a proxy. Press **Restart engine**. If it keeps
+filtering local connections), or requests went to a proxy. From 10.0.1 the desktop app also
+restarts an engine that stopped on its own (once every two minutes at most) and shows why it
+stopped. Press **Restart engine** if the notice stays. If it keeps
 happening, allow `ps5upload-engine` in your firewall or antivirus. "Payload didn't come up" with
 `error sending request for url (http://127.0.0.1:…)` was this problem, not the PS5: the app now
 says so.

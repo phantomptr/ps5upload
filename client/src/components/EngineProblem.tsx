@@ -114,6 +114,7 @@ export function EngineProblem({ compact = false }: { compact?: boolean }) {
   const tr = useTr();
   const navigate = useNavigate();
   const setStatus = useConnectionStore((s) => s.setStatus);
+  const engineError = useConnectionStore((s) => s.engineError);
   const desktop = isTauriEnv();
   const [diag, setDiag] = useState<EngineDiagnosis | null>(null);
   const [restarting, setRestarting] = useState(false);
@@ -165,6 +166,7 @@ export function EngineProblem({ compact = false }: { compact?: boolean }) {
         ),
       };
   const canRestart = desktop && (diag?.local ?? true);
+  const stopReason = engineError && engineError !== diag?.probe_error ? engineError : null;
 
   return (
     <div
@@ -186,6 +188,13 @@ export function EngineProblem({ compact = false }: { compact?: boolean }) {
       </p>
       <p className="mt-1 text-xs text-[var(--color-muted)]">{text.why}</p>
       <p className="mt-1 text-xs text-[var(--color-text)]">{text.fix}</p>
+      {/* Why it stopped, when the app saw it go ("engine exited (code …)"): the probe alone
+          only says nothing answers. */}
+      {stopReason && (
+        <p className="mt-1 break-all font-mono text-[0.6875rem] text-[var(--color-muted)]" data-testid="engine-stop-reason">
+          {stopReason}
+        </p>
+      )}
       {diag?.probe_error && (
         <p className="mt-1 break-all font-mono text-[0.6875rem] text-[var(--color-muted)]">
           {diag.probe_error}

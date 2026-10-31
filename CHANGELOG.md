@@ -4,6 +4,22 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.0.1
+
+- **Share a save with a friend (experimental).** Saves › **Share** saves a PS5 save's contents as
+  a `.zip`; on another PS5, **Use a shared save** puts it into that user's own save of the game,
+  so the console keeps it as theirs: no account ID change needed. Your save is backed up first and
+  put back if anything fails. Both consoles need PS5Upload; PS5 saves only.
+- **AppImage downloads.** Each release now also has the bare `.AppImage` (x64 and ARM64) next to
+  the Linux `.zip`, for AppImage managers. On Wayland with an NVIDIA card it restarts itself with
+  the system Wayland library, as the zip's `PS5Upload.sh` does.
+- **Play:** the Console picker is gone from the stream bar (Play uses the console you have
+  selected), **Start** is first in the row, and **Set up Play** stands out with its progress until
+  it's done.
+- **Fixed: on macOS the engine could stop after an update and stay stopped** ("Connection refused"
+  on 127.0.0.1:19113). The engine program is now replaced in one step instead of rewritten in
+  place, the app restarts an engine that stopped on its own, and the notice says why it stopped.
+
 ## 10.0.0
 
 - **Remote Play is now Play, at the centre of the app.** It sits right under Home in the sidebar

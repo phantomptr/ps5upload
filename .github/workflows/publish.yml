@@ -559,6 +559,10 @@ jobs:
               chmod +x "$staging/PS5Upload.sh"
               (cd "$staging" && zip -9 "$dist_abs/PS5Upload.zip" PS5Upload.AppImage PS5Upload.sh)
               rm -rf "$staging"
+              # The bare AppImage too, for AppImage managers (Shelly, Gear Lever, AppImageLauncher):
+              # it applies the launcher's Wayland + NVIDIA fix itself (linux_gpu.rs).
+              cp -v "$app" "$dist_abs/PS5Upload.AppImage"
+              chmod +x "$dist_abs/PS5Upload.AppImage"
               deb="$(find "$bundle" -type f -name "*.deb" | head -n1)"
               if [ -z "$deb" ]; then
                 echo "::error::no .deb produced by tauri"
@@ -965,6 +969,10 @@ jobs:
             arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
             cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.zip"
           done
+          for f in artifacts/ps5upload-linux-*/PS5Upload.AppImage; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.AppImage"
+          done
           for f in artifacts/ps5upload-linux-*/PS5Upload.deb; do
             arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
             cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.deb"
@@ -1026,6 +1034,8 @@ jobs:
             "PS5Upload-${TAG_VERSION}-win-arm64-setup.exe" \
             "PS5Upload-${TAG_VERSION}-linux-x64.zip" \
             "PS5Upload-${TAG_VERSION}-linux-arm64.zip" \
+            "PS5Upload-${TAG_VERSION}-linux-x64.AppImage" \
+            "PS5Upload-${TAG_VERSION}-linux-arm64.AppImage" \
             "PS5Upload-${TAG_VERSION}-linux-x64.deb" \
             "PS5Upload-${TAG_VERSION}-linux-arm64.deb" \
             "PS5Upload-${TAG_VERSION}-linux-x64.rpm" \

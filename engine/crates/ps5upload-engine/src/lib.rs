@@ -11073,6 +11073,13 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             "/api/save-backup/import-ps4",
             post(save_backup::post_import_ps4),
         )
+        .route("/api/save-backup/share", post(save_backup::post_share))
+        // A shared save's zip comes as the body: saves run from a few KB to a few hundred MB.
+        .route(
+            "/api/save-backup/use-shared",
+            post(save_backup::post_use_shared)
+                .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024)),
+        )
         .route(
             "/api/shared/{name}",
             get(shared_state::get_doc).put(shared_state::put_doc),

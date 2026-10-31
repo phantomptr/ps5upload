@@ -60,6 +60,73 @@ pub fn webkit_workarounds(session: GraphicsSession) -> Vec<(&'static str, &'stat
     vars
 }
 
+/// The environment variable a re-exec carries so it never happens twice.
+pub const PRELOADED_MARK: &str = "PS5UPLOAD_WAYLAND_PRELOADED";
+
+/// The system's `libwayland-client.so.0` from `ldconfig -p` output, or None.
+pub fn system_wayland_from_ldconfig(output: &str) -> Option<String> {
+    output
+        .lines()
+        .find(|l| l.contains("libwayland-client.so.0"))
+        .and_then(|l| l.rsplit_once("=> "))
+        .map(|(_, p)| p.trim().to_string())
+        .filter(|p| p.starts_with('/'))
+}
+
+/// Whether to restart this process once with the system's libwayland-client preloaded, and
+/// with which library. The AppImage carries its own copy; on Wayland + NVIDIA one older than the
+/// compositor leaves the window white (issue #285). The Linux .zip's PS5Upload.sh does this
+/// before launch; doing it here makes the bare .AppImage (and launchers that run it directly,
+/// such as Shelly) the same. Never when the user set LD_PRELOAD, and never twice.
+pub fn wayland_preload(
+    session: GraphicsSession,
+    in_appimage: bool,
+    ld_preload_set: bool,
+    already: bool,
+    system_lib: Option<&str>,
+) -> Option<String> {
+    if !(session.wayland && session.nvidia && in_appimage) || ld_preload_set || already {
+        return None;
+    }
+    system_lib.map(str::to_string)
+}
+
+/// Restart once with the system's libwayland-client preloaded, when `wayland_preload` says so
+/// (the same process: exec replaces it, so the AppImage runtime still waits for it). Returns only
+/// when nothing needed doing or the exec failed.
+#[cfg(target_os = "linux")]
+pub fn reexec_with_system_wayland() {
+    use std::os::unix::process::CommandExt;
+    let ld_set = std::env::var_os("LD_PRELOAD").is_some_and(|v| !v.is_empty());
+    let already = std::env::var_os(PRELOADED_MARK).is_some();
+    let in_appimage = std::env::var_os("APPIMAGE").is_some();
+    let session = probe();
+    if !(session.wayland && session.nvidia && in_appimage) || ld_set || already {
+        return;
+    }
+    let lib = ["ldconfig", "/sbin/ldconfig", "/usr/sbin/ldconfig"]
+        .iter()
+        .find_map(|ldc| {
+            std::process::Command::new(ldc)
+                .arg("-p")
+                .output()
+                .ok()
+                .and_then(|o| system_wayland_from_ldconfig(&String::from_utf8_lossy(&o.stdout)))
+        });
+    let Some(lib) = wayland_preload(session, in_appimage, ld_set, already, lib.as_deref()) else {
+        return;
+    };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let err = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .env("LD_PRELOAD", &lib)
+        .env(PRELOADED_MARK, "1")
+        .exec();
+    eprintln!("[linux] could not restart with {lib} preloaded: {err}");
+}
+
 /// Probe the real session. Kept apart from the decision logic above so the
 /// decisions stay testable without a Linux box, an NVIDIA card and a
 /// compositor.
@@ -88,6 +155,64 @@ fn nvidia_driver_loaded() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_appimage_preloads_the_system_wayland_only_where_it_must() {
+        let nv_wl = GraphicsSession {
+            wayland: true,
+            nvidia: true,
+        };
+        let lib = Some("/usr/lib/libwayland-client.so.0");
+        assert_eq!(
+            wayland_preload(nv_wl, true, false, false, lib).as_deref(),
+            lib
+        );
+        // Not an AppImage (deb, rpm): its own libraries are the system's.
+        assert_eq!(wayland_preload(nv_wl, false, false, false, lib), None);
+        // The user's own LD_PRELOAD wins; and never twice.
+        assert_eq!(wayland_preload(nv_wl, true, true, false, lib), None);
+        assert_eq!(wayland_preload(nv_wl, true, false, true, lib), None);
+        // Other stacks, or no system copy found.
+        assert_eq!(
+            wayland_preload(
+                GraphicsSession {
+                    wayland: true,
+                    nvidia: false
+                },
+                true,
+                false,
+                false,
+                lib
+            ),
+            None
+        );
+        assert_eq!(
+            wayland_preload(
+                GraphicsSession {
+                    wayland: false,
+                    nvidia: true
+                },
+                true,
+                false,
+                false,
+                lib
+            ),
+            None
+        );
+        assert_eq!(wayland_preload(nv_wl, true, false, false, None), None);
+    }
+
+    #[test]
+    fn the_system_wayland_is_read_from_ldconfig() {
+        let out = "\t1234 libs found in cache `/etc/ld.so.cache'\n\
+            \tlibwayland-cursor.so.0 (libc6,x86-64) => /usr/lib/libwayland-cursor.so.0\n\
+            \tlibwayland-client.so.0 (libc6,x86-64) => /usr/lib/libwayland-client.so.0\n";
+        assert_eq!(
+            system_wayland_from_ldconfig(out).as_deref(),
+            Some("/usr/lib/libwayland-client.so.0")
+        );
+        assert_eq!(system_wayland_from_ldconfig("nothing here"), None);
+    }
 
     #[test]
     fn wayland_detected_from_session_type() {

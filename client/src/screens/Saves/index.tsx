@@ -14,7 +14,11 @@ import {
   HardDrive,
   LockOpen,
   Lock,
+  Share2,
+  FileDown,
 } from "lucide-react";
+import { putSharedSave, shareSave } from "../../api/saveShare";
+import { saveFile } from "../../lib/rpCapture";
 import { openInFileSystem } from "../../state/fsNavigation";
 import {
   savesList,
@@ -106,7 +110,15 @@ export default function SavesScreen() {
   // holding more than one save image.
   const [openSave, setOpenSave] = useState<OpenSave | null>(null);
   const [openBusy, setOpenBusy] = useState(false);
-  const [picker, setPicker] = useState<{ entry: SaveEntry; images: string[] } | null>(null);
+  const [picker, setPicker] = useState<{
+    entry: SaveEntry;
+    images: string[];
+    /** What to do with the image picked: open it, share it, or put a shared save into it. */
+    then: "open" | "share" | "use";
+  } | null>(null);
+  // Using a shared save: the save image it goes into, while the file is being picked.
+  const shareInput = useRef<HTMLInputElement>(null);
+  const [useTarget, setUseTarget] = useState<{ entry: SaveEntry; image: string } | null>(null);
   useEffect(() => {
     if (!host?.trim() || payloadStatus !== "up") {
       setOpenSave(null);
@@ -136,7 +148,62 @@ export default function SavesScreen() {
       setOpenBusy(false);
     }
   };
-  const handleOpenSave = async (entry: SaveEntry) => {
+  // Sharing a save with another account (PS5 saves): its files out as a zip, or a shared
+  // save's files into your own save of the same game.
+  const doShare = async (image: string) => {
+    if (!host?.trim()) return;
+    setOpenBusy(true);
+    try {
+      const { blob, name } = await shareSave(consoleAddr(host.trim()), image);
+      const where = await saveFile(blob, name);
+      pushNotification("success", tr("saves_shared", undefined, "Save shared"), {
+        body: tr(
+          "saves_shared_body",
+          { where: where ?? name },
+          "Saved as {where}. Send it to your friend: on their PS5, Save Data › Use a shared save puts it into their own save of the game.",
+        ),
+      });
+    } catch (e) {
+      pushNotification("error", tr("saves_share_failed", { error: e instanceof Error ? e.message : String(e) }, "Could not share the save: {error}"));
+    } finally {
+      setOpenBusy(false);
+    }
+  };
+  const doUseShared = async (file: File) => {
+    const target = useTarget;
+    setUseTarget(null);
+    if (!host?.trim() || !target) return;
+    const ok = await confirmDialog({
+      title: tr("saves_use_shared_confirm_title", { title: target.entry.title_id }, `Use this shared save for ${target.entry.title_id}?`),
+      message: tr(
+        "saves_use_shared_confirm_body",
+        undefined,
+        "Your save's files are replaced with the shared save's, and the PS5 keeps it as yours. Your own save is backed up first (Save Data backups) and put back if anything fails. Close the game first.",
+      ),
+      destructive: true,
+      confirmLabel: tr("saves_use_shared_confirm_label", undefined, "Use it"),
+    });
+    if (!ok) return;
+    setOpenBusy(true);
+    try {
+      await putSharedSave(consoleAddr(host.trim()), target.image, target.entry.user_id, file);
+      pushNotification("success", tr("saves_use_shared_done", { title: target.entry.title_id }, "{title} now has the shared save"), {
+        body: tr("saves_use_shared_done_body", undefined, "Start the game to load it. Your own save was backed up first."),
+      });
+      void refresh();
+    } catch (e) {
+      pushNotification("error", tr("saves_use_shared_failed", { error: e instanceof Error ? e.message : String(e) }, "Could not use the shared save: {error}"));
+    } finally {
+      setOpenBusy(false);
+    }
+  };
+  const runOn = (entry: SaveEntry, image: string, then: "open" | "share" | "use") => {
+    if (then === "open") return doOpenSave(image);
+    if (then === "share") return doShare(image);
+    setUseTarget({ entry, image });
+    shareInput.current?.click();
+  };
+  const handleOpenSave = async (entry: SaveEntry, then: "open" | "share" | "use" = "open") => {
     if (!host?.trim() || openBusy) return;
     setOpenBusy(true);
     try {
@@ -149,8 +216,8 @@ export default function SavesScreen() {
         return;
       }
       setOpenBusy(false);
-      if (images.length === 1) await doOpenSave(images[0]);
-      else setPicker({ entry, images });
+      if (images.length === 1) await runOn(entry, images[0], then);
+      else setPicker({ entry, images, then });
     } catch (e) {
       pushNotification("error", tr("saves_open_failed", { error: e instanceof Error ? e.message : String(e) }, "Could not open the save: {error}"));
     } finally {
@@ -1077,6 +1144,19 @@ export default function SavesScreen() {
               </Button>
             </div>
           )}
+          <input
+            ref={shareInput}
+            type="file"
+            accept=".zip,application/zip"
+            className="hidden"
+            data-testid="save-use-shared-file"
+            onChange={(ev) => {
+              const f = ev.target.files?.[0];
+              ev.target.value = "";
+              if (f) void doUseShared(f);
+              else setUseTarget(null);
+            }}
+          />
           {picker && (
             <Modal
               open
@@ -1092,7 +1172,7 @@ export default function SavesScreen() {
                       className="w-full rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-left font-mono text-xs hover:bg-[var(--color-surface-raised)]"
                       onClick={() => {
                         setPicker(null);
-                        void doOpenSave(img);
+                        void runOn(picker.entry, img, picker.then);
                       }}
                     >
                       {img.split("/").pop()}
@@ -1171,6 +1251,40 @@ export default function SavesScreen() {
                     >
                       {tr("saves_open", undefined, "Open save")}
                     </Button>
+                    {e.kind === "ps5" && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          leftIcon={<Share2 size={11} />}
+                          onClick={() => void handleOpenSave(e, "share")}
+                          disabled={isBusy(e.path) || openBusy}
+                          title={tr(
+                            "saves_share_hint",
+                            undefined,
+                            "Save this save's files as a .zip to give to a friend: it loads on their PS5 under their own account (Use a shared save).",
+                          )}
+                          data-testid="save-share"
+                        >
+                          {tr("saves_share", undefined, "Share")}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          leftIcon={<FileDown size={11} />}
+                          onClick={() => void handleOpenSave(e, "use")}
+                          disabled={isBusy(e.path) || openBusy}
+                          title={tr(
+                            "saves_use_shared_hint",
+                            undefined,
+                            "Put a friend's shared save (.zip) into your save of this game. It becomes yours: no account ID change needed.",
+                          )}
+                          data-testid="save-use-shared"
+                        >
+                          {tr("saves_use_shared", undefined, "Use a shared save")}
+                        </Button>
+                      </>
+                    )}
                     {isTauriEnv() && (
                       <>
                         <Button

@@ -191,16 +191,28 @@ fn extract_at(path: &Path, bytes: &[u8], hex: &str) -> Result<()> {
     if current {
         return Ok(());
     }
-    std::fs::write(path, bytes)
-        .with_context(|| format!("write engine binary to {}", path.display()))?;
-    // On Unix, set the executable bit — without it, `spawn` returns EACCES. Windows
-    // runs .exe files by extension.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-            .with_context(|| format!("chmod {}", path.display()))?;
+    // Written beside it and renamed over it, never rewritten in place: on Apple Silicon a
+    // binary overwritten in place keeps the old code signature cached for that file, and macOS
+    // kills the next launch (SIGKILL) until a reboot. A rename gives it a new file.
+    let tmp = PathBuf::from(format!("{}.new", path.display()));
+    let written = (|| -> Result<()> {
+        std::fs::write(&tmp, bytes)
+            .with_context(|| format!("write engine binary to {}", tmp.display()))?;
+        // On Unix, set the executable bit — without it, `spawn` returns EACCES. Windows
+        // runs .exe files by extension.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
+                .with_context(|| format!("chmod {}", tmp.display()))?;
+        }
+        std::fs::rename(&tmp, path)
+            .with_context(|| format!("replace engine binary at {}", path.display()))
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
+    written?;
     // Stamp last so a crash mid-extract leaves a missing or outdated stamp; the next
     // launch re-extracts.
     if let Err(e) = std::fs::write(&stamp, hex) {
@@ -821,6 +833,8 @@ pub async fn start(app: &AppHandle) -> Result<String> {
                         }
                         guard.take()
                     };
+                    // Ours to reap: it stopped on its own (a stop or a restart takes it first).
+                    let unexpected = child_opt.is_some();
                     let code = if let Some(mut c) = child_opt {
                         let pid = c.id();
                         let code = c.wait().await.ok().and_then(|s| s.code());
@@ -834,6 +848,9 @@ pub async fn start(app: &AppHandle) -> Result<String> {
                     mark_sidecar_stopped();
                     eprintln!("[engine-watch] engine process exited (code {code:?})");
                     let _ = app_exit.emit("ps5upload-engine-exit", code);
+                    if unexpected && !crate::exit_guard::exiting() {
+                        restart_after_crash(app_exit);
+                    }
                 });
             }
         }
@@ -1015,6 +1032,46 @@ pub async fn diagnose(app: &AppHandle) -> Diagnosis {
         log_path,
         os: std::env::consts::OS,
     }
+}
+
+/// When the engine last restarted itself after a crash (ms since the epoch).
+static LAST_AUTO_RESTART_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// At most one restart of its own per this long: an engine that keeps dying is left stopped,
+/// with the banner's Restart button and its reason, rather than spun.
+const AUTO_RESTART_COOLDOWN_MS: u64 = 120_000;
+
+/// The engine stopped on its own while the app runs: start it again once, after a moment, and
+/// tell the renderer (the same ready event as the Restart button).
+fn restart_after_crash(app: AppHandle) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let last = LAST_AUTO_RESTART_MS.load(Ordering::SeqCst);
+    if last != 0 && now.saturating_sub(last) < AUTO_RESTART_COOLDOWN_MS {
+        eprintln!("[engine-watch] engine stopped again soon after a restart; leaving it stopped");
+        return;
+    }
+    LAST_AUTO_RESTART_MS.store(now, Ordering::SeqCst);
+    tauri::async_runtime::spawn(async move {
+        sleep(Duration::from_millis(1500)).await;
+        if crate::exit_guard::exiting() {
+            return;
+        }
+        eprintln!("[engine-watch] starting the engine again");
+        // Boxed: start() spawned the task this runs in.
+        let started: std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> =
+            Box::pin(start(&app));
+        match started.await {
+            Ok(url) => {
+                let _ = app.emit("ps5upload-engine-ready", &url);
+            }
+            Err(e) => {
+                eprintln!("[engine-watch] restart failed: {e:#}");
+                let _ = app.emit("ps5upload-engine-startup-error", format!("{e:#}"));
+            }
+        }
+    });
 }
 
 /// Stop the sidecar (if any) and start it again. For a remote engine this only re-probes it.

@@ -1633,15 +1633,20 @@ export function StreamPanel() {
   return (
     <div className="space-y-3">
       {!running && (
+        // Start first (10.0.1); the console is the one selected in the app (no picker of its own).
         <div className="flex flex-wrap items-end gap-2">
-          <Select
-            label={tr("rp_console", undefined, "Console")}
-            block={false}
-            className="w-full sm:w-72"
-            value={profileId}
-            onChange={(e) => setProfileId(e.target.value)}
-            options={profiles.map((p) => ({ value: p.id, label: `${p.name} (${p.host})` }))}
-          />
+          <Button
+            variant="primary"
+            size="md"
+            onClick={() => void (otherStream ? switchHere() : start())}
+            disabled={!paired}
+            data-testid="rp-start"
+          >
+            <Play size={14} />
+            {otherStream
+              ? tr("rp_switch_start", undefined, "Stop the other stream and start")
+              : tr("rp_start", undefined, "Start")}
+          </Button>
           <Select
             label={tr("rp_quality", undefined, "Picture")}
             block={false}
@@ -1664,18 +1669,6 @@ export function StreamPanel() {
               { value: "30", label: "30 fps" },
             ]}
           />
-          <Button
-            variant="primary"
-            size="md"
-            onClick={() => void (otherStream ? switchHere() : start())}
-            disabled={!paired}
-            data-testid="rp-start"
-          >
-            <Play size={14} />
-            {otherStream
-              ? tr("rp_switch_start", undefined, "Stop the other stream and start")
-              : tr("rp_start", undefined, "Start")}
-          </Button>
           <Button
             variant="ghost"
             size="md"

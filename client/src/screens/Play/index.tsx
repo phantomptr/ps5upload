@@ -9,6 +9,7 @@ import { useRemotePlayStore } from "../../state/remotePlay";
 import { useConnectionStore } from "../../state/connection";
 import { useRosterStore } from "../../state/roster";
 import { useStreamLaunch } from "./game/streamLaunch";
+import { usePlaySetup } from "./setup/usePlaySetup";
 import { COMPACT_QUERY, useMedia } from "./immersive";
 import { StreamPanel } from "./StreamPanel";
 
@@ -34,6 +35,9 @@ export default function PlayScreen() {
     const p = s.profiles.find((x) => x.host === host);
     return !!(p?.wake_regist_key && p?.wake_rp_key);
   });
+  // The header's Set up button shows how far along a console is until it's paired.
+  const setup = usePlaySetup({ poll: !paired });
+  const setupDone = setup.ready;
   useEffect(() => {
     if (!/^[A-Z]{4}\d{5}$/.test(launch)) return;
     setParams({}, { replace: true });
@@ -61,13 +65,17 @@ export default function PlayScreen() {
               )
         }
         right={
+          // Easy to find (10.0.1): a filled button with the progress while setup isn't done.
           <Button
-            variant="ghost"
-            size="sm"
-            leftIcon={<ListChecks size={14} />}
+            variant={setupDone ? "secondary" : "primary"}
+            size="md"
+            leftIcon={<ListChecks size={16} />}
             onClick={() => navigate("/play/setup")}
+            data-testid="play-setup-button"
           >
-            {tr("play_setup_short", undefined, "Set up")}
+            {setupDone
+              ? tr("play_setup_short", undefined, "Set up")
+              : tr("play_setup_button_progress", { done: setup.progress.done, total: setup.progress.total }, `Set up Play · ${setup.progress.done}/${setup.progress.total}`)}
           </Button>
         }
       />

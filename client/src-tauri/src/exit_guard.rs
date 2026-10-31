@@ -7,8 +7,22 @@
 //! process the app starts is registered here by PID: when the limit passes, they are killed
 //! directly (SIGKILL / TerminateProcess) and the app exits anyway.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
+
+/// The app is quitting: an engine that exits now is being shut down, not crashing, and must not
+/// be started again (engine.rs's exit watcher reads this).
+static EXITING: AtomicBool = AtomicBool::new(false);
+
+/// Mark the app as quitting (the exit handler, before it stops anything).
+pub fn set_exiting() {
+    EXITING.store(true, Ordering::SeqCst);
+}
+
+pub fn exiting() -> bool {
+    EXITING.load(Ordering::SeqCst)
+}
 
 /// How long the exit handler waits for the orderly clean-up (the engine's own stop is time-boxed
 /// at 5 s; this leaves room for it, and no more).

@@ -875,6 +875,315 @@ pub async fn post_import_ps4(Json(b): Json<ImportPs4Body>) -> Response {
     }
 }
 
+// ── Sharing a save with another account ─────────────────────────────────
+//
+// A PS5 save is encrypted for the account and console that made it, so a friend's save copied
+// over as it is (even with the account ID changed to theirs) does not load. What does carry over
+// is what is inside it: the game's own files. So a save is shared as those files (opened
+// decrypted on the friend's console, its sce_sys left out: that is the owner's account
+// information), and used by opening your own save of the same game, putting those files in it
+// and closing it, which the console encrypts again as yours. Your save is backed up first and
+// put back if anything fails. PS5 saves only.
+
+/// The tag of the backup taken of a save before a shared one replaced its files.
+pub const BEFORE_SHARE_TAG: &str = "beforeshare";
+/// What a shared save says about itself, inside its one folder.
+pub const SHARE_MANIFEST: &str = ".ps5upload-share.json";
+/// A save's own system folder (its owner's account and the console's view of it): kept.
+const SYS_DIR: &str = "sce_sys";
+
+/// A PS5 save image, `/user/home/<8 hex>/savedata_prospero/<TITLE>/<name>`: (title, name).
+pub fn ps5_save_image(image: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = image.split('/').collect();
+    match parts.as_slice() {
+        ["", "user", "home", uid, "savedata_prospero", title, name]
+            if uid.len() == 8
+                && uid.chars().all(|c| c.is_ascii_hexdigit())
+                && plain(title)
+                && !name.is_empty()
+                && !name.starts_with('.')
+                && !name.ends_with(".bin") =>
+        {
+            Some((title.to_string(), name.to_string()))
+        }
+        _ => None,
+    }
+}
+
+/// The save folder holding `image`.
+fn folder_of(image: &str) -> &str {
+    image.rsplit_once('/').map(|(d, _)| d).unwrap_or(image)
+}
+
+/// Opens `image` decrypted on the console; its mount point.
+fn open_save(host: &str, image: &str) -> Result<String, String> {
+    let v = post(
+        "/api/ps5/saves/open",
+        json!({ "addr": host, "image": image }),
+    )?;
+    match (
+        v.get("mounted").and_then(Value::as_bool),
+        v.get("mount_point").and_then(Value::as_str),
+    ) {
+        (Some(true), Some(mp)) if !mp.is_empty() => Ok(mp.to_string()),
+        _ => Err("the save did not open".into()),
+    }
+}
+
+/// Closes the open save (written back when it changed).
+fn close_save(host: &str) -> Result<bool, String> {
+    let v = post("/api/ps5/saves/close", json!({ "addr": host }))?;
+    Ok(v.get("written_back")
+        .and_then(Value::as_bool)
+        .unwrap_or(false))
+}
+
+/// A save is already open on the console (one at a time).
+fn a_save_is_open(host: &str) -> bool {
+    post("/api/ps5/saves/open", json!({ "addr": host, "image": "" }))
+        .ok()
+        .and_then(|v| v.get("mounted").and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
+/// The files of the save `image`, as a zip to give to someone else: one folder named after the
+/// game with the game's files and a small manifest, the save's sce_sys left out.
+pub fn share_save(host: &str, image: &str) -> Result<(String, Vec<u8>), String> {
+    let (title_id, name) =
+        ps5_save_image(image).ok_or_else(|| format!("{image} is not a PS5 save image"))?;
+    if title_running(host, &title_id)? {
+        return Err(format!(
+            "{title_id} is running on the PS5. Close the game, then share its save."
+        ));
+    }
+    if a_save_is_open(host) {
+        return Err("A save is open in Save Data. Close it first.".into());
+    }
+    let tmp = make_temp_dir(&title_id)?;
+    let tmp_s = tmp.to_string_lossy().into_owned();
+    let result = (|| {
+        let mount = open_save(host, image)?;
+        let copied = (|| {
+            let start = post(
+                "/api/transfer/download",
+                json!({ "addr": host, "src_path": mount, "dest_dir": tmp_s, "kind": "folder" }),
+            )?;
+            let job = start
+                .get("job_id")
+                .and_then(Value::as_str)
+                .ok_or("download did not start")?;
+            wait_job(job)
+        })();
+        // Read only: closing it changes nothing on the console.
+        let closed = close_save(host);
+        copied?;
+        closed?;
+        let leaf = mount.rsplit('/').next().unwrap_or("save_mount");
+        let got = tmp.join(leaf);
+        let dir = tmp.join(&title_id);
+        std::fs::rename(&got, &dir).map_err(|e| format!("copy: {e}"))?;
+        let _ = std::fs::remove_dir_all(dir.join(SYS_DIR));
+        let manifest = json!({
+            "kind": "ps5",
+            "title_id": title_id,
+            "image": name,
+            "shared_at_ms": now_ms(),
+            "app": env!("CARGO_PKG_VERSION"),
+        });
+        std::fs::write(dir.join(SHARE_MANIFEST), manifest.to_string())
+            .map_err(|e| format!("manifest: {e}"))?;
+        let zip = tmp.join("share.zip");
+        zip_folder(&tmp, &title_id, &zip).map_err(|e| format!("zip: {e:#}"))?;
+        let bytes = std::fs::read(&zip).map_err(|e| format!("zip: {e}"))?;
+        let file = format!("{title_id} {name} shared {}.zip", stamp(now_ms()));
+        Ok((file, bytes))
+    })();
+    let _ = cleanup_temp_dir(&tmp_s);
+    result
+}
+
+/// What a shared save holds, checked before anything on the console changes: the folder of
+/// `title_id`'s files, its sce_sys and manifest removed. Err says why it can't be used.
+pub fn shared_save_contents(unpacked: &Path, title_id: &str) -> Result<PathBuf, String> {
+    let dir = unpacked.join(title_id);
+    let manifest: Value = std::fs::read(dir.join(SHARE_MANIFEST))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .ok_or(
+            "this is not a shared save (no manifest): share it from Save Data on the other console",
+        )?;
+    if manifest.get("title_id").and_then(Value::as_str) != Some(title_id) {
+        return Err(format!("this shared save is not for {title_id}"));
+    }
+    if manifest.get("kind").and_then(Value::as_str) != Some("ps5") {
+        return Err("only PS5 saves can be shared".into());
+    }
+    let _ = std::fs::remove_file(dir.join(SHARE_MANIFEST));
+    let _ = std::fs::remove_dir_all(dir.join(SYS_DIR));
+    let any = std::fs::read_dir(&dir)
+        .map(|mut d| d.next().is_some())
+        .unwrap_or(false);
+    if !any {
+        return Err("the shared save has no files".into());
+    }
+    Ok(dir)
+}
+
+/// Put a shared save's files into your own save `image` of the same game, which the console then
+/// keeps as yours. Your save is backed up first (tagged `beforeshare`) and put back if a step
+/// fails.
+pub fn use_shared_save(
+    host: &str,
+    image: &str,
+    user_id: u32,
+    zip_bytes: &[u8],
+) -> Result<(), String> {
+    let s = settings();
+    if s.dir.trim().is_empty() {
+        return Err("Choose a folder for save backups first (Save Data › Automatic backups): your own save is kept there before its files are replaced.".into());
+    }
+    let (title_id, _) =
+        ps5_save_image(image).ok_or_else(|| format!("{image} is not a PS5 save image"))?;
+    let tmp = make_temp_dir(&title_id)?;
+    let tmp_s = tmp.to_string_lossy().into_owned();
+    let result = (|| {
+        let zip = tmp.join("shared.zip");
+        std::fs::write(&zip, zip_bytes).map_err(|e| format!("save the file: {e}"))?;
+        let unpacked = tmp.join("x");
+        std::fs::create_dir_all(&unpacked).map_err(|e| format!("unpack: {e}"))?;
+        unzip_strict(&zip, &unpacked, &title_id)
+            .map_err(|e| format!("this file is not a shared save of {title_id}: {e:#}"))?;
+        let src = shared_save_contents(&unpacked, &title_id)?;
+        if title_running(host, &title_id)? {
+            return Err(format!(
+                "{title_id} is running on the PS5. Close the game, then try again."
+            ));
+        }
+        if a_save_is_open(host) {
+            return Err("A save is open in Save Data. Close it first.".into());
+        }
+        // Yours first, so this can be undone.
+        let folder = folder_of(image).to_string();
+        let mine = SaveEntry {
+            title_id: title_id.clone(),
+            user_id: user_id as i32,
+            path: folder.clone(),
+            size: 0,
+            mtime: 0,
+            kind: "ps5".into(),
+        };
+        let backup = back_up_one(host, &mine, &s.dir, s.keep, Some(BEFORE_SHARE_TAG), &|| {
+            Ok(())
+        })
+        .map_err(|e| format!("could not back up your save first: {e}"))?;
+        let mount = open_save(host, image)?;
+        let replaced = (|| {
+            let listing = get(&format!(
+                "/api/ps5/list-dir?addr={}&path={}&offset=0&limit=4096",
+                enc(host),
+                enc(&mount)
+            ))?;
+            for e in listing
+                .get("entries")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+            {
+                let Some(name) = e.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                if name == "." || name == ".." || name == SYS_DIR {
+                    continue;
+                }
+                post(
+                    "/api/ps5/fs/delete",
+                    json!({ "addr": host, "path": format!("{mount}/{name}") }),
+                )?;
+            }
+            let start = post(
+                "/api/transfer/dir",
+                json!({ "addr": host, "src_dir": src.to_string_lossy(), "dest_root": mount, "excludes": [] }),
+            )?;
+            let job = start
+                .get("job_id")
+                .and_then(Value::as_str)
+                .ok_or("upload did not start")?;
+            wait_job(job)
+        })();
+        let closed = close_save(host);
+        match (replaced, closed) {
+            (Ok(()), Ok(_)) => {
+                crate::log_info!("save backup: shared save of {title_id} put on {host} ({image})");
+                Ok(())
+            }
+            (r, c) => {
+                let why = r.err().or_else(|| c.err()).unwrap_or_default();
+                let file = backup
+                    .file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                match restore(host, &title_id, &file, &folder, user_id) {
+                    Ok(()) => Err(format!("{why}. Your own save was put back.")),
+                    Err(e) => Err(format!(
+                        "{why}. Putting your save back failed too ({e}); restore {file} from Save Data."
+                    )),
+                }
+            }
+        }
+    })();
+    let _ = cleanup_temp_dir(&tmp_s);
+    result
+}
+
+#[derive(Deserialize)]
+pub struct ShareBody {
+    pub addr: String,
+    pub image: String,
+}
+
+/// `POST /api/save-backup/share` `{addr, image}`: the save's files as a zip (see `share_save`).
+pub async fn post_share(Json(b): Json<ShareBody>) -> Response {
+    let r = tokio::task::spawn_blocking(move || share_save(b.addr.trim(), b.image.trim())).await;
+    match r {
+        Ok(Ok((file, bytes))) => (
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "application/zip".to_string(),
+                ),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"", file.replace('"', "")),
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Ok(Err(e)) => json_error(StatusCode::BAD_GATEWAY, e),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct UseSharedQuery {
+    pub addr: String,
+    pub image: String,
+    pub user_id: u32,
+}
+
+/// `POST /api/save-backup/use-shared?addr=&image=&user_id=` with the shared zip as the body.
+pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::Bytes) -> Response {
+    let r = tokio::task::spawn_blocking(move || {
+        use_shared_save(q.addr.trim(), q.image.trim(), q.user_id, &body)
+    })
+    .await;
+    match r {
+        Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
+        Ok(Err(e)) => json_error(StatusCode::BAD_GATEWAY, e),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 // ── HTTP ────────────────────────────────────────────────────────────────
 
 fn json_error(status: StatusCode, msg: impl Into<String>) -> Response {
@@ -1015,6 +1324,73 @@ pub async fn post_restore(Json(b): Json<RestoreBody>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sharing works on PS5 save images only, named as the console keeps them.
+    #[test]
+    fn a_shared_save_is_a_ps5_save_image() {
+        assert_eq!(
+            ps5_save_image("/user/home/1a2b3c4d/savedata_prospero/PPSA01234/sdimg_SAVEDATA00"),
+            Some(("PPSA01234".into(), "sdimg_SAVEDATA00".into()))
+        );
+        // PS4 saves, keys, folders, odd users and paths that step out are not.
+        assert_eq!(
+            ps5_save_image("/user/home/1a2b3c4d/savedata/CUSA01234/sdimg_SAVEDATA00"),
+            None
+        );
+        assert_eq!(
+            ps5_save_image("/user/home/1a2b3c4d/savedata_prospero/PPSA01234/SAVEDATA00.bin"),
+            None
+        );
+        assert_eq!(
+            ps5_save_image("/user/home/1a2b3c4d/savedata_prospero/PPSA01234"),
+            None
+        );
+        assert_eq!(
+            ps5_save_image("/user/home/xyz/savedata_prospero/PPSA01234/a"),
+            None
+        );
+        assert_eq!(
+            ps5_save_image("/user/home/1a2b3c4d/savedata_prospero/../x/a"),
+            None
+        );
+        assert_eq!(
+            folder_of("/user/home/1a2b3c4d/savedata_prospero/PPSA01234/a"),
+            "/user/home/1a2b3c4d/savedata_prospero/PPSA01234"
+        );
+    }
+
+    /// A shared save is checked before the console is touched: its manifest, its game, and that
+    /// it carries files; the sender's sce_sys never goes in.
+    #[test]
+    fn a_shared_save_is_checked_and_its_sce_sys_left_out() {
+        let base = std::env::temp_dir().join(format!("ps5u-share-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("PPSA01234");
+        std::fs::create_dir_all(dir.join(SYS_DIR)).unwrap();
+        std::fs::write(dir.join(SYS_DIR).join("param.sfo"), b"owner").unwrap();
+        std::fs::write(dir.join("savedata.dat"), b"progress").unwrap();
+        // No manifest: not a shared save.
+        assert!(shared_save_contents(&base, "PPSA01234").is_err());
+        let manifest = |t: &str, k: &str| json!({ "kind": k, "title_id": t }).to_string();
+        std::fs::write(dir.join(SHARE_MANIFEST), manifest("PPSA09999", "ps5")).unwrap();
+        assert!(shared_save_contents(&base, "PPSA01234")
+            .unwrap_err()
+            .contains("not for PPSA01234"));
+        std::fs::write(dir.join(SHARE_MANIFEST), manifest("PPSA01234", "ps4")).unwrap();
+        assert!(shared_save_contents(&base, "PPSA01234").is_err());
+        std::fs::write(dir.join(SHARE_MANIFEST), manifest("PPSA01234", "ps5")).unwrap();
+        let src = shared_save_contents(&base, "PPSA01234").unwrap();
+        assert!(src.join("savedata.dat").is_file());
+        assert!(!src.join(SYS_DIR).exists());
+        assert!(!src.join(SHARE_MANIFEST).exists());
+        // Only a manifest and a sce_sys: nothing to put in.
+        std::fs::remove_file(src.join("savedata.dat")).unwrap();
+        std::fs::write(dir.join(SHARE_MANIFEST), manifest("PPSA01234", "ps5")).unwrap();
+        assert!(shared_save_contents(&base, "PPSA01234")
+            .unwrap_err()
+            .contains("no files"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// The import takes only a folder inside the save backup folder (code scanning alert #234:
     /// the API has no sign-in, so a path from a request must not reach the rest of the disk).

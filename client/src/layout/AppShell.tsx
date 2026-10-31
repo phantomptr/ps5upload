@@ -1543,8 +1543,10 @@ function AndroidLocalNetworkBanner() {
   );
 }
 
-/** How long after the app opened an engine that has not answered yet is still "starting". */
-export const ENGINE_STARTUP_GRACE_MS = 20_000;
+/** How long after the app opened an engine that has not answered yet is still "starting": longer
+ *  than the shell's own 30 s readiness wait (engine.rs READINESS_TIMEOUT), so a slow first start
+ *  (a fresh binary being scanned after an update) isn't shown as stopped while it still comes up. */
+export const ENGINE_STARTUP_GRACE_MS = 35_000;
 const appOpenedAt = Date.now();
 export function engineStartupGrace(now = Date.now()): boolean {
   return now - appOpenedAt < ENGINE_STARTUP_GRACE_MS;
