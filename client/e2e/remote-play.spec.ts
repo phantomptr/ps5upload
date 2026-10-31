@@ -732,7 +732,7 @@ for (const timed of [true, false]) {
     expect(engine.starts[0]).toMatchObject({ timing: true });
     const stages = page.getByTestId("rp-latency-stages");
     const net = timed ? "\\d+" : "\\?";
-    await expect(stages).toHaveText(new RegExp(`^net ${net} · queue \\d+ · decode \\d+ · draw \\d+ ms$`), {
+    await expect(stages).toHaveText(new RegExp(`^net ${net} · queue \\d+ · decode \\d+ · screen \\d+ ms$`), {
       timeout: 15_000,
     });
     // The picture is drawn either way.

@@ -39,7 +39,7 @@ export function LatencyLine({ stats }: { stats: StreamStats }) {
       </div>
       {(timed || restarts > 0) && (
         <div data-testid="rp-latency-stages">
-          {tr("rp_stats_stages", v, `net ${v.net} · queue ${v.queue} · decode ${v.decode} · draw ${v.draw} ms`)}
+          {tr("rp_stats_stages", v, `net ${v.net} · queue ${v.queue} · decode ${v.decode} · screen ${v.draw} ms`)}
           {restarts > 0 && (
             <>
               {" · "}

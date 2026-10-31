@@ -6289,7 +6289,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_clip_failed": "Không quay hoặc lưu được clip.",
 "rp_stats_latency": "Độ trễ ≈ {engine} ms engine + {decode} ms giải mã",
 "rp_stats_latency_decode": "Độ trễ ≈ {decode} ms giải mã",
-"rp_stats_stages": "mạng {net} · hàng đợi {queue} · giải mã {decode} · vẽ {draw} ms",
+"rp_stats_stages": "mạng {net} · hàng đợi {queue} · giải mã {decode} · màn hình {draw} ms",
 "rp_stats_decoder_restarts": "khởi động lại bộ giải mã {n}",
 "rp_low_latency": "Độ trễ thấp",
 "rp_low_latency_hint": "Bộ đệm âm thanh nhỏ nhất và hàng đợi hình ngắn nhất, cho độ trễ thấp nhất. Trên mạng đông, nhiều khung hình bị rơi hơn và âm thanh có thể rè. Phần hình áp dụng từ lần bắt đầu sau.",

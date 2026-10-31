@@ -6302,7 +6302,7 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_clip_failed": "Não foi possível gravar ou salvar o clipe.",
 "rp_stats_latency": "Latência ≈ {engine} ms motor + {decode} ms decodificação",
 "rp_stats_latency_decode": "Latência ≈ {decode} ms decodificação",
-"rp_stats_stages": "rede {net} · fila {queue} · decodificação {decode} · desenho {draw} ms",
+"rp_stats_stages": "rede {net} · fila {queue} · decodificação {decode} · tela {draw} ms",
 "rp_stats_decoder_restarts": "reinícios do decodificador {n}",
 "rp_low_latency": "Baixa latência",
 "rp_low_latency_hint": "O menor buffer de som e a fila de imagem mais curta, para o menor atraso. Numa rede ocupada mais quadros são perdidos e o som pode chiar. A parte da imagem vale a partir do próximo início.",

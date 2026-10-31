@@ -6294,7 +6294,7 @@ library_compressed_hint: "อิมเมจที่บีบอัดต้อ
 "rp_clip_failed": "บันทึกคลิปไม่ได้",
 "rp_stats_latency": "หน่วง ≈ เอนจิน {engine} ms + ถอดรหัส {decode} ms",
 "rp_stats_latency_decode": "หน่วง ≈ ถอดรหัส {decode} ms",
-"rp_stats_stages": "เครือข่าย {net} · คิว {queue} · ถอดรหัส {decode} · วาด {draw} ms",
+"rp_stats_stages": "เครือข่าย {net} · คิว {queue} · ถอดรหัส {decode} · หน้าจอ {draw} ms",
 "rp_stats_decoder_restarts": "รีสตาร์ตตัวถอดรหัส {n}",
 "rp_low_latency": "หน่วงต่ำ",
 "rp_low_latency_hint": "บัฟเฟอร์เสียงเล็กที่สุดและคิวภาพสั้นที่สุด เพื่อความหน่วงน้อยที่สุด บนเครือข่ายที่หนาแน่นจะมีเฟรมหลุดมากขึ้นและเสียงอาจแตก ส่วนของภาพมีผลเมื่อเริ่มครั้งถัดไป",

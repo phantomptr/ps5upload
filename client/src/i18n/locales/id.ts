@@ -6296,7 +6296,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_clip_failed": "Klip tidak dapat direkam atau disimpan.",
 "rp_stats_latency": "Latensi ≈ {engine} ms mesin + {decode} ms dekode",
 "rp_stats_latency_decode": "Latensi ≈ {decode} ms dekode",
-"rp_stats_stages": "jaringan {net} · antrean {queue} · dekode {decode} · gambar {draw} ms",
+"rp_stats_stages": "jaringan {net} · antrean {queue} · dekode {decode} · layar {draw} ms",
 "rp_stats_decoder_restarts": "dekoder dimulai ulang {n}",
 "rp_low_latency": "Latensi rendah",
 "rp_low_latency_hint": "Buffer suara terkecil dan antrean gambar terpendek, untuk jeda paling kecil. Di jaringan yang sibuk lebih banyak frame hilang dan suara bisa berderak. Bagian gambar berlaku saat mulai berikutnya.",

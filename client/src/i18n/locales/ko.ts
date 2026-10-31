@@ -6304,7 +6304,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_clip_failed": "클립을 녹화하거나 저장하지 못했습니다.",
 "rp_stats_latency": "지연 ≈ 엔진 {engine} ms + 디코딩 {decode} ms",
 "rp_stats_latency_decode": "지연 ≈ 디코딩 {decode} ms",
-"rp_stats_stages": "네트워크 {net} · 대기 {queue} · 디코딩 {decode} · 그리기 {draw} ms",
+"rp_stats_stages": "네트워크 {net} · 대기 {queue} · 디코딩 {decode} · 화면 {draw} ms",
 "rp_stats_decoder_restarts": "디코더 재시작 {n}",
 "rp_low_latency": "저지연",
 "rp_low_latency_hint": "지연을 최소화하도록 가장 작은 소리 버퍼와 가장 짧은 화면 대기열을 씁니다. 혼잡한 네트워크에서는 프레임이 더 많이 빠지고 소리가 끊길 수 있습니다. 화면 부분은 다음 시작부터 적용됩니다.",

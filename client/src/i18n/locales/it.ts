@@ -6240,7 +6240,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_clip_failed": "Impossibile registrare o salvare la clip.",
 "rp_stats_latency": "Latenza ≈ {engine} ms motore + {decode} ms decodifica",
 "rp_stats_latency_decode": "Latenza ≈ {decode} ms decodifica",
-"rp_stats_stages": "rete {net} · coda {queue} · decodifica {decode} · disegno {draw} ms",
+"rp_stats_stages": "rete {net} · coda {queue} · decodifica {decode} · schermo {draw} ms",
 "rp_stats_decoder_restarts": "riavvii del decoder {n}",
 "rp_low_latency": "Bassa latenza",
 "rp_low_latency_hint": "Il buffer audio più piccolo e la coda di immagini più corta, per il minor ritardo. Su una rete congestionata si perdono più fotogrammi e l'audio può gracchiare. La parte immagine vale dal prossimo avvio.",

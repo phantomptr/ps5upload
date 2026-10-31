@@ -6579,7 +6579,7 @@ library_compressed_hint: "برای اجرای ایمیج فشرده به ShadowM
 "rp_clip_failed": "کلیپ ضبط یا ذخیره نشد.",
 "rp_stats_latency": "تأخیر ≈ {engine} ms موتور + {decode} ms رمزگشایی",
 "rp_stats_latency_decode": "تأخیر ≈ {decode} ms رمزگشایی",
-"rp_stats_stages": "شبکه {net} · صف {queue} · رمزگشایی {decode} · رسم {draw} ms",
+"rp_stats_stages": "شبکه {net} · صف {queue} · رمزگشایی {decode} · صفحه {draw} ms",
 "rp_stats_decoder_restarts": "راه‌اندازی دوباره رمزگشا {n}",
 "rp_low_latency": "تأخیر کم",
 "rp_low_latency_hint": "کوچک‌ترین بافر صدا و کوتاه‌ترین صف تصویر برای کمترین تأخیر. در شبکهٔ شلوغ فریم‌های بیشتری از دست می‌رود و صدا ممکن است خش‌خش کند. بخش تصویر از شروع بعدی اعمال می‌شود.",

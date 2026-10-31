@@ -6303,7 +6303,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_clip_failed": "Impossible d'enregistrer ou de sauvegarder le clip.",
 "rp_stats_latency": "Latence ≈ {engine} ms moteur + {decode} ms décodage",
 "rp_stats_latency_decode": "Latence ≈ {decode} ms décodage",
-"rp_stats_stages": "réseau {net} · file {queue} · décodage {decode} · affichage {draw} ms",
+"rp_stats_stages": "réseau {net} · file {queue} · décodage {decode} · écran {draw} ms",
 "rp_stats_decoder_restarts": "redémarrages du décodeur {n}",
 "rp_low_latency": "Faible latence",
 "rp_low_latency_hint": "Le plus petit tampon audio et la file d'images la plus courte, pour le moins de délai. Sur un réseau chargé, plus d'images sont perdues et le son peut grésiller. La partie image s'applique au prochain démarrage.",

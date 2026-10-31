@@ -6294,7 +6294,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_clip_failed": "Klip kaydedilemedi.",
 "rp_stats_latency": "Gecikme ≈ {engine} ms motor + {decode} ms çözme",
 "rp_stats_latency_decode": "Gecikme ≈ {decode} ms çözme",
-"rp_stats_stages": "ağ {net} · kuyruk {queue} · çözme {decode} · çizim {draw} ms",
+"rp_stats_stages": "ağ {net} · kuyruk {queue} · çözme {decode} · ekran {draw} ms",
 "rp_stats_decoder_restarts": "çözücü yeniden başlatma {n}",
 "rp_low_latency": "Düşük gecikme",
 "rp_low_latency_hint": "En az gecikme için en küçük ses arabelleği ve en kısa görüntü kuyruğu. Yoğun bir ağda daha çok kare düşer ve ses cızırdayabilir. Görüntü kısmı bir sonraki başlatmada geçerli olur.",
