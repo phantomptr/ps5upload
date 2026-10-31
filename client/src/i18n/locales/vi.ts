@@ -6149,6 +6149,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_err_other": "Luồng đã dừng.",
 "rp_err_lost": "Kết nối với PS5 bị ngắt trong khi stream. Hãy bắt đầu lại; nếu vẫn xảy ra, hãy nối PS5 hoặc thiết bị này bằng cáp.",
 "rp_err_rp_off": "Remote Play đang tắt trên PS5. Trên máy, mở Cài đặt › Hệ thống › Remote Play và bật Bật Remote Play (nếu đã hiện bật, hãy tắt rồi bật lại), sau đó nhấn Bắt đầu.",
+"rp_err_refused": "PS5 từ chối bắt đầu Remote Play. Trên máy, kiểm tra Cài đặt › Hệ thống › Remote Play › Bật Remote Play (tắt rồi bật lại), nhấn Cho phép trong Play › Thiết lập, hoặc ghép nối lại. Mã bên dưới cho biết đó là kiểu từ chối nào.",
 "rp_err_passcode": "Người dùng PS5 này có mã đăng nhập. Remote Play từ đây không nhập được; hãy bỏ mã hoặc đăng nhập trên máy trước.",
 "rp_err_unreachable": "PS5 không phản hồi trên mạng. Hãy kiểm tra máy đang bật, cùng mạng và đã bật Remote Play trong cài đặt.",
 "rp_err_video": "PS5 từ chối kích thước hình đó. Hãy thử 720p.",

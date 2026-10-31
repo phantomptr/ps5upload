@@ -6100,6 +6100,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_err_other": "Lo stream si è interrotto.",
 "rp_err_lost": "La connessione alla PS5 si è interrotta durante lo stream. Riavvialo; se succede ancora, collega la PS5 o questo dispositivo via cavo.",
 "rp_err_rp_off": "Riproduzione remota è disattivata sulla PS5. Sulla console apri Impostazioni › Sistema › Riproduzione remota e attiva Abilita Riproduzione remota (se risulta già attiva, disattivala e riattivala), poi premi Avvia.",
+"rp_err_refused": "La PS5 ha rifiutato di avviare Riproduzione remota. Sulla console controlla Impostazioni › Sistema › Riproduzione remota › Abilita Riproduzione remota (disattivala e riattivala), premi Consenti in Play › Configura, oppure associa di nuovo. Il codice qui sotto dice quale rifiuto era.",
 "rp_err_passcode": "Questo utente PS5 ha un codice di accesso. Remote Play da qui non può inserirlo; rimuovi il codice o accedi prima sulla console.",
 "rp_err_unreachable": "La PS5 non risponde in rete. Controlla che sia accesa, sulla stessa rete e che Remote Play sia attivo nelle sue impostazioni.",
 "rp_err_video": "La PS5 ha rifiutato quella dimensione dell'immagine. Prova 720p.",

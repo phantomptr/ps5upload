@@ -655,6 +655,8 @@ fn error_status(e: &anyhow::Error) -> serde_json::Value {
         None if text.contains("refused the control session") => ("keys", None),
         // Session init answers 80108b12 while the console's own Remote Play switch is off.
         None if text.contains("80108b12") => ("rp_off", None),
+        // Any other refusal at session init: a code nobody has explained yet (80108b26, …).
+        None if text.contains("session init refused") => ("refused", None),
         None if text.contains("did not wake") => ("wake_failed", None),
         None if text.contains("login passcode") => ("passcode", None),
         None if text.contains("Nagare") || text.contains("AvCap") => ("video_refused", None),
@@ -1093,6 +1095,8 @@ mod tests {
     fn remote_play_switched_off_has_its_own_code() {
         let e = anyhow::anyhow!("session init refused (HTTP 403): 80108b12");
         assert_eq!(error_status(&e)["code"], "rp_off");
+        let e = anyhow::anyhow!("session init refused (HTTP 403): 80108b26");
+        assert_eq!(error_status(&e)["code"], "refused");
     }
 
     #[test]

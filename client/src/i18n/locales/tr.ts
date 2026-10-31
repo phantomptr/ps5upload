@@ -6154,6 +6154,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_err_other": "Yayın durdu.",
 "rp_err_lost": "Yayın sırasında PS5 bağlantısı koptu. Yeniden başlatın; tekrarlanırsa PS5'i veya bu cihazı kabloyla bağlayın.",
 "rp_err_rp_off": "PS5'te Remote Play kapalı. Konsolda Ayarlar › Sistem › Uzaktan Oynatma'yı açın ve Uzaktan Oynatmayı Etkinleştir'i açın (zaten açık görünüyorsa kapatıp yeniden açın), ardından Başlat'a basın.",
+"rp_err_refused": "PS5 Remote Play'i başlatmayı reddetti. Konsolda Ayarlar › Sistem › Uzaktan Oynatma › Uzaktan Oynatmayı Etkinleştir'i kontrol edin (kapatıp açın), Play › Kurulum'da İzin Ver'e basın veya yeniden eşleştirin. Aşağıdaki kod hangi ret olduğunu söyler.",
 "rp_err_passcode": "Bu PS5 kullanıcısının bir giriş şifresi var. Buradan Remote Play onu giremez; şifreyi kaldır ya da önce konsolda oturum aç.",
 "rp_err_unreachable": "PS5 ağda yanıt vermiyor. Açık olduğunu, aynı ağda olduğunu ve ayarlarında Remote Play'in etkin olduğunu kontrol et.",
 "rp_err_video": "PS5 bu görüntü boyutunu reddetti. 720p dene.",
