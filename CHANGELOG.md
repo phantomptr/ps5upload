@@ -4,8 +4,46 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 10.0.3
 
+- **Fixed: after waking the PS5 from rest mode, the app said the helper was down (#593)**, and
+  sending it again left two copies running. The helper survived rest mode but stopped listening;
+  it now listens again right after the wake, and sending it again always leaves exactly one copy.
+- **The helper shows as `ps5upload.elf` in Payload Manager**, never `payload.elf` (the name the
+  loader gives anything sent to it) or one of its own thread names.
+- **The helper is steadier when it is replaced:** a running backported game keeps its fakelib
+  overlay, a Sony call in progress is finished instead of cut off, cheats applied just before
+  aren't paused, and a crash can no longer leave it spinning with its port held.
+- **Clearer delete and copy errors:** they name the file or folder and the reason ("Permission
+  denied"), and deleting a folder removes everything it can instead of refusing the whole folder.
+- **PS5Upload Minion can open on Cheats (#584):** Settings › Start page. With a game running you
+  land on its cheats.
+- **Linux app: Play shows the picture in H.264**, which stayed black. The Linux app's video
+  decoder takes H.264 only in the form MP4 files use, so the stream is now handed over that way
+  (on every system, which changes nothing elsewhere).
+- **Linux app: Picture in picture opens.** It said it couldn't, because the Linux webview refused
+  to open the small window.
+- **Linux app: game icons show, and the microphone works in Play.**
+- **Back up saves to a network share (#592).** Saves › *Backups to a network share*: pick a folder
+  on an SMB server (or any server under Connections), then back up every few hours or each time
+  you close a game, for the consoles and users you choose. Each copy is read back from the share
+  and checked before it counts, and a bad one is deleted. Restore any version from the game's
+  page; the current save is backed up first.
+- **The DualSense touchpad works in Play (#589)**, finger and click, in the desktop app on macOS,
+  Windows and Linux (read straight from the controller), and in Chrome or Edge with
+  Settings › Controllers › *Use the DualSense touchpad*.
+- **Remote Play holds up better on Windows and Wi-Fi.** A passing network error no longer ends
+  the stream, Windows gets the same larger video buffer other systems had, and lost control
+  messages are sent again. A stream whose connection really dies now says so instead of freezing
+  on the last picture, and one slow check no longer flashes "engine unreachable".
+- **RAR sets past `.r99` extract (`.s00`, `.t00` …).** Old-style sets go `.rar`, `.r00`…`.r99`,
+  then `.s00`…; only the `.r` part was picked up, so extraction stopped a third of the way. A
+  failed extraction no longer leaves temporary files on the computer (Windows kept them when a
+  file was still locked for a moment); leftovers from earlier runs are cleared at start.
+- **Installer: updating it no longer fails the first install afterwards.** The old installer
+  could not let go of its port in time. It also can't be stopped in the middle of an install any
+  more, recovers by itself when its connection breaks instead of using a whole CPU core, and
+  shows in the console's process list as `ps5u-installer`.
 - **Fixed: a payload from a repo you added was stored in Payload Manager as "Custom <code>".**
   Store in Payload Manager uses the name the app caches a download under, and with no name
   given for a custom repo that was its internal id (`custom-3fa9c21b04de.elf`). It now keeps the
