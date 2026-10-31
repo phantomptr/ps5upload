@@ -165,6 +165,14 @@ impl Ctrl {
     }
 }
 
+impl Ctrl {
+    /// The heartbeat thread stopped on its own: the console closed ctrl, or it broke. The
+    /// console's heartbeats then go unanswered and the session is over.
+    fn ended(&self) -> bool {
+        self.thread.as_ref().is_some_and(|t| t.is_finished())
+    }
+}
+
 impl Drop for Ctrl {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -332,7 +340,11 @@ fn ctrl_open(
             while !stop_t.load(Ordering::Relaxed) {
                 while pending.len() >= 8 {
                     let size = u32::from_be_bytes(pending[0..4].try_into().unwrap()) as usize;
-                    if size > 8192 || pending.len() < 8 + size {
+                    // Out of step: nothing after this can be read, heartbeats included.
+                    if size > 8192 {
+                        return;
+                    }
+                    if pending.len() < 8 + size {
                         break;
                     }
                     let kind = u16::from_be_bytes([pending[4], pending[5]]);
@@ -599,7 +611,19 @@ pub struct StreamReport {
     pub loss_reported: u64,
     pub bytes_received: u64,
     pub disconnect_reason: Option<String>,
+    /// Our DATA chunks sent again because the console had not acknowledged them, and given up on.
+    pub data_resent: u64,
+    pub data_given_up: u64,
+    /// Sends that failed for a passing reason and were carried on from.
+    pub io_soft_errors: u64,
 }
+
+/// Nothing at all from the console for this long: it is gone (the network dropped, or it
+/// ended the stream without a word). Video and audio packets arrive many times a second even
+/// on a still picture, so a healthy stream is never this quiet.
+const SILENCE_LIMIT: Duration = Duration::from_secs(15);
+/// After ctrl closes, this long for the console's DISCONNECT (and its reason) to arrive.
+const CTRL_GONE_GRACE: Duration = Duration::from_secs(3);
 
 /// Open a stream and run it into `sink` (video, audio, status; pad input back)
 /// until the sink stops, `max` time passes, or the console disconnects.
@@ -772,9 +796,26 @@ pub fn run_stream(
     let (mut second_units, mut second_units_lost) = (0u64, 0u64);
     let mut last_idr: Option<Instant> = None;
     let (mut state_seq, mut history_seq) = (0u16, 0u16);
+    let mut ctrl_gone: Option<Instant> = None;
     let result = loop {
         if started.elapsed() > max || sink.stopped() {
             break Ok(());
+        }
+        // Before, a console that went quiet, or closed ctrl, left the page on a frozen
+        // picture until the four-hour limit: end the stream and say why.
+        if takion.last_rx.elapsed() > SILENCE_LIMIT {
+            break Err(anyhow!(
+                "the console stopped sending: nothing for {} s (the network dropped, or the console ended the stream)",
+                SILENCE_LIMIT.as_secs()
+            ));
+        }
+        if ctrl.ended() {
+            let since = *ctrl_gone.get_or_insert_with(Instant::now);
+            if since.elapsed() > CTRL_GONE_GRACE {
+                break Err(anyhow!(
+                    "the console closed the Remote Play control connection"
+                ));
+            }
         }
         if last_heartbeat.elapsed() >= Duration::from_secs(1) {
             last_heartbeat = Instant::now();
@@ -972,6 +1013,9 @@ pub fn run_stream(
     report.audio_frames = audio.frames;
     report.av_dropped_on_purpose = takion.av_dropped_on_purpose;
     report.bytes_received = takion.bytes_received;
+    report.data_resent = takion.data_resent;
+    report.data_given_up = takion.data_given_up;
+    report.io_soft_errors = takion.io_soft_errors;
     result.map(|_| report)
 }
 

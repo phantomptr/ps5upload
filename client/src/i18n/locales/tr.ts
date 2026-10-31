@@ -6152,6 +6152,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_phone_be": "Bu cihazı kumandası olarak kullan",
 "rp_err_keys": "PS5 bu uygulamanın eşleşmesini kabul etmedi. Bu konsol için «Uyandır ve oturum aç» özelliğini yeniden kur.",
 "rp_err_other": "Yayın durdu.",
+"rp_err_lost": "Yayın sırasında PS5 bağlantısı koptu. Yeniden başlatın; tekrarlanırsa PS5'i veya bu cihazı kabloyla bağlayın.",
 "rp_err_passcode": "Bu PS5 kullanıcısının bir giriş şifresi var. Buradan Remote Play onu giremez; şifreyi kaldır ya da önce konsolda oturum aç.",
 "rp_err_unreachable": "PS5 ağda yanıt vermiyor. Açık olduğunu, aynı ağda olduğunu ve ayarlarında Remote Play'in etkin olduğunu kontrol et.",
 "rp_err_video": "PS5 bu görüntü boyutunu reddetti. 720p dene.",

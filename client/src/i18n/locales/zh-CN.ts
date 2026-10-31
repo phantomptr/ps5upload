@@ -6104,6 +6104,7 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_phone_be": "将此设备作为它的手柄",
 "rp_err_keys": "PS5 未接受此应用的配对。请为这台主机重新设置“唤醒并登录”。",
 "rp_err_other": "串流已停止。",
+"rp_err_lost": "串流过程中与 PS5 的连接断开了。请重新开始；如果反复出现，请用网线连接 PS5 或本设备。",
 "rp_err_passcode": "这个 PS5 用户设置了登录密码。从这里进行远程游玩无法输入密码；请移除密码或先在主机上登录。",
 "rp_err_unreachable": "PS5 在网络上没有响应。请确认它已开机、在同一网络中，并已在设置中启用远程游玩。",
 "rp_err_video": "PS5 拒绝了该画面尺寸。请试试 720p。",

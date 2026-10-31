@@ -147,6 +147,12 @@ export function streamErrorMessage(tr: Tr, e: StreamError): string {
         { host: e.host ?? "" },
         `Remote Play is already streaming ${e.host ?? "another console"}. Stop that stream first.`,
       );
+    case "lost":
+      return tr(
+        "rp_err_lost",
+        undefined,
+        "The connection to the PS5 dropped during the stream. Start it again; if it keeps happening, connect the PS5 or this device by cable.",
+      );
     case "socket":
       return tr(
         "rp_err_socket_lost",

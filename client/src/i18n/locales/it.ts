@@ -6098,6 +6098,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_phone_be": "Usa questo dispositivo come suo controller",
 "rp_err_keys": "La PS5 non ha accettato l'associazione di questa app. Configura di nuovo «Accendi e accedi» per questa console.",
 "rp_err_other": "Lo stream si è interrotto.",
+"rp_err_lost": "La connessione alla PS5 si è interrotta durante lo stream. Riavvialo; se succede ancora, collega la PS5 o questo dispositivo via cavo.",
 "rp_err_passcode": "Questo utente PS5 ha un codice di accesso. Remote Play da qui non può inserirlo; rimuovi il codice o accedi prima sulla console.",
 "rp_err_unreachable": "La PS5 non risponde in rete. Controlla che sia accesa, sulla stessa rete e che Remote Play sia attivo nelle sue impostazioni.",
 "rp_err_video": "La PS5 ha rifiutato quella dimensione dell'immagine. Prova 720p.",

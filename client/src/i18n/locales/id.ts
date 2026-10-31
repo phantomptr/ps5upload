@@ -6154,6 +6154,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_phone_be": "Gunakan perangkat ini sebagai kontrolernya",
 "rp_err_keys": "PS5 tidak menerima pemasangan aplikasi ini. Atur ulang «Nyalakan & masuk» untuk konsol ini.",
 "rp_err_other": "Streaming berhenti.",
+"rp_err_lost": "Koneksi ke PS5 terputus saat streaming. Mulai lagi; jika terus terjadi, sambungkan PS5 atau perangkat ini dengan kabel.",
 "rp_err_passcode": "Pengguna PS5 ini punya kode sandi masuk. Remote Play dari sini tidak bisa memasukkannya; hapus kode sandi atau masuk dulu di konsol.",
 "rp_err_unreachable": "PS5 tidak merespons di jaringan. Periksa apakah menyala, di jaringan yang sama, dan Remote Play aktif di pengaturannya.",
 "rp_err_video": "PS5 menolak ukuran gambar itu. Coba 720p.",
