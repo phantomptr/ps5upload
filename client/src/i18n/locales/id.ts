@@ -6141,6 +6141,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "save_backup_snap_label": "Diambil saat bermain",
 "save_backup_snap_note": "Cadangan ini diambil saat game berjalan: disalin ketika simpanan tidak berubah, tapi jika game bermasalah, pulihkan cadangan otomatis saja.",
 "rp_phone_other_network": "Tidak ada yang terbuka di ponsel? Komputer ini ada di lebih dari satu jaringan: pilih jaringan Wi-Fi tempat ponsel tersambung.",
+"rp_phone_android_lan": "Android 17 atau lebih baru dan halaman tidak terbuka? Izinkan Perangkat di sekitar untuk browser ponsel: Setelan › Aplikasi › Chrome › Izin.",
 "rp_phone_kick": "Putuskan",
 "rp_phone_stop": "Tutup tautan (semua ponsel berhenti)",
 "rp_phone_ask": "{name} ingin menjadi kontroler",

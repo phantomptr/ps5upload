@@ -293,6 +293,13 @@ export function PhonePadsPanel({
                   </div>
                 </div>
               )}
+              <p className="text-xs text-[var(--color-muted)]" data-testid="rp-pad-android-lan">
+                {tr(
+                  "rp_phone_android_lan",
+                  undefined,
+                  "Android 17 or later and the page won't open? Allow the phone's browser Nearby devices: Settings › Apps › Chrome › Permissions.",
+                )}
+              </p>
               {mode === "play" && (
                 <p className="text-xs text-[var(--color-muted)]">
                   {tr(

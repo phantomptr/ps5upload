@@ -6085,6 +6085,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "save_backup_snap_label": "Hecha mientras jugabas",
 "save_backup_snap_note": "Esta se hizo con el juego en marcha: se copió mientras la partida no cambiaba, pero si el juego falla, restaura una copia automática.",
 "rp_phone_other_network": "¿No se abre nada en el móvil? Este ordenador está en más de una red: elige aquella en la que está el Wi-Fi del móvil.",
+"rp_phone_android_lan": "¿Android 17 o posterior y la página no se abre? Permite al navegador del teléfono «Dispositivos cercanos»: Ajustes › Aplicaciones › Chrome › Permisos.",
 "rp_phone_kick": "Desconectar",
 "rp_phone_stop": "Cerrar el enlace (todos los móviles se detienen)",
 "rp_phone_ask": "{name} quiere ser un mando",

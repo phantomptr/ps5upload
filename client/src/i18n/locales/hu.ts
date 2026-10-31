@@ -6438,6 +6438,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "save_backup_snap_label": "Játék közben készült",
 "save_backup_snap_note": "Ez futó játék mellett készült: akkor másolódott, amikor a mentés nem változott, de ha a játék furcsán viselkedik, inkább egy automatikus mentést állíts vissza.",
 "rp_phone_other_network": "Nem nyílik meg semmi a telefonon? Ez a számítógép több hálózaton is van: válaszd azt, amelyiken a telefon Wi-Fi-je van.",
+"rp_phone_android_lan": "Android 17 vagy újabb, és nem nyílik meg az oldal? Engedélyezd a telefon böngészőjének a Közeli eszközöket: Beállítások › Alkalmazások › Chrome › Engedélyek.",
 "rp_phone_kick": "Leválasztás",
 "rp_phone_stop": "Kapcsolat bezárása (minden telefon leáll)",
 "rp_phone_ask": "{name} kontroller szeretne lenni",

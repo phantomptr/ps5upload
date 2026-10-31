@@ -6085,6 +6085,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "save_backup_snap_label": "Fatto mentre giocavi",
 "save_backup_snap_note": "Questa è stata fatta a gioco aperto: copiata mentre il salvataggio non cambiava, ma se il gioco si comporta male ripristina invece una copia automatica.",
 "rp_phone_other_network": "Sul telefono non si apre nulla? Questo computer è su più di una rete: scegli quella del Wi-Fi del telefono.",
+"rp_phone_android_lan": "Android 17 o successivo e la pagina non si apre? Consenti al browser del telefono «Dispositivi nelle vicinanze»: Impostazioni › App › Chrome › Autorizzazioni.",
 "rp_phone_kick": "Disconnetti",
 "rp_phone_stop": "Chiudi il collegamento (tutti i telefoni si fermano)",
 "rp_phone_ask": "{name} vuole essere un controller",

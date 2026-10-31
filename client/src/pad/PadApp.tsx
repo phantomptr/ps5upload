@@ -6,7 +6,7 @@ import { PadClient, type PadLinkStage } from "../lib/padClient";
 import { TouchControls } from "../screens/Play/TouchControls";
 import { useTr } from "../state/lang";
 import { rpInput } from "../state/remotePlay";
-import { WatchPlayer, type WatchProblem } from "./watchPlayer";
+import { makeWatchPlayer, type MsePlayer, type WatchPlayer, type WatchProblem } from "./watchPlayer";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -68,7 +68,7 @@ export function PadApp({
   const [client, setClient] = useState<PadClient | null>(null);
   const [motionOn, setMotionOn] = useState(false);
   // Watch party: the picture, whether this page holds the controller, and what went wrong.
-  const player = useRef<WatchPlayer | null>(null);
+  const player = useRef<WatchPlayer | MsePlayer | null>(null);
   const screen = useRef<HTMLDivElement>(null);
   const [control, setControl] = useState(!watch);
   const [problem, setProblem] = useState<WatchProblem | null>(null);
@@ -86,9 +86,9 @@ export function PadApp({
   }, [motionOn]);
 
   useEffect(() => {
-    const p = watch ? new WatchPlayer(setProblem) : null;
+    const p = watch ? makeWatchPlayer(setProblem) : null;
     player.current = p;
-    if (p) screen.current?.appendChild(p.canvas);
+    if (p) screen.current?.appendChild(p.element);
     setControl(!watch);
     setSound(false);
     const c = new PadClient({
@@ -106,7 +106,7 @@ export function PadApp({
     return () => {
       c.stop();
       p?.stop();
-      p?.canvas.remove();
+      p?.element.remove();
     };
   }, [url, attempt, watch]);
 

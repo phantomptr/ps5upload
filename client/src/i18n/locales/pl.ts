@@ -6380,6 +6380,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "save_backup_snap_label": "Zrobione w trakcie gry",
 "save_backup_snap_note": "Ta kopia powstała, gdy gra działała: skopiowano ją, kiedy zapis się nie zmieniał, ale jeśli gra działa dziwnie, przywróć kopię automatyczną.",
 "rp_phone_other_network": "Na telefonie nic się nie otwiera? Ten komputer jest w więcej niż jednej sieci: wybierz tę, w której jest Wi-Fi telefonu.",
+"rp_phone_android_lan": "Android 17 lub nowszy i strona się nie otwiera? Zezwól przeglądarce telefonu na „Urządzenia w pobliżu”: Ustawienia › Aplikacje › Chrome › Uprawnienia.",
 "rp_phone_kick": "Rozłącz",
 "rp_phone_stop": "Zamknij połączenie (wszystkie telefony przestaną)",
 "rp_phone_ask": "{name} chce być kontrolerem",

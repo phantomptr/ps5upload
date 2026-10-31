@@ -6140,6 +6140,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "save_backup_snap_label": "Während des Spielens",
 "save_backup_snap_note": "Diese Sicherung entstand, während das Spiel lief: Sie wurde kopiert, als der Spielstand ruhte. Verhält sich das Spiel seltsam, stelle stattdessen eine automatische Sicherung wieder her.",
 "rp_phone_other_network": "Auf dem Handy öffnet sich nichts? Dieser Computer ist in mehr als einem Netzwerk: Wähle das, in dem das WLAN des Handys ist.",
+"rp_phone_android_lan": "Android 17 oder neuer und die Seite öffnet sich nicht? Erlaube dem Browser des Handys „Geräte in der Nähe“: Einstellungen › Apps › Chrome › Berechtigungen.",
 "rp_phone_kick": "Trennen",
 "rp_phone_stop": "Verbindung schließen (alle Handys stoppen)",
 "rp_phone_ask": "{name} möchte ein Controller sein",

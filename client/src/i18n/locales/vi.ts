@@ -6134,6 +6134,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "save_backup_snap_label": "Lấy khi đang chơi",
 "save_backup_snap_note": "Bản này lấy khi trò đang chạy: được chép lúc bản lưu không thay đổi, nhưng nếu trò chạy bất thường, hãy khôi phục một bản sao lưu tự động.",
 "rp_phone_other_network": "Điện thoại không mở được gì? Máy tính này ở trên nhiều mạng: hãy chọn mạng mà Wi-Fi của điện thoại đang dùng.",
+"rp_phone_android_lan": "Android 17 trở lên và trang không mở? Hãy cho trình duyệt của điện thoại quyền Thiết bị ở gần: Cài đặt › Ứng dụng › Chrome › Quyền.",
 "rp_phone_kick": "Ngắt kết nối",
 "rp_phone_stop": "Đóng liên kết (mọi điện thoại đều dừng)",
 "rp_phone_ask": "{name} muốn làm tay cầm",

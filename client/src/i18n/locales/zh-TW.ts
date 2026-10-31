@@ -6085,6 +6085,7 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "save_backup_snap_label": "遊戲中備份",
 "save_backup_snap_note": "這份備份是在遊戲執行時做的：複製時存檔沒有變化，但如果遊戲出問題，請改為還原一份自動備份。",
 "rp_phone_other_network": "手機上打不開？這台電腦連著不只一個網路：請選擇手機 Wi-Fi 所在的那一個。",
+"rp_phone_android_lan": "Android 17 以上版本打不開頁面？請允許手機瀏覽器的「鄰近裝置」權限：設定 › 應用程式 › Chrome › 權限。",
 "rp_phone_kick": "中斷連線",
 "rp_phone_stop": "關閉連結（所有手機都會停止）",
 "rp_phone_ask": "{name} 想成為控制器",

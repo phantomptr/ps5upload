@@ -6091,6 +6091,7 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "save_backup_snap_label": "游戏中备份",
 "save_backup_snap_note": "这份备份是在游戏运行时做的：复制时存档没有变化，但如果游戏出问题，请改为恢复一份自动备份。",
 "rp_phone_other_network": "手机上打不开？这台电脑连着不止一个网络：请选择手机 Wi-Fi 所在的那个。",
+"rp_phone_android_lan": "Android 17 或更高版本打不开页面？请允许手机浏览器的“附近的设备”权限：设置 › 应用 › Chrome › 权限。",
 "rp_phone_kick": "断开",
 "rp_phone_stop": "关闭连接（所有手机都会停止）",
 "rp_phone_ask": "{name} 想成为手柄",

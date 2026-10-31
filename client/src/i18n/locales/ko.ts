@@ -6149,6 +6149,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "save_backup_snap_label": "플레이 중 백업",
 "save_backup_snap_note": "게임이 실행 중일 때 만든 백업입니다. 세이브가 바뀌지 않는 동안 복사했지만, 게임이 이상하면 자동 백업을 대신 복원하세요.",
 "rp_phone_other_network": "폰에서 아무것도 열리지 않나요? 이 컴퓨터는 여러 네트워크에 연결되어 있습니다. 폰의 Wi-Fi가 연결된 네트워크를 고르세요.",
+"rp_phone_android_lan": "Android 17 이상에서 페이지가 열리지 않나요? 폰 브라우저에 '근처 기기' 권한을 허용하세요: 설정 › 애플리케이션 › Chrome › 권한.",
 "rp_phone_kick": "연결 끊기",
 "rp_phone_stop": "연결 닫기(모든 휴대폰 중지)",
 "rp_phone_ask": "{name}이(가) 컨트롤러가 되려고 합니다",

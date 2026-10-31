@@ -6139,6 +6139,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "save_backup_snap_label": "Oynarken alındı",
 "save_backup_snap_note": "Bu yedek oyun açıkken alındı: kayıt değişmiyorken kopyalandı, ama oyun sorun çıkarırsa bunun yerine otomatik bir yedeği geri yükle.",
 "rp_phone_other_network": "Telefonda hiçbir şey açılmıyor mu? Bu bilgisayar birden fazla ağda: telefonun Wi-Fi'sinin bağlı olduğu ağı seç.",
+"rp_phone_android_lan": "Android 17 veya üstü ve sayfa açılmıyor mu? Telefonun tarayıcısına Yakındaki cihazlar iznini verin: Ayarlar › Uygulamalar › Chrome › İzinler.",
 "rp_phone_kick": "Bağlantıyı kes",
 "rp_phone_stop": "Bağlantıyı kapat (tüm telefonlar durur)",
 "rp_phone_ask": "{name} kumanda olmak istiyor",

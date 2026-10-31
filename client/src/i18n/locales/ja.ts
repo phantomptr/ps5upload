@@ -6151,6 +6151,7 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "save_backup_snap_label": "プレイ中に保存",
 "save_backup_snap_note": "これはゲームの実行中に保存したものです。セーブが変わっていない間にコピーしましたが、ゲームの様子がおかしいときは自動バックアップを復元してください。",
 "rp_phone_other_network": "スマホで何も開きませんか？このコンピューターは複数のネットワークにつながっています。スマホの Wi-Fi と同じネットワークを選んでください。",
+"rp_phone_android_lan": "Android 17 以降でページが開かない場合は、スマホのブラウザに「付近のデバイス」を許可してください: 設定 › アプリ › Chrome › 権限。",
 "rp_phone_kick": "切断",
 "rp_phone_stop": "リンクを閉じる（すべてのスマホが停止）",
 "rp_phone_ask": "{name} がコントローラーになりたがっています",

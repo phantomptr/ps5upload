@@ -6148,6 +6148,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "save_backup_snap_label": "Prise en jouant",
 "save_backup_snap_note": "Celle-ci a été prise pendant que le jeu tournait : elle a été copiée quand la sauvegarde ne changeait pas, mais si le jeu se comporte mal, restaure plutôt une sauvegarde automatique.",
 "rp_phone_other_network": "Rien ne s'ouvre sur le téléphone ? Cet ordinateur est sur plusieurs réseaux : choisis celui du Wi-Fi du téléphone.",
+"rp_phone_android_lan": "Android 17 ou plus récent et la page ne s'ouvre pas ? Autorisez « Appareils à proximité » pour le navigateur du téléphone : Paramètres › Applis › Chrome › Autorisations.",
 "rp_phone_kick": "Déconnecter",
 "rp_phone_stop": "Fermer le lien (tous les téléphones s'arrêtent)",
 "rp_phone_ask": "{name} veut être une manette",

@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.0.2
+
+- **Fixed: watching the stream on a phone never showed the picture** ("The picture could not be
+  played here."), in H.264 and HEVC alike. A phone opens the watch link as plain `http://`, and
+  browsers offer the video decoder the page used only on secure pages, so it worked on the
+  computer itself and nowhere else. Phones and tablets now play it through the browser's own
+  video player, sound included, a fraction of a second behind the computer.
+- **The phone link doesn't open on Android 17?** Android now asks before a browser may reach
+  devices on your network: allow your browser **Nearby devices** (Settings › Apps › Chrome ›
+  Permissions). The phone panel says so under the link.
+
 ## 10.0.1
 
 - **Share a save with a friend (experimental).** Saves › **Share** saves a PS5 save's contents as
