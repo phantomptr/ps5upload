@@ -4,6 +4,7 @@ import { getEngineUrl } from "./engine";
 import {
   DEFAULT_KEYMAP,
   IDLE_PAD,
+  PadButton,
   RemotePlayStream,
   loadKeymap,
   mergePads,
@@ -22,6 +23,7 @@ import { gamepadsOf } from "../lib/nativePad";
 import { profileFor } from "../lib/padProfiles";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { setGameMode } from "../lib/gameMode";
+import { padTouchState, setPadTouchpad } from "../lib/padTouchpad";
 import { applyControls } from "../lib/gameControls";
 import { DEFAULT_PICTURE, readPicture, type PictureTools } from "../lib/rpPicture";
 import { pushNotification } from "./notifications";
@@ -200,15 +202,17 @@ function readPad(): PadState {
   // gives a background window controller input at all (Chromium does; WebKit gives it only to
   // the window in front).
   const pip = !!s.pipWindow && !s.pipWindow.closed;
-  const pads =
-    !rpInput.mapping && (pip || (s.onScreen && typeof document !== "undefined" && document.hasFocus()))
-      ? padFromGamepads(rpGamepads(), profileFor)
-      : IDLE_PAD;
+  const live = !rpInput.mapping && (pip || (s.onScreen && typeof document !== "undefined" && document.hasFocus()));
+  const pads = live ? padFromGamepads(rpGamepads(), profileFor) : IDLE_PAD;
+  // A DualSense's touchpad, which the Gamepad API never gives (lib/padTouchpad.ts): the same
+  // rule as its buttons, and the click is the touchpad button whatever the browser reports.
+  const pt = live ? padTouchState() : null;
   const merged = {
     ...mergePads(mergePads(keys, pads), rpInput.touchPad),
-    touch: rpInput.touch ?? rpInput.touchPad.touch ?? null,
+    touch: rpInput.touch ?? pt?.touch ?? rpInput.touchPad.touch ?? null,
     motion: rpInput.motion,
   };
+  if (pt?.click) merged.buttons |= PadButton.TOUCHPAD;
   // The running game's turbo, mouse aim and macros (Game panel › Controls).
   const now = typeof performance !== "undefined" ? performance.now() : Date.now();
   return applyControls(merged, controls, rpInput.held, rpControls, now);
@@ -313,6 +317,11 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
 // nothing plays yet, and a hold a reloaded page left on is let go.
 setGameMode(false);
 useRemotePlayStore.subscribe((s) => setGameMode(!!s.stream && s.phase === "playing"));
+
+// A DualSense's touchpad (lib/padTouchpad.ts) is read while a stream plays; each change sends the
+// pad at once, like a key, so a quick tap is not lost between two frames.
+setPadTouchpad(false, () => useRemotePlayStore.getState().stream?.sendPad());
+useRemotePlayStore.subscribe((s) => setPadTouchpad(!!s.stream && s.phase === "playing"));
 
 /** The session the engine is running, if any (it outlives a reload of this page). */
 export async function fetchRunningSession(): Promise<{ host: string | null; playing?: boolean; attached?: boolean }> {
