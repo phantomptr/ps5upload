@@ -5910,6 +5910,8 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_phone_qr": "供手机相机扫描的 QR 码",
 "rp_phone_how": "用手机相机扫描此码。手机会打开一个手柄；请横放手机。它会与这台电脑的操作一起控制游戏。",
 "rp_phone_app": "在手机上的 PS5Upload 应用中，远程游玩会显示这台电脑：点按“将此设备作为它的手柄”，然后在这里允许。",
+"batch_stream_now": "流式安装（{count}）",
+"batch_stream_rest": "安装包直接从这台电脑流式传输；其他内容在同一次点击中照常上传。",
 "rp_codec": "视频格式",
 "rp_codec_auto": "自动（可用时用 HEVC）",
 "rp_decoding": "视频解码",

@@ -67,4 +67,20 @@ describe("the Upload review list", () => {
     expect(out).toContain("/data: needs 2 GB, only 1 GB free");
     expect(out).toMatch(/<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Upload 1 now/);
   });
+
+  it("leads with Stream & install when the list holds packages, and says the rest upload", () => {
+    const out = renderToStaticMarkup(
+      <BatchReview {...props({ streamCount: 2, restCount: 1, canStream: true, onStream: () => {} })} />,
+    );
+    expect(out).toContain("Stream &amp; install 2");
+    expect(out).toContain("everything else uploads as usual, in the same click.");
+    // Stream & install comes first; Upload now is no longer the primary button.
+    expect(out.indexOf("batch-stream-install")).toBeLessThan(out.indexOf("Upload 1 now"));
+  });
+
+  it("offers no Stream & install without packages", () => {
+    const out = renderToStaticMarkup(<BatchReview {...props({ streamCount: 0, onStream: () => {} })} />);
+    expect(out).not.toContain("batch-stream-install");
+    expect(out).not.toContain("uploads as usual");
+  });
 });

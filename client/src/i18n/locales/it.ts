@@ -5904,6 +5904,8 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_phone_qr": "Codice QR per la fotocamera del telefono",
 "rp_phone_how": "Scansionalo con la fotocamera del telefono. Il telefono apre un controller; ruotalo in orizzontale. Gioca insieme ai comandi di questo computer.",
 "rp_phone_app": "Nell'app PS5Upload su un telefono, Remote Play mostra questo computer: tocca \"Usa questo dispositivo come suo controller\", poi autorizzalo qui.",
+"batch_stream_now": "Trasmetti e installa {count}",
+"batch_stream_rest": "I pacchetti vengono trasmessi direttamente da questo computer; il resto si carica come sempre, con lo stesso clic.",
 "rp_codec": "Formato video",
 "rp_codec_auto": "Automatico (HEVC dove funziona)",
 "rp_decoding": "Decodifica video",

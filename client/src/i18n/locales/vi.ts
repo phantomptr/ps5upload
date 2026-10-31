@@ -5953,6 +5953,8 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_phone_qr": "Mã QR cho camera điện thoại",
 "rp_phone_how": "Quét mã này bằng camera điện thoại. Điện thoại sẽ mở một tay cầm; hãy xoay ngang. Nó chơi cùng với điều khiển của máy tính này.",
 "rp_phone_app": "Trong ứng dụng PS5Upload trên điện thoại, Remote Play hiển thị máy tính này: chạm \"Dùng thiết bị này làm tay cầm của nó\", rồi cho phép tại đây.",
+"batch_stream_now": "Truyền và cài đặt {count}",
+"batch_stream_rest": "Các gói được truyền thẳng từ máy tính này; mọi thứ khác tải lên như thường, trong cùng một lần nhấn.",
 "rp_codec": "Định dạng video",
 "rp_codec_auto": "Tự động (HEVC nếu được)",
 "rp_decoding": "Giải mã video",

@@ -10,6 +10,13 @@ What's new in ps5upload, written for humans.
   a `.zip`; on another PS5, **Use a shared save** puts it into that user's own save of the game,
   so the console keeps it as theirs: no account ID change needed. Your save is backed up first and
   put back if anything fails. Both consoles need PS5Upload; PS5 saves only.
+- **Stream & install is back for several packages at once, and leads for one.** Since 8.7.0
+  (when Upload and Install Package became one screen), packages picked or dropped together could
+  only be uploaded first. The list's main button is now **Stream & install** with how many
+  packages there are: they install one after another, a game before its update and DLC whatever
+  order they were picked in (as before 8.7.0), and anything else in the list uploads in the same
+  click. One package's main button is **Stream & install** as well, with
+  **Upload & install** next to it as the fallback.
 - **AppImage downloads.** Each release now also has the bare `.AppImage` (x64 and ARM64) next to
   the Linux `.zip`, for AppImage managers. On Wayland with an NVIDIA card it restarts itself with
   the system Wayland library, as the zip's `PS5Upload.sh` does.

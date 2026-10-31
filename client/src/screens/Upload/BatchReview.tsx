@@ -28,6 +28,12 @@ export interface BatchReviewProps {
   addCount: number;
   canAdd: boolean;
   onAdd: (startNow: boolean) => void;
+  /** Packages in the list: Stream & install them (the main action when there are any). */
+  streamCount?: number;
+  /** The rest, uploaded in the same click. */
+  restCount?: number;
+  canStream?: boolean;
+  onStream?: () => void;
   onRemove: (id: string) => void;
   onInclude: (id: string, include: boolean) => void;
   onPassword: (id: string, password: string) => void;
@@ -63,6 +69,7 @@ function PasswordField({ onSubmit }: { onSubmit: (pw: string) => void }) {
 }
 
 export function BatchReview(p: BatchReviewProps) {
+  const streams = !!p.onStream && (p.streamCount ?? 0) > 0;
   const tr = useTr();
   const inspecting = p.rows.filter((r) => r.status === "inspecting").length;
   const convertState = convertFirstState(
@@ -201,8 +208,18 @@ export function BatchReview(p: BatchReviewProps) {
         </div>
       )}
 
+      {streams && (p.restCount ?? 0) > 0 && (
+        <p className="text-xs text-[var(--color-muted)]">
+          {tr("batch_stream_rest", undefined, "Packages stream straight from this computer; everything else uploads as usual, in the same click.")}
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
-        <Button variant="primary" disabled={!p.canAdd} onClick={() => p.onAdd(true)}>
+        {streams && (
+          <Button variant="primary" disabled={!p.canStream} onClick={p.onStream} data-testid="batch-stream-install">
+            {tr("batch_stream_now", { count: p.streamCount ?? 0 }, "Stream & install {count}")}
+          </Button>
+        )}
+        <Button variant={streams ? "secondary" : "primary"} disabled={!p.canAdd} onClick={() => p.onAdd(true)}>
           {tr("batch_upload_now", { count: p.addCount }, "Upload {count} now")}
         </Button>
         <Button disabled={!p.canAdd} onClick={() => p.onAdd(false)}>

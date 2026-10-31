@@ -5966,6 +5966,8 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_phone_qr": "Código QR para a câmera do celular",
 "rp_phone_how": "Escaneie com a câmera do celular. O celular abre um controle; vire-o na horizontal. Ele joga junto com os controles deste computador.",
 "rp_phone_app": "No app PS5Upload em um celular, a Reprodução Remota mostra este computador: toque em \"Usar este dispositivo como controle dele\" e depois permita aqui.",
+"batch_stream_now": "Transmitir e instalar {count}",
+"batch_stream_rest": "Os pacotes são transmitidos direto deste computador; o resto é enviado como sempre, no mesmo clique.",
 "rp_codec": "Formato de vídeo",
 "rp_codec_auto": "Automático (HEVC onde funcionar)",
 "rp_decoding": "Decodificação de vídeo",

@@ -112,6 +112,7 @@ import {
   type BatchRow,
 } from "../../state/uploadBatch";
 import { BatchReview } from "./BatchReview";
+import { inStreamOrder } from "../../lib/streamSelection";
 import { resolveUploadDest } from "../../lib/uploadDest";
 import { QueuePanel } from "./QueuePanel";
 import { RunningEngineJobs } from "../../components/RunningEngineJobs";
@@ -718,9 +719,8 @@ export default function UploadScreen({
     toAdd.length > 0 &&
     !batchCheck.blocked &&
     included.every((r) => r.status !== "inspecting");
-  const addBatch = (startNow: boolean) => {
+  const addBatch = (startNow: boolean, now: number) => {
     if (!batchReady) return;
-    const now = Date.now();
     const ids: string[] = [];
     toAdd.forEach((r, i) => {
       const item = batchItemFor(
@@ -734,6 +734,59 @@ export default function UploadScreen({
     batch.clear();
     // Start: the console's queue runs as every add does (#536). "Add to queue" only adds.
     if (startNow && host) queueStartAdded(hostOf(host), ids);
+  };
+  // Packages in the list stream & install from this computer (nothing copied to the PS5 first,
+  // as one package's main button does); the rest upload as Upload {count} now would. Packages
+  // need no room on the PS5 for a copy, so only the rest are held to the space check.
+  const batchPkgs = included.filter(
+    (r) => r.source?.kind === "pkg" && r.status === "ready",
+  );
+  const batchRest = toAdd.filter((r) => r.source?.kind !== "pkg");
+  const canStreamBatch =
+    !!host?.trim() &&
+    batchPkgs.length > 0 &&
+    included.every((r) => r.status !== "inspecting") &&
+    (batchRest.length === 0 || !batchCheck.blocked);
+  const streamBatch = async (now: number) => {
+    if (!canStreamBatch || !host) return;
+    const pkgs = batchPkgs;
+    const rest = batchRest;
+    const ids: string[] = [];
+    rest.forEach((r, i) => {
+      const item = batchItemFor(
+        r,
+        i === 0,
+        `${r.id}${Math.random().toString(36).slice(2, 6)}`,
+        now,
+      );
+      if (item) ids.push(queueAdd(item));
+    });
+    batch.clear();
+    if (ids.length) queueStartAdded(hostOf(host), ids);
+    // Games, then updates, then DLC (as Install Package's picker did before 8.7.0), each in the
+    // list's order. Each joins the console's queue as it is called, so they queue in that order;
+    // the promises settle only when each install ends (its outcome stays on its queue row).
+    const lib = pkgLibraryStore(host).getState();
+    const planned = inStreamOrder(
+      pkgs.map((r) => {
+        const info = r.source?.kind === "pkg" ? r.source.pkgInfo : null;
+        return {
+          path: r.path,
+          category: info?.category ?? undefined,
+          contentId: info?.contentId || undefined,
+          size: info?.totalBytes ? info.totalBytes : null,
+        };
+      }),
+    );
+    await Promise.all(
+      planned.map((p) =>
+        lib.installStream(p.path, host, {
+          category: p.category,
+          contentId: p.contentId,
+          sizeBytes: p.size,
+        }),
+      ),
+    );
   };
   const batchKindLabel = (r: BatchRow) =>
     r.source
@@ -857,7 +910,11 @@ export default function UploadScreen({
           }
           addCount={toAdd.length}
           canAdd={batchReady}
-          onAdd={addBatch}
+          onAdd={(startNow) => addBatch(startNow, Date.now())}
+          streamCount={batchPkgs.length}
+          restCount={batchRest.length}
+          canStream={canStreamBatch}
+          onStream={() => void streamBatch(Date.now())}
           onRemove={(id) => batch.remove(id)}
           onInclude={(id, v) => batch.setInclude(id, v)}
           onPassword={(id, pw) => batch.setPassword(id, pw)}
@@ -1102,6 +1159,21 @@ function Step2Options(props: {
     consoleHost,
     onQueueAllParts,
   } = props;
+  // A package's main action (#81, #580's report): Stream & install from this computer, nothing
+  // copied to the PS5 first; queued on the console's queue, and the pick is done.
+  const streamThis =
+    source?.kind === "pkg" && consoleHost
+      ? () => {
+          void pkgLibraryStore(consoleHost)
+            .getState()
+            .installStream(source.path, consoleHost, {
+              category: source.pkgInfo?.category ?? undefined,
+              contentId: source.pkgInfo?.contentId || undefined,
+              sizeBytes: source.pkgInfo?.totalBytes ?? null,
+            });
+          onClear();
+        }
+      : undefined;
   // The .pkg source is open in the package viewer.
   const [viewingPkg, setViewingPkg] = useState(false);
   const tr = useTr();
@@ -1574,20 +1646,7 @@ function Step2Options(props: {
             onView={
               isRemotePath(source.path) ? undefined : () => setViewingPkg(true)
             }
-            onStream={
-              consoleHost
-                ? () => {
-                    // Queued on the console's queue (shown at the top of this
-                    // screen and on Install Package); the pick is done.
-                    void pkgLibraryStore(consoleHost)
-                      .getState()
-                      .installStream(source.path, consoleHost, {
-                        sizeBytes: source.pkgInfo?.totalBytes ?? null,
-                      });
-                    onClear();
-                  }
-                : undefined
-            }
+            streams={!!streamThis}
           />
           <PackagePanel
             path={viewingPkg ? source.path : null}
@@ -1744,9 +1803,9 @@ function Step2Options(props: {
                     )
           }
           className={
-            // For a package, Stream & install (on its card) is the main
-            // action; uploading it first is the fallback.
-            source.kind === "pkg" ? ACTION_PLAIN : ACTION_PRIMARY
+            // For a package, Stream & install (next) is the main action;
+            // uploading it first is the fallback.
+            streamThis ? ACTION_PLAIN : ACTION_PRIMARY
           }
         >
           {preflightBusy
@@ -1759,6 +1818,22 @@ function Step2Options(props: {
                 ? tr("install.uploadInstall", "Upload & install")
                 : tr("upload_now", "Upload")}
         </button>
+        {streamThis && (
+          <button
+            type="button"
+            onClick={streamThis}
+            disabled={inFlight}
+            className={ACTION_PRIMARY}
+            data-testid="upload-stream-install"
+            title={tr(
+              "upload_pkg_stream_recommended",
+              undefined,
+              "Recommended: Stream & install sends it straight from this computer — nothing is copied to the PS5 first.",
+            )}
+          >
+            {tr("pkglib.streamInstall", undefined, "Stream & install")}
+          </button>
+        )}
       </div>
       {preflightError && (
         <div className="mt-2">
@@ -3084,13 +3159,13 @@ function RarSourceCard() {
 function PkgFinisherCard({
   pkgInfo,
   onView,
-  onStream,
+  streams,
 }: {
   pkgInfo: PkgSourceInfo | null;
   /** Open the package viewer on this package (a file on this computer). */
   onView?: () => void;
-  /** Stream & install it instead of uploading (the recommended path). */
-  onStream?: () => void;
+  /** Stream & install is offered (the bar's main button): say it is the recommended path. */
+  streams?: boolean;
 }) {
   const tr = useTr();
   const autoInstall = useInstallSettingsStore((s) => s.autoInstallAfterUpload);
@@ -3123,18 +3198,15 @@ function PkgFinisherCard({
           ) : null}
         </div>
       )}
-      {onStream && (
-        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-accent)]/10 p-3">
-          <p className="min-w-0 flex-1 text-xs">
+      {streams && (
+        <div className="mb-3 rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-accent)]/10 p-3">
+          <p className="text-xs">
             {tr(
               "upload_pkg_stream_recommended",
               undefined,
               "Recommended: Stream & install sends it straight from this computer — nothing is copied to the PS5 first.",
             )}
           </p>
-          <Button variant="primary" size="sm" onClick={onStream}>
-            {tr("pkglib.streamInstall", undefined, "Stream & install")}
-          </Button>
         </div>
       )}
       <p className="mb-3 text-xs text-[var(--color-muted)]">

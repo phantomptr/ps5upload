@@ -5960,6 +5960,8 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_phone_qr": "Kode QR untuk kamera ponsel",
 "rp_phone_how": "Pindai ini dengan kamera ponsel. Ponsel membuka kontroler; miringkan ke samping. Ponsel bermain bersama kontrol komputer ini.",
 "rp_phone_app": "Di aplikasi PS5Upload pada ponsel, Remote Play menampilkan komputer ini: ketuk \"Gunakan perangkat ini sebagai kontrolernya\", lalu izinkan di sini.",
+"batch_stream_now": "Stream & instal {count}",
+"batch_stream_rest": "Paket di-stream langsung dari komputer ini; yang lain diunggah seperti biasa, dalam klik yang sama.",
 "rp_codec": "Format video",
 "rp_codec_auto": "Otomatis (HEVC jika bisa)",
 "rp_decoding": "Dekode video",

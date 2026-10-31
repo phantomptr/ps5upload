@@ -30,6 +30,13 @@ export async function planStreamSelection(
       };
     })));
   }
-  const tier = (category?: string) => category === "gp" ? 1 : category === "ac" ? 2 : 0;
-  return items.sort((a, b) => tier(a.category) - tier(b.category));
+  return inStreamOrder(items);
+}
+
+/** Games first, then updates (gp), then DLC (ac), each kept in the order given: an update or
+ *  DLC never starts ahead of its game. Every multi-package Stream & install queues in this
+ *  order (Install Package's picker before 8.7.0, Upload & Install's list now). */
+export function inStreamOrder<T extends { category?: string | null }>(items: T[]): T[] {
+  const tier = (category?: string | null) => (category === "gp" ? 1 : category === "ac" ? 2 : 0);
+  return [...items].sort((a, b) => tier(a.category) - tier(b.category));
 }

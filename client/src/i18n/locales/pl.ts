@@ -6199,6 +6199,8 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_phone_qr": "Kod QR dla aparatu telefonu",
 "rp_phone_how": "Zeskanuj go aparatem telefonu. Telefon otworzy kontroler; obróć go poziomo. Gra razem ze sterowaniem tego komputera.",
 "rp_phone_app": "W aplikacji PS5Upload na telefonie Remote Play pokazuje ten komputer: stuknij „Użyj tego urządzenia jako jego kontrolera”, a potem zezwól tutaj.",
+"batch_stream_now": "Strumieniuj i zainstaluj: {count}",
+"batch_stream_rest": "Pakiety są przesyłane strumieniowo prosto z tego komputera; reszta wysyła się jak zwykle, tym samym kliknięciem.",
 "rp_codec": "Format wideo",
 "rp_codec_auto": "Automatycznie (HEVC, gdzie działa)",
 "rp_decoding": "Dekodowanie wideo",

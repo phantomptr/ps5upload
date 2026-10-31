@@ -5958,6 +5958,8 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_phone_qr": "Telefon kamerası için QR kod",
 "rp_phone_how": "Bunu telefonun kamerasıyla tarayın. Telefon bir kumanda açar; yan çevirin. Bu bilgisayarın kontrolleriyle birlikte oynar.",
 "rp_phone_app": "Bir telefondaki PS5Upload uygulamasında Remote Play bu bilgisayarı gösterir: \"Bu cihazı kumandası olarak kullan\"a dokunun, sonra burada izin verin.",
+"batch_stream_now": "Akışla kur: {count}",
+"batch_stream_rest": "Paketler doğrudan bu bilgisayardan akışla gönderilir; geri kalan her şey aynı tıklamayla her zamanki gibi yüklenir.",
 "rp_codec": "Video biçimi",
 "rp_codec_auto": "Otomatik (çalıştığı yerde HEVC)",
 "rp_decoding": "Video çözme",

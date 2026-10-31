@@ -1629,6 +1629,13 @@ cannot reach this computer (Stream fails with a network error: see the next ques
 install from a phone, or when you want to keep packages on the PS5 to reinstall later without the
 computer. Upload needs free space on the PS5 for the copy as well as for the installed game.
 
+**Q: Can I Stream & install several packages at once?**
+Yes. Pick or drop them together in **Upload & Install**: the list's main button is **Stream &
+install** with how many packages there are. They install one after another, a game before its
+update and DLC whatever order you picked them in, and anything else in the same list (game
+folders, images, files) uploads as usual in the same click. One package's main button is **Stream & install** too;
+**Upload & install** sits next to it for when the PS5 can't reach this computer.
+
 **Q: How do I install from a download link, and which of the three ways do I pick?**
 In **Upload & Install**, open **From a Link or an Archive** (or **From a link** under the drop
 zone) and paste a direct link to a `.pkg` under **Install from a link**.

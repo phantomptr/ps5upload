@@ -5904,6 +5904,8 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_phone_qr": "供手機相機掃描的 QR 碼",
 "rp_phone_how": "用手機相機掃描此碼。手機會開啟一個控制器；請橫放手機。它會與這台電腦的操作一起控制遊戲。",
 "rp_phone_app": "在手機上的 PS5Upload 應用程式中，遙控遊玩會顯示這台電腦：點一下「將此裝置當作它的控制器」，然後在這裡允許。",
+"batch_stream_now": "串流安裝（{count}）",
+"batch_stream_rest": "安裝包直接從這台電腦串流；其他內容在同一次點擊中照常上傳。",
 "rp_codec": "視訊格式",
 "rp_codec_auto": "自動（可用時用 HEVC）",
 "rp_decoding": "視訊解碼",

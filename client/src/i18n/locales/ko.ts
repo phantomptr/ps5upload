@@ -5968,6 +5968,8 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_phone_qr": "휴대폰 카메라용 QR 코드",
 "rp_phone_how": "휴대폰 카메라로 스캔하세요. 휴대폰에 컨트롤러가 열리면 가로로 돌리세요. 이 컴퓨터의 조작과 함께 플레이됩니다.",
 "rp_phone_app": "휴대폰의 PS5Upload 앱에서 리모트 플레이에 이 컴퓨터가 표시됩니다. '이 기기를 컨트롤러로 사용'을 탭한 다음 여기서 허용하세요.",
+"batch_stream_now": "스트림 및 설치 ({count})",
+"batch_stream_rest": "패키지는 이 컴퓨터에서 바로 스트리밍되고, 나머지는 같은 클릭으로 평소처럼 업로드됩니다.",
 "rp_codec": "영상 형식",
 "rp_codec_auto": "자동(가능하면 HEVC)",
 "rp_decoding": "영상 디코딩",

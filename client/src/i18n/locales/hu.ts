@@ -6257,6 +6257,8 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_phone_qr": "QR-kód a telefon kamerájához",
 "rp_phone_how": "Olvasd be a telefon kamerájával. A telefon megnyit egy kontrollert; fordítsd fekvőre. Együtt játszik a számítógép vezérlőivel.",
 "rp_phone_app": "Egy telefonon a PS5Upload alkalmazásban a Remote Play mutatja ezt a számítógépet: koppints az „Eszköz használata kontrollerként” gombra, majd engedélyezd itt.",
+"batch_stream_now": "Streamelés és telepítés: {count}",
+"batch_stream_rest": "A csomagok közvetlenül erről a számítógépről streamelődnek; minden más a szokott módon töltődik fel, ugyanazzal a kattintással.",
 "rp_codec": "Videóformátum",
 "rp_codec_auto": "Automatikus (HEVC, ahol működik)",
 "rp_decoding": "Videódekódolás",
