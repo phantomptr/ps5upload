@@ -9,7 +9,7 @@ import { DEFAULT_PICTURE, PicturePass, cropRect, needsPass, upscaleSize, upscale
 import type { MotionReading } from "./motion";
 import { getEngineUrl } from "../state/engine";
 import { log } from "../state/logs";
-import { isWindows } from "./platform";
+import { spsVisibleRect, visibleFix, type VisibleRect } from "./rpSps";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
 
 /** Button bits, as the console (and chiaki) number them. */
@@ -580,6 +580,40 @@ export class RemotePlayStream {
   /** The page's mic is on (remotePlayMic.ts); said again on every reattach. */
   private micOn = false;
 
+  /** The visible picture the stream's SPS describes (rpSps.ts), to put right a decoder that
+   *  reports a smaller one (Edge on Windows). */
+  private spsRect: VisibleRect | null = null;
+  private loggedVisibleFix = false;
+
+  /** The frame with the stream's own visible picture where the decoder reported a smaller one
+   *  (Microsoft Edge's hardware HEVC decoder, so the Windows app: the top-left of the picture
+   *  showed enlarged and cut off, #538/#575). The new frame shares the decoded pixels; the
+   *  original is closed. Any other frame comes back as it is. */
+  private withRealVisibleRect(frame: VideoFrame): VideoFrame {
+    const fix = visibleFix(frame, this.spsRect);
+    if (!fix) return frame;
+    try {
+      const fixed = new VideoFrame(frame, {
+        visibleRect: { x: fix.x, y: fix.y, width: fix.w, height: fix.h },
+        displayWidth: fix.w,
+        displayHeight: fix.h,
+      });
+      if (!this.loggedVisibleFix) {
+        this.loggedVisibleFix = true;
+        const v = frame.visibleRect;
+        log.warn(
+          "remote-play",
+          `the decoder reported a ${v?.width}x${v?.height} picture in a ${frame.codedWidth}x${frame.codedHeight} frame; ` +
+            `the stream says ${fix.w}x${fix.h}: drawing that`,
+        );
+      }
+      frame.close();
+      return fixed;
+    } catch {
+      return frame;
+    }
+  }
+
   /** The picture's shape (width / height) its layout follows, as last set on the canvas. */
   private shape = 16 / 9;
 
@@ -636,15 +670,11 @@ export class RemotePlayStream {
     this.boxWatch = ro;
   }
 
-  /** The size to upscale to: the picture's box on screen in device pixels, or null when not
-   *  known. On Windows its CSS pixels instead: a picture drawn bigger than its box in CSS
-   *  pixels showed enlarged from the top-left corner and cut off there (by the display scaling,
-   *  1.25x at 125%), as #538 did, so the Windows app is never handed one. The browser takes it
-   *  the last step to the screen. */
+  /** The picture's box on screen in device pixels, or null when not known. */
   private boxPx(): { w: number; h: number } | null {
     const b = this.boxCss;
     if (!b) return null;
-    const r = isWindows() ? 1 : (this.canvas.ownerDocument.defaultView?.devicePixelRatio ?? 1);
+    const r = this.canvas.ownerDocument.defaultView?.devicePixelRatio ?? 1;
     return { w: Math.round(b.w * r), h: Math.round(b.h * r) };
   }
 
@@ -909,6 +939,7 @@ export class RemotePlayStream {
     }
     this.video = null;
     this.header = null;
+    this.spsRect = null;
     this.sawKey = false;
     this.queued = [];
     this.sentAt.clear();
@@ -1123,6 +1154,7 @@ export class RemotePlayStream {
   private onVideo(kind: number, payload: Uint8Array): void {
     if (kind === 0) {
       this.header = payload.slice();
+      this.spsRect = spsVisibleRect(this.header, this.hevc);
       if (!this.video) this.openVideo();
       return;
     }
@@ -1155,7 +1187,8 @@ export class RemotePlayStream {
 
   private openVideo(): void {
     const video = new VideoDecoder({
-      output: (frame) => {
+      output: (decoded) => {
+        const frame = this.withRealVisibleRect(decoded);
         const t = this.sentAt.get(frame.timestamp);
         if (t !== undefined) {
           this.decodeMs = performance.now() - t;

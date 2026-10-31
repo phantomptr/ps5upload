@@ -52,6 +52,9 @@ interface Case {
   /** The Windows app's webview (true) or a Mac's (false); unset, the project's own user agent
    *  (Desktop Chrome's is a Windows one). */
   windows?: boolean;
+  /** Act out Microsoft Edge's hardware HEVC decoder (#538/#575): every frame says its visible
+   *  picture is 1280x720, top-left, whatever the stream's size. */
+  edgeVisibleRect?: boolean;
 }
 
 async function open(browser: Browser, c: Case): Promise<{ page: Page; close: () => Promise<void> }> {
@@ -66,7 +69,27 @@ async function open(browser: Browser, c: Case): Promise<{ page: Page; close: () 
   });
   const page = await ctx.newPage();
   await page.addInitScript(
-    ({ fit, h264, picture }) => {
+    ({ fit, h264, picture, edge }) => {
+      if (edge && typeof VideoDecoder !== "undefined") {
+        const Real = VideoDecoder;
+        class EdgeDecoder extends Real {
+          constructor(init: VideoDecoderInit) {
+            super({
+              ...init,
+              output: (f: VideoFrame) => {
+                const small = new VideoFrame(f, {
+                  visibleRect: { x: 0, y: 0, width: 1280, height: 720 },
+                  displayWidth: 1280,
+                  displayHeight: 720,
+                });
+                f.close();
+                init.output(small);
+              },
+            });
+          }
+        }
+        (window as unknown as { VideoDecoder: typeof VideoDecoder }).VideoDecoder = EdgeDecoder;
+      }
       window.localStorage.setItem("ps5upload.host", "192.168.1.100");
       window.localStorage.setItem(
         "ps5upload.roster.v1",
@@ -90,7 +113,7 @@ async function open(browser: Browser, c: Case): Promise<{ page: Page; close: () 
           /^(hev1|hvc1)/.test(cfg.codec) ? Promise.resolve({ supported: false, config: cfg }) : orig(cfg);
       }
     },
-    { fit: c.fit ?? "fit", h264: !!c.h264, picture: c.picture ?? null },
+    { fit: c.fit ?? "fit", h264: !!c.h264, picture: c.picture ?? null, edge: !!c.edgeVisibleRect },
   );
   await page.route(
     (url) => url.pathname.startsWith("/api/"),
@@ -311,36 +334,22 @@ for (const dpr of [1.25, 1.5])
         await startAndCheck(browser, { dpr, size: "1920x1080", h264: true, fit, picture, anySize: true });
       });
 
-// Windows (#538 again, upscaled): the picture is never drawn bigger than its box in CSS pixels,
-// so it cannot show enlarged from the top-left whatever the display scaling, and still shows whole.
-for (const dpr of [1.25, 1.5])
-  test(`Remote Play upscales on Windows to the box's CSS size at ${dpr * 100}%`, async ({ browser }) => {
-    const { page, close } = await open(browser, { dpr, size: "1920x1080", h264: true, picture: { upscale: true }, windows: true });
-    try {
-      await page.getByTestId("rp-start").click();
-      const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
-      const read = () =>
-        canvas.evaluate((c: HTMLCanvasElement) => {
-          const r = c.getBoundingClientRect();
-          return { px: [c.width, c.height], css: [Math.round(r.width), Math.round(r.height)] };
-        });
-      await expect.poll(async () => (await read()).px[0], { timeout: 20_000 }).toBeGreaterThanOrEqual(1920);
-      await page.waitForTimeout(500);
-      const r = await read();
-      // Elsewhere this box is upscaled to its device pixels (1.25x/1.5x its CSS size); on
-      // Windows never past the CSS box (here smaller than 1.1x the stream: not upscaled at all).
-      expect(r.px[0]).toBeLessThanOrEqual(Math.max(1920, r.css[0] + 2));
-      expect(r.px[1]).toBeLessThanOrEqual(Math.max(1080, r.css[1] + 2));
-    } finally {
-      await close();
-    }
-    await startAndCheck(browser, { dpr, size: "1920x1080", h264: true, picture: { upscale: true }, windows: true, anySize: true });
-  });
+// #538/#575 on Windows: Edge's hardware HEVC decoder says each 1920x1080 frame shows only its
+// top-left 1280x720, so that part was drawn enlarged and cut off in every picture size. The
+// stream's own SPS says the real picture, and the frame is rebuilt with it.
+for (const [codec, h264] of [
+  ["H.264", true],
+  ["HEVC", false],
+] as const)
+  for (const fit of ["fit", "fill", "stretch"] as const)
+    test(`Remote Play shows the whole picture when the decoder reports a smaller one (${codec}, ${fit})`, async ({ browser }) => {
+      await startAndCheck(browser, { dpr: 1.5, size: "1920x1080", h264, fit, edgeVisibleRect: true });
+    });
 
 // Upscaling (FSR 1): the real 1080p picture on a 2x screen is drawn at the picture's size on
 // screen, in device pixels, and keeps its shape (its layout does not move).
 test("Remote Play upscales the real picture to its size on screen", async ({ browser }) => {
-  // Not Windows: there the picture is upscaled to its CSS size only (above).
+  // Not on Desktop Chrome's own (Windows) user agent: any platform's would do.
   const { page, close } = await open(browser, { dpr: 2, size: "1920x1080", h264: true, picture: { upscale: true }, windows: false });
   try {
     await page.getByTestId("rp-start").click();

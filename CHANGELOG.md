@@ -16,11 +16,10 @@ What's new in ps5upload, written for humans.
 - **Play:** the Console picker is gone from the stream bar (Play uses the console you have
   selected), **Start** is first in the row, and **Set up Play** stands out with its progress until
   it's done.
-- **Fixed: on Windows, Play could show the picture enlarged and cut off on the right and bottom**
-  in every picture size, with Upscale on and display scaling above 100%. On Windows the picture
-  is now upscaled to its size on the page, never past it, so it always shows whole; Windows
-  takes it the last step to the screen. (A window that is not much bigger than the stream is
-  then not upscaled at all.)
+- **Fixed: on Windows, Play showed the picture enlarged and cut off on the right and bottom,**
+  in every picture size. Microsoft Edge's hardware HEVC decoder, which the Windows app plays
+  through, reports each frame's visible picture smaller than it is, so only its top-left part
+  was drawn. The app now reads the real picture size from the stream itself and draws all of it.
 - **Play picture:** with Upscale on, turning Crop to 21:9 on or off now reshapes the picture
   right away (it kept the old shape). The logs now say how the picture is laid out against what
   it draws, so a report of a picture cut off on Windows shows which it is.
