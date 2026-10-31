@@ -58,6 +58,9 @@ open = "5"
 # `probes.rs::decompress_to_cache`. Pure-Rust miniz backend, no
 # system-lib linkage, so cross-compilation to arm64/Windows stays simple.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# SHA-256 of a catalogue payload whose release publishes SHA256SUMS (commands/payloads.rs
+# CHECKSUM_FILES). Same version the engine crates already pull in.
+sha2 = "0.11"
 
 # Engine core modules invoked directly in-process by Tauri commands
 # (no HTTP hop). Same workspace, different manifest root.
