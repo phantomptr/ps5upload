@@ -1052,7 +1052,10 @@ mod tests {
         ] {
             assert_eq!(error_status(&anyhow::anyhow!(msg))["code"], "lost", "{msg}");
         }
-        assert_eq!(error_status(&anyhow::anyhow!("something else"))["code"], "other");
+        assert_eq!(
+            error_status(&anyhow::anyhow!("something else"))["code"],
+            "other"
+        );
     }
 
     #[test]
