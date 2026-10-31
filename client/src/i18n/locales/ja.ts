@@ -6625,6 +6625,9 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "saves_server_next": "次回:{when}",
   "save_backup_on_server": "サーバー上",
   "save_backup_before_restore": "復元の前",
+  "rp_buttons_title": "コントローラーのボタン",
+  "rp_buttons_hint": "コントローラーの各ボタンが PS5 に送るボタン。キーボードは下に専用の一覧があります。",
+  "rp_buttons_none": "なし",
 };
 
 export default ja;

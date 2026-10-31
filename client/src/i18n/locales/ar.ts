@@ -6606,6 +6606,9 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "saves_server_next": "التالية: {when}",
   "save_backup_on_server": "على الخادم",
   "save_backup_before_restore": "قبل الاستعادة",
+  "rp_buttons_title": "أزرار وحدة التحكم",
+  "rp_buttons_hint": "ما يرسله كل زر في وحدة التحكم إلى PS5. للوحة المفاتيح قائمتها الخاصة أدناه.",
+  "rp_buttons_none": "لا شيء",
 };
 
 export default ar;

@@ -6912,6 +6912,9 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "saves_server_next": "Következő: {when}",
   "save_backup_on_server": "A szerveren",
   "save_backup_before_restore": "Visszaállítás előtt",
+  "rp_buttons_title": "Kontroller gombjai",
+  "rp_buttons_hint": "Mit küld a kontroller egyes gombjai a PS5-nek. A billentyűzetnek saját listája van lent.",
+  "rp_buttons_none": "Semmi",
 };
 
 export default hu;

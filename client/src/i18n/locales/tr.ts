@@ -6613,6 +6613,9 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "saves_server_next": "Sonraki: {when}",
   "save_backup_on_server": "Sunucuda",
   "save_backup_before_restore": "Geri yüklemeden önce",
+  "rp_buttons_title": "Kumanda tuşları",
+  "rp_buttons_hint": "Kumandanın her tuşunun PS5'e ne gönderdiği. Klavyenin kendi listesi aşağıda.",
+  "rp_buttons_none": "Hiçbiri",
 };
 
 export default tr;

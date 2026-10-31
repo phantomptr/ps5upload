@@ -6623,6 +6623,9 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "saves_server_next": "다음: {when}",
   "save_backup_on_server": "서버에 있음",
   "save_backup_before_restore": "복원 전",
+  "rp_buttons_title": "컨트롤러 버튼",
+  "rp_buttons_hint": "컨트롤러의 각 버튼이 PS5에 보내는 버튼입니다. 키보드는 아래에 별도 목록이 있습니다.",
+  "rp_buttons_none": "없음",
 };
 
 export default ko;

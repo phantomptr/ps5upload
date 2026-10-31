@@ -6622,6 +6622,9 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "saves_server_next": "Prochaine : {when}",
   "save_backup_on_server": "Sur le serveur",
   "save_backup_before_restore": "Avant une restauration",
+  "rp_buttons_title": "Boutons de la manette",
+  "rp_buttons_hint": "Ce que chaque bouton de la manette envoie à la PS5. Le clavier a sa propre liste plus bas.",
+  "rp_buttons_none": "Rien",
 };
 
 export default fr;

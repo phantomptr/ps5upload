@@ -6559,6 +6559,9 @@ helper_mismatch_boot_copy: "PS5 запустила старую копию по�
   "saves_server_next": "Следующая: {when}",
   "save_backup_on_server": "На сервере",
   "save_backup_before_restore": "Перед восстановлением",
+  "rp_buttons_title": "Кнопки контроллера",
+  "rp_buttons_hint": "Что каждая кнопка контроллера отправляет на PS5. У клавиатуры свой список ниже.",
+  "rp_buttons_none": "Ничего",
 };
 
 export default ru;

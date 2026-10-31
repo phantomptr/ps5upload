@@ -6565,6 +6565,9 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "saves_server_next": "下次:{when}",
   "save_backup_on_server": "在服务器上",
   "save_backup_before_restore": "恢复之前",
+  "rp_buttons_title": "手柄按键",
+  "rp_buttons_hint": "手柄每个按键发送给 PS5 的按键。键盘在下方有自己的列表。",
+  "rp_buttons_none": "无",
 };
 
 export default zh_CN;

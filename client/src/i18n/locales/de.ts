@@ -6614,6 +6614,9 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "saves_server_next": "Nächste: {when}",
   "save_backup_on_server": "Auf dem Server",
   "save_backup_before_restore": "Vor einer Wiederherstellung",
+  "rp_buttons_title": "Controller-Tasten",
+  "rp_buttons_hint": "Was jede Controller-Taste an die PS5 sendet. Die Tastatur hat unten ihre eigene Liste.",
+  "rp_buttons_none": "Nichts",
 };
 
 export default de;

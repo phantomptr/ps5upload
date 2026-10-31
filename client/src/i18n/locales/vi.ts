@@ -6608,6 +6608,9 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "saves_server_next": "Tiếp theo: {when}",
   "save_backup_on_server": "Trên máy chủ",
   "save_backup_before_restore": "Trước khi khôi phục",
+  "rp_buttons_title": "Nút tay cầm",
+  "rp_buttons_hint": "Mỗi nút tay cầm gửi gì tới PS5. Bàn phím có danh sách riêng ở bên dưới.",
+  "rp_buttons_none": "Không gì cả",
 };
 
 export default vi;

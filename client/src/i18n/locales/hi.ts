@@ -6620,6 +6620,9 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
   "saves_server_next": "अगला: {when}",
   "save_backup_on_server": "सर्वर पर",
   "save_backup_before_restore": "रीस्टोर से पहले",
+  "rp_buttons_title": "कंट्रोलर बटन",
+  "rp_buttons_hint": "कंट्रोलर का हर बटन PS5 को क्या भेजता है। कीबोर्ड की अपनी सूची नीचे है।",
+  "rp_buttons_none": "कुछ नहीं",
 };
 
 export default hi;

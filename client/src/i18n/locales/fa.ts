@@ -6898,6 +6898,9 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
   "saves_server_next": "بعدی: {when}",
   "save_backup_on_server": "روی سرور",
   "save_backup_before_restore": "پیش از بازیابی",
+  "rp_buttons_title": "دکمه‌های دسته",
+  "rp_buttons_hint": "هر دکمهٔ دسته چه چیزی به PS5 می‌فرستد. صفحه‌کلید فهرست خودش را در پایین دارد.",
+  "rp_buttons_none": "هیچ",
 };
 
 export default fa;

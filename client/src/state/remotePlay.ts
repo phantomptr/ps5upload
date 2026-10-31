@@ -26,6 +26,7 @@ import { setGameMode } from "../lib/gameMode";
 import { padTouchState, setPadTouchpad } from "../lib/padTouchpad";
 import { applyControls } from "../lib/gameControls";
 import { DEFAULT_PICTURE, readPicture, type PictureTools } from "../lib/rpPicture";
+import { DEFAULT_BUTTON_MAP, readButtonMap, remapPad, type ButtonMap } from "../lib/rpButtonMap";
 import { pushNotification } from "./notifications";
 import { trStatic } from "../lib/trStatic";
 import { currentControls, rpControls } from "./gameControls";
@@ -76,6 +77,8 @@ export interface RpPrefs {
   /** The video format asked of the console: HEVC where this device decodes it (auto), or
    *  always H.264. */
   codec: "auto" | "h264";
+  /** What each controller button sends (lib/rpButtonMap.ts); empty = each sends itself. */
+  buttonMap: ButtonMap;
 }
 
 export const DEFAULT_RP_PREFS: RpPrefs = {
@@ -101,6 +104,7 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   toPhotos: true,
   decoding: "auto",
   codec: "auto",
+  buttonMap: DEFAULT_BUTTON_MAP,
 };
 
 /** The smallest sound buffer the Sound buffer setting offers. */
@@ -117,7 +121,7 @@ export function loadRpPrefs(): RpPrefs {
   try {
     const raw = safeGetItem(PREFS_KEY);
     const p = { ...DEFAULT_RP_PREFS, ...(raw ? (JSON.parse(raw) as Partial<RpPrefs>) : {}) };
-    return { ...p, picture: readPicture(p.picture) };
+    return { ...p, picture: readPicture(p.picture), buttonMap: readButtonMap(p.buttonMap) };
   } catch {
     return DEFAULT_RP_PREFS;
   }
@@ -203,16 +207,17 @@ function readPad(): PadState {
   // the window in front).
   const pip = !!s.pipWindow && !s.pipWindow.closed;
   const live = !rpInput.mapping && (pip || (s.onScreen && typeof document !== "undefined" && document.hasFocus()));
-  const pads = live ? padFromGamepads(rpGamepads(), profileFor) : IDLE_PAD;
+  const read = live ? padFromGamepads(rpGamepads(), profileFor) : IDLE_PAD;
   // A DualSense's touchpad, which the Gamepad API never gives (lib/padTouchpad.ts): the same
   // rule as its buttons, and the click is the touchpad button whatever the browser reports.
   const pt = live ? padTouchState() : null;
+  // Controller buttons sent as Settings › Controller buttons says (the keyboard has its own map).
+  const pads = remapPad(pt?.click ? { ...read, buttons: read.buttons | PadButton.TOUCHPAD } : read, s.prefs.buttonMap);
   const merged = {
     ...mergePads(mergePads(keys, pads), rpInput.touchPad),
     touch: rpInput.touch ?? pt?.touch ?? rpInput.touchPad.touch ?? null,
     motion: rpInput.motion,
   };
-  if (pt?.click) merged.buttons |= PadButton.TOUCHPAD;
   // The running game's turbo, mouse aim and macros (Game panel › Controls).
   const now = typeof performance !== "undefined" ? performance.now() : Date.now();
   return applyControls(merged, controls, rpInput.held, rpControls, now);

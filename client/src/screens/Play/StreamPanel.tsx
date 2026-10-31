@@ -71,6 +71,7 @@ import { fitName, PlayMenu, VolumeSlider } from "./PlayMenu";
 import { rpBrowserAdvice } from "./browserAdvice";
 import { askMotion, motionAvailable, startMotion } from "../../lib/motion";
 import { ControllerSetup } from "./ControllerSetup";
+import { ButtonRemap } from "./ButtonRemap";
 import { connectWebHidTouchpad, webHidTouchpadAvailable, webHidTouchpadConnected } from "../../lib/padTouchpad";
 import { PadAsks, PhonePadsPanel, usePadLink } from "./PhonePads";
 import { GamePanel } from "./game/GamePanel";
@@ -813,6 +814,11 @@ function SettingsPanel({ running }: { running: boolean }) {
         <h3 className="text-sm font-semibold">{tr("rp_pads_title", undefined, "Controllers")}</h3>
         <ControllerSetup />
         <WebHidTouchpad />
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold">{tr("rp_buttons_title", undefined, "Controller buttons")}</h3>
+        <ButtonRemap />
       </section>
 
       <section className="space-y-2">

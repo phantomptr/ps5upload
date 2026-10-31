@@ -6854,6 +6854,9 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "saves_server_next": "Następna: {when}",
   "save_backup_on_server": "Na serwerze",
   "save_backup_before_restore": "Przed przywróceniem",
+  "rp_buttons_title": "Przyciski kontrolera",
+  "rp_buttons_hint": "Co każdy przycisk kontrolera wysyła do PS5. Klawiatura ma własną listę poniżej.",
+  "rp_buttons_none": "Nic",
 };
 
 export default pl;

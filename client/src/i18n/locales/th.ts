@@ -6613,6 +6613,9 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
   "saves_server_next": "ครั้งถัดไป: {when}",
   "save_backup_on_server": "บนเซิร์ฟเวอร์",
   "save_backup_before_restore": "ก่อนการกู้คืน",
+  "rp_buttons_title": "ปุ่มคอนโทรลเลอร์",
+  "rp_buttons_hint": "สิ่งที่แต่ละปุ่มของคอนโทรลเลอร์ส่งไปยัง PS5 คีย์บอร์ดมีรายการของตัวเองด้านล่าง",
+  "rp_buttons_none": "ไม่มี",
 };
 
 export default th;

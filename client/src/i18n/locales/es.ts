@@ -6559,6 +6559,9 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
   "saves_server_next": "Próxima: {when}",
   "save_backup_on_server": "En el servidor",
   "save_backup_before_restore": "Antes de una restauración",
+  "rp_buttons_title": "Botones del mando",
+  "rp_buttons_hint": "Lo que envía cada botón del mando a la PS5. El teclado tiene su propia lista más abajo.",
+  "rp_buttons_none": "Nada",
 };
 
 export default es;

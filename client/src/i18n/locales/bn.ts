@@ -6606,6 +6606,9 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
   "saves_server_next": "পরবর্তী: {when}",
   "save_backup_on_server": "সার্ভারে",
   "save_backup_before_restore": "রিস্টোরের আগে",
+  "rp_buttons_title": "কন্ট্রোলারের বোতাম",
+  "rp_buttons_hint": "কন্ট্রোলারের প্রতিটি বোতাম PS5-এ কী পাঠায়। কিবোর্ডের নিজস্ব তালিকা নিচে আছে।",
+  "rp_buttons_none": "কিছু না",
 };
 
 export default bn;

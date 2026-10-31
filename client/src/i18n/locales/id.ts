@@ -6615,6 +6615,9 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "saves_server_next": "Berikutnya: {when}",
   "save_backup_on_server": "Di server",
   "save_backup_before_restore": "Sebelum pemulihan",
+  "rp_buttons_title": "Tombol kontroler",
+  "rp_buttons_hint": "Apa yang dikirim setiap tombol kontroler ke PS5. Keyboard punya daftarnya sendiri di bawah.",
+  "rp_buttons_none": "Tidak ada",
 };
 
 export default id;
