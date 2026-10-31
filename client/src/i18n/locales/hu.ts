@@ -6318,8 +6318,6 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "play_setup_state_wait": "Várakozik",
 "play_setup_title": "A Játék beállítása",
 "play_setup_wait": "Előbb végezd el a fenti lépéseket; ez akkor nyílik meg, ha készen vannak.",
-"rp_picture_upscale": "Felskálázás a képernyőre (FSR 1, kísérleti)",
-"rp_picture_upscale_hint": "A videókártyán az AMD FidelityFX Super Resolution 1-gyel a képernyőd saját felbontására hozza a képet, ami bármely GPU-n működik: élesebb nagy vagy 4K képernyőn. Az Élesítés szabja meg, mennyire. Éles pixelekkel kikapcsol.",
 "conn_from_root": "Az egész szerver böngészése",
 "conn_from_root_on": "A mappák a szerver saját útvonalai, ahogy egy SSH- vagy FTP-kliens mutatja (/home/te, /mnt/games): a kezdőmappa és a böngészés bárhol lehet, amit ez a fiók olvashat. Kezdőmappa nélkül ott nyílik meg, ahová a szerver beléptet.",
 "conn_from_root_off": "Csak az a mappa, ahová a szerver beléptet, és a tartalma: a / ez a mappa, és a kezdőmappa ezen belül van.",
@@ -6915,6 +6913,19 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "rp_buttons_title": "Kontroller gombjai",
   "rp_buttons_hint": "Mit küld a kontroller egyes gombjai a PS5-nek. A billentyűzetnek saját listája van lent.",
   "rp_buttons_none": "Semmi",
+  "rp_picture_enhance": "Élesítés és felskálázás",
+  "rp_picture_enhance_off": "Ki",
+  "rp_picture_enhance_sharpen": "Élesítés (AMD FidelityFX RCAS)",
+  "rp_picture_enhance_fsr": "Felskálázás a képernyőre (AMD FSR 1)",
+  "rp_picture_enhance_hint": "A videokártyán fut, bármilyen GPU-n. Az élesítés tisztábbá teszi a képet. A felskálázás a képernyő saját felbontására is hozza: nagy vagy 4K képernyőn a legjobb. Az Éles pixelekkel ki van kapcsolva.",
+  "rp_picture_hdr_note": "HDR-ben csak a 21:9-re vágás és az Éles pixelek érvényesek: a többi eszköz SDR-képekkel dolgozik.",
+  "rp_codec_hdr": "HDR (HEVC, kísérleti)",
+  "rp_codec_hdr_hint": "A PS5 HDR-t küld; ezen a képernyőn HDR-ben jelenik meg. Kísérleti: ha a kép fakó vagy túl világos, válts vissza Automatikusra.",
+  "rp_codec_hdr_no_decoder": "HDR nem érhető el: ez az eszköz nem tudja dekódolni a PS5 HDR-videóját (HEVC Main10).",
+  "rp_codec_hdr_no_screen": "HDR nem érhető el: ez a képernyő nem HDR-es, vagy a HDR ki van kapcsolva a rendszerbeállításokban.",
+  "rp_codec_hdr_no_display": "HDR nem érhető el: ez a böngésző nem tud HDR-t rajzolni (HDR-es WebGPU kell hozzá, mint a Chrome-ban vagy az Edge-ben).",
+  "rp_hdr_off_started": "A HDR nem jeleníthető meg ezen az eszközön, ezért a kép SDR-ben látszik. A videoformátum a következő indításra visszaáll Automatikusra.",
+  "rp_hdr_off": "A HDR nem működik ezen az eszközön, ezért ez a stream SDR. A videoformátum visszaállt Automatikusra.",
 };
 
 export default hu;

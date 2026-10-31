@@ -27,6 +27,7 @@ import { padTouchState, setPadTouchpad } from "../lib/padTouchpad";
 import { applyControls } from "../lib/gameControls";
 import { DEFAULT_PICTURE, readPicture, type PictureTools } from "../lib/rpPicture";
 import { DEFAULT_BUTTON_MAP, readButtonMap, remapPad, type ButtonMap } from "../lib/rpButtonMap";
+import type { CodecPref } from "../lib/rpHdr";
 import { pushNotification } from "./notifications";
 import { trStatic } from "../lib/trStatic";
 import { currentControls, rpControls } from "./gameControls";
@@ -74,9 +75,9 @@ export interface RpPrefs {
   /** Decode on the graphics card when there is one (auto), or always in software: a way out
    *  of a graphics driver's decoder bug (Windows' hardware HEVC, #538/#575). */
   decoding: "auto" | "software";
-  /** The video format asked of the console: HEVC where this device decodes it (auto), or
-   *  always H.264. */
-  codec: "auto" | "h264";
+  /** The video format asked of the console: HEVC where this device decodes it (auto), always
+   *  H.264, or HDR (HEVC Main10) where this device can show it in HDR (lib/rpHdr.ts). */
+  codec: CodecPref;
   /** What each controller button sends (lib/rpButtonMap.ts); empty = each sends itself. */
   buttonMap: ButtonMap;
 }
@@ -121,7 +122,8 @@ export function loadRpPrefs(): RpPrefs {
   try {
     const raw = safeGetItem(PREFS_KEY);
     const p = { ...DEFAULT_RP_PREFS, ...(raw ? (JSON.parse(raw) as Partial<RpPrefs>) : {}) };
-    return { ...p, picture: readPicture(p.picture), buttonMap: readButtonMap(p.buttonMap) };
+    const codec: CodecPref = p.codec === "h264" || p.codec === "hdr" ? p.codec : "auto";
+    return { ...p, codec, picture: readPicture(p.picture), buttonMap: readButtonMap(p.buttonMap) };
   } catch {
     return DEFAULT_RP_PREFS;
   }
@@ -265,6 +267,23 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
             ? trStatic("rp_picture_off_slow", "Picture tools turned off: this device could not keep up.")
             : trStatic("rp_picture_off_failed", "Picture tools turned off: this device has no WebGL 2."),
         ),
+      onHdrOff: (_why, started) => {
+        // HDR did not work here: back to Auto so the next start is plain HEVC (the reason is in
+        // the logs).
+        if (get().prefs.codec === "hdr") get().setPrefs({ codec: "auto" });
+        pushNotification(
+          "warning",
+          started
+            ? trStatic(
+                "rp_hdr_off_started",
+                "HDR could not be shown on this device, so the picture is shown in SDR. Video format is back to Auto for the next start.",
+              )
+            : trStatic(
+                "rp_hdr_off",
+                "HDR does not work on this device, so this stream is SDR. Video format is back to Auto.",
+              ),
+        );
+      },
       rumble: () => get().prefs.rumble,
       onPhase: (p) => {
         if (get().stream !== stream) return;

@@ -6260,8 +6260,6 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "play_setup_state_wait": "Czeka",
 "play_setup_title": "Skonfiguruj Graj",
 "play_setup_wait": "Najpierw wykonaj kroki powyżej; ten otworzy się, gdy będą gotowe.",
-"rp_picture_upscale": "Skaluj do ekranu (FSR 1, eksperymentalne)",
-"rp_picture_upscale_hint": "Podnosi obraz do rozdzielczości twojego ekranu na karcie graficznej za pomocą AMD FidelityFX Super Resolution 1, który działa na każdym GPU: ostrzej na dużym lub 4K ekranie. Wyostrzenie ustala, jak bardzo. Wyłączone przy Ostrych pikselach.",
 "conn_from_root": "Przeglądaj cały serwer",
 "conn_from_root_on": "Foldery to własne ścieżki serwera, tak jak pokazuje je klient SSH lub FTP (/home/ty, /mnt/games): folder startowy i przeglądanie mogą być wszędzie, gdzie to konto może czytać. Bez folderu startowego otwiera się tam, gdzie serwer cię loguje.",
 "conn_from_root_off": "Tylko folder, do którego loguje cię serwer, i jego zawartość: / to ten folder, a folder startowy jest w nim.",
@@ -6857,6 +6855,19 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "rp_buttons_title": "Przyciski kontrolera",
   "rp_buttons_hint": "Co każdy przycisk kontrolera wysyła do PS5. Klawiatura ma własną listę poniżej.",
   "rp_buttons_none": "Nic",
+  "rp_picture_enhance": "Wyostrzanie i skalowanie",
+  "rp_picture_enhance_off": "Wył.",
+  "rp_picture_enhance_sharpen": "Wyostrzanie (AMD FidelityFX RCAS)",
+  "rp_picture_enhance_fsr": "Skalowanie do ekranu (AMD FSR 1)",
+  "rp_picture_enhance_hint": "Wykonywane na karcie graficznej, na każdym GPU. Wyostrzanie czyni obraz wyraźniejszym. Skalowanie dodatkowo podnosi go do rozdzielczości ekranu: najlepiej na dużym lub 4K ekranie. Wyłączone przy Ostrych pikselach.",
+  "rp_picture_hdr_note": "W HDR działają tylko Przycięcie do 21:9 i Ostre piksele: pozostałe narzędzia działają na obrazach SDR.",
+  "rp_codec_hdr": "HDR (HEVC, eksperymentalne)",
+  "rp_codec_hdr_hint": "PS5 wysyła HDR; na tym ekranie jest pokazywany w HDR. Eksperymentalne: jeśli obraz wygląda blado lub zbyt jasno, wróć do Auto.",
+  "rp_codec_hdr_no_decoder": "HDR niedostępny: to urządzenie nie dekoduje wideo HDR z PS5 (HEVC Main10).",
+  "rp_codec_hdr_no_screen": "HDR niedostępny: ten ekran nie jest ekranem HDR albo HDR jest wyłączony w ustawieniach systemu.",
+  "rp_codec_hdr_no_display": "HDR niedostępny: ta przeglądarka nie potrafi rysować HDR (potrzebny WebGPU z HDR, jak w Chrome lub Edge).",
+  "rp_hdr_off_started": "Nie udało się pokazać HDR na tym urządzeniu, więc obraz jest w SDR. Format wideo wraca do Auto przy następnym starcie.",
+  "rp_hdr_off": "HDR nie działa na tym urządzeniu, więc ten strumień jest w SDR. Format wideo wraca do Auto.",
 };
 
 export default pl;

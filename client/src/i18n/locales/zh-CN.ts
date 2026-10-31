@@ -5971,8 +5971,6 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "play_setup_state_wait": "等待中",
 "play_setup_title": "设置畅玩",
 "play_setup_wait": "请先完成上面的步骤；完成后这一步才会打开。",
-"rp_picture_upscale": "放大到屏幕分辨率（FSR 1，实验性）",
-"rp_picture_upscale_hint": "在显卡上用 AMD FidelityFX Super Resolution 1 把画面提升到屏幕本身的分辨率，任何 GPU 都能用：在大屏或 4K 屏上更清晰。锐化控制清晰程度。开启“锐利像素”时不生效。",
 "conn_from_root": "浏览整台服务器",
 "conn_from_root_on": "文件夹是服务器自己的路径，与 SSH 或 FTP 客户端显示的一致（/home/you、/mnt/games）：起始文件夹和浏览可以是此账户能读取的任何位置。不填起始文件夹时，从服务器登录后所在的文件夹打开。",
 "conn_from_root_off": "只能访问服务器登录后所在的文件夹及其内容：/ 就是该文件夹，起始文件夹也在其中。",
@@ -6568,6 +6566,19 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "rp_buttons_title": "手柄按键",
   "rp_buttons_hint": "手柄每个按键发送给 PS5 的按键。键盘在下方有自己的列表。",
   "rp_buttons_none": "无",
+  "rp_picture_enhance": "锐化和放大",
+  "rp_picture_enhance_off": "关",
+  "rp_picture_enhance_sharpen": "锐化（AMD FidelityFX RCAS）",
+  "rp_picture_enhance_fsr": "放大到屏幕分辨率（AMD FSR 1）",
+  "rp_picture_enhance_hint": "在显卡上完成，任何 GPU 都可以。锐化让画面更清晰。放大还会把画面提升到屏幕自身的分辨率：大屏幕或 4K 屏幕上效果最好。开启“锐利像素”时不可用。",
+  "rp_picture_hdr_note": "HDR 下只有“裁剪为 21:9”和“锐利像素”生效：其他工具只处理 SDR 画面。",
+  "rp_codec_hdr": "HDR（HEVC，实验性）",
+  "rp_codec_hdr_hint": "PS5 发送 HDR，在这块屏幕上以 HDR 显示。实验性：如果画面发灰或过亮，请改回“自动”。",
+  "rp_codec_hdr_no_decoder": "不提供 HDR：此设备无法解码 PS5 的 HDR 视频（HEVC Main10）。",
+  "rp_codec_hdr_no_screen": "不提供 HDR：这块屏幕不是 HDR 屏幕，或系统设置里关闭了 HDR。",
+  "rp_codec_hdr_no_display": "不提供 HDR：此浏览器无法绘制 HDR（需要支持 HDR 的 WebGPU，例如 Chrome 或 Edge）。",
+  "rp_hdr_off_started": "此设备无法显示 HDR，所以画面以 SDR 显示。下次开始时视频格式会改回“自动”。",
+  "rp_hdr_off": "此设备不支持 HDR，所以这次串流为 SDR。视频格式已改回“自动”。",
 };
 
 export default zh_CN;

@@ -56,8 +56,8 @@ test("FSR 1 brings a halved picture back closer to the original than smooth scal
     sm.imageSmoothingQuality = "low"; // bilinear: what the page does without upscaling
     sm.drawImage(small, 0, 0, W, H);
 
-    const pass = new PicturePass();
-    const out = pass.render(small, W / 2, H / 2, { ...DEFAULT_PICTURE, upscale: true }, { w: W, h: H });
+    const pass = new PicturePass(new OffscreenCanvas(16, 16));
+    const out = pass.render(small, W / 2, H / 2, { ...DEFAULT_PICTURE, enhance: "fsr" }, { w: W, h: H });
 
     const ref = pixels(orig);
     const psnr = (d: Uint8ClampedArray) => {

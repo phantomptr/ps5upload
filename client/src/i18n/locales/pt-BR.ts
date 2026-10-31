@@ -6027,8 +6027,6 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "play_setup_state_wait": "Aguardando",
 "play_setup_title": "Configurar Jogar",
 "play_setup_wait": "Faça primeiro os passos acima; este abre quando eles estiverem concluídos.",
-"rp_picture_upscale": "Ampliar para a tela (FSR 1, experimental)",
-"rp_picture_upscale_hint": "Leva a imagem à resolução da sua tela na placa de vídeo com AMD FidelityFX Super Resolution 1, que funciona em qualquer GPU: mais nítida em uma tela grande ou 4K. Nitidez define o quanto. Desligado com Pixels nítidos.",
 "conn_from_root": "Navegar pelo servidor inteiro",
 "conn_from_root_on": "As pastas são os caminhos do próprio servidor, como um cliente SSH ou FTP mostra (/home/voce, /mnt/games): a pasta inicial e a navegação podem estar em qualquer lugar que esta conta possa ler. Sem pasta inicial, abre onde o servidor faz seu login.",
 "conn_from_root_off": "Só a pasta em que o servidor faz seu login e o que há nela: / é essa pasta, e a pasta inicial fica dentro dela.",
@@ -6624,6 +6622,19 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
   "rp_buttons_title": "Botões do controle",
   "rp_buttons_hint": "O que cada botão do controle envia ao PS5. O teclado tem sua própria lista abaixo.",
   "rp_buttons_none": "Nada",
+  "rp_picture_enhance": "Nitidez e ampliação",
+  "rp_picture_enhance_off": "Desligado",
+  "rp_picture_enhance_sharpen": "Nitidez (AMD FidelityFX RCAS)",
+  "rp_picture_enhance_fsr": "Ampliar para a tela (AMD FSR 1)",
+  "rp_picture_enhance_hint": "Feito na placa de vídeo, em qualquer GPU. Nitidez deixa a imagem mais definida. Ampliar também a leva à resolução da sua tela: melhor em uma tela grande ou 4K. Desligado com Pixels nítidos.",
+  "rp_picture_hdr_note": "Em HDR só valem Cortar para 21:9 e Pixels nítidos: as outras ferramentas funcionam com imagens SDR.",
+  "rp_codec_hdr": "HDR (HEVC, em teste)",
+  "rp_codec_hdr_hint": "O PS5 envia HDR; ele aparece em HDR nesta tela. Experimental: se a imagem parecer apagada ou clara demais, volte para Automático.",
+  "rp_codec_hdr_no_decoder": "HDR não é oferecido: este dispositivo não decodifica o vídeo HDR do PS5 (HEVC Main10).",
+  "rp_codec_hdr_no_screen": "HDR não é oferecido: esta tela não é HDR, ou o HDR está desligado nas configurações do sistema.",
+  "rp_codec_hdr_no_display": "HDR não é oferecido: este navegador não consegue desenhar HDR (precisa de WebGPU com HDR, como no Chrome ou Edge).",
+  "rp_hdr_off_started": "Não foi possível mostrar HDR neste dispositivo, então a imagem aparece em SDR. O formato de vídeo voltou para Automático no próximo início.",
+  "rp_hdr_off": "HDR não funciona neste dispositivo, então esta transmissão é SDR. O formato de vídeo voltou para Automático.",
 };
 
 export default pt_BR;

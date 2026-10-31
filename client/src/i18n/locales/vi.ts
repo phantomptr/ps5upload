@@ -6014,8 +6014,6 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "play_setup_state_wait": "Đang chờ",
 "play_setup_title": "Thiết lập Chơi",
 "play_setup_wait": "Hãy làm các bước ở trên trước; bước này mở ra khi chúng xong.",
-"rp_picture_upscale": "Nâng độ phân giải theo màn hình (FSR 1, thử nghiệm)",
-"rp_picture_upscale_hint": "Đưa hình lên đúng độ phân giải màn hình của bạn trên card đồ họa bằng AMD FidelityFX Super Resolution 1, chạy trên mọi GPU: nét hơn trên màn hình lớn hoặc 4K. Làm nét chỉnh độ nét. Tắt khi bật Điểm ảnh sắc nét.",
 "conn_from_root": "Duyệt toàn bộ máy chủ",
 "conn_from_root_on": "Thư mục là đường dẫn riêng của máy chủ, như máy khách SSH hoặc FTP hiển thị (/home/ban, /mnt/games): thư mục bắt đầu và việc duyệt có thể ở bất kỳ đâu tài khoản này được đọc. Không có thư mục bắt đầu thì mở ở nơi máy chủ đăng nhập bạn vào.",
 "conn_from_root_off": "Chỉ thư mục mà máy chủ đăng nhập bạn vào và những gì bên trong: / là thư mục đó, và thư mục bắt đầu nằm trong nó.",
@@ -6611,6 +6609,19 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "rp_buttons_title": "Nút tay cầm",
   "rp_buttons_hint": "Mỗi nút tay cầm gửi gì tới PS5. Bàn phím có danh sách riêng ở bên dưới.",
   "rp_buttons_none": "Không gì cả",
+  "rp_picture_enhance": "Làm nét và nâng độ phân giải",
+  "rp_picture_enhance_off": "Tắt",
+  "rp_picture_enhance_sharpen": "Làm nét (AMD FidelityFX RCAS)",
+  "rp_picture_enhance_fsr": "Nâng lên độ phân giải màn hình (AMD FSR 1)",
+  "rp_picture_enhance_hint": "Chạy trên card đồ họa, với mọi GPU. Làm nét giúp hình rõ hơn. Nâng độ phân giải còn đưa hình lên đúng độ phân giải màn hình của bạn: tốt nhất trên màn hình lớn hoặc 4K. Tắt khi bật Điểm ảnh sắc nét.",
+  "rp_picture_hdr_note": "Ở HDR chỉ Cắt về 21:9 và Điểm ảnh sắc nét có tác dụng: các công cụ khác làm việc với hình SDR.",
+  "rp_codec_hdr": "HDR (HEVC, thử nghiệm)",
+  "rp_codec_hdr_hint": "PS5 gửi HDR; trên màn hình này hình hiển thị ở HDR. Thử nghiệm: nếu hình trông nhạt hoặc quá sáng, hãy quay về Tự động.",
+  "rp_codec_hdr_no_decoder": "Không có HDR: thiết bị này không giải mã được video HDR của PS5 (HEVC Main10).",
+  "rp_codec_hdr_no_screen": "Không có HDR: màn hình này không phải màn hình HDR, hoặc HDR đang tắt trong cài đặt hệ thống.",
+  "rp_codec_hdr_no_display": "Không có HDR: trình duyệt này không vẽ được HDR (cần WebGPU có HDR, như Chrome hoặc Edge).",
+  "rp_hdr_off_started": "Không thể hiển thị HDR trên thiết bị này nên hình được hiển thị ở SDR. Định dạng video đã về Tự động cho lần bắt đầu sau.",
+  "rp_hdr_off": "HDR không hoạt động trên thiết bị này nên luồng này là SDR. Định dạng video đã về Tự động.",
 };
 
 export default vi;

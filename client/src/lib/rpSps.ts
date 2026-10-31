@@ -201,3 +201,33 @@ export function visibleFix(
   if (sps.x + sps.w > frame.codedWidth || sps.y + sps.h > frame.codedHeight) return null;
   return sps;
 }
+
+/** The WebCodecs codec string (ISO/IEC 14496-15 Annex E, as the WebCodecs HEVC registration
+ *  uses it) for the HEVC SPS in this video header, `hev1` as the stream is Annex B: e.g.
+ *  `hev1.2.4.L153.B0` for Main10, level 5.1, Main tier. Null without a readable SPS. */
+export function hevcCodecString(header: Uint8Array): string | null {
+  for (const nal of nals(header)) {
+    if (nal.length < 2 || ((nal[0] >> 1) & 0x3f) !== 33) continue;
+    try {
+      const r = new Bits(unescape(nal));
+      r.skip(16); // NAL header
+      r.skip(8); // sps_video_parameter_set_id, sps_max_sub_layers_minus1, temporal_id_nesting
+      const space = r.u(2);
+      const tier = r.u(1);
+      const profile = r.u(5);
+      // The 32 compatibility flags, written with the bit order reversed.
+      let compat = 0;
+      for (let i = 0; i < 32; i++) compat += r.u(1) * 2 ** i;
+      const constraint: number[] = [];
+      for (let i = 0; i < 6; i++) constraint.push(r.u(8));
+      const level = r.u(8);
+      while (constraint.length > 1 && constraint[constraint.length - 1] === 0) constraint.pop();
+      const spaceTag = ["", "A", "B", "C"][space];
+      const bytes = constraint.map((b) => b.toString(16).toUpperCase()).join(".");
+      return `hev1.${spaceTag}${profile}.${compat.toString(16).toUpperCase()}.${tier ? "H" : "L"}${level}.${bytes}`;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}

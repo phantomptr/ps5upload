@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PICTURE, cropRect, needsPass, readPicture, upscaleSize, upscales } from "./rpPicture";
+import { DEFAULT_PICTURE, cropRect, needsPass, rcasStops, readPicture, sharpens, upscaleSize, upscales } from "./rpPicture";
 
 describe("picture tools", () => {
   it("crops a 16:9 frame to its middle 21:9 band, or leaves it", () => {
@@ -13,17 +13,21 @@ describe("picture tools", () => {
   it("uses the GPU only for a tool that needs it (sharp pixels is CSS)", () => {
     expect(needsPass(DEFAULT_PICTURE)).toBe(false);
     expect(needsPass({ ...DEFAULT_PICTURE, pixelated: true })).toBe(false);
-    expect(needsPass({ ...DEFAULT_PICTURE, sharpen: 10 })).toBe(true);
+    // A strength alone does nothing: Sharpening and upscaling is off.
+    expect(needsPass({ ...DEFAULT_PICTURE, sharpen: 10 })).toBe(false);
+    expect(needsPass({ ...DEFAULT_PICTURE, enhance: "sharpen" })).toBe(true);
     expect(needsPass({ ...DEFAULT_PICTURE, crop219: true })).toBe(true);
   });
 
   it("reads a stored setting safely", () => {
     expect(readPicture(undefined)).toEqual(DEFAULT_PICTURE);
-    expect(readPicture({ sharpen: 500, brightness: -99, contrast: "x", crop219: 1 })).toEqual({
+    expect(readPicture({ enhance: "sharpen", sharpen: 500, brightness: -99, contrast: "x", crop219: 1 })).toEqual({
       ...DEFAULT_PICTURE,
+      enhance: "sharpen",
       sharpen: 100,
       brightness: -50,
     });
+    expect(readPicture({ enhance: "turbo" }).enhance).toBe("off");
   });
 });
 
@@ -55,11 +59,28 @@ describe("upscaling", () => {
   });
 
   it("is a stored setting, off by default, and gives way to sharp pixels", () => {
-    expect(DEFAULT_PICTURE.upscale).toBe(false);
-    expect(readPicture({ upscale: true }).upscale).toBe(true);
-    expect(readPicture({ upscale: "yes" }).upscale).toBe(false);
-    expect(needsPass({ ...DEFAULT_PICTURE, upscale: true })).toBe(true);
-    expect(upscales({ ...DEFAULT_PICTURE, upscale: true, pixelated: true })).toBe(false);
-    expect(needsPass({ ...DEFAULT_PICTURE, upscale: true, pixelated: true })).toBe(false);
+    expect(DEFAULT_PICTURE.enhance).toBe("off");
+    expect(readPicture({ enhance: "fsr" }).enhance).toBe("fsr");
+    expect(upscales({ ...DEFAULT_PICTURE, enhance: "fsr" })).toBe(true);
+    expect(upscales({ ...DEFAULT_PICTURE, enhance: "sharpen" })).toBe(false);
+    expect(upscales({ ...DEFAULT_PICTURE, enhance: "fsr", pixelated: true })).toBe(false);
+    expect(sharpens({ ...DEFAULT_PICTURE, enhance: "fsr", pixelated: true })).toBe(false);
+    expect(needsPass({ ...DEFAULT_PICTURE, enhance: "fsr", pixelated: true })).toBe(false);
+  });
+
+  it("keeps the look of settings saved before Sharpening and upscaling was one choice", () => {
+    // The Upscale switch was FSR (with its sharpening from the Sharpen slider).
+    expect(readPicture({ upscale: true, sharpen: 40 })).toMatchObject({ enhance: "fsr", sharpen: 40 });
+    // A Sharpen amount alone was sharpening at the picture's size.
+    expect(readPicture({ upscale: false, sharpen: 30 })).toMatchObject({ enhance: "sharpen", sharpen: 30 });
+    expect(readPicture({ upscale: "yes", sharpen: 0 }).enhance).toBe("off");
+    expect("upscale" in readPicture({ upscale: true })).toBe(false);
+  });
+
+  it("sets RCAS from mild (0) to strongest (100)", () => {
+    expect(rcasStops(0)).toBe(2);
+    expect(rcasStops(50)).toBe(1);
+    expect(rcasStops(100)).toBe(0);
+    expect(rcasStops(400)).toBe(0);
   });
 });

@@ -6020,8 +6020,6 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "play_setup_state_wait": "Wartet",
 "play_setup_title": "Spielen einrichten",
 "play_setup_wait": "Erledige zuerst die Schritte darüber; dieser öffnet sich, wenn sie erledigt sind.",
-"rp_picture_upscale": "Auf den Bildschirm hochskalieren (FSR 1, experimentell)",
-"rp_picture_upscale_hint": "Bringt das Bild auf der Grafikkarte mit AMD FidelityFX Super Resolution 1, das auf jeder GPU läuft, auf die Auflösung deines Bildschirms: schärfer auf einem großen oder 4K-Bildschirm. Schärfen legt fest, wie scharf. Aus bei Scharfe Pixel.",
 "conn_from_root": "Den ganzen Server durchsuchen",
 "conn_from_root_on": "Ordner sind die Pfade des Servers selbst, wie ein SSH- oder FTP-Client sie zeigt (/home/du, /mnt/games): Startordner und Durchsuchen können überall sein, wo dieses Konto lesen darf. Ohne Startordner öffnet es dort, wo der Server dich anmeldet.",
 "conn_from_root_off": "Nur der Ordner, in dem der Server dich anmeldet, und was darin ist: / ist dieser Ordner, und der Startordner liegt darin.",
@@ -6617,6 +6615,19 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "rp_buttons_title": "Controller-Tasten",
   "rp_buttons_hint": "Was jede Controller-Taste an die PS5 sendet. Die Tastatur hat unten ihre eigene Liste.",
   "rp_buttons_none": "Nichts",
+  "rp_picture_enhance": "Schärfen und Hochskalieren",
+  "rp_picture_enhance_off": "Aus",
+  "rp_picture_enhance_sharpen": "Schärfen (AMD FidelityFX RCAS)",
+  "rp_picture_enhance_fsr": "Auf den Bildschirm hochskalieren (AMD FSR 1)",
+  "rp_picture_enhance_hint": "Läuft auf der Grafikkarte, mit jeder GPU. Schärfen macht das Bild klarer. Hochskalieren bringt es zusätzlich auf die Auflösung deines Bildschirms: am besten auf einem großen oder 4K-Bildschirm. Aus mit Scharfe Pixel.",
+  "rp_picture_hdr_note": "In HDR gelten nur Auf 21:9 zuschneiden und Scharfe Pixel: die anderen Werkzeuge arbeiten mit SDR-Bildern.",
+  "rp_codec_hdr": "HDR (HEVC, experimentell)",
+  "rp_codec_hdr_hint": "Die PS5 sendet HDR; auf diesem Bildschirm wird es in HDR angezeigt. Experimentell: Wirkt das Bild matt oder zu hell, wechsle zurück zu Automatisch.",
+  "rp_codec_hdr_no_decoder": "HDR wird nicht angeboten: Dieses Gerät kann das HDR-Video der PS5 (HEVC Main10) nicht dekodieren.",
+  "rp_codec_hdr_no_screen": "HDR wird nicht angeboten: Dieser Bildschirm ist kein HDR-Bildschirm, oder HDR ist in den Systemeinstellungen aus.",
+  "rp_codec_hdr_no_display": "HDR wird nicht angeboten: Dieser Browser kann kein HDR zeichnen (dafür braucht es WebGPU mit HDR, wie in Chrome oder Edge).",
+  "rp_hdr_off_started": "HDR konnte auf diesem Gerät nicht angezeigt werden, das Bild erscheint daher in SDR. Das Videoformat steht für den nächsten Start wieder auf Automatisch.",
+  "rp_hdr_off": "HDR funktioniert auf diesem Gerät nicht, dieser Stream ist daher SDR. Das Videoformat steht wieder auf Automatisch.",
 };
 
 export default de;

@@ -6021,8 +6021,6 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "play_setup_state_wait": "Menunggu",
 "play_setup_title": "Siapkan Main",
 "play_setup_wait": "Kerjakan dulu langkah di atas; langkah ini terbuka setelah semuanya selesai.",
-"rp_picture_upscale": "Skala ke layar (FSR 1, eksperimental)",
-"rp_picture_upscale_hint": "Menaikkan gambar ke resolusi layarmu di kartu grafis dengan AMD FidelityFX Super Resolution 1, yang berjalan di GPU apa pun: lebih tajam di layar besar atau 4K. Ketajaman mengatur seberapa tajam. Mati bersama Piksel tajam.",
 "conn_from_root": "Jelajahi seluruh server",
 "conn_from_root_on": "Folder adalah path milik server sendiri, seperti yang ditampilkan klien SSH atau FTP (/home/kamu, /mnt/games): folder awal dan penjelajahan bisa di mana saja yang boleh dibaca akun ini. Tanpa folder awal, terbuka di tempat server memasukkanmu.",
 "conn_from_root_off": "Hanya folder tempat server memasukkanmu dan isinya: / adalah folder itu, dan folder awal ada di dalamnya.",
@@ -6618,6 +6616,19 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "rp_buttons_title": "Tombol kontroler",
   "rp_buttons_hint": "Apa yang dikirim setiap tombol kontroler ke PS5. Keyboard punya daftarnya sendiri di bawah.",
   "rp_buttons_none": "Tidak ada",
+  "rp_picture_enhance": "Penajaman dan peningkatan skala",
+  "rp_picture_enhance_off": "Mati",
+  "rp_picture_enhance_sharpen": "Pertajam (AMD FidelityFX RCAS)",
+  "rp_picture_enhance_fsr": "Perbesar ke layar (AMD FSR 1)",
+  "rp_picture_enhance_hint": "Dikerjakan di kartu grafis, di GPU apa pun. Pertajam membuat gambar lebih tajam. Perbesar juga menaikkannya ke resolusi layar Anda: terbaik di layar besar atau 4K. Mati bersama Piksel tajam.",
+  "rp_picture_hdr_note": "Dalam HDR hanya Pangkas ke 21:9 dan Piksel tajam yang berlaku: alat lain bekerja pada gambar SDR.",
+  "rp_codec_hdr": "HDR (HEVC, eksperimental)",
+  "rp_codec_hdr_hint": "PS5 mengirim HDR; di layar ini tampil dalam HDR. Eksperimental: jika gambar terlihat pudar atau terlalu terang, kembali ke Otomatis.",
+  "rp_codec_hdr_no_decoder": "HDR tidak tersedia: perangkat ini tidak dapat mendekode video HDR PS5 (HEVC Main10).",
+  "rp_codec_hdr_no_screen": "HDR tidak tersedia: layar ini bukan layar HDR, atau HDR dimatikan di pengaturan sistem.",
+  "rp_codec_hdr_no_display": "HDR tidak tersedia: browser ini tidak dapat menggambar HDR (perlu WebGPU dengan HDR, seperti di Chrome atau Edge).",
+  "rp_hdr_off_started": "HDR tidak dapat ditampilkan di perangkat ini, jadi gambar tampil dalam SDR. Format video kembali ke Otomatis untuk mulai berikutnya.",
+  "rp_hdr_off": "HDR tidak berfungsi di perangkat ini, jadi stream ini SDR. Format video kembali ke Otomatis.",
 };
 
 export default id;
