@@ -6593,6 +6593,8 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_clip_failed": "Nem sikerült felvenni vagy menteni a klipet.",
 "rp_stats_latency": "Késés ≈ {engine} ms motor + {decode} ms dekódolás",
 "rp_stats_latency_decode": "Késés ≈ {decode} ms dekódolás",
+"rp_stats_stages": "hálózat {net} · sor {queue} · dekódolás {decode} · rajzolás {draw} ms",
+"rp_stats_decoder_restarts": "dekóder-újraindítások {n}",
 "rp_low_latency": "Alacsony késés",
 "rp_low_latency_hint": "A legkisebb hangpuffer és a legrövidebb képsor a legkisebb késésért. Terhelt hálózaton több képkocka vész el, és a hang recseghet. A képre vonatkozó rész a következő indításkor lép életbe.",
 "rp_auto_quality": "Alacsonyabb minőség terhelt hálózaton",

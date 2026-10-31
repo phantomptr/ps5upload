@@ -6246,6 +6246,8 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_clip_failed": "无法录制或保存片段。",
 "rp_stats_latency": "延迟 ≈ 引擎 {engine} ms + 解码 {decode} ms",
 "rp_stats_latency_decode": "延迟 ≈ 解码 {decode} ms",
+"rp_stats_stages": "网络 {net} · 排队 {queue} · 解码 {decode} · 绘制 {draw} ms",
+"rp_stats_decoder_restarts": "解码器重启 {n}",
 "rp_low_latency": "低延迟",
 "rp_low_latency_hint": "使用最小的声音缓冲和最短的画面队列，延迟最低。网络繁忙时会丢更多帧，声音可能有爆音。画面部分在下次开始时生效。",
 "rp_auto_quality": "网络繁忙时降低画质",

@@ -2,7 +2,9 @@
 //
 // The engine runs the session with the console (ps5upload_core::rp_stream, a port of chiaki-ng)
 // and relays it over a WebSocket: binary records out ([kind][payload]: 0 video header, 1 video
-// access unit, 3 audio header, 4 audio frame), JSON status lines out, pad state in. This file
+// access unit, 3 audio header, 4 audio frame, 6 haptics, 7 video access unit after the engine's
+// u64 BE µs time it had it whole — sent only because this page asks with "timing": an older
+// engine sends 1), JSON status lines out, pad state in. This file
 // turns that into pixels on a canvas, sound, and input; the screen only drives it.
 
 import { DEFAULT_PICTURE, PicturePass, cropRect, needsPass, sharpens, upscaleSize, upscales, type PictureTools } from "./rpPicture";
@@ -16,6 +18,8 @@ import { getEngineUrl } from "../state/engine";
 import { log } from "../state/logs";
 import { hevcCodecString, spsVisibleRect, visibleFix, type VisibleRect } from "./rpSps";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
+import { ClockSync, LatencyStages, stagesLogText, type StageSummary } from "./rpLatency";
+import { decoderVerdict, FED_RECENT_MS, MAX_REBUILDS } from "./rpDecoderWatch";
 
 /** Button bits, as the console (and chiaki) number them. */
 export const PadButton = {
@@ -380,6 +384,10 @@ export interface StreamStats {
   /** Round trip from this page to the engine and back, ms (null until measured, or an engine
    *  that does not answer pings). The console's leg cannot be measured: no shared clock. */
   rttMs: number | null;
+  /** Each frame's stages over the last 2 s (rpLatency.ts); null until a frame was timed. */
+  stages?: StageSummary | null;
+  /** Times the video decoder was rebuilt because it stopped giving pictures (rpDecoderWatch.ts). */
+  decoderRestarts?: number;
 }
 
 /** A round trip from a ping's own timestamp, smoothed into the last value (a spike moves it a
@@ -470,6 +478,10 @@ const RECONNECT_FOR_MS = 30_000;
 /** Audio frames that may arrive ahead of a missing one before it is given up on. The engine
  *  sends a lost frame's recovered copy (FEC) right after the next ones. */
 const AUDIO_HOLD = 3;
+/** Frames whose times are kept for the latency stages: ~2 s at 60 fps, far more than in flight. */
+const FRAME_SLOTS = 128;
+/** A "latency:" line in the logs this often while playing (and so in a bug report's logs). */
+const LATENCY_LOG_MS = 60_000;
 /** The decoder this far behind: skip to the next keyframe rather than show old pictures. */
 const VIDEO_BACKLOG = 4;
 const VIDEO_BACKLOG_LOW_LATENCY = 2;
@@ -563,7 +575,24 @@ export class RemotePlayStream {
   private sawKey = false;
   private ts = 0;
   private queued: EncodedVideoChunk[] = [];
-  private sentAt = new Map<number, number>();
+  /** Per-frame times, in slots by the chunk's timestamp (no allocation per frame): the chunk's
+   *  timestamp, when it arrived, when it went to the decoder, and when the engine had it whole
+   *  (page clock; NaN when unknown). */
+  private slotTs = new Float64Array(FRAME_SLOTS).fill(-1);
+  private slotRecv = new Float64Array(FRAME_SLOTS);
+  private slotSubmit = new Float64Array(FRAME_SLOTS);
+  private slotEngine = new Float64Array(FRAME_SLOTS);
+  private stages = new LatencyStages();
+  private clock = new ClockSync();
+  /** A picture given by the decoder and not yet shown (the time it came out), for "draw". */
+  private outputPending = 0;
+  /** The decoder watchdog (rpDecoderWatch.ts). */
+  private lastFedAt = 0;
+  private waitingSince = 0;
+  private rebuilds = 0;
+  private gaveUp = false;
+  private decoderRestarts = 0;
+  private lastLatencyLog = 0;
   private audioCtx: AudioContext | null = null;
   private gainNode: GainNode | null = null;
   private worklet: AudioWorkletNode | null = null;
@@ -895,7 +924,8 @@ export class RemotePlayStream {
         `picture: stream ${streamW}x${streamH}, canvas ${c.width}x${c.height} px, shown ${n(r.width)}x${n(r.height)} ` +
           `in ${n(place?.width)}x${n(place?.height)} css px, fit ${c.dataset.fit}, ratio ${win?.devicePixelRatio ?? "?"}, ` +
           `window ${win?.innerWidth ?? "?"}x${win?.innerHeight ?? "?"}${win !== window ? " (pop-out)" : ""}, ` +
-          `drawn with ${this.drawer?.kind ?? "?"}, tools ${JSON.stringify(this.tools)}${this.passOff ? ` (off: ${this.passOff})` : ""}`,
+          `drawn with ${this.drawer?.kind ?? "?"}, tools ${JSON.stringify(this.tools)}${this.passOff ? ` (off: ${this.passOff})` : ""}, ` +
+          `latency ${stagesLogText(this.stages.summary(performance.now()))}`,
       );
     } catch {
       // Only a log line.
@@ -974,11 +1004,18 @@ export class RemotePlayStream {
         audioMs: this.audioMs,
         underruns: this.underruns,
         rttMs: this.rttMs,
+        stages: this.stages.summary(performance.now()),
+        decoderRestarts: this.decoderRestarts,
         ...this.lastLoss,
       });
       lastDecoded = this.decoded;
       lastBytes = this.bytes;
       this.ping();
+      this.watchDecoder();
+      if (this.decoded && Date.now() - this.lastLatencyLog > LATENCY_LOG_MS) {
+        this.lastLatencyLog = Date.now();
+        log.info("remote-play", `latency: ${stagesLogText(this.stages.summary(performance.now()))}`);
+      }
     }, 1000);
   }
 
@@ -1031,6 +1068,8 @@ export class RemotePlayStream {
           ...(this.o.mic ? { mic: true } : {}),
           ...(this.o.dualSense ? { dualsense: true } : {}),
           ...(this.replayS ? { replay_s: this.replayS } : {}),
+          // Video as kind 7, each frame with the engine's time (an older engine ignores this).
+          timing: true,
         }),
       );
       // Attaching turns the console's mic off in the engine: a page that has it on says so.
@@ -1039,10 +1078,19 @@ export class RemotePlayStream {
     ws.onmessage = (m) => {
       if (ws !== this.ws) return;
       if (typeof m.data === "string") return this.onStatus(m.data);
+      const recv = performance.now();
       const b = new Uint8Array(m.data as ArrayBuffer);
       const kind = b[0];
       const payload = b.subarray(1);
-      if (kind <= 1) this.onVideo(kind, payload);
+      if (kind <= 1) this.onVideo(kind, payload, recv, NaN);
+      else if (kind === 7) {
+        if (b.length < 9) return;
+        const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+        // u64 µs as two halves (no BigInt in this bundle); exact up to 2^53.
+        const us = dv.getUint32(1) * 4294967296 + dv.getUint32(5);
+        const off = this.clock.offsetMs;
+        this.onVideo(1, b.subarray(9), recv, off === null ? NaN : us / 1000 - off);
+      }
       else if (kind === 6) this.o.dualSense?.haptics(payload);
       else this.onAudio(kind, payload);
     };
@@ -1077,6 +1125,13 @@ export class RemotePlayStream {
   }
 
   private readonly tick = (): void => {
+    if (this.outputPending) {
+      // The browser shows what was drawn at this frame. A page that was hidden has no frames: a
+      // wait that long is not drawing time.
+      const ms = performance.now() - this.outputPending;
+      if (ms < 500) this.stages.add("draw", ms, performance.now());
+      this.outputPending = 0;
+    }
     this.sendPad();
     this.schedule();
   };
@@ -1121,7 +1176,13 @@ export class RemotePlayStream {
     this.spsRect = null;
     this.sawKey = false;
     this.queued = [];
-    this.sentAt.clear();
+    this.slotTs.fill(-1);
+    this.stages.clear();
+    this.outputPending = 0;
+    this.lastFedAt = 0;
+    this.waitingSince = 0;
+    this.rebuilds = 0;
+    this.gaveUp = false;
     try {
       this.audio?.close();
     } catch {
@@ -1254,6 +1315,12 @@ export class RemotePlayStream {
     window.clearInterval(this.statsTimer);
     window.clearTimeout(this.reconnectTimer);
     window.clearTimeout(this.glLostTimer);
+    if (this.decoded) {
+      log.info(
+        "remote-play",
+        `latency at the end: ${stagesLogText(this.stages.summary(performance.now()))}; decoder restarts ${this.decoderRestarts}`,
+      );
+    }
     this.watchBox(false);
     this.resetMedia();
     if (this.drawer?.kind === "gl") this.drawer.pass.dispose();
@@ -1280,6 +1347,7 @@ export class RemotePlayStream {
       rumble?: [number, number];
       light?: [number, number, number];
       pong?: unknown;
+      engine_us?: unknown;
       triggers?: { left: number[]; right: number[] };
       ds_intensity?: [number, number];
     };
@@ -1289,7 +1357,9 @@ export class RemotePlayStream {
       return;
     }
     if (s && typeof s === "object" && "pong" in s) {
-      this.rttMs = nextRtt(this.rttMs, s.pong, performance.now());
+      const now = performance.now();
+      this.rttMs = nextRtt(this.rttMs, s.pong, now);
+      this.clock.push(s.pong, s.engine_us, now);
       return;
     }
     if (s.rumble) {
@@ -1351,7 +1421,9 @@ export class RemotePlayStream {
     }
   }
 
-  private onVideo(kind: number, payload: Uint8Array): void {
+  /** One video record: `recv` when it arrived, `engineAt` when the engine had it whole (this
+   *  page's clock; NaN when unknown). */
+  private onVideo(kind: number, payload: Uint8Array, recv: number, engineAt: number): void {
     if (kind === 0) {
       const prev = this.header;
       this.header = payload.slice();
@@ -1394,14 +1466,69 @@ export class RemotePlayStream {
       data.set(payload, this.header.length);
     }
     this.ts += 16667;
-    this.sentAt.set(this.ts, performance.now());
-    if (this.sentAt.size > 120) this.sentAt.clear();
+    const slot = (this.ts / 16667) % FRAME_SLOTS;
+    this.slotTs[slot] = this.ts;
+    this.slotRecv[slot] = recv;
+    this.slotEngine[slot] = engineAt;
     const chunk = new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: this.ts, data });
+    const now = performance.now();
+    // The wait for a picture starts at the first frame in, or again after a pause in frames (a
+    // keyframe waited for, a hidden page): a gap in the input is not the decoder's.
+    if (!this.waitingSince || now - this.lastFedAt > FED_RECENT_MS) this.waitingSince = now;
+    this.lastFedAt = now;
     if (!this.video || this.video.state !== "configured") {
-      this.queued.push(chunk); // the HEVC codec string is still being probed
+      // The HEVC codec string is still being probed: "queue" runs until it is handed in.
+      this.slotSubmit[slot] = NaN;
+      this.queued.push(chunk);
       return;
     }
+    this.slotSubmit[slot] = now;
     this.video.decode(chunk);
+  }
+
+  /** The decoder stopped giving pictures while frames go in, or closed under the stream: a new
+   *  one from the codec header, and a keyframe asked for (rpDecoderWatch.ts). A few tries, a
+   *  little further apart each time; then the player is told, once, and it waits for a picture. */
+  private watchDecoder(): void {
+    if (this.gaveUp) return;
+    const verdict = decoderVerdict({
+      now: performance.now(),
+      haveHeader: !!this.header,
+      state: this.video ? this.video.state : "none",
+      lastFedAt: this.lastFedAt,
+      waitingSince: this.waitingSince,
+      rebuilds: this.rebuilds,
+    });
+    if (verdict === "ok") return;
+    if (verdict === "give_up") {
+      this.gaveUp = true;
+      log.warn("remote-play", `the video decoder gave no picture after ${MAX_REBUILDS} restarts: waiting for the next keyframe`);
+      this.o.onError({
+        code: "decode",
+        detail: `The video decoder stopped giving pictures and ${MAX_REBUILDS} restarts did not bring it back. Stop and start the stream, or set Settings › Video decoding to software.`,
+      });
+      return;
+    }
+    const old = this.video;
+    const waited = Math.round(performance.now() - this.waitingSince);
+    log.warn(
+      "remote-play",
+      `the video decoder ${old?.state === "closed" ? "closed" : `gave no picture for ${waited} ms`} while frames kept arriving ` +
+        `(queue ${old?.decodeQueueSize ?? "?"}): restarting it (${this.rebuilds + 1} of ${MAX_REBUILDS})`,
+    );
+    this.rebuilds++;
+    this.decoderRestarts++;
+    this.video = null;
+    try {
+      old?.close();
+    } catch {
+      // Already closed.
+    }
+    this.sawKey = false;
+    this.queued = [];
+    this.waitingSince = 0;
+    this.openVideo();
+    this.ws?.send(JSON.stringify({ keyframe: true }));
   }
 
   /** Draw one decoded frame onto the canvas (it closes the frame). The canvas is the picture's
@@ -1483,15 +1610,31 @@ export class RemotePlayStream {
   }
 
   private openVideo(): void {
+    // A new decoder: its wait for a picture starts with its first frame.
+    this.waitingSince = 0;
     const video = new VideoDecoder({
       output: (decoded) => {
-        const frame = this.withRealVisibleRect(decoded);
-        const t = this.sentAt.get(frame.timestamp);
-        if (t !== undefined) {
-          this.decodeMs = performance.now() - t;
-          this.sentAt.delete(frame.timestamp);
+        const now = performance.now();
+        const slot = (decoded.timestamp / 16667) % FRAME_SLOTS;
+        if (this.slotTs[slot] === decoded.timestamp) {
+          this.slotTs[slot] = -1;
+          const recv = this.slotRecv[slot];
+          const submit = this.slotSubmit[slot];
+          const engineAt = this.slotEngine[slot];
+          if (Number.isFinite(submit)) {
+            this.decodeMs = now - submit;
+            this.stages.add("decode", now - submit, now);
+            this.stages.add("queue", submit - recv, now);
+          }
+          if (Number.isFinite(engineAt)) this.stages.add("net", recv - engineAt, now);
         }
+        // A picture: the watchdog starts over.
+        this.waitingSince = 0;
+        this.rebuilds = 0;
+        this.gaveUp = false;
+        const frame = this.withRealVisibleRect(decoded);
         this.drawFrame(frame);
+        this.outputPending = now;
         this.decoded++;
       },
       error: (e) => {
@@ -1538,7 +1681,12 @@ export class RemotePlayStream {
         this.stop();
         return;
       }
-      for (const q of this.queued) video.decode(q);
+      const now = performance.now();
+      for (const q of this.queued) {
+        const slot = (q.timestamp / 16667) % FRAME_SLOTS;
+        if (this.slotTs[slot] === q.timestamp) this.slotSubmit[slot] = now;
+        video.decode(q);
+      }
       this.queued = [];
     };
     if (this.codecChoice === "h265_hdr") {

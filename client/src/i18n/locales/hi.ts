@@ -6301,6 +6301,8 @@ library_compressed_hint: "संपीड़ित इमेज चलाने 
 "rp_clip_failed": "क्लिप रिकॉर्ड या सहेजी नहीं जा सकी।",
 "rp_stats_latency": "देरी ≈ {engine} ms इंजन + {decode} ms डिकोड",
 "rp_stats_latency_decode": "देरी ≈ {decode} ms डिकोड",
+"rp_stats_stages": "नेटवर्क {net} · कतार {queue} · डिकोड {decode} · ड्रॉ {draw} ms",
+"rp_stats_decoder_restarts": "डिकोडर रीस्टार्ट {n}",
 "rp_low_latency": "कम देरी",
 "rp_low_latency_hint": "सबसे कम देरी के लिए सबसे छोटा साउंड बफ़र और सबसे छोटी पिक्चर कतार। व्यस्त नेटवर्क पर ज़्यादा फ़्रेम छूटते हैं और आवाज़ चटक सकती है। पिक्चर वाला हिस्सा अगली बार शुरू करने पर लागू होता है।",
 "rp_auto_quality": "व्यस्त नेटवर्क पर क्वालिटी कम करें",

@@ -6240,6 +6240,8 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_clip_failed": "無法錄製或儲存片段。",
 "rp_stats_latency": "延遲 ≈ 引擎 {engine} ms + 解碼 {decode} ms",
 "rp_stats_latency_decode": "延遲 ≈ 解碼 {decode} ms",
+"rp_stats_stages": "網路 {net} · 排隊 {queue} · 解碼 {decode} · 繪製 {draw} ms",
+"rp_stats_decoder_restarts": "解碼器重新啟動 {n}",
 "rp_low_latency": "低延遲",
 "rp_low_latency_hint": "使用最小的聲音緩衝和最短的畫面佇列，延遲最低。網路繁忙時會掉更多影格，聲音可能有爆音。畫面部分在下次開始時生效。",
 "rp_auto_quality": "網路繁忙時降低畫質",

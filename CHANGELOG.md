@@ -32,6 +32,14 @@ What's new in ps5upload, written for humans.
   is in the startup log.
 - **The Linux app quits cleanly when it is sent SIGTERM, SIGINT or SIGHUP.** Stopping it with
   `kill` left WebKit's web process crashing, and Ubuntu showed a crash report each time.
+- **Remote Play shows where its delay goes.** The stats overlay adds each frame's stages, measured
+  rather than estimated: network (engine to app), queue, decode and draw, as medians over the
+  last 2 s. The same numbers go into the app's logs (and so into a bug report) once a minute.
+- **A Remote Play picture that freezes while the stream runs comes back by itself.** When the
+  video decoder stops giving pictures without an error, the app starts a new one and asks the
+  PS5 for a fresh keyframe. After three tries it says so instead of trying forever.
+- **Fewer lost Remote Play keyframes on macOS and Linux.** The engine now asks every system for a
+  large network receive buffer (it did on Windows only), and logs the size it got.
 
 ## 10.1.0
 - **Updates are checked before they install.** Each release now publishes the SHA-256 of every
