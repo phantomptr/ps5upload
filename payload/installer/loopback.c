@@ -3,6 +3,8 @@
 #include "http_range.h"
 #include "jobs.h"
 #include "pathsafe.h"
+#include "listen_guard.h"
+#include "thread_name.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +12,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <poll.h>
 #include <time.h>
 #include <pthread.h>
 #include <sys/stat.h>
@@ -213,6 +216,7 @@ static int serve_one(struct inst_loopback *lb, int conn, const char *req, size_t
 typedef struct { struct inst_loopback *lb; int conn; } worker_arg_t;
 
 static void *worker(void *arg) {
+    inst_thread_name(INST_THREAD_LB_WORKER);
     worker_arg_t *wa = arg;
     struct inst_loopback *lb = wa->lb;
     int conn = wa->conn;
@@ -270,28 +274,90 @@ static void *worker(void *arg) {
     return NULL;
 }
 
+/* A non-blocking 127.0.0.1 listener on `port` (0 = ephemeral), or -1. */
+static int lb_listen(uint16_t port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); /* 127.0.0.1 ONLY */
+    a.sin_port = htons(port);
+    if (bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0 ||
+        listen(fd, LB_MAX_CONNS) != 0) {
+        close(fd);
+        return -1;
+    }
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) (void)fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    return fd;
+}
+
+/* Never leaves while `running`, and never spins: errors back off, and a
+ * listener failing for INST_LISTEN_BROKEN_MS is bound again on the SAME port
+ * (Sony already holds a URL naming it). This thread owns listen_fd while it
+ * runs; stop() joins it before closing the socket. */
 static void *listener(void *arg) {
+    inst_thread_name(INST_THREAD_LB_LISTEN);
     struct inst_loopback *lb = arg;
+    uint64_t err_since = 0;
     while (lb->running) {
-        struct sockaddr_in cli;
-        socklen_t cl = sizeof(cli);
-        int conn = accept(lb->listen_fd, (struct sockaddr *)&cli, &cl);
-        if (conn < 0) { if (lb->running) continue; break; }
+        if (lb->listen_fd < 0) {
+            lb->listen_fd = lb_listen(lb->port);
+            if (lb->listen_fd < 0) { inst_nap_ms(500); continue; }
+            fprintf(stderr, "[loopback] listener rebuilt on 127.0.0.1:%u\n", (unsigned)lb->port);
+            err_since = 0;
+        }
+        struct pollfd pf = { lb->listen_fd, POLLIN, 0 };
+        int r = poll(&pf, 1, INST_LISTEN_SLICE_MS);
+        if (r == 0) { err_since = 0; continue; }
+        if (r < 0 || (pf.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            if (r < 0 && errno == EINTR) continue;
+            if (!err_since) err_since = inst_mono_ms();
+            else if (inst_listen_broken(err_since, inst_mono_ms())) {
+                close(lb->listen_fd);
+                lb->listen_fd = -1;
+                continue;
+            }
+            inst_nap_ms(INST_LISTEN_BACKOFF_MS);
+            continue;
+        }
+        int conn = accept(lb->listen_fd, NULL, NULL);
+        if (conn < 0) {
+            inst_accept_action_t act = inst_accept_classify(errno);
+            if (act == INST_ACCEPT_BROKEN) {
+                if (!err_since) err_since = inst_mono_ms();
+                else if (inst_listen_broken(err_since, inst_mono_ms())) {
+                    fprintf(stderr, "[loopback] accept failing (errno %d); rebinding\n", errno);
+                    close(lb->listen_fd);
+                    lb->listen_fd = -1;
+                    continue;
+                }
+            }
+            if (act != INST_ACCEPT_RETRY) inst_nap_ms(INST_LISTEN_BACKOFF_MS);
+            continue;
+        }
+        err_since = 0;
+        /* The listener's O_NONBLOCK is inherited; workers expect blocking
+         * sockets bounded by their timeouts. */
+        int fl = fcntl(conn, F_GETFL, 0);
+        if (fl >= 0) (void)fcntl(conn, F_SETFL, fl & ~O_NONBLOCK);
         int yes = 1;
         setsockopt(conn, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
-        if (__sync_add_and_fetch(&lb->workers, 1) > LB_MAX_CONNS) {
-            __sync_sub_and_fetch(&lb->workers, 1);
+        if (!inst_slot_take(&lb->workers, LB_MAX_CONNS)) {
             close(conn);
             continue;
         }
         worker_arg_t *wa = malloc(sizeof(*wa));
-        if (!wa) { __sync_sub_and_fetch(&lb->workers, 1); close(conn); continue; }
+        if (!wa) { inst_slot_release(&lb->workers); close(conn); continue; }
         wa->lb = lb; wa->conn = conn;
         pthread_t t;
         if (pthread_create(&t, NULL, worker, wa) == 0) {
             pthread_detach(t);
         } else {
-            __sync_sub_and_fetch(&lb->workers, 1);
+            inst_slot_release(&lb->workers);
             free(wa);
             close(conn);
         }
@@ -326,19 +392,10 @@ int inst_loopback_start(inst_loopback_t **out, const char *pkg_path,
     lb->pkg_fd = open(pkg_path, O_RDONLY);
     if (lb->pkg_fd < 0) { free(lb); return -1; }
 
-    lb->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    lb->listen_fd = lb_listen(0);                /* ephemeral */
     if (lb->listen_fd < 0) { close(lb->pkg_fd); free(lb); return -1; }
-    int one = 1;
-    setsockopt(lb->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     struct sockaddr_in a;
     memset(&a, 0, sizeof(a));
-    a.sin_family = AF_INET;
-    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); /* 127.0.0.1 ONLY */
-    a.sin_port = 0;                              /* ephemeral */
-    if (bind(lb->listen_fd, (struct sockaddr *)&a, sizeof(a)) != 0 ||
-        listen(lb->listen_fd, LB_MAX_CONNS) != 0) {
-        close(lb->listen_fd); close(lb->pkg_fd); free(lb); return -1;
-    }
     socklen_t al = sizeof(a);
     getsockname(lb->listen_fd, (struct sockaddr *)&a, &al);
     lb->port = ntohs(a.sin_port);
@@ -369,10 +426,11 @@ double inst_loopback_idle_seconds(inst_loopback_t *lb) {
 
 void inst_loopback_stop(inst_loopback_t *lb) {
     if (!lb) return;
+    /* The listener polls in short slices and owns listen_fd (it may rebind
+     * it): let it see `running` drop, then close what it left open. */
     lb->running = 0;
-    shutdown(lb->listen_fd, SHUT_RDWR);
-    close(lb->listen_fd);
     pthread_join(lb->listener, NULL);
+    if (lb->listen_fd >= 0) close(lb->listen_fd);
     /* Hang up every open connection: an idle kept-alive one would otherwise sit in recv()
      * long after this returns. */
     pthread_mutex_lock(&lb->mutex);
