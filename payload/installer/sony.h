@@ -12,8 +12,8 @@ typedef struct {
     uint32_t init_rc;
 } inst_sony_state_t;
 
-/* Bounded sceAppInstUtilInitialize (reuses timed_init.h). Caches success.
- * Returns 0 / PS5_TIMED_INIT_TIMEOUT / Sony rc; updates st->init_done/init_rc. */
+/* Bounded sceAppInstUtilInitialize (inst_timed_init.h, monotonic). Caches success.
+ * Returns 0 / INST_TIMED_INIT_TIMEOUT / Sony rc; updates st->init_done/init_rc. */
 int inst_sony_init(inst_sony_state_t *st);
 
 typedef struct {

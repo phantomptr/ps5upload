@@ -23,9 +23,10 @@ LIBS := -lSceSystemService -lSceUserService -lSceIpmi -lSceAppInstUtil \
         -lSceNotification -lkernel_sys -lpthread
 
 SRCS := main.c protocol.c pathsafe.c jobs.c http_range.c loopback.c \
-        hints.c sony.c escalate.c
+        hints.c sony.c escalate.c listen_guard.c
 HEADERS := protocol.h pathsafe.h jobs.h http_range.h loopback.h hints.h \
-           sony.h escalate.h ../include/authid.h ../include/timed_init.h \
+           sony.h escalate.h listen_guard.h thread_name.h inst_timed_init.h \
+           ../include/authid.h \
            ../include/sceAppInstUtil.h
 
 all: $(ELF) $(ELF).gz

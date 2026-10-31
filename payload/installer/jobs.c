@@ -22,6 +22,14 @@ int inst_admit_install(inst_job_phase_t active_phase, int active_complete) {
     return (active_phase == INST_JOB_SERVING && !active_complete) ? 0 : 1;
 }
 
+int inst_stop_allowed(int install_in_flight, inst_job_phase_t active_phase,
+                      int active_complete) {
+    /* Exiting mid-InstallByPackage, or while Sony still reads the loopback
+     * file, fails that install; the same rule as admission otherwise. */
+    if (install_in_flight) return 0;
+    return inst_admit_install(active_phase, active_complete);
+}
+
 void inst_coverage_reset(inst_coverage_t *c) {
     c->count = 0;
 }

@@ -24,6 +24,12 @@ const char *inst_job_phase_str(inst_job_phase_t phase);
  * pkg-host's). A fully-read serving job is retired by the caller. */
 int inst_admit_install(inst_job_phase_t active_phase, int active_complete);
 
+/* Whether a `stop` may end the daemon now: 1 to stop, 0 to refuse as busy.
+ * Refused while an install call is in flight (the Sony lock is held) or while
+ * a serving loopback job still has bytes Sony has not read. */
+int inst_stop_allowed(int install_in_flight, inst_job_phase_t active_phase,
+                      int active_complete);
+
 #define INST_COVERAGE_MAX 256
 
 typedef struct { uint64_t start; uint64_t end; } inst_interval_t; /* inclusive */

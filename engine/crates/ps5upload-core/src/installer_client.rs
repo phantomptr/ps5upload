@@ -19,7 +19,7 @@ use crate::payload_lifecycle::{
 const INSTALLER_ELF_NAME: &str = "ps5upload-installer.elf";
 
 /// Must match the daemon's INST_VERSION in payload/installer/main.c.
-pub const INSTALLER_VERSION: &str = "1.4.0";
+pub const INSTALLER_VERSION: &str = "1.5.0";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const SHORT_TIMEOUT: Duration = Duration::from_secs(5); // hello / job / stop
@@ -30,6 +30,11 @@ const ENSURE_POLL: Duration = Duration::from_millis(500);
 /// How long a port that is open but answers no hello may stay that way (a
 /// daemon still exiting) before it is reported as not coming up.
 const MUTE_WAIT: Duration = Duration::from_secs(10);
+/// How long a daemon told to `stop` may keep :9115 before the replacement is
+/// sent anyway. 1.5.0+ lets go within a quarter second; older daemons only
+/// notice the stop on their next accepted connection, which the release
+/// probes below provide.
+const STOP_RELEASE_WAIT: Duration = Duration::from_secs(10);
 /// How long a refused loader port is retried before the loader counts as absent: past
 /// elfldr's 3 s re-listen and the swap's kill-sleep-bind gap.
 const LOADER_RETRY_WINDOW: Duration = Duration::from_secs(8);
@@ -201,6 +206,29 @@ fn stop_at(addr: &str) -> Result<(), String> {
     }
 }
 
+/// Wait for a stopped daemon to close `addr`. Each probe is a real connect:
+/// a pre-1.5.0 daemon sits in accept() after replying to `stop` and leaves
+/// only once one more connection arrives, so these probes are what let it go.
+/// true once the port refuses, false if it stayed open for `window`.
+fn wait_port_released(addr: &str, window: Duration, poll: Duration) -> bool {
+    let deadline = Instant::now() + window;
+    loop {
+        if !port_is_open(addr, PROBE_TIMEOUT) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(poll);
+    }
+}
+
+/// The daemon refused `stop` because an install is in flight or its file is
+/// still being read (1.5.0+): {"ok":false,"error":"busy",...}.
+fn stop_refused_busy(err: &str) -> bool {
+    err.starts_with("stop refused:") && err.contains("\"busy\"")
+}
+
 /// running < current, comparing dotted numeric versions.
 fn needs_upgrade(current: &str, running: &str) -> bool {
     fn triple(s: &str) -> (u64, u64, u64) {
@@ -249,7 +277,30 @@ fn ensure_with(
     protect_running: bool,
     mute_wait: Duration,
 ) -> Ensure {
+    ensure_with_waits(
+        ip,
+        port,
+        elf,
+        protect_running,
+        mute_wait,
+        STOP_RELEASE_WAIT,
+        ENSURE_WAIT_TOTAL,
+    )
+}
+
+fn ensure_with_waits(
+    ip: &str,
+    port: u16,
+    elf: Option<&[u8]>,
+    protect_running: bool,
+    mute_wait: Duration,
+    stop_release_wait: Duration,
+    bringup_wait: Duration,
+) -> Ensure {
     let addr = join_host_port(ip, port);
+    // The version being replaced, when this call stopped an older daemon: its
+    // hello must not be mistaken for the new one coming up.
+    let mut replacing: Option<Hello> = None;
     // 1) probe
     if port_is_open(&addr, PROBE_TIMEOUT) {
         if let Ok(h) = hello_at(&addr) {
@@ -264,8 +315,28 @@ fn ensure_with(
                         error: None,
                     };
                 }
-                // upgrade: stop, then fall through to send a fresh copy
-                let _ = talk(&addr, SHORT_TIMEOUT, "{\"op\":\"stop\"}");
+                // upgrade: stop, wait for the old daemon to let go of the
+                // port, then fall through to send a fresh copy. Sending while
+                // the old one still held :9115 made the new one fail its bind
+                // and exit, so the first install after an update failed with
+                // "never came up".
+                if let Err(e) = stop_at(&addr) {
+                    if stop_refused_busy(&e) {
+                        // mid-install: keep it; the next ensure upgrades
+                        return Ensure {
+                            listening: true,
+                            sent: false,
+                            state: Some(h.state),
+                            reason: Some("upgrade_skipped_serving"),
+                            error: None,
+                        };
+                    }
+                }
+                // Still held after the wait: send anyway. The new daemon
+                // retries its bind for a few seconds, and the wait below
+                // tells the old hello from the new one.
+                let _ = wait_port_released(&addr, stop_release_wait, ENSURE_POLL);
+                replacing = Some(h);
             } else {
                 return Ensure {
                     listening: true,
@@ -360,7 +431,8 @@ fn ensure_with(
         }
     }
     // 3) wait up to 45s for hello to answer (covers the boot wait)
-    let deadline = Instant::now() + ENSURE_WAIT_TOTAL;
+    let deadline = Instant::now() + bringup_wait;
+    let mut old_answering: Option<Hello> = None;
     let forget_stored_copy = || {
         if via_payload_manager {
             // The running daemon doesn't need it; don't leave it in the
@@ -371,6 +443,12 @@ fn ensure_with(
     while Instant::now() < deadline {
         if port_is_open(&addr, PROBE_TIMEOUT) {
             if let Ok(h) = hello_at(&addr) {
+                if replacing.is_some() && needs_upgrade(INSTALLER_VERSION, &h.version) {
+                    // the daemon being replaced, not yet gone
+                    old_answering = Some(h);
+                    std::thread::sleep(ENSURE_POLL);
+                    continue;
+                }
                 forget_stored_copy();
                 return Ensure {
                     listening: true,
@@ -384,6 +462,20 @@ fn ensure_with(
         std::thread::sleep(ENSURE_POLL);
     }
     forget_stored_copy();
+    if let Some(old) = old_answering {
+        // The old daemon never left, so the new one could not bind. It still
+        // installs; keep using it rather than failing the install.
+        return Ensure {
+            listening: true,
+            sent: true,
+            state: Some(old.state),
+            reason: Some("upgrade_not_taken"),
+            error: Some(format!(
+                "installer {} kept :9115; {INSTALLER_VERSION} could not replace it",
+                old.version
+            )),
+        };
+    }
     Ensure {
         listening: false,
         sent: true,
@@ -714,6 +806,157 @@ mod tests {
         assert!(!got.iter().any(|r| r.contains("\"stop\"")));
     }
 
+    const OLD_HELLO: &str = "{\"ok\":true,\"version\":\"1.4.0\",\"fw\":\"13\",\"state\":\"ready\",\"init_rc\":0,\"escalated\":true}";
+
+    /// How a fake old daemon answers `stop`.
+    #[derive(Clone, Copy, PartialEq)]
+    enum StopStyle {
+        /// 1.5.0+: replies ok and closes the port at once.
+        Prompt,
+        /// <= 1.4.0: replies ok, then only closes the port after accepting
+        /// one more connection (it was blocked in accept()).
+        AfterNextConnect,
+        /// 1.5.0+ mid-install: refuses with busy and keeps running.
+        Busy,
+    }
+
+    /// A fake old daemon on 127.0.0.1:0 that answers hello with OLD_HELLO and
+    /// `stop` per `style`. Returns (ip, port, requests, kill-flag); the port
+    /// closes when the fake exits.
+    fn fake_old_daemon(
+        style: StopStyle,
+    ) -> (
+        String,
+        u16,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let sa = l.local_addr().unwrap();
+        let reqs = Arc::new(Mutex::new(Vec::<String>::new()));
+        let kill = Arc::new(AtomicBool::new(false));
+        let (reqs2, kill2) = (reqs.clone(), kill.clone());
+        thread::spawn(move || {
+            let mut stopped = false;
+            while !kill2.load(Ordering::Relaxed) {
+                match l.accept() {
+                    Ok((mut s, _)) => {
+                        if stopped {
+                            // the old daemon wakes, sees the flag, exits
+                            return;
+                        }
+                        s.set_nonblocking(false).ok();
+                        s.set_read_timeout(Some(Duration::from_millis(200))).ok();
+                        let mut got = Vec::new();
+                        let mut buf = [0u8; 512];
+                        while !got.contains(&b'\n') {
+                            match s.read(&mut buf) {
+                                Ok(0) | Err(_) => break,
+                                Ok(n) => got.extend_from_slice(&buf[..n]),
+                            }
+                        }
+                        let line = String::from_utf8_lossy(&got).trim().to_string();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        reqs2.lock().unwrap().push(line.clone());
+                        let reply = if line.contains("\"stop\"") {
+                            if style == StopStyle::Busy {
+                                "{\"ok\":false,\"error\":\"busy\",\"job\":\"1-1\"}"
+                            } else {
+                                "{\"ok\":true}"
+                            }
+                        } else {
+                            OLD_HELLO
+                        };
+                        let _ = s.write_all(reply.as_bytes());
+                        let _ = s.write_all(b"\n");
+                        if line.contains("\"stop\"") {
+                            match style {
+                                StopStyle::Prompt => return,
+                                StopStyle::AfterNextConnect => stopped = true,
+                                StopStyle::Busy => {}
+                            }
+                        }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        (sa.ip().to_string(), sa.port(), reqs, kill)
+    }
+
+    fn short_ensure(ip: &str, port: u16) -> Ensure {
+        // No image: reaching the send step shows up as DPI_REASON_NO_IMAGE.
+        ensure_with_waits(
+            ip,
+            port,
+            None,
+            false,
+            Duration::from_millis(600),
+            Duration::from_secs(5),
+            Duration::from_secs(2),
+        )
+    }
+
+    #[test]
+    fn upgrade_waits_for_a_prompt_daemon_to_release_the_port() {
+        let (ip, port, reqs, kill) = fake_old_daemon(StopStyle::Prompt);
+        let t0 = Instant::now();
+        let e = short_ensure(&ip, port);
+        kill.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(e.reason, Some(DPI_REASON_NO_IMAGE), "{e:?}");
+        assert!(!port_is_open(&format!("{ip}:{port}"), PROBE_TIMEOUT));
+        assert!(t0.elapsed() < Duration::from_secs(4), "{:?}", t0.elapsed());
+        assert!(reqs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r == "{\"op\":\"stop\"}"));
+    }
+
+    #[test]
+    fn upgrade_wakes_an_old_daemon_blocked_in_accept() {
+        // A <=1.4.0 daemon only leaves after one more connection; the send
+        // must not happen while it still holds the port (the first-install
+        // "never came up" failure).
+        let (ip, port, _reqs, kill) = fake_old_daemon(StopStyle::AfterNextConnect);
+        let e = short_ensure(&ip, port);
+        kill.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(e.reason, Some(DPI_REASON_NO_IMAGE), "{e:?}");
+        assert!(!port_is_open(&format!("{ip}:{port}"), PROBE_TIMEOUT));
+    }
+
+    #[test]
+    fn upgrade_keeps_a_daemon_that_refuses_stop_mid_install() {
+        let (ip, port, reqs, kill) = fake_old_daemon(StopStyle::Busy);
+        let e = short_ensure(&ip, port);
+        kill.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(e.listening, "{e:?}");
+        assert!(!e.sent);
+        assert_eq!(e.reason, Some("upgrade_skipped_serving"));
+        assert!(reqs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r == "{\"op\":\"stop\"}"));
+    }
+
+    #[test]
+    fn stop_refusal_is_recognised_only_as_busy() {
+        assert!(stop_refused_busy(
+            "stop refused: {\"ok\":false,\"error\":\"busy\",\"job\":\"\"}"
+        ));
+        assert!(!stop_refused_busy("stop reply: EOF while parsing"));
+        assert!(!stop_refused_busy("connect 1.2.3.4:9115: refused"));
+    }
+
     /// A free loopback port nothing listens on yet.
     fn free_port() -> u16 {
         TcpListener::bind("127.0.0.1:0")
@@ -785,5 +1028,35 @@ mod tests {
         );
         assert!(r.is_err());
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    /// Hardware check: with an older daemon running on the console,
+    /// `PS5UPLOAD_LIVE_INSTALLER_IP=<console> cargo test -p ps5upload-core
+    /// installer_client::live -- --ignored --nocapture`. Runs the upgrade the
+    /// engine runs before an install (protect_running=false) with the freshly
+    /// built ELF and requires the new daemon up on the first try.
+    #[test]
+    #[ignore]
+    fn live_upgrade_replaces_an_older_daemon_first_time() {
+        let Ok(ip) = std::env::var("PS5UPLOAD_LIVE_INSTALLER_IP") else {
+            return;
+        };
+        let before = super::hello(&ip).map(|h| h.version);
+        let elf = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../payload/installer/ps5upload-installer.elf"
+        ))
+        .expect("installer ELF");
+        let t0 = std::time::Instant::now();
+        let e = super::ensure(&ip, Some(&elf), false);
+        let took = t0.elapsed();
+        let after = super::hello(&ip).map(|h| h.version);
+        println!("before={before:?} ensure={e:?} took={took:?} after={after:?}");
+        assert!(e.listening && e.sent, "{e:?}");
+        assert_eq!(e.reason, None, "{e:?}");
+        assert_eq!(after.as_deref(), Ok(super::INSTALLER_VERSION));
     }
 }
