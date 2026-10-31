@@ -87,6 +87,8 @@ export async function beforeRemotePlay(
   list: readonly RpBlocker[] = RP_BLOCKERS,
 ): Promise<void> {
   const k = key(host);
+  // A pause in progress starts the stream itself when it is done.
+  if (useRpBlockers.getState().pausing) return;
   const found = await withTimeout(
     detectBlockers(blockerCtx(host), list).catch(() => []),
     CHECK_TIMEOUT_MS,
