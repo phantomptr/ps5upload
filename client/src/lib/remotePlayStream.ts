@@ -592,7 +592,21 @@ export class RemotePlayStream {
    *  original is closed. Any other frame comes back as it is. */
   private withRealVisibleRect(frame: VideoFrame): VideoFrame {
     const fix = visibleFix(frame, this.spsRect);
-    if (!fix) return frame;
+    if (!fix) {
+      // Smaller than the stream says, but not fixable here (the coded size is small too): say
+      // so once, for a report.
+      const v = frame.visibleRect;
+      const sps = this.spsRect;
+      if (sps && v && !this.loggedVisibleFix && (v.width < sps.w - 16 || v.height < sps.h - 16)) {
+        this.loggedVisibleFix = true;
+        log.warn(
+          "remote-play",
+          `the decoder reported a ${v.width}x${v.height} picture in a ${frame.codedWidth}x${frame.codedHeight} frame; ` +
+            `the stream says ${sps.w}x${sps.h}, which does not fit: drawn as reported`,
+        );
+      }
+      return frame;
+    }
     try {
       const fixed = new VideoFrame(frame, {
         visibleRect: { x: fix.x, y: fix.y, width: fix.w, height: fix.h },
