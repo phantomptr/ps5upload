@@ -6164,6 +6164,8 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_err_lost": "La connexion à la PS5 a été coupée pendant le flux. Relancez-le ; si cela se répète, branchez la PS5 ou cet appareil par câble.",
 "rp_err_rp_off": "Remote Play est désactivé sur la PS5. Sur la console, ouvrez Paramètres › Système › Lecture à distance et activez Activer la lecture à distance (si c'est déjà activé, désactivez puis réactivez), puis appuyez sur Démarrer.",
 "rp_err_refused": "La PS5 a refusé de lancer Remote Play. Sur la console, vérifiez Paramètres › Système › Lecture à distance › Activer la lecture à distance (désactivez puis réactivez), appuyez sur Autoriser dans Play › Configurer, ou associez à nouveau. Le code ci-dessous indique quel refus c'était.",
+"web_update_how_docker": "Pour mettre à jour, lancez ceci dans le dossier de votre fichier compose (Watchtower peut aussi le faire pour vous) :",
+"web_update_how_app": "Cette page vient de PS5Upload sur un autre ordinateur. Mettez l'application à jour là-bas, et cette page suivra.",
 "rp_err_passcode": "Cet utilisateur PS5 a un code de connexion. La Lecture à distance d'ici ne peut pas le saisir ; retirez le code ou connectez-vous d'abord sur la console.",
 "rp_err_unreachable": "La PS5 ne répond pas sur le réseau. Vérifiez qu'elle est allumée, sur le même réseau, et que la Lecture à distance est activée dans ses paramètres.",
 "rp_err_video": "La PS5 a refusé cette taille d'image. Essayez 720p.",

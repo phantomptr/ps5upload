@@ -6396,6 +6396,8 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_err_lost": "Połączenie z PS5 zerwało się w trakcie strumienia. Uruchom go ponownie; jeśli to się powtarza, podłącz PS5 lub to urządzenie kablem.",
 "rp_err_rp_off": "Remote Play jest wyłączone na PS5. Na konsoli otwórz Ustawienia › System › Zdalna gra i włącz Włącz zdalną grę (jeśli już jest włączone, wyłącz i włącz ponownie), a potem naciśnij Start.",
 "rp_err_refused": "PS5 odmówiła uruchomienia Remote Play. Na konsoli sprawdź Ustawienia › System › Zdalna gra › Włącz zdalną grę (wyłącz i włącz ponownie), naciśnij Zezwól w Play › Konfiguracja albo sparuj ponownie. Kod poniżej mówi, jaka to odmowa.",
+"web_update_how_docker": "Aby zaktualizować, uruchom to w folderze z plikiem compose (Watchtower też może to robić za ciebie):",
+"web_update_how_app": "Ta strona pochodzi z PS5Upload na innym komputerze. Zaktualizuj tam aplikację, a ta strona zaktualizuje się razem z nią.",
 "rp_err_passcode": "Ten użytkownik PS5 ma kod logowania. Remote Play stąd nie może go wpisać; usuń kod lub najpierw zaloguj się na konsoli.",
 "rp_err_unreachable": "PS5 nie odpowiada w sieci. Sprawdź, czy jest włączona, w tej samej sieci i czy Remote Play jest włączone w jej ustawieniach.",
 "rp_err_video": "PS5 odrzuciła ten rozmiar obrazu. Spróbuj 720p.",

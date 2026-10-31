@@ -17,6 +17,7 @@ import { findStoredCopies, type StoredCopy } from "../lib/helperStoredCopies";
 import ConsoleTabs from "./ConsoleTabs";
 import ActivityBar from "./ActivityBar";
 import UpdateToast from "./UpdateToast";
+import WebUpdateToast from "./WebUpdateToast";
 import { Button } from "../components/Button";
 import {
   useConnectionFrozen,
@@ -1722,7 +1723,7 @@ export default function AppShell() {
             </div>
             {/* Slim, dismissible "update available" bar (the auto-check already
                 ran on mount). Pinned above the scroll area so it stays visible. */}
-            <UpdateToast />
+            {isTauriEnv() ? <UpdateToast /> : <WebUpdateToast />}
             {/* Vertical scroll only. overflow-x-hidden is a backstop: the
                 index.css width safety net makes content fit, but this guarantees
                 the page can never scroll sideways. Nested blocks that are meant

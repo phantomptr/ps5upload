@@ -6157,6 +6157,8 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_err_lost": "Koneksi ke PS5 terputus saat streaming. Mulai lagi; jika terus terjadi, sambungkan PS5 atau perangkat ini dengan kabel.",
 "rp_err_rp_off": "Remote Play dimatikan di PS5. Di konsol, buka Pengaturan › Sistem › Remote Play lalu nyalakan Aktifkan Remote Play (jika sudah menyala, matikan lalu nyalakan lagi), kemudian tekan Mulai.",
 "rp_err_refused": "PS5 menolak memulai Remote Play. Di konsol, periksa Pengaturan › Sistem › Remote Play › Aktifkan Remote Play (matikan lalu nyalakan lagi), tekan Izinkan di Play › Siapkan, atau pasangkan ulang. Kode di bawah menunjukkan penolakan yang mana.",
+"web_update_how_docker": "Untuk memperbarui, jalankan ini di folder file compose Anda (Watchtower juga bisa melakukannya untuk Anda):",
+"web_update_how_app": "Halaman ini berasal dari PS5Upload di komputer lain. Perbarui aplikasinya di sana, dan halaman ini ikut diperbarui.",
 "rp_err_passcode": "Pengguna PS5 ini punya kode sandi masuk. Remote Play dari sini tidak bisa memasukkannya; hapus kode sandi atau masuk dulu di konsol.",
 "rp_err_unreachable": "PS5 tidak merespons di jaringan. Periksa apakah menyala, di jaringan yang sama, dan Remote Play aktif di pengaturannya.",
 "rp_err_video": "PS5 menolak ukuran gambar itu. Coba 720p.",

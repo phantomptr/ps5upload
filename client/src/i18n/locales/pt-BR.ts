@@ -6163,6 +6163,8 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_err_lost": "A conexão com o PS5 caiu durante a transmissão. Inicie de novo; se continuar acontecendo, ligue o PS5 ou este dispositivo por cabo.",
 "rp_err_rp_off": "O Remote Play está desligado no PS5. No console, abra Configurações › Sistema › Reprodução remota e ative Habilitar Reprodução remota (se já aparecer ligado, desligue e ligue de novo); depois toque em Iniciar.",
 "rp_err_refused": "O PS5 recusou iniciar o Remote Play. No console, confira Configurações › Sistema › Reprodução remota › Habilitar Reprodução remota (desligue e ligue de novo), toque em Permitir em Play › Configurar ou pareie de novo. O código abaixo diz qual recusa foi.",
+"web_update_how_docker": "Para atualizar, rode isto na pasta do seu arquivo compose (o Watchtower também pode fazer isso por você):",
+"web_update_how_app": "Esta página vem do PS5Upload em outro computador. Atualize o app lá e esta página se atualiza junto.",
 "rp_err_passcode": "Este usuário do PS5 tem uma senha de acesso. A Reprodução Remota daqui não consegue digitá-la; remova a senha ou entre primeiro no console.",
 "rp_err_unreachable": "O PS5 não responde na rede. Verifique se está ligado, na mesma rede e com a Reprodução Remota ativada nas configurações.",
 "rp_err_video": "O PS5 recusou esse tamanho de imagem. Tente 720p.",
