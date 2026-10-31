@@ -603,6 +603,8 @@ pub fn run() {
             commands::focus_webview,
             // Remote Play playing: the OS's game mode where an app can ask for one.
             commands::game_mode_set,
+            // Remote Play playing: a DualSense's touchpad, which the Gamepad API never gives.
+            commands::pad_touchpad_set,
             commands::user_config_load, // ~/.ps5upload/settings.json read
             commands::user_config_save, // ~/.ps5upload/settings.json atomic write
             commands::user_config_path_resolved, // show-the-path for the Settings UI
