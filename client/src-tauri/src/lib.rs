@@ -24,6 +24,8 @@
 pub(crate) const DEFAULT_ENGINE_URL: &str = "http://127.0.0.1:19113";
 
 mod linux_gpu;
+#[cfg(target_os = "linux")]
+mod quit_signals;
 
 mod commands;
 // The engine runs as a spawned sidecar binary on desktop, but in-process
@@ -207,6 +209,11 @@ pub fn run() {
             // The main window (built here, not from the config, so Remote Play's picture in
             // picture can open from it; see pip_window).
             pip_window::build_main(app.handle())?;
+
+            // Linux: SIGTERM / SIGINT / SIGHUP quit through the normal exit, so the
+            // webview's processes shut down instead of crashing (quit_signals.rs).
+            #[cfg(target_os = "linux")]
+            quit_signals::spawn(app.handle().clone());
 
             // Open the main window centred + fully on-screen. Desktop-only —
             // the centre/monitor/size window APIs don't exist on mobile, so
