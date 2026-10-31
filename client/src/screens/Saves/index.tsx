@@ -85,6 +85,7 @@ import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import AutoBackupCard from "./AutoBackupCard";
+import ServerBackupCard from "./ServerBackupCard";
 import MoveFromPs4 from "./MoveFromPs4";
 import { formatDate } from "../../lib/formatDate";
 
@@ -1083,6 +1084,7 @@ export default function SavesScreen() {
 
       <ConnectionGate require="payload">
         <AutoBackupCard />
+        <ServerBackupCard owners={owners} />
         <MoveFromPs4 />
         {error && (
           <div className="mb-4">
