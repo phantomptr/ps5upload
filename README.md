@@ -236,7 +236,7 @@ make run-client    # launch the Tauri dev app
 
 - **`make install-ubuntu`** — Debian / Ubuntu / WSL2: `apt` deps for Tauri
   (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`,
-  `libayatana-appindicator3-dev`, `libxdo-dev`, `libssl-dev`,
+  `libayatana-appindicator3-dev`, `libxdo-dev`, `libasound2-dev`, `libssl-dev`,
   `build-essential`), Node.js 22 LTS via NodeSource (only if missing),
   Rust via rustup, and checksum-verified PS5 Payload SDK v0.45 →
   `~/ps5-payload-sdk`.

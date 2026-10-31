@@ -33,6 +33,7 @@ APT_DEPS=(
   librsvg2-dev
   libayatana-appindicator3-dev
   libxdo-dev
+  libasound2-dev   # DualSense haptics (cpal / ALSA)
   libssl-dev
   build-essential
   file
