@@ -6,6 +6,10 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+- **Remote Play runs at 60 fps in the Linux app.** WebKitGTK converted every frame to RGB on
+  the CPU as it was drawn (12 ms of each 16.7 ms frame at 1080p), so frames backed up: about
+  40 fps and over 100 ms of delay. The app now hands the GPU the frame's own YUV planes and
+  converts there (about 1 ms a frame).
 - **Convert checks that a folder is a whole game (#596).** A folder without
   `sce_sys/param.json` (or a PS4 game's `param.sfo`) is refused up front, with a hint to pick
   the game's own folder, instead of becoming a package or image that never launches.

@@ -7,7 +7,7 @@
 // engine sends 1), JSON status lines out, pad state in. This file
 // turns that into pixels on a canvas, sound, and input; the screen only drives it.
 
-import { DEFAULT_PICTURE, PicturePass, cropRect, needsPass, sharpens, upscaleSize, upscales, type PictureTools } from "./rpPicture";
+import { DEFAULT_PICTURE, PicturePass, PlaneReader, cropRect, isPlaneFormat, needsPass, sharpens, upscaleSize, upscales, type PictureTools } from "./rpPicture";
 import { isLinuxDesktop } from "./platform";
 import { linuxCompositingOff } from "./linuxGraphics";
 import { isTauriEnv } from "./tauriEnv";
@@ -756,6 +756,16 @@ export class RemotePlayStream {
    *  lags). The picture is then drawn plain. */
   private passOff: "failed" | "slow" | "linux" | null = null;
   private slowFrames = 0;
+  /** The Linux app's frames go to WebGL as their YUV planes (rpPicture.ts PlaneReader): handed
+   *  over as frames, WebKitGTK converts each NV12 frame to RGB on the CPU in texImage2D (12 ms of
+   *  the page's 16.7 at 1080p60 on an RTX 3080 PC: frames backed up and the rate fell to ~40).
+   *  Null elsewhere, or after a copy failed (frames as frames from then on). */
+  private planes: PlaneReader | null = isTauriEnv() && isLinuxDesktop() ? new PlaneReader() : null;
+  /** A copy is under way; the newest frame that came meanwhile waits (older ones are dropped). */
+  private planesBusy = false;
+  private planesNext: VideoFrame | null = null;
+  /** How the last frame reached WebGL, for the log: "frame" (texImage2D) or "<format>-planes". */
+  private input = "";
 
   /** Upscaling: the picture's box on screen, in CSS pixels (times the pixel ratio of the
    *  window it is in, at each frame, is what it is upscaled to). */
@@ -924,7 +934,7 @@ export class RemotePlayStream {
         `picture: stream ${streamW}x${streamH}, canvas ${c.width}x${c.height} px, shown ${n(r.width)}x${n(r.height)} ` +
           `in ${n(place?.width)}x${n(place?.height)} css px, fit ${c.dataset.fit}, ratio ${win?.devicePixelRatio ?? "?"}, ` +
           `window ${win?.innerWidth ?? "?"}x${win?.innerHeight ?? "?"}${win !== window ? " (pop-out)" : ""}, ` +
-          `drawn with ${this.drawer?.kind ?? "?"}, tools ${JSON.stringify(this.tools)}${this.passOff ? ` (off: ${this.passOff})` : ""}, ` +
+          `drawn with ${this.drawer?.kind ?? "?"}${this.drawer?.kind === "gl" && this.input ? `, input ${this.input}` : ""}, tools ${JSON.stringify(this.tools)}${this.passOff ? ` (off: ${this.passOff})` : ""}, ` +
           `latency ${stagesLogText(this.stages.summary(performance.now()))}`,
       );
     } catch {
@@ -1183,6 +1193,8 @@ export class RemotePlayStream {
     this.waitingSince = 0;
     this.rebuilds = 0;
     this.gaveUp = false;
+    this.planesNext?.close();
+    this.planesNext = null;
     try {
       this.audio?.close();
     } catch {
@@ -1564,6 +1576,7 @@ export class RemotePlayStream {
           frame.close();
           return;
         }
+        if (this.planes && isPlaneFormat(frame.format)) return this.drawPlanes(frame);
         const tools = this.passOff ? DEFAULT_PICTURE : this.tools;
         const t0 = performance.now();
         try {
@@ -1571,6 +1584,7 @@ export class RemotePlayStream {
           shape = fw / band;
           const to = upscales(tools) ? upscaleSize({ w: fw, h: band }, this.boxPx()) : null;
           out = d.pass.render(frame, fw, fh, tools, to);
+          this.input = "frame";
         } catch (e) {
           if (d.pass.lost) {
             frame.close();
@@ -1579,13 +1593,7 @@ export class RemotePlayStream {
           this.glFailed(String(e));
           return this.drawFrame(frame);
         }
-        // A device that cannot keep up gets the plain picture back, then the 2D canvas.
-        this.slowFrames = performance.now() - t0 > 12 ? this.slowFrames + 1 : 0;
-        if (this.slowFrames > 30) {
-          this.slowFrames = 0;
-          if (needsPass(tools)) this.picturePassOff("slow");
-          else this.glFailed("too slow on this device");
-        }
+        this.checkSlow(t0, tools);
       } else {
         // No WebGL: the picture as it is.
         if (needsPass(this.tools)) this.picturePassOff("failed");
@@ -1595,6 +1603,78 @@ export class RemotePlayStream {
         d.ctx?.drawImage(frame, 0, 0, fw, fh);
       }
     }
+    this.drawn(fw, fh, out, shape);
+    frame.close();
+  }
+
+  /** A device that cannot keep up gets the plain picture back, then the 2D canvas. */
+  private checkSlow(t0: number, tools: PictureTools): void {
+    this.slowFrames = performance.now() - t0 > 12 ? this.slowFrames + 1 : 0;
+    if (this.slowFrames > 30) {
+      this.slowFrames = 0;
+      if (needsPass(tools)) this.picturePassOff("slow");
+      else this.glFailed("too slow on this device");
+    }
+  }
+
+  /** Draw a frame through WebGL as its YUV planes (closes it). The copy out is asynchronous:
+   *  frames that come meanwhile wait, only the newest (a backlog only adds latency). */
+  private drawPlanes(frame: VideoFrame): void {
+    const reader = this.planes;
+    if (!reader) return this.drawFrame(frame);
+    if (this.planesBusy) {
+      this.planesNext?.close();
+      this.planesNext = frame;
+      return;
+    }
+    this.planesBusy = true;
+    const t0 = performance.now();
+    const fw = frame.displayWidth;
+    const fh = frame.displayHeight;
+    const next = () => {
+      this.planesBusy = false;
+      const n = this.planesNext;
+      this.planesNext = null;
+      if (n) this.drawFrame(n);
+    };
+    reader
+      .read(frame)
+      .then((planes) => {
+        const d = this.drawer;
+        // The drawer changed meanwhile (WebGL lost or failed, the stream reset): dropped.
+        if (!planes || d?.kind !== "gl" || d.pass.lost || this.planes !== reader) {
+          frame.close();
+          return;
+        }
+        const tools = this.passOff ? DEFAULT_PICTURE : this.tools;
+        const band = cropRect(fw, fh, tools.crop219).h;
+        const to = upscales(tools) ? upscaleSize({ w: fw, h: band }, this.boxPx()) : null;
+        let out: { w: number; h: number };
+        try {
+          out = d.pass.render(planes, fw, fh, tools, to);
+        } catch (e) {
+          frame.close();
+          if (d.pass.lost) return;
+          // WebGL itself failed: as with frames, the 2D canvas.
+          this.glFailed(String(e));
+          return;
+        }
+        this.input = `${planes.format.toLowerCase()}-planes`;
+        this.checkSlow(t0, tools);
+        this.drawn(fw, fh, out, fw / band);
+        frame.close();
+      })
+      .catch((e) => {
+        // The copy failed: frames go to WebGL as frames from now on.
+        log.warn("remote-play", `picture: copying the frame's ${frame.format} planes failed (${String(e)}): drawing frames as they are`);
+        this.planes = null;
+        this.drawFrame(frame);
+      })
+      .finally(next);
+  }
+
+  /** After a frame is drawn: the canvas's shape and the layout log line follow the picture. */
+  private drawn(fw: number, fh: number, out: { w: number; h: number }, shape: number): void {
     // The shape on its own too: upscaled, the canvas keeps the box's size while Crop to 21:9
     // changes the shape.
     const laid = `${out.w}x${out.h}:${shape}`;
@@ -1606,7 +1686,6 @@ export class RemotePlayStream {
       }
       this.logLayout(fw, fh);
     }
-    frame.close();
   }
 
   private openVideo(): void {
