@@ -4,6 +4,22 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Remap controller buttons in Play.** Settings › Controller buttons: choose which PS5 button each
+  button on your controller sends (swap ✕ and ○, turn a button off, put Create on L3...). It works
+  for every controller, and Reset to defaults puts it back.
+- **Sharpening and upscaling is one choice in Play's picture settings:** Off, Sharpen (AMD
+  FidelityFX RCAS) or Upscale to the screen (AMD FSR 1), with Sharpen setting how strong. Your
+  earlier Sharpen and Upscale settings carry over.
+- **The picture is drawn on the graphics card (WebGL) all the time**, so turning a picture tool on
+  or off no longer changes how it is drawn. With every tool off it looks exactly as before. A
+  device without WebGL keeps the old way.
+- **HDR in Play (experimental).** Settings › Video format › HDR asks the PS5 for its HDR stream
+  and shows it in HDR. It is offered only where it can work: an HDR screen, a device that decodes
+  HEVC Main10, and a browser that draws HDR (WebGPU, as in Chrome or Edge). If HDR doesn't work,
+  the app tells you and goes back to Auto. Sharpening, upscaling and colour stay off in HDR.
+
 ## 10.0.3
 
 - **Fixed: after waking the PS5 from rest mode, the app said the helper was down (#593)**, and
