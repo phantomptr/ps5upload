@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PICTURE, cropRect, needsPass, rcasStops, readPicture, sharpens, upscaleSize, upscales } from "./rpPicture";
+import {
+  DEFAULT_PICTURE,
+  cropRect,
+  isPlaneFormat,
+  needsPass,
+  planeLayout,
+  rcasStops,
+  readPicture,
+  sharpens,
+  upscaleSize,
+  upscales,
+  yuvToRgb,
+} from "./rpPicture";
 
 describe("picture tools", () => {
   it("crops a 16:9 frame to its middle 21:9 band, or leaves it", () => {
@@ -82,5 +94,68 @@ describe("upscaling", () => {
     expect(rcasStops(50)).toBe(1);
     expect(rcasStops(100)).toBe(0);
     expect(rcasStops(400)).toBe(0);
+  });
+});
+
+describe("YUV planes", () => {
+  it("packs NV12 and I420 planes tightly, chroma rounded up for odd sizes", () => {
+    expect(planeLayout("NV12", 1920, 1080)).toEqual({
+      layout: [
+        { offset: 0, stride: 1920 },
+        { offset: 1920 * 1080, stride: 1920 },
+      ],
+      size: 1920 * 1080 * 1.5,
+    });
+    expect(planeLayout("I420", 1920, 1080)).toEqual({
+      layout: [
+        { offset: 0, stride: 1920 },
+        { offset: 1920 * 1080, stride: 960 },
+        { offset: 1920 * 1080 + 960 * 540, stride: 960 },
+      ],
+      size: 1920 * 1080 * 1.5,
+    });
+    expect(planeLayout("NV12", 5, 3)).toEqual({
+      layout: [
+        { offset: 0, stride: 5 },
+        { offset: 15, stride: 6 },
+      ],
+      size: 15 + 6 * 2,
+    });
+  });
+
+  it("reads only NV12 and I420 as planes", () => {
+    expect(isPlaneFormat("NV12")).toBe(true);
+    expect(isPlaneFormat("I420")).toBe(true);
+    expect(isPlaneFormat("RGBA")).toBe(false);
+    expect(isPlaneFormat("I420P10")).toBe(false);
+    expect(isPlaneFormat(null)).toBe(false);
+  });
+
+  /** rgb (0-255) for yuv (0-255) through the matrix, as the shader does. */
+  const rgb = (c: ReturnType<typeof yuvToRgb>, y: number, u: number, v: number) => {
+    const d = [y / 255 - c.off[0], u / 255 - c.off[1], v / 255 - c.off[2]];
+    return [0, 1, 2].map((r) => Math.round(255 * (c.m[r] * d[0] + c.m[3 + r] * d[1] + c.m[6 + r] * d[2])));
+  };
+
+  it("maps limited-range black and white to 0 and 255, any matrix", () => {
+    for (const matrix of ["bt709", "smpte170m", "bt2020-ncl", null]) {
+      const c = yuvToRgb({ matrix, fullRange: false });
+      expect(rgb(c, 16, 128, 128)).toEqual([0, 0, 0]);
+      expect(rgb(c, 235, 128, 128)).toEqual([255, 255, 255]);
+    }
+    const full = yuvToRgb({ matrix: "bt709", fullRange: true });
+    expect(rgb(full, 0, 128, 128)).toEqual([0, 0, 0]);
+    expect(rgb(full, 255, 128, 128)).toEqual([255, 255, 255]);
+  });
+
+  it("uses BT.709 unless the frame says BT.601, and limited range unless it says full", () => {
+    // A pixel of the PS5's own stream (BT.709 limited): reference values from the standard.
+    expect(rgb(yuvToRgb({ matrix: "bt709", fullRange: false }), 96, 104, 147)).toEqual([127, 88, 42]);
+    expect(rgb(yuvToRgb(null), 96, 104, 147)).toEqual([127, 88, 42]);
+    expect(rgb(yuvToRgb({ matrix: "smpte170m", fullRange: false }), 96, 104, 147)).toEqual([123, 87, 45]);
+    expect(rgb(yuvToRgb({ matrix: "bt470bg" }), 96, 104, 147)).toEqual([123, 87, 45]);
+    // Limited-range red (BT.709), to within the 8-bit code values' rounding.
+    const red = rgb(yuvToRgb({ matrix: "bt709" }), 63, 102, 240);
+    [255, 0, 0].forEach((v, i) => expect(Math.abs(red[i] - v)).toBeLessThanOrEqual(1));
   });
 });
