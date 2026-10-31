@@ -51,9 +51,12 @@ use crate::rp_session::{
 
 use self::crypto::{Ecdh, GkCrypt, HANDSHAKE_KEY_SIZE};
 use self::proto::Message;
-use self::takion::{Event, Takion, DATA_TYPE_PAD_INFO, DATA_TYPE_PROTOBUF, DATA_TYPE_RUMBLE};
+use self::takion::{
+    Event, Takion, DATA_TYPE_PAD_INFO, DATA_TYPE_PROTOBUF, DATA_TYPE_RUMBLE,
+    DATA_TYPE_TRIGGER_EFFECTS,
+};
 
-pub use self::audio::{AudioAssembler, AudioHeader};
+pub use self::audio::{AudioAssembler, AudioHeader, HapticsAssembler};
 pub use self::feedback::{button, ControllerState, FeedbackSender};
 pub use self::mic::MicInput;
 pub use self::proto::Resolution;
@@ -92,6 +95,9 @@ pub struct StreamConfig {
     /// Set up the microphone (experimental, see mic.rs). Off, the session
     /// sends exactly what it did before the mic existed.
     pub mic: bool,
+    /// Say the pad is a DualSense (a real one is attached), so the console sends adaptive
+    /// triggers and haptics. Off, the session sends exactly what it did before.
+    pub dualsense: bool,
 }
 
 impl Default for StreamConfig {
@@ -105,6 +111,7 @@ impl Default for StreamConfig {
             codec: Codec::H264,
             wake: true,
             mic: false,
+            dualsense: false,
         }
     }
 }
@@ -140,7 +147,7 @@ struct Ctrl {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     stream: TcpStream,
-    /// With the mic on, writes go through here: the heartbeat thread and the
+    /// With the mic or DualSense on, writes go through here: the heartbeat thread and the
     /// stream both send. Off, the heartbeat thread writes alone, as before.
     writer: Option<Arc<Mutex<TcpStream>>>,
     /// Our rpcrypt counter: one per payload we send (the auth headers took
@@ -152,12 +159,12 @@ struct Ctrl {
 
 impl Ctrl {
     /// A message with a payload, encrypted on our counter (chiaki
-    /// `ctrl_message_send`). Used for the microphone (see mic.rs).
+    /// `ctrl_message_send`). Used for the microphone (see mic.rs) and the DualSense.
     fn send(&mut self, kind: u16, payload: &[u8]) -> Result<()> {
         let msg = ctrl_message(kind, payload, &self.brt, &self.amb, self.counter_local);
         self.counter_local += 1;
         let Some(writer) = self.writer.as_ref() else {
-            bail!("ctrl messages are for a session with the mic set up");
+            bail!("ctrl messages are for a session with the mic or DualSense set up");
         };
         let mut w = writer.lock().map_err(|_| anyhow!("ctrl writer poisoned"))?;
         w.write_all(&msg)?;
@@ -196,7 +203,7 @@ fn ctrl_open(
     creds: &SessionCreds,
     nonce: &[u8; KEY_SIZE],
     codec: Codec,
-    mic: bool,
+    shared_writer: bool,
 ) -> Result<(Ctrl, String, [u8; 16], [u8; 16])> {
     let amb = ambassador(nonce);
     let brt = bright(nonce, &creds.morning);
@@ -325,7 +332,7 @@ fn ctrl_open(
     // Keep answering heartbeats for the life of the stream.
     let stop = Arc::new(AtomicBool::new(false));
     let mut ts = s.try_clone()?;
-    let writer = if mic {
+    let writer = if shared_writer {
         Some(Arc::new(Mutex::new(s.try_clone()?)))
     } else {
         None
@@ -410,31 +417,69 @@ fn heartbeat_reply(ts: &mut TcpStream, shared: Option<&Mutex<TcpStream>>) -> boo
     }
 }
 
-/// What a session sends on ctrl right after the session id: chiaki
-/// `ctrl_enable_features` mutes the mic twice. Only with the mic set up;
-/// without it, nothing, as before the mic existed.
-fn start_ctrl_messages(mic: bool) -> Vec<(u16, Vec<u8>)> {
-    if !mic {
-        return Vec::new();
+/// chiaki `CTRL_MESSAGE_TYPE_ENABLE_DUALSENSE_FEATURES`, and the message it sends right after.
+const CTRL_ENABLE_DUALSENSE: u16 = 0x13;
+const CTRL_DUALSENSE_CONNECT: u16 = 0x11;
+
+/// What a session sends on ctrl right after the session id (chiaki `ctrl_enable_features`):
+/// with a DualSense, its features switched on; with the mic set up, the mic muted twice.
+/// Without either, nothing, as before both existed.
+fn start_ctrl_messages(mic: bool, dualsense: bool) -> Vec<(u16, Vec<u8>)> {
+    let mut v = Vec::new();
+    if dualsense {
+        v.push((CTRL_ENABLE_DUALSENSE, vec![0x00, 0x40, 0x00]));
+        v.push((
+            CTRL_DUALSENSE_CONNECT,
+            vec![
+                0xa0, 0xab, 0x51, 0xbd, 0xd1, 0x7e, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00,
+                0x00, 0x00,
+            ],
+        ));
     }
-    vec![
-        (mic::CTRL_MIC_TOGGLE, mic::toggle_payload(false).to_vec()),
-        (mic::CTRL_MIC_TOGGLE, mic::toggle_payload(false).to_vec()),
-    ]
+    if mic {
+        v.push((mic::CTRL_MIC_TOGGLE, mic::toggle_payload(false).to_vec()));
+        v.push((mic::CTRL_MIC_TOGGLE, mic::toggle_payload(false).to_vec()));
+    }
+    v
 }
 
 /// The Takion messages after STREAMINFO, as (channel, protobuf): the ack,
-/// the controller, and with the mic the uplink audio header (chiaki
-/// `stream_connection_enable_microphone`).
-fn after_streaminfo_messages(mic: bool) -> Vec<(u16, Vec<u8>)> {
+/// the controller (a DualSense or a DualShock 4), and with the mic the uplink
+/// audio header (chiaki `stream_connection_enable_microphone`).
+fn after_streaminfo_messages(mic: bool, dualsense: bool) -> Vec<(u16, Vec<u8>)> {
     let mut v = vec![
         (9, proto::bare(proto::kind::STREAMINFOACK)),
-        (1, proto::controller_connection()),
+        (1, proto::controller_connection(dualsense)),
     ];
     if mic {
         v.push((1, proto::stream_info_mic(&mic::stream_info_audio_header())));
     }
     v
+}
+
+/// One trigger's effect: its mode and 10 parameter bytes.
+pub type TriggerEffect = (u8, [u8; 10]);
+
+/// Trigger effects (data type 11): `[?, left mode, right mode, ?, ?, left 10 bytes, right 10
+/// bytes]`, 25 bytes at least (chiaki `stream_connection_takion_data_trigger_effects`).
+fn parse_trigger_effects(b: &[u8]) -> Option<(TriggerEffect, TriggerEffect)> {
+    if b.len() < 25 {
+        return None;
+    }
+    Some((
+        (b[1], b[5..15].try_into().ok()?),
+        (b[2], b[15..25].try_into().ok()?),
+    ))
+}
+
+/// The haptics and trigger strength the console's settings ask for, from pad info: at 20/21
+/// in the 0x19-byte form, 12/13 in the 0x11-byte one (chiaki ..._data_pad_info).
+fn pad_info_intensity(b: &[u8]) -> Option<(u8, u8)> {
+    match b.len() {
+        0x19 => Some((b[20], b[21])),
+        0x11 => Some((b[12], b[13])),
+        _ => None,
+    }
 }
 
 /// An empty ctrl message: just the 8-byte header.
@@ -506,6 +551,14 @@ pub trait StreamSink {
     fn rumble(&mut self, _left: u8, _right: u8) {}
     /// The console's light-bar colour for this pad.
     fn light_bar(&mut self, _rgb: [u8; 3]) {}
+    /// DualSense adaptive triggers (sessions with `dualsense` only): each trigger's effect
+    /// mode and its 10 parameter bytes, as the pad's output report takes them.
+    fn trigger_effects(&mut self, _left: TriggerEffect, _right: TriggerEffect) {}
+    /// The console's DualSense effect strength settings, when they change: haptics and
+    /// triggers, each 0 off, 1 strong, 2 medium, 3 weak (chiaki `ChiakiDualSenseEffectIntensity`).
+    fn dualsense_intensity(&mut self, _haptics: u8, _triggers: u8) {}
+    /// One 10 ms haptics frame: 3 kHz stereo s16le PCM (sessions with `dualsense` only).
+    fn haptics(&mut self, _pcm: &[u8]) {}
     /// True once the consumer has gone; the stream then ends.
     fn stopped(&mut self) -> bool {
         false
@@ -660,7 +713,7 @@ pub fn run_stream(
     let mut attempt = 0;
     let opened = loop {
         attempt += 1;
-        match ctrl_open(host, creds, &nonce, cfg.codec, cfg.mic) {
+        match ctrl_open(host, creds, &nonce, cfg.codec, cfg.mic || cfg.dualsense) {
             Err(e)
                 if attempt < CTRL_ATTEMPTS
                     && (format!("{e:#}").contains("ctrl reply")
@@ -688,9 +741,9 @@ pub fn run_stream(
         Err(e) => return Err(e),
     };
     sink.progress(Progress::SessionId);
-    // With the mic: muted twice to start (chiaki `ctrl_enable_features`);
+    // DualSense features on, the mic muted twice (chiaki `ctrl_enable_features`);
     // like chiaki, a failed send is not fatal.
-    for (kind, payload) in start_ctrl_messages(cfg.mic) {
+    for (kind, payload) in start_ctrl_messages(cfg.mic, cfg.dualsense) {
         let _ = ctrl.send(kind, &payload);
     }
 
@@ -770,7 +823,7 @@ pub fn run_stream(
     let si = stream_info.unwrap();
     report.resolutions = si.resolutions.iter().map(|r| (r.width, r.height)).collect();
     sink.progress(Progress::StreamInfo(report.resolutions.clone()));
-    for (channel, msg) in after_streaminfo_messages(cfg.mic) {
+    for (channel, msg) in after_streaminfo_messages(cfg.mic, cfg.dualsense) {
         takion.send_message(channel, &msg)?;
     }
     let mut mic_sender = mic::AudioSender::new();
@@ -779,6 +832,8 @@ pub fn run_stream(
         sink.audio(&si.audio_header, true);
     }
     let mut audio = AudioAssembler::default();
+    let mut haptics = HapticsAssembler::default();
+    let mut intensity: Option<(u8, u8)> = None;
 
     let mut assembler = FrameAssembler::new();
     let mut profile: Option<u8> = None;
@@ -972,11 +1027,25 @@ pub fn run_stream(
             Event::Data(DATA_TYPE_RUMBLE, b) if b.len() >= 3 => sink.rumble(b[1], b[2]),
             // Pad info carries the light-bar colour: at 1..4 in the 0x11-byte
             // form, 9..12 in the 0x19-byte one (chiaki ..._data_pad_info).
-            Event::Data(DATA_TYPE_PAD_INFO, b) => match b.len() {
-                0x11 => sink.light_bar([b[1], b[2], b[3]]),
-                0x19 => sink.light_bar([b[9], b[10], b[11]]),
-                _ => {}
-            },
+            Event::Data(DATA_TYPE_PAD_INFO, b) => {
+                match b.len() {
+                    0x11 => sink.light_bar([b[1], b[2], b[3]]),
+                    0x19 => sink.light_bar([b[9], b[10], b[11]]),
+                    _ => {}
+                }
+                // The effect strengths matter only to a DualSense.
+                if let Some(i) = pad_info_intensity(&b).filter(|_| cfg.dualsense) {
+                    if intensity != Some(i) {
+                        intensity = Some(i);
+                        sink.dualsense_intensity(i.0, i.1);
+                    }
+                }
+            }
+            Event::Data(DATA_TYPE_TRIGGER_EFFECTS, b) => {
+                if let Some((l, r)) = parse_trigger_effects(&b) {
+                    sink.trigger_effects(l, r);
+                }
+            }
             Event::Data(..) => {}
             Event::Av(p) if p.is_video => {
                 // The codec header goes out before the first frame of each profile.
@@ -990,6 +1059,11 @@ pub fn run_stream(
                     }
                 }
                 reorder.push(p);
+            }
+            Event::Av(p) if p.is_haptics => {
+                for frame in haptics.push(&p) {
+                    sink.haptics(&frame);
+                }
             }
             Event::Av(p) => {
                 for (idx, frame) in audio.push(&p) {
@@ -1037,9 +1111,9 @@ mod tests {
     /// STREAMINFOACK on channel 9 and the controller on channel 1, then nothing.
     #[test]
     fn without_the_mic_the_setup_is_unchanged() {
-        assert!(start_ctrl_messages(false).is_empty());
+        assert!(start_ctrl_messages(false, false).is_empty());
         assert_eq!(
-            after_streaminfo_messages(false),
+            after_streaminfo_messages(false, false),
             vec![
                 (9, vec![0x08, 0x0e]),
                 (
@@ -1058,17 +1132,65 @@ mod tests {
             launch_spec(&StreamConfig::default(), &[0u8; 16])
         );
         assert!(!StreamConfig::default().mic);
+        assert!(!StreamConfig::default().dualsense);
+    }
+
+    /// With a DualSense: chiaki's two ctrl messages first, and the controller is type 6.
+    #[test]
+    fn with_a_dualsense_the_console_is_told_so() {
+        let ctrl = start_ctrl_messages(false, true);
+        assert_eq!(ctrl[0], (0x13, vec![0x00, 0x40, 0x00]));
+        assert_eq!(ctrl[1].0, 0x11);
+        assert_eq!(ctrl[1].1.len(), 0x10);
+        assert_eq!(&ctrl[1].1[..6], &[0xa0, 0xab, 0x51, 0xbd, 0xd1, 0x7e]);
+        assert_eq!(ctrl.len(), 2);
+        // With the mic as well: the mic's mutes come after.
+        let both = start_ctrl_messages(true, true);
+        assert_eq!(&both[..2], &ctrl[..]);
+        assert_eq!(&both[2..], &start_ctrl_messages(true, false)[..]);
+        let tk = after_streaminfo_messages(false, true);
+        assert_eq!(
+            tk[1],
+            (
+                1,
+                vec![0x08, 0x15, 0xb2, 0x01, 0x04, 0x10, 0x01, 0x18, 0x06]
+            )
+        );
+    }
+
+    #[test]
+    fn trigger_effects_and_intensity_parse_like_chiaki() {
+        let mut b = vec![0u8; 25];
+        b[1] = 0x21;
+        b[2] = 0x26;
+        for i in 0..10 {
+            b[5 + i] = i as u8;
+            b[15 + i] = 0x10 + i as u8;
+        }
+        let (l, r) = parse_trigger_effects(&b).unwrap();
+        assert_eq!(l, (0x21, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]));
+        assert_eq!(r.0, 0x26);
+        assert_eq!(r.1[9], 0x19);
+        assert!(parse_trigger_effects(&b[..24]).is_none());
+        let mut p = vec![0u8; 0x19];
+        p[20] = 3;
+        p[21] = 2;
+        assert_eq!(pad_info_intensity(&p), Some((3, 2)));
+        let mut p = vec![0u8; 0x11];
+        p[12] = 1;
+        assert_eq!(pad_info_intensity(&p), Some((1, 0)));
+        assert_eq!(pad_info_intensity(&[0u8; 5]), None);
     }
 
     #[test]
     fn with_the_mic_setup_adds_chiaki_mutes_and_audio_header() {
-        let ctrl = start_ctrl_messages(true);
+        let ctrl = start_ctrl_messages(true, false);
         assert_eq!(
             ctrl,
             vec![(0x36, vec![0, 1, 1, 89]), (0x36, vec![0, 1, 1, 89])]
         );
-        let tk = after_streaminfo_messages(true);
-        assert_eq!(&tk[..2], &after_streaminfo_messages(false)[..]);
+        let tk = after_streaminfo_messages(true, false);
+        assert_eq!(&tk[..2], &after_streaminfo_messages(false, false)[..]);
         assert_eq!(tk[2].0, 1);
         assert_eq!(&tk[2].1[..6], &[0x08, 0x0d, 0x7a, 0x10, 0x12, 0x0e]);
     }

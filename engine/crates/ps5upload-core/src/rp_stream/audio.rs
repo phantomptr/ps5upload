@@ -147,6 +147,31 @@ impl AudioAssembler {
     }
 }
 
+/// The DualSense's haptics: audio packets flagged 0x02 (v12), framed and protected like the
+/// sound, but each unit is raw PCM (3 kHz, stereo s16le, 10 ms = 120 bytes) for the pad's
+/// actuators. Only a frame newer than the last one played is passed on: a late copy (FEC) of an
+/// older frame would buzz out of turn (chiaki `chiaki_audio_receiver_frame`, `is_haptics`).
+/// Not counted in the congestion reports (chiaki's haptics receiver has no packet stats).
+#[derive(Default)]
+pub struct HapticsAssembler {
+    inner: AudioAssembler,
+    last: Option<u16>,
+}
+
+impl HapticsAssembler {
+    /// The PCM frames in this packet to play now, oldest first.
+    pub fn push(&mut self, p: &AvPacket) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        for (idx, frame) in self.inner.push(p) {
+            if self.last.is_none_or(|l| seq16_gt(idx, l)) {
+                self.last = Some(idx);
+                out.push(frame);
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +187,7 @@ mod tests {
             units_in_frame_fec: (unit << 8) | (fec << 4) | source,
             codec: 5,
             adaptive_stream_index: 0,
+            is_haptics: false,
             key_pos: 0,
             data: (0..n * unit as usize)
                 .map(|i| (i / unit as usize) as u8)
@@ -188,5 +214,20 @@ mod tests {
         h[6..10].copy_from_slice(&480u32.to_be_bytes());
         let a = AudioHeader::parse(&h).unwrap();
         assert_eq!((a.channels, a.rate, a.frame_size), (2, 48000, 480));
+    }
+
+    #[test]
+    fn haptics_pass_on_only_frames_newer_than_the_last() {
+        let mut h = HapticsAssembler::default();
+        // Frame 10 (source) and FEC copies of 8, 9: only 10 is new enough.
+        assert_eq!(h.push(&pkt(10, 1, 2, 4)).len(), 1);
+        // 12 arrives (11 lost): 12 plays, the late copy of 11 does not.
+        let got = h.push(&pkt(12, 1, 2, 4));
+        assert_eq!(got, vec![vec![0u8; 4]]);
+        // Across the wrap.
+        let mut h = HapticsAssembler::default();
+        assert_eq!(h.push(&pkt(0xffff, 1, 0, 4)).len(), 1);
+        assert_eq!(h.push(&pkt(0, 1, 0, 4)).len(), 1);
+        assert!(h.push(&pkt(0xfffe, 1, 0, 4)).is_empty());
     }
 }

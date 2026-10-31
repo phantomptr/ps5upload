@@ -233,6 +233,7 @@ mod tests {
             units_in_frame_fec: fec,
             codec: 0,
             adaptive_stream_index: 0,
+            is_haptics: false,
             key_pos: 0,
             data: data.to_vec(),
         }
