@@ -6035,6 +6035,7 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_picture_pixelated_hint": "用硬边缘放大而不平滑：适合复古游戏。",
 "rp_picture_reset": "重置画面",
 "rp_picture_off_slow": "画面工具已关闭：这台设备跟不上。",
+"rp_picture_off_linux": "Linux 应用中已关闭锐化和放大：在那里它们会让串流卡顿。Linux 上的 Chrome 可以使用。",
 "rp_picture_off_failed": "画面工具已关闭：这台设备没有 WebGL 2。",
 "rp_game_tab_controls": "操控",
 "rp_controls_no_game": "启动一个游戏即可设置它的操控，每个游戏各自保存。",

@@ -5,7 +5,9 @@
 // access unit, 3 audio header, 4 audio frame), JSON status lines out, pad state in. This file
 // turns that into pixels on a canvas, sound, and input; the screen only drives it.
 
-import { DEFAULT_PICTURE, PicturePass, cropRect, needsPass, upscaleSize, upscales, type PictureTools } from "./rpPicture";
+import { DEFAULT_PICTURE, PicturePass, cropRect, needsPass, sharpens, upscaleSize, upscales, type PictureTools } from "./rpPicture";
+import { isLinuxDesktop } from "./platform";
+import { isTauriEnv } from "./tauriEnv";
 import { HdrPresenter, hdrSupport, isHdrFrame, pickCodec, supportedHevcMain10, type CodecPref, type StreamCodec } from "./rpHdr";
 import type { MotionReading } from "./motion";
 import type { DualSenseSink } from "./dualSense";
@@ -440,7 +442,7 @@ export interface StreamOptions {
    *  here (Settings › Video format). */
   codec?: CodecPref;
   /** The picture tools' GPU pass turned itself off (no WebGL, or the device lags). */
-  onPictureOff?: (why: "failed" | "slow") => void;
+  onPictureOff?: (why: "failed" | "slow" | "linux") => void;
   /** HDR was asked for and did not work here (`started`: the session is in HDR, shown as SDR). */
   onHdrOff?: (why: string, started: boolean) => void;
   /** How the picture fills the place it is shown in (default: the whole picture). */
@@ -709,8 +711,10 @@ export class RemotePlayStream {
     | { kind: "gl"; pass: PicturePass }
     | { kind: "2d"; ctx: CanvasRenderingContext2D | null }
     | null = null;
-  /** WebGL failed on this stream: the 2D canvas from now on. */
-  private noGl = false;
+  /** WebGL failed on this stream: the 2D canvas from now on. The Linux app starts there:
+   *  WebKitGTK copies a WebGL canvas back from the GPU every frame when compositing is off
+   *  (linux_gpu.rs turns it off on NVIDIA + Wayland), which made the stream lag badly. */
+  private noGl = linuxApp();
   /** The HDR presenter made at the start, used from the first frame. */
   private hdr: HdrPresenter | null = null;
   private loggedHdrFrame = false;
@@ -720,7 +724,7 @@ export class RemotePlayStream {
   private glLostTimer = 0;
   /** The picture tools stopped for good this session ("failed": no WebGL; "slow": the device
    *  lags). The picture is then drawn plain. */
-  private passOff: "failed" | "slow" | null = null;
+  private passOff: "failed" | "slow" | "linux" | null = null;
   private slowFrames = 0;
 
   /** Upscaling: the picture's box on screen, in CSS pixels (times the pixel ratio of the
@@ -764,11 +768,11 @@ export class RemotePlayStream {
   }
 
   /** Why the picture tools are off this session, or null. */
-  get pictureOff(): "failed" | "slow" | null {
+  get pictureOff(): "failed" | "slow" | "linux" | null {
     return this.passOff;
   }
 
-  private picturePassOff(why: "failed" | "slow"): void {
+  private picturePassOff(why: "failed" | "slow" | "linux"): void {
     if (this.passOff) return;
     this.passOff = why;
     this.o.onPictureOff?.(why);
@@ -776,6 +780,7 @@ export class RemotePlayStream {
 
   /** The drawer for the next frame, made on first use. */
   private pickDrawer(): NonNullable<RemotePlayStream["drawer"]> {
+    if (linuxApp() && sharpens(this.tools)) this.picturePassOff("linux");
     if (this.hdr && !this.hdr.lost && this.hdr.canvas === this.cv) return (this.drawer = { kind: "hdr", hdr: this.hdr });
     if (!this.noGl) {
       try {
@@ -1667,4 +1672,9 @@ export class RemotePlayStream {
     src.start(this.audioNext);
     this.audioNext += n / this.audioRate;
   }
+}
+
+/** The desktop app on Linux (WebKitGTK), where the picture is drawn with the 2D canvas. */
+function linuxApp(): boolean {
+  return isTauriEnv() && isLinuxDesktop();
 }

@@ -281,7 +281,12 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
           "warning",
           why === "slow"
             ? trStatic("rp_picture_off_slow", "Picture tools turned off: this device could not keep up.")
-            : trStatic("rp_picture_off_failed", "Picture tools turned off: this device has no WebGL 2."),
+            : why === "linux"
+              ? trStatic(
+                  "rp_picture_off_linux",
+                  "Sharpen and upscaling are off in the Linux app: drawing them there makes the stream lag. Chrome on Linux has them.",
+                )
+              : trStatic("rp_picture_off_failed", "Picture tools turned off: this device has no WebGL 2."),
         ),
       onHdrOff: (_why, started) => {
         // HDR did not work here: back to Auto so the next start is plain HEVC (the reason is in

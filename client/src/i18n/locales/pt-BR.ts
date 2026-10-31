@@ -6091,6 +6091,7 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_picture_pixelated_hint": "Amplia com bordas duras em vez de suavizar: para jogos retrô.",
 "rp_picture_reset": "Restaurar a imagem",
 "rp_picture_off_slow": "Ferramentas de imagem desligadas: este aparelho não deu conta.",
+"rp_picture_off_linux": "Nitidez e upscaling ficam desligados no app para Linux: lá eles deixam a transmissão travando. O Chrome no Linux tem os dois.",
 "rp_picture_off_failed": "Ferramentas de imagem desligadas: este aparelho não tem WebGL 2.",
 "rp_game_tab_controls": "Controles",
 "rp_controls_no_game": "Abra um jogo para ajustar os controles dele. Cada jogo guarda os seus.",

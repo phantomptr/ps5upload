@@ -6324,6 +6324,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_picture_pixelated_hint": "Skaluje z ostrymi krawędziami zamiast wygładzać: do gier retro.",
 "rp_picture_reset": "Przywróć obraz",
 "rp_picture_off_slow": "Narzędzia obrazu wyłączone: to urządzenie nie nadążało.",
+"rp_picture_off_linux": "Wyostrzanie i skalowanie są wyłączone w aplikacji na Linuksa: tam przez nie strumień się tnie. Chrome na Linuksie je ma.",
 "rp_picture_off_failed": "Narzędzia obrazu wyłączone: to urządzenie nie ma WebGL 2.",
 "rp_game_tab_controls": "Sterowanie",
 "rp_controls_no_game": "Uruchom grę, by ustawić jej sterowanie. Każda gra ma własne.",

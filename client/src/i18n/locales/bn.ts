@@ -6076,6 +6076,7 @@ library_compressed_hint: "সংকুচিত ইমেজ চালাতে 
 "rp_picture_pixelated_hint": "মসৃণ না করে ধারালো কিনারায় বড় করে: রেট্রো গেমের জন্য।",
 "rp_picture_reset": "ছবি রিসেট করুন",
 "rp_picture_off_slow": "ছবির টুল বন্ধ হয়েছে: এই ডিভাইস তাল রাখতে পারেনি।",
+"rp_picture_off_linux": "Linux অ্যাপে শার্পেন ও আপস্কেলিং বন্ধ: সেখানে এগুলো স্ট্রিমকে ধীর করে দেয়। Linux-এ Chrome-এ এগুলো আছে।",
 "rp_picture_off_failed": "ছবির টুল বন্ধ হয়েছে: এই ডিভাইসে WebGL 2 নেই।",
 "rp_game_tab_controls": "কন্ট্রোল",
 "rp_controls_no_game": "কোনো গেমের কন্ট্রোল সেট করতে সেটি চালু করুন। প্রতিটি গেম নিজেরটা রাখে।",
