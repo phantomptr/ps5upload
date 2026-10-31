@@ -954,6 +954,8 @@
   "cw_settings_network": "Hálózat",
   "cw_settings_off": "Ki",
   "cw_settings_on": "Be",
+  "cw_settings_start": "Kezdőoldal",
+  "cw_settings_start_note": "A PS5-ön tárolódik. Csalások esetén a PS5Upload Minion a futó játék csalásainál nyílik meg.",
   "cw_settings_text_size": "Szövegméret",
   "cw_settings_text_size_note": "Csak ezen a képernyőn érvényes, így a tévé és a számítógép saját méretet kaphat.",
   "cw_settings_theme": "Téma",

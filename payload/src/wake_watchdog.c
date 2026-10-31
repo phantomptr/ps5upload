@@ -9,6 +9,7 @@
  */
 
 #include "wake_watchdog.h"
+#include "proc_identity.h"
 #include "config.h"
 #include "runtime.h"
 #include "hw_info.h"
@@ -123,7 +124,7 @@ static int bigapp_running(void) {
 
 static void *wake_watchdog_thread_fn(void *arg) {
     (void)arg;
-    (void)syscall(SYS_thr_set_name, -1, "ps5upload-wake");
+    proc_name_set_self("ps5upload-wake");
 
     for (;;) {
         struct timespec real0, mono0, real1, mono1;

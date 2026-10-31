@@ -954,6 +954,8 @@
   "cw_settings_network": "Red",
   "cw_settings_off": "No",
   "cw_settings_on": "Sí",
+  "cw_settings_start": "Página de inicio",
+  "cw_settings_start_note": "Se guarda en la PS5. Con Trucos, PS5Upload Minion se abre en los trucos del juego en curso.",
   "cw_settings_text_size": "Tamaño del texto",
   "cw_settings_text_size_note": "Se guarda solo para esta pantalla, así la TV y un ordenador pueden tener cada uno su propio tamaño.",
   "cw_settings_theme": "Tema",

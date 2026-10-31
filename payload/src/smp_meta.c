@@ -7,6 +7,7 @@
  * Every write lands as a temporary file beside its destination and is renamed into
  * place in the same folder, so the rename can never cross a mount. */
 #include "smp_meta.h"
+#include "proc_identity.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -273,7 +274,7 @@ static void wait_or_wake(int seconds) {
 static void *worker(void *arg) {
     (void)arg;
 #ifdef SYS_thr_set_name
-    (void)syscall(SYS_thr_set_name, -1, "ps5upload-smp");
+    proc_name_set_self("ps5upload-smp");
 #endif
     pthread_mutex_lock(&g_mu);
     g_stats.running = 1;

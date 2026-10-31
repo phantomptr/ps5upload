@@ -8,6 +8,7 @@ import { overlayReducer } from "./help/overlay";
 import { Tour } from "./help/Tour";
 import { focusElement, onNavAction, type InputMap } from "./nav";
 import { SECTIONS, type SectionContext, type SectionParams } from "./sections";
+import { startSection, type WebSettings } from "./settings/Settings";
 import { HintBar } from "./shell/HintBar";
 import { Rail } from "./shell/Rail";
 import { ReloadBanner } from "./shell/ReloadBanner";
@@ -52,6 +53,34 @@ export function App({ inputMap }: { inputMap: InputMap }) {
   useBackLevel(active !== SECTIONS[0].id);
 
   useEffect(() => onTokenExpired(() => setExpired(true)), []);
+
+  // The saved start page (#584): with Cheats, the page opens there (the running game's cheats). Once,
+  // and only while the page is still on Home: a press made before the answer wins.
+  useEffect(() => {
+    let live = true;
+    call<WebSettings>("/api/settings").then(
+      (s) => {
+        const id = startSection(s, SECTIONS.some((x) => x.id === "cheats"));
+        if (!live || !id) return;
+        setActive((cur) => {
+          if (cur !== SECTIONS[0].id) return cur;
+          // Focus follows when it sat on Home's rail button (or nowhere), as at first load.
+          const home = railButton(SECTIONS[0].id);
+          if (focusLost() || document.activeElement === home) {
+            setTimeout(() => {
+              const el = railButton(id);
+              if (el) focusElement(el);
+            }, 0);
+          }
+          return id;
+        });
+      },
+      () => undefined, // no answer: Home, as before
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
 
   // ○ on Home could not close the page (the PS5 browser refuses once the page has history):
   // say which button gets back to the PS5's home screen.

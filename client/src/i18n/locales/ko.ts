@@ -5245,6 +5245,8 @@ c2c_test_deep_bad: "4 KiB 테스트 전송이 도착하지 않았습니다: {det
 "cw_tour3_pointer": "왼쪽 스틱으로 포인터를 움직이면 가리키는 것이 강조되고, ✕로 클릭합니다.",
 "cw_tour3_fullscreen": "처음 버튼을 누르면 페이지가 TV 전체를 채웁니다. 전체 화면은 설정에서 끌 수 있습니다.",
 "cw_settings_using": "컨트롤러와 팁",
+"cw_settings_start": "시작 페이지",
+"cw_settings_start_note": "PS5에 저장됩니다. 치트를 고르면 PS5Upload Minion이 실행 중인 게임의 치트로 열립니다.",
 "cw_settings_controls": "조작법",
 "cw_settings_controls_note": "여기서 각 컨트롤러 버튼이 하는 일. 버튼을 눌러 테스트하세요.",
 "cw_settings_tips": "팁 다시 보기",

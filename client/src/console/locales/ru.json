@@ -954,6 +954,8 @@
   "cw_settings_network": "Сеть",
   "cw_settings_off": "Выкл.",
   "cw_settings_on": "Вкл.",
+  "cw_settings_start": "Стартовая страница",
+  "cw_settings_start_note": "Хранится на PS5. С вариантом «Читы» PS5Upload Minion открывается на читах запущенной игры.",
   "cw_settings_text_size": "Размер текста",
   "cw_settings_text_size_note": "Сохраняется только для этого экрана, поэтому у телевизора и компьютера может быть свой размер.",
   "cw_settings_theme": "Тема",

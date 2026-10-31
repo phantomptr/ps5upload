@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <signal.h>
 #include "runtime.h"
 #include "config.h"
 #include "ava1_app_gen.h"
@@ -39,9 +40,27 @@ int runtime_try_takeover(runtime_state_t *state) {
 
     /* A flag left from before this instance (a crash, a reboot) must not be mistaken for a request. */
     takeover_flag_unlink(PS5UPLOAD2_RUNTIME_DIR);
+    runtime_sony_wait_clear();
 
     state->prior_asked = 0;
-    if (takeover_port_responding((int)AVA1_DEFAULT_PORT)) {
+    if (!takeover_port_responding((int)AVA1_DEFAULT_PORT)) {
+        /* Nothing answers, but the recorded prior may still be alive: a console's rest mode left
+         * older helpers running with a listener dead on the network (issue #593: after a wake the app
+         * saw the helper down, the resend started a second copy). Its flag poll thread still runs, so
+         * ask it through the flag all the same and leave the flag for it to see (the poll reads it
+         * once a second; this instance's own flag poll removes it when it starts, after the reap).
+         * The reap then gives it the asked grace. Verified on a Pro (FW 13.60): a 10.0.2 helper left
+         * deaf by rest mode read the flag and exited by itself within a second. */
+        int prior = state->prior_rec_pid;
+        if (prior > 0 && prior != (int)getpid() && kill((pid_t)prior, 0) == 0 &&
+            takeover_flag_write(PS5UPLOAD2_RUNTIME_DIR, state->takeover_nonce) == 0) {
+            printf("[payload2] prior instance pid=%d is alive but not serving; asked it to exit\n", prior);
+            state->prior_asked = 1;
+            state->startup_reason = PS5UPLOAD2_STARTUP_TAKEOVER;
+        }
+        return 0;
+    }
+    {
         /* The old instance is still serving AVA1. */
         int ports[1] = {(int)AVA1_DEFAULT_PORT};
         state->prior_asked = 1;

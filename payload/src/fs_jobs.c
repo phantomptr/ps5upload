@@ -341,9 +341,15 @@ static int tree_size_in(const char *path, uint64_t *bytes, uint64_t *files, int 
     DIR *d;
     struct dirent *e;
     int rc = 0;
-    if (depth > MAX_DEPTH) return -1;
+    if (depth > MAX_DEPTH) {
+        failed(h, path, "too deep");
+        return -1;
+    }
     if (cancelled(h)) return -2;
-    if (lstat(path, &st) != 0) return -1;
+    if (lstat(path, &st) != 0) {
+        failed(h, path, "lstat");
+        return -1;
+    }
     /* A nested mount is not counted (the removal and the chmod skip it and report it). */
     if (dev_of(&st, path) != root_dev) return 0;
     if (!S_ISDIR(st.st_mode)) {
@@ -352,22 +358,33 @@ static int tree_size_in(const char *path, uint64_t *bytes, uint64_t *files, int 
         return 0;
     }
     d = opendir(path);
-    if (!d) return -1;
+    if (!d) {
+        failed(h, path, "opendir");
+        return -1;
+    }
+    /* Counts what it can: an entry it cannot read is reported (the first one names the failure)
+     * and the walk goes on, so the totals cover everything readable. */
     while ((e = readdir(d)) != NULL) {
         char sub[1024];
         int sub_rc;
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        if (cancelled(h)) {
+            rc = -2;
+            break;
+        }
         /* A truncated child path means the work will hit the same limit; report it now rather
          * than let the totals lie. */
         if (snprintf(sub, sizeof sub, "%s/%s", path, e->d_name) >= (int)sizeof sub) {
+            failed(h, path, "path too long");
             rc = -1;
-            break;
+            continue;
         }
         sub_rc = tree_size_in(sub, bytes, files, depth + 1, h, root_dev);
-        if (sub_rc != 0) {
-            rc = sub_rc;
+        if (sub_rc == -2) {
+            rc = -2;
             break;
         }
+        if (sub_rc != 0) rc = -1;
     }
     closedir(d);
     return rc;
@@ -375,7 +392,10 @@ static int tree_size_in(const char *path, uint64_t *bytes, uint64_t *files, int 
 
 int fsj_tree_size(const char *path, uint64_t *bytes, uint64_t *files, int depth, const fsj_hooks_t *h) {
     struct stat st;
-    if (lstat(path, &st) != 0) return -1;
+    if (lstat(path, &st) != 0) {
+        failed(h, path, "lstat");
+        return -1;
+    }
     return tree_size_in(path, bytes, files, depth, h, dev_of(&st, path));
 }
 
@@ -527,32 +547,48 @@ typedef struct {
     ava1_op_ctx_t *c;
     char first[600];
     char what[16];
+    int err; /* errno of the first failure, 0 when the cause is not a system call's */
     uint64_t n;
+    const char *base; /* paths under this folder are shown relative to it (NULL: in full) */
 } fail_t;
 
 static int fail_cancelled(void *arg) { return ava1_op_cancelled(((fail_t *)arg)->c); }
 static void fail_file(void *arg, uint64_t bytes) { ava1_op_add(((fail_t *)arg)->c, 1, bytes); }
 static void fail_note(void *arg, const char *path, const char *what) {
     fail_t *f = arg;
+    int e = errno; /* the walkers report right after the failing call */
     if (f->n++ == 0) {
         snprintf(f->first, sizeof f->first, "%s", path);
         snprintf(f->what, sizeof f->what, "%s", what);
+        /* "mount", "path too long", "too deep" are the walker's own refusals, not an errno. */
+        f->err = (strcmp(what, "mount") == 0 || strcmp(what, "path too long") == 0 || strcmp(what, "too deep") == 0)
+                     ? 0
+                     : e;
     }
 }
 
-/* The cause of a partly failed walk: `<token>: <what> <first path> (<n> left)`, cut to the
- * status line, keeping the END of a long path (the part that tells folders apart). */
+/* The cause of a partly failed walk: `<token>: <what> <first path>: <errno text> (<n> left)`, cut
+ * to the status line, keeping the END of a long path (the part that tells folders apart). A path
+ * under `base` (the parent of the folder the job works on) is shown from that folder down. */
 static void fail_message(const fail_t *f, const char *token, const char *unit) {
     char shown[110];
-    size_t l = strlen(f->first), keep = sizeof shown - 1;
+    const char *p = f->first;
+    size_t l, keep = sizeof shown - 1, bl = f->base ? strlen(f->base) : 0;
+    if (bl > 1 && strncmp(p, f->base, bl) == 0 && p[bl] == '/' && p[bl + 1]) p += bl + 1;
+    l = strlen(p);
     if (l > keep) {
         memcpy(shown, "...", 3);
-        memcpy(shown + 3, f->first + l - (keep - 3), keep - 3);
+        memcpy(shown + 3, p + l - (keep - 3), keep - 3);
         shown[keep] = '\0';
     } else {
-        memcpy(shown, f->first, l + 1);
+        memcpy(shown, p, l + 1);
     }
-    ava1_op_message((ava1_op_ctx_t *)f->c, "%s: %s %s (%llu %s)", token, f->what, shown, (unsigned long long)f->n, unit);
+    if (f->err)
+        ava1_op_message((ava1_op_ctx_t *)f->c, "%s: %s %s: %s (%llu %s)", token, f->what, shown, strerror(f->err),
+                        (unsigned long long)f->n, unit);
+    else
+        ava1_op_message((ava1_op_ctx_t *)f->c, "%s: %s %s (%llu %s)", token, f->what, shown, (unsigned long long)f->n,
+                        unit);
 }
 
 /* DELETE {"path"}. The path is normalised first (trailing slashes, `//`, `/./` all spell the
@@ -565,21 +601,25 @@ static int op_delete(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n)
     char path[1024], parent[1024];
     uint64_t bytes = 0, files = 0;
     struct stat st;
-    fail_t f;
+    fail_t f, cf;
     fsj_hooks_t h, walk;
-    int rc, dev;
+    int rc, count_rc, dev;
     const ava1_data_cfg_t *cfg = ava1_data_cfg();
     (void)arg;
     (void)n;
     memset(&f, 0, sizeof f);
+    memset(&cf, 0, sizeof cf);
     f.c = c;
+    f.base = parent;
+    cf.c = c;
+    cf.base = parent;
     h.cancelled = fail_cancelled;
     h.file = fail_file;
     h.failed = fail_note;
     h.arg = &f;
     walk = h;
     walk.file = NULL;
-    walk.failed = NULL;
+    walk.arg = &cf; /* the count's failures are kept apart: only the removal's are "left" */
     if (!fsj_json_str((const char *)args, "path", path, sizeof path) || !path[0]) {
         ava1_op_message(c, "fs_delete_missing_path");
         return AVA1_ERR_PROTOCOL;
@@ -596,15 +636,16 @@ static int op_delete(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n)
     }
     if (lstat(path, &st) != 0 && errno == ENOENT) return AVA1_STATUS_OK; /* nothing to do */
     ava1_op_message(c, "counting");
-    rc = fsj_tree_size(path, &bytes, &files, 0, &walk);
-    if (rc == -2) {
+    count_rc = fsj_tree_size(path, &bytes, &files, 0, &walk);
+    if (count_rc == -2) {
         ava1_op_message(c, "fs_delete_cancelled");
         return AVA1_ERR_CANCELLED;
     }
-    if (rc != 0) {
-        ava1_op_message(c, "fs_delete_walk_failed");
-        return AVA1_ERR_IO;
-    }
+    /* A count that could not read everything is not a reason to refuse the delete: the total covers
+     * what it could read, and the removal (the authority) deletes what it can and names what is left. */
+    if (count_rc != 0 && cf.n)
+        fprintf(stderr, "[fs_jobs] delete %s: counting could not read %s (%s): %s; deleting what it can\n", path,
+                cf.first, cf.what, cf.err ? strerror(cf.err) : "-");
     ava1_op_set_total(c, files, bytes);
     ava1_op_message(c, "deleting");
     rc = fsj_rm_rf(path, 0, &h);
@@ -614,6 +655,7 @@ static int op_delete(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n)
     }
     if (rc != 0) {
         if (f.n) fail_message(&f, "fs_delete_failed", "left");
+        else if (cf.n) fail_message(&cf, "fs_delete_failed", "left");
         else ava1_op_message(c, "fs_delete_failed");
         return AVA1_ERR_IO;
     }

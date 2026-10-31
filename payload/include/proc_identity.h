@@ -56,8 +56,17 @@
  * point: `-1` means "this thread", so it cannot be done on the creator's
  * behalf from a pthread_create wrapper. Best-effort — a failure here costs
  * identification, never correctness, so the return is deliberately ignored. */
+static inline int proc_name_is_ours(const char *name);
+
 #ifdef SYS_thr_set_name
+/* On the PS5 a thread's name is also the PROCESS's name: the kinfo_proc ki_comm that Payload
+ * Manager and our own process list show followed whichever thread named itself last (measured on a
+ * Pro, FW 13.60: the helper listed as "ps5upload-clean", then "ps5upload-tile"; issue #593). So every
+ * helper thread takes the one process name, "ps5upload.elf", whatever role it passes: the console
+ * lists the helper by that name and never as elfldr's "payload.elf". Names outside our prefix (the
+ * extractor's "ps5u-extract") are kept as given. */
 static inline void proc_name_set_self(const char *name) {
+    if (proc_name_is_ours(name)) name = PS5UPLOAD2_PROC_NAME;
     (void)syscall(SYS_thr_set_name, -1, name);
 }
 #else

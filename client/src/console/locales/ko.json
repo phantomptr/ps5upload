@@ -954,6 +954,8 @@
   "cw_settings_network": "네트워크",
   "cw_settings_off": "꺼짐",
   "cw_settings_on": "켜짐",
+  "cw_settings_start": "시작 페이지",
+  "cw_settings_start_note": "PS5에 저장됩니다. 치트를 고르면 PS5Upload Minion이 실행 중인 게임의 치트로 열립니다.",
   "cw_settings_text_size": "글자 크기",
   "cw_settings_text_size_note": "이 화면에만 저장되므로 TV와 컴퓨터에서 각각 다른 크기를 쓸 수 있습니다.",
   "cw_settings_theme": "테마",

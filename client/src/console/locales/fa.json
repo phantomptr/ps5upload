@@ -954,6 +954,8 @@
   "cw_settings_network": "شبکه",
   "cw_settings_off": "خاموش",
   "cw_settings_on": "روشن",
+  "cw_settings_start": "صفحهٔ شروع",
+  "cw_settings_start_note": "روی PS5 ذخیره می‌شود. با چیت‌ها، PS5Upload Minion روی چیت‌های بازی در حال اجرا باز می‌شود.",
   "cw_settings_text_size": "اندازه متن",
   "cw_settings_text_size_note": "فقط برای همین صفحه ذخیره می‌شود، تا تلویزیون و رایانه هر کدام اندازه خود را داشته باشند.",
   "cw_settings_theme": "تم",

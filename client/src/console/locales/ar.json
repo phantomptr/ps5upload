@@ -954,6 +954,8 @@
   "cw_settings_network": "الشبكة",
   "cw_settings_off": "معطّل",
   "cw_settings_on": "مفعّل",
+  "cw_settings_start": "صفحة البدء",
+  "cw_settings_start_note": "تُحفظ على PS5. مع الشفرات، يفتح PS5Upload Minion على شفرات اللعبة الجارية.",
   "cw_settings_text_size": "حجم النص",
   "cw_settings_text_size_note": "يُحفظ لهذه الشاشة فقط، فيمكن أن يكون للتلفاز والكمبيوتر حجم مختلف لكل منهما.",
   "cw_settings_theme": "المظهر",

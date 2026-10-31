@@ -18,6 +18,7 @@
 #include "register.h"
 #include "shellui_rpc.h"
 #include "hw_guard.h"
+#include "fw_spoof.h"
 #include "kernel_rw_lock.h"
 #include "proc_list.h"
 #include "hw_info.h"
@@ -222,6 +223,7 @@ static void handle_fatal_info(int sig, siginfo_t *si, void *ucv) {
     fatal_put_str(buf, sizeof(buf), &pos, "\n");
     /* A faulting Sony getter inside the hw guard is recovered (siglongjmp, no return). */
     if (hw_guard_try_recover(sig)) return;
+    if (fw_spoof_try_recover(sig)) return;
     (void)write(STDERR_FILENO, buf, pos);
     handle_fatal(sig);
 }
@@ -234,6 +236,7 @@ static void handle_fatal(int sig) {
      * to "unavailable" rather than dropping the whole helper. Returns 0 (and
      * we fall through to normal fatal handling) for any non-guarded crash. */
     if (hw_guard_try_recover(sig)) return; /* unreachable when it recovers */
+    if (fw_spoof_try_recover(sig)) return; /* the firmware-version read, the same way */
 
     /* Name what we died doing, before anything else can fail. Only write(2)
      * and hand-rolled formatting: snprintf and stderr stdio are not
@@ -705,6 +708,8 @@ int main(void) {
         return 1;
     }
     startup_trace("WRITE_OWNERSHIP_DONE");
+    runtime_start_watchers();
+    startup_trace("WATCHERS_STARTED");
 
     /* Restore persisted fan threshold. The runtime root now exists
      * (created by runtime_ensure_directories above), so the persist
@@ -839,14 +844,16 @@ int main(void) {
 
     /* Arm a watchdog so that, however we shut down from here, the process cannot hang forever (e.g. on
      * an uninterruptible Sony API). A lingering process is exactly what the next resend would duplicate.
-     * Healthy shutdown exits via the return below long before this fires. */
+     * Healthy shutdown exits via the return below long before this fires. Armed FIRST: everything
+     * after it (a file write, a thread join) can hang too. */
+    runtime_arm_shutdown_watchdog(&state, rc == 0 ? 0 : 1);
+
     /* Persist tracked play time before we go. The watcher only saves every
      * 60s, so a payload swap in between would otherwise drop the current
      * session — which is most of what a short session IS. */
     activity_flush();
+    /* Leaves a running game's overlay mounted for the next helper to adopt. */
     fakelib_overlay_stop();
-
-    runtime_arm_shutdown_watchdog(&state, rc == 0 ? 0 : 1);
 
     /* The AVA1 half: stop accepting, wait for the sessions (2 s) and for any in-flight Sony call
      * (this does NOT return while one runs: only the exit watchdog armed above (8 s, or up to 60 s while a Sony call runs) can end the
@@ -859,5 +866,7 @@ int main(void) {
     }
 
     (void)runtime_clear_ownership(&state);
+    /* A dump stopped mid-decrypt may have left the kernel's vnode pager swapped: put it back. */
+    app_dump_pager_emergency_restore();
     return rc == 0 ? 0 : 1;
 }
