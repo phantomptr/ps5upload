@@ -103,6 +103,9 @@ pub struct UpdateCheck {
     /// `download_url`). Used by `update_download` to pick the local
     /// save path in ~/Downloads.
     pub download_filename: String,
+    /// Lowercase hex SHA-256 of `download_url` when latest.json carries a
+    /// `sha256` map (keyed like `assets`); empty otherwise.
+    pub download_sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -114,6 +117,8 @@ struct Manifest {
     pub_date: String,
     #[serde(default)]
     assets: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    sha256: std::collections::HashMap<String, String>,
 }
 
 /// Platform key used in the manifest. Matches the format tauri-plugin-
@@ -245,7 +250,14 @@ fn preferred_asset_keys() -> Vec<String> {
             return vec![format!("{base}-setup"), base.to_string()];
         }
     }
-    vec![base.to_string()]
+    // Android: the APK for this device's ABI (a 32-bit copy on a 64-bit phone
+    // moves to arm64), the running build's key as the fallback.
+    #[cfg(target_os = "android")]
+    let keys =
+        super::update_android::asset_keys_for_abis(&super::update_android::device_abilist(), base);
+    #[cfg(not(target_os = "android"))]
+    let keys = vec![base.to_string()];
+    keys
 }
 
 /// Minimal semver-ish comparison. Splits MAJOR.MINOR.PATCH numerics and
@@ -524,9 +536,12 @@ pub async fn update_check(app: AppHandle, channel: Option<String>) -> Result<Upd
     let available = is_newer(&current_version, &latest_version);
     // Most-specific-first: a packaged Linux install gets its own format,
     // everything else gets the single platform key.
-    let download_url = preferred_asset_keys()
+    let (download_url, download_sha256) = preferred_asset_keys()
         .into_iter()
-        .find_map(|k| manifest.assets.get(&k).cloned())
+        .find_map(|k| {
+            let url = manifest.assets.get(&k)?.clone();
+            Some((url, manifest.sha256.get(&k).cloned().unwrap_or_default()))
+        })
         .unwrap_or_default();
     let download_filename = download_url.rsplit('/').next().unwrap_or("").to_string();
     Ok(UpdateCheck {
@@ -537,6 +552,7 @@ pub async fn update_check(app: AppHandle, channel: Option<String>) -> Result<Upd
         pub_date: manifest.pub_date,
         download_url,
         download_filename,
+        download_sha256,
     })
 }
 
@@ -871,6 +887,16 @@ const PINNED_PRODUCTION_HOSTS: &[&str] = &[
     "objects.githubusercontent.com",
     "raw.githubusercontent.com",
 ];
+
+/// Whether an update asset may be downloaded from `url`: the pinned GitHub
+/// hosts, or any HTTPS host once a developer pointed the manifest elsewhere.
+pub(crate) fn is_allowed_download_url(url: &str) -> bool {
+    if std::env::var("PS5UPLOAD_UPDATE_MANIFEST_URL").is_ok() {
+        is_safe_dev_url(url)
+    } else {
+        is_safe_update_url(url)
+    }
+}
 
 fn is_safe_update_url(raw: &str) -> bool {
     is_safe_update_url_for_host(raw, PINNED_PRODUCTION_HOSTS)

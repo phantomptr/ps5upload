@@ -54,6 +54,7 @@ pub mod smp;
 pub mod system_bars;
 pub mod system_power;
 pub mod title_meta;
+pub mod update_android;
 pub mod updates;
 pub mod usb_autoloader;
 pub mod user_config;
@@ -115,6 +116,7 @@ pub use smp::*;
 pub use system_bars::*;
 pub use system_power::*;
 pub use title_meta::*;
+pub use update_android::*;
 pub use updates::*;
 pub use usb_autoloader::*;
 
