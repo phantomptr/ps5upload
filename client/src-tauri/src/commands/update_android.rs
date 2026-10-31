@@ -31,6 +31,7 @@ const APK_MAX_BYTES: u64 = 300 * 1024 * 1024;
 /// `compiled` (the key of the running build) is the last resort, so an
 /// unreadable ABI list still updates like before. A 32-bit copy on a 64-bit
 /// phone moves to the 64-bit APK; a 32-bit-only phone never gets it.
+#[cfg(any(target_os = "android", test))]
 pub fn asset_keys_for_abis(abilist: &str, compiled: &str) -> Vec<String> {
     let mut keys: Vec<String> = Vec::new();
     for abi in abilist.split(',').map(str::trim) {
