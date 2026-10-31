@@ -100,7 +100,8 @@ pub fn xpad_style(vendor: u16, product: u16, driver: &str) -> bool {
         || (vendor == 0x28de && product == 0x11ff)
 }
 
-/// A stick axis as -1-1, centred, with the device's flat zone (at least 2 %) read as 0.
+/// A stick axis as -1-1, centred, with the device's flat zone (at least 5 %: a resting
+/// DualSense reads 129-130 of 0-255, 2 % off centre) read as 0.
 fn stick(r: AbsRange, v: i32) -> f64 {
     let half = (f64::from(r.max) - f64::from(r.min)) / 2.0;
     if half <= 0.0 {
@@ -108,7 +109,7 @@ fn stick(r: AbsRange, v: i32) -> f64 {
     }
     let centre = (f64::from(r.max) + f64::from(r.min)) / 2.0;
     let x = ((f64::from(v) - centre) / half).clamp(-1.0, 1.0);
-    let dead = (f64::from(r.flat) / half).clamp(0.02, 0.25);
+    let dead = (f64::from(r.flat) / half).clamp(0.05, 0.25);
     if x.abs() < dead {
         0.0
     } else {
@@ -194,7 +195,8 @@ pub struct NativePadEvent {
 #[cfg(target_os = "linux")]
 pub mod reader {
     use super::*;
-    use evdev::{AbsoluteAxisCode, EventType, KeyCode, PropType, RawDevice};
+    use evdev::raw_stream::RawDevice;
+    use evdev::{AbsoluteAxisCode, EventType, KeyCode, PropType};
     use std::collections::HashSet;
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::OpenOptionsExt;
@@ -566,6 +568,13 @@ mod tests {
     fn a_resting_dualsense_is_all_zero() {
         let s = state(&dualsense(), &[], &[(ABS_HAT0X, 0), (ABS_HAT0Y, 0)]);
         assert_eq!(s.buttons, vec![0.0; 17]);
+        assert_eq!(s.axes, vec![0.0; 4]);
+        // What the user's resting DualSense read (EVIOCGABS): X 129, Y 130, RX/RY 128.
+        let s = state(
+            &dualsense(),
+            &[],
+            &[(ABS_X, 129), (ABS_Y, 130), (ABS_HAT0X, 0), (ABS_HAT0Y, 0)],
+        );
         assert_eq!(s.axes, vec![0.0; 4]);
     }
 
