@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **A new look for the on-screen controller in Remote Play:** thin light outlines with a faint
+  fill over the game, so the picture shows through. Shoulders stacked in the top corners, a
+  four-key D-pad and the face buttons at mid height, the sticks lower toward your thumbs,
+  Create and Options in the bottom corners. A key fills in while you press it.
+- **The controller fits the screen:** bigger keys on a tablet, smaller on a small phone, and
+  every key stays at least finger-sized. Size (Small, Medium, Large) and opacity (now down to
+  25%) are in Remote Play settings.
+- **Phone held sideways in full screen:** the menu button is at the bottom middle, under PS.
+
 ## 10.0.3
 
 - **Fixed: after waking the PS5 from rest mode, the app said the helper was down (#593)**, and
