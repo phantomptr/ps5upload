@@ -67,7 +67,7 @@ fn remote_err(e: RemoteError) -> anyhow::Error {
 }
 
 /// Makes `dir` and every missing parent on the server.
-async fn make_dirs(fs: &dyn RemoteFs, dir: &str) -> Result<()> {
+pub(crate) async fn make_dirs(fs: &dyn RemoteFs, dir: &str) -> Result<()> {
     let mut at = String::new();
     for part in dir.split('/').filter(|p| !p.is_empty()) {
         at = format!("{at}/{part}");
@@ -78,7 +78,7 @@ async fn make_dirs(fs: &dyn RemoteFs, dir: &str) -> Result<()> {
 
 /// Writes `staged` to `target` on the server: under a temporary name first, then into place, so
 /// an interrupted write never leaves a half file under the real name.
-async fn place(
+pub(crate) async fn place(
     fs: &dyn RemoteFs,
     staged: &Path,
     target: &str,
