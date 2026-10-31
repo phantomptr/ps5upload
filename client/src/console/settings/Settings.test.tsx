@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import de from "../locales/de.json";
 import { _setStringsLoaderForTests, chooseLanguage, getLanguage, storedLanguage, stringsReady, t } from "../strings";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
-import { canTurnOff, lanToggleStep, SettingsView, TurnedOff, tileNote, waitTileApplied, type SettingsViewProps, type WebSettings } from "./Settings";
+import { canTurnOff, lanToggleStep, SettingsView, startSection, TurnedOff, tileNote, waitTileApplied, type SettingsViewProps, type WebSettings } from "./Settings";
 
 function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   const out: ReactElement<Record<string, unknown>>[] = [];
@@ -186,5 +186,26 @@ describe("settings", () => {
     expect(sw?.props.on).toBe(false);
     (sw?.props.onClick as () => void)();
     expect(onToggleContrast).toHaveBeenCalled();
+  });
+
+  it("start_page_choice_shows_with_a_helper_that_saves_it_and_opens_cheats_only_when_saved", () => {
+    // An older helper sends no start_cheats: no row, and the page opens on Home.
+    const old = elements(SettingsView(base({ onStartPage: vi.fn() })));
+    expect(old.some((e) => e.props["data-start-choice"] !== undefined)).toBe(false);
+    expect(startSection({}, true)).toBeNull();
+
+    const onStartPage = vi.fn();
+    const settings: WebSettings = { lan: false, tile: true, start_cheats: false, version: "10.0.3" };
+    const els = elements(SettingsView(base({ settings, onStartPage })));
+    const choices = els.filter((e) => e.props["data-start-choice"] !== undefined);
+    expect(choices.map((e) => e.props["data-start-choice"])).toEqual(["home", "cheats"]);
+    expect(choices.map((e) => e.props["aria-pressed"])).toEqual([true, false]);
+    (choices[1].props.onClick as () => void)();
+    expect(onStartPage).toHaveBeenCalledWith(true);
+
+    expect(startSection({ start_cheats: true }, true)).toBe("cheats");
+    expect(startSection({ start_cheats: true }, false)).toBeNull();
+    expect(startSection({ start_cheats: false }, true)).toBeNull();
+    expect(startSection(null, true)).toBeNull();
   });
 });

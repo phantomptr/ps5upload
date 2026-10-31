@@ -1615,7 +1615,7 @@ static void r_cleanup_cancel(const char *b, size_t n, uint8_t *out, int fd) {
 /* The live settings. g_set_mu is held across a save, so two /api/settings/set calls never write
  * the file at once and memory always matches what is on disk. */
 static pthread_mutex_t g_set_mu = PTHREAD_MUTEX_INITIALIZER;
-static webui_settings_t g_set = { 0, 1, 1 };
+static webui_settings_t g_set = { 0, 1, 1, 0 };
 /* Whether webui.json was on the console when the helper started, or has been saved since: a PC that
  * turned Minion off re-applies that when the file is gone (the folder was wiped), and only then. */
 static int g_saved = 0;
@@ -1638,7 +1638,7 @@ void webui_api_settings_init(const webui_settings_t *s, int saved) {
 /* `addr`: with LAN access on, the console's address a phone opens ("Continue on your phone"; the
  * page builds http://<addr>:<port>/ from it); "" when off or there is none. Dotted IPv4 only.
  * `enabled`: PS5Upload Minion as a whole (false only in the reply that turns it off: the page
- * stops right after). */
+ * stops right after). `start_cheats`: the page opens on Cheats instead of Home (#584). */
 static void send_settings(int fd, const webui_settings_t *s) {
     char json[320], addr[INET_ADDRSTRLEN];
     int busy, failed, k;
@@ -1646,11 +1646,11 @@ static void send_settings(int fd, const webui_settings_t *s) {
     webui_tile_state(&busy, &failed, &result);
     if (!s->lan || !webui_lan_addr(addr)) addr[0] = '\0';
     k = snprintf(json, sizeof json,
-                 "{\"lan\":%s,\"tile\":%s,\"enabled\":%s,\"tile_busy\":%s,\"tile_failed\":%s,"
+                 "{\"lan\":%s,\"tile\":%s,\"enabled\":%s,\"start_cheats\":%s,\"tile_busy\":%s,\"tile_failed\":%s,"
                  "\"tile_result\":\"%s\",\"version\":\"%s\",\"addr\":\"%s\"}",
                  s->lan ? "true" : "false", s->tile ? "true" : "false", s->enabled ? "true" : "false",
-                 busy ? "true" : "false", failed ? "true" : "false", webui_tile_result_name(result),
-                 PS5UPLOAD2_VERSION, addr);
+                 s->start_cheats ? "true" : "false", busy ? "true" : "false", failed ? "true" : "false",
+                 webui_tile_result_name(result), PS5UPLOAD2_VERSION, addr);
     if (k < 0 || (size_t)k >= sizeof json) {
         send_error(fd, 500, "bad_settings_reply", 18);
         return;
@@ -1769,14 +1769,14 @@ static int apply_locked(const webui_settings_t *old, const webui_settings_t *s, 
     return s->enabled != old->enabled;
 }
 
-/* {lan?, tile?, enabled?}: saved first (the file is the truth at the next start), then answered
+/* {lan?, tile?, enabled?, start_cheats?}: saved first (the file is the truth at the next start), then answered
  * with the new settings, then applied: a `lan` change rebinds the listener on a thread of its own,
  * a `tile` change (or tile:true again) registers or removes the tile on the tile thread, and
  * enabled:false (Settings -> Turn off PS5Upload Minion) removes the tile and then stops this
  * server, after the reply. A failed save changes nothing. */
 static void r_settings_set(const char *b, size_t n, uint8_t *out, int fd) {
     webui_settings_t old, s;
-    int lan, tile, enabled, has_lan, has_tile, has_enabled, server;
+    int lan, tile, enabled, start_cheats, has_lan, has_tile, has_enabled, has_start, server, changed;
     (void)out;
     has_lan = webui_json_bool(b, n, "lan", &lan);
     if (has_lan < 0) {
@@ -1793,19 +1793,25 @@ static void r_settings_set(const char *b, size_t n, uint8_t *out, int fd) {
         send_bad(fd, "bad_enabled");
         return;
     }
+    has_start = webui_json_bool(b, n, "start_cheats", &start_cheats);
+    if (has_start < 0) {
+        send_bad(fd, "bad_start_cheats");
+        return;
+    }
     pthread_mutex_lock(&g_set_mu);
     old = s = g_set;
     if (has_lan) s.lan = lan;
     if (has_tile) s.tile = tile;
     if (has_enabled) s.enabled = enabled;
-    if ((s.lan != old.lan || s.tile != old.tile || s.enabled != old.enabled) &&
-        webui_settings_save(WEBUI_SETTINGS_PATH, &s) != 0) {
+    if (has_start) s.start_cheats = start_cheats;
+    changed = s.lan != old.lan || s.tile != old.tile || s.enabled != old.enabled || s.start_cheats != old.start_cheats;
+    if (changed && webui_settings_save(WEBUI_SETTINGS_PATH, &s) != 0) {
         pthread_mutex_unlock(&g_set_mu);
         send_error(fd, 500, "save_failed", 11);
         return;
     }
     g_set = s;
-    if (s.lan != old.lan || s.tile != old.tile || s.enabled != old.enabled) g_saved = 1;
+    if (changed) g_saved = 1;
     /* Keep tile requests in saved-setting order, including calls from the paired PC.
      * tile:true also retries a failed ensure; removal runs only on a change. */
     server = apply_locked(&old, &s, has_tile && tile);

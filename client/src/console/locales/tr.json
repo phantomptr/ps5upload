@@ -954,6 +954,8 @@
   "cw_settings_network": "Ağ",
   "cw_settings_off": "Kapalı",
   "cw_settings_on": "Açık",
+  "cw_settings_start": "Açılış sayfası",
+  "cw_settings_start_note": "PS5'te saklanır. Hileler seçiliyse PS5Upload Minion çalışan oyunun hileleriyle açılır.",
   "cw_settings_text_size": "Metin boyutu",
   "cw_settings_text_size_note": "Yalnızca bu ekran için saklanır; böylece TV ve bilgisayarın her biri kendi boyutunu kullanabilir.",
   "cw_settings_theme": "Tema",

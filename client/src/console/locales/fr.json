@@ -954,6 +954,8 @@
   "cw_settings_network": "Réseau",
   "cw_settings_off": "Désactivé",
   "cw_settings_on": "Activé",
+  "cw_settings_start": "Page de démarrage",
+  "cw_settings_start_note": "Enregistrée sur la PS5. Avec Codes, PS5Upload Minion s'ouvre sur les codes du jeu en cours.",
   "cw_settings_text_size": "Taille du texte",
   "cw_settings_text_size_note": "Enregistrée pour cet écran seulement : la TV et un ordinateur peuvent chacun avoir leur propre taille.",
   "cw_settings_theme": "Thème",

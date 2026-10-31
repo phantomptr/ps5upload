@@ -32,7 +32,15 @@ export interface WebSettings {
   tile_result?: string;
   /** PS5Upload Minion as a whole (#480); older helpers send none and cannot turn it off. */
   enabled?: boolean;
+  /** The page opens on Cheats instead of Home (#584); older helpers send none (Home). */
+  start_cheats?: boolean;
   version: string;
+}
+
+/** The section the page opens on: Cheats when the helper saved that start page and the page has a
+ *  Cheats section, else null (Home). */
+export function startSection(s: Pick<WebSettings, "start_cheats"> | null, hasCheats: boolean): "cheats" | null {
+  return s?.start_cheats === true && hasCheats ? "cheats" : null;
 }
 
 /** Whether this helper can turn Minion off (it sends `enabled`). */
@@ -99,6 +107,8 @@ export interface SettingsViewProps {
   onConfirmLan: () => void;
   onDismissLan: () => void;
   onToggleTile: () => void;
+  /** Choose the start page (#584): true opens on Cheats. Absent, or a helper without the setting: hidden. */
+  onStartPage?: (cheats: boolean) => void;
   onLanguage: (code: string) => void;
   /** The Full screen switch: whether the page is full screen now, or null where the browser cannot
    *  or refused (the switch is hidden). */
@@ -295,6 +305,27 @@ export function SettingsView(p: SettingsViewProps) {
         {p.onShowTips ? <ActionRow setting="tips" label={t("cw_settings_tips")} onClick={p.onShowTips} /> : null}
       </section>
 
+      {s && typeof s.start_cheats === "boolean" && p.onStartPage ? (
+        <section className="cw-home-section" data-setting="start">
+          <h2 className="cw-h2">{t("cw_settings_start")}</h2>
+          <div className="cw-quick" role="group" aria-label={t("cw_settings_start")}>
+            {[false, true].map((cheats) => (
+              <button
+                key={cheats ? "cheats" : "home"}
+                type="button"
+                className="cw-focusable cw-button"
+                data-start-choice={cheats ? "cheats" : "home"}
+                aria-pressed={s.start_cheats === cheats}
+                onClick={() => p.onStartPage?.(cheats)}
+              >
+                <span>{t(cheats ? "cw_cheats_title" : "cw_nav_home")}</span>
+              </button>
+            ))}
+          </div>
+          <p className="cw-dim cw-setting-note">{t("cw_settings_start_note")}</p>
+        </section>
+      ) : null}
+
       <section className="cw-home-section">
         <h2 className="cw-h2">{t("cw_settings_network")}</h2>
         {s ? (
@@ -448,7 +479,7 @@ export function Settings({ onOpenControls, onShowTips }: { onOpenControls?: () =
       });
   }, []);
 
-  const save = useCallback((change: Partial<Pick<WebSettings, "lan" | "tile">>) => {
+  const save = useCallback((change: Partial<Pick<WebSettings, "lan" | "tile" | "start_cheats">>) => {
     setBusy(true);
     setError(null);
     call<WebSettings>("/api/settings/set", change)
@@ -498,6 +529,9 @@ export function Settings({ onOpenControls, onShowTips }: { onOpenControls?: () =
       }}
       onToggleTile={() => {
         if (settings && !busy) save({ tile: !settings.tile });
+      }}
+      onStartPage={(cheats) => {
+        if (settings && !busy && settings.start_cheats !== cheats) save({ start_cheats: cheats });
       }}
       onLanguage={(code) => {
         chooseLanguage(code);

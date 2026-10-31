@@ -954,6 +954,8 @@
   "cw_settings_network": "नेटवर्क",
   "cw_settings_off": "बंद",
   "cw_settings_on": "चालू",
+  "cw_settings_start": "शुरुआती पेज",
+  "cw_settings_start_note": "PS5 पर सहेजा जाता है। चीट चुनने पर PS5Upload Minion चल रहे गेम के चीट पर खुलता है।",
   "cw_settings_text_size": "टेक्स्ट का आकार",
   "cw_settings_text_size_note": "केवल इसी स्क्रीन के लिए रखा जाता है, ताकि टीवी और कंप्यूटर का अपना-अपना आकार हो सके।",
   "cw_settings_theme": "थीम",

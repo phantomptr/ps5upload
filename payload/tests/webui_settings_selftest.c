@@ -63,7 +63,7 @@ static int count_entries(const char *dir) {
 
 static void missing_file_gives_defaults(void) {
     char p[512];
-    webui_settings_t s = { 7, 7, 7 };
+    webui_settings_t s = { 7, 7, 7, 7 };
     snprintf(p, sizeof p, "%s/none.json", g_dir);
     CHECK(webui_settings_load(p, &s) == 1);
     CHECK(s.lan == 0 && s.tile == 1 && s.enabled == 1);
@@ -84,14 +84,14 @@ static void garbled_file_gives_defaults(void) {
     size_t i;
     snprintf(p, sizeof p, "%s/bad.json", g_dir);
     for (i = 0; i < sizeof bad / sizeof bad[0]; i++) {
-        webui_settings_t s = { 7, 7, 7 };
+        webui_settings_t s = { 7, 7, 7, 7 };
         put_file(p, bad[i]);
         CHECK(webui_settings_load(p, &s) == 1);
         CHECK(s.lan == 0 && s.tile == 1 && s.enabled == 1);
     }
     /* A valid object missing a key keeps that key's default. */
     {
-        webui_settings_t s = { 7, 7, 7 };
+        webui_settings_t s = { 7, 7, 7, 7 };
         put_file(p, "{\"lan\":true}");
         CHECK(webui_settings_load(p, &s) == 0);
         CHECK(s.lan == 1 && s.tile == 1);
@@ -104,7 +104,14 @@ static void garbled_file_gives_defaults(void) {
         CHECK(s.lan == 0 && s.tile == 1 && s.enabled == 1);
         put_file(p, "{\"lan\":true,\"tile\":true,\"enabled\":false}");
         CHECK(webui_settings_load(p, &s) == 0);
-        CHECK(s.lan == 1 && s.tile == 1 && s.enabled == 0);
+        CHECK(s.lan == 1 && s.tile == 1 && s.enabled == 0 && s.start_cheats == 0);
+        /* No start page saved: Home. A start page that is not a bool garbles the file, like the rest. */
+        put_file(p, "{\"lan\":false,\"tile\":true,\"enabled\":true,\"start_cheats\":true}");
+        CHECK(webui_settings_load(p, &s) == 0);
+        CHECK(s.start_cheats == 1 && s.enabled == 1);
+        put_file(p, "{\"start_cheats\":\"cheats\"}");
+        CHECK(webui_settings_load(p, &s) == 1);
+        CHECK(s.start_cheats == 0 && s.enabled == 1);
     }
     unlink(p);
 }
@@ -116,26 +123,35 @@ static void save_then_load_round_trips(void) {
     for (lan = 0; lan < 2; lan++)
         for (tile = 0; tile < 2; tile++)
             for (enabled = 0; enabled < 2; enabled++) {
-                webui_settings_t in = { lan, tile, enabled }, out = { 7, 7, 7 };
+                webui_settings_t in = { lan, tile, enabled, 0 }, out = { 7, 7, 7, 7 };
                 CHECK(webui_settings_save(p, &in) == 0);
                 CHECK(webui_settings_load(p, &out) == 0);
                 CHECK(out.lan == lan && out.tile == tile && out.enabled == enabled);
             }
     /* The exact file text, and nothing left behind but the file itself. */
     {
-        webui_settings_t d = { 0, 1, 1 };
+        webui_settings_t d = { 0, 1, 1, 0 };
         CHECK(webui_settings_save(p, &d) == 0);
         CHECK(get_file(p, text, sizeof text) != (size_t)-1);
-        CHECK(strcmp(text, "{\"lan\":false,\"tile\":true,\"enabled\":true}") == 0);
+        CHECK(strcmp(text, "{\"lan\":false,\"tile\":true,\"enabled\":true,\"start_cheats\":false}") == 0);
         d.enabled = 0;
         CHECK(webui_settings_save(p, &d) == 0);
         CHECK(get_file(p, text, sizeof text) != (size_t)-1);
-        CHECK(strcmp(text, "{\"lan\":false,\"tile\":true,\"enabled\":false}") == 0);
+        CHECK(strcmp(text, "{\"lan\":false,\"tile\":true,\"enabled\":false,\"start_cheats\":false}") == 0);
+        /* The start page (#584) round-trips and keeps the other keys. */
+        d.enabled = 1;
+        d.start_cheats = 1;
+        CHECK(webui_settings_save(p, &d) == 0);
+        {
+            webui_settings_t back = { 7, 7, 7, 7 };
+            CHECK(webui_settings_load(p, &back) == 0);
+            CHECK(back.lan == 0 && back.tile == 1 && back.enabled == 1 && back.start_cheats == 1);
+        }
         CHECK(count_entries(g_dir) == 1);
     }
     /* A save that cannot happen leaves no file and says so. */
     {
-        webui_settings_t d = { 1, 0, 1 };
+        webui_settings_t d = { 1, 0, 1, 0 };
         snprintf(sub, sizeof sub, "%s/no-such-dir/webui.json", g_dir);
         CHECK(webui_settings_save(sub, &d) == -1);
     }
@@ -156,7 +172,7 @@ static void startup_plan_follows_enabled_and_tile(void) {
     int lan;
     for (lan = 0; lan < 2; lan++)
         for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-            webui_settings_t s = { lan, cases[i].tile, cases[i].enabled };
+            webui_settings_t s = { lan, cases[i].tile, cases[i].enabled, 0 };
             webui_startup_t p = webui_startup_plan(&s);
             CHECK(p.serve == cases[i].serve);
             CHECK(p.tile_add == cases[i].add);

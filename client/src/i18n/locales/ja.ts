@@ -5247,6 +5247,8 @@ c2c_test_deep_bad: "4 KiB のテスト送信が届きませんでした: {detail
 "cw_tour3_pointer": "左スティックでポインターを動かすと、指している物がハイライトされ、✕ でクリックできます。",
 "cw_tour3_fullscreen": "最初にボタンを押すと、ページがテレビ全体に表示されます。全画面は設定でオフにできます。",
 "cw_settings_using": "コントローラーとヒント",
+"cw_settings_start": "起動時のページ",
+"cw_settings_start_note": "PS5 に保存されます。チートを選ぶと、PS5Upload Minion は実行中のゲームのチートを開きます。",
 "cw_settings_controls": "操作方法",
 "cw_settings_controls_note": "ここでの各ボタンの役割。ボタンを押して試せます。",
 "cw_settings_tips": "ヒントをもう一度表示",

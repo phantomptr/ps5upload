@@ -5228,6 +5228,8 @@ c2c_test_deep_bad: "لم يصل الإرسال التجريبي بحجم 4 KiB: 
 "cw_tour3_pointer": "حرّك المؤشر بالعصا اليسرى: ما يشير إليه يُميَّز، و✕ ينقره.",
 "cw_tour3_fullscreen": "تملأ الصفحة التلفاز بعد أول ضغطة. يمكنك إيقاف ملء الشاشة من الإعدادات.",
 "cw_settings_using": "وحدة التحكم والنصائح",
+"cw_settings_start": "صفحة البدء",
+"cw_settings_start_note": "تُحفظ على PS5. مع الشفرات، يفتح PS5Upload Minion على شفرات اللعبة الجارية.",
 "cw_settings_controls": "التحكم",
 "cw_settings_controls_note": "ما يفعله كل زر في وحدة التحكم هنا. اضغط زرًا لتجربته.",
 "cw_settings_tips": "عرض النصائح مجددًا",

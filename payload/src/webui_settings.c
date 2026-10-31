@@ -17,6 +17,7 @@ void webui_settings_defaults(webui_settings_t *out) {
     out->lan = 0;
     out->tile = 1;
     out->enabled = 1;
+    out->start_cheats = 0;
 }
 
 int webui_settings_tile_wanted(const webui_settings_t *s) { return s->enabled && s->tile; }
@@ -66,19 +67,23 @@ int webui_settings_load(const char *path, webui_settings_t *out) {
     rc = webui_json_bool(buf + a, b - a, "enabled", &v);
     if (rc < 0) return 1;
     if (rc == 1) s.enabled = v;
+    rc = webui_json_bool(buf + a, b - a, "start_cheats", &v);
+    if (rc < 0) return 1;
+    if (rc == 1) s.start_cheats = v;
     *out = s;
     return 0;
 }
 
 int webui_settings_save(const char *path, const webui_settings_t *s) {
-    char tmp[1024], text[96];
+    char tmp[1024], text[128];
     size_t len, done = 0;
     int fd, k;
 
     k = snprintf(tmp, sizeof tmp, "%s.tmp", path); /* same directory as `path`: the rename never crosses a mount */
     if (k < 0 || (size_t)k >= sizeof tmp) return -1;
-    k = snprintf(text, sizeof text, "{\"lan\":%s,\"tile\":%s,\"enabled\":%s}", s->lan ? "true" : "false",
-                 s->tile ? "true" : "false", s->enabled ? "true" : "false");
+    k = snprintf(text, sizeof text, "{\"lan\":%s,\"tile\":%s,\"enabled\":%s,\"start_cheats\":%s}",
+                 s->lan ? "true" : "false", s->tile ? "true" : "false", s->enabled ? "true" : "false",
+                 s->start_cheats ? "true" : "false");
     len = (size_t)k;
     fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (fd < 0) return -1;
