@@ -11676,6 +11676,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     );
     // Mesh Drive folders are kept in sync here too, app open or not.
     mesh_drive::spawn();
+    // Server copies an earlier run left behind (an extract that failed, then the app closed)
+    // are removed here: nothing else knows them after a restart.
+    tokio::task::spawn_blocking(remote::fetch::sweep_stale_copies);
     // Graceful shutdown: when the parent-watcher fires (stdin EOF), the
     // SHUTDOWN Notify wakes this future, axum stops
     // accepting new connections, drains in-flight ones, then returns.

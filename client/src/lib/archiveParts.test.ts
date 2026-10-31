@@ -226,6 +226,22 @@ describe("parseSplitVolume", () => {
     });
   });
 
+  it("continues an old-style rar set past .r99 with .s00, .t00 …", () => {
+    expect(parseSplitVolume("Game.r99")).toMatchObject({ scheme: "rar", index: 99 });
+    expect(parseSplitVolume("Game.s00")).toEqual({
+      scheme: "rar",
+      index: 100,
+      entryName: "Game.rar",
+    });
+    expect(parseSplitVolume("GAME.T07")).toMatchObject({
+      scheme: "rar",
+      index: 207,
+      entryName: "GAME.rar",
+    });
+    // `.zNN` stays a spanned zip.
+    expect(parseSplitVolume("Game.z01")).toMatchObject({ scheme: "zip" });
+  });
+
   it("leaves whole archives and .partN sets alone", () => {
     for (const n of [
       "Game.zip",
@@ -256,6 +272,18 @@ describe("diagnoseArchiveSet — native split schemes", () => {
       kind: "pick-entry-volume",
       entryName: "G.rar",
     });
+  });
+
+  it("points an .s00 pick at the .rar too", () => {
+    const folder = ["G.rar", "G.r00", "G.r99", "G.s00", "G.t00"];
+    expect(diagnoseArchiveSet("G.s00", folder)).toEqual({
+      kind: "pick-entry-volume",
+      entryName: "G.rar",
+    });
+  });
+
+  it("leaves a lone .s01 file alone", () => {
+    expect(diagnoseArchiveSet("notes.s01", ["notes.s01"])).toBeNull();
   });
 
   it("flags a rar volume set whose .rar is missing", () => {

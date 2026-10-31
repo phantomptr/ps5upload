@@ -39,6 +39,71 @@ pub fn archive_kind(path: &Path) -> Option<ArchiveKind> {
     }
 }
 
+/// Volumes an old-style RAR set can have after its `.rar`: `.r00`…`.r99`, then WinRAR (and
+/// UnRAR, which follows the same rule) carries on with `.s00`…`.s99`, `.t00`…, up to `.z99`.
+/// The payload's extractor uses the same limit (`archive_volume_name`).
+pub const RAR_OLD_VOLUMES_MAX: u32 = 900;
+
+/// The 0-based position of an old-style RAR volume after the set's `.rar`, from its file name:
+/// `x.r00` → 0, `x.r99` → 99, `x.s00` → 100, `x.t05` → 205. Returns the stem (`x`) with it.
+/// None for anything else, `.rar` included.
+pub fn rar_old_volume_index(name: &str) -> Option<(&str, u32)> {
+    let dot = name.rfind('.')?;
+    let ext = &name.as_bytes()[dot + 1..];
+    if ext.len() != 3 || !ext[1].is_ascii_digit() || !ext[2].is_ascii_digit() {
+        return None;
+    }
+    let letter = ext[0].to_ascii_lowercase();
+    if !(b'r'..=b'z').contains(&letter) {
+        return None;
+    }
+    let n =
+        u32::from(letter - b'r') * 100 + u32::from(ext[1] - b'0') * 10 + u32::from(ext[2] - b'0');
+    Some((&name[..dot], n))
+}
+
+/// The name of old-style volume `index` (0-based, after the `.rar`) of the set `stem.rar`:
+/// 0 → `stem.r00`, 100 → `stem.s00`. `upper` writes the letter as `R`/`S`/… for a set named
+/// `STEM.RAR` (case matters on a case-sensitive disk). None past `.z99`.
+pub fn rar_old_volume_name(stem: &str, index: u32, upper: bool) -> Option<String> {
+    if index >= RAR_OLD_VOLUMES_MAX {
+        return None;
+    }
+    let letter = (b'r' + (index / 100) as u8) as char;
+    let letter = if upper {
+        letter.to_ascii_uppercase()
+    } else {
+        letter
+    };
+    Some(format!("{stem}.{letter}{:02}", index % 100))
+}
+
+/// Remove a file or a folder tree, retrying a few times. On Windows a file that was just closed
+/// can stay locked for a moment (an antivirus or the indexer opening it, a helper process still
+/// exiting), so a single attempt at cleanup after a failed unpack left the files behind. A path
+/// that is already gone counts as removed.
+pub fn remove_path_retrying(path: &Path) -> std::io::Result<()> {
+    const ATTEMPTS: u32 = 5;
+    let mut last = Ok(());
+    for attempt in 0..ATTEMPTS {
+        let r = match std::fs::symlink_metadata(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => Err(e),
+            Ok(m) if m.is_dir() => std::fs::remove_dir_all(path),
+            Ok(_) => std::fs::remove_file(path),
+        };
+        match r {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => last = Err(e),
+        }
+        if attempt + 1 < ATTEMPTS {
+            std::thread::sleep(std::time::Duration::from_millis(100 << attempt));
+        }
+    }
+    last
+}
+
 /// Image files Convert builds from directly.
 const IMAGE_EXTS: [&str; 3] = ["exfat", "ffpkg", "ffpfsc"];
 
@@ -415,8 +480,65 @@ pub fn find_game(root: &Path) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::host_path;
+    use super::{host_path, rar_old_volume_index, rar_old_volume_name, remove_path_retrying};
     use std::path::Path;
+
+    /// WinRAR's old naming runs `.rar`, `.r00`…`.r99`, then `.s00`…`.s99`, `.t00`…: every
+    /// letter continues the count, so a 300-volume set is not three sets.
+    #[test]
+    fn old_style_rar_volumes_continue_past_r99() {
+        assert_eq!(rar_old_volume_index("g.r00"), Some(("g", 0)));
+        assert_eq!(rar_old_volume_index("g.r99"), Some(("g", 99)));
+        assert_eq!(rar_old_volume_index("g.s00"), Some(("g", 100)));
+        assert_eq!(rar_old_volume_index("G.S42"), Some(("G", 142)));
+        assert_eq!(rar_old_volume_index("g.t00"), Some(("g", 200)));
+        assert_eq!(rar_old_volume_index("g.z99"), Some(("g", 899)));
+        for not in [
+            "g.rar",
+            "g.q00",
+            "g.r0",
+            "g.r100",
+            "g.part1.rar",
+            "g.7z.001",
+            "r00",
+        ] {
+            assert_eq!(rar_old_volume_index(not), None, "{not}");
+        }
+        assert_eq!(rar_old_volume_name("g", 0, false).as_deref(), Some("g.r00"));
+        assert_eq!(
+            rar_old_volume_name("g", 99, false).as_deref(),
+            Some("g.r99")
+        );
+        assert_eq!(
+            rar_old_volume_name("g", 100, false).as_deref(),
+            Some("g.s00")
+        );
+        assert_eq!(
+            rar_old_volume_name("g", 205, true).as_deref(),
+            Some("g.T05")
+        );
+        assert_eq!(rar_old_volume_name("g", 900, false), None);
+        // The name and the index are each other's inverse over the whole range.
+        for i in 0..900 {
+            let n = rar_old_volume_name("x", i, false).unwrap();
+            assert_eq!(rar_old_volume_index(&n), Some(("x", i)));
+        }
+    }
+
+    #[test]
+    fn remove_path_retrying_removes_trees_files_and_absent_paths() {
+        let base = std::env::temp_dir().join(format!("ps5u-rmretry-{}", std::process::id()));
+        let tree = base.join("tree");
+        std::fs::create_dir_all(tree.join("a/b")).unwrap();
+        std::fs::write(tree.join("a/b/f.bin"), b"x").unwrap();
+        let file = base.join("one.r00");
+        std::fs::write(&file, b"y").unwrap();
+        remove_path_retrying(&tree).unwrap();
+        remove_path_retrying(&file).unwrap();
+        assert!(!tree.exists() && !file.exists());
+        remove_path_retrying(&base.join("never-was")).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// A sanitised archive path still has to land under `dest` on this host: a drive or
     /// stream name, a reserved device name or a trailing dot would not.

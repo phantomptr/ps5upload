@@ -59,17 +59,18 @@ fn fetched() -> &'static Mutex<HashMap<PathBuf, Vec<PathBuf>>> {
     F.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The other volumes of the RAR set `name` starts, among `names` (the same folder), sorted:
-/// `game.part1.rar` → `game.part2.rar`, …; `game.rar` → `game.r00`, `game.r01`, …. Empty when
-/// `name` is not a set's first volume. UnRAR finds the rest of a set beside the first volume,
-/// so a copy of the first alone cannot be extracted.
+/// The other volumes of the RAR set `name` starts, among `names` (the same folder), in volume
+/// order: `game.part1.rar` → `game.part2.rar`, …; `game.rar` → `game.r00` … `game.r99`, then
+/// `game.s00` … `game.s99`, `game.t00` … (WinRAR's old naming continues with the next letter
+/// past `.r99`). Empty when `name` is not a set's first volume. UnRAR finds the rest of a set
+/// beside the first volume, so a copy of the first alone cannot be extracted.
 pub(crate) fn rar_set_siblings(name: &str, names: &[String]) -> Vec<String> {
     let lower = name.to_ascii_lowercase();
     let Some(base) = lower.strip_suffix(".rar") else {
         return Vec::new();
     };
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    let mut out: Vec<String> = if let Some(at) = base.rfind(".part") {
+    let mut out: Vec<(u32, String)> = if let Some(at) = base.rfind(".part") {
         let num = &base[at + 5..];
         if !digits(num) || num.parse::<u32>().ok() != Some(1) {
             return Vec::new();
@@ -77,29 +78,29 @@ pub(crate) fn rar_set_siblings(name: &str, names: &[String]) -> Vec<String> {
         let prefix = format!("{}.part", &base[..at]);
         names
             .iter()
-            .filter(|n| {
+            .filter_map(|n| {
                 let l = n.to_ascii_lowercase();
-                l != lower
-                    && l.strip_prefix(&prefix)
-                        .and_then(|r| r.strip_suffix(".rar"))
-                        .is_some_and(digits)
+                if l == lower {
+                    return None;
+                }
+                let num = l.strip_prefix(&prefix)?.strip_suffix(".rar")?;
+                if !digits(num) {
+                    return None;
+                }
+                Some((num.parse::<u32>().ok()?, n.clone()))
             })
-            .cloned()
             .collect()
     } else {
-        let prefix = format!("{base}.r");
         names
             .iter()
-            .filter(|n| {
-                let l = n.to_ascii_lowercase();
-                l.strip_prefix(&prefix)
-                    .is_some_and(|r| r.len() == 2 && digits(r))
+            .filter_map(|n| {
+                let (stem, index) = ps5upload_core::archive_extract::rar_old_volume_index(n)?;
+                stem.eq_ignore_ascii_case(base).then(|| (index, n.clone()))
             })
-            .cloned()
             .collect()
     };
     out.sort();
-    out
+    out.into_iter().map(|(_, n)| n).collect()
 }
 
 fn err(code: StatusCode, msg: impl Into<String>) -> Response {
@@ -194,12 +195,7 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
 
     let (dest_dir, made_dir) = match body.dest_dir.as_deref().filter(|d| !d.trim().is_empty()) {
         Some(d) => (crate::fpkg_api::resolve_engine_path(d), false),
-        None => (
-            std::env::temp_dir()
-                .join("ps5upload-remote")
-                .join(Uuid::new_v4().to_string()),
-            true,
-        ),
+        None => (default_copy_root().join(Uuid::new_v4().to_string()), true),
     };
     if let Err(e) = std::fs::create_dir_all(&dest_dir) {
         return err(
@@ -320,14 +316,10 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
             }
             Err(e) => {
                 // A single file dies as `<name>.partial`; a folder takes its partials with it.
-                for root in &remove_roots {
-                    let _ = std::fs::remove_file(format!("{}.partial", root.display()));
-                    let _ = if root.is_dir() {
-                        std::fs::remove_dir_all(root)
-                    } else {
-                        std::fs::remove_file(root)
-                    };
-                }
+                // Every handle `copy_all` opened is closed by now; the removal still retries,
+                // since Windows can keep a just-closed file locked for a moment.
+                let roots = remove_roots.clone();
+                let _ = tokio::task::spawn_blocking(move || remove_copies(&roots)).await;
                 crate::set_job(
                     &deps.jobs,
                     &deps.events_tx,
@@ -495,24 +487,83 @@ pub(crate) async fn cleanup(dest: &str) -> Response {
     let Some(roots) = root else {
         return err(StatusCode::BAD_REQUEST, "That is not a copy this app made.");
     };
-    let mut r = Ok(());
-    for root in &roots {
-        let one = if root.is_dir() {
-            std::fs::remove_dir_all(root)
-        } else {
-            std::fs::remove_file(root)
-        };
-        match one {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => r = Err((root.clone(), e)),
-            _ => {}
+    let left = tokio::task::spawn_blocking(move || {
+        let failed = remove_copies(&roots);
+        // What could not be removed (a file still locked on Windows) stays this copy's, so
+        // another cleanup can finish it instead of refusing it as unknown.
+        if !failed.is_empty() {
+            let paths = failed.iter().map(|(p, _)| p.clone()).collect();
+            fetched()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(key, paths);
+        }
+        failed
+    })
+    .await;
+    match left {
+        Ok(failed) if failed.is_empty() => Json(json!({ "ok": true })).into_response(),
+        Ok(failed) => {
+            let (root, e) = &failed[0];
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{}: {e}", root.display()),
+            )
+        }
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("disk task failed: {e}"),
+        ),
+    }
+}
+
+/// Remove each copy root (and a single file's `<name>.partial`), retrying past a short-lived
+/// lock. Returns the roots that could not be removed, with why.
+fn remove_copies(roots: &[PathBuf]) -> Vec<(PathBuf, std::io::Error)> {
+    use ps5upload_core::archive_extract::remove_path_retrying;
+    let mut failed = Vec::new();
+    for root in roots {
+        let mut partial = root.clone().into_os_string();
+        partial.push(".partial");
+        let _ = remove_path_retrying(Path::new(&partial));
+        if let Err(e) = remove_path_retrying(root) {
+            failed.push((root.clone(), e));
         }
     }
-    match r {
-        Ok(()) => Json(json!({ "ok": true })).into_response(),
-        Err((root, e)) => err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{}: {e}", root.display()),
-        ),
+    failed
+}
+
+/// Folder the engine copies server files into when the caller names none.
+fn default_copy_root() -> PathBuf {
+    std::env::temp_dir().join("ps5upload-remote")
+}
+
+/// Copies older than this are left from an earlier run when the engine starts.
+const STALE_COPY_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Remove copies a previous run left in the default copy folder: an extract that failed and the
+/// app closed before its copy was cleaned up, or a crash. No copy survives a restart in
+/// `fetched()`, so nothing could remove them later; only folders untouched for an hour go, so
+/// another engine's copy in progress is safe.
+pub fn sweep_stale_copies() {
+    sweep_stale_copies_in(&default_copy_root(), STALE_COPY_AGE);
+}
+
+fn sweep_stale_copies_in(root: &Path, max_age: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for e in entries.flatten() {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age >= max_age);
+        if old && e.file_type().is_ok_and(|t| t.is_dir()) {
+            let _ = ps5upload_core::archive_extract::remove_path_retrying(&e.path());
+        }
     }
 }
 
@@ -820,7 +871,7 @@ mod tests {
         .collect();
         assert_eq!(
             rar_set_siblings("g.part1.rar", &names),
-            ["g.part10.rar", "g.part2.rar"]
+            ["g.part2.rar", "g.part10.rar"]
         );
         assert_eq!(
             rar_set_siblings("G.PART01.RAR", &["G.PART02.RAR".into()]),
@@ -830,6 +881,32 @@ mod tests {
         // Not a first volume, or not a set: nothing extra.
         assert!(rar_set_siblings("g.part2.rar", &names).is_empty());
         assert!(rar_set_siblings("x.zip", &names).is_empty());
+    }
+
+    /// The reported set: `.rar`, `.r00`…`.r99`, `.s00`…`.s99`, `.t00`…. Only the `.rNN` third
+    /// used to be copied, so UnRAR stopped at the missing `.s00`.
+    #[test]
+    fn an_old_style_set_brings_every_letter_in_order() {
+        let mut names: Vec<String> = vec!["Game.rar".into(), "Other.s00".into(), "Game.q00".into()];
+        // Shuffled on purpose: the listing order must not matter.
+        for i in (0..250).rev() {
+            names.push(
+                ps5upload_core::archive_extract::rar_old_volume_name("Game", i, false).unwrap(),
+            );
+        }
+        let got = rar_set_siblings("Game.rar", &names);
+        assert_eq!(got.len(), 250);
+        assert_eq!(got[0], "Game.r00");
+        assert_eq!(got[99], "Game.r99");
+        assert_eq!(got[100], "Game.s00");
+        assert_eq!(got[199], "Game.s99");
+        assert_eq!(got[200], "Game.t00");
+        assert_eq!(got[249], "Game.t49");
+        // The stem matches without regard to case, as on the disks these sets come from.
+        assert_eq!(
+            rar_set_siblings("game.RAR", &["GAME.R00".into(), "game.S00".into()]),
+            ["GAME.R00", "game.S00"]
+        );
     }
 
     #[tokio::test]
@@ -874,6 +951,78 @@ mod tests {
         for v in ["g.part1.rar", "g.part2.rar", "g.part3.rar"] {
             assert!(!dest_dir.join(v).exists(), "{v}");
         }
+    }
+
+    /// An old-style set past `.r99` (`.s00`, `.t00` …) arrives whole, and leaves whole.
+    #[tokio::test]
+    async fn an_old_style_rar_set_arrives_with_its_s_and_t_volumes() {
+        let (r, id) = setup(&[
+            ("/dl/g.rar", b"0"),
+            ("/dl/g.r00", b"1"),
+            ("/dl/g.r99", b"2"),
+            ("/dl/g.s00", b"3"),
+            ("/dl/g.s99", b"4"),
+            ("/dl/g.t00", b"5"),
+        ]);
+        let (d, jobs) = deps(plenty);
+        let dest_dir = crate::remote::store::test_dir();
+        let (code, out) = json_of(
+            start_fetch(
+                Arc::clone(&r),
+                d,
+                FetchBody {
+                    path: format!("remote://{id}/dl/g.rar"),
+                    dest_dir: Some(dest_dir.display().to_string()),
+                },
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(code, StatusCode::ACCEPTED, "{out}");
+        let job: Uuid = out["job_id"].as_str().unwrap().parse().unwrap();
+        let JobState::Done {
+            dest, bytes_sent, ..
+        } = wait(&jobs, job).await
+        else {
+            panic!("fetch failed")
+        };
+        assert_eq!(bytes_sent, 6);
+        for v in ["g.rar", "g.r00", "g.r99", "g.s00", "g.s99", "g.t00"] {
+            assert!(dest_dir.join(v).exists(), "{v} was not copied");
+        }
+        let (code, _) = json_of(cleanup(&dest).await).await;
+        assert_eq!(code, StatusCode::OK);
+        for v in ["g.rar", "g.r00", "g.r99", "g.s00", "g.s99", "g.t00"] {
+            assert!(!dest_dir.join(v).exists(), "{v} was left behind");
+        }
+    }
+
+    /// Copies a previous run left in the copy folder go when the engine starts; a fresh one
+    /// (another engine's, still copying) stays.
+    #[test]
+    fn stale_copies_are_swept_and_fresh_ones_kept() {
+        let root = crate::remote::store::test_dir();
+        let old = root.join("old-copy");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("g.r00"), b"x").unwrap();
+        sweep_stale_copies_in(&root, std::time::Duration::from_secs(3600));
+        assert!(old.exists(), "a fresh copy was removed");
+        sweep_stale_copies_in(&root, std::time::Duration::ZERO);
+        assert!(!old.exists(), "a stale copy was left behind");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remove_copies_takes_a_single_files_partial_with_it() {
+        let dir = crate::remote::store::test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("g.rar");
+        std::fs::write(&file, b"x").unwrap();
+        std::fs::write(dir.join("g.s00.partial"), b"y").unwrap();
+        let failed = remove_copies(&[file.clone(), dir.join("g.s00")]);
+        assert!(failed.is_empty());
+        assert!(!file.exists() && !dir.join("g.s00.partial").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
