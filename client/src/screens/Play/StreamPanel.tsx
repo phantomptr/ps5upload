@@ -564,7 +564,40 @@ function SettingsPanel({ running }: { running: boolean }) {
               { value: "stretch", label: tr("rp_fit_stretch", undefined, "Stretch") },
             ]}
           />
+          <Select
+            label={tr("rp_decoding", undefined, "Video decoding")}
+            block={false}
+            className="w-48"
+            value={prefs.decoding}
+            disabled={running}
+            onChange={(e) => setPrefs({ decoding: e.target.value as RpPrefs["decoding"] })}
+            data-testid="rp-decoding"
+            options={[
+              { value: "auto", label: tr("rp_decoding_auto", undefined, "Graphics card (auto)") },
+              { value: "software", label: tr("rp_decoding_software", undefined, "Software") },
+            ]}
+          />
+          <Select
+            label={tr("rp_codec", undefined, "Video format")}
+            block={false}
+            className="w-48"
+            value={prefs.codec}
+            disabled={running}
+            onChange={(e) => setPrefs({ codec: e.target.value as RpPrefs["codec"] })}
+            data-testid="rp-codec"
+            options={[
+              { value: "auto", label: tr("rp_codec_auto", undefined, "Auto (HEVC where it works)") },
+              { value: "h264", label: "H.264" },
+            ]}
+          />
         </div>
+        <p className="text-xs text-[var(--color-muted)]">
+          {tr(
+            "rp_decoding_hint",
+            undefined,
+            "If the picture shows cut off or wrong on this device, try Software or H.264. They apply the next time you start.",
+          )}
+        </p>
         {running && (
           <p className="text-xs text-[var(--color-muted)]">
             {tr(

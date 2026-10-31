@@ -68,6 +68,12 @@ export interface RpPrefs {
   picture: PictureTools;
   /** On a phone, screenshots and clips go to the photo library (lib/rpCapture.ts saveCapture). */
   toPhotos: boolean;
+  /** Decode on the graphics card when there is one (auto), or always in software: a way out
+   *  of a graphics driver's decoder bug (Windows' hardware HEVC, #538/#575). */
+  decoding: "auto" | "software";
+  /** The video format asked of the console: HEVC where this device decodes it (auto), or
+   *  always H.264. */
+  codec: "auto" | "h264";
 }
 
 export const DEFAULT_RP_PREFS: RpPrefs = {
@@ -91,6 +97,8 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   replayS: 0,
   picture: DEFAULT_PICTURE,
   toPhotos: true,
+  decoding: "auto",
+  codec: "auto",
 };
 
 /** The smallest sound buffer the Sound buffer setting offers. */
@@ -239,6 +247,8 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       mic: prefs.mic,
       replayS: prefs.replayS,
       picture: prefs.picture,
+      decoding: prefs.decoding,
+      codec: prefs.codec,
       onPictureOff: (why) =>
         pushNotification(
           "warning",

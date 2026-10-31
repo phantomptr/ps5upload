@@ -19,7 +19,11 @@ What's new in ps5upload, written for humans.
 - **Fixed: on Windows, Play showed the picture enlarged and cut off on the right and bottom,**
   in every picture size, in the app and in Chromium browsers (Edge, Opera GX). Their hardware
   HEVC decoding on Windows reports each frame's visible picture smaller than it is, so only its
-  top-left part was drawn. The app now reads the real picture size from the stream itself and draws all of it.
+  top-left part was drawn (720p was fine; 1080p, coded 1920×1088, was not). The app now reads
+  the real picture size from the stream itself and draws all of it; where a decoder's picture
+  cannot be put right, it switches to software decoding by itself.
+- **Play › Settings: Video decoding (Graphics card / Software) and Video format (Auto / H.264).**
+  A way out if a graphics driver's decoder shows the picture wrong on some device.
 - **Play picture:** with Upscale on, turning Crop to 21:9 on or off now reshapes the picture
   right away (it kept the old shape). The logs now say how the picture is laid out against what
   it draws, so a report of a picture cut off on Windows shows which it is.

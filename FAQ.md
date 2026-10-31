@@ -2065,6 +2065,14 @@ In the Android app, full screen hides the status and navigation bars (swipe from
 **Q: Part of the Remote Play picture is cut off, or it looks stretched.**
 **Picture size** decides how the picture fits the screen: **Fit** shows the whole picture with black bars where the shapes differ (the default), **Fill** fills the screen and crops the edges, **Stretch** stretches the picture to the whole screen. It shows in full screen: on the page the picture's box is the picture's own shape, so all three look the same there. **Fit** never cuts anything off: like a video player, the whole picture always shows, with black bars at the sides or top and bottom when the shapes differ. On a 16:9 screen (the picture's own shape) all three look the same. Change it in full screen without leaving it: the **Picture size** menu on the bar (desktop), or the Fit / Fill / Stretch row in the **⋯** menu (phones). It's also in Play › Settings, and it applies at once. Before 9.2.0, the Windows app could show the picture enlarged with its right and bottom cut off (#538); update to fix it.
 
+**Q: On Windows the Play picture is enlarged and cut off on the right and bottom, whatever the picture size.**
+That was a Windows graphics-driver bug in hardware HEVC decoding (the app, Edge, Opera GX and
+other Chromium browsers): it reported a 1080p picture as smaller than it is, so only its top-left
+part was drawn. 720p was not affected. From 10.0.1 the app reads the real size from the stream and
+draws all of it, switching to software decoding by itself where that can't be put right. If it
+still looks wrong, set Play › Settings › **Video decoding** to **Software** or **Video format** to
+**H.264** (they apply the next time you start), and send a bug report.
+
 **Q: Does my phone controller (Backbone, Razer Kishi, GameSir, Scuf Nomad...) work with Remote Play?**
 Yes. Phone controllers, USB-C or Bluetooth, are game controllers to the phone, so Remote Play reads them like any other: connect it, press a button, and it plays (the on-screen controller hides). If the browser doesn't recognise one, it still plays in the usual layout; if a button is wrong, open Play › Settings › Controllers › **Map buttons** and press each button as asked (any step can be skipped). **Set an extra button** gives a back button or paddle any PS5 button. Mappings are saved per controller. In the Android app the app also hands controllers to the page itself, for phones whose system browser misses them; on iPhone the app makes sure the page has the focus controllers need.
 

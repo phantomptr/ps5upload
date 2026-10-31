@@ -13,10 +13,17 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
 // The 1080p H.264 one is coded 1920x1088 with the bottom 8 rows cropped in its SPS.
 
 const fixture = (name: string) =>
-  new Uint8Array(readFileSync(fileURLToPath(new URL(`./fixtures/remote-play/${name}`, import.meta.url))));
+  new Uint8Array(
+    readFileSync(
+      fileURLToPath(new URL(`./fixtures/remote-play/${name}`, import.meta.url)),
+    ),
+  );
 
 /** Split an Annex-B stream into its parameter sets (the "video header") and the picture. */
-function split(stream: Uint8Array, hevc: boolean): { header: Uint8Array; au: Uint8Array } {
+function split(
+  stream: Uint8Array,
+  hevc: boolean,
+): { header: Uint8Array; au: Uint8Array } {
   for (let i = 0; i + 3 < stream.length; i++) {
     if (stream[i] !== 0 || stream[i + 1] !== 0 || stream[i + 2] !== 1) continue;
     const t = hevc ? (stream[i + 3] >> 1) & 0x3f : stream[i + 3] & 0x1f;
@@ -55,40 +62,87 @@ interface Case {
   /** Act out Microsoft Edge's hardware HEVC decoder (#538/#575): every frame says its visible
    *  picture is 1280x720, top-left, whatever the stream's size. */
   edgeVisibleRect?: boolean;
+  /** Worse: the hardware decoder hands out just the top-left 1280x720 as a frame of its own
+   *  (nothing to put right from the SPS); in software it decodes properly. */
+  hardwareCropsFrame?: boolean;
+  /** Play settings stored before the start (Video decoding, Video format). */
+  prefs?: Record<string, unknown>;
 }
 
-async function open(browser: Browser, c: Case): Promise<{ page: Page; close: () => Promise<void> }> {
+async function open(
+  browser: Browser,
+  c: Case,
+): Promise<{
+  page: Page;
+  close: () => Promise<void>;
+  starts: Array<{ codec?: string }>;
+}> {
   const ctx = await browser.newContext({
     viewport: { width: 1919, height: 1040 },
     deviceScaleFactor: c.dpr,
     ...(c.windows === true
-      ? { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0" }
+      ? {
+          userAgent:
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
+        }
       : c.windows === false
-        ? { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" }
+        ? {
+            userAgent:
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+          }
         : {}),
   });
   const page = await ctx.newPage();
   await page.addInitScript(
-    ({ fit, h264, picture, edge }) => {
-      if (edge && typeof VideoDecoder !== "undefined") {
+    ({ fit, h264, picture, edge, crops, prefs }) => {
+      const w = window as unknown as {
+        VideoDecoder: typeof VideoDecoder;
+        __decoderCfgs: VideoDecoderConfig[];
+      };
+      w.__decoderCfgs = [];
+      if (typeof VideoDecoder !== "undefined") {
         const Real = VideoDecoder;
-        class EdgeDecoder extends Real {
+        class WatchedDecoder extends Real {
+          private hw = true;
           constructor(init: VideoDecoderInit) {
             super({
               ...init,
               output: (f: VideoFrame) => {
-                const small = new VideoFrame(f, {
-                  visibleRect: { x: 0, y: 0, width: 1280, height: 720 },
-                  displayWidth: 1280,
-                  displayHeight: 720,
-                });
-                f.close();
-                init.output(small);
+                if (edge) {
+                  const small = new VideoFrame(f, {
+                    visibleRect: { x: 0, y: 0, width: 1280, height: 720 },
+                    displayWidth: 1280,
+                    displayHeight: 720,
+                  });
+                  f.close();
+                  init.output(small);
+                } else if (crops && this.hw) {
+                  const c = new OffscreenCanvas(1280, 720);
+                  c.getContext("2d")!.drawImage(
+                    f,
+                    0,
+                    0,
+                    1280,
+                    720,
+                    0,
+                    0,
+                    1280,
+                    720,
+                  );
+                  const small = new VideoFrame(c, { timestamp: f.timestamp });
+                  f.close();
+                  init.output(small);
+                } else init.output(f);
               },
             });
           }
+          configure(cfg: VideoDecoderConfig) {
+            w.__decoderCfgs.push(cfg);
+            this.hw = cfg.hardwareAcceleration !== "prefer-software";
+            super.configure(cfg);
+          }
         }
-        (window as unknown as { VideoDecoder: typeof VideoDecoder }).VideoDecoder = EdgeDecoder;
+        w.VideoDecoder = WatchedDecoder;
       }
       window.localStorage.setItem("ps5upload.host", "192.168.1.100");
       window.localStorage.setItem(
@@ -106,14 +160,26 @@ async function open(browser: Browser, c: Case): Promise<{ page: Page; close: () 
           ],
         }),
       );
-      window.localStorage.setItem("ps5upload.rp_prefs.v1", JSON.stringify({ fit, ...(picture ? { picture } : {}) }));
+      window.localStorage.setItem(
+        "ps5upload.rp_prefs.v1",
+        JSON.stringify({ fit, ...(picture ? { picture } : {}), ...prefs }),
+      );
       if (h264 && typeof VideoDecoder !== "undefined") {
         const orig = VideoDecoder.isConfigSupported.bind(VideoDecoder);
         VideoDecoder.isConfigSupported = (cfg: VideoDecoderConfig) =>
-          /^(hev1|hvc1)/.test(cfg.codec) ? Promise.resolve({ supported: false, config: cfg }) : orig(cfg);
+          /^(hev1|hvc1)/.test(cfg.codec)
+            ? Promise.resolve({ supported: false, config: cfg })
+            : orig(cfg);
       }
     },
-    { fit: c.fit ?? "fit", h264: !!c.h264, picture: c.picture ?? null, edge: !!c.edgeVisibleRect },
+    {
+      fit: c.fit ?? "fit",
+      h264: !!c.h264,
+      picture: c.picture ?? null,
+      edge: !!c.edgeVisibleRect,
+      crops: !!c.hardwareCropsFrame,
+      prefs: c.prefs ?? {},
+    },
   );
   await page.route(
     (url) => url.pathname.startsWith("/api/"),
@@ -122,16 +188,35 @@ async function open(browser: Browser, c: Case): Promise<{ page: Page; close: () 
       let body: unknown = {};
       if (path === "/api/version") body = { version: "9.2.0", caps: {} };
       if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(body),
+      });
     },
   );
+  const starts: Array<{ codec?: string }> = [];
+  let pic: { header: Uint8Array; au: Uint8Array } | null = null;
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
       if (typeof m !== "string") return;
-      const msg = JSON.parse(m) as { host?: string; codec?: string };
+      const msg = JSON.parse(m) as {
+        host?: string;
+        codec?: string;
+        keyframe?: boolean;
+      };
+      // Asked for a keyframe (a decoder started over): the picture again.
+      if (msg.keyframe && pic) {
+        for (let i = 0; i < 6; i++) ws.send(record(1, pic.au));
+        return;
+      }
       if (!msg.host) return;
+      starts.push(msg);
       const hevc = msg.codec === "h265";
-      const { header, au } = split(fixture(hevc ? `hevc_${c.size}.hevc` : `h264_${c.size}.h264`), hevc);
+      const { header, au } = split(
+        fixture(hevc ? `hevc_${c.size}.hevc` : `h264_${c.size}.h264`),
+        hevc,
+      );
+      pic = { header, au };
       ws.send(JSON.stringify({ stage: "first_frame" }));
       ws.send(record(0, header));
       // The same keyframe a few times: a decoder may hold the first picture back.
@@ -139,8 +224,10 @@ async function open(browser: Browser, c: Case): Promise<{ page: Page; close: () 
     });
   });
   await page.goto("/play", { waitUntil: "domcontentloaded" });
-  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
-  return { page, close: () => ctx.close() };
+  await expect(
+    page.getByRole("heading", { name: "Play", exact: true }),
+  ).toBeVisible({ timeout: 30_000 });
+  return { page, close: () => ctx.close(), starts };
 }
 
 const MARKERS = [
@@ -151,7 +238,12 @@ const MARKERS = [
 ] as const;
 
 /** Colours at points of the stage (CSS px from its top-left), read off a real screenshot. */
-async function colorsAt(page: Page, shot: Buffer, w: number, pts: Array<[number, number]>) {
+async function colorsAt(
+  page: Page,
+  shot: Buffer,
+  w: number,
+  pts: Array<[number, number]>,
+) {
   return page.evaluate(
     async ({ b64, w, pts }) => {
       const img = new Image();
@@ -163,24 +255,48 @@ async function colorsAt(page: Page, shot: Buffer, w: number, pts: Array<[number,
       cv.height = img.naturalHeight;
       const g = cv.getContext("2d")!;
       g.drawImage(img, 0, 0);
-      return pts.map(([x, y]) => Array.from(g.getImageData(Math.floor(x * k), Math.floor(y * k), 1, 1).data.slice(0, 3)));
+      return pts.map(([x, y]) =>
+        Array.from(
+          g
+            .getImageData(Math.floor(x * k), Math.floor(y * k), 1, 1)
+            .data.slice(0, 3),
+        ),
+      );
     },
     { b64: shot.toString("base64"), w, pts },
   );
 }
 
-const near = (a: number[], b: readonly number[]) => a.every((v, i) => Math.abs(v - b[i]) <= 48);
+const near = (a: number[], b: readonly number[]) =>
+  a.every((v, i) => Math.abs(v - b[i]) <= 48);
 
 async function checkPicture(page: Page, c: Case) {
   const [W, H] = c.size.split("x").map(Number);
   const stage = page.getByTestId("rp-stage").filter({ visible: true });
   const canvas = stage.getByTestId("rp-canvas");
   // The canvas takes the frame's own size, not the size asked for.
-  if (c.anySize) await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.width), { timeout: 20_000 }).toBeGreaterThanOrEqual(W);
-  else await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => `${el.width}x${el.height}`), { timeout: 20_000 }).toBe(c.size);
+  if (c.anySize)
+    await expect
+      .poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.width), {
+        timeout: 20_000,
+      })
+      .toBeGreaterThanOrEqual(W);
+  else
+    await expect
+      .poll(
+        () =>
+          canvas.evaluate(
+            (el: HTMLCanvasElement) => `${el.width}x${el.height}`,
+          ),
+        { timeout: 20_000 },
+      )
+      .toBe(c.size);
   await expect(canvas).toHaveAttribute("data-fit", c.fit ?? "fit");
   // Nothing drawn over the picture while it is measured.
-  await page.addStyleTag({ content: '[data-testid="rp-stage"] > :not(:first-child) { visibility: hidden !important; }' });
+  await page.addStyleTag({
+    content:
+      '[data-testid="rp-stage"] > :not(:first-child) { visibility: hidden !important; }',
+  });
 
   const sb = (await stage.boundingBox())!;
   const cb = (await canvas.boundingBox())!;
@@ -201,8 +317,15 @@ async function checkPicture(page: Page, c: Case) {
   // Where the picture is: the browser sizes the canvas box for the fit, so the picture fills
   // its box (under object-fit, where container units are missing, the box is the stage and
   // object-fit places it there instead).
-  const boxed = await canvas.evaluate((el) => getComputedStyle(el).objectFit === "fill");
-  const sx = boxed || fit === "stretch" ? cb.width / W : fit === "fill" ? Math.max(cb.width / W, cb.height / H) : Math.min(cb.width / W, cb.height / H);
+  const boxed = await canvas.evaluate(
+    (el) => getComputedStyle(el).objectFit === "fill",
+  );
+  const sx =
+    boxed || fit === "stretch"
+      ? cb.width / W
+      : fit === "fill"
+        ? Math.max(cb.width / W, cb.height / H)
+        : Math.min(cb.width / W, cb.height / H);
   const sy = boxed || fit === "stretch" ? cb.height / H : sx;
   const px = cb.x - sb.x + (cb.width - W * sx) / 2;
   const py = cb.y - sb.y + (cb.height - H * sy) / 2;
@@ -223,7 +346,12 @@ async function checkPicture(page: Page, c: Case) {
 
   const shot = await stage.screenshot({ animations: "disabled" });
   const got = await colorsAt(page, shot, sb.width, pts);
-  MARKERS.forEach((mk, i) => expect(near(got[i], mk.rgb), `${mk.name} marker at ${pts[i]} is ${got[i]}`).toBe(true));
+  MARKERS.forEach((mk, i) =>
+    expect(
+      near(got[i], mk.rgb),
+      `${mk.name} marker at ${pts[i]} is ${got[i]}`,
+    ).toBe(true),
+  );
   const wider = sb.width / sb.height > W / H + 0.01;
   if (wider) {
     const edge = got[4];
@@ -239,7 +367,9 @@ async function startAndCheck(browser: Browser, c: Case) {
     await expect(page.getByTestId("rp-toolbar")).toContainText("Living room");
     if (c.full) {
       await page.getByTestId("rp-stage").filter({ visible: true }).dblclick();
-      await expect(page.locator('[data-testid="rp-stage"][data-full]')).toBeVisible();
+      await expect(
+        page.locator('[data-testid="rp-stage"][data-full]'),
+      ).toBeVisible();
     }
     await checkPicture(page, c);
   } finally {
@@ -248,30 +378,51 @@ async function startAndCheck(browser: Browser, c: Case) {
 }
 
 for (const dpr of [1, 1.25, 1.5, 2]) {
-  test(`Remote Play shows the whole 1080p H.264 picture at ${dpr * 100}% scaling`, async ({ browser }) => {
+  test(`Remote Play shows the whole 1080p H.264 picture at ${dpr * 100}% scaling`, async ({
+    browser,
+  }) => {
     await startAndCheck(browser, { dpr, size: "1920x1080", h264: true });
   });
 }
 
-test("Remote Play shows the whole picture with the codec the page picks (HEVC where it decodes)", async ({ browser }) => {
+test("Remote Play shows the whole picture with the codec the page picks (HEVC where it decodes)", async ({
+  browser,
+}) => {
   await startAndCheck(browser, { dpr: 1.5, size: "1920x1080" });
 });
 
-test("Remote Play shows a 720p stream whole when 1080p was asked for", async ({ browser }) => {
+test("Remote Play shows a 720p stream whole when 1080p was asked for", async ({
+  browser,
+}) => {
   await startAndCheck(browser, { dpr: 1.25, size: "1280x720", h264: true });
 });
 
 for (const fit of ["fit", "fill", "stretch"] as const) {
   test(`Remote Play full screen, ${fit}`, async ({ browser }) => {
-    await startAndCheck(browser, { dpr: 1.5, size: "1920x1080", h264: true, fit, full: true });
+    await startAndCheck(browser, {
+      dpr: 1.5,
+      size: "1920x1080",
+      h264: true,
+      fit,
+      full: true,
+    });
   });
 }
 
-test("Remote Play picture size is a setting that applies while playing", async ({ browser }) => {
-  const { page, close } = await open(browser, { dpr: 1, size: "1920x1080", h264: true });
+test("Remote Play picture size is a setting that applies while playing", async ({
+  browser,
+}) => {
+  const { page, close } = await open(browser, {
+    dpr: 1,
+    size: "1920x1080",
+    h264: true,
+  });
   try {
     await page.getByTestId("rp-start").click();
-    const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
+    const canvas = page
+      .getByTestId("rp-stage")
+      .filter({ visible: true })
+      .getByTestId("rp-canvas");
     await expect(canvas).toHaveAttribute("data-fit", "fit");
     const toolbar = page.getByTestId("rp-toolbar");
     await toolbar.hover();
@@ -291,7 +442,13 @@ test("Remote Play picture size is a setting that applies while playing", async (
     await expect(canvas).toHaveAttribute("data-fit", "stretch");
     await expect.poll(() => size(canvas)).toEqual(await size(stage));
     await expect
-      .poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("ps5upload.rp_prefs.v1") ?? "{}").fit))
+      .poll(() =>
+        page.evaluate(
+          () =>
+            JSON.parse(localStorage.getItem("ps5upload.rp_prefs.v1") ?? "{}")
+              .fit,
+        ),
+      )
       .toBe("stretch");
   } finally {
     await close();
@@ -300,7 +457,9 @@ test("Remote Play picture size is a setting that applies while playing", async (
 
 // Picture tools (9.11): the frame goes through the GPU pass (rpPicture.ts) before it reaches the
 // page's canvas: cropped to the middle 21:9 band and brightened, here on a real decoded frame.
-test("Remote Play picture tools crop to 21:9 and brighten the real picture", async ({ browser }) => {
+test("Remote Play picture tools crop to 21:9 and brighten the real picture", async ({
+  browser,
+}) => {
   const { page, close } = await open(browser, {
     dpr: 1,
     size: "1920x1080",
@@ -309,12 +468,26 @@ test("Remote Play picture tools crop to 21:9 and brighten the real picture", asy
   });
   try {
     await page.getByTestId("rp-start").click();
-    const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
+    const canvas = page
+      .getByTestId("rp-stage")
+      .filter({ visible: true })
+      .getByTestId("rp-canvas");
     // 1920 wide, the middle 21:9 band high (1920 * 9 / 21, even).
-    await expect.poll(() => canvas.evaluate((c: HTMLCanvasElement) => `${c.width}x${c.height}`), { timeout: 20_000 }).toBe("1920x822");
+    await expect
+      .poll(
+        () =>
+          canvas.evaluate((c: HTMLCanvasElement) => `${c.width}x${c.height}`),
+        { timeout: 20_000 },
+      )
+      .toBe("1920x822");
     // The fixture's grey (0x40) is brighter now.
     const mid = await canvas.evaluate((c: HTMLCanvasElement) =>
-      Array.from(c.getContext("2d")!.getImageData(c.width / 2, c.height / 2, 1, 1).data.slice(0, 3)),
+      Array.from(
+        c
+          .getContext("2d")!
+          .getImageData(c.width / 2, c.height / 2, 1, 1)
+          .data.slice(0, 3),
+      ),
     );
     for (const v of mid) expect(v).toBeGreaterThan(0x40 + 60);
   } finally {
@@ -330,8 +503,17 @@ for (const dpr of [1.25, 1.5])
       ["sharpened", { sharpen: 40 }],
       ["upscaled", { upscale: true }],
     ] as const)
-      test(`Remote Play shows the whole ${name} picture at ${dpr * 100}%, ${fit}`, async ({ browser }) => {
-        await startAndCheck(browser, { dpr, size: "1920x1080", h264: true, fit, picture, anySize: true });
+      test(`Remote Play shows the whole ${name} picture at ${dpr * 100}%, ${fit}`, async ({
+        browser,
+      }) => {
+        await startAndCheck(browser, {
+          dpr,
+          size: "1920x1080",
+          h264: true,
+          fit,
+          picture,
+          anySize: true,
+        });
       });
 
 // #538/#575 on Windows: Edge's hardware HEVC decoder says each 1920x1080 frame shows only its
@@ -342,29 +524,123 @@ for (const [codec, h264] of [
   ["HEVC", false],
 ] as const)
   for (const fit of ["fit", "fill", "stretch"] as const)
-    test(`Remote Play shows the whole picture when the decoder reports a smaller one (${codec}, ${fit})`, async ({ browser }) => {
-      await startAndCheck(browser, { dpr: 1.5, size: "1920x1080", h264, fit, edgeVisibleRect: true });
+    test(`Remote Play shows the whole picture when the decoder reports a smaller one (${codec}, ${fit})`, async ({
+      browser,
+    }) => {
+      await startAndCheck(browser, {
+        dpr: 1.5,
+        size: "1920x1080",
+        h264,
+        fit,
+        edgeVisibleRect: true,
+      });
     });
+
+// When even the coded frame is cut down (nothing to put right from the SPS), the app starts the
+// decoder over in software, which decodes the whole picture.
+test("Remote Play goes to software decoding when the hardware decoder's picture cannot be put right", async ({
+  browser,
+}) => {
+  const { page, close } = await open(browser, {
+    dpr: 1,
+    size: "1920x1080",
+    h264: true,
+    hardwareCropsFrame: true,
+  });
+  try {
+    await page.getByTestId("rp-start").click();
+    const cfgs = () =>
+      page.evaluate(() =>
+        (
+          window as unknown as { __decoderCfgs: VideoDecoderConfig[] }
+        ).__decoderCfgs.map((c) => c.hardwareAcceleration),
+      );
+    await expect.poll(cfgs, { timeout: 20_000 }).toHaveLength(2);
+    // First the hardware decoder (or no preference where the device has none), then software.
+    const [first, second] = await cfgs();
+    expect(first).not.toBe("prefer-software");
+    expect(second).toBe("prefer-software");
+  } finally {
+    await close();
+  }
+  await startAndCheck(browser, {
+    dpr: 1,
+    size: "1920x1080",
+    h264: true,
+    hardwareCropsFrame: true,
+  });
+});
+
+// Play › Settings: Video decoding › Software and Video format › H.264 reach the decoder and the
+// console.
+test("Remote Play's Video decoding and Video format settings apply", async ({
+  browser,
+}) => {
+  const { page, close, starts } = await open(browser, {
+    dpr: 1,
+    size: "1920x1080",
+    prefs: { decoding: "software", codec: "h264" },
+  });
+  try {
+    await page.getByTestId("rp-start").click();
+    const cfgs = () =>
+      page.evaluate(() =>
+        (
+          window as unknown as { __decoderCfgs: VideoDecoderConfig[] }
+        ).__decoderCfgs.map((c) => [
+          c.codec.slice(0, 4),
+          c.hardwareAcceleration,
+        ]),
+      );
+    await expect
+      .poll(cfgs, { timeout: 20_000 })
+      .toEqual([["avc1", "prefer-software"]]);
+    expect(starts[0]?.codec).toBe("h264");
+  } finally {
+    await close();
+  }
+});
 
 // Upscaling (FSR 1): the real 1080p picture on a 2x screen is drawn at the picture's size on
 // screen, in device pixels, and keeps its shape (its layout does not move).
-test("Remote Play upscales the real picture to its size on screen", async ({ browser }) => {
+test("Remote Play upscales the real picture to its size on screen", async ({
+  browser,
+}) => {
   // Not on Desktop Chrome's own (Windows) user agent: any platform's would do.
-  const { page, close } = await open(browser, { dpr: 2, size: "1920x1080", h264: true, picture: { upscale: true }, windows: false });
+  const { page, close } = await open(browser, {
+    dpr: 2,
+    size: "1920x1080",
+    h264: true,
+    picture: { upscale: true },
+    windows: false,
+  });
   try {
     await page.getByTestId("rp-start").click();
-    const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
+    const canvas = page
+      .getByTestId("rp-stage")
+      .filter({ visible: true })
+      .getByTestId("rp-canvas");
     const read = () =>
       canvas.evaluate((c: HTMLCanvasElement) => {
         const r = c.getBoundingClientRect();
         return {
           px: [c.width, c.height],
-          box: [Math.round(r.width * devicePixelRatio), Math.round(r.height * devicePixelRatio)],
+          box: [
+            Math.round(r.width * devicePixelRatio),
+            Math.round(r.height * devicePixelRatio),
+          ],
           shape: Number(c.style.getPropertyValue("--rp-shape")),
-          lit: Array.from(c.getContext("2d")!.getImageData(c.width / 2, c.height / 2, 1, 1).data.slice(0, 3)),
+          lit: Array.from(
+            c
+              .getContext("2d")!
+              .getImageData(c.width / 2, c.height / 2, 1, 1)
+              .data.slice(0, 3),
+          ),
         };
       });
-    await expect.poll(async () => (await read()).px[0], { timeout: 20_000 }).toBeGreaterThan(1920 * 1.1);
+    await expect
+      .poll(async () => (await read()).px[0], { timeout: 20_000 })
+      .toBeGreaterThan(1920 * 1.1);
     const r = await read();
     // Drawn at the box's device pixels (within rounding), the picture's own 16:9 shape kept.
     expect(Math.abs(r.px[0] - r.box[0])).toBeLessThanOrEqual(2);

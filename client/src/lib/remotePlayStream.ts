@@ -422,6 +422,10 @@ export interface StreamOptions {
   replayS?: number;
   /** Picture tools to start with (rpPicture.ts). */
   picture?: PictureTools;
+  /** "software": never the hardware decoder (Settings › Video decoding). */
+  decoding?: "auto" | "software";
+  /** "h264": never ask for HEVC (Settings › Video format). */
+  codec?: "auto" | "h264";
   /** The picture tools' GPU pass turned itself off (no WebGL, or the device lags). */
   onPictureOff?: (why: "failed" | "slow") => void;
   /** How the picture fills the place it is shown in (default: the whole picture). */
@@ -584,6 +588,8 @@ export class RemotePlayStream {
    *  reports a smaller one (Edge on Windows). */
   private spsRect: VisibleRect | null = null;
   private loggedVisibleFix = false;
+  /** The hardware decoder gave a picture that could not be put right: software from now on. */
+  private softwareAfterBadFrame = false;
 
   /** The frame with the stream's own visible picture where the decoder reported a smaller one
    *  (hardware HEVC decoding in Chromium browsers on Windows: Edge, so the Windows app, and
@@ -597,13 +603,36 @@ export class RemotePlayStream {
       // so once, for a report.
       const v = frame.visibleRect;
       const sps = this.spsRect;
-      if (sps && v && !this.loggedVisibleFix && (v.width < sps.w - 16 || v.height < sps.h - 16)) {
-        this.loggedVisibleFix = true;
-        log.warn(
-          "remote-play",
-          `the decoder reported a ${v.width}x${v.height} picture in a ${frame.codedWidth}x${frame.codedHeight} frame; ` +
-            `the stream says ${sps.w}x${sps.h}, which does not fit: drawn as reported`,
-        );
+      if (sps && v && (v.width < sps.w - 16 || v.height < sps.h - 16)) {
+        if (!this.softwareAfterBadFrame && this.o.decoding !== "software") {
+          // Start the decoder over in software, which reports the picture right.
+          this.softwareAfterBadFrame = true;
+          log.warn(
+            "remote-play",
+            `the decoder reported a ${v.width}x${v.height} picture in a ${frame.codedWidth}x${frame.codedHeight} frame; ` +
+              `the stream says ${sps.w}x${sps.h}, which does not fit: decoding in software from now on`,
+          );
+          const bad = this.video;
+          queueMicrotask(() => {
+            if (this.video !== bad) return;
+            try {
+              bad?.close();
+            } catch {
+              // Already closed.
+            }
+            this.video = null;
+            this.sawKey = false;
+            if (this.header) this.openVideo();
+            this.ws?.send(JSON.stringify({ keyframe: true }));
+          });
+        } else if (!this.loggedVisibleFix) {
+          this.loggedVisibleFix = true;
+          log.warn(
+            "remote-play",
+            `the decoder reported a ${v.width}x${v.height} picture in a ${frame.codedWidth}x${frame.codedHeight} frame; ` +
+              `the stream says ${sps.w}x${sps.h}, also in software: drawn as reported`,
+          );
+        }
       }
       return frame;
     }
@@ -789,7 +818,10 @@ export class RemotePlayStream {
     this.gainNode = this.audioCtx.createGain();
     this.gainNode.gain.value = this.volume;
     this.gainNode.connect(this.audioCtx.destination);
-    const [codec] = await Promise.all([chooseCodec(width, height), this.openWorklet()]);
+    const [codec] = await Promise.all([
+      this.o.codec === "h264" ? Promise.resolve("h264" as const) : chooseCodec(width, height),
+      this.openWorklet(),
+    ]);
     if (codec === "h264" && !(await canDecodeAvc(width, height))) {
       // Found before the console is woken or asked to stream.
       this.o.onError({ code: "no_decoder", detail: "" });
@@ -1275,7 +1307,14 @@ export class RemotePlayStream {
     const configure = async (codec: string) => {
       // The hardware decoder when there is one. "prefer-hardware" is a demand, not a wish: where
       // the device has none for this codec, configure() fails and no picture ever comes.
-      let cfg: VideoDecoderConfig = { codec, optimizeForLatency: true, hardwareAcceleration: "prefer-hardware" };
+      // Software when asked (Settings › Video decoding) or after the hardware one gave a picture
+      // that could not be put right.
+      const software = this.o.decoding === "software" || this.softwareAfterBadFrame;
+      let cfg: VideoDecoderConfig = {
+        codec,
+        optimizeForLatency: true,
+        hardwareAcceleration: software ? "prefer-software" : "prefer-hardware",
+      };
       try {
         if (!(await VideoDecoder.isConfigSupported(cfg)).supported) cfg = { codec, optimizeForLatency: true };
       } catch {
