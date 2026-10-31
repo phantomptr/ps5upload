@@ -60,6 +60,8 @@
 #    the standard Gamepad layout, for when the WebView's own Gamepad API does
 #    not deliver them. See step (9) below.
 # 10) The microphone for Remote Play voice chat (experimental). See step (10) below.
+# 11) In-app updates: AppUpdater.kt hands a downloaded APK to Android's installer
+#     (PackageInstaller), plus REQUEST_INSTALL_PACKAGES. See step (11) below.
 
 
 set -euo pipefail
@@ -1133,6 +1135,228 @@ if missing:
     print("added permissions:", ", ".join(missing))
 else:
     print("microphone permissions already present — skipping")
+PY
+
+# --- (11) in-app updates: AppUpdater (PackageInstaller) ---------------
+# The update banner downloads the APK for this device into <cacheDir>/updates
+# (commands/update_android.rs) and hands it to AppUpdater through
+# window.PS5UploadUpdater. AppUpdater checks it is our package, signed with our
+# key, then writes it into a PackageInstaller session; Android shows its own
+# "Update?" dialog (UpdateInstallReceiver starts it). Without "Install unknown
+# apps" for PS5Upload the page opens that setting first. The classes are
+# rewritten on every run, like TransferService.
+if [ -n "$mainactivity" ]; then
+  cat >"$(dirname "$mainactivity")/AppUpdater.kt" <<'KT'
+package com.phantomptr.ps5upload
+
+// Written by scripts/release/android-postinit-patch.sh; edit it there.
+
+import android.app.Activity
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageInstaller
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import java.io.File
+import org.json.JSONObject
+
+/** Installs a downloaded update APK through Android's own installer. */
+object AppUpdater {
+  // idle | writing | confirm (Android's dialog is up) | done | cancelled | failed
+  @Volatile private var state = "idle"
+  @Volatile private var message = ""
+
+  fun status(): String = JSONObject().put("state", state).put("message", message).toString()
+
+  internal fun set(s: String, m: String = "") {
+    message = m
+    state = s
+  }
+
+  /** "Install unknown apps" is allowed for PS5Upload (always true below Android 8). */
+  fun canInstall(ctx: Context): Boolean =
+    Build.VERSION.SDK_INT < 26 || ctx.packageManager.canRequestPackageInstalls()
+
+  /** Opens "Install unknown apps" for PS5Upload; the page tries again when the app is back. */
+  fun openInstallSettings(activity: Activity) {
+    val i = if (Build.VERSION.SDK_INT >= 26) {
+      Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + activity.packageName))
+    } else {
+      Intent(Settings.ACTION_SECURITY_SETTINGS)
+    }
+    try {
+      activity.startActivity(i)
+    } catch (_: Exception) {
+      activity.startActivity(
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", activity.packageName, null)),
+      )
+    }
+  }
+
+  /** Starts installing [path]; "" when started, else why not. Status follows in [status]. */
+  @Synchronized
+  fun install(ctx: Context, path: String): String {
+    if (state == "writing") return ""
+    val f = try { File(path).canonicalFile } catch (_: Exception) { return "bad path" }
+    val dir = File(ctx.cacheDir, "updates").canonicalFile
+    if (f.parentFile != dir || !f.name.endsWith(".apk", ignoreCase = true) || !f.isFile) {
+      return "not a downloaded update: $path"
+    }
+    checkApk(ctx, f)?.let { return it }
+    if (!canInstall(ctx)) return "needs-permission"
+    set("writing")
+    Thread({ write(ctx.applicationContext, f) }, "ps5upload-update").start()
+    return ""
+  }
+
+  /** Our package, signed with the key this copy was signed with. Null when it is fine. */
+  private fun checkApk(ctx: Context, f: File): String? {
+    val pm = ctx.packageManager
+    val flags = if (Build.VERSION.SDK_INT >= 28) {
+      PackageManager.GET_SIGNING_CERTIFICATES
+    } else {
+      @Suppress("DEPRECATION") PackageManager.GET_SIGNATURES
+    }
+    val apk = pm.getPackageArchiveInfo(f.path, flags) ?: return "the download is not an Android app"
+    if (apk.packageName != ctx.packageName) return "the download is a different app (${apk.packageName})"
+    val mine = try { pm.getPackageInfo(ctx.packageName, flags) } catch (_: Exception) { return null }
+    val a = signers(apk)
+    val b = signers(mine)
+    // Unknown on either side: let Android decide.
+    if (a.isEmpty() || b.isEmpty()) return null
+    if (a != b) return "signed-differently"
+    return null
+  }
+
+  private fun signers(p: PackageInfo): Set<String> {
+    val sigs = if (Build.VERSION.SDK_INT >= 28) {
+      p.signingInfo?.let { if (it.hasMultipleSigners()) it.apkContentsSigners else it.signingCertificateHistory }
+    } else {
+      @Suppress("DEPRECATION") p.signatures
+    }
+    return sigs?.map { it.toCharsString() }?.toSet() ?: emptySet()
+  }
+
+  private fun write(ctx: Context, f: File) {
+    var session: PackageInstaller.Session? = null
+    try {
+      val installer = ctx.packageManager.packageInstaller
+      val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+      params.setAppPackageName(ctx.packageName)
+      params.setSize(f.length())
+      val id = installer.createSession(params)
+      val s = installer.openSession(id)
+      session = s
+      f.inputStream().use { input ->
+        s.openWrite("base.apk", 0, f.length()).use { out ->
+          input.copyTo(out, 1 shl 16)
+          s.fsync(out)
+        }
+      }
+      val intent = Intent(ctx, UpdateInstallReceiver::class.java).setAction(UpdateInstallReceiver.ACTION)
+      var piFlags = PendingIntent.FLAG_UPDATE_CURRENT
+      // The installer fills in the result extras, so the intent must be mutable (Android 12+).
+      if (Build.VERSION.SDK_INT >= 31) piFlags = piFlags or PendingIntent.FLAG_MUTABLE
+      val pi = PendingIntent.getBroadcast(ctx, id, intent, piFlags)
+      s.commit(pi.intentSender)
+      s.close()
+      session = null
+    } catch (e: Exception) {
+      session?.abandon()
+      set("failed", e.message ?: e.toString())
+    }
+  }
+}
+
+/** Result of the install session: shows Android's "Update?" dialog, then records how it ended. */
+class UpdateInstallReceiver : BroadcastReceiver() {
+  companion object {
+    const val ACTION = "com.phantomptr.ps5upload.UPDATE_INSTALL_STATUS"
+  }
+
+  override fun onReceive(ctx: Context, intent: Intent) {
+    when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)) {
+      PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+        val confirm = if (Build.VERSION.SDK_INT >= 33) {
+          intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+        } else {
+          @Suppress("DEPRECATION") intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+        }
+        if (confirm == null) {
+          AppUpdater.set("failed", "Android did not show the install dialog")
+          return
+        }
+        confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+          ctx.startActivity(confirm)
+          AppUpdater.set("confirm")
+        } catch (e: Exception) {
+          AppUpdater.set("failed", e.message ?: e.toString())
+        }
+      }
+      PackageInstaller.STATUS_SUCCESS -> AppUpdater.set("done")
+      PackageInstaller.STATUS_FAILURE_ABORTED -> AppUpdater.set("cancelled")
+      else -> AppUpdater.set(
+        "failed",
+        intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "install failed ($status)",
+      )
+    }
+  }
+}
+KT
+  echo "wrote AppUpdater.kt"
+
+  python3 - "$mainactivity" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if "PS5UploadUpdater" in src:
+    print("MainActivity.kt already exposes PS5UploadUpdater — skipping")
+    sys.exit(0)
+anchor = "    super.onWebViewCreate(webView)\n"
+if anchor not in src:
+    sys.exit("::error::onWebViewCreate not found in MainActivity.kt (step 3 must run first)")
+src = src.replace(anchor, anchor + '''    // In-app updates: the page downloads the APK, AppUpdater hands it to Android.
+    webView.addJavascriptInterface(object {
+      @android.webkit.JavascriptInterface
+      fun canInstall(): Boolean = AppUpdater.canInstall(this@MainActivity)
+      @android.webkit.JavascriptInterface
+      fun openInstallSettings() { runOnUiThread { AppUpdater.openInstallSettings(this@MainActivity) } }
+      @android.webkit.JavascriptInterface
+      fun install(path: String): String = AppUpdater.install(this@MainActivity, path)
+      @android.webkit.JavascriptInterface
+      fun status(): String = AppUpdater.status()
+    }, "PS5UploadUpdater")
+''', 1)
+open(path, "w", encoding="utf-8").write(src)
+print("patched MainActivity.kt to expose PS5UploadUpdater")
+PY
+fi
+
+python3 - "$manifest" <<'PY'
+import re, sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+perm = "android.permission.REQUEST_INSTALL_PACKAGES"
+if f'android:name="{perm}"' not in src:
+    new = re.sub(r"(<manifest\b[^>]*>)", r'\1\n    <uses-permission android:name="' + perm + '" />', src, count=1)
+    if new == src:
+        sys.exit("::error::could not find <manifest> tag to add REQUEST_INSTALL_PACKAGES")
+    src = new
+    print("added REQUEST_INSTALL_PACKAGES")
+if ".UpdateInstallReceiver" not in src:
+    receiver = '        <receiver android:name=".UpdateInstallReceiver" android:exported="false" />\n'
+    new = src.replace("    </application>", receiver + "    </application>", 1)
+    if new == src:
+        sys.exit("::error::could not find </application> to declare UpdateInstallReceiver")
+    src = new
+    print("declared UpdateInstallReceiver")
+open(path, "w", encoding="utf-8").write(src)
 PY
 
 echo "android post-init patches applied"

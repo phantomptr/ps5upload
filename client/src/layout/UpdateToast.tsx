@@ -18,6 +18,8 @@ import { Modal } from "../components/Modal";
 import { MarkdownView } from "../components/MarkdownView";
 import { Button } from "../components/Button";
 import { openExternalUrl } from "../lib/openExternalUrl";
+import { isMobile } from "../lib/platform";
+import { apkUpdaterAvailable, progressPercent, useApkUpdateStore } from "../state/apkUpdate";
 
 /** The GitHub page of one release. */
 export function releasePageUrl(version: string): string {
@@ -113,6 +115,7 @@ export function UpdateToast() {
   const skippedVersion = useUpdateStore((s) => s.skippedVersion);
   const skipVersion = useUpdateStore((s) => s.skipVersion);
   const installOnQuit = useUpdateStore((s) => s.installOnQuitArmed);
+  const apkStep = useApkUpdateStore((s) => s.step);
   // Dismiss is keyed by version so a NEWER release later in the session
   // re-surfaces the bar instead of staying hidden.
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
@@ -136,6 +139,13 @@ export function UpdateToast() {
   const downloaded = phase.kind === "downloaded";
   const failed = phase.kind === "download-failed";
   const canInstall = phase.kind === "downloaded" && !!phase.download.can_install;
+  // Android with the installer bridge: one tap downloads and opens Android's dialog.
+  const apkInstall =
+    isMobile() && "result" in phase && !!phase.result.download_url && apkUpdaterAvailable();
+  const apkPct =
+    apkInstall && apkStep.kind === "downloading"
+      ? progressPercent(apkStep.received, apkStep.total)
+      : null;
 
   return (
     <div className="mx-3 mt-2 flex items-center gap-3 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] px-4 py-2 text-sm md:mx-6">
@@ -165,6 +175,18 @@ export function UpdateToast() {
             )}
           </span>
         )}
+        {apkInstall && apkStep.kind === "needs-permission" && (
+          <span className="text-[var(--color-muted)]">
+            {" · "}
+            {tr("update_apk_toast_permission", undefined, "allow installing apps, then come back")}
+          </span>
+        )}
+        {apkInstall && apkStep.kind === "installing" && (
+          <span className="text-[var(--color-muted)]">
+            {" · "}
+            {tr("update_apk_toast_confirm", undefined, "tap Update in Android's dialog")}
+          </span>
+        )}
       </span>
       <button
         type="button"
@@ -188,10 +210,14 @@ export function UpdateToast() {
             <Download size={13} />
           )}
           {downloading
-            ? tr("update_toast_downloading", undefined, "Downloading…")
+            ? apkPct != null
+              ? tr("update_apk_downloading_pct", { percent: apkPct }, "Downloading… {percent}%")
+              : tr("update_toast_downloading", undefined, "Downloading…")
             : failed
               ? tr("update_toast_retry", undefined, "Retry")
-              : tr("update_toast_download", undefined, "Download")}
+              : apkInstall
+                ? tr("update_apk_toast_install", undefined, "Install")
+                : tr("update_toast_download", undefined, "Download")}
         </button>
       )}
       {canInstall && (

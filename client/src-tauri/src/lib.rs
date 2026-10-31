@@ -632,6 +632,8 @@ pub fn run() {
             commands::update_download,
             commands::update_install,
             commands::update_install_on_quit,
+            // Android: the APK into the app cache with progress, for the system installer.
+            commands::update_download_apk,
             tray::tray_configure,
             // ── Title metadata fetch (cover art + display title) ────
             // Server-side fetch (Rust/reqwest) of the public PS5

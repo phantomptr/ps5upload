@@ -323,7 +323,14 @@ fn preferred_asset_keys() -> Vec<String> {
             return vec![format!("{base}-setup"), base.to_string()];
         }
     }
-    vec![base.to_string()]
+    // Android: the APK for this device's ABI (a 32-bit copy on a 64-bit phone
+    // moves to arm64), the running build's key as the fallback.
+    #[cfg(target_os = "android")]
+    let keys =
+        super::update_android::asset_keys_for_abis(&super::update_android::device_abilist(), base);
+    #[cfg(not(target_os = "android"))]
+    let keys = vec![base.to_string()];
+    keys
 }
 
 /// Minimal semver-ish comparison. Splits MAJOR.MINOR.PATCH numerics and
@@ -991,6 +998,16 @@ const PINNED_PRODUCTION_HOSTS: &[&str] = &[
     "objects.githubusercontent.com",
     "raw.githubusercontent.com",
 ];
+
+/// Whether an update asset may be downloaded from `url`: the pinned GitHub
+/// hosts, or any HTTPS host once a developer pointed the manifest elsewhere.
+pub(crate) fn is_allowed_download_url(url: &str) -> bool {
+    if std::env::var("PS5UPLOAD_UPDATE_MANIFEST_URL").is_ok() {
+        is_safe_dev_url(url)
+    } else {
+        is_safe_update_url(url)
+    }
+}
 
 fn is_safe_update_url(raw: &str) -> bool {
     is_safe_update_url_for_host(raw, PINNED_PRODUCTION_HOSTS)

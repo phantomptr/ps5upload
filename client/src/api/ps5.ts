@@ -4950,6 +4950,24 @@ export async function updateDownload(
   });
 }
 
+/** Android: the update APK downloaded into the app's cache, checked. */
+export interface ApkDownload {
+  path: string;
+  bytes: number;
+  /** The SHA-256 from latest.json matched (false: the release has none). */
+  verified: boolean;
+}
+
+/** Android: download the update APK into the app's cache (progress on the
+ *  `update-apk-progress` event) for `PS5UploadUpdater.install`. */
+export async function updateDownloadApk(
+  url: string,
+  filename: string,
+  sha256?: string,
+): Promise<ApkDownload> {
+  return invoke<ApkDownload>("update_download_apk", { url, filename, sha256: sha256 || null });
+}
+
 /** Install a downloaded update and restart into it (desktop: Windows, macOS, a Linux
  *  AppImage). The app quits once the install has started and comes back as the new version;
  *  a rejection means nothing changed. */

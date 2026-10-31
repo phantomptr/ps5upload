@@ -14,6 +14,9 @@ What's new in ps5upload, written for humans.
 - **Remote Play explains any refusal at the start.** A code nobody has explained yet (such as
   80108b26) now comes with what to check: the console's Remote Play switch, Allow for this user,
   and pairing.
+- **Android updates install from inside the app.** Tap Download and install: the app downloads the
+  APK for your phone (with progress), checks it, and Android asks "Update?". The first time,
+  Android asks you to allow PS5Upload to install apps. Open download page stays as the fallback.
 
 ## 10.1.0
 - **Updates are checked before they install.** Each release now publishes the SHA-256 of every

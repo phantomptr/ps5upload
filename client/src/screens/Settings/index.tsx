@@ -69,6 +69,8 @@ import { useRestAfterUploadStore } from "../../state/restAfterUpload";
 import { userConfigPath, resetAllAppData } from "../../state/userConfig";
 import { useUpdateStore, type UpdatePhase } from "../../state/update";
 import { isIOS, isMobile } from "../../lib/platform";
+import { apkUpdaterAvailable } from "../../state/apkUpdate";
+import { ApkUpdateStatus } from "../../layout/ApkUpdateStatus";
 import { settingsVisibility } from "./visibility";
 import type { LanguageCode } from "../../i18n";
 // Static imports for stores already pulled into the main bundle by
@@ -1804,10 +1806,15 @@ function UpdatesPanel() {
     phase.kind === "available" || phase.kind === "download-failed";
   const hasPlatformBundle =
     resultForNotes?.download_url && resultForNotes.download_url.length > 0;
+  // Android with the installer bridge: download and install inside the app.
+  const apkInstall = mobile && !!hasPlatformBundle && apkUpdaterAvailable();
 
   return (
     <div className="flex flex-col gap-3">
       <StatusRow phase={phase} />
+      {apkInstall && resultForNotes && (
+        <ApkUpdateStatus result={resultForNotes} failed={phase.kind === "download-failed"} />
+      )}
       {resultForNotes && (
         <ReleaseNotes
           version={resultForNotes.latest_version}
@@ -2017,8 +2024,14 @@ function UpdatesPanel() {
             disabled={busy}
             className="inline-flex items-center gap-1.5 rounded-full bg-[image:var(--accent-fill)] px-3.5 py-1.5 text-xs font-semibold text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105 disabled:opacity-50"
           >
-            <ExternalLink size={12} />
-            {hasPlatformBundle
+            {apkInstall ? <Download size={12} /> : <ExternalLink size={12} />}
+            {apkInstall
+              ? tr(
+                  "update_apk_install_button",
+                  { version: resultForNotes?.latest_version ?? "" },
+                  "Download and install v{version}",
+                )
+              : hasPlatformBundle
               ? isIOS()
                 ? tr(
                     "update_open_ipa_button",
