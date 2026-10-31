@@ -8,6 +8,7 @@
 import { DEFAULT_PICTURE, PicturePass, cropRect, needsPass, upscaleSize, upscales, type PictureTools } from "./rpPicture";
 import type { MotionReading } from "./motion";
 import { getEngineUrl } from "../state/engine";
+import { log } from "../state/logs";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
 
 /** Button bits, as the console (and chiaki) number them. */
@@ -578,6 +579,9 @@ export class RemotePlayStream {
   /** The page's mic is on (remotePlayMic.ts); said again on every reattach. */
   private micOn = false;
 
+  /** The picture's shape (width / height) its layout follows, as last set on the canvas. */
+  private shape = 16 / 9;
+
   constructor(private readonly o: StreamOptions) {
     this.canvas = document.createElement("canvas");
     this.canvas.dataset.testid = "rp-canvas";
@@ -684,6 +688,27 @@ export class RemotePlayStream {
     this.replayS = seconds;
     const ws = this.ws;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ replay_s: seconds }));
+  }
+
+  /** One line in the logs each time the picture changes size: where the canvas is laid out
+   *  against what it draws, so a report of a cut-off picture (#538, #575) says which. */
+  private logLayout(streamW: number, streamH: number): void {
+    try {
+      const c = this.canvas;
+      const win = c.ownerDocument.defaultView;
+      const r = c.getBoundingClientRect();
+      const place = c.parentElement?.getBoundingClientRect();
+      const n = (v: number | undefined) => (v === undefined ? "?" : v.toFixed(0));
+      log.info(
+        "remote-play",
+        `picture: stream ${streamW}x${streamH}, canvas ${c.width}x${c.height} px, shown ${n(r.width)}x${n(r.height)} ` +
+          `in ${n(place?.width)}x${n(place?.height)} css px, fit ${c.dataset.fit}, ratio ${win?.devicePixelRatio ?? "?"}, ` +
+          `window ${win?.innerWidth ?? "?"}x${win?.innerHeight ?? "?"}${win !== window ? " (pop-out)" : ""}, ` +
+          `tools ${JSON.stringify(this.tools)}`,
+      );
+    } catch {
+      // Only a log line.
+    }
   }
 
   /** How the picture fills the place it is shown in (see PictureFit). */
@@ -1162,10 +1187,15 @@ export class RemotePlayStream {
             shape = w / h;
           }
         }
-        if (c.width !== w || c.height !== h) {
-          c.width = w;
-          c.height = h;
+        // The shape on its own too: upscaled, the canvas keeps the box's size while Crop to 21:9
+        // changes the shape.
+        const shapeChanged = shape !== this.shape;
+        if (c.width !== w || c.height !== h || shapeChanged) {
+          if (c.width !== w) c.width = w;
+          if (c.height !== h) c.height = h;
           c.style.setProperty("--rp-shape", String(shape));
+          this.shape = shape;
+          this.logLayout(frame.displayWidth, frame.displayHeight);
         }
         this.ctx?.drawImage(src, 0, 0, c.width, c.height);
         frame.close();

@@ -16,6 +16,9 @@ What's new in ps5upload, written for humans.
 - **Play:** the Console picker is gone from the stream bar (Play uses the console you have
   selected), **Start** is first in the row, and **Set up Play** stands out with its progress until
   it's done.
+- **Play picture:** with Upscale on, turning Crop to 21:9 on or off now reshapes the picture
+  right away (it kept the old shape). The logs now say how the picture is laid out against what
+  it draws, so a report of a picture cut off on Windows shows which it is.
 - **Fixed: on macOS the engine could stop after an update and stay stopped** ("Connection refused"
   on 127.0.0.1:19113). The engine program is now replaced in one step instead of rewritten in
   place, the app restarts an engine that stopped on its own, and the notice says why it stopped.

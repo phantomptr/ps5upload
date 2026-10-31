@@ -47,6 +47,8 @@ interface Case {
   full?: boolean;
   /** Picture tools (lib/rpPicture.ts) set before the stream starts. */
   picture?: Record<string, unknown>;
+  /** The canvas may be drawn bigger than the stream (upscaling). */
+  anySize?: boolean;
 }
 
 async function open(browser: Browser, c: Case): Promise<{ page: Page; close: () => Promise<void> }> {
@@ -140,7 +142,8 @@ async function checkPicture(page: Page, c: Case) {
   const stage = page.getByTestId("rp-stage").filter({ visible: true });
   const canvas = stage.getByTestId("rp-canvas");
   // The canvas takes the frame's own size, not the size asked for.
-  await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => `${el.width}x${el.height}`), { timeout: 20_000 }).toBe(c.size);
+  if (c.anySize) await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.width), { timeout: 20_000 }).toBeGreaterThanOrEqual(W);
+  else await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => `${el.width}x${el.height}`), { timeout: 20_000 }).toBe(c.size);
   await expect(canvas).toHaveAttribute("data-fit", c.fit ?? "fit");
   // Nothing drawn over the picture while it is measured.
   await page.addStyleTag({ content: '[data-testid="rp-stage"] > :not(:first-child) { visibility: hidden !important; }' });
@@ -285,6 +288,17 @@ test("Remote Play picture tools crop to 21:9 and brighten the real picture", asy
   }
 });
 
+// The picture tools draw through the GPU pass: the whole picture still shows, at Windows'
+// usual 125% and 150% scaling, in every picture size, sharpened or upscaled.
+for (const dpr of [1.25, 1.5])
+  for (const fit of ["fit", "fill", "stretch"] as const)
+    for (const [name, picture] of [
+      ["sharpened", { sharpen: 40 }],
+      ["upscaled", { upscale: true }],
+    ] as const)
+      test(`Remote Play shows the whole ${name} picture at ${dpr * 100}%, ${fit}`, async ({ browser }) => {
+        await startAndCheck(browser, { dpr, size: "1920x1080", h264: true, fit, picture, anySize: true });
+      });
 
 // Upscaling (FSR 1): the real 1080p picture on a 2x screen is drawn at the picture's size on
 // screen, in device pixels, and keeps its shape (its layout does not move).
