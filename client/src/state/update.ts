@@ -438,6 +438,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         const download = await updateDownload(
           result.download_url,
           result.download_filename,
+          result.sha256,
         );
         set({ phase: { kind: "downloaded", result, download } });
       } catch (e) {

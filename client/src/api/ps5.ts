@@ -4901,6 +4901,9 @@ export interface UpdateCheck {
    *  filename in ~/Downloads. Pre-split server-side to keep the
    *  renderer free of URL parsing. */
   download_filename: string;
+  /** Lowercase hex SHA-256 the release publishes for `download_url`; empty for releases
+   *  before 10.2 (and absent in a result cached by an older build). */
+  sha256?: string;
 }
 
 export interface UpdateDownload {
@@ -4912,6 +4915,8 @@ export interface UpdateDownload {
   install_command?: string;
   /** This copy can install the download and restart into it (`updateInstall`). */
   can_install?: boolean;
+  /** The file matched the release's published SHA-256 (false: the release published none). */
+  verified?: boolean;
 }
 
 /** Ask GitHub for the latest-release manifest and compare to our
@@ -4927,12 +4932,19 @@ export async function updateCheck(
 /** Stream the update archive into the user's Downloads folder and
  *  reveal it in the OS file manager. Re-running with the same URL
  *  is idempotent: if the file is already on disk with the expected
- *  size, we skip the download and just re-open the folder. */
+ *  size, we skip the download and just re-open the folder. With a
+ *  `sha256`, the file must match it or the call rejects (and the file
+ *  is deleted). */
 export async function updateDownload(
   url: string,
   filename: string,
+  sha256?: string,
 ): Promise<UpdateDownload> {
-  return invoke<UpdateDownload>("update_download", { url, filename });
+  return invoke<UpdateDownload>("update_download", {
+    url,
+    filename,
+    sha256: sha256 || null,
+  });
 }
 
 /** Install a downloaded update and restart into it (desktop: Windows, macOS, a Linux
