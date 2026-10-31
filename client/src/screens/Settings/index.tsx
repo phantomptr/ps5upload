@@ -1,3 +1,4 @@
+import { MarkdownView } from "../../components/MarkdownView";
 import { MinionSettings } from "./MinionSettings";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { writeClipboard } from "../../lib/clipboard";
@@ -2167,9 +2168,9 @@ function ReleaseNotes({
           </span>
         )}
       </div>
-      <pre className="max-h-48 overflow-auto whitespace-pre-wrap font-sans text-xs leading-relaxed text-[var(--color-text)]">
-        {notes}
-      </pre>
+      <div className="max-h-64 overflow-auto text-xs leading-relaxed text-[var(--color-text)]">
+        <MarkdownView source={notes} />
+      </div>
     </div>
   );
 }

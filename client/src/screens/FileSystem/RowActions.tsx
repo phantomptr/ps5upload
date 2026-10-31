@@ -399,25 +399,45 @@ export function RowActionsTrigger({
 }
 
 /** Where a menu opened from a button sits: under the button, its end edge on
- *  the button's end edge; above the button when there is no room below. */
+ *  the button's end edge; above the button when there is no room below. The
+ *  viewport's `insetTop` / `insetBottom` are the phone's status and navigation
+ *  bars: a menu item under the status bar can't be tapped (Android takes the
+ *  touch), so the menu stays between them. */
 export function menuPlacement(
   anchor: { left: number; right: number; top: number; bottom: number },
   menu: { width: number; height: number },
-  viewport: { width: number; height: number },
+  viewport: { width: number; height: number; insetTop?: number; insetBottom?: number },
   margin = 4,
 ): { left: number; top: number } {
   const left = Math.max(
     margin,
     Math.min(anchor.right - menu.width, viewport.width - menu.width - margin),
   );
-  const fitsBelow = anchor.bottom + menu.height + margin <= viewport.height;
-  const fitsAbove = anchor.top - menu.height - margin >= 0;
+  const minTop = (viewport.insetTop ?? 0) + margin;
+  const maxBottom = viewport.height - (viewport.insetBottom ?? 0) - margin;
+  const fitsBelow = anchor.bottom + menu.height <= maxBottom;
+  const fitsAbove = anchor.top - menu.height >= minTop;
   const top = fitsBelow
     ? anchor.bottom
     : fitsAbove
       ? anchor.top - menu.height
-      : Math.max(margin, viewport.height - menu.height - margin);
+      : Math.max(minTop, maxBottom - menu.height);
   return { left, top };
+}
+
+/** The status and navigation bar heights (CSS px) the page is drawn under. */
+function safeInsets(): { insetTop: number; insetBottom: number } {
+  const probe = document.createElement("div");
+  probe.style.cssText =
+    "position:fixed;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top);padding-bottom:var(--safe-bottom, env(safe-area-inset-bottom))";
+  document.body.appendChild(probe);
+  const cs = getComputedStyle(probe);
+  const insets = {
+    insetTop: parseFloat(cs.paddingTop) || 0,
+    insetBottom: parseFloat(cs.paddingBottom) || 0,
+  };
+  probe.remove();
+  return insets;
 }
 
 /** The Files row menu: the right-click menu (at the pointer) and, on a phone,
@@ -446,13 +466,16 @@ export function RowMenu({
     const el = ref.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const viewport = { width: window.innerWidth, height: window.innerHeight, ...safeInsets() };
     setPos(
       anchor
         ? menuPlacement(anchor, r, viewport)
         : {
             left: Math.max(4, Math.min(x, viewport.width - r.width - 4)),
-            top: Math.max(4, Math.min(y, viewport.height - r.height - 4)),
+            top: Math.max(
+              viewport.insetTop + 4,
+              Math.min(y, viewport.height - viewport.insetBottom - r.height - 4),
+            ),
           },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -530,7 +553,7 @@ export function RowMenu({
       // The same floating glass as the app's other menus (components/Menu).
       // `--color-surface` is the translucent page tint: with it the rows under
       // the menu read straight through the items.
-      className="glass-float elev-2 fixed z-50 max-h-[calc(100dvh-0.5rem)] min-w-[12rem] max-w-[calc(100vw-0.5rem)] overflow-y-auto rounded-[var(--radius-card)] p-1.5 text-sm"
+      className="glass-float elev-2 fixed z-50 max-h-[calc(100dvh-0.5rem-env(safe-area-inset-top)-var(--safe-bottom,0px))] min-w-[12rem] max-w-[calc(100vw-0.5rem)] overflow-y-auto rounded-[var(--radius-card)] p-1.5 text-sm"
     >
       <RowMenuList
         items={items}
