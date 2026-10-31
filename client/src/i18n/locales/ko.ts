@@ -6302,6 +6302,8 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_capture_pointer": "화면을 클릭하면 포인터 숨기기",
 "rp_capture_pointer_hint": "Esc를 누르면 다시 보입니다.",
 "rp_rumble": "컨트롤러 진동",
+"rp_dualsense": "DualSense 효과",
+"rp_dualsense_hint": "이 컴퓨터에 DualSense가 연결되어 있으면: 적응형 트리거, USB로 연결하면 햅틱 피드백도. 다음 시작부터 적용됩니다.",
 "rp_mic_setting": "마이크 (실험적)",
 "rp_mic_setting_hint": "음성 채팅용 마이크 버튼을 추가합니다. 다음 시작부터 적용됩니다.",
 "rp_touch_controls": "화면 컨트롤러",

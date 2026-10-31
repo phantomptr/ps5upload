@@ -77,11 +77,13 @@ pub fn big(b: &Big) -> Vec<u8> {
     out
 }
 
-/// "A DualShock 4 is connected", which the console expects after STREAMINFO.
-pub fn controller_connection() -> Vec<u8> {
+/// "A DualShock 4 is connected", which the console expects after STREAMINFO; or a DualSense,
+/// so the console sends adaptive triggers and haptics (chiaki
+/// `stream_connection_send_controller_connection`, `ControllerType` 2 / 6 in takion.proto).
+pub fn controller_connection(dualsense: bool) -> Vec<u8> {
     let mut p = Vec::new();
     put_u(&mut p, 2, 1); // connected
-    put_u(&mut p, 3, 2); // DUALSHOCK4
+    put_u(&mut p, 3, if dualsense { 6 } else { 2 }); // DUALSENSE / DUALSHOCK4
     let mut out = Vec::new();
     put_u(&mut out, 1, kind::CONTROLLERCONNECTION);
     put_bytes(&mut out, 22, &p);

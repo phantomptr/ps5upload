@@ -6577,6 +6577,8 @@ library_compressed_hint: "برای اجرای ایمیج فشرده به ShadowM
 "rp_capture_pointer": "کلیک روی تصویر نشانگر را پنهان می‌کند",
 "rp_capture_pointer_hint": "Esc دوباره آن را نشان می‌دهد.",
 "rp_rumble": "لرزش دسته",
+"rp_dualsense": "جلوه‌های DualSense",
+"rp_dualsense_hint": "با DualSense وصل به این رایانه: ماشه‌های تطبیقی، و بازخورد لمسی وقتی با USB وصل است. از شروع بعدی اعمال می‌شود.",
 "rp_mic_setting": "میکروفون (آزمایشی)",
 "rp_mic_setting_hint": "یک دکمه میکروفون برای گفتگوی صوتی اضافه می‌کند. از شروع بعدی اعمال می‌شود.",
 "rp_touch_controls": "دسته روی صفحه",

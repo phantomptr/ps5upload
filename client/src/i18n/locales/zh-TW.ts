@@ -6238,6 +6238,8 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_capture_pointer": "點擊畫面隱藏指標",
 "rp_capture_pointer_hint": "按 Esc 重新顯示。",
 "rp_rumble": "控制器震動",
+"rp_dualsense": "DualSense 效果",
+"rp_dualsense_hint": "這台電腦連接 DualSense 時：自適應扳機，以 USB 連接時還有觸覺回饋。下次開始時生效。",
 "rp_mic_setting": "麥克風（實驗性）",
 "rp_mic_setting_hint": "新增語音聊天用的麥克風按鈕。下次開始時生效。",
 "rp_touch_controls": "螢幕控制器",

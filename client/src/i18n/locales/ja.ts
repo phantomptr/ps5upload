@@ -6304,6 +6304,8 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_capture_pointer": "映像をクリックするとポインターを隠す",
 "rp_capture_pointer_hint": "Esc で再表示します。",
 "rp_rumble": "コントローラーの振動",
+"rp_dualsense": "DualSense のエフェクト",
+"rp_dualsense_hint": "このコンピューターに DualSense をつないでいるとき: アダプティブトリガー、USB 接続時はハプティクスも。次の開始から反映されます。",
 "rp_mic_setting": "マイク（試験的）",
 "rp_mic_setting_hint": "ボイスチャット用のマイクボタンを追加します。次の開始から有効です。",
 "rp_touch_controls": "画面上のコントローラー",

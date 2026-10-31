@@ -6300,6 +6300,8 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_capture_pointer": "Clicar na imagem oculta o ponteiro",
 "rp_capture_pointer_hint": "Esc mostra de novo.",
 "rp_rumble": "Vibração do controle",
+"rp_dualsense": "Efeitos do DualSense",
+"rp_dualsense_hint": "Com um DualSense conectado a este computador: gatilhos adaptáveis e, ligado por USB, resposta tátil. Vale a partir do próximo início.",
 "rp_mic_setting": "Microfone (experimental)",
 "rp_mic_setting_hint": "Adiciona um botão de microfone para o chat de voz. Vale a partir do próximo início.",
 "rp_touch_controls": "Controle na tela",

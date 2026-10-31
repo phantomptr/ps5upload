@@ -6301,6 +6301,8 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_capture_pointer": "Cliquer sur l'image masque le pointeur",
 "rp_capture_pointer_hint": "Esc le réaffiche.",
 "rp_rumble": "Vibration de la manette",
+"rp_dualsense": "Effets DualSense",
+"rp_dualsense_hint": "Avec une DualSense connectée à cet ordinateur : gâchettes adaptatives et, branchée en USB, retour haptique. S'applique au prochain démarrage.",
 "rp_mic_setting": "Microphone (expérimental)",
 "rp_mic_setting_hint": "Ajoute un bouton micro pour le chat vocal. S’applique au prochain démarrage.",
 "rp_touch_controls": "Manette à l'écran",

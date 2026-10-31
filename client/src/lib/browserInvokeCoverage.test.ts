@@ -49,6 +49,12 @@ const NATIVE_ONLY: Record<string, string> = {
   focus_webview: "iOS app only: makes the WKWebView the first responder so controllers reach the page",
   game_mode_set: "the app asks its OS for game mode while Remote Play plays; a browser tab cannot (lib/gameMode.ts skips it)",
   pad_touchpad_set: "the app reads a DualSense's touchpad over HID while Remote Play plays; a browser uses WebHID instead (lib/padTouchpad.ts)",
+  pad_dualsense_info: "the app looks for a DualSense over HID to start Remote Play in DualSense mode; a browser never does (lib/dualSense.ts)",
+  pad_dualsense_triggers: "the app writes a DualSense's adaptive triggers over HID; browsers never start DualSense mode (lib/dualSense.ts)",
+  pad_dualsense_intensity: "the app applies the console's DualSense effect strengths over HID; browsers never start DualSense mode",
+  pad_dualsense_reset: "the app lets a DualSense's triggers go over HID; browsers never start DualSense mode",
+  pad_haptics_set: "the app opens a DualSense's USB audio device for haptics; browsers never start DualSense mode (lib/dualSense.ts)",
+  pad_haptics_push: "the app plays a DualSense's haptics on its USB audio device; browsers never start DualSense mode",
   dragout_stage_dir: "stages a PS5 file for an OS drag out of the window; a browser tab has no OS drag",
   // Host filesystem / OS
   read_text_file: "native: reads a host path",

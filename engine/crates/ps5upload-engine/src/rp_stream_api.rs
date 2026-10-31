@@ -7,7 +7,7 @@
 //! * client → engine, text JSON: first `{"host", "regist_key", "rp_key",
 //!   "width"?, "height"?, "fps"?, "bitrate_kbps"?, "codec"? ("h264", "h265",
 //!   or "h265_hdr": HEVC Main10 in HDR), "keep_alive_s"?,
-//!   "attach_only"?, "low_latency"?, "mic"?}`, then `{"pad": {"buttons", "l2", "r2",
+//!   "attach_only"?, "low_latency"?, "mic"?, "dualsense"?}`, then `{"pad": {"buttons", "l2", "r2",
 //!   "lx", "ly", "rx", "ry"}}` whenever the pad changes, `{"keyframe": true}`,
 //!   `{"ping": t}` (answered at once with `{"pong": t}`, for the page to time
 //!   the round trip), or `{"stop": true}`.
@@ -18,8 +18,11 @@
 //!   mic counts, and the mic goes off whenever the page changes.
 //! * engine → client, binary `[u8 kind][payload]`: 0 = video codec header
 //!   (Annex-B parameter sets), 1 = video access unit, 3 = audio header,
-//!   4 = audio frame (Opus). Text JSON = status (`{"stage": …}`), rumble
-//!   (`{"rumble": [strong, weak]}`) and light bar (`{"light": [r, g, b]}`).
+//!   4 = audio frame (Opus), 6 = DualSense haptics frame (10 ms of 3 kHz stereo s16le PCM).
+//!   Text JSON = status (`{"stage": …}`), rumble (`{"rumble": [strong, weak]}`), light bar
+//!   (`{"light": [r, g, b]}`) and, for a session started with `"dualsense": true`, adaptive
+//!   triggers (`{"triggers": {"left": [mode, 10 bytes…], "right": […]}}`) and the console's
+//!   effect strengths (`{"ds_intensity": [haptics, triggers]}`, 0 off 1 strong 2 medium 3 weak).
 //!
 //! The session belongs to the engine, not to the socket. The console serves
 //! one session at a time and holds its slot for 12-30 s after one ends, so a
@@ -60,6 +63,8 @@ const VIDEO_QUEUE_LOW_LATENCY: usize = 2;
 const CTL_QUEUE: usize = 512;
 const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(60);
 const MAX_KEEP_ALIVE: Duration = Duration::from_secs(600);
+/// Engine → page binary kind: one DualSense haptics frame (rp_stream `StreamSink::haptics`).
+const KIND_HAPTICS: u8 = 6;
 /// Page → engine binary kind: one microphone Opus packet.
 const KIND_MIC: u8 = 5;
 /// Mic frames waiting for the stream thread (10 ms each): a stalled thread
@@ -91,6 +96,10 @@ struct StartReq {
     /// `{"mic": …}` and mic frames used; without it the session is as before.
     #[serde(default)]
     mic: bool,
+    /// A DualSense is attached to the page's computer: the console is told the pad is one and
+    /// sends adaptive triggers and haptics. Without it the session is as before.
+    #[serde(default)]
+    dualsense: bool,
     /// A shorter video queue for this page (see VIDEO_QUEUE_LOW_LATENCY).
     #[serde(default)]
     low_latency: bool,
@@ -584,6 +593,24 @@ impl StreamSink for Sink {
         crate::pad_link::broadcast(&v.to_string());
         self.live.send_ctl(text(v));
     }
+    fn trigger_effects(&mut self, left: (u8, [u8; 10]), right: (u8, [u8; 10])) {
+        let side = |(mode, p): (u8, [u8; 10])| {
+            let mut v = vec![mode];
+            v.extend_from_slice(&p);
+            v
+        };
+        self.live.send_ctl(text(
+            serde_json::json!({"triggers": {"left": side(left), "right": side(right)}}),
+        ));
+    }
+    fn dualsense_intensity(&mut self, haptics: u8, triggers: u8) {
+        self.live.send_ctl(text(
+            serde_json::json!({"ds_intensity": [haptics, triggers]}),
+        ));
+    }
+    fn haptics(&mut self, pcm: &[u8]) {
+        self.live.send_ctl(bin(KIND_HAPTICS, pcm));
+    }
     fn input(&mut self) -> Option<ControllerState> {
         self.live.pad.lock().ok()?.pop_front()
     }
@@ -703,6 +730,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         cfg.codec = c;
     }
     cfg.mic = start.mic;
+    cfg.dualsense = start.dualsense;
     let live = Arc::new(Live::new(
         start.host.clone(),
         cfg.codec.is_hevc(),
@@ -1102,6 +1130,35 @@ mod tests {
         // The first page leaving afterwards does not detach the second.
         live.detach(first);
         assert!(live.viewer.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn dualsense_effects_reach_the_page() {
+        let live = Arc::new(Live::new("h".into(), false, Duration::from_secs(60)));
+        let mut sink = Sink {
+            live: live.clone(),
+            t0: Instant::now(),
+        };
+        let (vt, _vr, ct, mut cr) = page();
+        live.attach(vt, ct);
+        let _ = kinds(&mut cr);
+        sink.trigger_effects((0x21, [1; 10]), (0x05, [0; 10]));
+        sink.dualsense_intensity(1, 2);
+        sink.haptics(&[0u8; 120]);
+        assert_eq!(
+            kinds(&mut cr),
+            vec![
+                r#"{"triggers":{"left":[33,1,1,1,1,1,1,1,1,1,1],"right":[5,0,0,0,0,0,0,0,0,0,0]}}"#
+                    .to_string(),
+                r#"{"ds_intensity":[1,2]}"#.to_string(),
+                "bin6".to_string(),
+            ]
+        );
+        let s: StartReq = serde_json::from_str(
+            r##"{"host": "h", "regist_key": "", "rp_key": "", "dualsense": true}"##,
+        )
+        .unwrap();
+        assert!(s.dualsense);
     }
 
     #[test]

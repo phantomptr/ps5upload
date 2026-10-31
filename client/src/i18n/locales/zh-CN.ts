@@ -6244,6 +6244,8 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_capture_pointer": "点击画面隐藏指针",
 "rp_capture_pointer_hint": "按 Esc 重新显示。",
 "rp_rumble": "手柄振动",
+"rp_dualsense": "DualSense 效果",
+"rp_dualsense_hint": "此电脑连接 DualSense 时：自适应扳机，通过 USB 连接时还有触觉反馈。下次开始时生效。",
 "rp_mic_setting": "麦克风（实验性）",
 "rp_mic_setting_hint": "添加用于语音聊天的麦克风按钮。下次开始时生效。",
 "rp_touch_controls": "屏幕手柄",

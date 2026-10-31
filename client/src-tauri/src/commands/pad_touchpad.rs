@@ -6,16 +6,24 @@
 //! the touchpad click as `pad-touchpad` events (lib/padTouchpad.ts feeds them into the pad the
 //! console gets, next to the on-screen controller's touchpad).
 //!
-//! Shared, read-only access: the device is opened non-exclusively on macOS
-//! (`macos-shared-device`), nothing is ever written to it, and it is not switched into another
-//! report mode, so the system's own controller support (GameController, WebView2, the Gamepad
-//! API) keeps reading it as before. That also means a DualSense on Bluetooth gives touches only
-//! when it already sends its full report (0x31): macOS does put it in that mode, other
-//! systems may leave it in the short report, which carries no touchpad.
+//! The same reports carry the motion sensors: the gyro and accelerometer, scaled with the pad's
+//! own calibration as SDL does, go to the page as `pad-motion` events and on to the console's
+//! state packet (engine rp_stream/feedback.rs), so gyro aiming and tilt work.
+//!
+//! Shared access: the device is opened non-exclusively on macOS (`macos-shared-device`) and
+//! never switched into another report mode, so the system's own controller support
+//! (GameController, WebView2, the Gamepad API) keeps reading it as before. The only writes are
+//! the adaptive triggers of a DualSense-mode session (pad_dualsense.rs), and over Bluetooth only
+//! while the pad already sends its full report. That also means a DualSense on Bluetooth gives
+//! touches and motion only when it already sends its full report (0x31): macOS does put it in
+//! that mode, other systems may leave it in the short report, which carries neither.
 //!
 //! Reading starts when a stream plays and stops when it ends (`pad_touchpad_set`); a
 //! controller plugged in or paired later is found within a second. Desktop only: on Android
 //! and iOS the command answers that it has no reader.
+
+// The reader is desktop-only; on a phone only the commands' answers remain.
+#![cfg_attr(any(target_os = "android", target_os = "ios"), allow(dead_code))]
 
 use serde::Serialize;
 
@@ -70,6 +78,146 @@ pub fn parse_dualsense_report(buf: &[u8]) -> Option<TouchReport> {
     })
 }
 
+/// The motion sensors in a DualSense input report (same reports as the touchpad): gyro (pitch,
+/// yaw, roll) and accelerometer (x, y, z), raw, and the sensor clock (0.33 µs ticks, wrapping).
+/// At state bytes 15-26 and 27-30 (SDL `PS5StatePacket_t`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RawMotion {
+    pub gyro: [i16; 3],
+    pub accel: [i16; 3],
+    pub ticks: u32,
+}
+
+/// The state bytes of a full report: USB 0x01 (64 bytes) or Bluetooth 0x31 (78 bytes).
+fn full_state(buf: &[u8]) -> Option<&[u8]> {
+    match buf.first()? {
+        0x01 if buf.len() >= 64 => Some(&buf[1..]),
+        0x31 if buf.len() >= 78 => Some(&buf[2..]),
+        _ => None,
+    }
+}
+
+pub fn parse_dualsense_motion(buf: &[u8]) -> Option<RawMotion> {
+    let st = full_state(buf)?;
+    let w = |at: usize| i16::from_le_bytes([st[at], st[at + 1]]);
+    Some(RawMotion {
+        gyro: [w(15), w(17), w(19)],
+        accel: [w(21), w(23), w(25)],
+        ticks: u32::from_le_bytes(st[27..31].try_into().ok()?),
+    })
+}
+
+/// SDL's resolutions: raw units per °/s and per g.
+const GYRO_RES_PER_DEGREE: f32 = 1024.0;
+const ACCEL_RES_PER_G: f32 = 8192.0;
+
+/// One axis's factory calibration: subtract the bias, multiply by the sensitivity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Axis {
+    bias: f32,
+    sensitivity: f32,
+}
+
+/// A pad's factory calibration (feature report 0x05), as SDL reads it
+/// (`HIDAPI_DriverPS5_LoadCalibrationData`). Without it (or with a bad one) the raw values are
+/// scaled as SDL does: the gyro ×64, the accelerometer as is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Calibration {
+    axes: [Axis; 6],
+}
+
+impl Default for Calibration {
+    fn default() -> Self {
+        let a = |s| Axis {
+            bias: 0.0,
+            sensitivity: s,
+        };
+        Calibration {
+            axes: [a(64.0), a(64.0), a(64.0), a(1.0), a(1.0), a(1.0)],
+        }
+    }
+}
+
+impl Calibration {
+    /// From feature report 0x05, report id first (41 bytes). None if short or implausible.
+    pub fn parse(d: &[u8]) -> Option<Self> {
+        if d.len() < 35 || d[0] != 0x05 {
+            return None;
+        }
+        let w = |at: usize| f32::from(i16::from_le_bytes([d[at], d[at + 1]]));
+        let speed = (w(19) + w(21)) * GYRO_RES_PER_DEGREE;
+        let gyro = |bias: usize, plus: usize, minus: usize| Axis {
+            bias: w(bias),
+            sensitivity: speed / (w(plus) - w(minus)),
+        };
+        let accel = |plus: usize, minus: usize| {
+            let range = w(plus) - w(minus);
+            Axis {
+                // SDL computes this in integers.
+                bias: w(plus) - (range / 2.0).trunc(),
+                sensitivity: 2.0 * ACCEL_RES_PER_G / range,
+            }
+        };
+        let c = Calibration {
+            axes: [
+                gyro(1, 7, 9),
+                gyro(3, 11, 13),
+                gyro(5, 15, 17),
+                accel(23, 25),
+                accel(27, 29),
+                accel(31, 33),
+            ],
+        };
+        // Some controllers have a bad calibration (SDL): then none.
+        let ok = c.axes.iter().enumerate().all(|(i, a)| {
+            let divisor = if i < 3 { 64.0 } else { 1.0 };
+            a.bias.abs() <= 1024.0
+                && a.sensitivity.is_finite()
+                && (1.0 - a.sensitivity / divisor).abs() <= 0.5
+        });
+        ok.then_some(c)
+    }
+
+    /// Gyro in mrad/s and acceleration in thousandths of g, in the pad's axes (x right, y up out
+    /// of its face, z toward the player: the axes the console and SDL use).
+    pub fn apply(&self, m: &RawMotion) -> ([i32; 3], [i32; 3]) {
+        let v =
+            |i: usize, raw: i16| (f32::from(raw) - self.axes[i].bias) * self.axes[i].sensitivity;
+        let gyro = |i: usize| {
+            let rad = v(i, m.gyro[i]) / GYRO_RES_PER_DEGREE * std::f32::consts::PI / 180.0;
+            (rad * 1000.0).round() as i32
+        };
+        let accel = |i: usize| (v(i + 3, m.accel[i]) / ACCEL_RES_PER_G * 1000.0).round() as i32;
+        ([gyro(0), gyro(1), gyro(2)], [accel(0), accel(1), accel(2)])
+    }
+}
+
+/// The sensor clock in µs, from its 0.33 µs ticks: counted up across the tick counter's wrap,
+/// then wrapping at 2^32 µs as the console's state expects.
+#[derive(Debug, Default)]
+pub struct SensorClock {
+    last: Option<u32>,
+    ticks: u64,
+}
+
+impl SensorClock {
+    pub fn us(&mut self, ticks: u32) -> u32 {
+        if let Some(l) = self.last {
+            self.ticks += u64::from(ticks.wrapping_sub(l));
+        }
+        self.last = Some(ticks);
+        (self.ticks / 3) as u32
+    }
+}
+
+/// A motion reading as the page sends it on (engine `MotionSample`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct MotionEvent {
+    pub gyro: [i32; 3],
+    pub accel: [i32; 3],
+    pub t: u32,
+}
+
 /// What the page is told: the finger it follows (raw x 0-1919, y 0-1079) and the click.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct TouchEvent {
@@ -115,17 +263,21 @@ impl Follower {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod reader {
     use super::*;
+    use crate::commands::pad_dualsense::{self, Transport};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use tauri::{AppHandle, Emitter};
 
-    /// The running reader's stop flag.
-    static RUNNING: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+    /// The running reader's stop flag, and a flag it raises once it has let go of the pad.
+    static RUNNING: Mutex<Option<(Arc<AtomicBool>, Arc<AtomicBool>)>> = Mutex::new(None);
 
     /// Moves closer together than this are coalesced (the pad reports at 250 Hz or more; the
     /// page reads once a frame). A lift, a landing or a click is always sent at once.
     const MOVE_EVERY: Duration = Duration::from_millis(8);
+    /// Motion readings closer together than this are skipped (the page reads once a frame;
+    /// each reading carries its own sensor time, so the console's orientation stays right).
+    const MOTION_EVERY: Duration = Duration::from_millis(8);
 
     pub fn set(app: AppHandle, on: bool) {
         let mut cur = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
@@ -134,17 +286,53 @@ mod reader {
                 return;
             }
             let stop = Arc::new(AtomicBool::new(false));
-            *cur = Some(stop.clone());
+            let done = Arc::new(AtomicBool::new(false));
+            *cur = Some((stop.clone(), done.clone()));
             let spawned = std::thread::Builder::new()
                 .name("pad-touchpad".into())
-                .spawn(move || run(app, stop));
+                .spawn(move || {
+                    run(app, stop);
+                    done.store(true, Ordering::Relaxed);
+                });
             if let Err(e) = spawned {
                 eprintln!("[pad-touchpad] could not start: {e}");
                 *cur = None;
             }
-        } else if let Some(stop) = cur.take() {
+        } else if let Some((stop, _)) = cur.take() {
             stop.store(true, Ordering::Relaxed);
         }
+    }
+
+    /// The app is quitting: stop reading and give the reader a moment to let the triggers go.
+    pub fn stop_on_exit() {
+        let cur = RUNNING.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some((stop, done)) = cur {
+            stop.store(true, Ordering::Relaxed);
+            let until = Instant::now() + Duration::from_millis(300);
+            while !done.load(Ordering::Relaxed) && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    /// Is a DualSense attached, and on USB? A quick look, without opening it.
+    pub fn find() -> (bool, bool) {
+        let Ok(mut api) = hidapi::HidApi::new() else {
+            return (false, false);
+        };
+        let _ = api.reset_devices();
+        let _ = api.add_devices(SONY_VID, 0);
+        let mut found = (false, false);
+        for d in api
+            .device_list()
+            .filter(|d| DUALSENSE_PIDS.contains(&d.product_id()))
+        {
+            found.0 = true;
+            if matches!(d.bus_type(), hidapi::BusType::Usb) {
+                found.1 = true;
+            }
+        }
+        found
     }
 
     /// Sleep `d` in short steps; false once stopped.
@@ -205,15 +393,38 @@ mod reader {
         }
     }
 
-    /// Read reports until stopped or the controller goes away; the page is left with no finger
-    /// and no click either way.
+    /// The pad's factory calibration, read once its full report shows (on Bluetooth, asking
+    /// for it in the short-report mode would switch the pad over).
+    fn calibration(dev: &hidapi::HidDevice) -> Calibration {
+        let mut f = [0u8; 64];
+        f[0] = 0x05;
+        match dev.get_feature_report(&mut f) {
+            Ok(n) => Calibration::parse(&f[..n]).unwrap_or_default(),
+            Err(_) => Calibration::default(),
+        }
+    }
+
+    /// Read reports until stopped or the controller goes away; the page is left with no finger,
+    /// no click and no motion either way, and the triggers are let go.
     fn read(app: &AppHandle, dev: &hidapi::HidDevice, stop: &AtomicBool) {
         let mut buf = [0u8; 128];
         let mut follower = Follower::default();
         let mut sent = TouchEvent::default();
         let mut sent_at = Instant::now();
+        let mut cal: Option<Calibration> = None;
+        let mut clock = SensorClock::default();
+        let mut motion_at: Option<Instant> = None;
+        let mut transport: Option<Transport> = None;
         while !stop.load(Ordering::Relaxed) {
-            let n = match dev.read_timeout(&mut buf, 100) {
+            // The console's trigger effects, between two reads (pad_dualsense.rs).
+            if let Some(t) = transport {
+                if let Some(report) = pad_dualsense::take_report(t) {
+                    if let Err(e) = dev.write(&report) {
+                        eprintln!("[pad-touchpad] could not set the triggers: {e}");
+                    }
+                }
+            }
+            let n = match dev.read_timeout(&mut buf, 20) {
                 Ok(0) => continue,
                 Ok(n) => n,
                 Err(_) => break,
@@ -221,6 +432,20 @@ mod reader {
             let Some(r) = parse_dualsense_report(&buf[..n]) else {
                 continue;
             };
+            transport = Some(if buf[0] == 0x31 {
+                Transport::Bluetooth
+            } else {
+                Transport::Usb
+            });
+            if let Some(m) = parse_dualsense_motion(&buf[..n]) {
+                let cal = *cal.get_or_insert_with(|| calibration(dev));
+                let t = clock.us(m.ticks);
+                if motion_at.map_or(true, |at| at.elapsed() >= MOTION_EVERY) {
+                    let (gyro, accel) = cal.apply(&m);
+                    let _ = app.emit("pad-motion", Some(MotionEvent { gyro, accel, t }));
+                    motion_at = Some(Instant::now());
+                }
+            }
             let ev = follower.next(&r);
             if ev == sent {
                 continue;
@@ -236,7 +461,31 @@ mod reader {
         if sent != TouchEvent::default() {
             let _ = app.emit("pad-touchpad", TouchEvent::default());
         }
+        if motion_at.is_some() {
+            let _ = app.emit("pad-motion", None::<MotionEvent>);
+        }
+        if let Some(report) = transport.and_then(pad_dualsense::take_reset) {
+            let _ = dev.write(&report);
+        }
     }
+}
+
+/// Is a DualSense attached (first), and on USB (second)? Desktop only.
+pub fn find_dualsense() -> (bool, bool) {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        reader::find()
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        (false, false)
+    }
+}
+
+/// The app is quitting: let the triggers go (desktop).
+pub fn pad_touchpad_stop_on_exit() {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    reader::stop_on_exit();
 }
 
 /// Read the DualSense touchpad (on) or stop (off). True where the app has a reader (desktop).
@@ -403,5 +652,89 @@ mod tests {
         );
         assert!(ev(&mut f, bt(true, UP, UP)).click);
         assert!(!ev(&mut f, bt(false, UP, UP)).click);
+    }
+
+    /// A USB report with motion: gyro, accel and the sensor clock at state bytes 15-30.
+    fn motion_report(gyro: [i16; 3], accel: [i16; 3], ticks: u32) -> Vec<u8> {
+        let mut b = usb(false, UP, UP);
+        for i in 0..3 {
+            b[1 + 15 + i * 2..1 + 17 + i * 2].copy_from_slice(&gyro[i].to_le_bytes());
+            b[1 + 21 + i * 2..1 + 23 + i * 2].copy_from_slice(&accel[i].to_le_bytes());
+        }
+        b[1 + 27..1 + 31].copy_from_slice(&ticks.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn motion_is_read_from_usb_and_bluetooth_reports() {
+        let b = motion_report([1, -2, 300], [0, 8192, -8192], 0xdead_beef);
+        let m = parse_dualsense_motion(&b).unwrap();
+        assert_eq!(m.gyro, [1, -2, 300]);
+        assert_eq!(m.accel, [0, 8192, -8192]);
+        assert_eq!(m.ticks, 0xdead_beef);
+        // Bluetooth: the same state one byte later.
+        let mut bt = vec![0u8; 78];
+        bt[0] = 0x31;
+        bt[2..65].copy_from_slice(&b[1..64]);
+        assert_eq!(parse_dualsense_motion(&bt), Some(m));
+        assert_eq!(parse_dualsense_motion(&[0x01; 10]), None);
+    }
+
+    #[test]
+    fn uncalibrated_scaling_is_sdls() {
+        // SDL without calibration: gyro raw × 64 / 1024 °/s, accel raw / 8192 g.
+        let c = Calibration::default();
+        let m = parse_dualsense_motion(&motion_report([16, 0, -160], [0, 8192, -4096], 0)).unwrap();
+        let (g, a) = c.apply(&m);
+        // 16 raw = 1 °/s = 17.45 mrad/s.
+        assert_eq!(g, [17, 0, -175]);
+        assert_eq!(a, [0, 1000, -500]);
+    }
+
+    /// A calibration report as a DualSense sends it (feature 0x05): biases, ±ranges, speeds.
+    fn calibration_report() -> Vec<u8> {
+        let mut d = vec![0u8; 41];
+        d[0] = 0x05;
+        let mut put = |at: usize, v: i16| d[at..at + 2].copy_from_slice(&v.to_le_bytes());
+        put(1, 2); // pitch bias
+        put(3, -3); // yaw bias
+        put(5, 0); // roll bias
+        for (plus, minus) in [(7, 9), (11, 13), (15, 17)] {
+            put(plus, 8640);
+            put(minus, -8640);
+        }
+        put(19, 540); // speed +
+        put(21, 540); // speed -
+        for (plus, minus) in [(23, 25), (27, 29), (31, 33)] {
+            put(plus, 8200);
+            put(minus, -8184);
+        }
+        d
+    }
+
+    #[test]
+    fn calibration_is_read_and_applied_like_sdl() {
+        let c = Calibration::parse(&calibration_report()).expect("plausible");
+        // Gyro sensitivity (540 + 540) × 1024 / 17280 = 64: the bias comes off, then as before.
+        let m = parse_dualsense_motion(&motion_report([18, -3, 0], [8, 8200, -8184], 0)).unwrap();
+        let (g, a) = c.apply(&m);
+        assert_eq!(g, [17, 0, 0]);
+        // Accel: range 16384 = 2 g, bias 8200 - 8192 = 8.
+        assert_eq!(a, [0, 1000, -1000]);
+        // A bad calibration (zero range) is ignored.
+        let mut bad = calibration_report();
+        bad[7..9].copy_from_slice(&0i16.to_le_bytes());
+        bad[9..11].copy_from_slice(&0i16.to_le_bytes());
+        assert_eq!(Calibration::parse(&bad), None);
+        assert_eq!(Calibration::parse(&[0x05; 10]), None);
+    }
+
+    #[test]
+    fn the_sensor_clock_counts_across_its_wrap() {
+        let mut c = SensorClock::default();
+        assert_eq!(c.us(u32::MAX - 2), 0);
+        // 6 ticks later, across the wrap: 2 µs.
+        assert_eq!(c.us(3), 2);
+        assert_eq!(c.us(3 + 3000), 1002);
     }
 }
