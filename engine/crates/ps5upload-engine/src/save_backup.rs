@@ -84,7 +84,7 @@ pub struct Status {
 /// Console and save path → the save's modification time when it was last backed up.
 pub type Done = BTreeMap<String, i64>;
 
-fn done_key(host: &str, path: &str) -> String {
+pub(crate) fn done_key(host: &str, path: &str) -> String {
     format!("{host}|{path}")
 }
 
@@ -120,7 +120,7 @@ pub fn stamp(ms: u64) -> String {
     )
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -139,14 +139,14 @@ fn state_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
-fn load<T: for<'de> Deserialize<'de> + Default>(name: &str) -> T {
+pub(crate) fn load<T: for<'de> Deserialize<'de> + Default>(name: &str) -> T {
     state_dir()
         .and_then(|d| std::fs::read(d.join(name)).ok())
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
 }
 
-fn save<T: Serialize>(name: &str, value: &T) -> std::io::Result<()> {
+pub(crate) fn save<T: Serialize>(name: &str, value: &T) -> std::io::Result<()> {
     let Some(dir) = state_dir() else {
         return Ok(());
     };
@@ -176,7 +176,7 @@ fn shared() -> &'static Mutex<Shared> {
     })
 }
 
-fn settings() -> Settings {
+pub(crate) fn settings() -> Settings {
     shared()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -239,7 +239,7 @@ fn read_json(mut r: ureq::http::Response<ureq::Body>) -> Result<Value, String> {
     }
 }
 
-fn post(path: &str, body: Value) -> Result<Value, String> {
+pub(crate) fn post(path: &str, body: Value) -> Result<Value, String> {
     read_json(
         agent()
             .post(&api(path)?)
@@ -249,11 +249,11 @@ fn post(path: &str, body: Value) -> Result<Value, String> {
     )
 }
 
-fn get(path: &str) -> Result<Value, String> {
+pub(crate) fn get(path: &str) -> Result<Value, String> {
     read_json(agent().get(&api(path)?).call().map_err(|e| e.to_string())?)
 }
 
-fn enc(s: &str) -> String {
+pub(crate) fn enc(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
@@ -265,7 +265,7 @@ fn enc(s: &str) -> String {
 }
 
 /// Waits for a transfer job to finish.
-fn wait_job(job_id: &str) -> Result<(), String> {
+pub(crate) fn wait_job(job_id: &str) -> Result<(), String> {
     loop {
         let v = get(&format!("/api/jobs/{job_id}"))?;
         match v.get("status").and_then(Value::as_str) {
@@ -283,7 +283,7 @@ fn wait_job(job_id: &str) -> Result<(), String> {
 }
 
 /// A transfer to or from `host` is running: a backup would only compete with it.
-fn console_busy(host: &str) -> bool {
+pub(crate) fn console_busy(host: &str) -> bool {
     let Ok(Value::Array(jobs)) = get("/api/jobs") else {
         return false;
     };
@@ -306,7 +306,7 @@ pub fn mentions_host(text: &str, host: &str) -> bool {
         })
 }
 
-fn list_saves(host: &str) -> Result<Vec<SaveEntry>, String> {
+pub(crate) fn list_saves(host: &str) -> Result<Vec<SaveEntry>, String> {
     let v = get(&format!("/api/ps5/saves/list?addr={}", enc(host)))?;
     serde_json::from_value(v.get("saves").cloned().unwrap_or(Value::Array(vec![])))
         .map_err(|e| format!("saves list: {e}"))
@@ -329,17 +329,7 @@ fn back_up_one(
     let tmp = make_temp_dir(&entry.title_id)?;
     let tmp_s = tmp.to_string_lossy().into_owned();
     let result = (|| {
-        let start = post(
-            "/api/transfer/download",
-            json!({ "addr": host, "src_path": entry.path, "dest_dir": tmp_s, "kind": "folder" }),
-        )?;
-        let job = start
-            .get("job_id")
-            .and_then(Value::as_str)
-            .ok_or("download did not start")?;
-        wait_job(job)?;
-        verify()?;
-        backup_finalize(&tmp.join(&entry.title_id)).map_err(|e| format!("{e:#}"))?;
+        download_save(host, entry, &tmp, verify)?;
         let st = match tag {
             Some(t) => format!("{}_{t}", stamp(now_ms())),
             None => stamp(now_ms()),
@@ -355,6 +345,28 @@ fn back_up_one(
     })();
     let _ = cleanup_temp_dir(&tmp_s);
     result
+}
+
+/// Copies the save folder `entry` off `host` into `tmp/<title_id>` and tidies it for a backup
+/// (`backup_finalize`). `verify` runs once the copy is here: an Err stops there.
+pub(crate) fn download_save(
+    host: &str,
+    entry: &SaveEntry,
+    tmp: &Path,
+    verify: &dyn Fn() -> Result<(), String>,
+) -> Result<(), String> {
+    let start = post(
+        "/api/transfer/download",
+        json!({ "addr": host, "src_path": entry.path, "dest_dir": tmp.to_string_lossy(), "kind": "folder" }),
+    )?;
+    let job = start
+        .get("job_id")
+        .and_then(Value::as_str)
+        .ok_or("download did not start")?;
+    wait_job(job)?;
+    verify()?;
+    backup_finalize(&tmp.join(&entry.title_id)).map_err(|e| format!("{e:#}"))?;
+    Ok(())
 }
 
 fn set_status(f: impl FnOnce(&mut Status)) {
@@ -422,7 +434,7 @@ pub fn run_pass() -> Result<(), String> {
 // ── snapshots (while the game runs) ─────────────────────────────────────
 
 /// Whether `title_id` runs on `host` (an app process carrying it).
-fn title_running(host: &str, title_id: &str) -> Result<bool, String> {
+pub(crate) fn title_running(host: &str, title_id: &str) -> Result<bool, String> {
     let list = ps5upload_core::process_mgr::process_list(host)
         .map_err(|e| format!("could not check the running game: {e:#}"))?;
     Ok(list
@@ -585,7 +597,7 @@ pub fn parse_backup_name(title_id: &str, file: &str) -> Option<(u32, String)> {
     (!stamp.is_empty()).then(|| (user, stamp.to_string()))
 }
 
-fn plain(s: &str) -> bool {
+pub(crate) fn plain(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
@@ -636,6 +648,20 @@ fn restore(
     if !zip.is_file() {
         return Err(format!("no backup {}", zip.display()));
     }
+    restore_zip(host, title_id, &zip, save_path, user_id)
+}
+
+/// Puts the backup zip `zip` (on this computer) of `title_id` back into the save folder
+/// `save_path` on `host`: checked and unpacked first, the save there now backed up, then
+/// replaced (see `put_in_place`).
+pub(crate) fn restore_zip(
+    host: &str,
+    title_id: &str,
+    zip: &Path,
+    save_path: &str,
+    user_id: u32,
+) -> Result<(), String> {
+    let s = settings();
     if !save_path.ends_with(&format!("/{title_id}")) {
         return Err(format!("{save_path} is not the save folder of {title_id}"));
     }
@@ -650,7 +676,7 @@ fn restore(
     let tmp_s = tmp.to_string_lossy().into_owned();
     let result = (|| {
         // Check and unpack the backup before anything on the console changes.
-        unzip_strict(&zip, &tmp, title_id).map_err(|e| format!("unzip: {e:#}"))?;
+        unzip_strict(zip, &tmp, title_id).map_err(|e| format!("unzip: {e:#}"))?;
         restore_prepare(&tmp.join(title_id)).map_err(|e| format!("prepare: {e:#}"))?;
         put_in_place(
             host,
@@ -679,17 +705,21 @@ fn put_in_place(
     s: &Settings,
     tag: Option<&str>,
 ) -> Result<(), String> {
-    // Keep what is there now, so the change can be undone.
+    // Keep what is there now, so the change can be undone: in the backup folder, or (with none
+    // set) on the server the save backups go to.
+    let current = SaveEntry {
+        title_id: title_id.to_string(),
+        user_id: user_id as i32,
+        path: save_path.to_string(),
+        size: 0,
+        mtime: 0,
+        kind: String::new(),
+    };
     if !s.dir.trim().is_empty() {
-        let current = SaveEntry {
-            title_id: title_id.to_string(),
-            user_id: user_id as i32,
-            path: save_path.to_string(),
-            size: 0,
-            mtime: 0,
-            kind: String::new(),
-        };
         back_up_one(host, &current, &s.dir, s.keep, tag, &|| Ok(()))
+            .map_err(|e| format!("could not back up the current save first: {e}"))?;
+    } else if crate::save_backup_server::configured() {
+        crate::save_backup_server::back_up_before_restore(host, &current)
             .map_err(|e| format!("could not back up the current save first: {e}"))?;
     }
     let listing = get(&format!(
@@ -1186,7 +1216,7 @@ pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::
 
 // ── HTTP ────────────────────────────────────────────────────────────────
 
-fn json_error(status: StatusCode, msg: impl Into<String>) -> Response {
+pub(crate) fn json_error(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(json!({ "error": msg.into() }))).into_response()
 }
 

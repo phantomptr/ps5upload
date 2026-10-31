@@ -182,7 +182,9 @@ export async function openPip(opts: { title: string; onBack: () => void }): Prom
     win =
       kind === "document"
         ? await documentPip()!.requestWindow({ width: PIP_WIDTH, height: PIP_HEIGHT })
-        : window.open("", "_blank", `width=${PIP_WIDTH},height=${PIP_HEIGHT}`);
+        : // "about:blank", not "": the Linux app's WebKitGTK reports "" as the new window's
+          // address, which Tauri cannot parse, and it then refuses the window.
+          window.open("about:blank", "_blank", `width=${PIP_WIDTH},height=${PIP_HEIGHT}`);
   } catch (e) {
     console.warn(`[pip] the ${kind} window did not open:`, e);
     win = null;

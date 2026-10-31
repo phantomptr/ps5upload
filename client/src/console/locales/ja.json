@@ -954,6 +954,8 @@
   "cw_settings_network": "ネットワーク",
   "cw_settings_off": "オフ",
   "cw_settings_on": "オン",
+  "cw_settings_start": "起動時のページ",
+  "cw_settings_start_note": "PS5 に保存されます。チートを選ぶと、PS5Upload Minion は実行中のゲームのチートを開きます。",
   "cw_settings_text_size": "文字サイズ",
   "cw_settings_text_size_note": "この画面だけに保存されるので、テレビとパソコンでそれぞれ別のサイズにできます。",
   "cw_settings_theme": "テーマ",

@@ -954,6 +954,8 @@
   "cw_settings_network": "Netzwerk",
   "cw_settings_off": "Aus",
   "cw_settings_on": "An",
+  "cw_settings_start": "Startseite",
+  "cw_settings_start_note": "Wird auf der PS5 gespeichert. Mit Cheats öffnet sich PS5Upload Minion bei den Cheats des laufenden Spiels.",
   "cw_settings_text_size": "Textgröße",
   "cw_settings_text_size_note": "Gilt nur für diesen Bildschirm, damit Fernseher und Computer jeweils ihre eigene Größe haben können.",
   "cw_settings_theme": "Design",

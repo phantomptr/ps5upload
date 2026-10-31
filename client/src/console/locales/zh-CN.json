@@ -954,6 +954,8 @@
   "cw_settings_network": "网络",
   "cw_settings_off": "关",
   "cw_settings_on": "开",
+  "cw_settings_start": "启动页面",
+  "cw_settings_start_note": "保存在 PS5 上。选择金手指时，PS5Upload Minion 会直接打开正在运行的游戏的金手指。",
   "cw_settings_text_size": "文字大小",
   "cw_settings_text_size_note": "只保存在此屏幕上，因此电视和电脑可以各用各的大小。",
   "cw_settings_theme": "主题",

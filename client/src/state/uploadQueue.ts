@@ -2439,6 +2439,10 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
 
     remove(id) {
       settle(id, { ok: false, message: "Removed from the queue." });
+      // A failed item keeps its server copy for a retry; removing it is the last use. That
+      // covers a copy made at pick time (Upload screen) too, which the item names directly.
+      const removed = get().items.find((it) => it.id === id);
+      if (removed) void releaseCopy(removed.sourcePath);
       releaseArchiveCopy(id);
       set((s) => ({ items: removeItem(s.items, id) }));
       scheduleSave();

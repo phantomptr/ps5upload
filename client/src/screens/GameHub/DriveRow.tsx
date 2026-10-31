@@ -66,6 +66,7 @@ import {
   playSecondsFor,
 } from "../../state/playTime";
 import {
+  engineImageCors,
   fsDelete,
   fsChmod,
   fsPathExists,
@@ -3523,6 +3524,7 @@ function LibraryThumb({
       {src ? (
         <img
           src={src}
+          crossOrigin={engineImageCors(src)}
           alt=""
           // lazy: a big library's thumbnails are icon0.png fetched over
           // HTTP from the single-client PS5 — loading them only as rows

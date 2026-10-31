@@ -10,6 +10,7 @@
 //!   folder_inspect — sce_sys / param.json walk for local folders
 //!   keep_awake  — platform sleep inhibitor spawn/kill
 //!   game_mode   — what each OS offers a game while Remote Play plays
+//!   pad_touchpad — a DualSense's touchpad read natively while Remote Play plays
 //!   user_config — ~/.ps5upload/settings.json read/write
 //!   companions  — TCP probe of known scene-tool ports
 //!   title_meta  — HTML scrape of public title-info site (cover art)
@@ -31,6 +32,7 @@ pub mod heal_appmeta;
 pub mod host_platform;
 pub mod keep_awake;
 pub mod local_fs;
+pub mod pad_touchpad;
 pub mod payloads;
 pub mod persistence;
 pub mod probes;
@@ -91,6 +93,7 @@ pub use game_mode::*;
 pub use heal_appmeta::*;
 pub use keep_awake::*;
 pub use local_fs::*;
+pub use pad_touchpad::*;
 pub use payloads::*;
 pub use persistence::*;
 pub use probes::*;

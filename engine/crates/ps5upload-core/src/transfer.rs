@@ -863,20 +863,23 @@ mod rar_support {
             }
         }
 
-        // name.rar + name.r00, r01 … — same idea on the older scheme.
+        // name.rar + name.r00 … r99, s00 … s99, t00 … — same idea on the older scheme, where
+        // each letter after `r` continues the count (WinRAR's naming past `.r99`).
         if lower.ends_with(".rar") {
             let stem = &file[..file.len() - 4];
-            let name_of = |n: u32| format!("{stem}.r{n:02}");
-            if exists(&format!("{dir}{}", name_of(0))) {
+            let upper = file.ends_with(".RAR");
+            let name_of = |n: u32| crate::archive_extract::rar_old_volume_name(stem, n, upper);
+            let on_disk = |n: u32| name_of(n).is_some_and(|c| exists(&format!("{dir}{c}")));
+            if on_disk(0) {
                 let mut n = 0u32;
                 loop {
                     n += 1;
-                    let cand = name_of(n);
-                    if exists(&format!("{dir}{cand}")) {
+                    let cand = name_of(n)?;
+                    if on_disk(n) {
                         continue;
                     }
                     for ahead in 1..=3 {
-                        if exists(&format!("{dir}{}", name_of(n + ahead))) {
+                        if on_disk(n + ahead) {
                             return Some(cand);
                         }
                     }
@@ -2081,6 +2084,45 @@ mod rar_volume_tests {
         );
         let complete = fs(&["/g/game.rar", "/g/game.r00", "/g/game.r01"]);
         assert_eq!(missing_volume("/g/game.rar", &complete), None);
+    }
+
+    /// Past `.r99` WinRAR goes on with `.s00`, `.t00` …: a gap there is named too, and a
+    /// complete 250-volume set is complete.
+    #[test]
+    fn legacy_scheme_continues_past_r99() {
+        let mut names = vec!["/g/game.rar".to_string()];
+        for i in 0..250 {
+            names.push(format!(
+                "/g/{}",
+                crate::archive_extract::rar_old_volume_name("game", i, false).unwrap()
+            ));
+        }
+        let all: Vec<&str> = names.iter().map(String::as_str).collect();
+        assert_eq!(missing_volume("/g/game.rar", &fs(&all)), None);
+        let without_s00: Vec<&str> = all
+            .iter()
+            .copied()
+            .filter(|n| !n.ends_with(".s00"))
+            .collect();
+        assert_eq!(
+            missing_volume("/g/game.rar", &fs(&without_s00)).as_deref(),
+            Some("game.s00")
+        );
+        let without_t07: Vec<&str> = all
+            .iter()
+            .copied()
+            .filter(|n| !n.ends_with(".t07"))
+            .collect();
+        assert_eq!(
+            missing_volume("/g/game.rar", &fs(&without_t07)).as_deref(),
+            Some("game.t07")
+        );
+        // An upper-case set is looked for in upper case.
+        let upper = fs(&["/g/GAME.RAR", "/g/GAME.R00", "/g/GAME.R02"]);
+        assert_eq!(
+            missing_volume("/g/GAME.RAR", &upper).as_deref(),
+            Some("GAME.R01")
+        );
     }
 
     /// Windows paths and no-directory paths must not break the split.

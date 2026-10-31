@@ -31,6 +31,10 @@
 
 #include "xjob.h"
 
+#ifdef __PROSPERO__
+#include "proc_identity.h"
+#endif
+
 // ---- the handler registry (7-Zip's own lives in ArchiveExports.cpp, a DLL's export table) ----
 
 static const CArcInfo *g_Arcs[32];
@@ -571,6 +575,10 @@ struct CFeedThread {
 
 static void *FeedMain(void *arg) {
   CFeedThread *t = (CFeedThread *)arg;
+#ifdef __PROSPERO__
+  /* The same name as the main thread: unnamed, the process can list as payload.elf. */
+  proc_name_set_self("ps5u-extract");
+#endif
   UInt32 idx = 0;
   t->Res = t->Outer->Extract(&idx, 1, 0, t->Cb);
   t->P->CloseWrite();

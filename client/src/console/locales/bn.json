@@ -954,6 +954,8 @@
   "cw_settings_network": "নেটওয়ার্ক",
   "cw_settings_off": "বন্ধ",
   "cw_settings_on": "চালু",
+  "cw_settings_start": "শুরুর পাতা",
+  "cw_settings_start_note": "PS5-এ রাখা থাকে। চিট বেছে নিলে PS5Upload Minion চলমান গেমের চিটে খোলে।",
   "cw_settings_text_size": "লেখার আকার",
   "cw_settings_text_size_note": "শুধু এই স্ক্রিনের জন্য রাখা হয়, তাই টিভি আর কম্পিউটারে আলাদা আকার রাখা যায়।",
   "cw_settings_theme": "থিম",

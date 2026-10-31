@@ -101,6 +101,36 @@ static inline ps5upload2_reap_t instance_reap_decision(int name_is_ours, uint64_
     return PS5UPLOAD2_REAP_UNVERIFIABLE;
 }
 
+/*
+ * Is the recorded prior pid the very process that wrote the record, though it does not carry our
+ * name? An older helper could list under elfldr's generic "payload.elf" (a representative thread
+ * that never named itself), and the name check alone then left it running beside the new one
+ * (#593). The record's started_at_unix is stamped seconds after that process started, and the
+ * kernel's start time of the pid (ki_start) is the same clock, so the two agree within
+ * PS5UPLOAD2_RECORD_MATCH_S only for that process: a recycled pid started at another time. Only
+ * the generic loader name gets this second chance; any other name is someone else's payload.
+ * A clock set in between (the app syncs the console's clock) makes them disagree: the answer is
+ * then "no", which only keeps the old rule.
+ */
+#define PS5UPLOAD2_RECORD_MATCH_S 120u
+#define PS5UPLOAD2_GENERIC_PAYLOAD_NAME "payload.elf"
+
+static inline int instance_record_is_proc(uint64_t record_started, uint64_t proc_start, int proc_start_known) {
+    uint64_t d;
+    if (!proc_start_known || record_started == 0 || proc_start == 0) return 0;
+    d = record_started >= proc_start ? record_started - proc_start : proc_start - record_started;
+    return d <= PS5UPLOAD2_RECORD_MATCH_S;
+}
+
+/* Did process (their_start, their_pid) start before (my_start, my_pid)? Kernel start times are in
+ * seconds; within one second the lower pid is the older (pids count up). The sweeps only ever kill
+ * older copies: a helper sent after this one is the one to keep. */
+static inline int instance_sweep_is_older(uint64_t their_start, int their_pid, uint64_t my_start, int my_pid) {
+    if (their_start == 0 || my_start == 0) return 0;
+    if (their_start != my_start) return their_start < my_start;
+    return their_pid < my_pid;
+}
+
 /* Wire name. snake_case: this value crosses the STATUS_ACK JSON boundary
  * into serde on the engine side. */
 static inline const char *

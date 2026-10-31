@@ -954,6 +954,8 @@
   "cw_settings_network": "เครือข่าย",
   "cw_settings_off": "ปิด",
   "cw_settings_on": "เปิด",
+  "cw_settings_start": "หน้าเริ่มต้น",
+  "cw_settings_start_note": "บันทึกไว้ใน PS5 เมื่อเลือกโกง PS5Upload Minion จะเปิดที่สูตรโกงของเกมที่กำลังเล่นอยู่",
   "cw_settings_text_size": "ขนาดตัวอักษร",
   "cw_settings_text_size_note": "บันทึกไว้สำหรับหน้าจอนี้เท่านั้น ทีวีและคอมพิวเตอร์จึงตั้งขนาดของตัวเองได้",
   "cw_settings_theme": "ธีม",

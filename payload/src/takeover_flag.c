@@ -1,5 +1,6 @@
 /* Flag-file takeover between AVA1-era instances: see include/takeover_flag.h. */
 #include "takeover_flag.h"
+#include "proc_identity.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -184,6 +185,7 @@ typedef struct {
 } poll_ctx_t;
 
 static void *poll_thread(void *arg) {
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME); /* unnamed, the process can list as payload.elf */
     poll_ctx_t c = *(poll_ctx_t *)arg;
     free(arg);
     for (;;) {

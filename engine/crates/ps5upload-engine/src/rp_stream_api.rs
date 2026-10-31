@@ -628,6 +628,12 @@ fn error_status(e: &anyhow::Error) -> serde_json::Value {
         None if text.contains("did not wake") => ("wake_failed", None),
         None if text.contains("login passcode") => ("passcode", None),
         None if text.contains("Nagare") || text.contains("AvCap") => ("video_refused", None),
+        // Mid-stream: the console went quiet or closed the control connection.
+        None if text.contains("console stopped sending")
+            || text.contains("closed the Remote Play control connection") =>
+        {
+            ("lost", None)
+        }
         None => ("other", None),
     };
     serde_json::json!({"stage": "error", "code": code, "retry_s": retry_s, "error": text})
@@ -713,13 +719,23 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             live: l.clone(),
             t0: Instant::now(),
         };
-        let r = run_stream(
-            &l.host,
-            &creds,
-            cfg,
-            Duration::from_secs(4 * 3600),
-            &mut sink,
-        );
+        // A panic must still end the session: left in LIVE, it would turn every later start
+        // for this console into a join of a dead stream.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_stream(
+                &l.host,
+                &creds,
+                cfg,
+                Duration::from_secs(4 * 3600),
+                &mut sink,
+            )
+        }))
+        .unwrap_or_else(|p| {
+            Err(anyhow::anyhow!(
+                "the stream stopped on an internal error: {}",
+                panic_text(&p)
+            ))
+        });
         let end = match r {
             Ok(rep) => serde_json::json!({
                 "stage": "ended",
@@ -732,6 +748,9 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
                 "loss_reported": rep.loss_reported,
                 "video_mb": rep.video.bytes as f64 / 1e6,
                 "bad_mac": rep.av_bad_mac,
+                "data_resent": rep.data_resent,
+                "data_given_up": rep.data_given_up,
+                "io_soft_errors": rep.io_soft_errors,
                 "ws_dropped": l.dropped.load(Ordering::Relaxed),
                 "reason": rep.disconnect_reason,
             }),
@@ -752,6 +771,14 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         }
     });
     live
+}
+
+/// A panic's message, when it has one.
+fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
+    p.downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic".into())
 }
 
 async fn session(mut socket: WebSocket) {
@@ -1015,6 +1042,26 @@ mod tests {
         assert!(!is_keyframe(DELTA, false));
         assert!(is_keyframe(&[0, 0, 1, 19 << 1, 1], true)); // HEVC IDR_W_RADL
         assert!(!is_keyframe(&[0, 0, 1, 1 << 1, 1], true)); // HEVC TRAIL_R
+    }
+
+    #[test]
+    fn a_stream_lost_midway_has_its_own_code() {
+        for msg in [
+            "the console stopped sending: nothing for 15 s (the network dropped, or the console ended the stream)",
+            "the console closed the Remote Play control connection",
+        ] {
+            assert_eq!(error_status(&anyhow::anyhow!(msg))["code"], "lost", "{msg}");
+        }
+        assert_eq!(
+            error_status(&anyhow::anyhow!("something else"))["code"],
+            "other"
+        );
+    }
+
+    #[test]
+    fn a_panic_has_its_message() {
+        let p = std::panic::catch_unwind(|| panic!("index out of bounds")).unwrap_err();
+        assert_eq!(panic_text(&p), "index out of bounds");
     }
 
     #[test]

@@ -25,6 +25,8 @@ aes = "0.9"
 aes-gcm = { version = "0.11", default-features = false, features = ["aes"] }
 k256 = { version = "0.14", default-features = false, features = ["ecdh", "arithmetic"] }
 cfb-mode = "0.9"
+# The stream socket's receive buffer, on Windows too (std has no setter).
+socket2 = "0.6"
 libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true

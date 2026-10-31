@@ -54,6 +54,61 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/** Backups to a network share (engine save_backup_server.rs, #592). */
+export type ServerBackupMode = "off" | "interval" | "after_close";
+
+export interface ServerBackupSettings {
+  mode: ServerBackupMode;
+  /** `remote://<connection-id>/<folder>`; "" when none is chosen. */
+  target: string;
+  every_hours: number;
+  keep: number;
+  /** Consoles to back up (bare IPs); empty: every console. */
+  hosts: string[];
+  /** Console users to back up; empty: every user. */
+  users: number[];
+}
+
+export interface ServerBackupVerified {
+  title_id: string;
+  file: string;
+  size: number;
+  sha256: string;
+  entries: number;
+}
+
+export interface ServerBackupStatus {
+  running: boolean;
+  /** Unix ms of the last pass that backed something up or failed; 0 when none. */
+  last_at: number;
+  last_trigger: "" | "interval" | "closed" | "manual";
+  backed_up: number;
+  verified: number;
+  failed: number;
+  last_error: string | null;
+  last_verified: ServerBackupVerified | null;
+  /** Unix ms of the last time the consoles were looked at. */
+  last_check_at: number;
+}
+
+export interface ServerBackupView {
+  settings: ServerBackupSettings;
+  status: ServerBackupStatus;
+  /** Interval mode: Unix ms the next pass is due (0: now); null in the other modes. */
+  next_at: number | null;
+}
+
+export const serverBackupApi = {
+  view: () => call<ServerBackupView>("/server"),
+  set: (patch: Partial<ServerBackupSettings>) =>
+    call<ServerBackupView>("/server", { method: "PUT", body: JSON.stringify(patch) }),
+  runNow: () => call<ServerBackupView>("/server/run", { method: "POST" }),
+  list: async (titleId: string) =>
+    (await call<{ backups: SaveBackupFile[] }>(`/server/list?title_id=${encodeURIComponent(titleId)}`)).backups,
+  restore: (req: { addr: string; title_id: string; file: string; save_path: string; user_id: number }) =>
+    call<{ ok: boolean }>("/server/restore", { method: "POST", body: JSON.stringify(req) }),
+};
+
 export const saveBackupApi = {
   view: () => call<SaveBackupView>(""),
   set: (patch: Partial<SaveBackupSettings>) =>

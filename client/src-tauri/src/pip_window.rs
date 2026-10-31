@@ -40,6 +40,14 @@ pub fn build_main<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         let handle = app.clone();
         builder.on_new_window(move |url, features| open_popup(&handle, url, features))
     };
+    // WebKitGTK refuses a page's microphone unless the app answers its permission request, so
+    // Remote Play's mic (talking in party chat) failed on Linux with NotAllowedError. The
+    // other platforms ask the user through the system as before.
+    #[cfg(target_os = "linux")]
+    let builder = builder.on_permission_request(|_, kind| match kind {
+        tauri::webview::PermissionKind::Microphone => tauri::webview::PermissionResponse::Allow,
+        _ => tauri::webview::PermissionResponse::Default,
+    });
     builder.build()?;
     Ok(())
 }

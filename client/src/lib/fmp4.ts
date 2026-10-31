@@ -135,9 +135,11 @@ function mediaSegment(seq: number, time: number, duration: number, data: Uint8Ar
   return out;
 }
 
-/** Annex-B access unit → 4-byte length-prefixed NAL units (access unit delimiters dropped). */
-function lengthPrefixed(au: Uint8Array, hevc: boolean): Uint8Array {
-  const nals = annexBNals(au).filter((n) => nalType(n, hevc) !== (hevc ? 35 : 9));
+/** Annex-B access unit → 4-byte length-prefixed NAL units (access unit delimiters dropped, and
+ *  the parameter sets too with `dropParams`: an avcC description carries them). */
+export function lengthPrefixed(au: Uint8Array, hevc: boolean, dropParams = false): Uint8Array {
+  const skip = hevc ? [35, ...(dropParams ? [32, 33, 34] : [])] : [9, ...(dropParams ? [7, 8] : [])];
+  const nals = annexBNals(au).filter((n) => !skip.includes(nalType(n, hevc)));
   const out = new Uint8Array(nals.reduce((a, n) => a + 4 + n.length, 0));
   const dv = new DataView(out.buffer);
   let o = 0;
@@ -150,6 +152,39 @@ function lengthPrefixed(au: Uint8Array, hevc: boolean): Uint8Array {
 }
 
 const hex = (b: number) => b.toString(16).padStart(2, "0");
+
+const sized = (n: Uint8Array) => {
+  const out = new Uint8Array(2 + n.length);
+  out[0] = n.length >> 8;
+  out[1] = n.length & 0xff;
+  out.set(n, 2);
+  return out;
+};
+
+const cat = (parts: Uint8Array[]) => {
+  const out = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+};
+
+/** The AVCDecoderConfigurationRecord (avcC's contents) for the SPS and PPS in an Annex-B
+ *  header, or null without them. Also WebCodecs' `description` for H.264 in AVC form. */
+export function avcDescription(header: Uint8Array): Uint8Array | null {
+  const nals = annexBNals(header);
+  const sps = nals.filter((n) => nalType(n, false) === 7);
+  const pps = nals.filter((n) => nalType(n, false) === 8);
+  if (!sps.length || !pps.length || sps[0].length < 4) return null;
+  return cat([
+    u([1, 1], [sps[0][1], 1], [sps[0][2], 1], [sps[0][3], 1], [0xff, 1], [0xe0 | sps.length, 1]),
+    ...sps.map(sized),
+    u([pps.length, 1]),
+    ...pps.map(sized),
+  ]);
+}
 
 /** The video track's init segment and MSE type, from the stream's parameter sets; null when
  *  they are missing. `size` is the visible picture (rpSps.spsVisibleRect). */
@@ -169,34 +204,12 @@ export function videoInit(
       u([0x18, 2], [0xffff, 2]),
       config,
     );
-  const sized = (n: Uint8Array) => {
-    const out = new Uint8Array(2 + n.length);
-    out[0] = n.length >> 8;
-    out[1] = n.length & 0xff;
-    out.set(n, 2);
-    return out;
-  };
-  const cat = (parts: Uint8Array[]) => {
-    const out = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
-    let o = 0;
-    for (const p of parts) {
-      out.set(p, o);
-      o += p.length;
-    }
-    return out;
-  };
 
   if (!hevc) {
     const sps = of(7);
-    const pps = of(8);
-    if (!sps.length || !pps.length || sps[0].length < 4) return null;
-    const avcC = box(
-      "avcC",
-      u([1, 1], [sps[0][1], 1], [sps[0][2], 1], [sps[0][3], 1], [0xff, 1], [0xe0 | sps.length, 1]),
-      ...sps.map(sized),
-      u([pps.length, 1]),
-      ...pps.map(sized),
-    );
+    const record = avcDescription(header);
+    if (!record) return null;
+    const avcC = box("avcC", record);
     return {
       init: initSegment({ handler: "vide", timescale: 90000, sampleEntry: visual("avc1", avcC), width: size.w, height: size.h }),
       mime: `video/mp4; codecs="avc1.${hex(sps[0][1])}${hex(sps[0][2])}${hex(sps[0][3])}"`,

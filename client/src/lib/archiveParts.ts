@@ -212,6 +212,9 @@ export function diagnoseArchiveSet(
     // split archive, so an ordinary file with a numeric extension is left
     // alone. `.z01`/`.r00` are distinctive enough to stand by themselves.
     if (vol.scheme === "numeric" && volumeCount < 2) return null;
+    // Likewise a lone `.s01` / `.t00`: only `.rNN` is distinctive by itself; the later
+    // letters of an old-style RAR set count once they come as a set.
+    if (vol.scheme === "rar" && vol.index >= 100 && volumeCount < 2) return null;
     return {
       kind: "split-unsupported",
       // A rar set missing its `.rar` cannot be opened either; report it the
@@ -284,7 +287,8 @@ export function diagnoseArchiveSet(
 //                              the splitter doesn't care what it's cutting.
 //   Game.z01, Game.z02 + .zip  Spanned zip. The central directory lives in
 //                              the final `.zip`; earlier volumes are raw.
-//   Game.r00, Game.r01 + .rar  Old-style RAR volumes. UnRAR follows these
+//   Game.r00 … Game.r99,       Old-style RAR volumes (past .r99 the letter
+//   Game.s00 …, + .rar         moves on: .s00, .t00 …). UnRAR follows these
 //                              from the `.rar`, so that one is fine — the
 //                              user just has to pick the `.rar`.
 //
@@ -298,7 +302,7 @@ export function diagnoseArchiveSet(
 export interface SplitVolumeInfo {
   /** `numeric` → `X.7z.001`; `zip` → `X.z01`; `rar` → `X.r00`. */
   scheme: "numeric" | "zip" | "rar";
-  /** Volume number as written (`001` → 1, `r00` → 0). */
+  /** Volume number as written (`001` → 1, `r00` → 0, `s00` → 100). */
   index: number;
   /** The file that OPENS the set, if the scheme has one we can name:
    *  `X.rar` for rar volumes, `X.zip` for a spanned zip, and for numeric
@@ -308,7 +312,9 @@ export interface SplitVolumeInfo {
 
 const NUMERIC_SPLIT_RE = /^(.*?)(\.(?:zip|7z|rar))?\.(\d{3,})$/i;
 const ZIP_VOL_RE = /^(.*)\.z(\d{2,})$/i;
-const RAR_VOL_RE = /^(.*)\.r(\d{2,})$/i;
+// Old-style RAR runs `.r00`…`.r99`, then WinRAR carries on with `.s00`…`.s99`, `.t00`…: each
+// letter continues the count. (`.z` is left to spanned zips, matched first above.)
+const RAR_VOL_RE = /^(.*)\.([r-y])(\d{2})$/i;
 
 /** Parse a natively-split volume name. Returns null for anything else —
  *  including the `.partN.<ext>` scheme, which `parseArchivePart` owns. */
@@ -342,7 +348,9 @@ export function parseSplitVolume(filename: string): SplitVolumeInfo | null {
   if (r) {
     return {
       scheme: "rar",
-      index: Number.parseInt(r[2], 10),
+      // `.r05` → 5, `.s00` → 100, `.t07` → 207.
+      index:
+        (r[2].toLowerCase().charCodeAt(0) - 114) * 100 + Number.parseInt(r[3], 10),
       entryName: `${r[1]}.rar`,
     };
   }

@@ -8,13 +8,13 @@
 
 #include <ps5/kernel.h>
 #include "authid.h"          /* PS5_SHELLCORE_AUTHID, ps5_detect_firmware_major */
-#include "timed_init.h"      /* ps5_timed_init_wait, PS5_TIMED_INIT_TIMEOUT */
+#include "inst_timed_init.h" /* inst_timed_init_wait: monotonic bound */
 #include "sceAppInstUtil.h"  /* MetaInfo, sceAppInstUtil* */
 
-static ps5_timed_init_state_t g_init_state = PS5_TIMED_INIT_STATE_INITIALIZER;
+static inst_timed_init_state_t g_init_state = INST_TIMED_INIT_STATE_INITIALIZER;
 
 int inst_sony_init(inst_sony_state_t *st) {
-    int rc = ps5_timed_init_wait(&g_init_state, sceAppInstUtilInitialize, 10000U);
+    int rc = inst_timed_init_wait(&g_init_state, sceAppInstUtilInitialize, 10000U);
     st->init_rc = (uint32_t)rc;
     st->init_done = (rc == 0);
     return rc;

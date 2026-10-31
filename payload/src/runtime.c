@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "app_dump.h"
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
@@ -997,12 +998,18 @@ int runtime_init(runtime_state_t *state) {
     backup_init();
     remoteplay_init();
     notif_init();
-    cheats_init();
-    activity_init();
     sdk_changer_init();
     tmdb_init();
     fw_spoof_init();
     return 0;
+}
+
+void runtime_start_watchers(void) {
+    /* Not in runtime_init: that runs before the takeover, while a predecessor may still be live.
+     * cheats_init consumes the in-progress cheats marker (a live predecessor's would pause the game
+     * and toast "helper stopped"), and both instances would write activity.json(.tmp). */
+    cheats_init();
+    activity_init();
 }
 
 int runtime_write_ownership(const runtime_state_t *state) {
@@ -1162,6 +1169,37 @@ void runtime_classify_prior_instance(runtime_state_t *state) {
  * ps5upload.elf alive for hours with no startup trace and no port). A starting helper is in its
  * own setup, not in a Sony call, until it serves. */
 #define REAP_GRACE_UNASKED_MS 3000
+/* The exit watchdog's own ceiling (WATCHDOG_CEILING_MS, 60 s) plus a margin: the longest an asked
+ * prior inside a Sony call may take to exit by itself. */
+#define REAP_SONY_CEILING_MS 65000
+
+/* The exiting instance's "waiting out a Sony call" note: its pid in <runtime dir>/exit_sony_wait.
+ * Written by the exit watchdog, read by the next instance's reap. */
+#define SONY_WAIT_PATH PS5UPLOAD2_RUNTIME_DIR "/exit_sony_wait"
+
+void runtime_sony_wait_clear(void) { (void)unlink(SONY_WAIT_PATH); }
+
+static void sony_wait_mark(void) {
+    char buf[24];
+    int fd = open(SONY_WAIT_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int n;
+    if (fd < 0) return;
+    n = snprintf(buf, sizeof buf, "%d\n", (int)getpid());
+    if (n > 0) (void)write(fd, buf, (size_t)n);
+    close(fd);
+}
+
+int runtime_sony_wait_pid(void) {
+    char buf[24];
+    ssize_t n;
+    int fd = open(SONY_WAIT_PATH, O_RDONLY);
+    if (fd < 0) return -1;
+    n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (n <= 0) return -1;
+    buf[n] = '\0';
+    return atoi(buf);
+}
 
 void runtime_reap_prior_instance(runtime_state_t *state) {
     if (!state) return;
@@ -1205,7 +1243,10 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
         uint64_t boottime = runtime_system_boottime_unix();
         uint64_t kstart = 0;
         int kstart_known = proc_start_by_pid(prior, &kstart) == 0;
-        ps5upload2_reap_t verdict = instance_reap_decision(proc_name_is_ours(their_name), prior_started, boottime,
+        int ours = proc_name_is_ours(their_name) ||
+                   (strcmp(their_name, PS5UPLOAD2_GENERIC_PAYLOAD_NAME) == 0 &&
+                    instance_record_is_proc(prior_started, kstart, kstart_known));
+        ps5upload2_reap_t verdict = instance_reap_decision(ours, prior_started, boottime,
                                                            kstart, kstart_known, (uint64_t)time(NULL));
         fprintf(stderr,
                 "[payload2] reap: pid %d name=%s kernel_start=%llu%s record_started=%llu boottime=%llu -> %s\n",
@@ -1214,6 +1255,15 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
                 verdict == PS5UPLOAD2_REAP_YES ? "ours, this boot"
                 : verdict == PS5UPLOAD2_REAP_NOT_OURS ? "not one of ours (recycled pid), skipping"
                 : "cannot show it is of this boot: NOT killing");
+        if (verdict == PS5UPLOAD2_REAP_NOT_OURS && state->prior_asked &&
+            strcmp(their_name, PS5UPLOAD2_GENERIC_PAYLOAD_NAME) == 0) {
+            /* Under the generic name it cannot be told from someone else's payload, so it is never
+             * killed; but only a helper of ours reads the takeover flag it was sent, so give it the
+             * grace to leave by itself (an older helper that listed as payload.elf, #593). */
+            for (int i = 0; i < REAP_GRACE_MS / 100 && kill((pid_t)prior, 0) == 0; i++) usleep(100000);
+            fprintf(stderr, "[payload2] reap: pid %d (%s) %s\n", prior, their_name,
+                    kill((pid_t)prior, 0) == 0 ? "is still running; left alone" : "exited when asked: it was ours");
+        }
         if (verdict != PS5UPLOAD2_REAP_YES) return;
     }
 
@@ -1223,16 +1273,33 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
      * and kill only what is still there after that. */
     {
         struct timespec t0, now;
-        int gone = 0;
-        const int grace_ms = state->prior_asked ? REAP_GRACE_MS : REAP_GRACE_UNASKED_MS;
+        int gone = 0, told = 0;
+        int grace_ms = state->prior_asked ? REAP_GRACE_MS : REAP_GRACE_UNASKED_MS;
         clock_gettime(CLOCK_MONOTONIC, &t0);
         for (;;) {
+            long long elapsed;
             if (kill((pid_t)prior, 0) != 0) {
                 gone = 1;
                 break;
             }
             clock_gettime(CLOCK_MONOTONIC, &now);
-            if ((now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000 >= grace_ms) break;
+            elapsed = (long long)(now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000;
+            if (elapsed >= grace_ms) {
+                /* An exiting prior whose watchdog is waiting out a Sony call says so (runtime_sony_wait_*):
+                 * it will exit by itself within its ceiling, and a kill now is what wedges a console. */
+                if (runtime_sony_wait_pid() == prior && elapsed < REAP_SONY_CEILING_MS) {
+                    if (!told) {
+                        told = 1;
+                        fprintf(stderr,
+                                "[payload2] prior instance pid=%d is exiting but inside a Sony call; waiting for it "
+                                "(up to %d ms)\n",
+                                prior, REAP_SONY_CEILING_MS);
+                    }
+                    grace_ms = REAP_SONY_CEILING_MS;
+                } else {
+                    break;
+                }
+            }
             usleep(100000);
         }
         if (gone) {
@@ -1286,6 +1353,9 @@ int runtime_sweep_our_instances(void) {
     pid_t killed_pids[64];
     int killed_pid_count = 0;
 
+    uint64_t my_start = 0;
+    int my_start_known = proc_start_by_pid(me, &my_start) == 0;
+
     if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) != 0 || buf_size == 0) return 0;
     size_t alloc = buf_size + (buf_size / 4) + 1024;
     uint8_t *kbuf = (uint8_t *)malloc(alloc);
@@ -1317,6 +1387,17 @@ int runtime_sweep_our_instances(void) {
 
         if ((int)pid <= 1 || (int)pid == me) continue;
         if (!proc_name_is_ours(name)) continue;
+        /* Only an OLDER copy: a helper sent after this one (the late sweep runs 65 s in) is the one
+         * the user wants, and it may not have asked us to exit yet. Unknown start times: not killed. */
+        {
+            uint64_t their_start = 0;
+            if (!my_start_known || proc_start_by_pid((int)pid, &their_start) != 0 ||
+                !instance_sweep_is_older(their_start, (int)pid, my_start, me)) {
+                fprintf(stderr, "[payload2] sweep: pid=%d name=%s is not older than us; left alone\n", (int)pid,
+                        name);
+                continue;
+            }
+        }
 
         fprintf(stderr,
                 "[payload2] sweep: SIGKILL pid=%d name=%s (another instance of ours)\n",
@@ -1414,6 +1495,7 @@ static void *runtime_shutdown_watchdog(void *arg) {
             }
             if (held) pthread_mutex_unlock(&sony_api_lock); /* not at the exit yet: do not block the others */
             if (!announced) {
+                sony_wait_mark(); /* the next instance's reap waits for us instead of killing us mid-call */
                 announced = 1;
                 fprintf(stderr,
                         "[payload2] shutdown watchdog: %d ms passed but a Sony call is in flight; waiting for it "
@@ -1436,6 +1518,9 @@ static void *runtime_shutdown_watchdog(void *arg) {
     }
     fprintf(stderr, "[payload2] shutdown watchdog fired — forcing _exit(%d)\n",
             g_watchdog_exit_code);
+    /* A dump decrypting right now may have the kernel's vnode pager swapped: put it back, or every
+     * file mmap on the console keeps going through the self pager after we are gone. */
+    app_dump_pager_emergency_restore();
     _exit(g_watchdog_exit_code);
     return NULL;
 }
@@ -4692,6 +4777,7 @@ static void power_do_action(int action) {
 }
 
 static void *power_defer_thread(void *arg) {
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME); /* unnamed, the process can list as payload.elf */
     power_defer_t *d = (power_defer_t *)arg;
     int action = d->action;
     free(d);

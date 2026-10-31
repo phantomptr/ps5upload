@@ -880,6 +880,43 @@ async fn a_partial_delete_failure_names_the_first_path_and_the_entries_left() {
         cur.contains(&format!("{n_stuck} left")),
         "counts the entries left: {cur}"
     );
+    assert!(
+        cur.contains(": Permission denied ("),
+        "says why, in the system's words: {cur}"
+    );
+    assert!(
+        cur.contains(" g/d05/f"),
+        "the path from the deleted folder down, not the whole one: {cur}"
+    );
+    drop(r.srv);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_folder_the_count_cannot_read_does_not_stop_the_delete() {
+    // Was a bare `fs_delete_walk_failed` with nothing removed (the /data/prosperoeden report).
+    let r = rig("jr-countfail").await;
+    if unsafe { libc_geteuid() } == 0 {
+        return;
+    }
+    let tree = r.d.join("g");
+    write_tree(&tree, 40, |_| 4);
+    let locked = tree.join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("x"), b"x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let st = delete_outcome(&r, 243, tree.to_str().unwrap()).await;
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!((st.state, st.code), (Some(2), Some(gen::ERR_IO)));
+    let cur = st.current.unwrap();
+    assert!(
+        cur.starts_with("fs_delete_failed: opendir g/locked: Permission denied"),
+        "{cur}"
+    );
+    assert_eq!(
+        count_files(&tree),
+        1,
+        "everything readable was deleted; only the locked folder's file is left"
+    );
     drop(r.srv);
 }
 

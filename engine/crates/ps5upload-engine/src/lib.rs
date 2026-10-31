@@ -94,6 +94,7 @@ mod remote_pkg;
 mod rp_replay;
 mod rp_stream_api;
 mod save_backup;
+mod save_backup_server;
 mod settings_backup;
 mod shared_state;
 mod state_io;
@@ -11063,6 +11064,22 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             get(save_backup::get_view).put(save_backup::put_settings),
         )
         .route("/api/save-backup/run", post(save_backup::post_run))
+        .route(
+            "/api/save-backup/server",
+            get(save_backup_server::get_view).put(save_backup_server::put_settings),
+        )
+        .route(
+            "/api/save-backup/server/run",
+            post(save_backup_server::post_run),
+        )
+        .route(
+            "/api/save-backup/server/list",
+            get(save_backup_server::get_list),
+        )
+        .route(
+            "/api/save-backup/server/restore",
+            post(save_backup_server::post_restore),
+        )
         .route("/api/save-backup/list", get(save_backup::get_list))
         .route("/api/save-backup/restore", post(save_backup::post_restore))
         .route(
@@ -11674,8 +11691,13 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         &bind,
         &std::env::var("PS5UPLOAD_BASE_URL").unwrap_or_default(),
     );
+    // Save backups to a network share: on an interval, or when a game is closed (#592).
+    save_backup_server::spawn();
     // Mesh Drive folders are kept in sync here too, app open or not.
     mesh_drive::spawn();
+    // Server copies an earlier run left behind (an extract that failed, then the app closed)
+    // are removed here: nothing else knows them after a restart.
+    tokio::task::spawn_blocking(remote::fetch::sweep_stale_copies);
     // Graceful shutdown: when the parent-watcher fires (stdin EOF), the
     // SHUTDOWN Notify wakes this future, axum stops
     // accepting new connections, drains in-flight ones, then returns.

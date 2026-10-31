@@ -39,6 +39,10 @@ typedef struct {
 
 int runtime_init(runtime_state_t *state);
 int runtime_write_ownership(const runtime_state_t *state);
+/* The cheats and play-time watchers: started only once this instance owns the console (after
+ * runtime_write_ownership), so a predecessor still handing over keeps its in-progress cheats marker
+ * and its activity.json to itself. */
+void runtime_start_watchers(void);
 int runtime_clear_ownership(const runtime_state_t *state);
 /* Best-effort SIGKILL of a previous instance that crashed and lingered (the
  * cooperative takeover only handles a healthy old instance). Call AFTER
@@ -74,7 +78,13 @@ void runtime_classify_prior_instance(runtime_state_t *state);
  * snapshot taken at call time — the live snapshot IS the boot-session proof,
  * so there is nothing for a started_at/boottime check to add. See the
  * comment at the top of the implementation for the full reasoning. */
+/* SIGKILLs every OTHER process of ours that started before this one (kernel start time, then pid):
+ * a newer helper sent meanwhile is the one to keep. Returns how many were killed. */
 int runtime_sweep_our_instances(void);
+/* An exiting instance whose exit watchdog waits out a Sony call notes its pid for the next
+ * instance's reap (which then waits instead of killing it mid-call). */
+void runtime_sony_wait_clear(void);
+int runtime_sony_wait_pid(void);
 /* Arm a detached watchdog that force-`_exit()`s the process if the graceful
  * shutdown wedges, so a stuck shutdown can't leave an orphan. Call once when
  * shutdown begins (after runtime_wait_for_shutdown returns).

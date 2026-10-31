@@ -1693,7 +1693,7 @@ struct Unpacking(Option<PathBuf>);
 impl Drop for Unpacking {
     fn drop(&mut self) {
         if let Some(dest) = self.0.take() {
-            let _ = std::fs::remove_dir_all(&dest);
+            let _ = ps5upload_core::archive_extract::remove_path_retrying(&dest);
             active_extracts()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -1892,7 +1892,7 @@ fn remove_stale_extracts(out: &Path) {
             && e.file_type().is_ok_and(|t| t.is_dir())
             && !active.contains(&p);
         if stale {
-            let _ = std::fs::remove_dir_all(&p);
+            let _ = ps5upload_core::archive_extract::remove_path_retrying(&p);
         }
     }
 }
@@ -2108,7 +2108,7 @@ pub(crate) async fn fpkg_extract_cleanup_handler(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&root);
-        match std::fs::remove_dir_all(&root) {
+        match ps5upload_core::archive_extract::remove_path_retrying(&root) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(format!("{}: {e}", root.display())),
@@ -2125,6 +2125,54 @@ pub(crate) async fn fpkg_extract_cleanup_handler(
 #[cfg(test)]
 mod extract_tests {
     use super::*;
+
+    /// An unpack that fails half way (here a damaged second entry, after the first was written)
+    /// leaves nothing on this computer: the files it wrote are closed and the folder removed.
+    #[test]
+    fn a_failed_unpack_leaves_no_files_behind() {
+        use std::io::Write;
+        let base = std::env::temp_dir().join(format!("fpkg-failed-unpack-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        let zip_path = base.join("game.zip");
+        {
+            let mut zw = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zw.start_file("game/eboot.bin", opts).unwrap();
+            zw.write_all(&[b'A'; 4096]).unwrap();
+            zw.start_file("game/data.bin", opts).unwrap();
+            zw.write_all(&[b'B'; 4096]).unwrap();
+            zw.finish().unwrap();
+        }
+        // Damage the second entry's bytes: its CRC check fails mid-unpack.
+        let mut bytes = std::fs::read(&zip_path).unwrap();
+        let at = bytes.windows(64).position(|w| w == [b'B'; 64]).unwrap();
+        bytes[at + 10] = b'X';
+        std::fs::write(&zip_path, bytes).unwrap();
+
+        let dest = base.join(format!("{EXTRACT_PREFIX}test"));
+        active_extracts().lock().unwrap().insert(dest.clone());
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let outcome = {
+            let _unpacking = Unpacking(Some(dest.clone()));
+            let r = ps5upload_core::archive_extract::extract(
+                &zip_path,
+                &dest,
+                None,
+                &mut |_, _| {},
+                &cancel,
+            );
+            assert!(
+                dest.join("game/eboot.bin").exists(),
+                "the first entry was written"
+            );
+            r
+        };
+        assert!(outcome.is_err(), "the damaged entry must fail the unpack");
+        assert!(!dest.exists(), "the failed unpack's files were left behind");
+        assert!(!active_extracts().lock().unwrap().contains(&dest));
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn a_leftover_partial_goes_but_a_second_build_of_the_same_output_is_refused() {

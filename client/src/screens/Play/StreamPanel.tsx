@@ -71,6 +71,7 @@ import { fitName, PlayMenu, VolumeSlider } from "./PlayMenu";
 import { rpBrowserAdvice } from "./browserAdvice";
 import { askMotion, motionAvailable, startMotion } from "../../lib/motion";
 import { ControllerSetup } from "./ControllerSetup";
+import { connectWebHidTouchpad, webHidTouchpadAvailable, webHidTouchpadConnected } from "../../lib/padTouchpad";
 import { PadAsks, PhonePadsPanel, usePadLink } from "./PhonePads";
 import { GamePanel } from "./game/GamePanel";
 import { LaunchStatus } from "./game/LaunchStatus";
@@ -145,6 +146,12 @@ export function streamErrorMessage(tr: Tr, e: StreamError): string {
         "rp_err_busy_other",
         { host: e.host ?? "" },
         `Remote Play is already streaming ${e.host ?? "another console"}. Stop that stream first.`,
+      );
+    case "lost":
+      return tr(
+        "rp_err_lost",
+        undefined,
+        "The connection to the PS5 dropped during the stream. Start it again; if it keeps happening, connect the PS5 or this device by cable.",
       );
     case "socket":
       return tr(
@@ -805,6 +812,7 @@ function SettingsPanel({ running }: { running: boolean }) {
       <section className="space-y-2">
         <h3 className="text-sm font-semibold">{tr("rp_pads_title", undefined, "Controllers")}</h3>
         <ControllerSetup />
+        <WebHidTouchpad />
       </section>
 
       <section className="space-y-2">
@@ -1986,6 +1994,32 @@ export function StreamPanel() {
           )}
         </p>
       )}
+    </div>
+  );
+}
+
+/** In a browser with WebHID (Chrome, Edge): let it read a DualSense's touchpad, which the
+ *  Gamepad API never gives. The browser asks which controller first, so this needs a click.
+ *  The app reads the touchpad by itself and shows nothing here. */
+function WebHidTouchpad() {
+  const tr = useTr();
+  const [on, setOn] = useState(webHidTouchpadConnected);
+  if (!webHidTouchpadAvailable()) return null;
+  if (on) {
+    return (
+      <p className="text-xs text-[var(--color-muted)]" data-testid="rp-hid-touchpad-on">
+        {tr("rp_hid_touchpad_on", undefined, "The DualSense touchpad is read in this browser.")}
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" onClick={() => void connectWebHidTouchpad().then(setOn)} data-testid="rp-hid-touchpad">
+        {tr("rp_hid_touchpad", undefined, "Use the DualSense touchpad")}
+      </Button>
+      <span className="text-xs text-[var(--color-muted)]">
+        {tr("rp_hid_touchpad_hint", undefined, "The browser asks which controller: pick the DualSense.")}
+      </span>
     </div>
   );
 }

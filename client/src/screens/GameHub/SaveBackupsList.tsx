@@ -3,12 +3,13 @@ import { RotateCcw } from "lucide-react";
 
 import { Button } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
-import { saveBackupApi, type SaveBackupFile } from "../../api/saveBackup";
+import { saveBackupApi, serverBackupApi, type SaveBackupFile } from "../../api/saveBackup";
 import type { SaveEntry } from "../../api/ps5";
 import { formatBytes } from "../../lib/format";
 import { hostOf } from "../../lib/addr";
 import { pushNotification } from "../../state/notifications";
 import { useAutoSaveBackupStore } from "../../state/autoSaveBackup";
+import { useServerBackupStore } from "../../state/serverSaveBackup";
 import { useTr } from "../../state/lang";
 
 /** How many versions a save shows before "show all". */
@@ -20,30 +21,49 @@ export function stampLabel(stamp: string): string {
   return m ? `${m[1]} ${m[2]}:${m[3]} UTC` : stamp;
 }
 
-/** The automatic backups of one save, newest first, each with Restore. The engine puts the
- *  backup back after keeping what is there now, so a restore can itself be undone. */
+/** A backup in this computer's backup folder, or on the network share (#592). */
+export type ListedBackup = SaveBackupFile & { server?: boolean };
+
+/** Local and server backups as one list, newest first (a stamp sorts in time order). */
+export function mergeBackups(local: SaveBackupFile[], server: SaveBackupFile[]): ListedBackup[] {
+  const all: ListedBackup[] = [...local, ...server.map((b) => ({ ...b, server: true }))];
+  return all.sort((a, b) =>
+    a.stamp < b.stamp ? 1 : a.stamp > b.stamp ? -1 : a.server ? 1 : -1,
+  );
+}
+
+/** The automatic backups of one save, newest first, each with Restore: those in the backup
+ *  folder and those on the network share. The engine puts the backup back after keeping what is
+ *  there now, so a restore can itself be undone. */
 export function SaveBackupsList({ host, save }: { host: string; save: SaveEntry }) {
   const tr = useTr();
   const { confirm, dialog } = useConfirm();
   const settings = useAutoSaveBackupStore((s) => s.settings);
   const refreshSettings = useAutoSaveBackupStore((s) => s.refresh);
-  const [backups, setBackups] = useState<SaveBackupFile[]>([]);
+  const serverSettings = useServerBackupStore((s) => s.settings);
+  const refreshServer = useServerBackupStore((s) => s.refresh);
+  const [backups, setBackups] = useState<ListedBackup[]>([]);
   const [all, setAll] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
     if (!settings) void refreshSettings();
   }, [settings, refreshSettings]);
+  useEffect(() => {
+    if (!serverSettings) void refreshServer();
+  }, [serverSettings, refreshServer]);
   const dir = settings?.dir ?? "";
+  const target = serverSettings?.target ?? "";
   const load = useCallback(async () => {
-    if (!dir.trim()) return setBackups([]);
-    try {
-      const list = await saveBackupApi.list(save.title_id);
-      setBackups(list.filter((b) => b.user_id === save.user_id >>> 0));
-    } catch {
-      setBackups([]);
-    }
-  }, [dir, save.title_id, save.user_id]);
+    const mine = (b: SaveBackupFile) => b.user_id === save.user_id >>> 0;
+    // A server that can't be reached leaves its backups out; the local ones still show.
+    const none: SaveBackupFile[] = [];
+    const [local, server] = await Promise.all([
+      dir.trim() ? saveBackupApi.list(save.title_id).catch(() => none) : none,
+      target ? serverBackupApi.list(save.title_id).catch(() => none) : none,
+    ]);
+    setBackups(mergeBackups(local.filter(mine), server.filter(mine)));
+  }, [dir, target, save.title_id, save.user_id]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -51,7 +71,9 @@ export function SaveBackupsList({ host, save }: { host: string; save: SaveEntry 
   if (backups.length === 0) return null;
   const shown = all ? backups : backups.slice(0, SHOWN);
 
-  async function restore(b: SaveBackupFile) {
+  const key = (b: ListedBackup) => `${b.server ? "server" : "local"}:${b.file}`;
+
+  async function restore(b: ListedBackup) {
     const ok = await confirm({
       title: tr("save_backup_restore_title", { when: stampLabel(b.stamp) }, "Restore the backup from {when}?"),
       message:
@@ -72,9 +94,9 @@ export function SaveBackupsList({ host, save }: { host: string; save: SaveEntry 
       destructive: true,
     });
     if (!ok) return;
-    setBusy(b.file);
+    setBusy(key(b));
     try {
-      await saveBackupApi.restore({
+      await (b.server ? serverBackupApi : saveBackupApi).restore({
         addr: hostOf(host),
         title_id: save.title_id,
         file: b.file,
@@ -102,12 +124,22 @@ export function SaveBackupsList({ host, save }: { host: string; save: SaveEntry 
       </div>
       <ul className="space-y-1">
         {shown.map((b) => (
-          <li key={b.file} className="flex items-center justify-between gap-3 text-xs">
+          <li key={key(b)} className="flex items-center justify-between gap-3 text-xs">
             <span className="tabular-nums">
               {stampLabel(b.stamp)} · {formatBytes(b.size)}
               {b.tag === "beforeps" && (
                 <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]">
                   {tr("save_backup_before_ps4", undefined, "Before a PS4 save")}
+                </span>
+              )}
+              {b.server && (
+                <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]" data-testid="save-backup-server">
+                  {tr("save_backup_on_server", undefined, "On the server")}
+                </span>
+              )}
+              {b.tag === "beforerestore" && (
+                <span className="ms-2 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]">
+                  {tr("save_backup_before_restore", undefined, "Before a restore")}
                 </span>
               )}
               {b.tag === "snap" && (
@@ -120,7 +152,7 @@ export function SaveBackupsList({ host, save }: { host: string; save: SaveEntry 
               variant="ghost"
               size="sm"
               leftIcon={<RotateCcw size={12} />}
-              loading={busy === b.file}
+              loading={busy === key(b)}
               disabled={busy !== null}
               onClick={() => void restore(b)}
             >
