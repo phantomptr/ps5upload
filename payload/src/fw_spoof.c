@@ -43,34 +43,34 @@ static void get_kernel_release(char *out, size_t cap) {
 static __thread volatile sig_atomic_t g_fsg_armed = 0;
 static __thread sigjmp_buf g_fsg_jmp;
 
-static void fsg_handler(int sig) {
-    if (!g_fsg_armed) return;
-    if (sig != SIGSEGV && sig != SIGBUS && sig != SIGILL) return;
+/* Called by the process's fatal-signal handler (main.c) before anything else, like
+ * hw_guard_try_recover: a fault inside the guarded read jumps back to it (no return). The handlers
+ * are never swapped: two threads swapping them process-wide could leave this one installed, and
+ * then a real crash anywhere returned into the faulting instruction forever (100% CPU, :9120 held). */
+int fw_spoof_try_recover(int sig) {
+    if (!g_fsg_armed) return 0;
+    if (sig != SIGSEGV && sig != SIGBUS && sig != SIGILL) return 0;
     g_fsg_armed = 0;
     static const char msg[] = "[fw_spoof] FAULT in kernel_get_fw_version (skipped)\n";
     (void)write(2, msg, sizeof(msg) - 1);
     siglongjmp(g_fsg_jmp, sig);
+    return 1; /* unreachable */
 }
 
-/* Safely call kernel_get_fw_version() with fault recovery. Returns 0 on
- * fault (caller treats 0 as "unknown"). */
+/* Safely call kernel_get_fw_version() with fault recovery, once: the firmware does not change
+ * while the helper runs. Returns 0 on a fault (callers treat 0 as "unknown"). */
 unsigned int fw_safe_kernel_version(void) {
-    struct sigaction old_segv, old_bus, old_ill;
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = fsg_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-
-    /* Install our handler, run the guarded call, then restore. */
-    sigaction(SIGSEGV, &sa, &old_segv);
-    sigaction(SIGBUS,  &sa, &old_bus);
-    sigaction(SIGILL,  &sa, &old_ill);
-
+    static volatile int done = 0;
+    static volatile unsigned int cached = 0;
+    volatile unsigned int fw = 0;
+    if (done) return cached;
     /* The SDK's kernel-R/W window is shared and not thread-safe: the read runs inside the payload's
      * innermost lock (kernel_rw_lock.h), released on the fault path too. */
-    volatile unsigned int fw = 0;
     pthread_mutex_lock(&kernel_rw_lock);
+    if (done) {
+        pthread_mutex_unlock(&kernel_rw_lock);
+        return cached;
+    }
     if (sigsetjmp(g_fsg_jmp, 1) == 0) {
         g_fsg_armed = 1;
         fw = kernel_get_fw_version();
@@ -79,11 +79,9 @@ unsigned int fw_safe_kernel_version(void) {
         g_fsg_armed = 0;
         fw = 0;
     }
+    cached = fw;
+    done = 1;
     pthread_mutex_unlock(&kernel_rw_lock);
-
-    sigaction(SIGSEGV, &old_segv, NULL);
-    sigaction(SIGBUS,  &old_bus,  NULL);
-    sigaction(SIGILL,  &old_ill,  NULL);
     return fw;
 }
 

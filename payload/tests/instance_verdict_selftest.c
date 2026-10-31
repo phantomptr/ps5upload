@@ -113,6 +113,25 @@ int main(void) {
         check(instance_proc_start_plausible(0, BOOT, NOW) == 0, "zero start is not plausible");
     }
 
+    /* #593: a recorded pid listed under the generic "payload.elf" is ours only when its kernel start
+     * time and the record's started_at agree; the sweeps only kill copies older than this one. */
+    {
+        check(instance_record_is_proc(AFTER_BOOT + 3, AFTER_BOOT, 1) == 1,
+              "record stamped seconds after the process started: the same process");
+        check(instance_record_is_proc(AFTER_BOOT, AFTER_BOOT + 3, 1) == 1, "either order");
+        check(instance_record_is_proc(AFTER_BOOT + 600, AFTER_BOOT, 1) == 0,
+              "ten minutes apart: a recycled pid (or a clock set between), not proof");
+        check(instance_record_is_proc(AFTER_BOOT, AFTER_BOOT, 0) == 0, "unknown kernel start: no");
+        check(instance_record_is_proc(0, AFTER_BOOT, 1) == 0, "no record time: no");
+
+        check(instance_sweep_is_older(100, 50, 200, 60) == 1, "started earlier: older");
+        check(instance_sweep_is_older(300, 50, 200, 60) == 0, "started later: a newer helper, kept");
+        check(instance_sweep_is_older(200, 50, 200, 60) == 1, "same second, lower pid: older");
+        check(instance_sweep_is_older(200, 70, 200, 60) == 0, "same second, higher pid: newer");
+        check(instance_sweep_is_older(0, 50, 200, 60) == 0, "unknown start: never killed");
+        check(instance_sweep_is_older(100, 50, 0, 60) == 0, "our own start unknown: never killed");
+    }
+
     printf("\ninstance_verdict_selftest: %s\n",
            failures == 0 ? "ALL PASS" : "FAILED");
     return failures == 0 ? 0 : 1;

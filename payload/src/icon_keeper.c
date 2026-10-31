@@ -1,4 +1,5 @@
 #include "icon_keeper.h"
+#include "proc_identity.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -122,7 +123,7 @@ static void *icon_keeper_thread(void *arg) {
     static char ids[KEEPER_MAX][16];
     static const char *ptrs[KEEPER_MAX];
     (void)arg;
-    (void)syscall(SYS_thr_set_name, -1, "ps5upload-icons");
+    proc_name_set_self("ps5upload-icons");
     keeper_seed_once();
     time_t seen = 0;
     for (;;) {

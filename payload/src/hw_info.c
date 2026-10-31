@@ -13,6 +13,7 @@
  */
 
 #include <stdio.h>
+#include "proc_identity.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -505,6 +506,7 @@ typedef struct {
     void *arg;
 } cpum_thread_arg_t;
 static void *cpum_thread_main(void *p) {
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME); /* unnamed, the process can list as payload.elf */
     cpum_thread_arg_t *a = p;
     a->fn(a->arg);
     return NULL;
@@ -1318,7 +1320,7 @@ static void *hw_fan_watcher_thread_fn(void *arg) {
     (void)arg;
     /* Best-effort thread name for ps/top output; ignored if the
      * syscall isn't available. SYS_thr_set_name is FreeBSD-specific. */
-    (void)syscall(SYS_thr_set_name, -1, "ps5upload-fan");
+    proc_name_set_self("ps5upload-fan");
 
     for (;;) {
         /* Sleep in 1 s chunks rather than one long sleep so a future

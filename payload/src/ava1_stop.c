@@ -1,5 +1,6 @@
 /* The AVA1 half of a payload exit: see include/ava1_stop.h. */
 #include "ava1_stop.h"
+#include "proc_identity.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -27,6 +28,7 @@ int ava1_exit_test_fail_create; /* tests: pthread_create "fails" */
 static volatile int g_flush_done;
 
 static void *flush_main(void *arg) {
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME); /* unnamed, the process can list as payload.elf */
     (void)arg;
     ava1_data_flush_for_exit();
     __atomic_store_n(&g_flush_done, 1, __ATOMIC_SEQ_CST);
@@ -92,6 +94,15 @@ int ava1_payload_stop(int conn_wait_ms, int sony_wait_ms) {
         usleep(10000);
     }
 
+    /* A worker still running may be inside the data layer: tearing it down under that worker is a
+     * use-after-free. Leave it to the process exit (the journals were fsynced per append, and the
+     * exit watchdog flushes them once more). */
+    if (ava1_server_rpc_inflight() > 0) {
+        fprintf(stderr, "[ava1] stop: %d RPC worker(s) still running; the data layer is left to the exit\n",
+                ava1_server_rpc_inflight());
+        rc |= AVA1_STOP_RPC_LEFT;
+        return rc;
+    }
     ava1_data_stop();
     return rc;
 }
@@ -103,6 +114,7 @@ typedef struct {
 } defer_t;
 
 static void *defer_main(void *p) {
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME); /* unnamed, the process can list as payload.elf */
     defer_t d = *(defer_t *)p;
     free(p);
     usleep((useconds_t)d.delay_ms * 1000u);

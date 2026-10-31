@@ -2,6 +2,7 @@
  * engine trusted through the ELF's trust slot. Pairing opens by itself for 5 minutes
  * only while nothing is paired; otherwise a paired device opens it (pairing.open). */
 #include "ava1_glue.h"
+#include "proc_identity.h"
 #include "app_dump.h"
 #include "archive_extract.h"
 
@@ -23,6 +24,7 @@
 #include "ava1_server.h"
 #include "ava1_store.h"
 #include "ava1_trust.h"
+#include "ava1_thread.h"
 #include "config.h"
 #include "mesh.h"
 #include "fs_jobs.h"
@@ -204,10 +206,15 @@ int ava1_payload_rpc(uint16_t method, const uint8_t *body, uint32_t body_len, ui
     return rpc(method, body, body_len, out, cap, out_len);
 }
 
+/* Every thread the AVA1 library starts names itself first: unnamed, the helper could list as
+ * elfldr's "payload.elf" and slip past both reaps (proc_identity.h). */
+static void name_ava1_thread(void) { proc_name_set_self(PS5UPLOAD2_PROC_NAME); }
+
 int ava1_payload_start(void) {
     ava1_server_cfg_t cfg;
     uint8_t launcher[32], token[16];
     memset(&cfg, 0, sizeof cfg);
+    ava1_thread_set_start_hook(name_ava1_thread);
     if (mkdir("/data/ps5upload", 0777) != 0 && errno != EEXIST) return -errno;
     if (mkdir(AVA1_DIR, 0777) != 0 && errno != EEXIST) return -errno;
     if (ava1_identity_load_or_create(AVA1_DIR "/identity", &cfg.identity) != 0) return -EIO;

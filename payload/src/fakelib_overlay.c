@@ -19,7 +19,13 @@
 #include <unistd.h>
 
 #include "proc_identity.h"
+#include "config.h"
+#include <signal.h>
 #define OVERLAY_PATH_MAX 1024
+/* The overlay in place right now: "<pid>\n<title id>\n<target>\n". Written when it is mounted and
+ * removed when it is taken down, so a helper that exits (a resend, an update) while the game still
+ * runs leaves it mounted, and the next helper adopts it and takes it down when the game exits. */
+#define OVERLAY_RECORD PS5UPLOAD2_RUNTIME_DIR "/fakelib_overlay"
 #define IOVEC_ENTRY(x) { (void *)(x), (x) ? strlen(x) + 1 : 0 }
 #define IOVEC_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 
@@ -32,6 +38,7 @@ typedef struct overlay_state {
     char title_id[10];
     char error[96];
     char mounted_on[OVERLAY_PATH_MAX];
+    pid_t mounted_pid; /* the game the overlay is for */
 } overlay_state_t;
 
 static overlay_state_t g_overlay = {
@@ -91,6 +98,8 @@ static int resolve_paths(const char *title_id, char *source, size_t source_cap,
     return found;
 }
 
+static void watch_for_exit(int kq, pid_t pid);
+
 static int target_is_unionfs(const char *target) {
     struct statfs *mounts = NULL;
     int count = mntinfo_snapshot(&mounts);
@@ -115,13 +124,91 @@ static int mount_overlay(const char *source, const char *target) {
     return nmount(iov, IOVEC_SIZE(iov), 0);
 }
 
+static void record_write(pid_t pid, const char *title_id, const char *target) {
+    char tmp[sizeof(OVERLAY_RECORD) + 8];
+    FILE *f;
+    snprintf(tmp, sizeof tmp, "%s.tmp", OVERLAY_RECORD);
+    f = fopen(tmp, "w");
+    if (!f) return;
+    fprintf(f, "%d\n%s\n%s\n", (int)pid, title_id ? title_id : "", target);
+    if (fclose(f) == 0) (void)rename(tmp, OVERLAY_RECORD);
+    else (void)unlink(tmp);
+}
+
+/* 1 with the fields filled when a record is present and well formed. */
+static int record_read(pid_t *pid, char *title_id, size_t tcap, char *target, size_t cap) {
+    char line[OVERLAY_PATH_MAX + 2];
+    FILE *f = fopen(OVERLAY_RECORD, "r");
+    int ok = 0;
+    if (!f) return 0;
+    if (fgets(line, sizeof line, f)) {
+        *pid = (pid_t)atoi(line);
+        if (fgets(line, sizeof line, f)) {
+            line[strcspn(line, "\n")] = '\0';
+            snprintf(title_id, tcap, "%s", line);
+            if (fgets(line, sizeof line, f)) {
+                line[strcspn(line, "\n")] = '\0';
+                snprintf(target, cap, "%s", line);
+                ok = *pid > 0 && target[0] == '/';
+            }
+        }
+    }
+    fclose(f);
+    return ok;
+}
+
 static void cleanup_mount(void) {
     char target[OVERLAY_PATH_MAX];
     pthread_mutex_lock(&g_overlay.mutex);
     snprintf(target, sizeof(target), "%s", g_overlay.mounted_on);
     g_overlay.mounted_on[0] = '\0';
+    g_overlay.mounted_pid = 0;
     pthread_mutex_unlock(&g_overlay.mutex);
     if (target[0]) (void)unmount(target, MNT_FORCE);
+    (void)unlink(OVERLAY_RECORD);
+}
+
+/* On exit: the overlay stays while its game runs (unmounting a running game's libraries crashes
+ * it); the record lets the next helper take it over. */
+static void release_on_exit(void) {
+    pid_t pid;
+    pthread_mutex_lock(&g_overlay.mutex);
+    pid = g_overlay.mounted_on[0] ? g_overlay.mounted_pid : 0;
+    pthread_mutex_unlock(&g_overlay.mutex);
+    if (pid > 0 && kill(pid, 0) == 0) {
+        fprintf(stderr, "[fakelib] exit: the game (pid %d) still runs; its overlay stays for the next helper\n",
+                (int)pid);
+        return;
+    }
+    cleanup_mount();
+}
+
+/* At start: an overlay a previous helper left for a game that still runs is ours to watch and take
+ * down; one whose game is gone is taken down now. */
+static void adopt_left_overlay(int kq) {
+    pid_t pid = 0;
+    char title_id[16] = {0}, target[OVERLAY_PATH_MAX] = {0};
+    if (!record_read(&pid, title_id, sizeof title_id, target, sizeof target)) {
+        (void)unlink(OVERLAY_RECORD);
+        return;
+    }
+    if (!target_is_unionfs(target)) {
+        (void)unlink(OVERLAY_RECORD);
+        return;
+    }
+    if (kill(pid, 0) == 0) {
+        pthread_mutex_lock(&g_overlay.mutex);
+        snprintf(g_overlay.mounted_on, sizeof(g_overlay.mounted_on), "%s", target);
+        g_overlay.mounted_pid = pid;
+        pthread_mutex_unlock(&g_overlay.mutex);
+        set_state("mounted", title_id, NULL);
+        watch_for_exit(kq, pid);
+        fprintf(stderr, "[fakelib] adopted the overlay a previous helper left for %s (pid %d)\n", title_id, (int)pid);
+        return;
+    }
+    fprintf(stderr, "[fakelib] the overlay left for %s outlived its game; taking it down\n", title_id);
+    (void)unmount(target, MNT_FORCE);
+    (void)unlink(OVERLAY_RECORD);
 }
 
 /* Is the unionfs already on `target` the one WE mounted?
@@ -195,7 +282,9 @@ static void handle_exec(int kq, pid_t pid) {
     }
     pthread_mutex_lock(&g_overlay.mutex);
     snprintf(g_overlay.mounted_on, sizeof(g_overlay.mounted_on), "%s", target);
+    g_overlay.mounted_pid = pid;
     pthread_mutex_unlock(&g_overlay.mutex);
+    record_write(pid, title_id, target);
     set_state("mounted", title_id, NULL);
     watch_for_exit(kq, pid);
 }
@@ -217,6 +306,7 @@ static void *overlay_main(void *unused) {
         close(kq); set_state("error", NULL, "syscore_watch_failed"); return NULL;
     }
     set_state("watching", NULL, NULL);
+    adopt_left_overlay(kq);
     pid_t child = -1;
     while (!g_overlay.stop) {
         struct kevent event;
@@ -228,12 +318,17 @@ static void *overlay_main(void *unused) {
         if ((event.fflags & NOTE_EXEC) && child > 0 && event.ident == (uintptr_t)child)
             handle_exec(kq, child);
         if ((event.fflags & NOTE_EXIT) && event.ident != (uintptr_t)syscore) {
-            cleanup_mount();
+            /* Only the game the overlay is for takes it down (a blocked launch's pid exits too). */
+            pid_t mp;
+            pthread_mutex_lock(&g_overlay.mutex);
+            mp = g_overlay.mounted_pid;
+            pthread_mutex_unlock(&g_overlay.mutex);
+            if (mp <= 0 || event.ident == (uintptr_t)mp) cleanup_mount();
             set_state("watching", NULL, NULL);
             child = -1;
         }
     }
-    cleanup_mount();
+    release_on_exit();
     close(kq);
     return NULL;
 }
