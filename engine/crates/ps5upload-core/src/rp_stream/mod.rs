@@ -78,6 +78,26 @@ const CTRL_LOGIN_PIN_REQ: u16 = 0x0004;
 pub enum Codec {
     H264,
     H265,
+    /// H.265 Main10 in HDR (PQ, BT.2020): streaming type 3 and `"dynamicRange":"HDR"` in
+    /// the launch spec, as chiaki-ng asks for it (ctrl.c, launchspec.c).
+    H265Hdr,
+}
+
+impl Codec {
+    /// The stream is H.265 (SDR or HDR): its access units and headers are HEVC.
+    pub fn is_hevc(self) -> bool {
+        matches!(self, Codec::H265 | Codec::H265Hdr)
+    }
+
+    /// The codec a start message names ("h264", "h265", "h265_hdr"), or None.
+    pub fn from_name(name: &str) -> Option<Codec> {
+        match name {
+            "h264" => Some(Codec::H264),
+            "h265" => Some(Codec::H265),
+            "h265_hdr" => Some(Codec::H265Hdr),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -213,6 +233,7 @@ fn ctrl_open(
     let streaming_type: u32 = match codec {
         Codec::H264 => 1,
         Codec::H265 => 2,
+        Codec::H265Hdr => 3,
     };
     let streaming_type = next(&streaming_type.to_le_bytes());
     let counter_local = counter;
@@ -462,9 +483,11 @@ fn ctrl_message(
 }
 
 fn launch_spec(cfg: &StreamConfig, handshake_key: &[u8; HANDSHAKE_KEY_SIZE]) -> String {
-    let codec = match cfg.codec {
-        Codec::H264 => "avc",
-        Codec::H265 => "hevc",
+    let codec = if cfg.codec.is_hevc() { "hevc" } else { "avc" };
+    let range = if cfg.codec == Codec::H265Hdr {
+        "HDR"
+    } else {
+        "SDR"
     };
     format!(
         "{{\"sessionId\":\"sessionId4321\",\"streamResolutions\":[{{\"resolution\":{{\"width\":{w},\"height\":{h}}},\
@@ -476,7 +499,7 @@ fn launch_spec(cfg: &StreamConfig, handshake_key: &[u8; HANDSHAKE_KEY_SIZE]) -> 
 \"connectedControllers\":[\"xinput\",\"ds3\",\"ds4\"],\"yuvCoefficient\":\"bt601\",\"videoEncoderProfile\":\"hw4.1\",\
 \"audioEncoderProfile\":\"audio1\",\"adaptiveStreamMode\": \"resize\"}},\"userProfile\":{{\"onlineId\":\"psnId\",\
 \"npId\":\"npId\",\"region\":\"US\",\"languagesUsed\":[\"en\",\"jp\"]}},\"videoCodec\":\"{codec}\",\
-\"dynamicRange\":\"SDR\",\"handshakeKey\":\"{hk}\"}}",
+\"dynamicRange\":\"{range}\",\"handshakeKey\":\"{hk}\"}}",
         w = cfg.width,
         h = cfg.height,
         fps = cfg.fps,
@@ -1030,6 +1053,34 @@ mod tests {
         assert_eq!(v["videoCodec"], "avc");
         assert_eq!(v["network"]["mtu"], 1454);
         assert_eq!(v["streamResolutions"][0]["resolution"]["width"], 1280);
+        assert_eq!(v["dynamicRange"], "SDR");
+    }
+
+    /// HDR is H.265 with `"dynamicRange":"HDR"` (chiaki-ng launchspec.c); plain H.265 stays SDR.
+    #[test]
+    fn launch_spec_asks_for_hdr_only_with_the_hdr_codec() {
+        let spec = |codec| {
+            let cfg = StreamConfig {
+                codec,
+                ..Default::default()
+            };
+            serde_json::from_str::<serde_json::Value>(&launch_spec(&cfg, &[0u8; 16])).unwrap()
+        };
+        let hdr = spec(Codec::H265Hdr);
+        assert_eq!(hdr["videoCodec"], "hevc");
+        assert_eq!(hdr["dynamicRange"], "HDR");
+        let sdr = spec(Codec::H265);
+        assert_eq!(sdr["videoCodec"], "hevc");
+        assert_eq!(sdr["dynamicRange"], "SDR");
+    }
+
+    #[test]
+    fn codec_names_and_hevc() {
+        assert_eq!(Codec::from_name("h264"), Some(Codec::H264));
+        assert_eq!(Codec::from_name("h265"), Some(Codec::H265));
+        assert_eq!(Codec::from_name("h265_hdr"), Some(Codec::H265Hdr));
+        assert_eq!(Codec::from_name("vp9"), None);
+        assert!(Codec::H265Hdr.is_hevc() && Codec::H265.is_hevc() && !Codec::H264.is_hevc());
     }
 
     /// A session without the mic sends exactly what it did before the mic
