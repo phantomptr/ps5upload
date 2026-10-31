@@ -207,7 +207,9 @@ export function HushPanel({
         <dt className="text-[var(--color-muted)]">{tr("hush_running", undefined, "Running")}</dt>
         <dd>{proc ? `${proc.comm || proc.name} · pid ${proc.pid}` : tr("hush_not_running", undefined, "No")}</dd>
         <dt className="text-[var(--color-muted)]">{tr("hush_mode", undefined, "Mode")}</dt>
-        <dd>{c.mode === "check" ? tr("hush_mode_check", undefined, "check mode") : tr("hush_mode_apply", undefined, "apply")}</dd>
+        <dd>
+          <code>{`mode=${c.mode}`}</code>
+        </dd>
         <dt className="text-[var(--color-muted)]">{tr("hush_interval", undefined, "Checks every")}</dt>
         <dd>{`${c.intervalS} s`}</dd>
       </dl>

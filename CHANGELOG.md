@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Hush is in the Payloads catalogue:** it turns off the PS5's background gameplay recording
+  (by disco-trooper). The download is checked against the release's SHA256SUMS.
+- **Hush has a card on "On your PS5"** that shows whether it runs, whether it is on, its mode and
+  the newest lines of its log, with an On/Off switch that changes only `enabled=` in its config.
+- **Play works with Hush (#561):** Hush also turns off the encoder Remote Play needs, so a stream
+  had no picture. Start now asks to pause Hush while you play (about 20 s) and turns it back on
+  when the stream ends; Settings › Always pause Hush for Remote Play skips the question. If the
+  app closes mid-stream, Hush's card offers to turn it back on. A stream that fails while Hush
+  was on names it as the cause and suggests restarting the console.
+- **Play › Set up has a new step, No payload blocks Remote Play,** that ticks by itself when Hush
+  is off or not loaded.
+
 ## 10.0.3
 
 - **Fixed: after waking the PS5 from rest mode, the app said the helper was down (#593)**, and
