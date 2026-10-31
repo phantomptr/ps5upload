@@ -49,10 +49,21 @@ interface Case {
   picture?: Record<string, unknown>;
   /** The canvas may be drawn bigger than the stream (upscaling). */
   anySize?: boolean;
+  /** The Windows app's webview (true) or a Mac's (false); unset, the project's own user agent
+   *  (Desktop Chrome's is a Windows one). */
+  windows?: boolean;
 }
 
 async function open(browser: Browser, c: Case): Promise<{ page: Page; close: () => Promise<void> }> {
-  const ctx = await browser.newContext({ viewport: { width: 1919, height: 1040 }, deviceScaleFactor: c.dpr });
+  const ctx = await browser.newContext({
+    viewport: { width: 1919, height: 1040 },
+    deviceScaleFactor: c.dpr,
+    ...(c.windows === true
+      ? { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0" }
+      : c.windows === false
+        ? { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" }
+        : {}),
+  });
   const page = await ctx.newPage();
   await page.addInitScript(
     ({ fit, h264, picture }) => {
@@ -300,10 +311,37 @@ for (const dpr of [1.25, 1.5])
         await startAndCheck(browser, { dpr, size: "1920x1080", h264: true, fit, picture, anySize: true });
       });
 
+// Windows (#538 again, upscaled): the picture is never drawn bigger than its box in CSS pixels,
+// so it cannot show enlarged from the top-left whatever the display scaling, and still shows whole.
+for (const dpr of [1.25, 1.5])
+  test(`Remote Play upscales on Windows to the box's CSS size at ${dpr * 100}%`, async ({ browser }) => {
+    const { page, close } = await open(browser, { dpr, size: "1920x1080", h264: true, picture: { upscale: true }, windows: true });
+    try {
+      await page.getByTestId("rp-start").click();
+      const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
+      const read = () =>
+        canvas.evaluate((c: HTMLCanvasElement) => {
+          const r = c.getBoundingClientRect();
+          return { px: [c.width, c.height], css: [Math.round(r.width), Math.round(r.height)] };
+        });
+      await expect.poll(async () => (await read()).px[0], { timeout: 20_000 }).toBeGreaterThanOrEqual(1920);
+      await page.waitForTimeout(500);
+      const r = await read();
+      // Elsewhere this box is upscaled to its device pixels (1.25x/1.5x its CSS size); on
+      // Windows never past the CSS box (here smaller than 1.1x the stream: not upscaled at all).
+      expect(r.px[0]).toBeLessThanOrEqual(Math.max(1920, r.css[0] + 2));
+      expect(r.px[1]).toBeLessThanOrEqual(Math.max(1080, r.css[1] + 2));
+    } finally {
+      await close();
+    }
+    await startAndCheck(browser, { dpr, size: "1920x1080", h264: true, picture: { upscale: true }, windows: true, anySize: true });
+  });
+
 // Upscaling (FSR 1): the real 1080p picture on a 2x screen is drawn at the picture's size on
 // screen, in device pixels, and keeps its shape (its layout does not move).
 test("Remote Play upscales the real picture to its size on screen", async ({ browser }) => {
-  const { page, close } = await open(browser, { dpr: 2, size: "1920x1080", h264: true, picture: { upscale: true } });
+  // Not Windows: there the picture is upscaled to its CSS size only (above).
+  const { page, close } = await open(browser, { dpr: 2, size: "1920x1080", h264: true, picture: { upscale: true }, windows: false });
   try {
     await page.getByTestId("rp-start").click();
     const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");

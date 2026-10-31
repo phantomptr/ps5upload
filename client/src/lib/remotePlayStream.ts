@@ -9,6 +9,7 @@ import { DEFAULT_PICTURE, PicturePass, cropRect, needsPass, upscaleSize, upscale
 import type { MotionReading } from "./motion";
 import { getEngineUrl } from "../state/engine";
 import { log } from "../state/logs";
+import { isWindows } from "./platform";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
 
 /** Button bits, as the console (and chiaki) number them. */
@@ -635,11 +636,15 @@ export class RemotePlayStream {
     this.boxWatch = ro;
   }
 
-  /** The picture's box on screen in device pixels, or null when not known. */
+  /** The size to upscale to: the picture's box on screen in device pixels, or null when not
+   *  known. On Windows its CSS pixels instead: a picture drawn bigger than its box in CSS
+   *  pixels showed enlarged from the top-left corner and cut off there (by the display scaling,
+   *  1.25x at 125%), as #538 did, so the Windows app is never handed one. The browser takes it
+   *  the last step to the screen. */
   private boxPx(): { w: number; h: number } | null {
     const b = this.boxCss;
     if (!b) return null;
-    const r = this.canvas.ownerDocument.defaultView?.devicePixelRatio ?? 1;
+    const r = isWindows() ? 1 : (this.canvas.ownerDocument.defaultView?.devicePixelRatio ?? 1);
     return { w: Math.round(b.w * r), h: Math.round(b.h * r) };
   }
 
