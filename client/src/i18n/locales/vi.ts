@@ -6078,6 +6078,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_picture_pixelated_hint": "Phóng to với cạnh sắc thay vì làm mịn: cho trò chơi cổ điển.",
 "rp_picture_reset": "Đặt lại hình ảnh",
 "rp_picture_off_slow": "Đã tắt công cụ hình ảnh: thiết bị này không theo kịp.",
+"rp_picture_off_linux": "Làm nét và nâng độ phân giải bị tắt trong ứng dụng Linux: ở đó chúng làm stream bị giật. Chrome trên Linux có chúng.",
 "rp_picture_off_failed": "Đã tắt công cụ hình ảnh: thiết bị này không có WebGL 2.",
 "rp_game_tab_controls": "Điều khiển",
 "rp_controls_no_game": "Mở một trò để đặt điều khiển cho nó. Mỗi trò giữ cài đặt riêng.",

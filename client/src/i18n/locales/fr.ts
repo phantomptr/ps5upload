@@ -6092,6 +6092,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_picture_pixelated_hint": "Agrandit avec des bords nets au lieu de lisser : pour les jeux rétro.",
 "rp_picture_reset": "Réinitialiser l'image",
 "rp_picture_off_slow": "Outils d'image désactivés : cet appareil ne suivait pas.",
+"rp_picture_off_linux": "Netteté et mise à l'échelle sont désactivées dans l'appli Linux : elles y font saccader le flux. Chrome sous Linux les propose.",
 "rp_picture_off_failed": "Outils d'image désactivés : cet appareil n'a pas WebGL 2.",
 "rp_game_tab_controls": "Commandes",
 "rp_controls_no_game": "Lance un jeu pour régler ses commandes. Chaque jeu garde les siennes.",

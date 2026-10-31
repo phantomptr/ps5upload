@@ -6095,6 +6095,7 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_picture_pixelated_hint": "なめらかにせず、角を立てて拡大します（レトロゲーム向け）。",
 "rp_picture_reset": "画質を元に戻す",
 "rp_picture_off_slow": "画質ツールをオフにしました：この端末では処理が追いつきません。",
+"rp_picture_off_linux": "Linux アプリではシャープ化とアップスケールはオフです。そこでは配信がカクつくためです。Linux の Chrome では使えます。",
 "rp_picture_off_failed": "画質ツールをオフにしました：この端末には WebGL 2 がありません。",
 "rp_game_tab_controls": "操作",
 "rp_controls_no_game": "ゲームを起動すると、その操作を設定できます。ゲームごとに保存されます。",

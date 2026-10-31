@@ -6084,6 +6084,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_picture_pixelated_hint": "Skaliert mit harten Kanten statt zu glätten: für Retro-Spiele.",
 "rp_picture_reset": "Bild zurücksetzen",
 "rp_picture_off_slow": "Bildwerkzeuge ausgeschaltet: Dieses Gerät kam nicht hinterher.",
+"rp_picture_off_linux": "Schärfen und Hochskalieren sind in der Linux-App aus: Dort ruckelt der Stream damit. Chrome unter Linux hat sie.",
 "rp_picture_off_failed": "Bildwerkzeuge ausgeschaltet: Dieses Gerät hat kein WebGL 2.",
 "rp_game_tab_controls": "Steuerung",
 "rp_controls_no_game": "Starte ein Spiel, um seine Steuerung einzustellen. Jedes Spiel behält seine eigene.",

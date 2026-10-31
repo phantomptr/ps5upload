@@ -6093,6 +6093,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_picture_pixelated_hint": "부드럽게 하지 않고 각진 가장자리로 확대합니다: 레트로 게임용.",
 "rp_picture_reset": "화면 초기화",
 "rp_picture_off_slow": "화면 도구를 껐습니다: 이 기기가 따라가지 못했습니다.",
+"rp_picture_off_linux": "Linux 앱에서는 선명하게와 업스케일링이 꺼져 있습니다. 그곳에서는 스트림이 끊기기 때문입니다. Linux의 Chrome에서는 사용할 수 있습니다.",
 "rp_picture_off_failed": "화면 도구를 껐습니다: 이 기기에는 WebGL 2가 없습니다.",
 "rp_game_tab_controls": "조작",
 "rp_controls_no_game": "게임을 실행하면 그 게임의 조작을 설정할 수 있습니다. 게임마다 따로 저장됩니다.",

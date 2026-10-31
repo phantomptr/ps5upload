@@ -6085,6 +6085,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_picture_pixelated_hint": "Memperbesar dengan tepi tegas, bukan dihaluskan: untuk game retro.",
 "rp_picture_reset": "Atur ulang gambar",
 "rp_picture_off_slow": "Alat gambar dimatikan: perangkat ini tidak sanggup.",
+"rp_picture_off_linux": "Penajaman dan upscaling dimatikan di aplikasi Linux: di sana keduanya membuat stream tersendat. Chrome di Linux punya keduanya.",
 "rp_picture_off_failed": "Alat gambar dimatikan: perangkat ini tidak punya WebGL 2.",
 "rp_game_tab_controls": "Kontrol",
 "rp_controls_no_game": "Mulai game untuk mengatur kontrolnya. Setiap game menyimpan miliknya sendiri.",

@@ -6029,6 +6029,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_picture_pixelated_hint": "Scala con bordi netti invece di sfumare: per i giochi retro.",
 "rp_picture_reset": "Ripristina l'immagine",
 "rp_picture_off_slow": "Strumenti immagine disattivati: questo dispositivo non teneva il passo.",
+"rp_picture_off_linux": "Nitidezza e upscaling sono disattivati nell'app Linux: lì fanno scattare lo stream. Chrome su Linux li ha.",
 "rp_picture_off_failed": "Strumenti immagine disattivati: questo dispositivo non ha WebGL 2.",
 "rp_game_tab_controls": "Comandi",
 "rp_controls_no_game": "Avvia un gioco per impostarne i comandi. Ogni gioco tiene i suoi.",

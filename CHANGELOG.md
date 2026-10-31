@@ -17,6 +17,9 @@ What's new in ps5upload, written for humans.
 - **Android updates install from inside the app.** Tap Download and install: the app downloads the
   APK for your phone (with progress), checks it, and Android asks "Update?". The first time,
   Android asks you to allow PS5Upload to install apps. Open download page stays as the fallback.
+- **Controllers work in Remote Play on Linux where the system webview can't see them.** On
+  distributions whose WebKitGTK is built without controller support (Ubuntu 26.04, for one), the
+  app now reads plugged-in controllers itself, so a DualSense or Xbox pad drives the console.
 
 ## 10.1.0
 - **Updates are checked before they install.** Each release now publishes the SHA-256 of every

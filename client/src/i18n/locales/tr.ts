@@ -6083,6 +6083,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_picture_pixelated_hint": "Yumuşatmak yerine sert kenarlarla ölçekler: retro oyunlar için.",
 "rp_picture_reset": "Görüntüyü sıfırla",
 "rp_picture_off_slow": "Görüntü araçları kapandı: bu cihaz yetişemedi.",
+"rp_picture_off_linux": "Linux uygulamasında keskinleştirme ve büyütme kapalı: orada yayının takılmasına yol açıyorlar. Linux'ta Chrome'da varlar.",
 "rp_picture_off_failed": "Görüntü araçları kapandı: bu cihazda WebGL 2 yok.",
 "rp_game_tab_controls": "Kontroller",
 "rp_controls_no_game": "Kontrollerini ayarlamak için bir oyun başlat. Her oyun kendininkini tutar.",

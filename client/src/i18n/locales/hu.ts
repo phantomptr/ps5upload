@@ -6382,6 +6382,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_picture_pixelated_hint": "Simítás helyett éles szélekkel nagyít: retró játékokhoz.",
 "rp_picture_reset": "Kép visszaállítása",
 "rp_picture_off_slow": "Képeszközök kikapcsolva: ez az eszköz nem bírta.",
+"rp_picture_off_linux": "Az élesítés és a felskálázás ki van kapcsolva a Linuxos alkalmazásban: ott akadozik tőlük a stream. A Linuxos Chrome-ban elérhetők.",
 "rp_picture_off_failed": "Képeszközök kikapcsolva: ezen az eszközön nincs WebGL 2.",
 "rp_game_tab_controls": "Irányítás",
 "rp_controls_no_game": "Indíts el egy játékot az irányítása beállításához. Minden játék a sajátját tartja meg.",

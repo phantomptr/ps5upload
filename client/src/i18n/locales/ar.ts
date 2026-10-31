@@ -6076,6 +6076,7 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "rp_picture_pixelated_hint": "يكبّر بحواف حادة بدل التنعيم: للألعاب القديمة.",
 "rp_picture_reset": "إعادة ضبط الصورة",
 "rp_picture_off_slow": "أُوقفت أدوات الصورة: لم يستطع هذا الجهاز المجاراة.",
+"rp_picture_off_linux": "التوضيح والتكبير معطّلان في تطبيق لينكس: إذ يجعلان البث متقطعًا هناك. يتوفران في Chrome على لينكس.",
 "rp_picture_off_failed": "أُوقفت أدوات الصورة: لا يدعم هذا الجهاز WebGL 2.",
 "rp_game_tab_controls": "التحكم",
 "rp_controls_no_game": "شغّل لعبة لضبط التحكم الخاص بها. لكل لعبة إعداداتها.",

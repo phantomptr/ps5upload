@@ -6029,6 +6029,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_picture_pixelated_hint": "Escala con bordes duros en vez de suavizar: para juegos retro.",
 "rp_picture_reset": "Restablecer la imagen",
 "rp_picture_off_slow": "Herramientas de imagen desactivadas: este dispositivo no daba abasto.",
+"rp_picture_off_linux": "Enfocar y reescalar están desactivados en la app de Linux: allí hacen que la transmisión vaya a tirones. Chrome en Linux sí los tiene.",
 "rp_picture_off_failed": "Herramientas de imagen desactivadas: este dispositivo no tiene WebGL 2.",
 "rp_game_tab_controls": "Controles",
 "rp_controls_no_game": "Inicia un juego para ajustar sus controles. Cada juego guarda los suyos.",
