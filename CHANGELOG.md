@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 10.1.0
 
 - **Remap controller buttons in Play.** Settings › Controller buttons: choose which PS5 button each
   button on your controller sends (swap ✕ and ○, turn a button off, put Create on L3...). It works
