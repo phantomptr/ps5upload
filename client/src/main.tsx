@@ -9,6 +9,8 @@ import { preloadSharedPrefs } from "./lib/sharedPrefs";
 
 // The Android app forwards controllers from the first moment the page exists.
 installNativePad();
+// The Linux app reads controllers itself, for a WebKitGTK whose Gamepad API sees none.
+if (isTauriEnv()) void import("./lib/nativePadDesktop").then((m) => m.startNativePads());
 
 const ready = isTauriEnv() ? Promise.resolve() : preloadSharedPrefs();
 void ready.then(() => import("./appMain"));

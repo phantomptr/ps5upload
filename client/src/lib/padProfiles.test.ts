@@ -101,4 +101,33 @@ describe("a controller forwarded by the Android app", () => {
     resetNativePad();
     vi.unstubAllGlobals();
   });
+
+  it("the Linux app's controllers: several by slot, and gone when unplugged", async () => {
+    const { gamepadsOf, installNativePad, resetNativePad } = await import("./nativePad");
+    resetNativePad();
+    const fired: string[] = [];
+    vi.stubGlobal("window", { dispatchEvent: (e: Event) => fired.push(e.type) });
+    installNativePad();
+    const nav = { getGamepads: () => [null] } as unknown as Navigator;
+    const send = window.__ps5uNativePad!;
+    send({ slot: 1, id: "Xbox", connected: true, buttons: press(1), axes: [0, 0, 0, 0] });
+    send({ slot: 0, id: "DualSense", connected: true, buttons: press(0), axes: [0, 0, 0, 0] });
+    send({ slot: 0, id: "DualSense", connected: true, buttons: press(3), axes: [0, 0, 0, 0] });
+    expect(fired).toEqual(["gamepadconnected", "gamepadconnected"]); // once each, not per change
+    expect(gamepadsOf(nav).map((g) => [g?.id, g?.index])).toEqual([
+      ["DualSense (app)", 3],
+      ["Xbox (app)", 4],
+    ]);
+    expect(padFromGamepads(gamepadsOf(nav)).buttons).toBe(PadButton.TRIANGLE | PadButton.CIRCLE);
+    send({ slot: 0, id: "DualSense", connected: false, buttons: [], axes: [] });
+    expect(fired[fired.length - 1]).toBe("gamepaddisconnected");
+    expect(gamepadsOf(nav).map((g) => g?.id)).toEqual(["Xbox (app)"]);
+    send({ slot: 1, id: "Xbox", connected: false, buttons: [], axes: [] });
+    expect(gamepadsOf(nav)).toEqual([null]);
+    // A second unplug of the same slot fires nothing.
+    send({ slot: 1, id: "Xbox", connected: false, buttons: [], axes: [] });
+    expect(fired.filter((t) => t === "gamepaddisconnected")).toHaveLength(2);
+    resetNativePad();
+    vi.unstubAllGlobals();
+  });
 });
