@@ -9,6 +9,7 @@ import {
   type UpdateDownload,
 } from "../api/ps5";
 import { isMobile } from "../lib/platform";
+import { apkUpdaterAvailable, downloadAndInstallApk } from "./apkUpdate";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { t as translate } from "../i18n";
 import { useLangStore } from "./lang";
@@ -407,6 +408,19 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       // system browser instead; Android's own download manager takes it
       // from there. Phase stays `available` so the button remains usable.
       if (isMobile()) {
+        // Android with the installer bridge: download here and open Android's
+        // "Update?" dialog (state/apkUpdate.ts). The browser below stays the
+        // fallback, and the way for everything else.
+        if (apkUpdaterAvailable() && result.download_url) {
+          set({ phase: { kind: "downloading", result } });
+          const error = await downloadAndInstallApk(result);
+          set({
+            phase: error
+              ? { kind: "download-failed", result, message: error }
+              : { kind: "available", result },
+          });
+          return;
+        }
         const target = result.download_url || RELEASES_URL;
         const ok = await openExternalUrl(target);
         set({

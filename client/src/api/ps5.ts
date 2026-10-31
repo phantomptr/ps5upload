@@ -4901,6 +4901,9 @@ export interface UpdateCheck {
    *  filename in ~/Downloads. Pre-split server-side to keep the
    *  renderer free of URL parsing. */
   download_filename: string;
+  /** SHA-256 of `download_url` when latest.json publishes one; empty or
+   *  absent otherwise. */
+  download_sha256?: string;
 }
 
 export interface UpdateDownload {
@@ -4933,6 +4936,24 @@ export async function updateDownload(
   filename: string,
 ): Promise<UpdateDownload> {
   return invoke<UpdateDownload>("update_download", { url, filename });
+}
+
+/** Android: the update APK downloaded into the app's cache, checked. */
+export interface ApkDownload {
+  path: string;
+  bytes: number;
+  /** The SHA-256 from latest.json matched (false: the release has none). */
+  verified: boolean;
+}
+
+/** Android: download the update APK into the app's cache (progress on the
+ *  `update-apk-progress` event) for `PS5UploadUpdater.install`. */
+export async function updateDownloadApk(
+  url: string,
+  filename: string,
+  sha256?: string,
+): Promise<ApkDownload> {
+  return invoke<ApkDownload>("update_download_apk", { url, filename, sha256: sha256 || null });
 }
 
 /** Install a downloaded update and restart into it (desktop: Windows, macOS, a Linux
