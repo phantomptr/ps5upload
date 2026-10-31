@@ -3,7 +3,7 @@
 // (rp_stream_api.rs to_spectators): kind 0 the video's codec header, 1 a video access unit,
 // 3 the sound's header, 4 an Opus frame. This decodes them onto a canvas and plays the sound.
 
-import { opusInit, opusSamples, opusSegment, videoInit, videoSegment } from "../lib/fmp4";
+import { avcDescription, lengthPrefixed, opusInit, opusSamples, opusSegment, videoInit, videoSegment } from "../lib/fmp4";
 import { avcCodecString, isKeyframe, supportedHevc } from "../lib/rpCodec";
 import { spsVisibleRect } from "../lib/rpSps";
 
@@ -75,6 +75,8 @@ export class WatchPlayer {
         this.onProblem("no_hevc");
         return;
       }
+      // H.264 in AVC form, its parameter sets as the description (WebKitGTK decodes no Annex B).
+      const description = this.hevc ? undefined : (avcDescription(header) ?? undefined);
       try {
         this.video?.close();
       } catch {
@@ -92,7 +94,7 @@ export class WatchPlayer {
         },
         error: () => this.onProblem("decode"),
       });
-      v.configure({ codec, optimizeForLatency: true });
+      v.configure(description ? { codec, description, optimizeForLatency: true } : { codec, optimizeForLatency: true });
       this.video = v;
       this.sawKey = false;
     } catch {
@@ -114,7 +116,8 @@ export class WatchPlayer {
     }
     this.sawKey = true;
     let data = au;
-    if (key && this.header) {
+    if (!this.hevc) data = lengthPrefixed(au, false, true);
+    else if (key && this.header) {
       data = new Uint8Array(this.header.length + au.length);
       data.set(this.header, 0);
       data.set(au, this.header.length);

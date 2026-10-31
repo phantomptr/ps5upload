@@ -291,6 +291,11 @@ export function playRumble(pads: ReadonlyArray<Gamepad | null>, strong: number, 
 
 export { avcCodecString, isKeyframe, supportedHevc } from "./rpCodec";
 import { avcCodecString, isKeyframe, supportedHevc } from "./rpCodec";
+import { avcDescription, lengthPrefixed } from "./fmp4";
+
+function sameBytes(a: Uint8Array | null, b: Uint8Array): boolean {
+  return !!a && a.length === b.length && a.every((x, i) => x === b[i]);
+}
 
 /** H.264 as the PS5 sends it (Main, up to level 5.0 for 1080p), then plainer forms. */
 const AVC_CANDIDATES = ["avc1.4d4032", "avc1.640032", "avc1.4d4028", "avc1.42e01f"];
@@ -1200,9 +1205,24 @@ export class RemotePlayStream {
 
   private onVideo(kind: number, payload: Uint8Array): void {
     if (kind === 0) {
+      const prev = this.header;
       this.header = payload.slice();
       this.spsRect = spsVisibleRect(this.header, this.hevc);
       if (!this.video) this.openVideo();
+      else if (!this.hevc && !sameBytes(prev, this.header)) {
+        // H.264 decodes in AVC form, its parameter sets in the description: new ones need a
+        // decoder configured with them.
+        const old = this.video;
+        this.video = null;
+        try {
+          old.close();
+        } catch {
+          // Already closed.
+        }
+        this.sawKey = false;
+        this.openVideo();
+        this.ws?.send(JSON.stringify({ keyframe: true }));
+      }
       return;
     }
     this.bytes += payload.length;
@@ -1216,7 +1236,11 @@ export class RemotePlayStream {
     if (!this.sawKey && !key) return;
     this.sawKey = true;
     let data = payload;
-    if (key && this.header) {
+    if (!this.hevc) {
+      // AVC form (length-prefixed, parameter sets in the description): the Linux app's
+      // WebKitGTK decodes no H.264 given as Annex B ("Decode error", a black picture).
+      data = lengthPrefixed(payload, false, true);
+    } else if (key && this.header) {
       data = new Uint8Array(this.header.length + payload.length);
       data.set(this.header);
       data.set(payload, this.header.length);
@@ -1304,21 +1328,21 @@ export class RemotePlayStream {
       },
     });
     this.video = video;
-    const configure = async (codec: string) => {
+    const configure = async (codec: string, description?: Uint8Array) => {
       // The hardware decoder when there is one. "prefer-hardware" is a demand, not a wish: where
       // the device has none for this codec, configure() fails and no picture ever comes.
       // Software when asked (Settings › Video decoding) or after the hardware one gave a picture
       // that could not be put right.
       const software = this.o.decoding === "software" || this.softwareAfterBadFrame;
+      const base: VideoDecoderConfig = description ? { codec, description, optimizeForLatency: true } : { codec, optimizeForLatency: true };
       let cfg: VideoDecoderConfig = {
-        codec,
-        optimizeForLatency: true,
+        ...base,
         hardwareAcceleration: software ? "prefer-software" : "prefer-hardware",
       };
       try {
-        if (!(await VideoDecoder.isConfigSupported(cfg)).supported) cfg = { codec, optimizeForLatency: true };
+        if (!(await VideoDecoder.isConfigSupported(cfg)).supported) cfg = base;
       } catch {
-        cfg = { codec, optimizeForLatency: true };
+        cfg = base;
       }
       if (video !== this.video) return;
       this.codec = codec;
@@ -1339,7 +1363,9 @@ export class RemotePlayStream {
         else this.o.onError({ code: "decode", detail: "This device cannot decode HEVC." });
       });
     } else if (this.header) {
-      void configure(avcCodecString(this.header));
+      const description = avcDescription(this.header);
+      if (description) void configure(avcCodecString(this.header), description);
+      else this.o.onError({ code: "decode", detail: "The stream's H.264 header has no SPS/PPS." });
     }
   }
 

@@ -6,6 +6,7 @@ import {
   appIconDataUrl,
   cachedAppIcon,
   cachedGameIcon,
+  engineImageCors,
   gameIconUrl,
   gameIconDataUrl,
   GRID_ICON_SIZE,
@@ -152,6 +153,7 @@ export function GameIcon({
       {src ? (
         <img
           src={src}
+          crossOrigin={engineImageCors(src)}
           alt={alt}
           className="h-full w-full object-cover"
           // Safe here: none of this component's call sites sit inside a

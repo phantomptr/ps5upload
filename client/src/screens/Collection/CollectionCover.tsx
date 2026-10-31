@@ -6,6 +6,7 @@ import {
   collectionCoverDataUrl,
   type CollectionGame,
 } from "../../api/collection";
+import { engineImageCors } from "../../api/ps5";
 import { useImageRetry } from "../../lib/useImageRetry";
 import { coverVersion } from "./coverVersion";
 
@@ -58,6 +59,7 @@ export function CollectionCover({
   return (
     <img
       src={src}
+      crossOrigin={engineImageCors(src)}
       alt=""
       loading="lazy"
       onError={onError}

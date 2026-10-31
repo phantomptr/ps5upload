@@ -4008,6 +4008,14 @@ export async function pkgMetadataConsole(
   }
 }
 
+/** `crossOrigin` for an `<img>` of one of the engine's images (icons, covers), else undefined.
+ *  The Linux app's webview sends no Referer from its tauri:// page to the engine, so a plain
+ *  image request carries nothing the engine can trust and is refused as cross-site; a CORS
+ *  request carries the app's Origin, which the engine accepts. */
+export function engineImageCors(src: string | null | undefined): "anonymous" | undefined {
+  return src && src.startsWith(`${engineBase()}/`) ? "anonymous" : undefined;
+}
+
 /** Stable `<img src=...>` URL for an installed title's cover art
  *  (/user/appmeta/<titleId>/icon0.png), streamed back as `image/png` by
  *  the engine. Works identically on desktop and Android (in-process engine
