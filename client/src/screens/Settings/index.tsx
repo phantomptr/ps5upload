@@ -84,6 +84,8 @@ import { formatDate } from "../../lib/formatDate";
 import { applyBundle, backupBeforeChange, buildBundle } from "../../lib/settingsBackup";
 import { SettingsBackups } from "./SettingsBackups";
 import { TraySettings } from "./TraySettings";
+import { LinuxGraphicsSettings } from "./LinuxGraphicsSettings";
+import { linuxGraphicsPossible } from "../../lib/linuxGraphics";
 import { trayPossible } from "../../state/tray";
 // useAuditLogStore + AuditEntry moved to screens/AuditLog/index.tsx
 // (2.12.0 — promoted out of Settings junk drawer).
@@ -956,6 +958,11 @@ export default function SettingsScreen() {
             <Section title={tr("settings_card_tray", undefined, "System tray")} full>
               <TraySettings />
             </Section>
+            {linuxGraphicsPossible() && (
+              <Section title={tr("settings_card_linux_graphics", undefined, "Graphics")} full>
+                <LinuxGraphicsSettings />
+              </Section>
+            )}
           </>
         )}
 
