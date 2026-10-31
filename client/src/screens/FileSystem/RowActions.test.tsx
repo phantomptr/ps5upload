@@ -249,6 +249,16 @@ describe("menuPlacement", () => {
     expect(pos.top).toBe(96);
     expect(pos.top + tall.height).toBeLessThanOrEqual(vp.height);
   });
+
+  // A phone with one file in the folder: no room under the row, and flipping
+  // up put Download under the status bar, where Android takes the tap.
+  it("never puts the menu under the status bar or the navigation bar", () => {
+    const phone = { width: 412, height: 915, insetTop: 32, insetBottom: 48 };
+    const anchor = { left: 360, right: 400, top: 440, bottom: 490 };
+    const pos = menuPlacement(anchor, { width: 200, height: 420 }, phone);
+    expect(pos.top).toBeGreaterThanOrEqual(phone.insetTop + 4);
+    expect(pos.top + 420).toBeLessThanOrEqual(phone.height - phone.insetBottom - 4);
+  });
 });
 
 describe("Files row: snapshot and what takes space (menu only)", () => {

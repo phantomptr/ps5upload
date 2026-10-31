@@ -229,12 +229,12 @@ export function storedCopiesNotices(
       title: tr(
         "helper_copies_updated_title",
         undefined,
-        "Updated the helper your PS5 starts at boot",
+        "Helper updated",
       ),
       body: tr(
         "helper_copies_updated_body",
-        { list: describe(updated, tr), version: v },
-        "Replaced with this app's helper {version}: {list}. The PS5 starts this version after a restart.",
+        { version: v },
+        "Your PS5 will start helper {version} the next time it restarts.",
       ),
     });
   }

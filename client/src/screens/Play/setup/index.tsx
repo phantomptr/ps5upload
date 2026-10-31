@@ -102,7 +102,7 @@ export default function PlaySetupScreen() {
       body: tr(
         "rpg_service_body",
         undefined,
-        "Settings › System › Remote Play › Enable Remote Play. The app can switch it on for you, and on firmware 10.00 and later also allow it for this user.",
+        "Settings › System › Remote Play › Enable Remote Play. The app can switch it on for you, and on firmware 10.00 and later also allow it for this user. If Start then says Remote Play is switched off, turn it on in the PS5's own Settings: the console's switch is the one that counts.",
       ),
       act: r ? (
         <Button

@@ -129,6 +129,12 @@ export function streamErrorMessage(tr: Tr, e: StreamError): string {
         undefined,
         "The PS5 did not accept this app's pairing. Set up Wake & sign in again for this console.",
       );
+    case "rp_off":
+      return tr(
+        "rp_err_rp_off",
+        undefined,
+        "Remote Play is switched off on the PS5. On the console, open Settings › System › Remote Play and turn on Enable Remote Play (if it already shows on, turn it off and on again), then press Start.",
+      );
     case "passcode":
       return tr(
         "rp_err_passcode",
