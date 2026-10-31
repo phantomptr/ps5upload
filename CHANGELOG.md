@@ -4,6 +4,13 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Fixed: a payload from a repo you added was stored in Payload Manager as "Custom <code>".**
+  Store in Payload Manager uses the name the app caches a download under, and with no name
+  given for a custom repo that was its internal id (`custom-3fa9c21b04de.elf`). It now keeps the
+  release's own file name (`MyPayload_v1.2.elf`). Download it again to get the new name.
+
 ## 10.0.2
 
 - **Fixed: watching the stream on a phone never showed the picture** ("The picture could not be

@@ -1625,24 +1625,44 @@ pub struct LocalInventoryEntry {
     mtime: i64,
 }
 
-/// The file name a downloaded payload is cached under: the asset hint when it is a
-/// plain name, else `<id>.elf`. A custom repo's hint is user text, so anything that
-/// could name a path (`/`, `..`, `:`) falls back to the id instead of being joined.
-fn cached_elf_name(id: &str, asset_name_hint: &str) -> String {
-    let base = asset_name_hint
-        .trim()
-        .trim_end_matches(".elf")
-        .trim_matches(|c: char| !c.is_alphanumeric());
-    let plain = !base.is_empty()
-        && base
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        && !base.contains("..");
-    if plain {
-        format!("{base}.elf")
-    } else {
-        format!("{id}.elf")
+/// The file name a downloaded payload is cached under, which is also the name Store in
+/// Payload Manager gives it: the asset hint when it is a plain name; with no hint (a custom
+/// repo), the release asset's own file name (`<name>.elf`, or a `.zip`'s stem); else
+/// `<id>.elf`. A hint and an asset name are outside text, so anything that could name a path
+/// (`/`, `..`, `:`, `%`) falls back to the id instead of being joined. Without the asset name a
+/// custom repo's payload was cached, and stored in Payload Manager, as `custom-<hex>.elf`
+/// (shown there as "Custom <hex>").
+fn cached_elf_name(id: &str, asset_name_hint: &str, asset_url: &str) -> String {
+    let plain_base = |name: &str| -> Option<String> {
+        let base = name
+            .trim()
+            .trim_end_matches(".elf")
+            .trim_end_matches(".zip")
+            .trim_matches(|c: char| !c.is_alphanumeric());
+        let plain = !base.is_empty()
+            && base
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            && !base.contains("..");
+        plain.then(|| format!("{base}.elf"))
+    };
+    if !asset_name_hint.trim().is_empty() {
+        return plain_base(asset_name_hint).unwrap_or_else(|| format!("{id}.elf"));
     }
+    let asset_file = asset_url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .rsplit('/')
+        .next()
+        .unwrap_or("");
+    let lower = asset_file.to_ascii_lowercase();
+    if lower.ends_with(".elf") || lower.ends_with(".zip") {
+        if let Some(name) = plain_base(asset_file) {
+            return name;
+        }
+    }
+    format!("{id}.elf")
 }
 
 /// Per-payload cache root. `~/.../payloads/<id>/` holds the latest
@@ -1797,7 +1817,7 @@ pub async fn payloads_download(
     // We can't ELF-check the first chunk inline anymore (a zip starts
     // with "PK\x03\x04"), so buffer fully — assets are well under the
     // few-MB cap — and branch on the magic.
-    let final_name = cached_elf_name(&entry.id, &entry.asset_name_hint);
+    let final_name = cached_elf_name(&entry.id, &entry.asset_name_hint, &asset_url);
     let final_path = dir.join(&final_name);
     let dl_tmp = final_path.with_extension("download.tmp");
     let elf_tmp = final_path.with_extension("elf.tmp");
@@ -1958,23 +1978,42 @@ mod cache_name_tests {
 
     #[test]
     fn a_custom_hint_cannot_name_a_path() {
-        assert_eq!(cached_elf_name("custom-0a", "kstuff"), "kstuff.elf");
-        assert_eq!(
-            cached_elf_name("custom-0a", "elfldr-ps5.elf"),
-            "elfldr-ps5.elf"
-        );
-        assert_eq!(
-            cached_elf_name("custom-0a", "HearBridge-"),
-            "HearBridge.elf"
-        );
-        assert_eq!(cached_elf_name("custom-0a", ""), "custom-0a.elf");
+        let n = |hint: &str| cached_elf_name("custom-0a", hint, "");
+        assert_eq!(n("kstuff"), "kstuff.elf");
+        assert_eq!(n("elfldr-ps5.elf"), "elfldr-ps5.elf");
+        assert_eq!(n("HearBridge-"), "HearBridge.elf");
+        assert_eq!(n(""), "custom-0a.elf");
         // Leading and trailing punctuation is trimmed as before; only interior path text falls back.
-        assert_eq!(cached_elf_name("custom-0a", "..\\x"), "x.elf");
+        assert_eq!(n("..\\x"), "x.elf");
         for hint in ["a/../../b", "C:evil", "sub/dir", "a..b", "a\\b"] {
+            assert_eq!(n(hint), "custom-0a.elf", "{hint}");
+        }
+    }
+
+    #[test]
+    fn a_custom_repo_payload_keeps_its_release_asset_name() {
+        let n = |url: &str| cached_elf_name("custom-3fa9c21b04de", "", url);
+        let gh = "https://github.com/someone/thing/releases/download/v1.2";
+        // Was "custom-3fa9c21b04de.elf", which Payload Manager showed as "Custom 3fa9c21b04de".
+        assert_eq!(n(&format!("{gh}/MyPayload_v1.2.elf")), "MyPayload_v1.2.elf");
+        assert_eq!(n(&format!("{gh}/MyPayload-1.2.zip")), "MyPayload-1.2.elf");
+        assert_eq!(n(&format!("{gh}/thing.elf?raw=1")), "thing.elf");
+        // A hint still wins (the catalogue's stable names), and odd asset names fall back.
+        assert_eq!(
+            cached_elf_name("custom-0a", "kstuff", &format!("{gh}/kstuff_v1.elf")),
+            "kstuff.elf"
+        );
+        for bad in [
+            "My%20Payload.elf",
+            "a..b.elf",
+            "notes.txt",
+            "",
+            "https://x/",
+        ] {
             assert_eq!(
-                cached_elf_name("custom-0a", hint),
-                "custom-0a.elf",
-                "{hint}"
+                n(&format!("{gh}/{bad}")),
+                "custom-3fa9c21b04de.elf",
+                "{bad}"
             );
         }
     }
