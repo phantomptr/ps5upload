@@ -16,6 +16,20 @@ What's new in ps5upload, written for humans.
   and pairing.
 
 ## 10.1.0
+- **Updates are checked before they install.** Each release now publishes the SHA-256 of every
+  download, and the app checks the file against it; a file that doesn't match is deleted and
+  nothing is installed.
+- **One-click updates for a .deb or .rpm install on Linux.** Install and restart asks for your
+  password with the desktop's own prompt, installs the package and opens the new version. If you
+  close the prompt (or your desktop can't show one), the command to run is shown as before.
+  rpm-ostree systems (Bazzite, Silverblue) still get the command, since the change applies after
+  a reboot.
+- **Install updates when you quit** (Settings › Updates, on by default). A downloaded update is
+  installed as you quit PS5Upload, never while something is transferring, and the app stays
+  closed. Not for a .deb or .rpm, which needs your password.
+- **What's new after an update:** the first launch of a new version shows its release notes once.
+- **Skip this version** in the update banner and in Settings › Updates: no banner, badge or
+  automatic install for that version until a newer one comes out.
 
 - **Remap controller buttons in Play.** Settings › Controller buttons: choose which PS5 button each
   button on your controller sends (swap ✕ and ○, turn a button off, put Create on L3...). It works

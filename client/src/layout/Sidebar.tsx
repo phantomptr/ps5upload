@@ -59,7 +59,10 @@ export default function Sidebar() {
     };
   }, []);
   const errorCount = useLogsStore((s) => s.errorCount);
-  const updateAvailable = useUpdateStore((s) => s.phase.kind === "available");
+  const updateAvailable = useUpdateStore(
+    // Not for a version the user skipped.
+    (s) => s.phase.kind === "available" && s.phase.result.latest_version !== s.skippedVersion,
+  );
   // Subscribed, not read once: flipping the switch in Settings must add or
   // remove the row without a reload.
   const betaEnabled = useBetaFeaturesStore((s) => s.enabled);

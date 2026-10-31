@@ -95,6 +95,7 @@ const NATIVE_ONLY: Record<string, string> = {
   update_check: "native: desktop self-update",
   update_download: "native: desktop self-update",
   update_install: "native: desktop self-update",
+  update_install_on_quit: "native: desktop self-update",
   changelog_load: "native: reads a bundled resource",
   faq_load: "native: reads a bundled resource",
 

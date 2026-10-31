@@ -1,7 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ExternalLink, Download, RefreshCw, X, Sparkles } from "lucide-react";
 
 import { useUpdateStore } from "../state/update";
+import { getAppVersion } from "../lib/appVersion";
+import { loadBundledDoc } from "../lib/bundledDoc";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { isTauriEnv } from "../lib/tauriEnv";
+import {
+  HISTORY_KEYS,
+  LAST_SEEN_VERSION_KEY,
+  changelogSection,
+  shouldShowWhatsNew,
+} from "../lib/whatsNew";
 import { useTr } from "../state/lang";
 import { Spinner } from "../components/Spinner";
 import { Modal } from "../components/Modal";
@@ -12,6 +22,75 @@ import { openExternalUrl } from "../lib/openExternalUrl";
 /** The GitHub page of one release. */
 export function releasePageUrl(version: string): string {
   return `https://github.com/phantomptr/ps5upload/releases/tag/v${version.replace(/^v/, "")}`;
+}
+
+/** A release's notes in a dialog, with a link to its GitHub page: the banner's Details and
+ *  the "what's new" shown once after an update. */
+export function ReleaseNotesDialog({
+  version,
+  notes,
+  onClose,
+}: {
+  version: string;
+  notes: string;
+  onClose: () => void;
+}) {
+  const tr = useTr();
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={tr("whats_new_in", { version }, `What's new in v${version}`)}
+      size="xl"
+      footer={
+        <Button size="sm" variant="ghost" onClick={() => void openExternalUrl(releasePageUrl(version))}>
+          <ExternalLink size={13} />
+          {tr("library_fpkg_kstuff_tip_repo", undefined, "View on GitHub")}
+        </Button>
+      }
+    >
+      <div className="max-h-[60vh] overflow-auto p-4 text-sm">
+        {notes.trim() ? (
+          <MarkdownView source={notes} />
+        ) : (
+          <p className="text-[var(--color-muted)]">v{version}</p>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/** The first launch of a new version shows its notes once (from the bundled CHANGELOG.md, so
+ *  it needs no network). Desktop and phone apps; the browser page updates with the engine. */
+export function WhatsNewOnLaunch() {
+  const [shown, setShown] = useState<{ version: string; notes: string } | null>(null);
+  useEffect(() => {
+    if (!isTauriEnv()) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const version = await getAppVersion();
+        if (!version || cancelled) return;
+        const lastSeen = safeGetItem(LAST_SEEN_VERSION_KEY);
+        if (lastSeen === version) return;
+        const usedBefore = HISTORY_KEYS.some((k) => safeGetItem(k) != null);
+        // Remembered before anything is shown: once means once, even if this launch dies.
+        safeSetItem(LAST_SEEN_VERSION_KEY, version);
+        if (!shouldShowWhatsNew(lastSeen, version, usedBefore)) return;
+        const notes = changelogSection((await loadBundledDoc("changelog")) ?? "", version);
+        if (notes && !cancelled) setShown({ version, notes });
+      } catch {
+        // No version or no changelog: nothing to show.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (!shown) return null;
+  return (
+    <ReleaseNotesDialog version={shown.version} notes={shown.notes} onClose={() => setShown(null)} />
+  );
 }
 
 /**
@@ -31,6 +110,9 @@ export function UpdateToast() {
   const download = useUpdateStore((s) => s.download);
   const install = useUpdateStore((s) => s.install);
   const installing = useUpdateStore((s) => s.installing);
+  const skippedVersion = useUpdateStore((s) => s.skippedVersion);
+  const skipVersion = useUpdateStore((s) => s.skipVersion);
+  const installOnQuit = useUpdateStore((s) => s.installOnQuitArmed);
   // Dismiss is keyed by version so a NEWER release later in the session
   // re-surfaces the bar instead of staying hidden.
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
@@ -46,6 +128,8 @@ export function UpdateToast() {
       ? phase.result.latest_version
       : null;
   if (version == null || dismissedVersion === version) return null;
+  // Skipped (remembered across launches): only Settings still shows it.
+  if (version === skippedVersion) return null;
   const notes = "result" in phase ? phase.result.notes : "";
 
   const downloading = phase.kind === "downloading";
@@ -65,6 +149,12 @@ export function UpdateToast() {
               : tr("update_toast_title", undefined, "Update available")}
         </span>
         <span className="text-[var(--color-muted)]"> — v{version}</span>
+        {downloaded && installOnQuit && (
+          <span className="text-[var(--color-muted)]">
+            {" · "}
+            {tr("update_toast_installs_on_quit", undefined, "installs when you quit")}
+          </span>
+        )}
         {downloaded && !canInstall && (
           <span className="text-[var(--color-muted)]">
             {" · "}
@@ -115,6 +205,15 @@ export function UpdateToast() {
           {tr("update_install_restart", undefined, "Install and restart")}
         </button>
       )}
+      {!downloading && !installing && (
+        <button
+          type="button"
+          onClick={skipVersion}
+          className="shrink-0 rounded px-2 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)] max-sm:hidden"
+        >
+          {tr("update_skip_version", undefined, "Skip this version")}
+        </button>
+      )}
       <button
         type="button"
         aria-label={tr("update_toast_dismiss", undefined, "Dismiss")}
@@ -124,26 +223,7 @@ export function UpdateToast() {
         <X size={14} />
       </button>
       {showNotes && (
-        <Modal
-          open
-          onClose={() => setShowNotes(false)}
-          title={tr("whats_new_in", { version }, `What's new in v${version}`)}
-          size="xl"
-          footer={
-            <Button size="sm" variant="ghost" onClick={() => void openExternalUrl(releasePageUrl(version))}>
-              <ExternalLink size={13} />
-              {tr("library_fpkg_kstuff_tip_repo", undefined, "View on GitHub")}
-            </Button>
-          }
-        >
-          <div className="max-h-[60vh] overflow-auto p-4 text-sm">
-            {notes.trim() ? (
-              <MarkdownView source={notes} />
-            ) : (
-              <p className="text-[var(--color-muted)]">v{version}</p>
-            )}
-          </div>
-        </Modal>
+        <ReleaseNotesDialog version={version} notes={notes} onClose={() => setShowNotes(false)} />
       )}
     </div>
   );

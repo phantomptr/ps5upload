@@ -5,11 +5,13 @@ import {
   updateCheck,
   updateDownload,
   updateInstall,
+  updateInstallOnQuit,
   type UpdateCheck,
   type UpdateDownload,
 } from "../api/ps5";
 import { isMobile } from "../lib/platform";
-import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { isTauriEnv } from "../lib/tauriEnv";
+import { safeGetItem, safeRemoveItem, safeSetItem } from "../lib/safeStorage";
 import { t as translate } from "../i18n";
 import { useLangStore } from "./lang";
 import { pushNotification } from "./notifications";
@@ -47,6 +49,21 @@ const NOTIFIED_KEY = "ps5upload.update.notified-version";
 const AUTOINSTALL_KEY = "ps5upload.update.autoinstall";
 /** How often an automatic install waiting for the app to be idle looks again. */
 const IDLE_RECHECK_MS = 60_000;
+// Install a downloaded update when the app quits (no restart). On unless turned off ("0").
+const INSTALL_ON_QUIT_KEY = "ps5upload.update.install-on-quit";
+// A version the user chose to skip: not offered in the banner, the sidebar dot or the
+// automatic install until a newer one comes out. Settings still shows it.
+const SKIPPED_KEY = "ps5upload.update.skipped-version";
+
+function loadInstallOnQuit(): boolean {
+  if (typeof localStorage === "undefined") return true;
+  return safeGetItem(INSTALL_ON_QUIT_KEY) !== "0";
+}
+
+function loadSkipped(): string | null {
+  if (typeof localStorage === "undefined") return null;
+  return safeGetItem(SKIPPED_KEY) || null;
+}
 
 function loadAutoInstall(): boolean {
   if (typeof localStorage === "undefined") return false;
@@ -165,6 +182,12 @@ export type UpdatePhase =
   | { kind: "downloaded"; result: UpdateCheck; download: UpdateDownload }
   | { kind: "download-failed"; result: UpdateCheck; message: string };
 
+/** The update the banner, the sidebar dot and the automatic install offer: an available one
+ *  the user has not skipped. Settings shows every phase regardless. */
+export function updateOffered(s: { phase: UpdatePhase; skippedVersion: string | null }): boolean {
+  return s.phase.kind === "available" && s.phase.result.latest_version !== s.skippedVersion;
+}
+
 interface UpdateStore {
   phase: UpdatePhase;
   /** Last time we asked the endpoint. 0 when never. Refreshed after
@@ -207,6 +230,21 @@ interface UpdateStore {
    *  restart). Off by default; desktop copies that can install only. */
   autoInstallEnabled: boolean;
   setAutoInstallEnabled: (enabled: boolean) => void;
+  /** Install a downloaded update when the app quits, without starting it again. On by
+   *  default; desktop copies that install without a password only. */
+  installOnQuitEnabled: boolean;
+  setInstallOnQuitEnabled: (enabled: boolean) => void;
+  /** The downloaded update is armed to install when the app quits (nothing transfers). */
+  installOnQuitArmed: boolean;
+  /** Why "Install and restart" fell back to the command to copy (a .deb / .rpm whose
+   *  password prompt was closed, could not be shown, or whose install failed). */
+  installFallback: string | null;
+  /** The version the user skipped (persisted), or null. */
+  skippedVersion: string | null;
+  /** Skip the version on offer: no banner, dot or automatic install for it. */
+  skipVersion: () => void;
+  /** Offer the skipped version again. */
+  unskipVersion: () => void;
 }
 
 function loadCache(): CachedCheck | null {
@@ -269,7 +307,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       // new version — the toast bar is dismissible/session-scoped, this is
       // the durable "you have an update" record.
       notifyAvailableOnce(result);
-      if (result.available && get().autoInstallEnabled && !isMobile()) void autoInstall();
+      if (updateOffered(get()) && get().autoInstallEnabled && !isMobile()) void autoInstall();
     } catch (e) {
       set({
         phase: {
@@ -290,7 +328,11 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     try {
       if (get().phase.kind === "available") await get().download();
       const phase = get().phase;
-      if (phase.kind !== "downloaded" || !phase.download.can_install) return;
+      // A .deb / .rpm asks for a password: a prompt out of nowhere is not "automatic".
+      if (phase.kind !== "downloaded" || !phase.download.can_install || phase.download.needs_password) {
+        return;
+      }
+      if (phase.result.latest_version === get().skippedVersion) return;
       while (get().autoInstallEnabled && !(await appIdle())) {
         await new Promise((r) => setTimeout(r, IDLE_RECHECK_MS));
       }
@@ -314,6 +356,28 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     lastCheckedMs: initialLastChecked,
     installing: false,
     autoInstallEnabled: loadAutoInstall(),
+    installOnQuitEnabled: loadInstallOnQuit(),
+    installOnQuitArmed: false,
+    installFallback: null,
+    skippedVersion: loadSkipped(),
+
+    setInstallOnQuitEnabled(enabled: boolean) {
+      if (typeof localStorage !== "undefined") safeSetItem(INSTALL_ON_QUIT_KEY, enabled ? "1" : "0");
+      set({ installOnQuitEnabled: enabled });
+    },
+
+    skipVersion() {
+      const phase = get().phase;
+      if (!("result" in phase) || !phase.result.available) return;
+      const version = phase.result.latest_version;
+      if (typeof localStorage !== "undefined") safeSetItem(SKIPPED_KEY, version);
+      set({ skippedVersion: version });
+    },
+
+    unskipVersion() {
+      if (typeof localStorage !== "undefined") safeRemoveItem(SKIPPED_KEY);
+      set({ skippedVersion: null });
+    },
 
     setAutoInstallEnabled(enabled: boolean) {
       if (typeof localStorage !== "undefined") safeSetItem(AUTOINSTALL_KEY, enabled ? "1" : "0");
@@ -327,11 +391,26 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     async install() {
       const phase = get().phase;
       if (phase.kind !== "downloaded" || !phase.download.can_install || get().installing) return;
-      set({ installing: true });
+      set({ installing: true, installFallback: null });
       try {
         await updateInstall(phase.download.path);
         // The app quits from here; nothing else to do.
       } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        // A .deb / .rpm through pkexec: the prompt was closed, could not be shown, or the
+        // package manager failed. Nothing changed; show the command to run instead.
+        if (phase.download.needs_password) {
+          set({
+            installing: false,
+            installFallback: message,
+            phase: {
+              kind: "downloaded",
+              result: phase.result,
+              download: { ...phase.download, can_install: false, needs_password: false },
+            },
+          });
+          return;
+        }
         set({
           installing: false,
           phase: {
@@ -438,6 +517,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         const download = await updateDownload(
           result.download_url,
           result.download_filename,
+          result.sha256,
         );
         set({ phase: { kind: "downloaded", result, download } });
       } catch (e) {
@@ -459,3 +539,84 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     },
   };
 });
+
+// ─── Install on quit ─────────────────────────────────────────────────
+//
+// The Rust side holds at most one armed update (commands/self_install.rs) and installs it from
+// `RunEvent::Exit` without starting the app again. This keeps it in step with the store: armed
+// only while a downloaded update this copy installs without a password is waiting, the
+// setting is on, it isn't skipped and nothing transfers (the same check the automatic
+// install waits on). A transfer starting disarms it; finishing arms it again.
+
+/** What should be armed right now, or null. */
+export function installOnQuitTarget(
+  s: Pick<UpdateStore, "phase" | "installOnQuitEnabled" | "installing" | "skippedVersion">,
+  idle: boolean,
+): string | null {
+  const p = s.phase;
+  if (!s.installOnQuitEnabled || s.installing || !idle || p.kind !== "downloaded") return null;
+  if (!p.download.can_install || p.download.needs_password) return null;
+  if (p.result.latest_version === s.skippedVersion) return null;
+  return p.download.path;
+}
+
+let armedPath: string | null = null;
+let syncing = false;
+let syncAgain = false;
+let watchingTransfers = false;
+
+async function watchTransfers() {
+  if (watchingTransfers) return;
+  watchingTransfers = true;
+  const [{ useUploadQueueStore }, { useTransferStore }] = await Promise.all([
+    import("./uploadQueue"),
+    import("./transfer"),
+  ]);
+  useUploadQueueStore.subscribe(() => void syncInstallOnQuit());
+  useTransferStore.subscribe(() => void syncInstallOnQuit());
+}
+
+async function syncInstallOnQuit(): Promise<void> {
+  if (syncing) {
+    syncAgain = true;
+    return;
+  }
+  syncing = true;
+  try {
+    do {
+      syncAgain = false;
+      const s = useUpdateStore.getState();
+      // Only a downloaded update needs the (lazily loaded) transfer stores.
+      const waiting = s.phase.kind === "downloaded";
+      if (waiting) void watchTransfers();
+      const want = waiting ? installOnQuitTarget(s, await appIdle()) : null;
+      if (want === armedPath) continue;
+      let armed = false;
+      try {
+        armed = await updateInstallOnQuit(want);
+        armedPath = want;
+      } catch {
+        // Not a downloaded update any more (moved or deleted): nothing is armed.
+        armedPath = null;
+      }
+      if (useUpdateStore.getState().installOnQuitArmed !== armed) {
+        useUpdateStore.setState({ installOnQuitArmed: armed });
+      }
+    } while (syncAgain);
+  } finally {
+    syncing = false;
+  }
+}
+
+if (isTauriEnv() && !isMobile()) {
+  useUpdateStore.subscribe((s, prev) => {
+    if (
+      s.phase !== prev.phase ||
+      s.installOnQuitEnabled !== prev.installOnQuitEnabled ||
+      s.installing !== prev.installing ||
+      s.skippedVersion !== prev.skippedVersion
+    ) {
+      void syncInstallOnQuit();
+    }
+  });
+}
