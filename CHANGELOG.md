@@ -4,6 +4,12 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Android updates install from inside the app.** Tap Download and install: the app downloads the
+  APK for your phone (with progress), checks it, and Android asks "Update?". The first time,
+  Android asks you to allow PS5Upload to install apps. Open download page stays as the fallback.
+
 ## 10.1.0
 
 - **Remap controller buttons in Play.** Settings › Controller buttons: choose which PS5 button each
