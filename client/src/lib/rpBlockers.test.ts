@@ -30,6 +30,7 @@ vi.mock("../api/ps5", () => ({
     if (!names.length) throw new Error("not found");
     return names.map((name) => ({ name }));
   },
+  fsPathExists: async (_addr: string, dir: string) => [...files.keys()].some((p) => p.startsWith(`${dir}/`)),
   processList: async () => ({ processes: procs, truncated: false }),
   payloadsLocalPath: async (id: string) => `/cache/${id}/${id}.elf`,
   payloadsRelease: async () => ({ picked_asset_url: "", tag: "" }),

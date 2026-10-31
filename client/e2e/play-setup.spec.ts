@@ -69,6 +69,10 @@ async function consoleHalfSetUp(page: Page, opts: { paired?: boolean } = {}): Pr
       if (path === "/api/ps5/rp/session") body = { host: null };
       if (path === "/api/ps5/remoteplay/readiness") body = c.readiness;
       // Hush's files and its process (elfldr lists it as payload.elf; pid.lock names it).
+      if (path === "/api/ps5/list-dir") {
+        const dir = new URL(req.url()).searchParams.get("path");
+        body = { entries: c.hush && dir === "/data" ? [{ name: "hush" }] : [] };
+      }
       if (path === "/api/ps5/fs/read-preview") {
         const file = (req.postDataJSON() as { path: string }).path;
         const text =

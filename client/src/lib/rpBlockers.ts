@@ -11,6 +11,7 @@ import {
   fsDelete,
   fsListDir,
   fsMkdir,
+  fsPathExists,
   fsReadPreview,
   fsWriteText,
   payloadsDownload,
@@ -22,6 +23,7 @@ import {
 } from "../api/ps5";
 import {
   HUSH_CONFIG_PATH,
+  HUSH_DIR,
   HUSH_LOCK_PATH,
   HUSH_LOG_PATH,
   hushLockPid,
@@ -132,6 +134,9 @@ export const HUSH_BLOCKER: RpBlocker = {
   reason: "Hush is on. It blocks Remote Play's picture.",
 
   async detect(ctx) {
+    // The setup guide asks every few seconds: on a console without Hush, reading its config
+    // fails each time (and logs it), so look for the folder first.
+    if (!(await fsPathExists(ctx.addr, HUSH_DIR))) return false;
     const cfg = await readConsoleText(ctx.addr, HUSH_CONFIG_PATH);
     if (cfg === null || !parseHushConfig(cfg).enabled) return false;
     const lock = await readConsoleText(ctx.addr, HUSH_LOCK_PATH, 64);

@@ -60,6 +60,13 @@ async function hushConsole(page: Page): Promise<Console> {
             ? [{ pid: 142, name: "payload.elf", comm: "payload.elf", title_id: "", app_id: 0, memory_mib: 1, threads: 1, kind: "payload" }]
             : [],
         };
+      if (path === "/api/ps5/list-dir") {
+        const dir = new URL(req.url()).searchParams.get("path") ?? "";
+        const names = new Set(
+          [...c.files.keys()].filter((f) => f.startsWith(`${dir}/`)).map((f) => f.slice(dir.length + 1).split("/")[0]),
+        );
+        body = { entries: [...names].map((name) => ({ name })) };
+      }
       if (path === "/api/ps5/fs/read-preview") {
         const text = c.files.get((req.postDataJSON() as { path: string }).path);
         if (text === undefined) {
