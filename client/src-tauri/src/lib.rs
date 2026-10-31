@@ -692,6 +692,7 @@ pub fn run() {
             };
             // Desktop: never wait on it without a limit (exit_guard.rs: an 8.1.1 Mac froze
             // here after "Install and restart"). Past the limit the children are killed.
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             exit_guard::set_exiting();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             exit_guard::run_bounded(exit_guard::CLEANUP_LIMIT, cleanup);
