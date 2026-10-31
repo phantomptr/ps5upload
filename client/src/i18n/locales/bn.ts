@@ -6279,6 +6279,8 @@ library_compressed_hint: "সংকুচিত ইমেজ চালাতে 
 "rp_clip_failed": "ক্লিপ রেকর্ড বা সেভ করা যায়নি।",
 "rp_stats_latency": "দেরি ≈ {engine} ms ইঞ্জিন + {decode} ms ডিকোড",
 "rp_stats_latency_decode": "দেরি ≈ {decode} ms ডিকোড",
+"rp_stats_stages": "নেটওয়ার্ক {net} · সারি {queue} · ডিকোড {decode} · আঁকা {draw} ms",
+"rp_stats_decoder_restarts": "ডিকোডার রিস্টার্ট {n}",
 "rp_low_latency": "কম দেরি",
 "rp_low_latency_hint": "সবচেয়ে কম দেরির জন্য সবচেয়ে ছোট সাউন্ড বাফার আর সবচেয়ে ছোট ছবির সারি। ব্যস্ত নেটওয়ার্কে বেশি ফ্রেম বাদ পড়ে এবং শব্দ ভাঙা শোনাতে পারে। ছবির অংশটি পরের বার শুরু করলে কার্যকর হয়।",
 "rp_auto_quality": "ব্যস্ত নেটওয়ার্কে মান কমান",

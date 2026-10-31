@@ -6232,6 +6232,8 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_clip_failed": "No se pudo grabar o guardar el clip.",
 "rp_stats_latency": "Latencia ≈ {engine} ms motor + {decode} ms decodificación",
 "rp_stats_latency_decode": "Latencia ≈ {decode} ms decodificación",
+"rp_stats_stages": "red {net} · cola {queue} · decodificación {decode} · dibujo {draw} ms",
+"rp_stats_decoder_restarts": "reinicios del decodificador {n}",
 "rp_low_latency": "Baja latencia",
 "rp_low_latency_hint": "El búfer de sonido más pequeño y la cola de imagen más corta, para el menor retraso. En una red ocupada se pierden más fotogramas y el sonido puede crepitar. La parte de imagen se aplica la próxima vez que empieces.",
 "rp_auto_quality": "Bajar la calidad en una red ocupada",

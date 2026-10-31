@@ -6527,6 +6527,8 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_clip_failed": "Nie udało się nagrać ani zapisać klipu.",
 "rp_stats_latency": "Opóźnienie ≈ {engine} ms silnik + {decode} ms dekodowanie",
 "rp_stats_latency_decode": "Opóźnienie ≈ {decode} ms dekodowanie",
+"rp_stats_stages": "sieć {net} · kolejka {queue} · dekodowanie {decode} · rysowanie {draw} ms",
+"rp_stats_decoder_restarts": "restarty dekodera {n}",
 "rp_low_latency": "Niskie opóźnienie",
 "rp_low_latency_hint": "Najmniejszy bufor dźwięku i najkrótsza kolejka obrazu, dla najmniejszego opóźnienia. W obciążonej sieci gubi się więcej klatek, a dźwięk może trzeszczeć. Część dotycząca obrazu działa od następnego startu.",
 "rp_auto_quality": "Niższa jakość w obciążonej sieci",

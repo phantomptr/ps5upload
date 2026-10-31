@@ -6298,6 +6298,8 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_clip_failed": "クリップを録画または保存できませんでした。",
 "rp_stats_latency": "遅延 ≈ エンジン {engine} ms + デコード {decode} ms",
 "rp_stats_latency_decode": "遅延 ≈ デコード {decode} ms",
+"rp_stats_stages": "ネット {net} · 待ち {queue} · デコード {decode} · 描画 {draw} ms",
+"rp_stats_decoder_restarts": "デコーダー再起動 {n}",
 "rp_low_latency": "低遅延",
 "rp_low_latency_hint": "遅延を最小にするため、音声バッファと映像キューを最も短くします。混雑したネットワークではフレームの欠落が増え、音が途切れることがあります。映像の設定は次の開始時から反映されます。",
 "rp_auto_quality": "混雑したネットワークでは画質を下げる",

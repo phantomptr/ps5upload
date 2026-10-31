@@ -7,6 +7,7 @@ import { Wifi, X } from "lucide-react";
 import { Spinner, Toggle } from "../../components";
 import { BusyNetworkWatch, canStepDown } from "../../lib/rpAutoQuality";
 import type { StreamStats } from "../../lib/remotePlayStream";
+import { STAGES, stageValues } from "../../lib/rpLatency";
 import { useTr } from "../../state/lang";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { useRpQualityStore, wasOffered } from "../../state/rpQuality";
@@ -21,16 +22,33 @@ export function latencyParts(s: Pick<StreamStats, "rttMs" | "decodeMs">): { engi
   };
 }
 
-/** The stats overlay's latency line. */
+/** The stats overlay's latency line, and under it each frame's stages (medians over the last
+ *  2 s, measured: see lib/rpLatency.ts) once a frame was timed, short enough for a phone. */
 export function LatencyLine({ stats }: { stats: StreamStats }) {
   const tr = useTr();
   const { engine, decode } = latencyParts(stats);
+  const timed = !!stats.stages && STAGES.some((k) => stats.stages?.[k]);
+  const v = stageValues(stats.stages);
+  const restarts = stats.decoderRestarts ?? 0;
   return (
-    <div data-testid="rp-latency">
-      {engine === null
-        ? tr("rp_stats_latency_decode", { decode }, `Latency ≈ ${decode} ms decode`)
-        : tr("rp_stats_latency", { engine, decode }, `Latency ≈ ${engine} ms engine + ${decode} ms decode`)}
-    </div>
+    <>
+      <div data-testid="rp-latency">
+        {engine === null
+          ? tr("rp_stats_latency_decode", { decode }, `Latency ≈ ${decode} ms decode`)
+          : tr("rp_stats_latency", { engine, decode }, `Latency ≈ ${engine} ms engine + ${decode} ms decode`)}
+      </div>
+      {(timed || restarts > 0) && (
+        <div data-testid="rp-latency-stages">
+          {tr("rp_stats_stages", v, `net ${v.net} · queue ${v.queue} · decode ${v.decode} · draw ${v.draw} ms`)}
+          {restarts > 0 && (
+            <>
+              {" · "}
+              {tr("rp_stats_decoder_restarts", { n: restarts }, `decoder restarts ${restarts}`)}
+            </>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 

@@ -6287,6 +6287,8 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_clip_failed": "Der Clip konnte nicht aufgenommen oder gespeichert werden.",
 "rp_stats_latency": "Latenz ≈ {engine} ms Engine + {decode} ms Dekodierung",
 "rp_stats_latency_decode": "Latenz ≈ {decode} ms Dekodierung",
+"rp_stats_stages": "Netz {net} · Warteschlange {queue} · Dekodierung {decode} · Zeichnen {draw} ms",
+"rp_stats_decoder_restarts": "Decoder-Neustarts {n}",
 "rp_low_latency": "Geringe Latenz",
 "rp_low_latency_hint": "Kleinster Tonpuffer und kürzeste Bildwarteschlange für die geringste Verzögerung. In einem ausgelasteten Netzwerk fallen mehr Bilder aus und der Ton kann knacken. Der Bildteil gilt ab dem nächsten Start.",
 "rp_auto_quality": "Geringere Qualität bei ausgelastetem Netzwerk",

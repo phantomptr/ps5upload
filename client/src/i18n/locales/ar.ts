@@ -6279,6 +6279,8 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "rp_clip_failed": "تعذّر تسجيل المقطع أو حفظه.",
 "rp_stats_latency": "التأخير ≈ {engine} ms للمحرك + {decode} ms لفك الترميز",
 "rp_stats_latency_decode": "التأخير ≈ {decode} ms لفك الترميز",
+"rp_stats_stages": "الشبكة {net} · الانتظار {queue} · فك الترميز {decode} · الرسم {draw} ms",
+"rp_stats_decoder_restarts": "إعادات تشغيل فك الترميز {n}",
 "rp_low_latency": "تأخير منخفض",
 "rp_low_latency_hint": "أصغر مخزن للصوت وأقصر طابور للصورة لأقل تأخير. على شبكة مزدحمة تسقط إطارات أكثر وقد يتقطع الصوت. يُطبَّق جزء الصورة عند البدء التالي.",
 "rp_auto_quality": "خفض الجودة على شبكة مزدحمة",
