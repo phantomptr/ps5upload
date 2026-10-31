@@ -4,6 +4,61 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.1.0
+
+- **Remap controller buttons in Play.** Settings › Controller buttons: choose which PS5 button each
+  button on your controller sends (swap ✕ and ○, turn a button off, put Create on L3...). It works
+  for every controller, and Reset to defaults puts it back.
+- **Sharpening and upscaling is one choice in Play's picture settings:** Off, Sharpen (AMD
+  FidelityFX RCAS) or Upscale to the screen (AMD FSR 1), with Sharpen setting how strong. Your
+  earlier Sharpen and Upscale settings carry over.
+- **The picture is drawn on the graphics card (WebGL) all the time**, so turning a picture tool on
+  or off no longer changes how it is drawn. With every tool off it looks exactly as before. A
+  device without WebGL keeps the old way.
+- **HDR in Play (experimental).** Settings › Video format › HDR asks the PS5 for its HDR stream
+  and shows it in HDR. It is offered only where it can work: an HDR screen, a device that decodes
+  HEVC Main10, and a browser that draws HDR (WebGPU, as in Chrome or Edge). If HDR doesn't work,
+  the app tells you and goes back to Auto. Sharpening, upscaling and colour stay off in HDR.
+- **Play: a DualSense's adaptive triggers** (desktop app). With a DualSense connected to the
+  computer, the console is told it is one, and games set the triggers' resistance as on the PS5.
+  They are let go when the stream ends or the app quits. Settings › Controls › *DualSense effects*.
+- **Play: DualSense haptics over USB** (desktop app). PS5 games' haptics play on the controller
+  plugged in with a cable; over Bluetooth they become rumble instead. On a Mac, set the
+  controller to 4 channels in Audio MIDI Setup for haptics.
+- **Play: motion controls with a DualSense** (desktop app): its gyro and accelerometer reach the
+  console, for gyro aiming and tilt.
+- **A new look for the on-screen controller in Remote Play:** thin light outlines with a faint
+  fill over the game, so the picture shows through. Shoulders stacked in the top corners, a
+  four-key D-pad and the face buttons at mid height, the sticks lower toward your thumbs,
+  Create and Options in the bottom corners. A key fills in while you press it.
+- **The controller fits the screen:** bigger keys on a tablet, smaller on a small phone, and
+  every key stays at least finger-sized. Size (Small, Medium, Large) and opacity (now down to
+  25%) are in Remote Play settings.
+- **Phone held sideways in full screen:** the menu button is at the bottom middle, under PS.
+- **Hush is in the Payloads catalogue:** it turns off the PS5's background gameplay recording
+  (by disco-trooper). The download is checked against the release's SHA256SUMS.
+- **Hush has a card on "On your PS5"** that shows whether it runs, whether it is on, its mode and
+  the newest lines of its log, with an On/Off switch that changes only `enabled=` in its config.
+- **Play works with Hush (#561):** Hush also turns off the encoder Remote Play needs, so a stream
+  had no picture. Start now asks to pause Hush while you play (about 20 s) and turns it back on
+  when the stream ends; Settings › Always pause Hush for Remote Play skips the question. If the
+  app closes mid-stream, Hush's card offers to turn it back on. A stream that fails while Hush
+  was on names it as the cause and suggests restarting the console.
+- **Play › Set up has a new step, No payload blocks Remote Play,** that ticks by itself when Hush
+  is off or not loaded.
+- **"Remote Play is switched off" is said plainly.** When the PS5's own Remote Play switch is off,
+  Start showed "session init refused (HTTP 403): 80108b12". It now says to turn on Settings ›
+  System › Remote Play › Enable Remote Play on the console, and the setup guide says that
+  switch is the one that counts.
+- **Fixed: Download couldn't be tapped in the Files ⋮ menu on a phone.** With the menu opened
+  upwards, its first item sat under the status bar, where Android takes the tap. The menu now
+  stays between the status and navigation bars.
+- **Details on "Update available" shows what's new.** It opened Settings, where the release
+  notes were far down the page as raw text; it now opens the notes, with a link to the release
+  on GitHub.
+- **"Helper updated" in plain words.** The notice says which version the PS5 starts after its
+  next restart, without file paths, and only once per console and version.
+
 ## 10.0.3
 
 - **Fixed: after waking the PS5 from rest mode, the app said the helper was down (#593)**, and

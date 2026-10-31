@@ -121,6 +121,26 @@ describe("On your PS5 detection", () => {
     ]);
   });
 
+  it("finds Hush by the pid in its lock file: elfldr shows it as payload.elf", () => {
+    const procs = [proc(101, "payload.elf", "payload", { is_self: true }), proc(142, "payload.elf"), proc(127, "elfldr.elf")];
+    for (const entries of [hubEntries([...CATALOG, info("hush", "Hush", "hush.elf", "/data/hush/config.ini")]), hubEntries(null)]) {
+      const cards = detectHubCards({
+        entries,
+        processes: procs,
+        markers: new Set(["/data/hush/config.ini"]),
+        pids: new Map([["hush", [142]]]),
+      });
+      const hush = cards.find((c) => c.id === "hush")!;
+      expect([hush.state, hush.integration]).toEqual(["running", "hush"]);
+      expect(hush.processes.map((p) => p.pid)).toEqual([142]);
+      // Its process is not shown again as an uncatalogued payload.elf.
+      expect(cards.some((c) => c.id === "proc:payload")).toBe(false);
+    }
+    // Without the lock (Hush exited), its config marks it installed.
+    const off = detectHubCards({ entries: hubEntries(null), processes: [], markers: new Set(["/data/hush/config.ini"]) });
+    expect(off.map((c) => [c.id, c.state])).toEqual([["hush", "installed"]]);
+  });
+
   it("works without a catalogue (the browser build) for the integrations", () => {
     const cards = detectHubCards({ entries: hubEntries(null), processes: PHAT, markers: new Set() });
     expect(cards.map((c) => c.id)).toEqual([

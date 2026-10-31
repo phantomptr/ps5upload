@@ -13,6 +13,7 @@ import {
   type RemotePlayReadiness,
 } from "../../../api/ps5";
 import { mgmtAddr, transferAddr } from "../../../lib/addr";
+import { blockerCtx, detectBlockers } from "../../../lib/rpBlockers";
 import { useDocumentVisible } from "../../../lib/visibility";
 import { useConnectionStore } from "../../../state/connection";
 import { usePlaySetupMarks } from "../../../state/playSetup";
@@ -37,15 +38,18 @@ export function usePlaySetup(opts: { poll?: boolean } = {}) {
   const [readiness, setReadiness] = useState<RemotePlayReadiness | null>(null);
   const [info, setInfo] = useState<ProfileInfo | null>(null);
   const [np, setNp] = useState<NpState | null>(null);
+  const [blockers, setBlockers] = useState<string[] | null>(null);
 
   const refresh = useCallback(async () => {
     if (!host || !connected) return;
-    const [r, i] = await Promise.all([
+    const [r, i, b] = await Promise.all([
       remoteplayReadiness(transferAddr(host)).catch(() => null),
       profileInfo(mgmtAddr(host)).catch(() => null),
+      detectBlockers(blockerCtx(host)).catch(() => null),
     ]);
     setReadiness(r && r.registry_err === 0 ? r : null);
     setInfo(i);
+    setBlockers(b ? b.map((x) => x.id) : null);
     const t = npBackupTarget(i);
     setNp(t ? await profileNpState(t.slot, t.uid, mgmtAddr(host)).catch(() => null) : null);
   }, [host, connected]);
@@ -55,6 +59,7 @@ export function usePlaySetup(opts: { poll?: boolean } = {}) {
     setReadiness(null);
     setInfo(null);
     setNp(null);
+    setBlockers(null);
   }, [host]);
 
   useEffect(() => {
@@ -64,7 +69,7 @@ export function usePlaySetup(opts: { poll?: boolean } = {}) {
     return () => window.clearInterval(t);
   }, [poll, visible, connected, host, refresh]);
 
-  const states = setupStates({ connected, readiness, np, paired, restOk, played });
+  const states = setupStates({ connected, readiness, np, paired, restOk, played, blockers });
   return {
     host,
     connected,
@@ -75,6 +80,7 @@ export function usePlaySetup(opts: { poll?: boolean } = {}) {
     progress: setupProgress(states),
     ready: playReady(states),
     profileId: profile?.id ?? null,
+    blockers,
     refresh,
     setRestDone: (on: boolean) => setRest(host, on),
     /** The readiness after the app changed a setting (it answers with the re-read value). */

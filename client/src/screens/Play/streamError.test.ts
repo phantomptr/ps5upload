@@ -12,4 +12,9 @@ describe("streamErrorMessage", () => {
     expect(m).toContain("dropped during the stream");
     expect(m).not.toBe(streamErrorMessage(tr, { code: "other", detail: "" }));
   });
+
+  it("tells how to turn Remote Play on when the console has it switched off", () => {
+    const m = streamErrorMessage(tr, { code: "rp_off", detail: "" });
+    expect(m).toContain("Settings › System › Remote Play");
+  });
 });

@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "10.0.3"
+version = "10.1.0"
 description = "The all-in-one PS5 companion app."
 license = "GPL-3.0-or-later"
 edition = "2021"
@@ -58,6 +58,9 @@ open = "5"
 # `probes.rs::decompress_to_cache`. Pure-Rust miniz backend, no
 # system-lib linkage, so cross-compilation to arm64/Windows stays simple.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# SHA-256 of a catalogue payload whose release publishes SHA256SUMS (commands/payloads.rs
+# CHECKSUM_FILES). Same version the engine crates already pull in.
+sha2 = "0.11"
 
 # Engine core modules invoked directly in-process by Tauri commands
 # (no HTTP hop). Same workspace, different manifest root.
@@ -128,6 +131,10 @@ tauri-plugin-drag = "2"
 # library is needed at build time: hid.dll directly on Windows, hidraw + a pure-Rust udev on
 # Linux, IOKit on macOS (opened shared, so the system's own controller support keeps the pad).
 hidapi = { version = "2.6", default-features = false, features = ["windows-native", "linux-native-basic-udev", "macos-shared-device"] }
+# Desktop-only: a DualSense's haptics for Remote Play (commands/pad_haptics.rs), played on the
+# controller's USB audio device (channels 3 and 4). Apache-2.0. CoreAudio on macOS, WASAPI on
+# Windows, ALSA on Linux (libasound2-dev to build, libasound.so.2 at run time).
+cpal = "0.17"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios", all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
 jpegxr = "0.3"

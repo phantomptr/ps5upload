@@ -9,6 +9,7 @@ import {
   type CopyResult,
   type ReplaceDeps,
 } from "../lib/helperStoredCopies";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { isTauriEnv } from "../lib/tauriEnv";
 import type { Translator } from "./lang";
 import { pushNotification } from "./notifications";
@@ -45,7 +46,27 @@ export async function updateHelperCopiesAfterSend(
   tr: Translator,
 ): Promise<CopyResult[]> {
   const version = await getAppVersion().catch(() => null);
-  return refreshStoredCopies(host, liveReplaceDeps(), tr, version, (n) =>
-    pushNotification(n.level, n.title, { body: n.body }),
-  );
+  return refreshStoredCopies(host, liveReplaceDeps(), tr, version, (n) => {
+    // Payload Manager can put its repo copy back, so the same copy is replaced on every
+    // send: say it once per console and version, not each time.
+    if (n.level === "success" && !firstUpdateNotice(host, version)) return;
+    pushNotification(n.level, n.title, { body: n.body });
+  });
+}
+
+const NOTIFIED_KEY = "ps5upload.helper_copies_notified";
+
+/** True the first time `host` is told about `version`; remembers it. */
+export function firstUpdateNotice(host: string, version: string | null): boolean {
+  let seen: Record<string, string> = {};
+  try {
+    seen = JSON.parse(safeGetItem(NOTIFIED_KEY) ?? "{}") as Record<string, string>;
+  } catch {
+    // A damaged value: start over.
+  }
+  const v = version ?? "";
+  if (seen[host] === v) return false;
+  seen[host] = v;
+  safeSetItem(NOTIFIED_KEY, JSON.stringify(seen));
+  return true;
 }

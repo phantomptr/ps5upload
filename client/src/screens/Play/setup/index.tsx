@@ -9,6 +9,8 @@ import { humanizePs5Error } from "../../../lib/humanizeError";
 import { pairConsole } from "../../../lib/pairConsole";
 import { useTr } from "../../../state/lang";
 import { usePlaySetupMarks } from "../../../state/playSetup";
+import { blockerNames } from "../../../state/rpBlockers";
+import { payloadCardLink } from "../../Payloads/payloadTabs";
 import { NpSignInSection } from "../../Accounts/NpSignInSection";
 import { SETUP_ORDER, type SetupKey, type SetupState } from "./playSetup";
 import { usePlaySetup } from "./usePlaySetup";
@@ -102,7 +104,7 @@ export default function PlaySetupScreen() {
       body: tr(
         "rpg_service_body",
         undefined,
-        "Settings › System › Remote Play › Enable Remote Play. The app can switch it on for you, and on firmware 10.00 and later also allow it for this user.",
+        "Settings › System › Remote Play › Enable Remote Play. The app can switch it on for you, and on firmware 10.00 and later also allow it for this user. If Start then says Remote Play is switched off, turn it on in the PS5's own Settings: the console's switch is the one that counts.",
       ),
       act: r ? (
         <Button
@@ -154,6 +156,25 @@ export default function PlaySetupScreen() {
           data-testid="play-setup-pair"
         >
           {tr("play_setup_pair", undefined, "Pair")}
+        </Button>
+      ) : undefined,
+    },
+    blockers: {
+      title: tr("play_setup_blockers_title", undefined, "No payload blocks Remote Play"),
+      body: s.blockers?.length
+        ? tr(
+            "play_setup_blockers_body_on",
+            { name: blockerNames(s.blockers) },
+            `${blockerNames(s.blockers)} is on, and it blocks Remote Play's picture. Play offers to pause it each time you start, or turn it off on its card in Payloads. This step ticks by itself when it is off.`,
+          )
+        : tr(
+            "play_setup_blockers_body",
+            undefined,
+            "Some payloads turn off the console's video encoder, which Remote Play needs: Hush does. This step ticks when none of them is on.",
+          ),
+      act: s.blockers?.length ? (
+        <Button size="sm" variant="primary" onClick={() => navigate(payloadCardLink(s.blockers![0]))} data-testid="play-setup-blockers-open">
+          {tr("rp_blocker_open_card", { name: blockerNames(s.blockers) }, `Open ${blockerNames(s.blockers)}`)}
         </Button>
       ) : undefined,
     },

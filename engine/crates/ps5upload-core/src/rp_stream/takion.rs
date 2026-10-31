@@ -42,6 +42,8 @@ const CHUNK_COOKIE_ACK: u8 = 0xb;
 pub const DATA_TYPE_PROTOBUF: u8 = 0;
 pub const DATA_TYPE_RUMBLE: u8 = 7;
 pub const DATA_TYPE_PAD_INFO: u8 = 9;
+/// DualSense adaptive triggers (chiaki `CHIAKI_TAKION_MESSAGE_DATA_TYPE_TRIGGER_EFFECTS`).
+pub const DATA_TYPE_TRIGGER_EFFECTS: u8 = 11;
 
 fn mac_offset(kind: u8) -> Option<usize> {
     match kind {
@@ -83,6 +85,8 @@ pub struct AvPacket {
     pub units_in_frame_fec: u16,
     pub codec: u8,
     pub adaptive_stream_index: u8,
+    /// An audio packet that carries the DualSense's haptics (v12 flag byte 0x02), not sound.
+    pub is_haptics: bool,
     pub key_pos: u64,
     pub data: Vec<u8>,
 }
@@ -788,8 +792,11 @@ fn parse_av_v12(buf: &[u8], key_state: &mut KeyState) -> Option<AvPacket> {
     if nalu_info {
         p += 3;
     }
+    // v12 audio: a flag byte, 0x02 for the DualSense's haptics (chiaki av_packet_parse).
+    let mut is_haptics = false;
     if !is_video {
-        p += 1; // haptics flag (v12)
+        is_haptics = av.get(p) == Some(&0x02);
+        p += 1;
     }
     if p > av.len() {
         return None;
@@ -803,6 +810,7 @@ fn parse_av_v12(buf: &[u8], key_state: &mut KeyState) -> Option<AvPacket> {
         units_in_frame_fec,
         codec,
         adaptive_stream_index,
+        is_haptics,
         key_pos,
         data: av[p..].to_vec(),
     })
@@ -954,5 +962,28 @@ mod tests {
         std::thread::sleep(Duration::from_millis(220));
         let _ = t.poll(Duration::from_millis(1));
         assert_eq!(t.data_resent, 1);
+    }
+
+    /// A v12 audio packet: the flag byte after the header says haptics (0x02) or sound.
+    #[test]
+    fn a_v12_audio_packet_says_whether_it_is_haptics() {
+        let pkt = |flag: u8| {
+            let mut b = vec![PACKET_AUDIO];
+            let mut av = vec![0u8; 0x12];
+            av[0..2].copy_from_slice(&7u16.to_be_bytes()); // packet index
+            av[2..4].copy_from_slice(&40u16.to_be_bytes()); // frame index
+            av[8] = 5; // codec
+            av.push(flag);
+            av.extend_from_slice(&[0xaa; 120]);
+            b.extend_from_slice(&av);
+            b
+        };
+        let mut ks = KeyState::default();
+        let h = parse_av_v12(&pkt(0x02), &mut ks).unwrap();
+        assert!(h.is_haptics && !h.is_video);
+        assert_eq!((h.frame_index, h.codec, h.data.len()), (40, 5, 120));
+        let a = parse_av_v12(&pkt(0x00), &mut ks).unwrap();
+        assert!(!a.is_haptics);
+        assert_eq!(a.data, vec![0xaa; 120]);
     }
 }

@@ -23,9 +23,12 @@ import { gamepadsOf } from "../lib/nativePad";
 import { profileFor } from "../lib/padProfiles";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { setGameMode } from "../lib/gameMode";
-import { padTouchState, setPadTouchpad } from "../lib/padTouchpad";
+import { padMotion, padTouchState, setPadTouchpad } from "../lib/padTouchpad";
+import { DualSenseEffects, dualSenseCapable, findDualSense } from "../lib/dualSense";
 import { applyControls } from "../lib/gameControls";
 import { DEFAULT_PICTURE, readPicture, type PictureTools } from "../lib/rpPicture";
+import { DEFAULT_BUTTON_MAP, readButtonMap, remapPad, type ButtonMap } from "../lib/rpButtonMap";
+import type { CodecPref } from "../lib/rpHdr";
 import { pushNotification } from "./notifications";
 import { trStatic } from "../lib/trStatic";
 import { currentControls, rpControls } from "./gameControls";
@@ -49,12 +52,15 @@ export interface RpPrefs {
   rumble: boolean;
   /** The controller drawn over the picture: on touch screens (auto), always, or never. */
   touchControls: "auto" | "on" | "off";
-  /** How solid the on-screen controller is drawn, 0.3 (faint) to 1. */
+  /** How solid the on-screen controller is drawn, 0.25 (faint) to 1. */
   touchOpacity: number;
   /** The on-screen controller's size. */
   touchSize: "s" | "m" | "l";
   /** A phone's motion sensors as the controller's (gyro aiming, tilt). */
   motion: boolean;
+  /** A DualSense on this computer gets the console's adaptive triggers and haptics (sessions
+   *  start in DualSense mode, lib/dualSense.ts). Off, sessions start as before. */
+  dualSense: boolean;
   /** Least delay: the smallest sound buffer and short picture queues (more dropped frames on a
    *  busy network). */
   lowLatency: boolean;
@@ -73,9 +79,11 @@ export interface RpPrefs {
   /** Decode on the graphics card when there is one (auto), or always in software: a way out
    *  of a graphics driver's decoder bug (Windows' hardware HEVC, #538/#575). */
   decoding: "auto" | "software";
-  /** The video format asked of the console: HEVC where this device decodes it (auto), or
-   *  always H.264. */
-  codec: "auto" | "h264";
+  /** The video format asked of the console: HEVC where this device decodes it (auto), always
+   *  H.264, or HDR (HEVC Main10) where this device can show it in HDR (lib/rpHdr.ts). */
+  codec: CodecPref;
+  /** What each controller button sends (lib/rpButtonMap.ts); empty = each sends itself. */
+  buttonMap: ButtonMap;
 }
 
 export const DEFAULT_RP_PREFS: RpPrefs = {
@@ -93,6 +101,7 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   touchOpacity: 1,
   touchSize: "m",
   motion: false,
+  dualSense: true,
   lowLatency: false,
   autoQuality: true,
   mic: false,
@@ -101,6 +110,7 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   toPhotos: true,
   decoding: "auto",
   codec: "auto",
+  buttonMap: DEFAULT_BUTTON_MAP,
 };
 
 /** The smallest sound buffer the Sound buffer setting offers. */
@@ -117,7 +127,8 @@ export function loadRpPrefs(): RpPrefs {
   try {
     const raw = safeGetItem(PREFS_KEY);
     const p = { ...DEFAULT_RP_PREFS, ...(raw ? (JSON.parse(raw) as Partial<RpPrefs>) : {}) };
-    return { ...p, picture: readPicture(p.picture) };
+    const codec: CodecPref = p.codec === "h264" || p.codec === "hdr" ? p.codec : "auto";
+    return { ...p, codec, picture: readPicture(p.picture), buttonMap: readButtonMap(p.buttonMap) };
   } catch {
     return DEFAULT_RP_PREFS;
   }
@@ -203,16 +214,18 @@ function readPad(): PadState {
   // the window in front).
   const pip = !!s.pipWindow && !s.pipWindow.closed;
   const live = !rpInput.mapping && (pip || (s.onScreen && typeof document !== "undefined" && document.hasFocus()));
-  const pads = live ? padFromGamepads(rpGamepads(), profileFor) : IDLE_PAD;
+  const read = live ? padFromGamepads(rpGamepads(), profileFor) : IDLE_PAD;
   // A DualSense's touchpad, which the Gamepad API never gives (lib/padTouchpad.ts): the same
   // rule as its buttons, and the click is the touchpad button whatever the browser reports.
   const pt = live ? padTouchState() : null;
+  // Controller buttons sent as Settings › Controller buttons says (the keyboard has its own map).
+  const pads = remapPad(pt?.click ? { ...read, buttons: read.buttons | PadButton.TOUCHPAD } : read, s.prefs.buttonMap);
   const merged = {
     ...mergePads(mergePads(keys, pads), rpInput.touchPad),
     touch: rpInput.touch ?? pt?.touch ?? rpInput.touchPad.touch ?? null,
-    motion: rpInput.motion,
+    // A phone's motion, else a DualSense's (read with its touchpad, same rule).
+    motion: rpInput.motion ?? (live ? padMotion() : null),
   };
-  if (pt?.click) merged.buttons |= PadButton.TOUCHPAD;
   // The running game's turbo, mouse aim and macros (Game panel › Controls).
   const now = typeof performance !== "undefined" ? performance.now() : Date.now();
   return applyControls(merged, controls, rpInput.held, rpControls, now);
@@ -236,6 +249,15 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
     if (cur && cur.currentPhase !== "ended") return;
     const { prefs } = get();
     const [width, height] = prefs.res.split("x").map(Number);
+    // A DualSense here: the session starts in DualSense mode (triggers and haptics). Only the
+    // desktop app looks (and only it waits for the answer).
+    const ds = prefs.dualSense && dualSenseCapable() ? await findDualSense() : null;
+    // Started meanwhile (a second tap while the controller was looked for).
+    const now = get().stream;
+    if (now && now.currentPhase !== "ended") return;
+    const dualSense = ds
+      ? new DualSenseEffects(ds, (strong, weak) => get().stream?.vibrate(strong, weak))
+      : undefined;
     const stream: RemotePlayStream = new RemotePlayStream({
       host: t.host,
       registKey: t.registKey,
@@ -249,6 +271,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       attach: opts?.attach,
       fit: prefs.fit,
       mic: prefs.mic,
+      dualSense,
       replayS: prefs.replayS,
       picture: prefs.picture,
       decoding: prefs.decoding,
@@ -260,11 +283,29 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
             ? trStatic("rp_picture_off_slow", "Picture tools turned off: this device could not keep up.")
             : trStatic("rp_picture_off_failed", "Picture tools turned off: this device has no WebGL 2."),
         ),
+      onHdrOff: (_why, started) => {
+        // HDR did not work here: back to Auto so the next start is plain HEVC (the reason is in
+        // the logs).
+        if (get().prefs.codec === "hdr") get().setPrefs({ codec: "auto" });
+        pushNotification(
+          "warning",
+          started
+            ? trStatic(
+                "rp_hdr_off_started",
+                "HDR could not be shown on this device, so the picture is shown in SDR. Video format is back to Auto for the next start.",
+              )
+            : trStatic(
+                "rp_hdr_off",
+                "HDR does not work on this device, so this stream is SDR. Video format is back to Auto.",
+              ),
+        );
+      },
       rumble: () => get().prefs.rumble,
       onPhase: (p) => {
         if (get().stream !== stream) return;
         set({ phase: p });
         if (p === "ended") {
+          dualSense?.stop();
           rpInput.held.clear();
           set({ stream: null, light: null });
         }

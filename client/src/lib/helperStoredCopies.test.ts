@@ -189,10 +189,10 @@ describe("updateStoredCopies", () => {
 describe("storedCopiesNotices", () => {
   const copy = { path: "/mnt/usb0/ps5_autoloader/ps5upload.elf", place: "autoloader" as const, atBoot: true };
 
-  it("lists what was updated", () => {
+  it("says the version the PS5 starts next, without paths", () => {
     const [n] = storedCopiesNotices([{ copy, status: "updated" }], tr, "9.2.0");
     expect(n.level).toBe("success");
-    expect(n.body).toContain("/mnt/usb0/ps5_autoloader/ps5upload.elf (autoloader)");
+    expect(n.body).not.toContain("/mnt/usb0");
     expect(n.body).toContain("v9.2.0");
   });
 

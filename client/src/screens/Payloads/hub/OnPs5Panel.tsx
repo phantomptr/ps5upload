@@ -44,6 +44,7 @@ import PayloadManagerPanel from "../PayloadManagerPanel";
 import { PmSummary, SmpSummary } from "./summaries";
 import { HbSummary, HearBridgePanel, useHearBridge } from "./hearbridge";
 import { hbAct } from "../../../api/hearbridge";
+import { HushPanel, HushSummary, useHush, useHushActions } from "../../Hush";
 import {
   detectHubCards,
   hubEntries,
@@ -95,7 +96,7 @@ async function findMarkers(addr: string, entries: readonly HubEntry[]): Promise<
 /**
  * "On your PS5": one card per payload running or installed on the selected console, with
  * its web page, an update when the catalogue has a newer release, Stop, and (for
- * ShadowMount+, nanoDNS, Payload Manager and HearBridge) its own panel under Manage.
+ * ShadowMount+, nanoDNS, Payload Manager, HearBridge and Hush) its own panel under Manage.
  */
 export default function OnPs5Panel() {
   return (
@@ -206,6 +207,14 @@ function OnPs5Body() {
   // its Manage panel is open.
   const hb = useHearBridge(host, online && hbWanted, openId === "hearbridge");
   const hbPresent = hb.view?.present === true;
+  // Hush keeps its pid in /data/hush/pid.lock (elfldr lists it as payload.elf): its files are
+  // read while its card is on screen.
+  const hushWanted =
+    openId === "hush" ||
+    detectHubCards({ entries, processes: procs, markers }).some((c) => c.integration === "hush");
+  const hush = useHush(host, online && hushWanted);
+  const hushPid = hush.view?.lockPid ?? null;
+  const hushActions = useHushActions(host, hush.refresh);
   const cards = useMemo(
     () =>
       detectHubCards({
@@ -213,9 +222,10 @@ function OnPs5Body() {
         processes: procs,
         markers,
         answering: hbPresent ? new Set(["hearbridge"]) : undefined,
+        pids: hushPid ? new Map([["hush", [hushPid]]]) : undefined,
         forceShow: openId,
       }),
-    [entries, procs, markers, openId, hbPresent],
+    [entries, procs, markers, openId, hbPresent, hushPid],
   );
   const hbVersion = hb.view?.present ? hb.view.status.version || null : null;
   const hbPort = hb.view?.present ? hb.view.port : null;
@@ -451,7 +461,16 @@ function OnPs5Body() {
                 summary={
                   c.integration === "hearbridge"
                     ? () => <HbSummary view={hb.view} />
-                    : c.integration
+                    : c.integration === "hush"
+                      ? () => (
+                          <HushSummary
+                            view={hush.view}
+                            running={c.state === "running"}
+                            busy={hushActions.busy}
+                            onResume={() => void hushActions.run(true, hush.view?.configText ?? null)}
+                          />
+                        )
+                      : c.integration
                       ? (fallback) => (
                           <Summary
                             key={summaryRev}
@@ -466,6 +485,8 @@ function OnPs5Body() {
                 panel={
                   c.integration === "hearbridge" ? (
                     <HearBridgePanel host={host} view={hb.view} apply={hb.apply} refresh={hb.refresh} />
+                  ) : c.integration === "hush" ? (
+                    <HushPanel host={host} view={hush.view} procs={procs} refresh={hush.refresh} />
                   ) : c.integration ? (
                     <IntegrationPanel id={c.integration} host={host} />
                   ) : null

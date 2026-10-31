@@ -1,4 +1,4 @@
-//! `rp-stream <creds.json> <out> [seconds] [h264|h265] [WxH]`: open a Remote
+//! `rp-stream <creds.json> <out> [seconds] [h264|h265|h265_hdr] [WxH]`: open a Remote
 //! Play stream with a paired console and write its video (Annex-B) to a file,
 //! timing each milestone. `creds.json` is `{"<host>": {"regist_key": hex32,
 //! "rp_key": hex32}}`; the keys are never printed.
@@ -63,8 +63,8 @@ pub fn run(host: &str, args: &[String]) -> Result<()> {
     let out_path = args.get(1).ok_or_else(|| anyhow!("need an output file"))?;
     let secs: u64 = args.get(2).map(|s| s.parse()).transpose()?.unwrap_or(10);
     let mut cfg = StreamConfig::default();
-    if args.get(3).map(String::as_str) == Some("h265") {
-        cfg.codec = Codec::H265;
+    if let Some(c) = args.get(3).and_then(|s| Codec::from_name(s)) {
+        cfg.codec = c;
     }
     if let Some((w, h)) = args.get(4).and_then(|s| s.split_once('x')) {
         cfg.width = w.parse()?;

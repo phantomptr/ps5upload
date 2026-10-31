@@ -605,6 +605,13 @@ pub fn run() {
             commands::game_mode_set,
             // Remote Play playing: a DualSense's touchpad, which the Gamepad API never gives.
             commands::pad_touchpad_set,
+            // ...and in DualSense mode its adaptive triggers and haptics.
+            commands::pad_dualsense_info,
+            commands::pad_dualsense_triggers,
+            commands::pad_dualsense_intensity,
+            commands::pad_dualsense_reset,
+            commands::pad_haptics_set,
+            commands::pad_haptics_push,
             commands::user_config_load, // ~/.ps5upload/settings.json read
             commands::user_config_save, // ~/.ps5upload/settings.json atomic write
             commands::user_config_path_resolved, // show-the-path for the Settings UI
@@ -694,6 +701,8 @@ pub fn run() {
             };
             // Desktop: never wait on it without a limit (exit_guard.rs: an 8.1.1 Mac froze
             // here after "Install and restart"). Past the limit the children are killed.
+            // A DualSense left with a game's trigger resistance: let it go.
+            commands::pad_touchpad_stop_on_exit();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             exit_guard::set_exiting();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]

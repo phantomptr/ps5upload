@@ -1,10 +1,18 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
-import { Download, RefreshCw, X, Sparkles } from "lucide-react";
+import { ExternalLink, Download, RefreshCw, X, Sparkles } from "lucide-react";
 
 import { useUpdateStore } from "../state/update";
 import { useTr } from "../state/lang";
 import { Spinner } from "../components/Spinner";
+import { Modal } from "../components/Modal";
+import { MarkdownView } from "../components/MarkdownView";
+import { Button } from "../components/Button";
+import { openExternalUrl } from "../lib/openExternalUrl";
+
+/** The GitHub page of one release. */
+export function releasePageUrl(version: string): string {
+  return `https://github.com/phantomptr/ps5upload/releases/tag/v${version.replace(/^v/, "")}`;
+}
 
 /**
  * Non-intrusive update banner. The update store already auto-checks on launch
@@ -18,7 +26,7 @@ import { Spinner } from "../components/Spinner";
  */
 export function UpdateToast() {
   const tr = useTr();
-  const navigate = useNavigate();
+  const [showNotes, setShowNotes] = useState(false);
   const phase = useUpdateStore((s) => s.phase);
   const download = useUpdateStore((s) => s.download);
   const install = useUpdateStore((s) => s.install);
@@ -38,6 +46,7 @@ export function UpdateToast() {
       ? phase.result.latest_version
       : null;
   if (version == null || dismissedVersion === version) return null;
+  const notes = "result" in phase ? phase.result.notes : "";
 
   const downloading = phase.kind === "downloading";
   const downloaded = phase.kind === "downloaded";
@@ -69,7 +78,7 @@ export function UpdateToast() {
       </span>
       <button
         type="button"
-        onClick={() => navigate("/settings")}
+        onClick={() => setShowNotes(true)}
         className="shrink-0 rounded px-2 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
       >
         {tr("update_toast_details", undefined, "Details")}
@@ -114,6 +123,28 @@ export function UpdateToast() {
       >
         <X size={14} />
       </button>
+      {showNotes && (
+        <Modal
+          open
+          onClose={() => setShowNotes(false)}
+          title={tr("whats_new_in", { version }, `What's new in v${version}`)}
+          size="xl"
+          footer={
+            <Button size="sm" variant="ghost" onClick={() => void openExternalUrl(releasePageUrl(version))}>
+              <ExternalLink size={13} />
+              {tr("library_fpkg_kstuff_tip_repo", undefined, "View on GitHub")}
+            </Button>
+          }
+        >
+          <div className="max-h-[60vh] overflow-auto p-4 text-sm">
+            {notes.trim() ? (
+              <MarkdownView source={notes} />
+            ) : (
+              <p className="text-[var(--color-muted)]">v{version}</p>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

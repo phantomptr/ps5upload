@@ -11,6 +11,8 @@
 //!   keep_awake  — platform sleep inhibitor spawn/kill
 //!   game_mode   — what each OS offers a game while Remote Play plays
 //!   pad_touchpad — a DualSense's touchpad read natively while Remote Play plays
+//!   pad_dualsense — its adaptive triggers (written by pad_touchpad's reader)
+//!   pad_haptics — its haptics, played on its USB audio device
 //!   user_config — ~/.ps5upload/settings.json read/write
 //!   companions  — TCP probe of known scene-tool ports
 //!   title_meta  — HTML scrape of public title-info site (cover art)
@@ -32,6 +34,8 @@ pub mod heal_appmeta;
 pub mod host_platform;
 pub mod keep_awake;
 pub mod local_fs;
+pub mod pad_dualsense;
+pub mod pad_haptics;
 pub mod pad_touchpad;
 pub mod payloads;
 pub mod persistence;
@@ -93,6 +97,8 @@ pub use game_mode::*;
 pub use heal_appmeta::*;
 pub use keep_awake::*;
 pub use local_fs::*;
+pub use pad_dualsense::*;
+pub use pad_haptics::*;
 pub use pad_touchpad::*;
 pub use payloads::*;
 pub use persistence::*;

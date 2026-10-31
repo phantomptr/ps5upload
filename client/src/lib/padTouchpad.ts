@@ -9,9 +9,13 @@
 //
 // Either way the result is one finger (in the console's touchpad space, like the on-screen
 // controller's) and the touchpad click, which state/remotePlay.ts adds to the pad it sends.
-// Read-only: nothing is written to the controller, so it keeps working as a Gamepad.
+// The desktop app also reads the pad's motion sensors from the same reports (`pad-motion`
+// events), sent with the pad like a phone's (lib/motion.ts).
+// Read-only here: the only writes (a DualSense-mode session's triggers) are the app's.
 
 import { listen } from "@tauri-apps/api/event";
+
+import type { MotionReading } from "./motion";
 
 import { invoke } from "./invokeLogged";
 import { isMobile } from "./platform";
@@ -32,6 +36,14 @@ let notify: (() => void) | null = null;
 /** The controller's touchpad right now. */
 export function padTouchState(): PadTouch {
   return state;
+}
+
+/** The controller's latest motion reading (desktop app), or null. Read with the pad each
+ *  frame: a change alone does not send the pad. */
+let motion: MotionReading | null = null;
+
+export function padMotion(): MotionReading | null {
+  return motion;
 }
 
 function update(next: PadTouch): void {
@@ -111,6 +123,7 @@ export class Follower {
  *  reaches it (a reader left running by a page reloaded mid-stream is stopped). */
 let nativeOn: boolean | null = null;
 let nativeUnlisten: (() => unknown) | null = null;
+let motionUnlisten: (() => unknown) | null = null;
 let chain: Promise<unknown> = Promise.resolve();
 
 function setNative(on: boolean): void {
@@ -124,11 +137,19 @@ function setNative(on: boolean): void {
             update({ touch: touchFromRaw(e.payload?.touch), click: !!e.payload?.click }),
           );
         }
+        if (!motionUnlisten) {
+          motionUnlisten = await listen<MotionReading | null>("pad-motion", (e) => {
+            motion = e.payload ?? null;
+          });
+        }
         await invoke("pad_touchpad_set", { on: true });
       } else {
         await invoke("pad_touchpad_set", { on: false });
         if (nativeUnlisten) safeUnlisten(nativeUnlisten);
         nativeUnlisten = null;
+        if (motionUnlisten) safeUnlisten(motionUnlisten);
+        motionUnlisten = null;
+        motion = null;
         update(IDLE);
       }
     } catch {
@@ -249,6 +270,8 @@ export function resetPadTouchpadForTest(): void {
   notify = null;
   nativeOn = null;
   nativeUnlisten = null;
+  motionUnlisten = null;
+  motion = null;
   browserOn = false;
   hidDevices = 0;
   chain = Promise.resolve();

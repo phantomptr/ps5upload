@@ -1,15 +1,20 @@
-// Remote Play picture tools: sharpen, brightness, contrast, saturation, a 21:9 crop and upscaling
-// to the screen, done on the GPU (WebGL) for each decoded frame, only while a tool is on. The
-// result is drawn into the stream's own canvas, so the page, its fit layout, screenshots and
-// clips all see it unchanged. With every tool off the stream draws frames exactly as before.
-// "Sharp pixels" is CSS (image-rendering) and needs nothing here.
+// Remote Play picture tools: sharpening, upscaling, brightness, contrast, saturation and a 21:9
+// crop, done on the GPU (WebGL 2) as each decoded frame is drawn. The stream draws every frame
+// through here straight onto its own canvas, so the page, its fit layout, screenshots and clips
+// all see the result. With every tool off it is one plain pass: the picture looks as it did with
+// the 2D canvas. "Sharp pixels" is CSS (image-rendering) and needs nothing here.
 //
-// Upscaling is AMD FidelityFX Super Resolution 1 (EASU, then RCAS), ported from ffx_fsr1.h
-// (MIT, Advanced Micro Devices; LICENSES/FidelityFX-FSR-MIT.txt). It is plain shader code, so it
-// runs the same on any GPU with WebGL 2.
+// Sharpening is RCAS and upscaling is EASU then RCAS, from AMD FidelityFX Super Resolution 1
+// (ffx_fsr1.h, MIT, Advanced Micro Devices; LICENSES/FidelityFX-FSR-MIT.txt), ported to GLSL ES
+// 3.0. It is plain shader code, so it runs the same on any GPU with WebGL 2.
+
+/** Sharpening and upscaling: none, sharpen at the picture's own size (RCAS), or FSR 1 (EASU up
+ *  to the picture's size on screen, then RCAS). */
+export type Enhance = "off" | "sharpen" | "fsr";
 
 export interface PictureTools {
-  /** 0–100: how much the picture is sharpened. */
+  enhance: Enhance;
+  /** 0–100: how much Sharpen and FSR sharpen. */
   sharpen: number;
   /** -50–50 each; 0 = unchanged. */
   brightness: number;
@@ -19,30 +24,38 @@ export interface PictureTools {
   crop219: boolean;
   /** Scale with hard edges (retro games): CSS only. */
   pixelated: boolean;
-  /** Upscale to the picture's size on screen with FSR 1 (Sharpen sets its sharpening). */
-  upscale: boolean;
 }
 
 export const DEFAULT_PICTURE: PictureTools = {
+  enhance: "off",
   sharpen: 0,
   brightness: 0,
   contrast: 0,
   saturation: 0,
   crop219: false,
   pixelated: false,
-  upscale: false,
 };
 
-/** Whether any tool needs the GPU pass (pixelated is CSS). */
+/** Whether any tool changes the picture (pixelated is CSS): with none, the plain pass. */
 export function needsPass(p: PictureTools): boolean {
   return (
-    p.sharpen > 0 || p.brightness !== 0 || p.contrast !== 0 || p.saturation !== 0 || p.crop219 || upscales(p)
+    sharpens(p) || p.brightness !== 0 || p.contrast !== 0 || p.saturation !== 0 || p.crop219
   );
 }
 
-/** Upscaling is asked for and can apply (sharp pixels wants the pixels as they are). */
+/** Sharpen or FSR is on (sharp pixels wants the pixels as they are). */
+export function sharpens(p: PictureTools): boolean {
+  return p.enhance !== "off" && !p.pixelated;
+}
+
+/** Upscaling is asked for and can apply. */
 export function upscales(p: PictureTools): boolean {
-  return p.upscale && !p.pixelated;
+  return p.enhance === "fsr" && !p.pixelated;
+}
+
+/** RCAS's sharpness in stops for a 0–100 strength: 0 is FSR's mild 2 stops, 100 its strongest. */
+export function rcasStops(strength: number): number {
+  return 2 - (2 * Math.min(100, Math.max(0, strength))) / 100;
 }
 
 /** Most an upscale goes: per side, and in all (4K). */
@@ -77,19 +90,31 @@ export function cropRect(w: number, h: number, crop219: boolean): { y: number; h
   return { y: Math.round((h - band) / 2), h: band };
 }
 
-/** A stored setting, checked (anything odd is the default). */
+const ENHANCE: ReadonlyArray<Enhance> = ["off", "sharpen", "fsr"];
+
+/** A stored setting, checked (anything odd is the default). Settings saved before Sharpening
+ *  and upscaling was one choice keep their look: the Upscale switch is FSR, a sharpen amount
+ *  alone is Sharpen. */
 export function readPicture(v: unknown): PictureTools {
   const o = (v ?? {}) as Record<string, unknown>;
   const n = (x: unknown, lo: number, hi: number) =>
     typeof x === "number" && Number.isFinite(x) ? Math.min(hi, Math.max(lo, Math.round(x))) : 0;
+  const sharpen = n(o.sharpen, 0, 100);
+  const enhance: Enhance = ENHANCE.includes(o.enhance as Enhance)
+    ? (o.enhance as Enhance)
+    : o.upscale === true
+      ? "fsr"
+      : sharpen > 0
+        ? "sharpen"
+        : "off";
   return {
-    sharpen: n(o.sharpen, 0, 100),
+    enhance,
+    sharpen,
     brightness: n(o.brightness, -50, 50),
     contrast: n(o.contrast, -50, 50),
     saturation: n(o.saturation, -50, 50),
     crop219: o.crop219 === true,
     pixelated: o.pixelated === true,
-    upscale: o.upscale === true,
   };
 }
 
@@ -108,18 +133,11 @@ precision mediump float;
 in vec2 uv;
 out vec4 o;
 uniform sampler2D t;
-uniform vec2 px;      // one texel
-uniform float sharp;  // 0-1
 uniform float bright; // -0.5-0.5
 uniform float contr;  // 0.5-1.5
 uniform float satur;  // 0-2
 void main() {
   vec3 c = texture(t, uv).rgb;
-  if (sharp > 0.0) {
-    vec3 n = texture(t, uv + vec2(px.x, 0.0)).rgb + texture(t, uv - vec2(px.x, 0.0)).rgb
-           + texture(t, uv + vec2(0.0, px.y)).rgb + texture(t, uv - vec2(0.0, px.y)).rgb;
-    c = clamp(c + (c - n * 0.25) * sharp * 1.5, 0.0, 1.0);
-  }
   c = (c - 0.5) * contr + 0.5 + bright;
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = mix(vec3(l), c, satur);
@@ -278,29 +296,30 @@ interface Target {
   h: number;
 }
 
-/** The GPU pass: draws a frame through the shaders onto its own canvas, which the stream then
- *  draws into the page's canvas. Throws when WebGL 2 is not there. */
+/** The frame drawer: draws each frame through the shaders straight onto the stream's canvas.
+ *  Throws when the canvas gives no WebGL 2 (or a shader does not build). */
 export class PicturePass {
-  readonly canvas: HTMLCanvasElement | OffscreenCanvas;
   private gl: WebGL2RenderingContext;
   private prog: WebGLProgram;
   private tex: WebGLTexture;
   private u: Record<string, WebGLUniformLocation | null> = {};
-  /** Upscaling: its programs and the two textures between the passes, made when first used. */
-  private up: {
-    easu: WebGLProgram;
-    rcas: WebGLProgram;
-    u: Record<string, WebGLUniformLocation | null>;
-    a: Target;
-    b: Target;
-  } | null = null;
+  /** RCAS (Sharpen and FSR) and EASU (FSR), made when first used. */
+  private rcas: { prog: WebGLProgram; t: WebGLUniformLocation | null; max: WebGLUniformLocation | null; sharp: WebGLUniformLocation | null } | null = null;
+  private easu: { prog: WebGLProgram; t: WebGLUniformLocation | null; scale: WebGLUniformLocation | null; max: WebGLUniformLocation | null } | null = null;
+  /** The textures between the passes: the colour pass's output (a), EASU's (b). */
+  private a: Target | null = null;
+  private b: Target | null = null;
 
-  constructor() {
-    this.canvas =
-      typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(16, 16) : document.createElement("canvas");
-    const gl = this.canvas.getContext("webgl2", { alpha: false, antialias: false, preserveDrawingBuffer: true }) as
-      | WebGL2RenderingContext
-      | null;
+  constructor(readonly canvas: HTMLCanvasElement | OffscreenCanvas) {
+    // preserveDrawingBuffer: a screenshot (toBlob) and a clip (captureStream) read the canvas
+    // at any time, not only right after a frame is drawn.
+    const gl = canvas.getContext("webgl2", {
+      alpha: false,
+      antialias: false,
+      depth: false,
+      stencil: false,
+      preserveDrawingBuffer: true,
+    }) as WebGL2RenderingContext | null;
     if (!gl) throw new Error("no WebGL 2");
     this.gl = gl;
     this.prog = this.program(VS, FS);
@@ -316,7 +335,12 @@ export class PicturePass {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    for (const n of ["src", "px", "sharp", "bright", "contr", "satur", "t"]) this.u[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ["src", "bright", "contr", "satur", "t"]) this.u[n] = gl.getUniformLocation(this.prog, n);
+  }
+
+  /** The context went away (webglcontextlost): nothing can be drawn until a new pass is made. */
+  get lost(): boolean {
+    return this.gl.isContextLost();
   }
 
   /** A linked program; the corner positions are attribute 0 in every one. */
@@ -365,31 +389,42 @@ export class PicturePass {
     gl.viewport(0, 0, w, h);
   }
 
-  private upscaler(): NonNullable<PicturePass["up"]> {
-    if (!this.up) {
-      const gl = this.gl;
-      const easu = this.program(VS_PX, FS_EASU);
-      const rcas = this.program(VS_PX, FS_RCAS);
-      this.up = {
-        easu,
-        rcas,
-        u: {
-          eT: gl.getUniformLocation(easu, "t"),
-          eScale: gl.getUniformLocation(easu, "scale"),
-          eMax: gl.getUniformLocation(easu, "maxp"),
-          rT: gl.getUniformLocation(rcas, "t"),
-          rMax: gl.getUniformLocation(rcas, "maxp"),
-          rSharp: gl.getUniformLocation(rcas, "sharp"),
-        },
-        a: this.target(),
-        b: this.target(),
-      };
-    }
-    return this.up;
+  /** Draw onto the canvas itself. */
+  private drawToCanvas(w: number, h: number): void {
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+    this.gl.viewport(0, 0, w, h);
   }
 
-  /** Draw `frame` (w×h) with `p`; the result is on `canvas`, out.w × out.h. `to`: the size to
-   *  upscale to (upscaleSize), or null for the picture's own size. */
+  private rcasProgram(): NonNullable<PicturePass["rcas"]> {
+    if (!this.rcas) {
+      const gl = this.gl;
+      const prog = this.program(VS_PX, FS_RCAS);
+      this.rcas = {
+        prog,
+        t: gl.getUniformLocation(prog, "t"),
+        max: gl.getUniformLocation(prog, "maxp"),
+        sharp: gl.getUniformLocation(prog, "sharp"),
+      };
+    }
+    return this.rcas;
+  }
+
+  private easuProgram(): NonNullable<PicturePass["easu"]> {
+    if (!this.easu) {
+      const gl = this.gl;
+      const prog = this.program(VS_PX, FS_EASU);
+      this.easu = {
+        prog,
+        t: gl.getUniformLocation(prog, "t"),
+        scale: gl.getUniformLocation(prog, "scale"),
+        max: gl.getUniformLocation(prog, "maxp"),
+      };
+    }
+    return this.easu;
+  }
+
+  /** Draw `frame` (w×h) with `p` onto the canvas, which is sized to the result (returned).
+   *  `to`: the size to upscale to (upscaleSize), or null for the picture's own size. */
   render(
     frame: TexImageSource,
     w: number,
@@ -399,55 +434,67 @@ export class PicturePass {
   ): { w: number; h: number } {
     const gl = this.gl;
     const crop = cropRect(w, h, p.crop219);
-    const up = to && upscales(p) ? this.upscaler() : null;
+    const up = !!to && upscales(p);
+    const sharp = sharpens(p);
     const out = up && to ? to : { w, h: crop.h };
     if (this.canvas.width !== out.w || this.canvas.height !== out.h) {
       this.canvas.width = out.w;
       this.canvas.height = out.h;
     }
-    // The colour pass, at the picture's own size: onto the canvas, or into the first texture.
-    if (up) this.drawInto(up.a, w, crop.h);
-    else {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, w, crop.h);
-    }
+    // The colour pass, at the picture's own size: onto the canvas, or into the first texture
+    // for the sharpening and upscaling passes.
+    if (sharp) this.drawInto((this.a ??= this.target()), w, crop.h);
+    else this.drawToCanvas(w, crop.h);
     gl.useProgram(this.prog);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
     gl.uniform4f(this.u.src, 0, crop.y / h, 1, crop.h / h);
-    gl.uniform2f(this.u.px, 1 / w, 1 / h);
-    // Upscaling sharpens in its own pass (RCAS), after the picture is at the screen's size.
-    gl.uniform1f(this.u.sharp, up ? 0 : p.sharpen / 100);
     gl.uniform1f(this.u.bright, p.brightness / 100);
     gl.uniform1f(this.u.contr, 1 + p.contrast / 100);
     gl.uniform1f(this.u.satur, 1 + p.saturation / 50);
     gl.uniform1i(this.u.t, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    if (!up) return out;
+    if (!sharp || !this.a) return out;
 
-    // EASU: to the screen's size, into the second texture.
-    this.drawInto(up.b, out.w, out.h);
-    gl.useProgram(up.easu);
-    gl.bindTexture(gl.TEXTURE_2D, up.a.tex);
-    gl.uniform1i(up.u.eT, 0);
-    gl.uniform2f(up.u.eScale, w / out.w, crop.h / out.h);
-    gl.uniform2i(up.u.eMax, w - 1, crop.h - 1);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    let from = this.a;
+    if (up) {
+      // EASU: to the screen's size, into the second texture.
+      const easu = this.easuProgram();
+      this.drawInto((this.b ??= this.target()), out.w, out.h);
+      gl.useProgram(easu.prog);
+      gl.bindTexture(gl.TEXTURE_2D, this.a.tex);
+      gl.uniform1i(easu.t, 0);
+      gl.uniform2f(easu.scale, w / out.w, crop.h / out.h);
+      gl.uniform2i(easu.max, w - 1, crop.h - 1);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      from = this.b;
+    }
 
-    // RCAS: sharpened onto the canvas. Sharpen 0 is FSR's mild 2 stops, 100 its strongest.
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, out.w, out.h);
-    gl.useProgram(up.rcas);
-    gl.bindTexture(gl.TEXTURE_2D, up.b.tex);
-    gl.uniform1i(up.u.rT, 0);
-    gl.uniform2i(up.u.rMax, out.w - 1, out.h - 1);
-    gl.uniform1f(up.u.rSharp, Math.pow(2, -(2 - (2 * p.sharpen) / 100)));
+    // RCAS: sharpened onto the canvas.
+    const rcas = this.rcasProgram();
+    this.drawToCanvas(out.w, out.h);
+    gl.useProgram(rcas.prog);
+    gl.bindTexture(gl.TEXTURE_2D, from.tex);
+    gl.uniform1i(rcas.t, 0);
+    gl.uniform2i(rcas.max, out.w - 1, out.h - 1);
+    gl.uniform1f(rcas.sharp, Math.pow(2, -rcasStops(p.sharpen)));
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return out;
   }
 
+  /** Free the GPU objects (the canvas keeps its context: it cannot take another kind). */
   dispose(): void {
-    this.gl.getExtension("WEBGL_lose_context")?.loseContext();
+    const gl = this.gl;
+    if (gl.isContextLost()) return;
+    gl.deleteTexture(this.tex);
+    for (const t of [this.a, this.b]) {
+      if (!t) continue;
+      gl.deleteTexture(t.tex);
+      gl.deleteFramebuffer(t.fb);
+    }
+    gl.deleteProgram(this.prog);
+    if (this.rcas) gl.deleteProgram(this.rcas.prog);
+    if (this.easu) gl.deleteProgram(this.easu.prog);
   }
 }

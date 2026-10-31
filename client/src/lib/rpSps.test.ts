@@ -1,7 +1,7 @@
 // @ts-expect-error -- the app tsconfig has no node types; Vitest runs this under Node.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { spsVisibleRect, visibleFix } from "./rpSps";
+import { hevcCodecString, spsVisibleRect, visibleFix } from "./rpSps";
 
 const fixture = (name: string) => new Uint8Array(readFileSync(`e2e/fixtures/remote-play/${name}`));
 
@@ -34,5 +34,19 @@ describe("visibleFix", () => {
   it("never reaches past the coded size or acts without an SPS", () => {
     expect(visibleFix({ codedWidth: 1280, codedHeight: 720, visibleRect: { width: 640, height: 360 } }, sps)).toBeNull();
     expect(visibleFix(frame(1280, 720), null)).toBeNull();
+  });
+});
+
+describe("hevcCodecString", () => {
+  it("reads the codec string of a Main10 SPS (what an HDR stream sends)", () => {
+    // VPS 0, one sub-layer; Main10 (profile 2, compatibility flag 2), progressive, frame only,
+    // level 5.1 (153), Main tier.
+    const sps = new Uint8Array([0, 0, 0, 1, 0x42, 0x01, 0x01, 0x02, 0x20, 0, 0, 0, 0xb0, 0, 0, 0, 0, 0, 153, 0xa0]);
+    expect(hevcCodecString(sps)).toBe("hev1.2.4.L153.B0");
+  });
+  it("reads a Main stream's, and nothing without an HEVC SPS", () => {
+    expect(hevcCodecString(fixture("hevc_1920x1080.hevc"))).toMatch(/^hev1\.1\.6\.L\d+\.[0-9A-F]+/);
+    expect(hevcCodecString(fixture("h264_1920x1080.h264"))).toBeNull();
+    expect(hevcCodecString(new Uint8Array([0, 0, 1, 0x42, 0x01]))).toBeNull();
   });
 });
