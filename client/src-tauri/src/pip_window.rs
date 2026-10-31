@@ -48,6 +48,10 @@ pub fn build_main<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         tauri::webview::PermissionKind::Microphone => tauri::webview::PermissionResponse::Allow,
         _ => tauri::webview::PermissionResponse::Default,
     });
+    // Whether WebKit's compositing is off this launch (linux_gpu.rs): Remote Play then draws
+    // with the 2D canvas, as WebGL is read back from the GPU every frame there.
+    #[cfg(target_os = "linux")]
+    let builder = builder.initialization_script(crate::linux_gpu::page_flag_script());
     builder.build()?;
     Ok(())
 }

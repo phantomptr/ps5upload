@@ -7,6 +7,7 @@
 
 import { DEFAULT_PICTURE, PicturePass, cropRect, needsPass, sharpens, upscaleSize, upscales, type PictureTools } from "./rpPicture";
 import { isLinuxDesktop } from "./platform";
+import { linuxCompositingOff } from "./linuxGraphics";
 import { isTauriEnv } from "./tauriEnv";
 import { HdrPresenter, hdrSupport, isHdrFrame, pickCodec, supportedHevcMain10, type CodecPref, type StreamCodec } from "./rpHdr";
 import type { MotionReading } from "./motion";
@@ -711,9 +712,9 @@ export class RemotePlayStream {
     | { kind: "gl"; pass: PicturePass }
     | { kind: "2d"; ctx: CanvasRenderingContext2D | null }
     | null = null;
-  /** WebGL failed on this stream: the 2D canvas from now on. The Linux app starts there:
-   *  WebKitGTK copies a WebGL canvas back from the GPU every frame when compositing is off
-   *  (linux_gpu.rs turns it off on NVIDIA + Wayland), which made the stream lag badly. */
+  /** WebGL failed on this stream: the 2D canvas from now on. The Linux app starts there when
+   *  WebKitGTK's compositing is off (linux_gpu.rs: older stacks, Safe graphics mode): WebKit then
+   *  copies a WebGL canvas back from the GPU every frame, which made the stream lag badly. */
   private noGl = linuxApp();
   /** The HDR presenter made at the start, used from the first frame. */
   private hdr: HdrPresenter | null = null;
@@ -1674,7 +1675,8 @@ export class RemotePlayStream {
   }
 }
 
-/** The desktop app on Linux (WebKitGTK), where the picture is drawn with the 2D canvas. */
+/** The desktop app on Linux with WebKitGTK's compositing off, where the picture is drawn with the
+ *  2D canvas. */
 function linuxApp(): boolean {
-  return isTauriEnv() && isLinuxDesktop();
+  return isTauriEnv() && isLinuxDesktop() && linuxCompositingOff();
 }

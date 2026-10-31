@@ -284,7 +284,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
             : why === "linux"
               ? trStatic(
                   "rp_picture_off_linux",
-                  "Sharpen and upscaling are off in the Linux app: drawing them there makes the stream lag. Chrome on Linux has them.",
+                  "Sharpen and upscaling are off: with the Linux app's safe graphics, drawing them makes the stream lag. Chrome on Linux has them.",
                 )
               : trStatic("rp_picture_off_failed", "Picture tools turned off: this device has no WebGL 2."),
         ),
