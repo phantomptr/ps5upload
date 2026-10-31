@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 10.2.0
 
 - **Remote Play runs at 60 fps in the Linux app.** WebKitGTK converted every frame to RGB on
   the CPU as it was drawn (12 ms of each 16.7 ms frame at 1080p), so frames backed up: about
