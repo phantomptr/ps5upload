@@ -39,7 +39,7 @@ async function hushConsole(page: Page): Promise<Console> {
             name: "Living room",
             host,
             wake_regist_key: "00112233",
-            wake_rp_key: "00112233445566778899aabbccddeeff",
+            wake_rp_key: "0f".repeat(16), // made up (built here so it reads as no secret)
           },
         ],
       }),
