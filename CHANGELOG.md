@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Convert checks that a folder is a whole game (#596).** A folder without
+  `sce_sys/param.json` (or a PS4 game's `param.sfo`) is refused up front, with a hint to pick
+  the game's own folder, instead of becoming a package or image that never launches.
+- **The web UI says when a new release is out.** A page served by a self-hosted engine (Docker,
+  a NAS) shows the update bar too; Details has what's new and, for Docker, the command to copy.
+- **Remote Play explains any refusal at the start.** A code nobody has explained yet (such as
+  80108b26) now comes with what to check: the console's Remote Play switch, Allow for this user,
+  and pairing.
+
 ## 10.1.0
 
 - **Remap controller buttons in Play.** Settings › Controller buttons: choose which PS5 button each
