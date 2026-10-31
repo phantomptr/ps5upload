@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DEFAULT_PICTURE, type PictureTools } from "../../lib/rpPicture";
+import { DEFAULT_PICTURE, type Enhance, type PictureTools } from "../../lib/rpPicture";
+import { hdrScreen, hdrSupport, type HdrSupport } from "../../lib/rpHdr";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router";
 import {
@@ -71,6 +72,7 @@ import { fitName, PlayMenu, VolumeSlider } from "./PlayMenu";
 import { rpBrowserAdvice } from "./browserAdvice";
 import { askMotion, motionAvailable, startMotion } from "../../lib/motion";
 import { ControllerSetup } from "./ControllerSetup";
+import { ButtonRemap } from "./ButtonRemap";
 import { connectWebHidTouchpad, webHidTouchpadAvailable, webHidTouchpadConnected } from "../../lib/padTouchpad";
 import { PadAsks, PhonePadsPanel, usePadLink } from "./PhonePads";
 import { GamePanel } from "./game/GamePanel";
@@ -267,7 +269,7 @@ function StatsLine({
     fps: stats.fps,
     mbps: stats.mbps.toFixed(1),
     ms: stats.decodeMs.toFixed(1),
-    codec: stats.codec.startsWith("hev") || stats.codec.startsWith("hvc") ? "HEVC" : "H.264",
+    codec: stats.codec.startsWith("hev") || stats.codec.startsWith("hvc") ? (stats.hdr ? "HEVC HDR" : "HEVC") : "H.264",
     loss: stats.lossPct.toFixed(2),
     audio: Math.round(stats.audioMs),
   };
@@ -411,11 +413,13 @@ function FitMenu({
   );
 }
 
-/** Settings › Picture: sharpen, colour, a 21:9 crop, upscaling and sharp pixels (lib/rpPicture.ts). They
- *  apply at once; with all of them off the picture is drawn exactly as the console sends it. */
+/** Settings › Picture: sharpening and upscaling, colour, a 21:9 crop and sharp pixels
+ *  (lib/rpPicture.ts). They apply at once; with all of them off the picture is drawn exactly as
+ *  the console sends it. */
 function PictureToolsSetting() {
   const tr = useTr();
   const pic = useRemotePlayStore((s) => s.prefs.picture);
+  const hdr = useRemotePlayStore((s) => s.prefs.codec === "hdr");
   const setPrefs = useRemotePlayStore((s) => s.setPrefs);
   const set = (p: Partial<PictureTools>) => setPrefs({ picture: { ...pic, ...p } });
   const slider = (key: "sharpen" | "brightness" | "contrast" | "saturation", label: string, min: number) => (
@@ -437,7 +441,29 @@ function PictureToolsSetting() {
   return (
     <fieldset className="space-y-2" data-testid="rp-picture">
       <legend className="mb-1 text-sm font-medium">{tr("rp_picture_title", undefined, "Picture")}</legend>
-      {slider("sharpen", tr("rp_picture_sharpen", undefined, "Sharpen"), 0)}
+      <div className="space-y-1">
+        <Select
+          label={tr("rp_picture_enhance", undefined, "Sharpening and upscaling")}
+          block={false}
+          className="w-64"
+          value={pic.enhance}
+          onChange={(e) => set({ enhance: e.target.value as Enhance })}
+          data-testid="rp-picture-enhance"
+          options={[
+            { value: "off", label: tr("rp_picture_enhance_off", undefined, "Off") },
+            { value: "sharpen", label: tr("rp_picture_enhance_sharpen", undefined, "Sharpen (AMD FidelityFX RCAS)") },
+            { value: "fsr", label: tr("rp_picture_enhance_fsr", undefined, "Upscale to the screen (AMD FSR 1)") },
+          ]}
+        />
+        <p className="text-xs text-[var(--color-muted)]">
+          {tr(
+            "rp_picture_enhance_hint",
+            undefined,
+            "Done on the graphics card, on any GPU. Sharpen makes the picture crisper. Upscale also brings it up to your screen's own resolution: best on a big or 4K screen. Off with Sharp pixels.",
+          )}
+        </p>
+      </div>
+      {pic.enhance !== "off" && slider("sharpen", tr("rp_picture_sharpen", undefined, "Sharpen"), 0)}
       {slider("brightness", tr("rp_picture_brightness", undefined, "Brightness"), -50)}
       {slider("contrast", tr("rp_picture_contrast", undefined, "Contrast"), -50)}
       {slider("saturation", tr("rp_picture_saturation", undefined, "Colour"), -50)}
@@ -452,21 +478,20 @@ function PictureToolsSetting() {
         )}
       />
       <Toggle
-        checked={pic.upscale}
-        onChange={(v) => set({ upscale: v })}
-        label={tr("rp_picture_upscale", undefined, "Upscale to the screen (FSR 1, experimental)")}
-        hint={tr(
-          "rp_picture_upscale_hint",
-          undefined,
-          "Brings the picture up to your screen's own resolution on the graphics card with AMD FidelityFX Super Resolution 1, which works on any GPU: crisper on a big or 4K screen. Sharpen sets how crisp. Off with Sharp pixels.",
-        )}
-      />
-      <Toggle
         checked={pic.pixelated}
         onChange={(v) => set({ pixelated: v })}
         label={tr("rp_picture_pixelated", undefined, "Sharp pixels")}
         hint={tr("rp_picture_pixelated_hint", undefined, "Scales with hard edges instead of smoothing: for retro games.")}
       />
+      {hdr && (
+        <p className="text-xs text-[var(--color-muted)]">
+          {tr(
+            "rp_picture_hdr_note",
+            undefined,
+            "In HDR only Crop to 21:9 and Sharp pixels apply: the other tools work on SDR pictures.",
+          )}
+        </p>
+      )}
       <button
         type="button"
         onClick={() => setPrefs({ picture: DEFAULT_PICTURE })}
@@ -518,10 +543,48 @@ function GameModeNote() {
   );
 }
 
+/** Whether HDR can be offered here (lib/rpHdr.ts), once checked; null until then. */
+function useHdrSupport(): HdrSupport | null {
+  const [v, setV] = useState<HdrSupport | null>(null);
+  useEffect(() => {
+    let live = true;
+    void hdrSupport().then((r) => live && setV(r));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return v;
+}
+
+/** What HDR does here, or why it is not offered (said only to someone who chose it, or who
+ *  has an HDR screen and so might look for it). */
+function HdrNote({ support, chosen }: { support: HdrSupport | null; chosen: boolean }) {
+  const tr = useTr();
+  if (!support) return null;
+  let text: string | null = null;
+  if (support.ok) {
+    if (chosen)
+      text = tr(
+        "rp_codec_hdr_hint",
+        undefined,
+        "The PS5 sends HDR; it shows in HDR on this screen. Experimental: if the picture looks dull or too bright, go back to Auto.",
+      );
+  } else if (chosen || hdrScreen()) {
+    text =
+      support.why === "decoder"
+        ? tr("rp_codec_hdr_no_decoder", undefined, "HDR is not offered: this device cannot decode the PS5's HDR video (HEVC Main10).")
+        : support.why === "screen"
+          ? tr("rp_codec_hdr_no_screen", undefined, "HDR is not offered: this screen is not an HDR screen, or HDR is off in the system's settings.")
+          : tr("rp_codec_hdr_no_display", undefined, "HDR is not offered: this browser cannot draw HDR (it needs WebGPU with HDR, as in Chrome or Edge).");
+  }
+  return text ? <p className="text-xs text-[var(--color-muted)]" data-testid="rp-hdr-note">{text}</p> : null;
+}
+
 /** Everything that can be set, in one place: picture, sound, session, controls, keys. */
 function SettingsPanel({ running }: { running: boolean }) {
   const tr = useTr();
   const prefs = useRemotePlayStore((s) => s.prefs);
+  const hdr = useHdrSupport();
   const setPrefs = useRemotePlayStore((s) => s.setPrefs);
   const keymap = useRemotePlayStore((s) => s.keymap);
   const setKeymap = useRemotePlayStore((s) => s.setKeymap);
@@ -595,9 +658,14 @@ function SettingsPanel({ running }: { running: boolean }) {
             options={[
               { value: "auto", label: tr("rp_codec_auto", undefined, "Auto (HEVC where it works)") },
               { value: "h264", label: "H.264" },
+              // Only where it can be shown in HDR (or already chosen, to show what is set).
+              ...(hdr?.ok || prefs.codec === "hdr"
+                ? [{ value: "hdr", label: tr("rp_codec_hdr", undefined, "HDR (HEVC, experimental)") }]
+                : []),
             ]}
           />
         </div>
+        <HdrNote support={hdr} chosen={prefs.codec === "hdr"} />
         <p className="text-xs text-[var(--color-muted)]">
           {tr(
             "rp_decoding_hint",
@@ -813,6 +881,11 @@ function SettingsPanel({ running }: { running: boolean }) {
         <h3 className="text-sm font-semibold">{tr("rp_pads_title", undefined, "Controllers")}</h3>
         <ControllerSetup />
         <WebHidTouchpad />
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold">{tr("rp_buttons_title", undefined, "Controller buttons")}</h3>
+        <ButtonRemap />
       </section>
 
       <section className="space-y-2">

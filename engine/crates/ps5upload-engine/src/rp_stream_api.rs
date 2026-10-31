@@ -5,7 +5,8 @@
 //! AGPL-3.0):
 //!
 //! * client → engine, text JSON: first `{"host", "regist_key", "rp_key",
-//!   "width"?, "height"?, "fps"?, "bitrate_kbps"?, "codec"?, "keep_alive_s"?,
+//!   "width"?, "height"?, "fps"?, "bitrate_kbps"?, "codec"? ("h264", "h265",
+//!   or "h265_hdr": HEVC Main10 in HDR), "keep_alive_s"?,
 //!   "attach_only"?, "low_latency"?, "mic"?}`, then `{"pad": {"buttons", "l2", "r2",
 //!   "lx", "ly", "rx", "ry"}}` whenever the pad changes, `{"keyframe": true}`,
 //!   `{"ping": t}` (answered at once with `{"pong": t}`, for the page to time
@@ -698,13 +699,13 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
     if let Some(b) = start.bitrate_kbps {
         cfg.bitrate_kbps = b;
     }
-    if start.codec.as_deref() == Some("h265") {
-        cfg.codec = Codec::H265;
+    if let Some(c) = start.codec.as_deref().and_then(Codec::from_name) {
+        cfg.codec = c;
     }
     cfg.mic = start.mic;
     let live = Arc::new(Live::new(
         start.host.clone(),
-        cfg.codec == Codec::H265,
+        cfg.codec.is_hevc(),
         start
             .keep_alive_s
             .map(Duration::from_secs)

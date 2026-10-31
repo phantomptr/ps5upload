@@ -6,10 +6,11 @@
 // turns that into pixels on a canvas, sound, and input; the screen only drives it.
 
 import { DEFAULT_PICTURE, PicturePass, cropRect, needsPass, upscaleSize, upscales, type PictureTools } from "./rpPicture";
+import { HdrPresenter, hdrSupport, isHdrFrame, pickCodec, supportedHevcMain10, type CodecPref, type StreamCodec } from "./rpHdr";
 import type { MotionReading } from "./motion";
 import { getEngineUrl } from "../state/engine";
 import { log } from "../state/logs";
-import { spsVisibleRect, visibleFix, type VisibleRect } from "./rpSps";
+import { hevcCodecString, spsVisibleRect, visibleFix, type VisibleRect } from "./rpSps";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
 
 /** Button bits, as the console (and chiaki) number them. */
@@ -364,6 +365,8 @@ export interface StreamStats {
   mbps: number;
   decodeMs: number;
   codec: string;
+  /** The stream is the console's HDR one. */
+  hdr?: boolean;
   lossPct: number;
   rebuilt: number;
   lost: number;
@@ -429,10 +432,13 @@ export interface StreamOptions {
   picture?: PictureTools;
   /** "software": never the hardware decoder (Settings › Video decoding). */
   decoding?: "auto" | "software";
-  /** "h264": never ask for HEVC (Settings › Video format). */
-  codec?: "auto" | "h264";
+  /** "h264": never ask for HEVC; "hdr": the console's HDR stream where it can be shown in HDR
+   *  here (Settings › Video format). */
+  codec?: CodecPref;
   /** The picture tools' GPU pass turned itself off (no WebGL, or the device lags). */
   onPictureOff?: (why: "failed" | "slow") => void;
+  /** HDR was asked for and did not work here (`started`: the session is in HDR, shown as SDR). */
+  onHdrOff?: (why: string, started: boolean) => void;
   /** How the picture fills the place it is shown in (default: the whole picture). */
   fit?: PictureFit;
   /** False: the console's rumble is not played on the controllers. */
@@ -536,14 +542,17 @@ export function stopEngineSession(host: string): void {
 /** One stream. It belongs to the app, not to a screen: leaving the screen keeps it (and the
  *  console's session) running. `stop()` ends it. */
 export class RemotePlayStream {
-  /** The picture; the screen puts it on the page wherever it shows the stream. */
-  readonly canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D | null;
+  /** The picture; the screen puts it on the page wherever it shows the stream. It is replaced
+   *  (in place on the page) only when its drawing has to fall back to the 2D canvas. */
+  get canvas(): HTMLCanvasElement {
+    return this.cv;
+  }
+  private cv: HTMLCanvasElement;
   private ws: WebSocket | null = null;
   private video: VideoDecoder | null = null;
   private header: Uint8Array | null = null;
   private hevc = false;
-  private codecChoice: "h265" | "h264" = "h264";
+  private codecChoice: StreamCodec = "h264";
   private sawKey = false;
   private ts = 0;
   private queued: EncodedVideoChunk[] = [];
@@ -667,19 +676,14 @@ export class RemotePlayStream {
   private shape = 16 / 9;
 
   constructor(private readonly o: StreamOptions) {
-    this.canvas = document.createElement("canvas");
-    this.canvas.dataset.testid = "rp-canvas";
+    this.cv = document.createElement("canvas");
+    this.cv.dataset.testid = "rp-canvas";
     // Until the first frame, a 16:9 picture.
-    this.canvas.style.setProperty("--rp-shape", String(16 / 9));
+    this.cv.style.setProperty("--rp-shape", String(16 / 9));
     this.setFit(o.fit ?? "fit");
     this.replayS = o.replayS ?? 0;
     if (o.picture) this.setPicture(o.picture);
-    // Not `desynchronized`: Chromium honours it only on Windows and ChromeOS, where the canvas
-    // is presented through its own swap chain/overlay instead of the page's compositor. The
-    // Windows app (only there) showed the picture enlarged from the top-left corner, cropped on
-    // the right and bottom (#538): the canvas's CSS size and object-fit were not applied. The
-    // page's compositor, as on every other platform, scales it to its box.
-    this.ctx = this.canvas.getContext("2d", { alpha: false });
+    // The canvas gets its context at the first frame (drawFrame), or at the start for HDR.
   }
 
   /** The video's codec string as its decoder was set up with ("" before the first picture). */
@@ -687,10 +691,31 @@ export class RemotePlayStream {
     return this.codec;
   }
 
-  /** Picture tools (rpPicture.ts) and their GPU pass, made when a tool needs it. */
+  /** Picture tools (rpPicture.ts). */
   private tools: PictureTools = DEFAULT_PICTURE;
-  private pass: PicturePass | null = null;
-  /** The pass stopped for good this session ("failed": no WebGL; "slow": the device lags). */
+  /** How frames are drawn, chosen at the first frame: WebGPU in HDR, WebGL 2 (the picture tools
+   *  run there; with none on it is one plain pass), or the 2D canvas where WebGL 2 is missing or
+   *  failed. Not `desynchronized` in any: Chromium honours it only on Windows and ChromeOS,
+   *  where the canvas is presented through its own swap chain/overlay instead of the page's
+   *  compositor. The Windows app (only there) showed the picture enlarged from the top-left
+   *  corner, cropped on the right and bottom (#538): the canvas's CSS size and object-fit were
+   *  not applied. The page's compositor, as on every other platform, scales it to its box. */
+  private drawer:
+    | { kind: "hdr"; hdr: HdrPresenter }
+    | { kind: "gl"; pass: PicturePass }
+    | { kind: "2d"; ctx: CanvasRenderingContext2D | null }
+    | null = null;
+  /** WebGL failed on this stream: the 2D canvas from now on. */
+  private noGl = false;
+  /** The HDR presenter made at the start, used from the first frame. */
+  private hdr: HdrPresenter | null = null;
+  private loggedHdrFrame = false;
+  /** The canvas size and shape last logged (logLayout). */
+  private laidOut = "";
+  /** WebGL's context went away: how long it gets to come back before the 2D canvas. */
+  private glLostTimer = 0;
+  /** The picture tools stopped for good this session ("failed": no WebGL; "slow": the device
+   *  lags). The picture is then drawn plain. */
   private passOff: "failed" | "slow" | null = null;
   private slowFrames = 0;
 
@@ -715,7 +740,7 @@ export class RemotePlayStream {
       const r = entries[entries.length - 1].contentRect;
       this.boxCss = { w: r.width, h: r.height };
     });
-    ro.observe(this.canvas);
+    ro.observe(this.cv);
     this.boxWatch = ro;
   }
 
@@ -723,44 +748,116 @@ export class RemotePlayStream {
   private boxPx(): { w: number; h: number } | null {
     const b = this.boxCss;
     if (!b) return null;
-    const r = this.canvas.ownerDocument.defaultView?.devicePixelRatio ?? 1;
+    const r = this.cv.ownerDocument.defaultView?.devicePixelRatio ?? 1;
     return { w: Math.round(b.w * r), h: Math.round(b.h * r) };
   }
 
   /** Set the picture tools; they apply from the next frame. */
   setPicture(p: PictureTools): void {
     this.tools = p;
-    this.canvas.style.imageRendering = p.pixelated ? "pixelated" : "";
+    this.cv.style.imageRendering = p.pixelated ? "pixelated" : "";
     this.watchBox(upscales(p));
-    if (!needsPass(p)) {
-      this.pass?.dispose();
-      this.pass = null;
-    }
   }
 
-  /** Why the picture tools' GPU pass is off this session, or null. */
+  /** Why the picture tools are off this session, or null. */
   get pictureOff(): "failed" | "slow" | null {
     return this.passOff;
   }
 
-  private picturePass(): PicturePass | null {
-    if (this.passOff || !needsPass(this.tools)) return null;
-    if (!this.pass) {
-      try {
-        this.pass = new PicturePass();
-      } catch {
-        this.picturePassOff("failed");
-        return null;
-      }
-    }
-    return this.pass;
+  private picturePassOff(why: "failed" | "slow"): void {
+    if (this.passOff) return;
+    this.passOff = why;
+    this.o.onPictureOff?.(why);
   }
 
-  private picturePassOff(why: "failed" | "slow"): void {
-    this.passOff = why;
-    this.pass?.dispose();
-    this.pass = null;
-    this.o.onPictureOff?.(why);
+  /** The drawer for the next frame, made on first use. */
+  private pickDrawer(): NonNullable<RemotePlayStream["drawer"]> {
+    if (this.hdr && !this.hdr.lost && this.hdr.canvas === this.cv) return (this.drawer = { kind: "hdr", hdr: this.hdr });
+    if (!this.noGl) {
+      try {
+        const pass = new PicturePass(this.cv);
+        this.watchGl(this.cv);
+        return (this.drawer = { kind: "gl", pass });
+      } catch (e) {
+        log.warn("remote-play", `no WebGL 2 for the picture (${String(e)}): drawing with the 2D canvas`);
+        this.noGl = true;
+      }
+    }
+    let ctx = this.cv.getContext("2d", { alpha: false });
+    if (!ctx) {
+      // The canvas already holds another kind of context (WebGL made, then a shader failed).
+      this.replaceCanvas();
+      ctx = this.cv.getContext("2d", { alpha: false });
+    }
+    return (this.drawer = { kind: "2d", ctx });
+  }
+
+  /** WebGL's context can be lost (a driver reset, the GPU process restarting, a move between
+   *  windows): wait a moment for it to come back, then go on with the 2D canvas. */
+  private watchGl(c: HTMLCanvasElement): void {
+    c.addEventListener("webglcontextlost", (e) => {
+      if (c !== this.cv) return;
+      e.preventDefault(); // so it can be restored
+      log.warn("remote-play", "the picture's WebGL context was lost; waiting for it to come back");
+      window.clearTimeout(this.glLostTimer);
+      this.glLostTimer = window.setTimeout(() => {
+        if (c !== this.cv || !(this.drawer?.kind === "gl" && this.drawer.pass.lost)) return;
+        this.glFailed("its WebGL context did not come back");
+      }, 3000);
+    });
+    c.addEventListener("webglcontextrestored", () => {
+      if (c !== this.cv || this.noGl) return;
+      window.clearTimeout(this.glLostTimer);
+      try {
+        this.drawer = { kind: "gl", pass: new PicturePass(c) };
+        log.info("remote-play", "the picture's WebGL context is back");
+      } catch (e) {
+        this.glFailed(String(e));
+      }
+    });
+  }
+
+  /** WebGL cannot draw the picture: the 2D canvas from now on, on a new canvas element. */
+  private glFailed(why: string): void {
+    log.warn("remote-play", `the picture could not be drawn with WebGL (${why}): drawing with the 2D canvas`);
+    this.noGl = true;
+    this.replaceCanvas();
+  }
+
+  /** The HDR display failed mid-stream: the session stays HDR, drawn by WebGL or 2D (the
+   *  browser converts it to SDR); the next start asks for SDR (the store sets that). */
+  private hdrFailed(why: string): void {
+    log.warn("remote-play", `HDR could not be shown (${why}): showing the picture as SDR`);
+    this.hdr?.dispose();
+    this.hdr = null;
+    this.replaceCanvas();
+    this.o.onHdrOff?.(why, true);
+  }
+
+  /** A fresh canvas in the old one's place: a canvas keeps the first kind of context it gave,
+   *  so changing how frames are drawn needs a new element. It takes over the old one's classes,
+   *  fit, shape and size; the screens find it as `canvas` (picture-in-picture as a video keeps
+   *  showing the old one until it is opened again). */
+  private replaceCanvas(): void {
+    const old = this.cv;
+    if (this.drawer?.kind === "gl") this.drawer.pass.dispose();
+    this.drawer = null;
+    const c = document.createElement("canvas");
+    c.className = old.className;
+    for (const [k, v] of Object.entries(old.dataset)) if (v !== undefined) c.dataset[k] = v;
+    c.style.cssText = old.style.cssText;
+    c.width = old.width;
+    c.height = old.height;
+    this.cv = c;
+    try {
+      old.replaceWith(c);
+    } catch {
+      // Not on a page.
+    }
+    if (this.boxWatch) {
+      this.watchBox(false);
+      this.watchBox(upscales(this.tools));
+    }
   }
 
   /** The instant replay window asked for now (it can change while the stream runs). */
@@ -778,7 +875,7 @@ export class RemotePlayStream {
    *  against what it draws, so a report of a cut-off picture (#538, #575) says which. */
   private logLayout(streamW: number, streamH: number): void {
     try {
-      const c = this.canvas;
+      const c = this.cv;
       const win = c.ownerDocument.defaultView;
       const r = c.getBoundingClientRect();
       const place = c.parentElement?.getBoundingClientRect();
@@ -788,7 +885,7 @@ export class RemotePlayStream {
         `picture: stream ${streamW}x${streamH}, canvas ${c.width}x${c.height} px, shown ${n(r.width)}x${n(r.height)} ` +
           `in ${n(place?.width)}x${n(place?.height)} css px, fit ${c.dataset.fit}, ratio ${win?.devicePixelRatio ?? "?"}, ` +
           `window ${win?.innerWidth ?? "?"}x${win?.innerHeight ?? "?"}${win !== window ? " (pop-out)" : ""}, ` +
-          `tools ${JSON.stringify(this.tools)}`,
+          `drawn with ${this.drawer?.kind ?? "?"}, tools ${JSON.stringify(this.tools)}${this.passOff ? ` (off: ${this.passOff})` : ""}`,
       );
     } catch {
       // Only a log line.
@@ -798,8 +895,8 @@ export class RemotePlayStream {
   /** How the picture fills the place it is shown in (see PictureFit). */
   setFit(fit: PictureFit): void {
     const f: PictureFit = fit in FIT_CLASS ? fit : "fit";
-    this.canvas.className = canvasClass(f);
-    this.canvas.dataset.fit = f;
+    this.cv.className = canvasClass(f);
+    this.cv.dataset.fit = f;
   }
 
   get host(): string {
@@ -823,10 +920,27 @@ export class RemotePlayStream {
     this.gainNode = this.audioCtx.createGain();
     this.gainNode.gain.value = this.volume;
     this.gainNode.connect(this.audioCtx.destination);
-    const [codec] = await Promise.all([
-      this.o.codec === "h264" ? Promise.resolve("h264" as const) : chooseCodec(width, height),
+    const pref = this.o.codec ?? "auto";
+    const [hevc, hdr] = await Promise.all([
+      pref === "h264" ? Promise.resolve(false) : chooseCodec(width, height).then((c) => c === "h265"),
+      pref === "hdr" ? hdrSupport(width, height) : Promise.resolve(null),
       this.openWorklet(),
     ]);
+    let { codec, hdrOff } = pickCodec(pref, hevc, hdr);
+    if (codec === "h265_hdr") {
+      // The HDR canvas is set up before the console is asked: if it cannot be, the session is
+      // plain HEVC from the start.
+      try {
+        this.hdr = await HdrPresenter.create(this.cv);
+      } catch (e) {
+        codec = hevc ? "h265" : "h264";
+        hdrOff = String(e);
+      }
+    }
+    if (hdrOff) {
+      log.warn("remote-play", `HDR was asked for but is not used (${hdrOff}): streaming ${codec}`);
+      this.o.onHdrOff?.(hdrOff, false);
+    }
     if (codec === "h264" && !(await canDecodeAvc(width, height))) {
       // Found before the console is woken or asked to stream.
       this.o.onError({ code: "no_decoder", detail: "" });
@@ -834,7 +948,7 @@ export class RemotePlayStream {
       return;
     }
     this.codecChoice = codec;
-    this.hevc = codec === "h265";
+    this.hevc = codec !== "h264";
     this.connect(!!this.o.attach);
     this.ticking = true;
     this.schedule();
@@ -846,6 +960,7 @@ export class RemotePlayStream {
         mbps: ((this.bytes - lastBytes) * 8) / 1e6,
         decodeMs: this.decodeMs,
         codec: this.codec,
+        hdr: this.codecChoice === "h265_hdr",
         audioMs: this.audioMs,
         underruns: this.underruns,
         rttMs: this.rttMs,
@@ -1015,7 +1130,7 @@ export class RemotePlayStream {
 
   /** The picture as it is now, a PNG at the stream's own size (null before the first frame). */
   snapshot(): Promise<Blob | null> {
-    const c = this.canvas;
+    const c = this.cv;
     if (!this.decoded) return Promise.resolve(null);
     return new Promise((resolve) => c.toBlob((b) => resolve(b), "image/png"));
   }
@@ -1024,7 +1139,7 @@ export class RemotePlayStream {
    *  off before the volume (a muted player still records it) into a second output, so what
    *  plays is untouched. `release()` takes the tap off again. */
   captureMedia(fps: number): { stream: MediaStream; release: () => void } | null {
-    const c = this.canvas as HTMLCanvasElement & { captureStream?: (fps?: number) => MediaStream };
+    const c = this.cv as HTMLCanvasElement & { captureStream?: (fps?: number) => MediaStream };
     if (typeof c.captureStream !== "function") return null;
     const stream = c.captureStream(fps);
     const actx = this.audioCtx;
@@ -1119,8 +1234,12 @@ export class RemotePlayStream {
     }
     window.clearInterval(this.statsTimer);
     window.clearTimeout(this.reconnectTimer);
+    window.clearTimeout(this.glLostTimer);
     this.watchBox(false);
     this.resetMedia();
+    if (this.drawer?.kind === "gl") this.drawer.pass.dispose();
+    this.hdr?.dispose();
+    this.hdr = null;
     try {
       this.worklet?.disconnect();
     } catch {
@@ -1256,6 +1375,84 @@ export class RemotePlayStream {
     this.video.decode(chunk);
   }
 
+  /** Draw one decoded frame onto the canvas (it closes the frame). The canvas is the picture's
+   *  own size (its visible part, at the display aspect), taken from each frame, never from the
+   *  size asked for: the console may send another; upscaled, it is the size upscaled to. */
+  private drawFrame(frame: VideoFrame): void {
+    const fw = frame.displayWidth;
+    const fh = frame.displayHeight;
+    let out = { w: fw, h: fh };
+    // The picture's own shape (before any upscale), which its layout follows.
+    let shape = fw / fh;
+    const d = this.drawer ?? this.pickDrawer();
+    {
+      if (d.kind === "hdr") {
+        if (!this.loggedHdrFrame) {
+          this.loggedHdrFrame = true;
+          const cs = frame.colorSpace;
+          const desc = `${cs?.primaries ?? "?"}/${cs?.transfer ?? "?"}/${cs?.matrix ?? "?"}, format ${frame.format ?? "GPU"}`;
+          if (isHdrFrame(cs)) log.info("remote-play", `HDR picture: ${desc}`);
+          else log.warn("remote-play", `HDR session, but the decoder says the picture is ${desc}: drawn as it is`);
+        }
+        try {
+          out = d.hdr.render(frame, fw, fh, this.tools.crop219);
+          shape = fw / out.h;
+        } catch (e) {
+          this.hdrFailed(String(e));
+          frame.close();
+          return;
+        }
+      } else if (d.kind === "gl") {
+        // Lost: frames are dropped until it is back (watchGl).
+        if (d.pass.lost) {
+          frame.close();
+          return;
+        }
+        const tools = this.passOff ? DEFAULT_PICTURE : this.tools;
+        const t0 = performance.now();
+        try {
+          const band = cropRect(fw, fh, tools.crop219).h;
+          shape = fw / band;
+          const to = upscales(tools) ? upscaleSize({ w: fw, h: band }, this.boxPx()) : null;
+          out = d.pass.render(frame, fw, fh, tools, to);
+        } catch (e) {
+          if (d.pass.lost) {
+            frame.close();
+            return;
+          }
+          this.glFailed(String(e));
+          return this.drawFrame(frame);
+        }
+        // A device that cannot keep up gets the plain picture back, then the 2D canvas.
+        this.slowFrames = performance.now() - t0 > 12 ? this.slowFrames + 1 : 0;
+        if (this.slowFrames > 30) {
+          this.slowFrames = 0;
+          if (needsPass(tools)) this.picturePassOff("slow");
+          else this.glFailed("too slow on this device");
+        }
+      } else {
+        // No WebGL: the picture as it is.
+        if (needsPass(this.tools)) this.picturePassOff("failed");
+        const c = this.cv;
+        if (c.width !== fw) c.width = fw;
+        if (c.height !== fh) c.height = fh;
+        d.ctx?.drawImage(frame, 0, 0, fw, fh);
+      }
+    }
+    // The shape on its own too: upscaled, the canvas keeps the box's size while Crop to 21:9
+    // changes the shape.
+    const laid = `${out.w}x${out.h}:${shape}`;
+    if (laid !== this.laidOut) {
+      this.laidOut = laid;
+      if (shape !== this.shape) {
+        this.cv.style.setProperty("--rp-shape", String(shape));
+        this.shape = shape;
+      }
+      this.logLayout(fw, fh);
+    }
+    frame.close();
+  }
+
   private openVideo(): void {
     const video = new VideoDecoder({
       output: (decoded) => {
@@ -1265,49 +1462,7 @@ export class RemotePlayStream {
           this.decodeMs = performance.now() - t;
           this.sentAt.delete(frame.timestamp);
         }
-        // The canvas is the picture's own size (its visible part, at the display aspect), taken
-        // from each frame, never from the size asked for: the console may send another.
-        const c = this.canvas;
-        let w = frame.displayWidth;
-        let h = frame.displayHeight;
-        // The picture's own shape (before any upscale), which its layout follows.
-        let shape = w / h;
-        // Picture tools on: the frame goes through the GPU pass first (rpPicture.ts).
-        const pass = this.picturePass();
-        let src: CanvasImageSource = frame;
-        if (pass) {
-          try {
-            const t0 = performance.now();
-            const band = cropRect(w, h, this.tools.crop219).h;
-            shape = w / band;
-            const to = upscales(this.tools) ? upscaleSize({ w, h: band }, this.boxPx()) : null;
-            const out = pass.render(frame, w, h, this.tools, to);
-            src = pass.canvas;
-            w = out.w;
-            h = out.h;
-            // A device that cannot keep up gets the plain picture back.
-            this.slowFrames = performance.now() - t0 > 12 ? this.slowFrames + 1 : 0;
-            if (this.slowFrames > 30) this.picturePassOff("slow");
-          } catch {
-            this.picturePassOff("failed");
-            src = frame;
-            w = frame.displayWidth;
-            h = frame.displayHeight;
-            shape = w / h;
-          }
-        }
-        // The shape on its own too: upscaled, the canvas keeps the box's size while Crop to 21:9
-        // changes the shape.
-        const shapeChanged = shape !== this.shape;
-        if (c.width !== w || c.height !== h || shapeChanged) {
-          if (c.width !== w) c.width = w;
-          if (c.height !== h) c.height = h;
-          c.style.setProperty("--rp-shape", String(shape));
-          this.shape = shape;
-          this.logLayout(frame.displayWidth, frame.displayHeight);
-        }
-        this.ctx?.drawImage(src, 0, 0, c.width, c.height);
-        frame.close();
+        this.drawFrame(frame);
         this.decoded++;
       },
       error: (e) => {
@@ -1357,7 +1512,24 @@ export class RemotePlayStream {
       for (const q of this.queued) video.decode(q);
       this.queued = [];
     };
-    if (this.hevc) {
+    if (this.codecChoice === "h265_hdr") {
+      // Main10: the SPS's own codec string where the device takes it, else the usual ones.
+      const own = this.header ? hevcCodecString(this.header) : null;
+      void (async () => {
+        let c: string | null = null;
+        try {
+          if (own && (await VideoDecoder.isConfigSupported({ codec: own })).supported) c = own;
+        } catch {
+          // Not this one.
+        }
+        c ??= await supportedHevcMain10(this.o.width, this.o.height);
+        if (c) void configure(c);
+        else {
+          this.o.onHdrOff?.("no HEVC Main10 decoder", true);
+          this.o.onError({ code: "decode", detail: "This device cannot decode the HDR stream (HEVC Main10)." });
+        }
+      })();
+    } else if (this.hevc) {
       void supportedHevc(this.o.width, this.o.height).then((c) => {
         if (c) void configure(c);
         else this.o.onError({ code: "decode", detail: "This device cannot decode HEVC." });

@@ -1112,7 +1112,7 @@ fn main() -> Result<()> {
     }
 
     match rest[0].as_str() {
-        // Remote Play stream spike: rp-stream <creds.json> <out.264> [seconds] [h264|h265] [WxH]
+        // Remote Play stream spike: rp-stream <creds.json> <out.264> [seconds] [h264|h265|h265_hdr] [WxH]
         // creds.json = {"<host>": {"regist_key": hex32, "rp_key": hex32}}; keys never printed.
         "rp-stream" => rp_stream_cmd::run(addr, &rest[1..]),
         "rp-ddp" => rp_stream_cmd::ddp_raw(addr),

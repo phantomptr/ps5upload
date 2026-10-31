@@ -67,6 +67,8 @@ interface Case {
   hardwareCropsFrame?: boolean;
   /** Play settings stored before the start (Video decoding, Video format). */
   prefs?: Record<string, unknown>;
+  /** A device without WebGL 2: the page gets none. */
+  noWebGl?: boolean;
 }
 
 async function open(
@@ -93,6 +95,17 @@ async function open(
         : {}),
   });
   const page = await ctx.newPage();
+  if (c.noWebGl)
+    await page.addInitScript(() => {
+      const real = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (
+        this: HTMLCanvasElement,
+        kind: string,
+        ...rest: unknown[]
+      ) {
+        return kind === "webgl2" ? null : real.call(this, kind, ...(rest as []));
+      } as typeof real;
+    });
   await page.addInitScript(
     ({ fit, h264, picture, edge, crops, prefs }) => {
       const w = window as unknown as {
@@ -481,27 +494,52 @@ test("Remote Play picture tools crop to 21:9 and brighten the real picture", asy
       )
       .toBe("1920x822");
     // The fixture's grey (0x40) is brighter now.
-    const mid = await canvas.evaluate((c: HTMLCanvasElement) =>
-      Array.from(
-        c
-          .getContext("2d")!
-          .getImageData(c.width / 2, c.height / 2, 1, 1)
-          .data.slice(0, 3),
-      ),
-    );
+    // Drawn with WebGL: read through a 2D copy.
+    const mid = await canvas.evaluate((c: HTMLCanvasElement) => {
+      const t = document.createElement("canvas");
+      t.width = c.width;
+      t.height = c.height;
+      const g = t.getContext("2d")!;
+      g.drawImage(c, 0, 0);
+      return Array.from(g.getImageData(c.width / 2, c.height / 2, 1, 1).data.slice(0, 3));
+    });
     for (const v of mid) expect(v).toBeGreaterThan(0x40 + 60);
   } finally {
     await close();
   }
 });
 
+// Frames are drawn with WebGL 2 (the plain pass when no tool is on), and with the 2D canvas on a
+// device without it: the whole picture, the right way up, either way.
+for (const noWebGl of [false, true])
+  test(`Remote Play draws the picture with ${noWebGl ? "the 2D canvas without WebGL 2" : "WebGL 2"}`, async ({
+    browser,
+  }) => {
+    const c: Case = { dpr: 1, size: "1920x1080", h264: true, noWebGl };
+    const { page, close } = await open(browser, c);
+    try {
+      await page.getByTestId("rp-start").click();
+      await checkPicture(page, c);
+      const kind = await page
+        .getByTestId("rp-stage")
+        .filter({ visible: true })
+        .getByTestId("rp-canvas")
+        .evaluate((el: HTMLCanvasElement) =>
+          el.getContext("2d") ? "2d" : "webgl2",
+        );
+      expect(kind).toBe(noWebGl ? "2d" : "webgl2");
+    } finally {
+      await close();
+    }
+  });
+
 // The picture tools draw through the GPU pass: the whole picture still shows, at Windows'
 // usual 125% and 150% scaling, in every picture size, sharpened or upscaled.
 for (const dpr of [1.25, 1.5])
   for (const fit of ["fit", "fill", "stretch"] as const)
     for (const [name, picture] of [
-      ["sharpened", { sharpen: 40 }],
-      ["upscaled", { upscale: true }],
+      ["sharpened", { enhance: "sharpen", sharpen: 40 }],
+      ["upscaled", { enhance: "fsr" }],
     ] as const)
       test(`Remote Play shows the whole ${name} picture at ${dpr * 100}%, ${fit}`, async ({
         browser,
@@ -611,7 +649,7 @@ test("Remote Play upscales the real picture to its size on screen", async ({
     dpr: 2,
     size: "1920x1080",
     h264: true,
-    picture: { upscale: true },
+    picture: { enhance: "fsr" },
     windows: false,
   });
   try {
@@ -630,12 +668,14 @@ test("Remote Play upscales the real picture to its size on screen", async ({
             Math.round(r.height * devicePixelRatio),
           ],
           shape: Number(c.style.getPropertyValue("--rp-shape")),
-          lit: Array.from(
-            c
-              .getContext("2d")!
-              .getImageData(c.width / 2, c.height / 2, 1, 1)
-              .data.slice(0, 3),
-          ),
+          lit: (() => {
+            const t = document.createElement("canvas");
+            t.width = c.width;
+            t.height = c.height;
+            const g = t.getContext("2d")!;
+            g.drawImage(c, 0, 0);
+            return Array.from(g.getImageData(c.width / 2, c.height / 2, 1, 1).data.slice(0, 3));
+          })(),
         };
       });
     await expect
