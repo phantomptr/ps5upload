@@ -870,7 +870,7 @@ function SettingsPanel({ running }: { running: boolean }) {
               {tr("rp_touch_opacity", undefined, "Controller opacity")}
               <input
                 type="range"
-                min={30}
+                min={25}
                 max={100}
                 step={5}
                 value={Math.round(prefs.touchOpacity * 100)}
@@ -1401,6 +1401,8 @@ export function StreamPanel() {
   const touchLayout: TouchLayout = !compact ? "overlay-bar" : portraitFull ? "deck" : "overlay";
   const touchHere = showTouch && (!compact || full);
   const touchOverPicture = touchHere && touchLayout !== "deck";
+  // Sideways in full screen the controller has the menu button (bottom middle), not the handle.
+  const touchMenu = compact && full && touchHere && touchLayout === "overlay";
   const openSettings = () => {
     if (full) exitFull();
     setMenuOpen(false);
@@ -1687,12 +1689,13 @@ export function StreamPanel() {
               opacity={prefs.touchOpacity}
               size={prefs.touchSize}
               deckTop={`calc(${PICTURE_TOP} + 56.25vw)`}
+              onMenu={touchMenu ? () => setMenuOpen(true) : undefined}
             />
           )}
 
           {/* Full screen on a touch-sized player: one small handle, top middle, opens the menu.
               Nothing else on the picture leaves full screen or stops the stream. */}
-          {compact && full && !menuOpen && (
+          {compact && full && !menuOpen && !touchMenu && (
             <button
               type="button"
               onClick={(e) => {

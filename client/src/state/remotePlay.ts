@@ -52,7 +52,7 @@ export interface RpPrefs {
   rumble: boolean;
   /** The controller drawn over the picture: on touch screens (auto), always, or never. */
   touchControls: "auto" | "on" | "off";
-  /** How solid the on-screen controller is drawn, 0.3 (faint) to 1. */
+  /** How solid the on-screen controller is drawn, 0.25 (faint) to 1. */
   touchOpacity: number;
   /** The on-screen controller's size. */
   touchSize: "s" | "m" | "l";
