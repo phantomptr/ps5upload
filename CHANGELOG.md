@@ -6,6 +6,22 @@ What's new in ps5upload, written for humans.
 
 ## 10.2.0
 
+- **Updates are checked before they install.** Each release now publishes the SHA-256 of every
+  download, and the app checks the file against it; a file that doesn't match is deleted and
+  nothing is installed.
+- **One-click updates for a .deb or .rpm install on Linux.** Install and restart asks for your
+  password with the desktop's own prompt, installs the package and opens the new version. If you
+  close the prompt (or your desktop can't show one), the command to run is shown as before.
+  rpm-ostree systems (Bazzite, Silverblue) still get the command, since the change applies after
+  a reboot.
+- **Install updates when you quit** (Settings › Updates, on by default). A downloaded update is
+  installed as you quit PS5Upload, never while something is transferring, and the app stays
+  closed. Not for a .deb or .rpm, which needs your password.
+- **What's new after an update:** the first launch of a new version shows its release notes once.
+- **Skip this version** in the update banner and in Settings › Updates: no banner, badge or
+  automatic install for that version until a newer one comes out.
+- **Linux: the "keep the PC awake" hold ends with the app.** A transfer's sleep block outlived an
+  app that was killed and kept the PC awake until a reboot; it now ends when PS5Upload does.
 - **Remote Play runs at 60 fps in the Linux app.** WebKitGTK converted every frame to RGB on
   the CPU as it was drawn (12 ms of each 16.7 ms frame at 1080p), so frames backed up: about
   40 fps and over 100 ms of delay. The app now hands the GPU the frame's own YUV planes and
