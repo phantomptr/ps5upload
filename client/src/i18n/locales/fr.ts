@@ -6161,6 +6161,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_phone_be": "Utiliser cet appareil comme sa manette",
 "rp_err_keys": "La PS5 n'a pas accepté l'association de cette app. Configurez à nouveau « Réveiller et connecter » pour cette console.",
 "rp_err_other": "Le flux s'est arrêté.",
+"rp_err_lost": "La connexion à la PS5 a été coupée pendant le flux. Relancez-le ; si cela se répète, branchez la PS5 ou cet appareil par câble.",
 "rp_err_passcode": "Cet utilisateur PS5 a un code de connexion. La Lecture à distance d'ici ne peut pas le saisir ; retirez le code ou connectez-vous d'abord sur la console.",
 "rp_err_unreachable": "La PS5 ne répond pas sur le réseau. Vérifiez qu'elle est allumée, sur le même réseau, et que la Lecture à distance est activée dans ses paramètres.",
 "rp_err_video": "La PS5 a refusé cette taille d'image. Essayez 720p.",

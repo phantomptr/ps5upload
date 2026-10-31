@@ -6098,6 +6098,7 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_phone_be": "將此裝置當作它的控制器",
 "rp_err_keys": "PS5 未接受此應用程式的配對。請為這台主機重新設定「喚醒並登入」。",
 "rp_err_other": "串流已停止。",
+"rp_err_lost": "串流過程中與 PS5 的連線中斷了。請重新開始；若反覆發生，請用網路線連接 PS5 或本裝置。",
 "rp_err_passcode": "這個 PS5 使用者設定了登入密碼。從這裡遙控遊玩無法輸入密碼；請移除密碼或先在主機上登入。",
 "rp_err_unreachable": "PS5 在網路上沒有回應。請確認它已開機、在同一網路中，並已在設定中啟用遙控遊玩。",
 "rp_err_video": "PS5 拒絕了該畫面尺寸。請試試 720p。",

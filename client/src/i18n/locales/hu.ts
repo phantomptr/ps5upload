@@ -6451,6 +6451,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_phone_be": "Eszköz használata kontrollerként",
 "rp_err_keys": "A PS5 nem fogadta el ennek az alkalmazásnak a párosítását. Állítsd be újra a(z) „Felébresztés és bejelentkezés” lehetőséget ehhez a konzolhoz.",
 "rp_err_other": "A stream leállt.",
+"rp_err_lost": "A kapcsolat a PS5-tel megszakadt a stream közben. Indítsd újra; ha többször előfordul, csatlakoztasd a PS5-öt vagy ezt az eszközt kábellel.",
 "rp_err_passcode": "Ennek a PS5-felhasználónak bejelentkezési kódja van. Innen a Remote Play nem tudja beírni; töröld a kódot, vagy előbb jelentkezz be a konzolon.",
 "rp_err_unreachable": "A PS5 nem válaszol a hálózaton. Ellenőrizd, hogy be van-e kapcsolva, ugyanazon a hálózaton van-e, és hogy a Remote Play be van-e kapcsolva a beállításaiban.",
 "rp_err_video": "A PS5 elutasította ezt a képméretet. Próbáld 720p-vel.",

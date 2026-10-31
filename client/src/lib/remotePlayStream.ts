@@ -392,7 +392,7 @@ export type StreamPhase =
 
 export interface StreamError {
   /** Stable, from the engine: busy, busy_other, asleep, unreachable, keys, wake_failed,
-   *  passcode, video_refused, other — or client-side: decode, no_decoder, socket. */
+   *  passcode, video_refused, lost (dropped mid-stream), other — or client-side: decode, no_decoder, socket. */
   code: string;
   retryS?: number;
   /** busy_other: the console that is streaming. */

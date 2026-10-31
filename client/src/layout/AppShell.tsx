@@ -132,6 +132,7 @@ import { IncomingShareSheet } from "../components/IncomingShareSheet";
 import { dropTarget, usePackageViewer } from "../state/packageViewer";
 import { installConvertRunner } from "../lib/convertQueueRunner";
 import { recordAppEvent } from "../lib/appJournal";
+import { engineProbeVerdict } from "../lib/engineUnreachable";
 
 // The Convert queue builds through the Convert pipeline wherever the user is in the app.
 installConvertRunner();
@@ -307,10 +308,17 @@ function useStatusPolling() {
     if (!visible) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let misses = 0;
     const tick = async () => {
       const up = await engineApi.ping();
       if (cancelled) return;
       const before = useConnectionStore.getState().engineStatus;
+      misses = up ? 0 : misses + 1;
+      // One slow probe is not an engine that went away: ask again in a second first.
+      if (engineProbeVerdict(before, up, misses) === null) {
+        timer = setTimeout(tick, 1000);
+        return;
+      }
       // The engine starts with the window and can take a few seconds (Windows, many consoles):
       // until it has answered once, a miss inside the grace period is "starting", not "down"
       // (#515: the red banner flashed on every launch). A failed start or a crash is reported

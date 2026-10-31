@@ -6098,6 +6098,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_phone_be": "Usar este dispositivo como su mando",
 "rp_err_keys": "La PS5 no aceptó el emparejamiento de esta app. Vuelve a configurar «Encender e iniciar sesión» para esta consola.",
 "rp_err_other": "La transmisión se detuvo.",
+"rp_err_lost": "La conexión con la PS5 se cortó durante la transmisión. Vuelve a iniciarla; si sigue pasando, conecta la PS5 o este dispositivo por cable.",
 "rp_err_passcode": "Este usuario de PS5 tiene un código de acceso. Remote Play desde aquí no puede introducirlo; quita el código o inicia sesión primero en la consola.",
 "rp_err_unreachable": "La PS5 no responde en la red. Comprueba que está encendida, en la misma red y que Remote Play está activado en sus ajustes.",
 "rp_err_video": "La PS5 rechazó ese tamaño de imagen. Prueba 720p.",

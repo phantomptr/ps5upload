@@ -6160,6 +6160,7 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_phone_be": "Usar este dispositivo como controle dele",
 "rp_err_keys": "O PS5 não aceitou o pareamento deste app. Configure de novo «Ligar e entrar» para este console.",
 "rp_err_other": "A transmissão parou.",
+"rp_err_lost": "A conexão com o PS5 caiu durante a transmissão. Inicie de novo; se continuar acontecendo, ligue o PS5 ou este dispositivo por cabo.",
 "rp_err_passcode": "Este usuário do PS5 tem uma senha de acesso. A Reprodução Remota daqui não consegue digitá-la; remova a senha ou entre primeiro no console.",
 "rp_err_unreachable": "O PS5 não responde na rede. Verifique se está ligado, na mesma rede e com a Reprodução Remota ativada nas configurações.",
 "rp_err_video": "O PS5 recusou esse tamanho de imagem. Tente 720p.",

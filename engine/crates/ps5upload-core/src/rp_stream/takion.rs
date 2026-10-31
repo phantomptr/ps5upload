@@ -117,6 +117,131 @@ pub struct Takion {
     rng: u64,
     pub av_dropped_on_purpose: u64,
     closed: bool,
+    /// Our DATA chunks the console has not acknowledged, resent until it does.
+    send_buffer: SendBuffer,
+    /// DATA chunks sent again, and given up on after `SendBuffer::TRIES_MAX` sends.
+    pub data_resent: u64,
+    pub data_given_up: u64,
+    /// Sends and receives that failed for a reason that passes (an ICMP error, a full buffer).
+    pub io_soft_errors: u64,
+    /// When the console last sent anything.
+    pub last_rx: Instant,
+    /// Test knob (`PS5UPLOAD_RP_DROP_OUT_DATA`): `N` loses the first copy of our DATA chunk
+    /// number N after the crypt is up, as the network might; `Nall` loses every copy of it,
+    /// which is what any lost chunk was before resends.
+    drop_out_data: Option<(u64, bool)>,
+    data_sent: u64,
+}
+
+/// Our DATA chunks waiting for the console's DATA_ACK (chiaki-ng `takionsendbuffer.c`).
+///
+/// Takion delivers DATA in order, so one lost chunk holds back every later one: without a
+/// resend, a single lost heartbeat starves the console of all of them and it ends the stream a
+/// little later. chiaki-ng keeps 16, resends each 200 ms until acknowledged, up to 10 times.
+#[derive(Default)]
+struct SendBuffer {
+    packets: Vec<Unacked>,
+}
+
+struct Unacked {
+    seq: u32,
+    pkt: Vec<u8>,
+    sent: Instant,
+    tries: u32,
+}
+
+impl SendBuffer {
+    const SIZE: usize = 16;
+    const RESEND_AFTER: Duration = Duration::from_millis(200);
+    const TRIES_MAX: u32 = 10;
+
+    /// Keep `pkt` (sent once at `now`) until acknowledged. False when full: it is not kept,
+    /// as chiaki-ng does.
+    fn push(&mut self, seq: u32, pkt: Vec<u8>, now: Instant) -> bool {
+        if self.packets.len() >= Self::SIZE {
+            return false;
+        }
+        self.packets.push(Unacked {
+            seq,
+            pkt,
+            sent: now,
+            tries: 1,
+        });
+        true
+    }
+
+    /// The console has every chunk up to `cumulative`: forget them. Returns how many.
+    fn ack(&mut self, cumulative: u32) -> usize {
+        let before = self.packets.len();
+        self.packets
+            .retain(|p| p.seq != cumulative && !seq32_lt(p.seq, cumulative));
+        before - self.packets.len()
+    }
+
+    /// The packets to send again now, and how many were given up on.
+    fn due(&mut self, now: Instant) -> (Vec<Vec<u8>>, u64) {
+        let mut out = Vec::new();
+        let mut given_up = 0;
+        self.packets.retain_mut(|p| {
+            if now.duration_since(p.sent) < Self::RESEND_AFTER {
+                return true;
+            }
+            if p.tries >= Self::TRIES_MAX {
+                given_up += 1;
+                return false;
+            }
+            p.tries += 1;
+            p.sent = now;
+            out.push(p.pkt.clone());
+            true
+        });
+        (out, given_up)
+    }
+}
+
+/// `PS5UPLOAD_RP_DROP_OUT_DATA`: `N` or `Nall`.
+fn drop_knob(v: &str) -> Option<(u64, bool)> {
+    let v = v.trim();
+    match v.strip_suffix("all") {
+        Some(n) => n.parse().ok().map(|n| (n, true)),
+        None => v.parse().ok().map(|n| (n, false)),
+    }
+}
+
+/// A send or receive error that does not end the stream. Windows reports an ICMP "port
+/// unreachable" from an earlier send as WSAECONNRESET on the next receive of a UDP socket, and
+/// a Wi-Fi blip as "host/network unreachable" or no buffer space; the stream carries on, and
+/// the silence watchdog in `run_stream` ends it if the console really is gone.
+fn soft_io_error(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind as K;
+    matches!(
+        e.kind(),
+        K::WouldBlock
+            | K::TimedOut
+            | K::Interrupted
+            | K::ConnectionReset
+            | K::ConnectionRefused
+            | K::HostUnreachable
+            | K::NetworkUnreachable
+            | K::NetworkDown
+    ) || matches!(e.raw_os_error(), Some(code) if is_no_buffer_space(code))
+}
+
+/// ENOBUFS (55 on macOS/BSD, 105 on Linux) or WSAENOBUFS (10055).
+fn is_no_buffer_space(code: i32) -> bool {
+    #[cfg(unix)]
+    {
+        code == libc::ENOBUFS
+    }
+    #[cfg(windows)]
+    {
+        code == 10055
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = code;
+        false
+    }
 }
 
 impl Takion {
@@ -158,6 +283,15 @@ impl Takion {
             rng: tag_local as u64 | 1,
             av_dropped_on_purpose: 0,
             closed: false,
+            send_buffer: SendBuffer::default(),
+            data_resent: 0,
+            data_given_up: 0,
+            io_soft_errors: 0,
+            last_rx: Instant::now(),
+            drop_out_data: std::env::var("PS5UPLOAD_RP_DROP_OUT_DATA")
+                .ok()
+                .and_then(|v| drop_knob(&v)),
+            data_sent: 0,
         };
         t.handshake()?;
         Ok(t)
@@ -194,6 +328,8 @@ impl Takion {
             {
                 Ok(None)
             }
+            // Gone by the next receive: the stream carries on.
+            Err(e) if soft_io_error(&e) => Ok(None),
             Err(e) => Err(anyhow!("receiving from the console: {e}")),
         }
     }
@@ -294,8 +430,26 @@ impl Takion {
         cur
     }
 
+    /// Send one datagram. A passing error (see [`soft_io_error`]) is counted, not returned.
+    fn send_raw(&mut self, pkt: &[u8]) -> Result<()> {
+        match self.sock.send(pkt) {
+            Ok(_) => Ok(()),
+            Err(e) if soft_io_error(&e) => {
+                self.io_soft_errors += 1;
+                Ok(())
+            }
+            Err(e) => Err(anyhow!("sending to the console: {e}")),
+        }
+    }
+
     /// MAC `pkt` in place (if crypt is up) and send it.
     fn send_maced(&mut self, pkt: &mut [u8], key_pos: u64) -> Result<()> {
+        self.seal(pkt, key_pos);
+        self.send_raw(pkt)
+    }
+
+    /// MAC `pkt` in place, if the crypt is up.
+    fn seal(&mut self, pkt: &mut [u8], key_pos: u64) {
         let kind = pkt[0] & 0xf;
         let mo = mac_offset(kind).unwrap();
         let ko = key_pos_offset(kind).unwrap();
@@ -309,8 +463,6 @@ impl Takion {
             pkt[mo..mo + GMAC_SIZE].copy_from_slice(&mac);
             pkt[ko..ko + 4].copy_from_slice(&saved);
         }
-        self.sock.send(pkt)?;
-        Ok(())
     }
 
     /// Send one DATA chunk. `first` chunks carry a data-type byte; `flags` 1
@@ -336,7 +488,33 @@ impl Takion {
             pkt.push(0);
         }
         pkt.extend_from_slice(data);
-        self.send_maced(&mut pkt, key_pos)
+        self.seal(&mut pkt, key_pos);
+        // Lost on purpose (the test knob): the resend has to bring it.
+        let mut skip = None;
+        if self.gk_local.is_some() {
+            self.data_sent += 1;
+            skip = self
+                .drop_out_data
+                .filter(|(n, _)| *n == self.data_sent)
+                .map(|(_, all)| all);
+        }
+        if skip.is_none() {
+            self.send_raw(&pkt)?;
+        }
+        if skip != Some(true) {
+            self.send_buffer.push(seq, pkt, Instant::now());
+        }
+        Ok(())
+    }
+
+    /// Send again what the console has not acknowledged in time (best effort).
+    fn resend_due(&mut self) {
+        let (due, given_up) = self.send_buffer.due(Instant::now());
+        self.data_given_up += given_up;
+        for pkt in due {
+            self.data_resent += 1;
+            let _ = self.send_raw(&pkt);
+        }
     }
 
     /// A protobuf message, split across DATA chunks the way chiaki splits BIG.
@@ -404,8 +582,7 @@ impl Takion {
         pkt.extend_from_slice(&body);
         let mac = gk.gmac(key_pos, &pkt);
         pkt[8..12].copy_from_slice(&mac);
-        self.sock.send(&pkt)?;
-        Ok(())
+        self.send_raw(&pkt)
     }
 
     /// A microphone packet built by [`super::mic::AudioSender`]: sealed with
@@ -416,8 +593,7 @@ impl Takion {
             bail!("microphone audio before the stream crypt is up");
         };
         super::mic::seal(gk, key_pos, pkt, ps5);
-        self.sock.send(pkt)?;
-        Ok(())
+        self.send_raw(pkt)
     }
 
     /// Check a received packet's MAC (once the console's crypt is known).
@@ -451,6 +627,7 @@ impl Takion {
 
     /// Wait up to `timeout` for the next event. Sends DATA acks as a side effect.
     pub fn poll(&mut self, timeout: Duration) -> Result<Option<Event>> {
+        self.resend_due();
         // Packets parked before the crypt was up go first.
         if self.gk_remote.is_some() && !self.postponed.is_empty() {
             let mut pkt = self.postponed.remove(0);
@@ -469,6 +646,7 @@ impl Takion {
                 return Ok(None);
             };
             self.bytes_received += n as u64;
+            self.last_rx = Instant::now();
             let mut pkt = buf[..n].to_vec();
             if let Some(ev) = self.handle(&mut pkt)? {
                 return Ok(Some(ev));
@@ -523,6 +701,11 @@ impl Takion {
                 let Ok((chunk, payload)) = self.parse_control(pkt) else {
                     return Ok(None);
                 };
+                // The console has our DATA up to this sequence number.
+                if chunk == CHUNK_DATA_ACK && payload.len() >= 4 {
+                    self.send_buffer.ack(be32(&payload[0..4]));
+                    return Ok(None);
+                }
                 if chunk == CHUNK_DATA && payload.len() >= 9 {
                     let seq = be32(&payload[0..4]);
                     let data_type = payload[8];
@@ -625,20 +808,151 @@ fn parse_av_v12(buf: &[u8], key_state: &mut KeyState) -> Option<AvPacket> {
     })
 }
 
-#[cfg(unix)]
-fn set_recv_buffer(sock: &UdpSocket, bytes: i32) {
-    use std::os::fd::AsRawFd;
-    // SAFETY: a valid socket fd and a properly sized int option.
-    unsafe {
-        libc::setsockopt(
-            sock.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_RCVBUF,
-            &bytes as *const i32 as *const libc::c_void,
-            std::mem::size_of::<i32>() as libc::socklen_t,
-        );
-    }
+/// A big receive buffer: a keyframe arrives as a burst of hundreds of packets, and Windows
+/// gives a UDP socket 64 KiB by default (this was set on Unix only, so Windows lost keyframe
+/// packets). Best effort: the OS may cap it.
+fn set_recv_buffer(sock: &UdpSocket, bytes: usize) {
+    let _ = socket2::SockRef::from(sock).set_recv_buffer_size(bytes);
 }
 
-#[cfg(not(unix))]
-fn set_recv_buffer(_sock: &UdpSocket, _bytes: i32) {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buffer_with(seqs: &[u32], now: Instant) -> SendBuffer {
+        let mut b = SendBuffer::default();
+        for &s in seqs {
+            assert!(b.push(s, vec![s as u8], now));
+        }
+        b
+    }
+
+    #[test]
+    fn an_unacknowledged_chunk_is_sent_again_after_200_ms() {
+        let t = Instant::now();
+        let mut b = buffer_with(&[7], t);
+        assert!(b.due(t + Duration::from_millis(100)).0.is_empty());
+        let (again, given_up) = b.due(t + Duration::from_millis(201));
+        assert_eq!(again, vec![vec![7u8]]);
+        assert_eq!(given_up, 0);
+        // The clock restarts at the resend.
+        assert!(b.due(t + Duration::from_millis(300)).0.is_empty());
+    }
+
+    #[test]
+    fn a_cumulative_ack_forgets_everything_up_to_it_across_the_wrap() {
+        let t = Instant::now();
+        let mut b = buffer_with(&[u32::MAX - 1, u32::MAX, 0, 1], t);
+        assert_eq!(b.ack(0), 3);
+        let (left, _) = b.due(t + Duration::from_secs(1));
+        assert_eq!(left, vec![vec![1u8]]);
+        // An old ack changes nothing.
+        assert_eq!(b.ack(u32::MAX - 5), 0);
+    }
+
+    #[test]
+    fn a_chunk_is_given_up_on_after_ten_sends() {
+        let t = Instant::now();
+        let mut b = buffer_with(&[1], t);
+        let mut sent = 1;
+        let mut now = t;
+        loop {
+            now += Duration::from_millis(250);
+            let (again, given_up) = b.due(now);
+            sent += again.len();
+            if given_up == 1 {
+                break;
+            }
+        }
+        assert_eq!(sent, SendBuffer::TRIES_MAX as usize);
+        assert!(b.packets.is_empty());
+    }
+
+    #[test]
+    fn a_full_buffer_keeps_no_more() {
+        let t = Instant::now();
+        let seqs: Vec<u32> = (0..SendBuffer::SIZE as u32).collect();
+        let mut b = buffer_with(&seqs, t);
+        assert!(!b.push(99, vec![], t));
+        assert_eq!(b.ack(0), 1);
+        assert!(b.push(99, vec![], t));
+    }
+
+    #[test]
+    fn the_drop_knob_reads_one_copy_or_all() {
+        assert_eq!(drop_knob("40"), Some((40, false)));
+        assert_eq!(drop_knob("40all"), Some((40, true)));
+        assert_eq!(drop_knob("x"), None);
+    }
+
+    #[test]
+    fn passing_network_errors_do_not_end_the_stream() {
+        use std::io::{Error, ErrorKind};
+        for k in [
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionRefused,
+            ErrorKind::HostUnreachable,
+            ErrorKind::NetworkUnreachable,
+            ErrorKind::WouldBlock,
+        ] {
+            assert!(soft_io_error(&Error::from(k)), "{k:?}");
+        }
+        #[cfg(unix)]
+        assert!(soft_io_error(&Error::from_raw_os_error(libc::ENOBUFS)));
+        assert!(!soft_io_error(&Error::from(ErrorKind::PermissionDenied)));
+        assert!(!soft_io_error(&Error::from(ErrorKind::InvalidInput)));
+    }
+
+    /// Until the console acknowledges our DATA, the chunk is sent again, byte for byte.
+    #[test]
+    fn a_lost_data_chunk_reaches_the_console_on_the_resend() {
+        let console = UdpSocket::bind("127.0.0.1:0").unwrap();
+        console
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let ours = UdpSocket::bind("127.0.0.1:0").unwrap();
+        ours.connect(console.local_addr().unwrap()).unwrap();
+        let mut t = Takion {
+            sock: ours,
+            tag_local: 1,
+            tag_remote: 2,
+            seq_local: 100,
+            key_pos_local: 0,
+            gk_local: None,
+            gk_remote: None,
+            key_state: KeyState::default(),
+            seq_remote_next: 0,
+            data_early: BTreeMap::new(),
+            postponed: Vec::new(),
+            av_received: 0,
+            av_bad_mac: 0,
+            bytes_received: 0,
+            drop_pct: 0,
+            rng: 1,
+            av_dropped_on_purpose: 0,
+            closed: true,
+            send_buffer: SendBuffer::default(),
+            data_resent: 0,
+            data_given_up: 0,
+            io_soft_errors: 0,
+            last_rx: Instant::now(),
+            drop_out_data: None,
+            data_sent: 0,
+        };
+        t.send_message(1, b"heartbeat").unwrap();
+        let mut buf = [0u8; 256];
+        let n = console.recv(&mut buf).unwrap();
+        let first = buf[..n].to_vec();
+        // No ack: the poll after 200 ms sends it again.
+        std::thread::sleep(Duration::from_millis(220));
+        let _ = t.poll(Duration::from_millis(1));
+        assert_eq!(t.data_resent, 1);
+        let n = console.recv(&mut buf).unwrap();
+        assert_eq!(&buf[..n], &first[..]);
+        // Acknowledged: never again.
+        assert_eq!(t.send_buffer.ack(100), 1);
+        std::thread::sleep(Duration::from_millis(220));
+        let _ = t.poll(Duration::from_millis(1));
+        assert_eq!(t.data_resent, 1);
+    }
+}

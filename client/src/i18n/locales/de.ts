@@ -6153,6 +6153,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_phone_be": "Dieses Gerät als Controller nutzen",
 "rp_err_keys": "Die PS5 hat die Kopplung dieser App nicht angenommen. Richte „Wecken & anmelden“ für diese Konsole neu ein.",
 "rp_err_other": "Der Stream wurde beendet.",
+"rp_err_lost": "Die Verbindung zur PS5 ist während des Streams abgebrochen. Starte ihn erneut; passiert das öfter, verbinde die PS5 oder dieses Gerät per Kabel.",
 "rp_err_passcode": "Dieser PS5-Benutzer hat einen Anmelde-Passcode. Remote Play kann ihn von hier nicht eingeben; entferne den Passcode oder melde dich zuerst an der Konsole an.",
 "rp_err_unreachable": "Die PS5 antwortet nicht im Netzwerk. Prüfe, ob sie eingeschaltet und im selben Netzwerk ist und ob Remote Play in ihren Einstellungen aktiviert ist.",
 "rp_err_video": "Die PS5 hat diese Bildgröße abgelehnt. Versuche 720p.",

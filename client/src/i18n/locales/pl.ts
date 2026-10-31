@@ -6393,6 +6393,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_phone_be": "Użyj tego urządzenia jako jego kontrolera",
 "rp_err_keys": "PS5 nie przyjęła parowania tej aplikacji. Skonfiguruj ponownie „Wybudź i zaloguj” dla tej konsoli.",
 "rp_err_other": "Strumień się zatrzymał.",
+"rp_err_lost": "Połączenie z PS5 zerwało się w trakcie strumienia. Uruchom go ponownie; jeśli to się powtarza, podłącz PS5 lub to urządzenie kablem.",
 "rp_err_passcode": "Ten użytkownik PS5 ma kod logowania. Remote Play stąd nie może go wpisać; usuń kod lub najpierw zaloguj się na konsoli.",
 "rp_err_unreachable": "PS5 nie odpowiada w sieci. Sprawdź, czy jest włączona, w tej samej sieci i czy Remote Play jest włączone w jej ustawieniach.",
 "rp_err_video": "PS5 odrzuciła ten rozmiar obrazu. Spróbuj 720p.",

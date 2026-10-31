@@ -6147,6 +6147,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_phone_be": "Dùng thiết bị này làm tay cầm của nó",
 "rp_err_keys": "PS5 không chấp nhận ghép đôi của ứng dụng này. Hãy thiết lập lại «Bật & đăng nhập» cho máy này.",
 "rp_err_other": "Luồng đã dừng.",
+"rp_err_lost": "Kết nối với PS5 bị ngắt trong khi stream. Hãy bắt đầu lại; nếu vẫn xảy ra, hãy nối PS5 hoặc thiết bị này bằng cáp.",
 "rp_err_passcode": "Người dùng PS5 này có mã đăng nhập. Remote Play từ đây không nhập được; hãy bỏ mã hoặc đăng nhập trên máy trước.",
 "rp_err_unreachable": "PS5 không phản hồi trên mạng. Hãy kiểm tra máy đang bật, cùng mạng và đã bật Remote Play trong cài đặt.",
 "rp_err_video": "PS5 từ chối kích thước hình đó. Hãy thử 720p.",
