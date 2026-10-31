@@ -4499,6 +4499,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tokio",
+ "webkit2gtk-sys",
  "zbus",
  "zip",
 ]

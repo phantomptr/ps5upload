@@ -124,31 +124,24 @@ pub fn screenshot_decoder_child() -> bool {
 pub fn run() {
     // Linux WebKitGTK white-screen rescue, matched to the graphics stack.
     //
-    // The shipped `PS5Upload.sh` launcher exports these too, but a user who
-    // double-clicks the bare AppImage (or runs the .deb / .rpm / folder
+    // The shipped `PS5Upload.sh` launcher exports one of these too, but a user
+    // who double-clicks the bare AppImage (or runs the .deb / .rpm / folder
     // build) never goes through that wrapper. Setting them here — at the top
     // of process startup, before the webview's child web process is spawned
     // and inherits our environment — covers every launch method.
     //
-    // Which variables, and why not simply all of them, is in linux_gpu.rs.
-    // Short version: disabling accelerated compositing costs everyone their
-    // scrolling smoothness, so it is applied only to the stack that needs it
-    // (NVIDIA on Wayland, issue #285) rather than to all Linux users.
-    //
-    // Single-threaded at this point (no Tauri runtime, no engine thread
-    // yet), so set_var is sound; edition 2021 keeps it safe (non-unsafe).
-    // Only ever set when unset, so an explicit user choice wins in either
-    // direction — including forcing a rescue back OFF.
+    // Which variables, and when none, is in linux_gpu.rs. Short version: they
+    // cost scrolling and Remote Play's picture, so the stack measured to work
+    // without them (NVIDIA 555+ on Wayland, WebKitGTK 2.46+, not the AppImage)
+    // gets none; every other stack keeps them exactly as before, and Safe
+    // graphics mode (Settings, --safe-graphics) forces them on. Only ever set
+    // when unset, so an explicit user choice wins in either direction.
     // The bare AppImage on Wayland + NVIDIA: restart once with the system's libwayland-client
     // (what the .zip's PS5Upload.sh does before launch). Before anything else starts.
     #[cfg(target_os = "linux")]
     linux_gpu::reexec_with_system_wayland();
     #[cfg(target_os = "linux")]
-    for (key, value) in linux_gpu::webkit_workarounds(linux_gpu::probe()) {
-        if std::env::var_os(key).is_none() {
-            std::env::set_var(key, value);
-        }
-    }
+    linux_gpu::apply();
 
     let builder = tauri::Builder::default();
     // Single-instance MUST run before any other setup (window creation,
@@ -637,6 +630,9 @@ pub fn run() {
             // Android: the APK into the app cache with progress, for the system installer.
             commands::update_download_apk,
             tray::tray_configure,
+            // Linux: Safe graphics mode (WebKitGTK's rescues), read at the next launch.
+            linux_gpu::linux_graphics_get,
+            linux_gpu::linux_graphics_safe_mode_set,
             // ── Title metadata fetch (cover art + display title) ────
             // Server-side fetch (Rust/reqwest) of the public PS5
             // title-info site, bypassing renderer CSP/CORS. Hostname
