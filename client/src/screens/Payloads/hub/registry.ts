@@ -4,19 +4,22 @@
 // A payload is "running" when a process with its name is up, "installed" when its marker
 // file is on the console. Payloads show up in the process list under their ELF's file name
 // ("shadowmountplus.elf", "nanodns.elf", "pldmgr.elf"; measured on FW 13.60), so names are
-// compared without case or extension.
+// compared without case or extension. A payload that never names itself shows as the loader
+// called it ("payload.elf" from elfldr): such a payload is found by other evidence, the pid
+// it keeps in a lock file (Hush's /data/hush/pid.lock), passed in as `pids`.
 
 import type { PayloadInfo, ProcessInfo } from "../../../api/ps5";
 
 /** The payloads with a panel of their own on the card ("Manage"). Adding one = a registry
  *  entry here plus its panel in OnPs5Panel; never a new tab. */
-export type IntegrationId = "shadowmountplus" | "nanodns" | "payload-manager" | "hearbridge";
+export type IntegrationId = "shadowmountplus" | "nanodns" | "payload-manager" | "hearbridge" | "hush";
 
 export const INTEGRATION_IDS: readonly IntegrationId[] = [
   "shadowmountplus",
   "nanodns",
   "payload-manager",
   "hearbridge",
+  "hush",
 ];
 
 export function isIntegration(id: string): id is IntegrationId {
@@ -57,7 +60,7 @@ const EXTRA_PROCESS_NAMES: Record<string, string[]> = {
 };
 
 /** The integrations as the browser build knows them: it has no catalogue (that lives in the
- *  desktop app), so these four stand in for it. Mirrors commands/payloads.rs. */
+ *  desktop app), so these stand in for it. Mirrors commands/payloads.rs. */
 export const BUILTIN_ENTRIES: readonly HubEntry[] = [
   {
     id: "shadowmountplus",
@@ -89,6 +92,14 @@ export const BUILTIN_ENTRIES: readonly HubEntry[] = [
     processNames: ["hearbridge"],
     marker: "/data/hearbridge/hearbridge.log",
     webPort: 8090,
+    isCustom: false,
+  },
+  {
+    id: "hush",
+    name: "Hush",
+    processNames: ["hush"],
+    marker: "/data/hush/config.ini",
+    webPort: null,
     isCustom: false,
   },
 ];
@@ -143,6 +154,8 @@ export interface DetectInput {
   /** Integrations whose own API answered (Payload Manager on :8084, HearBridge): running
    *  even when the process list hasn't been read yet. */
   answering?: ReadonlySet<string>;
+  /** Processes known to be an entry's by other evidence than their name (entry id → pids). */
+  pids?: ReadonlyMap<string, readonly number[]>;
   /** A card to show even when nothing was found (a deep link opened it). */
   forceShow?: string | null;
 }
@@ -154,6 +167,7 @@ export function detectHubCards({
   processes,
   markers,
   answering,
+  pids,
   forceShow,
 }: DetectInput): HubCard[] {
   const claimed = new Set<number>();
@@ -161,8 +175,11 @@ export function detectHubCards({
   const cards: HubCard[] = [];
   for (const e of entries) {
     const names = new Set(e.processNames.map(normProcName).filter(Boolean));
+    const own = pids?.get(e.id) ?? [];
     const procs = processes.filter(
-      (p) => !p.is_self && (names.has(normProcName(p.comm)) || names.has(normProcName(p.name))),
+      (p) =>
+        !p.is_self &&
+        (names.has(normProcName(p.comm)) || names.has(normProcName(p.name)) || own.includes(p.pid)),
     );
     const integration = isIntegration(e.id) ? e.id : null;
     const answered = !!answering?.has(e.id);

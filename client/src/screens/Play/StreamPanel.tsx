@@ -89,6 +89,8 @@ import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { closePip, openPip, pipPadsInBackground, pipSupport } from "./pip";
 import { CaptureBarButtons, CaptureOverlay } from "./CaptureControls";
 import { LatencyLine, QualityNotice, RpNetworkSettings } from "./NetworkExtras";
+import { RpBlockerNotice, RpBlockerPhase, RpBlockerSetting } from "./RpBlockers";
+import { beforeRemotePlay } from "../../state/rpBlockers";
 import { useRpQualityStore } from "../../state/rpQuality";
 
 type Tr = ReturnType<typeof useTr>;
@@ -690,6 +692,7 @@ function SettingsPanel({ running }: { running: boolean }) {
           hint={tr("rp_show_stats_hint", undefined, "Frame rate, bitrate, decode time, loss and sound delay.")}
         />
         <RpNetworkSettings />
+        <RpBlockerSetting />
       </section>
 
       <section className="space-y-2">
@@ -1236,12 +1239,17 @@ export function StreamPanel() {
     async (attach = false, host?: string) => {
       const p = host ? profiles.find((x) => x.host === host) : profile;
       if (!p?.wake_regist_key || !p.wake_rp_key) return;
-      await startStream(
-        { host: p.host, name: p.name, registKey: p.wake_regist_key, rpKey: p.wake_rp_key },
-        { attach },
-      );
-      stage.current?.focus();
-      if (compact) stage.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+      const go = async () => {
+        await startStream(
+          { host: p.host, name: p.name, registKey: p.wake_regist_key!, rpKey: p.wake_rp_key! },
+          { attach },
+        );
+        stage.current?.focus();
+        if (compact) stage.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+      };
+      // A payload that blocks the picture (Hush) is asked about, or paused, first.
+      if (attach) await go();
+      else await beforeRemotePlay(p.host, go);
     },
     [profile, profiles, startStream, compact],
   );
@@ -1492,6 +1500,7 @@ export function StreamPanel() {
           />
 
           <LaunchStatus />
+          <RpBlockerPhase host={profile?.host ?? null} />
           <DropZone active={dropZone.active} />
           <DropChoice consoleName={target?.name ?? ""} />
           {running && phase !== "playing" && phase !== "moved" && (
@@ -1967,6 +1976,7 @@ export function StreamPanel() {
           {streamErrorHelp(tr, error) ?? error.detail}
         </Callout>
       )}
+      <RpBlockerNotice host={profile?.host ?? null} error={error} running={running} />
       {pipFailed && (
         <Callout tone="warn" title={tr("rp_pip_failed", undefined, "Picture in picture did not open.")}>
           {tr(
