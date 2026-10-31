@@ -105,10 +105,11 @@ code {
 }
 .skip {
   position: absolute;
-  left: -999px;
+  /* Above the page, not beside it: off to the side, a right-to-left page scrolls sideways. */
+  inset-inline-start: 16px;
+  top: -999px;
 }
 .skip:focus {
-  left: 16px;
   top: 12px;
   z-index: 10;
   background: var(--card);
@@ -188,6 +189,45 @@ code {
 .icon-btn svg {
   width: 18px;
   height: 18px;
+}
+/* The language picker: a globe and the language's own name. */
+.lang {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+}
+.lang svg {
+  position: absolute;
+  inset-inline-start: 10px;
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+}
+.lang select {
+  appearance: none;
+  height: 100%;
+  max-width: 150px;
+  padding-inline: 32px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.lang select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Until a translated page has its words (index.html's <head> sets this; at most 2.5 s). */
+.i18n-wait body {
+  visibility: hidden;
 }
 
 /* ── Buttons ────────────────────────────────────────────────────────────── */
@@ -296,7 +336,7 @@ code {
 }
 .hero-phone {
   position: absolute;
-  right: -8px;
+  inset-inline-end: -8px;
   bottom: 0;
   width: 26%;
 }
@@ -628,6 +668,15 @@ code {
   .coffee span {
     display: none;
   }
+  /* Only the globe on a phone; the list still names each language. */
+  .lang select {
+    width: 36px;
+    padding: 0;
+    color: transparent;
+  }
+  .lang select option {
+    color: var(--text);
+  }
   .hero {
     padding-top: 40px;
   }
@@ -698,7 +747,7 @@ code {
 .ticks li::before {
   content: "✓";
   position: absolute;
-  left: 0;
+  inset-inline-start: 0;
   top: 1px;
   display: grid;
   place-items: center;
@@ -719,7 +768,7 @@ code {
 .mini-steps li::before {
   content: counter(s);
   position: absolute;
-  left: 0;
+  inset-inline-start: 0;
   top: 1px;
   display: grid;
   place-items: center;
@@ -835,7 +884,7 @@ code {
 .step:not(:last-child)::before {
   content: "";
   position: absolute;
-  left: 23px;
+  inset-inline-start: 23px;
   top: 48px;
   bottom: 0;
   width: 2px;
@@ -949,7 +998,7 @@ code {
   }
   .hero-phone {
     width: 32%;
-    right: 0;
+    inset-inline-end: 0;
   }
   .guides {
     grid-template-columns: 1fr;

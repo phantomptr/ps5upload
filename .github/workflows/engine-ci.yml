@@ -61,6 +61,8 @@ jobs:
           check-latest: true
       - name: Verify downstream files match VERSION
         run: node scripts/update-version.js --check
+      - name: Website translations (every language has every string and its screenshots)
+        run: node scripts/site-i18n.mjs
 
   # ─────────────────────────────────────────────────────────────────────
   # Rust workspace (engine, core, AVA1 crates). Format, clippy, tests.

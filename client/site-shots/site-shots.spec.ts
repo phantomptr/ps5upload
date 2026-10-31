@@ -5,10 +5,14 @@ import { expect, test, type Page } from "@playwright/test";
 // console: fictional games with drawn covers (make-art.py), a drawn game picture for the stream,
 // a generic console name, user and address. No real console, account, game or file appears.
 //
+// Every language the app has gets its own set, from the app running in that language: English
+// in out/, the others in out/<code>/. SHOT_LANGS=de,fr takes only those.
+//
 //   cd client && npx playwright test -c site-shots.config.ts && node site-shots/to-webp.mjs
 
 const HOST = "192.168.1.50";
 const OUT = process.env.SHOTS_DIR ?? "site-shots/out";
+const LANGS = (process.env.SHOT_LANGS ?? "en,zh-CN,zh-TW,hi,es,ar,bn,pl,pt-BR,ru,ja,de,fr,ko,tr,vi,id,it,th,hu,fa").split(",");
 const art = (name: string) => readFileSync(new URL(`./art/${name}.png`, import.meta.url));
 
 const GAMES: Array<[string, string, string, number]> = [
@@ -80,11 +84,12 @@ const READINESS = {
 };
 
 /** The made-up console, as the engine would answer for it. */
-async function fakeConsole(page: Page, opts: { paired: boolean; theme: "light" | "dark" }) {
+async function fakeConsole(page: Page, opts: { paired: boolean; theme: "light" | "dark"; lang: string }) {
   await page.addInitScript(
-    ([host, paired, theme, now]) => {
+    ([host, paired, theme, now, lang]) => {
       const ls = window.localStorage;
       ls.setItem("ps5upload.theme", theme);
+      ls.setItem("ps5upload.lang", lang);
       ls.setItem("ps5upload.host", host);
       ls.setItem(
         "ps5upload.roster.v1",
@@ -109,7 +114,7 @@ async function fakeConsole(page: Page, opts: { paired: boolean; theme: "light" |
       );
       if (paired) ls.setItem("ps5upload.play_setup.v1", JSON.stringify({ rest: { [host]: true }, played: {}, homeHidden: false }));
     },
-    [HOST, opts.paired, opts.theme, NOW] as const,
+    [HOST, opts.paired, opts.theme, NOW, opts.lang] as const,
   );
   await page.route("**/api/collection/games/*/cover*", (route) => {
     const id = new URL(route.request().url()).pathname.split("/")[4];
@@ -302,98 +307,101 @@ async function fakeStream(page: Page, frames: { header: Buffer; au: Buffer }) {
   });
 }
 
-const shot = (page: Page, name: string, theme: string) =>
-  page.screenshot({ path: `${OUT}/${name}-${theme}.png`, animations: "disabled", caret: "hide" });
+for (const lang of LANGS) {
+  const dir = lang === "en" ? OUT : `${OUT}/${lang}`;
+  const shot = (page: Page, name: string, theme: string) =>
+    page.screenshot({ path: `${dir}/${name}-${theme}.png`, animations: "disabled", caret: "hide" });
 
-for (const theme of ["light", "dark"] as const) {
-  test.describe(`${theme}`, () => {
-    test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1.5 });
+  for (const theme of ["light", "dark"] as const) {
+    test.describe(`${lang} ${theme}`, () => {
+      test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1.5 });
 
-    test(`home, setup, upload, games, saves, workshop, connection (${theme})`, async ({ page }) => {
-      await fakeConsole(page, { paired: true, theme });
-      await page.goto("/home", { waitUntil: "domcontentloaded" });
-      await expect(page.getByTestId("home-play-continue")).toBeVisible({ timeout: 30_000 });
-      await page.waitForTimeout(1500);
-      await shot(page, "home", theme);
+      test(`home, setup, upload, games, saves, workshop, connection (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang });
+        await page.goto("/home", { waitUntil: "domcontentloaded" });
+        await expect(page.getByTestId("home-play-continue")).toBeVisible({ timeout: 30_000 });
+        await page.waitForTimeout(1500);
+        await shot(page, "home", theme);
 
-      for (const [route, name] of [
-        ["/send", "upload"],
-        ["/games", "games"],
-        ["/files", "files"],
-        ["/workshop", "workshop"],
-        ["/connection", "connection"],
-      ] as const) {
-        await page.getByRole("navigation").first().locator(`a[href="${route}"]`).first().click().catch(async () => {
-          await page.goto(route, { waitUntil: "domcontentloaded" });
-        });
-        await page.waitForTimeout(2500);
-        // The site leaves out the package-format notice on Upload & Install (a details box).
-        if (name === "upload") {
-          await page.evaluate(() => {
-            for (const d of Array.from(document.querySelectorAll("details"))) {
-              if (/FPKG/.test(d.textContent ?? "")) (d as HTMLElement).style.display = "none";
-            }
+        for (const [route, name] of [
+          ["/send", "upload"],
+          ["/games", "games"],
+          ["/files", "files"],
+          ["/workshop", "workshop"],
+          ["/connection", "connection"],
+        ] as const) {
+          await page.getByRole("navigation").first().locator(`a[href="${route}"]`).first().click().catch(async () => {
+            await page.goto(route, { waitUntil: "domcontentloaded" });
           });
+          await page.waitForTimeout(2500);
+          // The site leaves out the package-format notice on Upload & Install (a details box).
+          if (name === "upload") {
+            await page.evaluate(() => {
+              for (const d of Array.from(document.querySelectorAll("details"))) {
+                if (/FPKG/.test(d.textContent ?? "")) (d as HTMLElement).style.display = "none";
+              }
+            });
+          }
+          await shot(page, name, theme);
         }
-        await shot(page, name, theme);
-      }
-    });
-
-    test(`setup checklist (${theme})`, async ({ page }) => {
-      await fakeConsole(page, { paired: false, theme });
-      await page.goto("/play/setup", { waitUntil: "domcontentloaded" });
-      await expect(page.locator('[data-step="signin"]')).toHaveAttribute("data-state", "ok", { timeout: 30_000 });
-      await page.waitForTimeout(800);
-      await shot(page, "setup", theme);
-    });
-
-    test(`play and phones (${theme})`, async ({ page }) => {
-      await fakeConsole(page, { paired: true, theme });
-      await page.goto("/home", { waitUntil: "domcontentloaded" });
-      const frames = await streamOf(page, { w: 1920, h: 1080 });
-      await fakeStream(page, frames);
-      await page.getByRole("navigation").first().locator('a[href="/play"]').first().click();
-      await page.getByTestId("rp-start").click();
-      const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
-      await expect.poll(() => canvas.evaluate((c: HTMLCanvasElement) => c.width), { timeout: 20_000 }).toBe(1920);
-      await page.getByTestId("rp-toolbar").hover();
-      await page.waitForTimeout(600);
-      await shot(page, "play", theme);
-      await page.getByTestId("rp-phones").click();
-      await page.getByTestId("rp-pad-mode-watch").click().catch(() => {});
-      await page.waitForTimeout(800);
-      await shot(page, "phones", theme);
-    });
-  });
-
-  test.describe(`phone ${theme}`, () => {
-    test.use({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
-
-    test(`phone screens (${theme})`, async ({ page }) => {
-      await fakeConsole(page, { paired: true, theme });
-      await page.goto("/home", { waitUntil: "domcontentloaded" });
-      await expect(page.getByTestId("home-play")).toBeVisible({ timeout: 30_000 });
-      await page.waitForTimeout(1500);
-      await shot(page, "m-home", theme);
-      await page.goto("/games", { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(2500);
-      // Down to the covers.
-      await page.evaluate(() => {
-        const img = document.querySelector('main img[src*="/cover"]');
-        img?.scrollIntoView({ block: "start" });
-        document.querySelector("main")?.scrollBy?.(0, -90);
-        window.scrollBy(0, -90);
       });
-      await page.waitForTimeout(600);
-      await shot(page, "m-games", theme);
-      const frames = await streamOf(page, { w: 1280, h: 720 });
-      await fakeStream(page, frames);
-      await page.goto("/play", { waitUntil: "domcontentloaded" });
-      await page.getByTestId("rp-start").tap();
-      const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
-      await expect.poll(() => canvas.evaluate((c: HTMLCanvasElement) => c.width), { timeout: 20_000 }).toBe(1280);
-      await page.waitForTimeout(800);
-      await shot(page, "m-play", theme);
+
+      test(`setup checklist (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: false, theme, lang });
+        await page.goto("/play/setup", { waitUntil: "domcontentloaded" });
+        await expect(page.locator('[data-step="signin"]')).toHaveAttribute("data-state", "ok", { timeout: 30_000 });
+        await page.waitForTimeout(800);
+        await shot(page, "setup", theme);
+      });
+
+      test(`play and phones (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang });
+        await page.goto("/home", { waitUntil: "domcontentloaded" });
+        const frames = await streamOf(page, { w: 1920, h: 1080 });
+        await fakeStream(page, frames);
+        await page.getByRole("navigation").first().locator('a[href="/play"]').first().click();
+        await page.getByTestId("rp-start").click();
+        const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
+        await expect.poll(() => canvas.evaluate((c: HTMLCanvasElement) => c.width), { timeout: 20_000 }).toBe(1920);
+        await page.getByTestId("rp-toolbar").hover();
+        await page.waitForTimeout(600);
+        await shot(page, "play", theme);
+        await page.getByTestId("rp-phones").click();
+        await page.getByTestId("rp-pad-mode-watch").click().catch(() => {});
+        await page.waitForTimeout(800);
+        await shot(page, "phones", theme);
+      });
     });
-  });
+
+    test.describe(`${lang} phone ${theme}`, () => {
+      test.use({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+
+      test(`phone screens (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang });
+        await page.goto("/home", { waitUntil: "domcontentloaded" });
+        await expect(page.getByTestId("home-play")).toBeVisible({ timeout: 30_000 });
+        await page.waitForTimeout(1500);
+        await shot(page, "m-home", theme);
+        await page.goto("/games", { waitUntil: "domcontentloaded" });
+        await page.waitForTimeout(2500);
+        // Down to the covers.
+        await page.evaluate(() => {
+          const img = document.querySelector('main img[src*="/cover"]');
+          img?.scrollIntoView({ block: "start" });
+          document.querySelector("main")?.scrollBy?.(0, -90);
+          window.scrollBy(0, -90);
+        });
+        await page.waitForTimeout(600);
+        await shot(page, "m-games", theme);
+        const frames = await streamOf(page, { w: 1280, h: 720 });
+        await fakeStream(page, frames);
+        await page.goto("/play", { waitUntil: "domcontentloaded" });
+        await page.getByTestId("rp-start").tap();
+        const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
+        await expect.poll(() => canvas.evaluate((c: HTMLCanvasElement) => c.width), { timeout: 20_000 }).toBe(1280);
+        await page.waitForTimeout(800);
+        await shot(page, "m-play", theme);
+      });
+    });
+  }
 }

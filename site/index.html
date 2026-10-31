@@ -3,19 +3,73 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PS5Upload — play and manage your PS5 from any screen</title>
-  <meta name="description" content="PS5Upload streams your PS5 to your computer, phone or browser and manages it from there: play, install, move games and saves, all in one app. Free and open source for macOS, Windows, Linux, Android, iPhone and Docker." />
+  <title data-i18n="meta.title">PS5Upload — play and manage your PS5 from any screen</title>
+  <meta name="description" data-i18n-attr="content:meta.description" content="PS5Upload streams your PS5 to your computer, phone or browser and manages it from there: play, install, move games and saves, all in one app. Free and open source for macOS, Windows, Linux, Android, iPhone and Docker." />
   <meta property="og:title" content="PS5Upload" />
-  <meta property="og:description" content="Play and manage your PS5 from any screen. Free and open source for macOS, Windows, Linux, Android, iPhone and Docker." />
+  <meta property="og:description" data-i18n-attr="content:meta.og" content="Play and manage your PS5 from any screen. Free and open source for macOS, Windows, Linux, Android, iPhone and Docker." />
   <meta property="og:image" content="https://ps5upload.phantomptr.com/assets/shots/play-dark.webp" />
   <meta property="og:type" content="website" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="color-scheme" content="light dark" />
   <link rel="icon" href="assets/favicon.png" />
   <link rel="stylesheet" href="style.css" />
+  <!-- The language, decided before anything is drawn (the same list as app.js): the page waits
+       for its words instead of flashing English, and right-to-left languages lay out that way
+       from the start. -->
+  <script>
+    (function () {
+      var codes = ["en","zh-CN","zh-TW","hi","es","ar","bn","pl","pt-BR","ru","ja","de","fr","ko","tr","vi","id","it","th","hu","fa"];
+      var pick = function (c) {
+        if (!c) return null;
+        c = String(c).toLowerCase();
+        for (var i = 0; i < codes.length; i++) if (codes[i].toLowerCase() === c) return codes[i];
+        if (/^zh-(tw|hk|mo|hant)/.test(c)) return "zh-TW";
+        if (/^zh/.test(c)) return "zh-CN";
+        if (/^pt/.test(c)) return "pt-BR";
+        var p = c.split("-")[0];
+        return codes.indexOf(p) >= 0 ? p : null;
+      };
+      var lang = null;
+      try { lang = pick(new URLSearchParams(location.search).get("lang")) || pick(localStorage.getItem("ps5upload.site.lang")); } catch (e) {}
+      if (!lang) {
+        var nav = navigator.languages || [navigator.language];
+        for (var j = 0; j < nav.length && !lang; j++) lang = pick(nav[j]);
+      }
+      lang = lang || "en";
+      var root = document.documentElement;
+      root.lang = lang;
+      root.dir = lang === "ar" || lang === "fa" ? "rtl" : "ltr";
+      if (lang !== "en") {
+        root.classList.add("i18n-wait");
+        setTimeout(function () { root.classList.remove("i18n-wait"); }, 2500);
+      }
+    })();
+  </script>
+  <link rel="alternate" hreflang="x-default" href="https://ps5upload.phantomptr.com/" />
+  <link rel="alternate" hreflang="en" href="https://ps5upload.phantomptr.com/?lang=en" />
+  <link rel="alternate" hreflang="zh-Hans" href="https://ps5upload.phantomptr.com/?lang=zh-CN" />
+  <link rel="alternate" hreflang="zh-Hant" href="https://ps5upload.phantomptr.com/?lang=zh-TW" />
+  <link rel="alternate" hreflang="hi" href="https://ps5upload.phantomptr.com/?lang=hi" />
+  <link rel="alternate" hreflang="es" href="https://ps5upload.phantomptr.com/?lang=es" />
+  <link rel="alternate" hreflang="ar" href="https://ps5upload.phantomptr.com/?lang=ar" />
+  <link rel="alternate" hreflang="bn" href="https://ps5upload.phantomptr.com/?lang=bn" />
+  <link rel="alternate" hreflang="pl" href="https://ps5upload.phantomptr.com/?lang=pl" />
+  <link rel="alternate" hreflang="pt-BR" href="https://ps5upload.phantomptr.com/?lang=pt-BR" />
+  <link rel="alternate" hreflang="ru" href="https://ps5upload.phantomptr.com/?lang=ru" />
+  <link rel="alternate" hreflang="ja" href="https://ps5upload.phantomptr.com/?lang=ja" />
+  <link rel="alternate" hreflang="de" href="https://ps5upload.phantomptr.com/?lang=de" />
+  <link rel="alternate" hreflang="fr" href="https://ps5upload.phantomptr.com/?lang=fr" />
+  <link rel="alternate" hreflang="ko" href="https://ps5upload.phantomptr.com/?lang=ko" />
+  <link rel="alternate" hreflang="tr" href="https://ps5upload.phantomptr.com/?lang=tr" />
+  <link rel="alternate" hreflang="vi" href="https://ps5upload.phantomptr.com/?lang=vi" />
+  <link rel="alternate" hreflang="id" href="https://ps5upload.phantomptr.com/?lang=id" />
+  <link rel="alternate" hreflang="it" href="https://ps5upload.phantomptr.com/?lang=it" />
+  <link rel="alternate" hreflang="th" href="https://ps5upload.phantomptr.com/?lang=th" />
+  <link rel="alternate" hreflang="hu" href="https://ps5upload.phantomptr.com/?lang=hu" />
+  <link rel="alternate" hreflang="fa" href="https://ps5upload.phantomptr.com/?lang=fa" />
 </head>
 <body>
-  <a class="skip" href="#main">Skip to content</a>
+  <a class="skip" href="#main" data-i18n="nav.skip">Skip to content</a>
 
   <header class="top">
     <div class="wrap top-row">
@@ -23,19 +77,23 @@
         <img src="assets/logo.png" alt="" width="34" height="34" />
         <span>PS5Upload</span>
       </a>
-      <nav class="nav" aria-label="Sections">
-        <a href="#play">Play</a>
-        <a href="#tour">Features</a>
-        <a href="#guide">Guide</a>
-        <a href="#download">Download</a>
-        <a href="#news">News</a>
+      <nav class="nav" data-i18n-attr="aria-label:nav.sections" aria-label="Sections">
+        <a href="#play" data-i18n="nav.play">Play</a>
+        <a href="#tour" data-i18n="nav.features">Features</a>
+        <a href="#guide" data-i18n="nav.guide">Guide</a>
+        <a href="#download" data-i18n="nav.download">Download</a>
+        <a href="#news" data-i18n="nav.news">News</a>
       </nav>
       <div class="top-actions">
-        <a class="btn small coffee" href="https://ko-fi.com/B0B81S0WUA" title="PS5Upload is free. A coffee for me, or tokens for the AI that writes the code, keeps it going.">☕ <span>Coffee or tokens</span></a>
-        <a class="icon-btn" href="https://github.com/phantomptr/ps5upload" aria-label="PS5Upload on GitHub" title="GitHub">
+        <a class="btn small coffee" href="https://ko-fi.com/B0B81S0WUA" data-i18n-attr="title:nav.coffee_title" title="PS5Upload is free. A coffee for me, or tokens for the AI that writes the code, keeps it going.">☕ <span data-i18n="nav.coffee">Coffee or tokens</span></a>
+        <label class="lang" data-i18n-attr="title:nav.language" title="Language">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm-9-9h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3Z"/></svg>
+          <select id="lang" data-i18n-attr="aria-label:nav.language" aria-label="Language"></select>
+        </label>
+        <a class="icon-btn" href="https://github.com/phantomptr/ps5upload" data-i18n-attr="aria-label:nav.github" aria-label="PS5Upload on GitHub" title="GitHub">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.56-.29-5.25-1.28-5.25-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.27 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
         </a>
-        <button class="icon-btn" id="theme" type="button" aria-label="Switch light or dark" title="Light or dark">
+        <button class="icon-btn" id="theme" type="button" data-i18n-attr="aria-label:nav.theme_label;title:nav.theme_title" aria-label="Switch light or dark" title="Light or dark">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
         </button>
       </div>
@@ -48,9 +106,9 @@
       <div class="hero-glow" aria-hidden="true"></div>
       <div class="wrap hero-row">
         <div class="hero-text">
-          <p class="eyebrow" id="hero-version">Free and open source</p>
-          <h1>Your PS5, on <span class="grad">every screen</span>.</h1>
-          <p class="lead">
+          <p class="eyebrow" id="hero-version" data-i18n="hero.eyebrow">Free and open source</p>
+          <h1 data-i18n="hero.title">Your PS5, on <span class="grad">every screen</span>.</h1>
+          <p class="lead" data-i18n="hero.lead">
             Play your PS5 from your computer, phone or browser, and manage everything on it from
             the same app: install games, move files, keep your saves and set it all up with a
             checklist that ticks itself.
@@ -58,9 +116,9 @@
           <div class="hero-cta">
             <a class="btn primary" id="hero-download" href="https://github.com/phantomptr/ps5upload/releases">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0-4-4m4 4 4-4M5 21h14"/></svg>
-              <span id="hero-download-label">Download</span>
+              <span id="hero-download-label" data-i18n="hero.download">Download</span>
             </a>
-            <a class="btn" href="#guide">Get started</a>
+            <a class="btn" href="#guide" data-i18n="hero.start">Get started</a>
           </div>
           <p class="fine" id="hero-fine">macOS · Windows · Linux · Android · iPhone · Docker</p>
         </div>
@@ -69,7 +127,7 @@
             <div class="screen">
               <picture>
                 <source srcset="assets/shots/play-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="play" />
-                <img src="assets/shots/play-light.webp" alt="Play: a PS5 game streamed into PS5Upload on a computer, with its controls bar." width="1600" height="1000" data-theme-img="play" />
+                <img src="assets/shots/play-light.webp" data-i18n-attr="alt:alt.play" alt="Play: a PS5 game streamed into PS5Upload on a computer, with its controls bar." width="1600" height="1000" data-theme-img="play" />
               </picture>
             </div>
           </figure>
@@ -77,90 +135,90 @@
             <div class="screen">
               <picture>
                 <source srcset="assets/shots/m-home-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="m-home" />
-                <img src="assets/shots/m-home-light.webp" alt="PS5Upload on a phone: Home with the Play card." width="390" height="844" data-theme-img="m-home" />
+                <img src="assets/shots/m-home-light.webp" data-i18n-attr="alt:alt.m_home" alt="PS5Upload on a phone: Home with the Play card." width="390" height="844" data-theme-img="m-home" />
               </picture>
             </div>
           </figure>
         </div>
       </div>
-      <ul class="wrap badges" aria-label="At a glance">
-        <li><b>6</b> platforms</li>
-        <li><b>21</b> languages</li>
-        <li><b>1</b> app for play and management</li>
-        <li><b>0</b> cost: free and open source</li>
+      <ul class="wrap badges" data-i18n-attr="aria-label:badges.label" aria-label="At a glance">
+        <li data-i18n="badges.platforms"><b>6</b> platforms</li>
+        <li data-i18n="badges.languages"><b>21</b> languages</li>
+        <li data-i18n="badges.app"><b>1</b> app for play and management</li>
+        <li data-i18n="badges.cost"><b>0</b> cost: free and open source</li>
       </ul>
     </section>
 
     <!-- Play -->
     <section class="section" id="play" aria-labelledby="play-title">
       <div class="wrap">
-        <p class="kicker">New in 10.0</p>
-        <h2 id="play-title">Play is the heart of the app</h2>
-        <p class="section-lead">Your console's screen, streamed to the device in front of you. It wakes the PS5 from rest mode, signs your user in, and you play with a controller, the keyboard or touch.</p>
+        <p class="kicker" data-i18n="play.kicker">New in 10.0</p>
+        <h2 id="play-title" data-i18n="play.title">Play is the heart of the app</h2>
+        <p class="section-lead" data-i18n="play.lead">Your console's screen, streamed to the device in front of you. It wakes the PS5 from rest mode, signs your user in, and you play with a controller, the keyboard or touch.</p>
       </div>
       <div class="wrap tour">
         <div class="tour-row">
           <div class="tour-text">
-            <h3>One press from Home</h3>
-            <p>The Play card sits at the top of Home: press Play, or pick up your last game where you left it. Every game's page has Play too, which starts the game and streams it in one go.</p>
+            <h3 data-i18n="play.home.title">One press from Home</h3>
+            <p data-i18n="play.home.text">The Play card sits at the top of Home: press Play, or pick up your last game where you left it. Every game's page has Play too, which starts the game and streams it in one go.</p>
             <ul class="ticks">
-              <li>Wakes the console and signs in for you</li>
-              <li>Keeps playing while you use other screens</li>
-              <li>Fit, Fill or Stretch the picture; full screen and picture in picture</li>
+              <li data-i18n="play.home.t1">Wakes the console and signs in for you</li>
+              <li data-i18n="play.home.t2">Keeps playing while you use other screens</li>
+              <li data-i18n="play.home.t3">Fit, Fill or Stretch the picture; full screen and picture in picture</li>
             </ul>
           </div>
           <figure class="shot tilt-l">
             <picture>
               <source srcset="assets/shots/home-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="home" />
-              <img src="assets/shots/home-light.webp" alt="Home with the Play card at the top." width="1600" height="1000" loading="lazy" data-theme-img="home" />
+              <img src="assets/shots/home-light.webp" data-i18n-attr="alt:alt.home" alt="Home with the Play card at the top." width="1600" height="1000" loading="lazy" data-theme-img="home" />
             </picture>
           </figure>
         </div>
         <div class="tour-row flip">
           <div class="tour-text">
-            <h3>Set up once, with a checklist that ticks itself</h3>
-            <p>Play › Set up walks through everything a console needs, in order. It reads the console every few seconds and ticks each step as it's done; where the app can do the step, the button is right there.</p>
+            <h3 data-i18n="play.setup.title">Set up once, with a checklist that ticks itself</h3>
+            <p data-i18n="play.setup.text">Play › Set up walks through everything a console needs, in order. It reads the console every few seconds and ticks each step as it's done; where the app can do the step, the button is right there.</p>
             <ol class="mini-steps">
-              <li>Connect to your PS5</li>
-              <li>Sign in to a user and give it an account ID</li>
-              <li>Sign the account in, offline</li>
-              <li>Turn Remote Play on</li>
-              <li>Pair this app with the console</li>
+              <li data-i18n="play.setup.s1">Connect to your PS5</li>
+              <li data-i18n="play.setup.s2">Sign in to a user and give it an account ID</li>
+              <li data-i18n="play.setup.s3">Sign the account in, offline</li>
+              <li data-i18n="play.setup.s4">Turn Remote Play on</li>
+              <li data-i18n="play.setup.s5">Pair this app with the console</li>
             </ol>
           </div>
           <figure class="shot tilt-r">
             <picture>
               <source srcset="assets/shots/setup-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="setup" />
-              <img src="assets/shots/setup-light.webp" alt="Play › Set up: a checklist with the done steps ticked and the next one open." width="1600" height="1000" loading="lazy" data-theme-img="setup" />
+              <img src="assets/shots/setup-light.webp" data-i18n-attr="alt:alt.setup" alt="Play › Set up: a checklist with the done steps ticked and the next one open." width="1600" height="1000" loading="lazy" data-theme-img="setup" />
             </picture>
           </figure>
         </div>
         <div class="tour-row">
           <div class="tour-text">
-            <h3>Play together</h3>
-            <p>Scan a code and a phone becomes a controller, or a screen for friends to watch from the couch. Hand a watcher the controller when it's their turn.</p>
+            <h3 data-i18n="play.together.title">Play together</h3>
+            <p data-i18n="play.together.text">Scan a code and a phone becomes a controller, or a screen for friends to watch from the couch. Hand a watcher the controller when it's their turn.</p>
             <ul class="ticks">
-              <li>Phones as controllers, up to four</li>
-              <li>Watch party with sound, up to four watchers</li>
-              <li>Instant replay, screenshots and clips, saved to your phone's photos</li>
+              <li data-i18n="play.together.t1">Phones as controllers, up to four</li>
+              <li data-i18n="play.together.t2">Watch party with sound, up to four watchers</li>
+              <li data-i18n="play.together.t3">Instant replay, screenshots and clips, saved to your phone's photos</li>
             </ul>
           </div>
           <figure class="shot tilt-l">
             <picture>
               <source srcset="assets/shots/phones-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="phones" />
-              <img src="assets/shots/phones-light.webp" alt="The phone panel: a code to scan, to use a phone as a controller or to watch." width="1600" height="1000" loading="lazy" data-theme-img="phones" />
+              <img src="assets/shots/phones-light.webp" data-i18n-attr="alt:alt.phones" alt="The phone panel: a code to scan, to use a phone as a controller or to watch." width="1600" height="1000" loading="lazy" data-theme-img="phones" />
             </picture>
           </figure>
         </div>
       </div>
       <div class="wrap">
         <div class="grid chips">
-          <div class="chip-card"><span class="ico">🎮</span><b>Per-game controls</b><span>Turbo, mouse aim and macros, kept for each game.</span></div>
-          <div class="chip-card"><span class="ico">✨</span><b>Upscale to your screen</b><span>AMD FSR 1 on the graphics card, on any GPU.</span></div>
-          <div class="chip-card"><span class="ico">🎨</span><b>Picture tools</b><span>Sharpen, brightness, colour and a 21:9 crop.</span></div>
-          <div class="chip-card"><span class="ico">⏪</span><b>Instant replay</b><span>Save the last 15 to 60 seconds as a video.</span></div>
-          <div class="chip-card"><span class="ico">🎙️</span><b>Voice</b><span>Your microphone to the console, for party chat.</span></div>
-          <div class="chip-card"><span class="ico">🧩</span><b>Game panel</b><span>Cheats, the console's state and controls, beside the picture.</span></div>
+          <div class="chip-card"><span class="ico">🎮</span><b data-i18n="chips.controls.title">Per-game controls</b><span data-i18n="chips.controls.text">Turbo, mouse aim and macros, kept for each game.</span></div>
+          <div class="chip-card"><span class="ico">✨</span><b data-i18n="chips.upscale.title">Upscale to your screen</b><span data-i18n="chips.upscale.text">AMD FSR 1 on the graphics card, on any GPU.</span></div>
+          <div class="chip-card"><span class="ico">🎨</span><b data-i18n="chips.picture.title">Picture tools</b><span data-i18n="chips.picture.text">Sharpen, brightness, colour and a 21:9 crop.</span></div>
+          <div class="chip-card"><span class="ico">⏪</span><b data-i18n="chips.replay.title">Instant replay</b><span data-i18n="chips.replay.text">Save the last 15 to 60 seconds as a video.</span></div>
+          <div class="chip-card"><span class="ico">🎙️</span><b data-i18n="chips.voice.title">Voice</b><span data-i18n="chips.voice.text">Your microphone to the console, for party chat.</span></div>
+          <div class="chip-card"><span class="ico">🧩</span><b data-i18n="chips.panel.title">Game panel</b><span data-i18n="chips.panel.text">Cheats, the console's state and controls, beside the picture.</span></div>
         </div>
       </div>
     </section>
@@ -168,61 +226,61 @@
     <!-- Feature tour -->
     <section class="section alt" id="tour" aria-labelledby="tour-title">
       <div class="wrap">
-        <p class="kicker">Everything in one app</p>
-        <h2 id="tour-title">Fill it, sort it, keep it</h2>
-        <p class="section-lead">Everything between your devices and your PS5, built on its own fast transfer protocol.</p>
+        <p class="kicker" data-i18n="tour.kicker">Everything in one app</p>
+        <h2 id="tour-title" data-i18n="tour.title">Fill it, sort it, keep it</h2>
+        <p class="section-lead" data-i18n="tour.lead">Everything between your devices and your PS5, built on its own fast transfer protocol.</p>
       </div>
       <div class="wrap tour">
         <div class="tour-row">
           <div class="tour-text">
-            <h3>Upload &amp; Install</h3>
-            <p>Drop a package, a game folder, an image or an archive: the app works out what it is and does the right thing. Transfers are resumable and run at the full speed of your network, with thousands of small files packed together so they never crawl.</p>
+            <h3 data-i18n="tour.upload.title">Upload &amp; Install</h3>
+            <p data-i18n="tour.upload.text">Drop a package, a game folder, an image or an archive: the app works out what it is and does the right thing. Transfers are resumable and run at the full speed of your network, with thousands of small files packed together so they never crawl.</p>
             <ul class="ticks">
-              <li>Install from your computer, a link or a network share</li>
-              <li>A queue that carries on while you do other things</li>
-              <li>Updates and add-ons install from each game's page</li>
+              <li data-i18n="tour.upload.t1">Install from your computer, a link or a network share</li>
+              <li data-i18n="tour.upload.t2">A queue that carries on while you do other things</li>
+              <li data-i18n="tour.upload.t3">Updates and add-ons install from each game's page</li>
             </ul>
           </div>
           <figure class="shot tilt-l">
             <picture>
               <source srcset="assets/shots/upload-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="upload" />
-              <img src="assets/shots/upload-light.webp" alt="Upload &amp; Install: drop anything and it is detected." width="1600" height="1000" loading="lazy" data-theme-img="upload" />
+              <img src="assets/shots/upload-light.webp" data-i18n-attr="alt:alt.upload" alt="Upload &amp; Install: drop anything and it is detected." width="1600" height="1000" loading="lazy" data-theme-img="upload" />
             </picture>
           </figure>
         </div>
         <div class="tour-row flip">
           <div class="tour-text">
-            <h3>All your games, in one place</h3>
-            <p>One grid for the games on your drives, your network shares and every console, with their updates and add-ons. Each game's page shows where it is and what you can do with it: Play, Launch on PS5, install, move or update.</p>
+            <h3 data-i18n="tour.games.title">All your games, in one place</h3>
+            <p data-i18n="tour.games.text">One grid for the games on your drives, your network shares and every console, with their updates and add-ons. Each game's page shows where it is and what you can do with it: Play, Launch on PS5, install, move or update.</p>
           </div>
           <figure class="shot tilt-r">
             <picture>
               <source srcset="assets/shots/games-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="games" />
-              <img src="assets/shots/games-light.webp" alt="Games: a grid of game covers with their sizes and where they are." width="1600" height="1000" loading="lazy" data-theme-img="games" />
+              <img src="assets/shots/games-light.webp" data-i18n-attr="alt:alt.games" alt="Games: a grid of game covers with their sizes and where they are." width="1600" height="1000" loading="lazy" data-theme-img="games" />
             </picture>
           </figure>
         </div>
         <div class="tour-row">
           <div class="tour-text">
-            <h3>Saves and files</h3>
-            <p>Back your saves up on a schedule, restore them, and take a snapshot before you try something new. Browse the console's drives like a folder on your computer: copy, move and open files both ways.</p>
+            <h3 data-i18n="tour.saves.title">Saves and files</h3>
+            <p data-i18n="tour.saves.text">Back your saves up on a schedule, restore them, and take a snapshot before you try something new. Browse the console's drives like a folder on your computer: copy, move and open files both ways.</p>
           </div>
           <figure class="shot tilt-l">
             <picture>
               <source srcset="assets/shots/files-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="files" />
-              <img src="assets/shots/files-light.webp" alt="Files: the console's drives and folders, browsed like a folder on your computer." width="1600" height="1000" loading="lazy" data-theme-img="files" />
+              <img src="assets/shots/files-light.webp" data-i18n-attr="alt:alt.files" alt="Files: the console's drives and folders, browsed like a folder on your computer." width="1600" height="1000" loading="lazy" data-theme-img="files" />
             </picture>
           </figure>
         </div>
         <div class="tour-row flip">
           <div class="tour-text">
-            <h3>Workshop</h3>
-            <p>Turn a game folder into a package or a disk image, look inside one, and make images smaller with compression. Everything runs on your computer and goes to the console when it's ready.</p>
+            <h3 data-i18n="tour.workshop.title">Workshop</h3>
+            <p data-i18n="tour.workshop.text">Turn a game folder into a package or a disk image, look inside one, and make images smaller with compression. Everything runs on your computer and goes to the console when it's ready.</p>
           </div>
           <figure class="shot tilt-r">
             <picture>
               <source srcset="assets/shots/workshop-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="workshop" />
-              <img src="assets/shots/workshop-light.webp" alt="Workshop: convert a game folder into a package or an image." width="1600" height="1000" loading="lazy" data-theme-img="workshop" />
+              <img src="assets/shots/workshop-light.webp" data-i18n-attr="alt:alt.workshop" alt="Workshop: convert a game folder into a package or an image." width="1600" height="1000" loading="lazy" data-theme-img="workshop" />
             </picture>
           </figure>
         </div>
@@ -230,9 +288,9 @@
       <div class="wrap">
         <div class="everywhere">
           <div class="everywhere-text">
-            <h3>On every device you have</h3>
-            <p>Native apps for macOS, Windows, Linux, Android and iPhone, and a Docker image that serves the same app as a web page from a NAS or server. Several consoles? Add them all and switch with a tap.</p>
-            <div class="os-row" aria-label="Platforms">
+            <h3 data-i18n="tour.everywhere.title">On every device you have</h3>
+            <p data-i18n="tour.everywhere.text">Native apps for macOS, Windows, Linux, Android and iPhone, and a Docker image that serves the same app as a web page from a NAS or server. Several consoles? Add them all and switch with a tap.</p>
+            <div class="os-row" data-i18n-attr="aria-label:tour.everywhere.platforms" aria-label="Platforms">
               <span>macOS</span><span>Windows</span><span>Linux</span><span>Android</span><span>iPhone</span><span>Docker</span>
             </div>
           </div>
@@ -241,7 +299,7 @@
               <div class="screen">
                 <picture>
                   <source srcset="assets/shots/m-play-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="m-play" />
-                  <img src="assets/shots/m-play-light.webp" alt="Play on a phone, with the on-screen controller." width="390" height="844" loading="lazy" data-theme-img="m-play" />
+                  <img src="assets/shots/m-play-light.webp" data-i18n-attr="alt:alt.m_play" alt="Play on a phone, with the on-screen controller." width="390" height="844" loading="lazy" data-theme-img="m-play" />
                 </picture>
               </div>
             </figure>
@@ -249,7 +307,7 @@
               <div class="screen">
                 <picture>
                   <source srcset="assets/shots/m-games-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="m-games" />
-                  <img src="assets/shots/m-games-light.webp" alt="Games on a phone." width="390" height="844" loading="lazy" data-theme-img="m-games" />
+                  <img src="assets/shots/m-games-light.webp" data-i18n-attr="alt:alt.m_games" alt="Games on a phone." width="390" height="844" loading="lazy" data-theme-img="m-games" />
                 </picture>
               </div>
             </figure>
@@ -261,33 +319,33 @@
     <!-- Guide -->
     <section class="section" id="guide" aria-labelledby="guide-title">
       <div class="wrap">
-        <p class="kicker">Guide</p>
-        <h2 id="guide-title">Get started in five steps</h2>
-        <p class="section-lead">From download to your first game on screen. Most of it happens once.</p>
+        <p class="kicker" data-i18n="guide.kicker">Guide</p>
+        <h2 id="guide-title" data-i18n="guide.title">Get started in five steps</h2>
+        <p class="section-lead" data-i18n="guide.lead">From download to your first game on screen. Most of it happens once.</p>
         <ol class="steps">
           <li class="step">
             <span class="num">1</span>
             <div>
-              <h3>Install the app</h3>
-              <p>Download it for your computer or phone below. On a NAS or server, run the Docker image and open it in a browser instead.</p>
+              <h3 data-i18n="guide.s1.title">Install the app</h3>
+              <p data-i18n="guide.s1.text">Download it for your computer or phone below. On a NAS or server, run the Docker image and open it in a browser instead.</p>
             </div>
           </li>
           <li class="step">
             <span class="num">2</span>
             <div>
-              <h3>Load the helper on the PS5</h3>
-              <p>Start your PS5's payload loader as you usually do, then press <b>Update helper</b> in the app (or Connection). The helper is how the app talks to the console.</p>
+              <h3 data-i18n="guide.s2.title">Load the helper on the PS5</h3>
+              <p data-i18n="guide.s2.text">Start your PS5's payload loader as you usually do, then press <b>Send helper</b> on the Connection screen. The helper is how the app talks to the console.</p>
             </div>
           </li>
           <li class="step">
             <span class="num">3</span>
             <div>
-              <h3>Connect</h3>
-              <p>Type the console's address on the Connection screen, or let the app find it on your network. The status at the bottom turns green when it's there.</p>
+              <h3 data-i18n="guide.s3.title">Connect</h3>
+              <p data-i18n="guide.s3.text">Type the console's address on the Connection screen, or let the app find it on your network. The status at the bottom turns green when it's there.</p>
               <figure class="shot small">
                 <picture>
                   <source srcset="assets/shots/connection-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="connection" />
-                  <img src="assets/shots/connection-light.webp" alt="The Connection screen with a console found and connected." width="1600" height="1000" loading="lazy" data-theme-img="connection" />
+                  <img src="assets/shots/connection-light.webp" data-i18n-attr="alt:alt.connection" alt="The Connection screen with a console found and connected." width="1600" height="1000" loading="lazy" data-theme-img="connection" />
                 </picture>
               </figure>
             </div>
@@ -295,93 +353,93 @@
           <li class="step">
             <span class="num">4</span>
             <div>
-              <h3>Set up Play</h3>
-              <p>Open <b>Play › Set up</b> and follow the checklist. Each step ticks by itself when it's done; the one only the console can show (its rest-mode settings) you tick yourself.</p>
+              <h3 data-i18n="guide.s4.title">Set up Play</h3>
+              <p data-i18n="guide.s4.text">Open <b>Play › Set up</b> and follow the checklist. Each step ticks by itself when it's done; the one only the console can show (its rest-mode settings) you tick yourself.</p>
             </div>
           </li>
           <li class="step">
             <span class="num">5</span>
             <div>
-              <h3>Play, and fill it up</h3>
-              <p>Press <b>Play</b> on Home. To add a game, drop it on <b>Upload &amp; Install</b>; it shows up in <b>Games</b> with Play ready when it's installed.</p>
+              <h3 data-i18n="guide.s5.title">Play, and fill it up</h3>
+              <p data-i18n="guide.s5.text">Press <b>Play</b> on Home. To add a game, drop it on <b>Upload &amp; Install</b>; it shows up in <b>Games</b> with Play ready when it's installed.</p>
             </div>
           </li>
         </ol>
       </div>
 
       <div class="wrap">
-        <h3 class="guides-title">How do I…</h3>
+        <h3 class="guides-title" data-i18n="howto.title">How do I…</h3>
         <div class="guides">
           <details class="guide" open>
-            <summary>Play with a phone as the controller</summary>
+            <summary data-i18n="howto.pad.title">Play with a phone as the controller</summary>
             <div>
               <ol>
-                <li>Start Play on your computer.</li>
-                <li>Press the phone button on the picture's bar.</li>
-                <li>Scan the code with the phone's camera. The phone opens a controller; turn it sideways.</li>
+                <li data-i18n="howto.pad.s1">Start Play on your computer.</li>
+                <li data-i18n="howto.pad.s2">Press the phone button on the picture's bar.</li>
+                <li data-i18n="howto.pad.s3">Scan the code with the phone's camera. The phone opens a controller; turn it sideways.</li>
               </ol>
-              <p class="muted">In the PS5Upload app on a phone, Play shows the computer that's playing: tap <i>Use this device as its controller</i>.</p>
+              <p class="muted" data-i18n="howto.pad.note">In the PS5Upload app on a phone, Play shows the computer that's playing: tap <i>Use this device as its controller</i>.</p>
             </div>
           </details>
           <details class="guide">
-            <summary>Let friends watch</summary>
+            <summary data-i18n="howto.watch.title">Let friends watch</summary>
             <div>
               <ol>
-                <li>In the phone panel, choose <b>To watch</b>.</li>
-                <li>Friends scan the code: the stream plays in their browser, with sound after a tap.</li>
-                <li>Press <b>Hand the controller</b> next to someone to let them play.</li>
-              </ol>
-            </div>
-          </details>
-          <details class="guide">
-            <summary>Install a game or an update</summary>
-            <div>
-              <ol>
-                <li>Drop the package on <b>Upload &amp; Install</b>, or pick it with Browse.</li>
-                <li>It joins the queue and installs; you can keep using the app.</li>
-                <li>For an update or add-on, open the game's page in <b>Games</b> and install it from there.</li>
+                <li data-i18n="howto.watch.s1">In the phone panel, choose <b>To watch</b>.</li>
+                <li data-i18n="howto.watch.s2">Friends scan the code: the stream plays in their browser, with sound after a tap.</li>
+                <li data-i18n="howto.watch.s3">Press <b>Hand the controller</b> next to someone to let them play.</li>
               </ol>
             </div>
           </details>
           <details class="guide">
-            <summary>Back up and restore saves</summary>
+            <summary data-i18n="howto.install.title">Install a game or an update</summary>
             <div>
               <ol>
-                <li>Open <b>Save Data</b> and choose a folder for backups.</li>
-                <li>Back up one game, or turn on automatic backups.</li>
-                <li>To go back, pick a backup and press Restore (close the game first).</li>
-              </ol>
-              <p class="muted">While playing, the game panel takes a snapshot of the running game's save in one press.</p>
-            </div>
-          </details>
-          <details class="guide">
-            <summary>Make the picture sharper on a big screen</summary>
-            <div>
-              <ol>
-                <li>In Play, open <b>Settings › Picture</b>.</li>
-                <li>Turn on <b>Upscale to the screen</b>, and set <b>Sharpen</b> to taste.</li>
-              </ol>
-              <p class="muted">It runs on your graphics card and turns itself off if the device can't keep up.</p>
-            </div>
-          </details>
-          <details class="guide">
-            <summary>Use it from a browser (Docker)</summary>
-            <div>
-              <ol>
-                <li>Run the Docker image on your NAS or server (the command is below).</li>
-                <li>Open port 19113 on that machine in a browser.</li>
-                <li>The whole app is there, including Play.</li>
+                <li data-i18n="howto.install.s1">Drop the package on <b>Upload &amp; Install</b>, or pick it with Browse.</li>
+                <li data-i18n="howto.install.s2">It joins the queue and installs; you can keep using the app.</li>
+                <li data-i18n="howto.install.s3">For an update or add-on, open the game's page in <b>Games</b> and install it from there.</li>
               </ol>
             </div>
           </details>
           <details class="guide">
-            <summary>Something isn't working</summary>
+            <summary data-i18n="howto.saves.title">Back up and restore saves</summary>
             <div>
               <ol>
-                <li>Open <b>Bug Report</b> in the sidebar: it builds a report with the app's logs.</li>
-                <li>Attach it to an issue on GitHub, or ask on Discord.</li>
+                <li data-i18n="howto.saves.s1">Open <b>Save Data</b> and choose a folder for backups.</li>
+                <li data-i18n="howto.saves.s2">Back up one game, or turn on automatic backups.</li>
+                <li data-i18n="howto.saves.s3">To go back, pick a backup and press Restore (close the game first).</li>
               </ol>
-              <p class="muted">The in-app <b>Help</b> screen answers most questions, in your language.</p>
+              <p class="muted" data-i18n="howto.saves.note">While playing, the game panel takes a snapshot of the running game's save in one press.</p>
+            </div>
+          </details>
+          <details class="guide">
+            <summary data-i18n="howto.sharp.title">Make the picture sharper on a big screen</summary>
+            <div>
+              <ol>
+                <li data-i18n="howto.sharp.s1">In Play, open <b>Settings › Picture</b>.</li>
+                <li data-i18n="howto.sharp.s2">Turn on <b>Upscale to the screen</b>, and set <b>Sharpen</b> to taste.</li>
+              </ol>
+              <p class="muted" data-i18n="howto.sharp.note">It runs on your graphics card and turns itself off if the device can't keep up.</p>
+            </div>
+          </details>
+          <details class="guide">
+            <summary data-i18n="howto.docker.title">Use it from a browser (Docker)</summary>
+            <div>
+              <ol>
+                <li data-i18n="howto.docker.s1">Run the Docker image on your NAS or server (the command is below).</li>
+                <li data-i18n="howto.docker.s2">Open port 19113 on that machine in a browser.</li>
+                <li data-i18n="howto.docker.s3">The whole app is there, including Play.</li>
+              </ol>
+            </div>
+          </details>
+          <details class="guide">
+            <summary data-i18n="howto.help.title">Something isn't working</summary>
+            <div>
+              <ol>
+                <li data-i18n="howto.help.s1">Open <b>Bug Report</b> in the sidebar: it builds a report with the app's logs.</li>
+                <li data-i18n="howto.help.s2">Attach it to an issue on GitHub, or ask on Discord.</li>
+              </ol>
+              <p class="muted" data-i18n="howto.help.note">The in-app <b>Help</b> screen answers most questions, in your language.</p>
             </div>
           </details>
         </div>
@@ -392,26 +450,26 @@
       <div class="wrap">
         <div class="section-head">
           <div>
-            <h2 id="download-title">Download</h2>
-            <p class="section-lead" id="download-lead">The newest release for every platform.</p>
+            <h2 id="download-title" data-i18n="download.title">Download</h2>
+            <p class="section-lead" id="download-lead" data-i18n="download.lead">The newest release for every platform.</p>
           </div>
-          <a class="btn small" id="release-link" href="https://github.com/phantomptr/ps5upload/releases">Release notes</a>
+          <a class="btn small" id="release-link" href="https://github.com/phantomptr/ps5upload/releases" data-i18n="download.notes">Release notes</a>
         </div>
         <div class="grid downloads" id="downloads">
-          <p class="muted">Loading the latest release…</p>
+          <p class="muted" data-i18n="download.loading">Loading the latest release…</p>
         </div>
         <div class="card docker">
           <div>
-            <h3>Docker (the app as a web page on your NAS or server)</h3>
-            <p class="muted">Serves the full app on your network. Open port 19113 in a browser. Fill in your PS5's address and the network allowed to use it, or start from <a href="https://github.com/phantomptr/ps5upload/blob/main/engine/compose.yaml">engine/compose.yaml</a>.</p>
+            <h3 data-i18n="download.docker.title">Docker (the app as a web page on your NAS or server)</h3>
+            <p class="muted" data-i18n="download.docker.text">Serves the full app on your network. Open port 19113 in a browser. Fill in your PS5's address and the network allowed to use it, or start from <a href="https://github.com/phantomptr/ps5upload/blob/main/engine/compose.yaml">engine/compose.yaml</a>.</p>
           </div>
           <div class="copy">
             <code id="docker-cmd">docker run -d --name ps5upload --network host -v ps5upload-data:/data -e PS5_ADDR=&lt;your PS5's IP&gt; -e PS5UPLOAD_ALLOW_IP=&lt;your LAN, e.g. 192.168.1.0/24&gt; ghcr.io/phantomptr/ps5upload-engine-webui:latest</code>
-            <button class="btn small" type="button" data-copy="docker-cmd">Copy</button>
+            <button class="btn small" type="button" data-copy="docker-cmd" data-i18n="download.copy">Copy</button>
           </div>
         </div>
         <details class="more">
-          <summary>The PS5 helper and the engine on its own</summary>
+          <summary data-i18n="download.extras">The PS5 helper and the engine on its own</summary>
           <div id="extras" class="extras"></div>
         </details>
       </div>
@@ -420,34 +478,34 @@
     <section class="section" id="news" aria-labelledby="news-title">
       <div class="wrap">
         <div class="section-head">
-          <h2 id="news-title">News</h2>
-          <a class="btn small" href="https://github.com/phantomptr/ps5upload/blob/main/CHANGELOG.md">Full changelog</a>
+          <h2 id="news-title" data-i18n="news.title">News</h2>
+          <a class="btn small" href="https://github.com/phantomptr/ps5upload/blob/main/CHANGELOG.md" data-i18n="news.changelog">Full changelog</a>
         </div>
         <div id="news-list" class="news">
-          <p class="muted">Loading releases…</p>
+          <p class="muted" data-i18n="news.loading">Loading releases…</p>
         </div>
       </div>
     </section>
 
     <section class="section alt" id="community" aria-labelledby="community-title">
       <div class="wrap">
-        <h2 id="community-title">Community</h2>
+        <h2 id="community-title" data-i18n="community.title">Community</h2>
         <div class="grid community">
           <a class="card link-card" href="https://discord.gg/fzK3xddtrM">
             <h3>Discord</h3>
-            <p>Help, setup questions and ideas. Release announcements land here first.</p>
+            <p data-i18n="community.discord">Help, setup questions and ideas. Release announcements land here first.</p>
           </a>
           <a class="card link-card" href="https://github.com/phantomptr/ps5upload/issues">
-            <h3>Report a bug</h3>
-            <p>Open an issue on GitHub. The app's Bug Report screen builds a report with logs to attach.</p>
+            <h3 data-i18n="community.bug.title">Report a bug</h3>
+            <p data-i18n="community.bug.text">Open an issue on GitHub. The app's Bug Report screen builds a report with logs to attach.</p>
           </a>
           <a class="card link-card" href="https://x.com/phantomptr">
             <h3>X</h3>
-            <p>Follow @phantomptr for releases.</p>
+            <p data-i18n="community.x">Follow @phantomptr for releases.</p>
           </a>
           <a class="card link-card" href="https://ko-fi.com/B0B81S0WUA">
-            <h3>Coffee or tokens</h3>
-            <p>PS5Upload is free. If it saves you time, a coffee for me or AI tokens for the code keeps it going, and please support the people behind the other tools you use too.</p>
+            <h3 data-i18n="community.coffee.title">Coffee or tokens</h3>
+            <p data-i18n="community.coffee.text">PS5Upload is free. If it saves you time, a coffee for me or AI tokens for the code keeps it going, and please support the people behind the other tools you use too.</p>
           </a>
         </div>
       </div>
@@ -456,8 +514,8 @@
 
   <footer class="foot">
     <div class="wrap foot-row">
-      <span>Made by <a href="https://phantomptr.com/">PhantomPtr</a>. PS5Upload is free software under the GPL-3.0.</span>
-      <span class="muted">Not affiliated with Sony Interactive Entertainment.</span>
+      <span data-i18n="foot.made">Made by <a href="https://phantomptr.com/">PhantomPtr</a>. PS5Upload is free software under the GPL-3.0.</span>
+      <span class="muted" data-i18n="foot.sony">Not affiliated with Sony Interactive Entertainment.</span>
     </div>
   </footer>
 

@@ -1,5 +1,10 @@
-// PS5Upload website: live releases, the right download for this visitor, the news list, and
-// the light/dark switch. No build step and no dependencies.
+// PS5Upload website: live releases, the right download for this visitor, the news list, the
+// language and the light/dark switch. No build step and no dependencies.
+//
+// The words come in the visitor's language: English is in index.html, the others in
+// i18n/<code>.json (scripts/site-i18n.mjs checks them against the page). The language itself
+// is picked in index.html's <head>, before anything is drawn, so the page never flashes the
+// wrong way round; each language has its own screenshots, taken from the app in that language.
 //
 // Releases come from GitHub's API when the page loads, so a new release shows up without a
 // redeploy. If that fails (offline, or GitHub's 60-requests-an-hour limit for anonymous
@@ -11,10 +16,9 @@ const REPO = "phantomptr/ps5upload";
 const API = `https://api.github.com/repos/${REPO}/releases?per_page=12`;
 const NEWS_COUNT = 4;
 
-// ── Theme ──────────────────────────────────────────────────────────────────
+// ── Language ───────────────────────────────────────────────────────────────
 
 const root = document.documentElement;
-const systemDark = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
 const store = {
   get: (k) => {
     try {
@@ -32,16 +36,91 @@ const store = {
   },
 };
 
+/** The app's languages, in the app's order (client/src/state/lang.ts). */
+const LANGS = [
+  ["en", "English"],
+  ["zh-CN", "简体中文"],
+  ["zh-TW", "繁體中文"],
+  ["hi", "हिन्दी"],
+  ["es", "Español"],
+  ["ar", "العربية"],
+  ["bn", "বাংলা"],
+  ["pl", "Polski"],
+  ["pt-BR", "Português (Brasil)"],
+  ["ru", "Русский"],
+  ["ja", "日本語"],
+  ["de", "Deutsch"],
+  ["fr", "Français"],
+  ["ko", "한국어"],
+  ["tr", "Türkçe"],
+  ["vi", "Tiếng Việt"],
+  ["id", "Bahasa Indonesia"],
+  ["it", "Italiano"],
+  ["th", "ไทย"],
+  ["hu", "Magyar"],
+  ["fa", "فارسی"],
+];
+const lang = LANGS.some(([c]) => c === root.lang) ? root.lang : "en";
+let words = {};
+
+/** A string in the visitor's language, `en` when it has no translation; {name} takes vars.name. */
+function t(key, en, vars = {}) {
+  let s = words[key] ?? en;
+  for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{${k}}`, v);
+  return s;
+}
+
+async function loadWords() {
+  if (lang === "en") return;
+  try {
+    const res = await fetch(`i18n/${lang}.json`);
+    if (res.ok) words = await res.json();
+  } catch {
+    /* stays English */
+  }
+}
+
+/** Puts the translations into the page: data-i18n is an element's content (which may hold
+ *  <b>, <i>, <a> and <span>), data-i18n-attr is "attribute:key" pairs split by ";". */
+function translatePage() {
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    const s = words[el.dataset.i18n];
+    if (s !== undefined) el.innerHTML = s;
+  });
+  document.querySelectorAll("[data-i18n-attr]").forEach((el) => {
+    for (const pair of el.dataset.i18nAttr.split(";")) {
+      const [attr, key] = pair.split(":");
+      if (words[key] !== undefined) el.setAttribute(attr, words[key]);
+    }
+  });
+}
+
+const select = document.getElementById("lang");
+select.innerHTML = LANGS.map(([c, label]) => `<option value="${c}" lang="${c}">${label}</option>`).join("");
+select.value = lang;
+select.addEventListener("change", () => {
+  store.set("ps5upload.site.lang", select.value);
+  const url = new URL(location.href);
+  url.searchParams.set("lang", select.value);
+  location.href = url.href;
+});
+
+// ── Theme ──────────────────────────────────────────────────────────────────
+
+const systemDark = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
+
 function applyTheme(theme) {
   if (theme) root.dataset.theme = theme;
   else delete root.dataset.theme;
   const dark = theme ? theme === "dark" : systemDark();
-  // The screenshots follow the page, not only the system.
+  // The screenshots follow the page, not only the system, and are in the page's language.
+  const dir = lang === "en" ? "assets/shots/" : `assets/shots/${lang}/`;
   document.querySelectorAll("[data-theme-src]").forEach((s) => {
+    s.srcset = `${dir}${s.dataset.themeSrc}-dark.webp`;
     s.media = theme ? "not all" : "(prefers-color-scheme: dark)";
   });
   document.querySelectorAll("img[data-theme-img]").forEach((img) => {
-    img.src = `assets/shots/${img.dataset.themeImg}-${dark ? "dark" : "light"}.webp`;
+    img.src = `${dir}${img.dataset.themeImg}-${dark ? "dark" : "light"}.webp`;
   });
 }
 applyTheme(store.get("ps5upload.site.theme"));
@@ -60,35 +139,35 @@ document.addEventListener("click", async (e) => {
   const text = document.getElementById(btn.dataset.copy)?.textContent ?? "";
   try {
     await navigator.clipboard.writeText(text);
-    btn.textContent = "Copied";
+    btn.textContent = t("js.copied", "Copied");
   } catch {
-    btn.textContent = "Select and copy";
+    btn.textContent = t("js.copy_failed", "Select and copy");
   }
-  setTimeout(() => (btn.textContent = "Copy"), 1600);
+  setTimeout(() => (btn.textContent = t("download.copy", "Copy")), 1600);
 });
 
 // ── Releases ───────────────────────────────────────────────────────────────
 
 /** What a release file is, from its name (scripts/gen-updater-manifest.py names them). */
 const KINDS = [
-  { re: /-mac-arm64\.dmg$/, os: "mac", label: "Apple Silicon", note: ".dmg" },
-  { re: /-mac-x64\.dmg$/, os: "mac", label: "Intel", note: ".dmg" },
-  { re: /-win-x64-setup\.exe$/, os: "windows", label: "x64 installer", note: ".exe" },
-  { re: /-win-x64\.zip$/, os: "windows", label: "x64 portable", note: ".zip" },
-  { re: /-win-arm64-setup\.exe$/, os: "windows", label: "ARM64 installer", note: ".exe" },
-  { re: /-win-arm64\.zip$/, os: "windows", label: "ARM64 portable", note: ".zip" },
-  { re: /-linux-x64\.deb$/, os: "linux", label: "x64 Debian, Ubuntu", note: ".deb" },
-  { re: /-linux-x64\.rpm$/, os: "linux", label: "x64 Fedora, openSUSE", note: ".rpm" },
-  { re: /-linux-x64\.AppImage$/, os: "linux", label: "x64 AppImage", note: ".AppImage" },
-  { re: /-linux-x64\.zip$/, os: "linux", label: "x64 any distro", note: ".zip" },
-  { re: /-linux-arm64\.deb$/, os: "linux", label: "ARM64 Debian, Ubuntu", note: ".deb" },
-  { re: /-linux-arm64\.rpm$/, os: "linux", label: "ARM64 Fedora, openSUSE", note: ".rpm" },
-  { re: /-linux-arm64\.AppImage$/, os: "linux", label: "ARM64 AppImage", note: ".AppImage" },
-  { re: /-linux-arm64\.zip$/, os: "linux", label: "ARM64 any distro", note: ".zip" },
-  { re: /-android\.apk$/, os: "android", label: "Phones and tablets", note: ".apk" },
-  { re: /-android-armv7\.apk$/, os: "android", label: "Older 32-bit phones", note: ".apk" },
-  { re: /-ios-unsigned\.ipa$/, os: "ios", label: "iPhone, sideload", note: ".ipa" },
-  { re: /^ps5upload-[\d.]+\.elf$/, os: "extra", label: "PS5 helper (payload)", note: ".elf" },
+  { re: /-mac-arm64\.dmg$/, os: "mac", label: () => "Apple Silicon", note: ".dmg" },
+  { re: /-mac-x64\.dmg$/, os: "mac", label: () => "Intel", note: ".dmg" },
+  { re: /-win-x64-setup\.exe$/, os: "windows", label: () => t("dl.win_x64_setup", "x64 installer"), note: ".exe" },
+  { re: /-win-x64\.zip$/, os: "windows", label: () => t("dl.win_x64_zip", "x64 portable"), note: ".zip" },
+  { re: /-win-arm64-setup\.exe$/, os: "windows", label: () => t("dl.win_arm64_setup", "ARM64 installer"), note: ".exe" },
+  { re: /-win-arm64\.zip$/, os: "windows", label: () => t("dl.win_arm64_zip", "ARM64 portable"), note: ".zip" },
+  { re: /-linux-x64\.deb$/, os: "linux", label: () => t("dl.linux_x64_deb", "x64 Debian, Ubuntu"), note: ".deb" },
+  { re: /-linux-x64\.rpm$/, os: "linux", label: () => t("dl.linux_x64_rpm", "x64 Fedora, openSUSE"), note: ".rpm" },
+  { re: /-linux-x64\.AppImage$/, os: "linux", label: () => "x64 AppImage", note: ".AppImage" },
+  { re: /-linux-x64\.zip$/, os: "linux", label: () => t("dl.linux_x64_zip", "x64 any distro"), note: ".zip" },
+  { re: /-linux-arm64\.deb$/, os: "linux", label: () => t("dl.linux_arm64_deb", "ARM64 Debian, Ubuntu"), note: ".deb" },
+  { re: /-linux-arm64\.rpm$/, os: "linux", label: () => t("dl.linux_arm64_rpm", "ARM64 Fedora, openSUSE"), note: ".rpm" },
+  { re: /-linux-arm64\.AppImage$/, os: "linux", label: () => "ARM64 AppImage", note: ".AppImage" },
+  { re: /-linux-arm64\.zip$/, os: "linux", label: () => t("dl.linux_arm64_zip", "ARM64 any distro"), note: ".zip" },
+  { re: /-android\.apk$/, os: "android", label: () => t("dl.android", "Phones and tablets"), note: ".apk" },
+  { re: /-android-armv7\.apk$/, os: "android", label: () => t("dl.android_armv7", "Older 32-bit phones"), note: ".apk" },
+  { re: /-ios-unsigned\.ipa$/, os: "ios", label: () => t("dl.ios", "iPhone, sideload"), note: ".ipa" },
+  { re: /^ps5upload-[\d.]+\.elf$/, os: "extra", label: () => t("dl.payload", "PS5 helper (payload)"), note: ".elf" },
   { re: /^ps5upload-engine-/, os: "extra", label: null, note: "" },
 ];
 const OS = {
@@ -111,7 +190,7 @@ function detectOs() {
 
 const mb = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`);
 const date = (iso) =>
-  iso ? new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
+  iso ? new Date(iso).toLocaleDateString(lang, { year: "numeric", month: "short", day: "numeric" }) : "";
 
 function normalize(list) {
   return (list || [])
@@ -207,7 +286,7 @@ function renderDownloads(rel, mine) {
     const i = KINDS.findIndex((k) => k.re.test(a.name));
     if (i < 0) continue;
     const k = KINDS[i];
-    groups[k.os].push({ ...a, order: i, label: k.label ?? a.name.replace(/^ps5upload-engine-[\d.]+-/, "Engine · "), note: k.note });
+    groups[k.os].push({ ...a, order: i, label: k.label ? k.label() : a.name.replace(/^ps5upload-engine-[\d.]+-/, t("js.engine", "Engine") + " · "), note: k.note });
   }
   // KINDS order (x64 before ARM64, installer before portable), not GitHub's alphabetical one.
   for (const g of Object.values(groups)) g.sort((a, b) => a.order - b.order);
@@ -218,7 +297,7 @@ function renderDownloads(rel, mine) {
     .map(
       (os) => `
       <div class="card dl${os === mine ? " mine" : ""}">
-        <div class="dl-head"><h3>${OS[os]}</h3>${os === mine ? '<span class="tag">Your system</span>' : ""}</div>
+        <div class="dl-head"><h3>${OS[os]}</h3>${os === mine ? `<span class="tag">${t("js.your_system", "Your system")}</span>` : ""}</div>
         <div class="dl-files">
           ${groups[os]
             .map(
@@ -237,29 +316,30 @@ function renderDownloads(rel, mine) {
 }
 
 function renderHero(rel, stable, groups, mine) {
-  const pre = rel.prerelease ? " · pre-release" : "";
+  const pre = rel.prerelease ? ` · ${t("js.prerelease_lower", "pre-release")}` : "";
   document.getElementById("hero-version").textContent = `${rel.tag}${pre} · ${date(rel.published)}`;
   const first = mine && groups[mine]?.[0];
   const btn = document.getElementById("hero-download");
   if (first) {
     btn.href = first.url;
-    document.getElementById("hero-download-label").textContent = `Download for ${OS[mine]}`;
+    document.getElementById("hero-download-label").textContent = t("js.download_for", "Download for {os}", { os: OS[mine] });
     document.getElementById("hero-fine").innerHTML =
-      `${esc(first.label)} ${esc(first.note)} · ${mb(first.size)} · <a href="#download">Other platforms</a>`;
+      `${esc(first.label)} ${esc(first.note)} · ${mb(first.size)} · <a href="#download">${t("js.other_platforms", "Other platforms")}</a>`;
   } else {
     btn.href = "#download";
-    document.getElementById("hero-download-label").textContent = "Download";
+    document.getElementById("hero-download-label").textContent = t("hero.download", "Download");
   }
   document.getElementById("release-link").href = rel.url;
   const lead = document.getElementById("download-lead");
   lead.textContent = rel.prerelease
-    ? `${rel.tag} is a pre-release: new and being tested.${stable ? ` The last stable release is ${stable.tag}.` : ""}`
-    : `${rel.tag}, released ${date(rel.published)}.`;
+    ? t("js.lead_pre", "{tag} is a pre-release: new and being tested.", { tag: rel.tag }) +
+      (stable ? ` ${t("js.lead_stable", "The last stable release is {tag}.", { tag: stable.tag })}` : "")
+    : t("js.lead_released", "{tag}, released {date}.", { tag: rel.tag, date: date(rel.published) });
   if (rel.prerelease && stable) {
-    lead.insertAdjacentHTML("beforeend", ` <a href="${esc(stable.url)}">Get ${esc(stable.tag)}</a>`);
+    lead.insertAdjacentHTML("beforeend", ` <a href="${esc(stable.url)}">${esc(t("js.get", "Get {tag}", { tag: stable.tag }))}</a>`);
   }
   document.getElementById("docker-cmd").textContent =
-    `docker run -d --name ps5upload --network host -v ps5upload-data:/data -e PS5_ADDR=<your PS5's IP> -e PS5UPLOAD_ALLOW_IP=<your LAN, e.g. 192.168.1.0/24> ghcr.io/${REPO.split("/")[0]}/ps5upload-engine-webui:${rel.tag.replace(/^v/, "")}`;
+    `docker run -d --name ps5upload --network host -v ps5upload-data:/data -e PS5_ADDR=<${t("js.docker_ip", "your PS5's IP")}> -e PS5UPLOAD_ALLOW_IP=<${t("js.docker_lan", "your LAN, e.g. 192.168.1.0/24")}> ghcr.io/${REPO.split("/")[0]}/ps5upload-engine-webui:${rel.tag.replace(/^v/, "")}`;
 }
 
 function renderNews(list) {
@@ -272,11 +352,11 @@ function renderNews(list) {
       <article class="card">
         <div class="post-head">
           <h3>${esc(r.tag)}</h3>
-          ${r.prerelease ? '<span class="tag pre">Pre-release</span>' : '<span class="tag">Release</span>'}
+          ${r.prerelease ? `<span class="tag pre">${t("js.prerelease", "Pre-release")}</span>` : `<span class="tag">${t("js.release", "Release")}</span>`}
           <time datetime="${esc(r.published || "")}">${date(r.published)}</time>
         </div>
         <div class="post-body">${markdown(excerpt(r.body).md)}</div>
-        <a class="post-more" href="${esc(r.url)}">${excerpt(r.body).more ? "Read the rest, and downloads →" : "Downloads and full notes →"}</a>
+        <a class="post-more" href="${esc(r.url)}">${excerpt(r.body).more ? t("js.read_rest", "Read the rest, and downloads →") : t("js.full_notes", "Downloads and full notes →")}</a>
       </article>`,
       )
       .join("") +
@@ -289,6 +369,9 @@ function renderNews(list) {
 }
 
 (async () => {
+  await loadWords();
+  translatePage();
+  root.classList.remove("i18n-wait");
   try {
     const list = await loadReleases();
     if (!list.length) throw new Error("no releases");
@@ -299,7 +382,7 @@ function renderNews(list) {
     renderHero(latest, stable && stable !== latest ? stable : null, groups, mine);
     renderNews(list);
   } catch {
-    const msg = `<p class="muted">Couldn't load the releases here. <a href="https://github.com/${REPO}/releases">See them on GitHub</a>.</p>`;
+    const msg = `<p class="muted">${t("js.load_failed", "Couldn't load the releases here.")} <a href="https://github.com/${REPO}/releases">${t("js.see_github", "See them on GitHub")}</a>.</p>`;
     document.getElementById("downloads").innerHTML = msg;
     document.getElementById("news-list").innerHTML = msg;
   }
