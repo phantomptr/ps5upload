@@ -631,6 +631,7 @@ pub fn run() {
             commands::update_check,
             commands::update_download,
             commands::update_install,
+            commands::update_install_on_quit,
             tray::tray_configure,
             // ── Title metadata fetch (cover art + display title) ────
             // Server-side fetch (Rust/reqwest) of the public PS5
@@ -687,6 +688,10 @@ pub fn run() {
             tray::show_main(_handle);
         }
         if let tauri::RunEvent::Exit = event {
+            // A downloaded update armed for the quit: its script waits for this process to end,
+            // so it is started before the clean-up and never delays it.
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            commands::install_armed_on_quit();
             // The main thread, after the event loop ended: the clean-up runs on the async
             // runtime, which stays alive until this closure returns.
             let cleanup = async {

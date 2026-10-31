@@ -19,11 +19,30 @@
 //! * Linux, portable: the zip's `PS5Upload.AppImage` (and launcher) replace the running
 //!   AppImage (`$APPIMAGE`), if its folder is writable.
 //!
-//! Not here: a `.deb` / `.rpm` (installing needs root: `update_download` hands over the command
-//! instead), Android (the system asks before every install), iOS (re-signed by the user's own
-//! tool) and Docker (the image is pulled).
+//! * Linux, a `.deb` / `.rpm` install (since 10.2): `pkexec apt install -y <deb>` or
+//!   `pkexec dnf install -y <rpm>` (the same tool `updates::install_command_for` names), so the
+//!   desktop's own password prompt stands in for `sudo` in a terminal. It runs while the app
+//!   is still open: the package manager replaces files of a running program safely on Linux
+//!   (the old inodes live on until the process ends), and running it first is what lets the
+//!   app see pkexec's exit status. Dismissed prompt (126), no polkit agent or no such program
+//!   (127), no `pkexec` at all, or a failed install: the app stays open, nothing changed, and
+//!   the renderer falls back to the command to copy. On success the app quits and a small
+//!   script starts the new version once it has gone (starting it earlier would only hand
+//!   its arguments to the old instance, tauri-plugin-single-instance).
+//!
+//! Not here: an rpm-ostree system (Bazzite, Silverblue: the swap applies at the next boot,
+//! so `update_download` still hands over the command), Android (the system asks before every
+//! install), iOS (re-signed by the user's own tool) and Docker (the image is pulled).
+//!
+//! Install on quit: the renderer arms `update_install_on_quit` with a downloaded update while
+//! nothing transfers; when the app then quits normally, `install_armed_on_quit` (lib.rs,
+//! `RunEvent::Exit`) starts the same script without the final restart, so quitting still
+//! means quitting. Only plans that need no password: a polkit prompt popping up after the
+//! window has gone would be a surprise, so a `.deb` / `.rpm` waits for the button.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use tauri::AppHandle;
 
@@ -33,8 +52,33 @@ use tauri::AppHandle;
 /// touching its shortcuts. The same flags tauri-plugin-updater passes to a Tauri NSIS setup.
 pub const WINDOWS_SETUP_ARGS: [&str; 3] = ["/P", "/R", "/UPDATE"];
 
+/// The Linux package manager a `.deb` / `.rpm` update goes through.
+// Built only on Linux (`plan`); the tests cover it everywhere.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageManager {
+    Apt,
+    Dnf,
+}
+
+/// The arguments handed to `pkexec`: the package manager and its install of `package`. No
+/// shell sits between them, so the path needs no quoting.
+pub fn pkexec_args(manager: PackageManager, package: &Path) -> Vec<OsString> {
+    let tool = match manager {
+        PackageManager::Apt => "apt",
+        PackageManager::Dnf => "dnf",
+    };
+    vec![
+        tool.into(),
+        "install".into(),
+        "-y".into(),
+        package.as_os_str().to_os_string(),
+    ]
+}
+
 /// What an install replaces, and with what.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub enum Plan {
     /// Run the Windows setup in update mode (`WINDOWS_SETUP_ARGS`); it starts `exe` again.
     WindowsSetup { installer: PathBuf, exe: PathBuf },
@@ -44,6 +88,49 @@ pub enum Plan {
     MacDmg { dmg: PathBuf, bundle: PathBuf },
     /// Replace the AppImage (and its launcher beside it) with the zip's.
     LinuxAppImage { zip: PathBuf, appimage: PathBuf },
+    /// Install the `.deb` / `.rpm` through `pkexec` (a password prompt), then start `exe` again.
+    LinuxPackage {
+        package: PathBuf,
+        manager: PackageManager,
+        exe: PathBuf,
+    },
+}
+
+impl Plan {
+    /// The install asks for the user's password (pkexec). Such a plan is never run on quit or
+    /// by the automatic install, only from the button.
+    pub fn needs_password(&self) -> bool {
+        matches!(self, Plan::LinuxPackage { .. })
+    }
+}
+
+/// The plan for a packaged Linux install: `kind` is the package format that owns the running
+/// program (`updates::linux_package_kind`), `ostree` whether this is an rpm-ostree system and
+/// `pkexec` whether `pkexec` is on the PATH. None when any of them rules it out; the user
+/// then gets the command to run instead.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn package_plan_for(
+    download: &Path,
+    exe: &Path,
+    kind: Option<&str>,
+    ostree: bool,
+    pkexec: bool,
+) -> Option<Plan> {
+    if !pkexec {
+        return None;
+    }
+    let name = download.file_name()?.to_str()?.to_ascii_lowercase();
+    let manager = match kind? {
+        "deb" if name.ends_with(".deb") => PackageManager::Apt,
+        // rpm-ostree cannot `dnf install`; its swap needs a reboot (the command says so).
+        "rpm" if name.ends_with(".rpm") && !ostree => PackageManager::Dnf,
+        _ => return None,
+    };
+    Some(Plan::LinuxPackage {
+        package: download.to_path_buf(),
+        manager,
+        exe: exe.to_path_buf(),
+    })
 }
 
 /// The plan for installing `download` over this copy, or None when this copy cannot be
@@ -96,13 +183,27 @@ fn ps_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-/// The script that carries `plan` out once process `pid` has quit. Every path ends by starting
-/// the app, new or old. None for the Windows setup, which is started directly.
-pub fn script_for(plan: &Plan, pid: u32) -> Option<String> {
+/// How the Windows setup is started: `WINDOWS_SETUP_ARGS`, without `/R` when the app is not
+/// to start again (an install on quit).
+pub fn windows_setup_args(relaunch: bool) -> Vec<&'static str> {
+    WINDOWS_SETUP_ARGS
+        .into_iter()
+        .filter(|a| relaunch || *a != "/R")
+        .collect()
+}
+
+/// The script that carries `plan` out once process `pid` has quit. With `relaunch`, every path
+/// ends by starting the app, new or old; without it (an install on quit) nothing is started.
+/// None for the Windows setup, which is started directly.
+///
+/// For a `.deb` / `.rpm` the package is already installed when this runs (`update_install`
+/// ran pkexec first): the script only waits for the old process and starts the new one.
+pub fn script_for(plan: &Plan, pid: u32, relaunch: bool) -> Option<String> {
     Some(match plan {
         Plan::MacDmg { dmg, bundle } => {
             let dmg = sh_quote(&dmg.to_string_lossy());
             let app = sh_quote(&bundle.to_string_lossy());
+            let start = if relaunch { r#"open "$app""# } else { "" };
             format!(
                 r#"#!/bin/sh
 # PS5Upload update: replace the app bundle with the one in the .dmg, then start it.
@@ -132,13 +233,18 @@ if hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$dmg" >/de
 fi
 rmdir "$mnt" 2>/dev/null
 xattr -dr com.apple.quarantine "$app" 2>/dev/null
-open "$app"
+{start}
 "#
             )
         }
         Plan::LinuxAppImage { zip, appimage } => {
             let zip = sh_quote(&zip.to_string_lossy());
             let target = sh_quote(&appimage.to_string_lossy());
+            let start = if relaunch {
+                r#"nohup "$target" >/dev/null 2>&1 &"#
+            } else {
+                ""
+            };
             format!(
                 r#"#!/bin/sh
 # PS5Upload update: replace the AppImage (and its launcher) with the zip's, then start it.
@@ -161,14 +267,37 @@ if unzip -oq "$zip" -d "$dir" 2>/dev/null || python3 -c 'import sys,zipfile; zip
   fi
 fi
 rm -rf "$dir"
-nohup "$target" >/dev/null 2>&1 &
+{start}
 "#
             )
         }
         Plan::WindowsSetup { .. } => return None,
+        Plan::LinuxPackage { exe, .. } => {
+            if !relaunch {
+                return None;
+            }
+            let exe = sh_quote(&exe.to_string_lossy());
+            format!(
+                r#"#!/bin/sh
+# PS5Upload update: the package is installed; start the new version once the old one has quit.
+pid={pid}
+exe={exe}
+n=0
+while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 60 ]; do sleep 0.5; n=$((n+1)); done
+# Still running after 30 s: it hung on the way out.
+if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid"; sleep 1; fi
+nohup "$exe" >/dev/null 2>&1 &
+"#
+            )
+        }
         Plan::WindowsZip { zip, exe } => {
             let zip = ps_quote(&zip.to_string_lossy());
             let exe = ps_quote(&exe.to_string_lossy());
+            let start = if relaunch {
+                "Start-Process -FilePath $exe"
+            } else {
+                ""
+            };
             format!(
                 r#"# PS5Upload update: replace the portable PS5Upload.exe with the zip's, then start it.
 $ErrorActionPreference = 'Continue'
@@ -190,7 +319,7 @@ try {{
   }}
 }} catch {{ }}
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
-Start-Process -FilePath $exe
+{start}
 "#
             )
         }
@@ -220,17 +349,43 @@ fn dir_writable(dir: &Path) -> bool {
     }
 }
 
+/// Whether `prog` is an executable file in a `$PATH` directory.
+#[cfg(target_os = "linux")]
+fn on_path(prog: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|d| {
+            std::fs::metadata(d.join(prog))
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+    })
+}
+
 /// This copy's plan for `download`, from the running program and the platform.
 pub fn plan(download: &Path) -> Option<Plan> {
     let exe = std::env::current_exe().ok()?;
     let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
-    plan_for(
+    let plain = plan_for(
         std::env::consts::OS,
         download,
         &exe,
         appimage.as_deref(),
         &dir_writable,
-    )
+    );
+    #[cfg(target_os = "linux")]
+    if plain.is_none() && appimage.is_none() {
+        // The path the package database knows (/usr/bin/x may be a link into /opt): it is
+        // what starts the new version, since /proc/self/exe reads "(deleted)" once replaced.
+        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        return package_plan_for(
+            download,
+            &exe,
+            super::updates::linux_package_kind(),
+            Path::new("/run/ostree-booted").exists(),
+            on_path("pkexec"),
+        );
+    }
+    plain
 }
 
 /// Start `script` detached from this process, so it outlives the app.
@@ -283,9 +438,9 @@ fn spawn_detached(plan: &Plan, script: &str) -> Result<(), String> {
 }
 
 /// Start the Windows setup on its own, detached, so it outlives the app.
-fn spawn_setup(installer: &Path) -> Result<(), String> {
+fn spawn_setup(installer: &Path, relaunch: bool) -> Result<(), String> {
     let mut cmd = std::process::Command::new(installer);
-    cmd.args(WINDOWS_SETUP_ARGS);
+    cmd.args(windows_setup_args(relaunch));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -301,31 +456,143 @@ fn spawn_setup(installer: &Path) -> Result<(), String> {
         .map_err(|e| format!("start the update setup {}: {e}", installer.display()))
 }
 
-/// Whether `update_install` can install `path` on this copy.
-pub fn can_install(path: &str) -> bool {
-    plan(Path::new(path)).is_some()
+/// What `update_download` tells the renderer about installing `path` on this copy:
+/// (`update_install` can, it asks for a password).
+pub fn install_ability(path: &str) -> (bool, bool) {
+    match plan(Path::new(path)) {
+        Some(p) => (true, p.needs_password()),
+        None => (false, false),
+    }
+}
+
+/// `path` as a downloaded update: a file `update_download` saved, never an arbitrary path.
+fn downloaded_update(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
+    let download = PathBuf::from(path);
+    let downloads = super::updates::downloads_dir(app)?;
+    if download.parent() != Some(downloads.as_path()) || !download.is_file() {
+        return Err(format!("{path} is not a downloaded update"));
+    }
+    Ok(download)
+}
+
+/// Start carrying out `plan` (for a package, its pkexec step has already run).
+fn start(plan: &Plan, relaunch: bool) -> Result<(), String> {
+    match script_for(plan, std::process::id(), relaunch) {
+        Some(script) => spawn_detached(plan, &script),
+        None => match plan {
+            Plan::WindowsSetup { installer, .. } => spawn_setup(installer, relaunch),
+            Plan::LinuxPackage { .. } => Ok(()),
+            _ => Err("no way to install this update".into()),
+        },
+    }
+}
+
+/// What a pkexec exit status means. The renderer matches the two fixed strings to fall back
+/// to the command to copy.
+pub fn pkexec_outcome(code: Option<i32>, stderr: &str) -> Result<(), String> {
+    match code {
+        Some(0) => Ok(()),
+        // The password prompt was dismissed, or the user is not allowed.
+        Some(126) => Err("pkexec-cancelled".into()),
+        // No polkit agent to ask with, or the program was not found.
+        Some(127) => Err("pkexec-unavailable".into()),
+        other => {
+            let tail: String = stderr
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("")
+                .chars()
+                .take(300)
+                .collect();
+            Err(format!(
+                "the package manager did not install the update (exit {}){}",
+                other.map_or_else(|| "signal".to_string(), |c| c.to_string()),
+                if tail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {tail}")
+                }
+            ))
+        }
+    }
+}
+
+/// Run `pkexec <manager> install -y <package>` and wait for it; the desktop shows its password
+/// prompt. The app stays open throughout, so a refusal changes nothing.
+async fn run_pkexec(manager: PackageManager, package: &Path) -> Result<(), String> {
+    let out = tokio::process::Command::new("pkexec")
+        .args(pkexec_args(manager, package))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "pkexec-unavailable".to_string()
+            } else {
+                format!("start pkexec: {e}")
+            }
+        })?;
+    pkexec_outcome(out.status.code(), &String::from_utf8_lossy(&out.stderr))
+}
+
+/// The update armed to install when the app quits (`update_install_on_quit`).
+static ON_QUIT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+fn on_quit_slot() -> std::sync::MutexGuard<'static, Option<PathBuf>> {
+    ON_QUIT.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Arm (a path) or disarm (None) installing a downloaded update when the app quits. Returns
+/// whether it is armed: only an update this copy installs without a password can be. The
+/// renderer arms it only while nothing transfers and disarms it when a transfer starts.
+#[tauri::command]
+pub fn update_install_on_quit(app: AppHandle, path: Option<String>) -> Result<bool, String> {
+    let Some(path) = path else {
+        *on_quit_slot() = None;
+        return Ok(false);
+    };
+    let download = downloaded_update(&app, &path)?;
+    let armed = plan(&download).is_some_and(|p| !p.needs_password());
+    *on_quit_slot() = armed.then_some(download);
+    Ok(armed)
+}
+
+/// The app is quitting (lib.rs, `RunEvent::Exit`): start the armed update, if any, without
+/// starting the app again. Best effort: a failure leaves the old version and the download.
+pub fn install_armed_on_quit() {
+    let Some(download) = on_quit_slot().take() else {
+        return;
+    };
+    let result = match plan(&download) {
+        Some(p) if !p.needs_password() && download.is_file() => start(&p, false),
+        _ => Err("the armed update can no longer be installed".into()),
+    };
+    if let Err(e) = result {
+        let _ = std::io::Write::write_fmt(
+            &mut std::io::stderr(),
+            format_args!("[self_install] install on quit: {e}\n"),
+        );
+    }
 }
 
 /// Install the downloaded update at `path` and restart into it. The app quits once the
 /// installing script has started; the script starts the app again when it is done.
 #[tauri::command]
 pub async fn update_install(app: AppHandle, path: String) -> Result<(), String> {
-    let download = PathBuf::from(&path);
-    let downloads = super::updates::downloads_dir(&app)?;
-    // Only a file update_download saved: never an arbitrary path handed in.
-    if download.parent() != Some(downloads.as_path()) || !download.is_file() {
-        return Err(format!("{path} is not a downloaded update"));
-    }
+    let download = downloaded_update(&app, &path)?;
     let plan = plan(&download).ok_or_else(|| {
         "this copy cannot install updates by itself; install the download by hand".to_string()
     })?;
-    match script_for(&plan, std::process::id()) {
-        Some(script) => spawn_detached(&plan, &script)?,
-        None => match &plan {
-            Plan::WindowsSetup { installer, .. } => spawn_setup(installer)?,
-            _ => return Err("no way to install this update".into()),
-        },
+    if let Plan::LinuxPackage {
+        package, manager, ..
+    } = &plan
+    {
+        run_pkexec(*manager, package).await?;
     }
+    // This install replaces any armed for the quit.
+    *on_quit_slot() = None;
+    start(&plan, true)?;
     // Let the reply reach the window before the app goes.
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     // The update waits for this process to end: it must end. The orderly exit is bounded
@@ -460,7 +727,7 @@ mod tests {
             dmg: "/Users/o'neil/Downloads/PS5Upload.dmg".into(),
             bundle: "/Applications/PS5Upload.app".into(),
         };
-        let s = script_for(&plan, 42).unwrap();
+        let s = script_for(&plan, 42, true).unwrap();
         assert!(s.contains("pid=42"));
         // An app that hangs on the way out is ended, not waited on forever.
         assert!(s.contains(r#"then kill -9 "$pid""#));
@@ -471,7 +738,7 @@ mod tests {
             zip: r"C:\Users\o'neil\Downloads\PS5Upload.zip".into(),
             exe: r"C:\Apps\PS5Upload.exe".into(),
         };
-        let s = script_for(&plan, 7).unwrap();
+        let s = script_for(&plan, 7, true).unwrap();
         assert!(s.contains(r"$zip = 'C:\Users\o''neil\Downloads\PS5Upload.zip'"));
         assert!(s.contains("Wait-Process -Id 7"));
         assert!(s.contains("Get-Process -Id 7 -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Stop-Process -Force"));
@@ -482,14 +749,14 @@ mod tests {
             exe: r"C:\Apps\PS5Upload.exe".into(),
         };
         // #533: the setup is started directly (no PowerShell), in Tauri's update mode.
-        assert_eq!(script_for(&plan, 7), None);
+        assert_eq!(script_for(&plan, 7, true), None);
         assert_eq!(WINDOWS_SETUP_ARGS, ["/P", "/R", "/UPDATE"]);
 
         let plan = Plan::LinuxAppImage {
             zip: "/d/x.zip".into(),
             appimage: "/home/me/PS5Upload.AppImage".into(),
         };
-        assert!(script_for(&plan, 9)
+        assert!(script_for(&plan, 9, true)
             .unwrap()
             .trim_end()
             .ends_with(r#"nohup "$target" >/dev/null 2>&1 &"#));
@@ -501,7 +768,7 @@ mod tests {
             zip: r"C:\Users\José\Downloads\PS5Upload-9.0.1-win-x64.zip".into(),
             exe: r"C:\Users\José\Apps\PS5Upload.exe".into(),
         };
-        let file = script_file_contents(true, &script_for(&plan, 7).unwrap());
+        let file = script_file_contents(true, &script_for(&plan, 7, true).unwrap());
         assert!(file.as_bytes().starts_with(&[0xEF, 0xBB, 0xBF]));
         assert!(file.contains("José"));
         // A shell script must not get one: `#!` has to be the first two bytes.
@@ -520,18 +787,161 @@ mod tests {
                 zip: PathBuf::from("/home/o'neil/PS5Upload.zip"),
                 appimage: PathBuf::from("/home/o'neil/Apps/PS5Upload.AppImage"),
             },
+            Plan::LinuxPackage {
+                package: PathBuf::from("/home/o'neil/Downloads/PS5Upload.deb"),
+                manager: PackageManager::Apt,
+                exe: PathBuf::from("/usr/bin/ps5 upload"),
+            },
         ] {
-            let out = std::process::Command::new("/bin/sh")
-                .arg("-n")
-                .arg("-c")
-                .arg(script_for(&plan, 42).unwrap())
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "{plan:?}: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
+            for relaunch in [true, false] {
+                let Some(script) = script_for(&plan, 42, relaunch) else {
+                    continue;
+                };
+                let out = std::process::Command::new("/bin/sh")
+                    .arg("-n")
+                    .arg("-c")
+                    .arg(script)
+                    .output()
+                    .unwrap();
+                assert!(
+                    out.status.success(),
+                    "{plan:?}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
         }
+    }
+
+    #[test]
+    fn a_packaged_linux_install_goes_through_pkexec() {
+        let exe = Path::new("/usr/bin/ps5-upload");
+        let deb = Path::new("/home/me/Downloads/PS5Upload-10.2.0-linux-x64.deb");
+        let rpm = Path::new("/home/me/Downloads/PS5Upload-10.2.0-linux-x64.rpm");
+        assert_eq!(
+            package_plan_for(deb, exe, Some("deb"), false, true),
+            Some(Plan::LinuxPackage {
+                package: deb.into(),
+                manager: PackageManager::Apt,
+                exe: exe.into(),
+            })
+        );
+        assert_eq!(
+            package_plan_for(rpm, exe, Some("rpm"), false, true),
+            Some(Plan::LinuxPackage {
+                package: rpm.into(),
+                manager: PackageManager::Dnf,
+                exe: exe.into(),
+            })
+        );
+        // rpm-ostree needs a reboot: the command, not the button.
+        assert_eq!(package_plan_for(rpm, exe, Some("rpm"), true, true), None);
+        // No pkexec: the command.
+        assert_eq!(package_plan_for(deb, exe, Some("deb"), false, false), None);
+        // The download must be the format that owns this copy, and a portable copy has none.
+        assert_eq!(package_plan_for(rpm, exe, Some("deb"), false, true), None);
+        assert_eq!(package_plan_for(deb, exe, None, false, true), None);
+        assert_eq!(
+            package_plan_for(
+                Path::new("/d/PS5Upload-linux-x64.zip"),
+                exe,
+                Some("deb"),
+                false,
+                true
+            ),
+            None
+        );
+        let plan = package_plan_for(deb, exe, Some("deb"), false, true).unwrap();
+        assert!(plan.needs_password());
+        assert!(!Plan::LinuxAppImage {
+            zip: "/d/x.zip".into(),
+            appimage: "/a/x.AppImage".into()
+        }
+        .needs_password());
+    }
+
+    #[test]
+    fn pkexec_gets_the_path_as_one_argument_and_the_tool_install_command_for_names() {
+        // The same tools updates::install_command_for shows (sudo apt / sudo dnf install).
+        let odd = Path::new("/home/o'neil/Down loads/PS5Upload $(x).deb");
+        assert_eq!(
+            pkexec_args(PackageManager::Apt, odd),
+            [
+                "apt",
+                "install",
+                "-y",
+                "/home/o'neil/Down loads/PS5Upload $(x).deb"
+            ]
+            .map(OsString::from)
+            .to_vec()
+        );
+        assert_eq!(
+            pkexec_args(PackageManager::Dnf, Path::new("/d/x.rpm")),
+            ["dnf", "install", "-y", "/d/x.rpm"]
+                .map(OsString::from)
+                .to_vec()
+        );
+    }
+
+    #[test]
+    fn pkexec_refusals_fall_back_to_the_command() {
+        assert_eq!(pkexec_outcome(Some(0), ""), Ok(()));
+        assert_eq!(
+            pkexec_outcome(Some(126), ""),
+            Err("pkexec-cancelled".to_string())
+        );
+        assert_eq!(
+            pkexec_outcome(
+                Some(127),
+                "Error executing command as another user: No authentication agent found."
+            ),
+            Err("pkexec-unavailable".to_string())
+        );
+        let err = pkexec_outcome(Some(100), "E: Unable to locate package\n\n").unwrap_err();
+        assert!(
+            err.contains("exit 100") && err.contains("Unable to locate"),
+            "{err}"
+        );
+        assert!(pkexec_outcome(None, "").unwrap_err().contains("signal"));
+    }
+
+    #[test]
+    fn the_package_script_only_restarts_the_new_version() {
+        let plan = Plan::LinuxPackage {
+            package: "/d/x.deb".into(),
+            manager: PackageManager::Apt,
+            exe: "/opt/PS5 Upload/ps5-upload".into(),
+        };
+        let s = script_for(&plan, 9, true).unwrap();
+        assert!(s.contains("pid=9"));
+        assert!(s.contains("exe='/opt/PS5 Upload/ps5-upload'"));
+        // pkexec already ran inside the app: no root, no package manager here.
+        assert!(!s.contains("apt") && !s.contains("pkexec"));
+        assert!(s.trim_end().ends_with(r#"nohup "$exe" >/dev/null 2>&1 &"#));
+        assert_eq!(script_for(&plan, 9, false), None);
+    }
+
+    #[test]
+    fn an_install_on_quit_does_not_start_the_app_again() {
+        let mac = Plan::MacDmg {
+            dmg: "/d/x.dmg".into(),
+            bundle: "/Applications/PS5Upload.app".into(),
+        };
+        let s = script_for(&mac, 1, false).unwrap();
+        assert!(s.contains("ditto"));
+        assert!(!s.contains(r#"open "$app""#));
+        let img = Plan::LinuxAppImage {
+            zip: "/d/x.zip".into(),
+            appimage: "/a/PS5Upload.AppImage".into(),
+        };
+        let s = script_for(&img, 1, false).unwrap();
+        assert!(s.contains("PS5Upload.AppImage") && !s.contains("nohup"));
+        let zip = Plan::WindowsZip {
+            zip: r"C:\d\x.zip".into(),
+            exe: r"C:\a\PS5Upload.exe".into(),
+        };
+        let s = script_for(&zip, 1, false).unwrap();
+        assert!(s.contains("Expand-Archive") && !s.contains("Start-Process"));
+        assert_eq!(windows_setup_args(true), ["/P", "/R", "/UPDATE"]);
+        assert_eq!(windows_setup_args(false), ["/P", "/UPDATE"]);
     }
 }

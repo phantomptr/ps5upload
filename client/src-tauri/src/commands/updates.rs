@@ -265,7 +265,7 @@ fn current_platform_key() -> &'static str {
 /// hand them an RPM they never installed. If neither package manager
 /// claims the file, it is portable and the plain key is right.
 #[cfg(target_os = "linux")]
-fn linux_package_kind() -> Option<&'static str> {
+pub(crate) fn linux_package_kind() -> Option<&'static str> {
     fn owns(tool: &str, args: &[&str]) -> bool {
         std::process::Command::new(tool)
             .args(args)
@@ -653,6 +653,9 @@ pub struct UpdateDownload {
     pub install_command: Option<String>,
     /// `update_install` can install this download and restart into it (commands/self_install).
     pub can_install: bool,
+    /// That install asks for the user's password (a `.deb` / `.rpm` through pkexec), so it is
+    /// never started on quit or by the automatic install; `install_command` is the fallback.
+    pub needs_password: bool,
     /// The file matched the SHA-256 the release manifest published. False only when the
     /// manifest published none (a release before 10.2); a mismatch is an error instead.
     pub verified: bool,
@@ -841,13 +844,14 @@ pub async fn update_download(
             // renderer as a download failure (a user re-clicking "Download"
             // would otherwise see a spurious error).
             let path = target.to_string_lossy().into_owned();
-            let can_install = super::self_install::can_install(&path);
+            let (can_install, needs_password) = super::self_install::install_ability(&path);
             if !can_install {
                 reveal(&target);
             }
             return Ok(UpdateDownload {
                 install_command: install_command(&path),
                 can_install,
+                needs_password,
                 verified: expected.is_some(),
                 path,
                 bytes: meta.len(),
@@ -922,7 +926,7 @@ pub async fn update_download(
     // download itself succeeded — we shouldn't convert that into a
     // download-failed error for the user. Log + continue.
     let path = target.to_string_lossy().into_owned();
-    let can_install = super::self_install::can_install(&path);
+    let (can_install, needs_password) = super::self_install::install_ability(&path);
     // A copy that installs it itself shows "Install and restart": opening the folder (or, on
     // Windows, starting the setup, which then asks to close the running app) only gets in
     // the way.
@@ -932,6 +936,7 @@ pub async fn update_download(
     Ok(UpdateDownload {
         install_command: install_command(&path),
         can_install,
+        needs_password,
         verified: expected.is_some(),
         path,
         bytes: total,
