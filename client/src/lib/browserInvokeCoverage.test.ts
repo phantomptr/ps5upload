@@ -55,6 +55,7 @@ const NATIVE_ONLY: Record<string, string> = {
   pad_dualsense_reset: "the app lets a DualSense's triggers go over HID; browsers never start DualSense mode",
   pad_haptics_set: "the app opens a DualSense's USB audio device for haptics; browsers never start DualSense mode (lib/dualSense.ts)",
   pad_haptics_push: "the app plays a DualSense's haptics on its USB audio device; browsers never start DualSense mode",
+  pad_native_start: "the Linux app reads controllers from /dev/input for a WebKitGTK that sees none; a browser has its own Gamepad API (lib/nativePadDesktop.ts)",
   dragout_stage_dir: "stages a PS5 file for an OS drag out of the window; a browser tab has no OS drag",
   // Host filesystem / OS
   read_text_file: "native: reads a host path",
@@ -95,6 +96,8 @@ const NATIVE_ONLY: Record<string, string> = {
   update_check: "native: desktop self-update",
   update_download: "native: desktop self-update",
   update_install: "native: desktop self-update",
+  update_install_on_quit: "native: desktop self-update",
+  update_download_apk: "native: Android self-update (APK into the app cache)",
   changelog_load: "native: reads a bundled resource",
   faq_load: "native: reads a bundled resource",
 

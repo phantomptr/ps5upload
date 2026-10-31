@@ -69,6 +69,8 @@ import { useRestAfterUploadStore } from "../../state/restAfterUpload";
 import { userConfigPath, resetAllAppData } from "../../state/userConfig";
 import { useUpdateStore, type UpdatePhase } from "../../state/update";
 import { isIOS, isMobile } from "../../lib/platform";
+import { apkUpdaterAvailable } from "../../state/apkUpdate";
+import { ApkUpdateStatus } from "../../layout/ApkUpdateStatus";
 import { settingsVisibility } from "./visibility";
 import type { LanguageCode } from "../../i18n";
 // Static imports for stores already pulled into the main bundle by
@@ -82,6 +84,8 @@ import { formatDate } from "../../lib/formatDate";
 import { applyBundle, backupBeforeChange, buildBundle } from "../../lib/settingsBackup";
 import { SettingsBackups } from "./SettingsBackups";
 import { TraySettings } from "./TraySettings";
+import { LinuxGraphicsSettings } from "./LinuxGraphicsSettings";
+import { linuxGraphicsPossible } from "../../lib/linuxGraphics";
 import { trayPossible } from "../../state/tray";
 // useAuditLogStore + AuditEntry moved to screens/AuditLog/index.tsx
 // (2.12.0 — promoted out of Settings junk drawer).
@@ -954,6 +958,11 @@ export default function SettingsScreen() {
             <Section title={tr("settings_card_tray", undefined, "System tray")} full>
               <TraySettings />
             </Section>
+            {linuxGraphicsPossible() && (
+              <Section title={tr("settings_card_linux_graphics", undefined, "Graphics")} full>
+                <LinuxGraphicsSettings />
+              </Section>
+            )}
           </>
         )}
 
@@ -1752,6 +1761,13 @@ function UpdatesPanel() {
   const installing = useUpdateStore((s) => s.installing);
   const autoInstallEnabled = useUpdateStore((s) => s.autoInstallEnabled);
   const setAutoInstallEnabled = useUpdateStore((s) => s.setAutoInstallEnabled);
+  const installOnQuitEnabled = useUpdateStore((s) => s.installOnQuitEnabled);
+  const setInstallOnQuitEnabled = useUpdateStore((s) => s.setInstallOnQuitEnabled);
+  const installOnQuitArmed = useUpdateStore((s) => s.installOnQuitArmed);
+  const installFallback = useUpdateStore((s) => s.installFallback);
+  const skippedVersion = useUpdateStore((s) => s.skippedVersion);
+  const skipVersion = useUpdateStore((s) => s.skipVersion);
+  const unskipVersion = useUpdateStore((s) => s.unskipVersion);
   const autoCheckEnabled = useUpdateStore((s) => s.autoCheckEnabled);
   const setAutoCheckEnabled = useUpdateStore((s) => s.setAutoCheckEnabled);
   const channel = useUpdateStore((s) => s.channel);
@@ -1797,10 +1813,15 @@ function UpdatesPanel() {
     phase.kind === "available" || phase.kind === "download-failed";
   const hasPlatformBundle =
     resultForNotes?.download_url && resultForNotes.download_url.length > 0;
+  // Android with the installer bridge: download and install inside the app.
+  const apkInstall = mobile && !!hasPlatformBundle && apkUpdaterAvailable();
 
   return (
     <div className="flex flex-col gap-3">
       <StatusRow phase={phase} />
+      {apkInstall && resultForNotes && (
+        <ApkUpdateStatus result={resultForNotes} failed={phase.kind === "download-failed"} />
+      )}
       {resultForNotes && (
         <ReleaseNotes
           version={resultForNotes.latest_version}
@@ -1832,14 +1853,51 @@ function UpdatesPanel() {
                 {tr("update_install_restart", undefined, "Install and restart")}
               </button>
               <span className="text-[var(--color-muted)]">
-                {tr(
-                  "update_install_restart_hint",
-                  undefined,
-                  "PS5Upload closes, installs the new version and opens again. Wait for running transfers to finish first.",
-                )}
+                {phase.download.needs_password
+                  ? tr(
+                      "update_install_password_hint",
+                      undefined,
+                      "Asks for your password, installs the new package and restarts PS5Upload. Wait for running transfers to finish first.",
+                    )
+                  : tr(
+                      "update_install_restart_hint",
+                      undefined,
+                      "PS5Upload closes, installs the new version and opens again. Wait for running transfers to finish first.",
+                    )}
               </span>
+              {installOnQuitArmed && (
+                <span className="w-full text-[var(--color-muted)]">
+                  {tr(
+                    "update_install_on_quit_armed",
+                    { version: phase.result.latest_version },
+                    "Or quit PS5Upload: v{version} is installed then, and the app stays closed.",
+                  )}
+                </span>
+              )}
             </div>
           ) : (
+          <>
+          {installFallback && (
+            <div className="mb-2 text-[var(--color-warn)]">
+              {installFallback === "pkexec-cancelled"
+                ? tr(
+                    "update_pkexec_cancelled",
+                    undefined,
+                    "The password prompt was closed and nothing was installed. To install, run the command below.",
+                  )
+                : installFallback === "pkexec-unavailable"
+                  ? tr(
+                      "update_pkexec_unavailable",
+                      undefined,
+                      "PS5Upload couldn't ask for your password here. To install, run the command below.",
+                    )
+                  : tr(
+                      "update_pkexec_failed",
+                      { message: installFallback },
+                      "The install didn't finish ({message}). To install, run the command below.",
+                    )}
+            </div>
+          )}
           <ol className="list-inside list-decimal space-y-0.5 text-[var(--color-muted)]">
             <li>{tr("update_step_quit", undefined, "Quit PS5Upload.")}</li>
             {phase.download.install_command ? (
@@ -1865,6 +1923,7 @@ function UpdatesPanel() {
               {tr("update_step_launch", undefined, "Launch the new version.")}
             </li>
           </ol>
+          </>
           )}
           <button
             type="button"
@@ -1887,9 +1946,26 @@ function UpdatesPanel() {
             </span>
           }
           hint={tr(
-            "update_autoinstall_hint",
+            "update_autoinstall_hint_v2",
             undefined,
-            "Downloads a new release, waits until nothing is transferring, then installs it and restarts PS5Upload. Works for the Windows installer and zip, macOS, and the Linux AppImage; a .deb or .rpm install still asks you to run one command.",
+            "Downloads a new release, waits until nothing is transferring, then installs it and restarts PS5Upload. Works for the Windows installer and zip, macOS, and the Linux AppImage; a .deb or .rpm install asks for your password, so it waits for you to click Install.",
+          )}
+          className="text-xs"
+        />
+      )}
+      {!mobile && isTauriEnv() && (
+        <Toggle
+          checked={installOnQuitEnabled}
+          onChange={(checked) => setInstallOnQuitEnabled(checked)}
+          label={
+            <span className="font-medium text-[var(--color-text)]">
+              {tr("update_install_on_quit_label", undefined, "Install updates when I quit")}
+            </span>
+          }
+          hint={tr(
+            "update_install_on_quit_hint",
+            undefined,
+            "A downloaded update is installed as you quit PS5Upload, never while something is transferring, and the app stays closed. A .deb or .rpm install asks for your password, so it waits for the Install button.",
           )}
           className="text-xs"
         />
@@ -1955,8 +2031,14 @@ function UpdatesPanel() {
             disabled={busy}
             className="inline-flex items-center gap-1.5 rounded-full bg-[image:var(--accent-fill)] px-3.5 py-1.5 text-xs font-semibold text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105 disabled:opacity-50"
           >
-            <ExternalLink size={12} />
-            {hasPlatformBundle
+            {apkInstall ? <Download size={12} /> : <ExternalLink size={12} />}
+            {apkInstall
+              ? tr(
+                  "update_apk_install_button",
+                  { version: resultForNotes?.latest_version ?? "" },
+                  "Download and install v{version}",
+                )
+              : hasPlatformBundle
               ? isIOS()
                 ? tr(
                     "update_open_ipa_button",
@@ -1986,6 +2068,32 @@ function UpdatesPanel() {
             )}
           </button>
         )}
+        {canDownload &&
+          resultForNotes &&
+          (skippedVersion === resultForNotes.latest_version ? (
+            <span className="inline-flex items-center gap-2 text-xs text-[var(--color-muted)]">
+              {tr(
+                "update_skipped_note",
+                { version: resultForNotes.latest_version },
+                "You skipped v{version}.",
+              )}
+              <button
+                type="button"
+                onClick={unskipVersion}
+                className="underline-offset-2 hover:underline"
+              >
+                {tr("update_unskip", undefined, "Don't skip")}
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={skipVersion}
+              className="text-xs text-[var(--color-muted)] underline-offset-2 hover:text-[var(--color-text)] hover:underline max-md:min-h-11"
+            >
+              {tr("update_skip_version", undefined, "Skip this version")}
+            </button>
+          ))}
         {canDownload && !mobile && !hasPlatformBundle && (
           <span className="text-xs text-[var(--color-muted)]">
             {tr(

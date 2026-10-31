@@ -284,13 +284,16 @@ fn acquire_inhibitor() -> Result<Option<Handle>, String> {
     if !has_systemd_inhibit {
         return Ok(None);
     }
+    // Held only while this app runs: a `sleep infinity` outlived an app that was killed (seen
+    // on Ubuntu, 2026-10-31) and kept the PC from sleeping until the next reboot.
     let child = Command::new("systemd-inhibit")
         .args([
             "--what=idle:sleep",
             "--who=ps5upload",
             "--why=active transfer",
-            "sleep",
-            "infinity",
+            "sh",
+            "-c",
+            &hold_while_alive_script(std::process::id()),
         ])
         // See the caffeinate spawn — kill on Handle drop; exit-handler
         // release covers the never-dropped HOLDER static.
@@ -397,4 +400,31 @@ fn acquire_inhibitor() -> Result<Option<Handle>, String> {
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn acquire_inhibitor() -> Result<Option<Handle>, String> {
     Ok(None)
+}
+
+/// The command `systemd-inhibit` runs: it holds the inhibitor until process `pid` (this app) is
+/// gone, checking every few seconds.
+#[cfg(any(target_os = "linux", test))]
+fn hold_while_alive_script(pid: u32) -> String {
+    format!("while kill -0 {pid} 2>/dev/null; do sleep 5; done")
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::hold_while_alive_script;
+
+    #[test]
+    fn the_hold_ends_when_the_app_is_gone() {
+        let script = hold_while_alive_script(4_000_000);
+        assert_eq!(
+            script,
+            "while kill -0 4000000 2>/dev/null; do sleep 5; done"
+        );
+        // A pid that doesn't exist: the loop ends at once.
+        let out = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .status()
+            .unwrap();
+        assert!(out.success());
+    }
 }

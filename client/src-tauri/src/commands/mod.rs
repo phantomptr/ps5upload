@@ -13,6 +13,7 @@
 //!   pad_touchpad — a DualSense's touchpad read natively while Remote Play plays
 //!   pad_dualsense — its adaptive triggers (written by pad_touchpad's reader)
 //!   pad_haptics — its haptics, played on its USB audio device
+//!   pad_native  — controllers read natively on Linux, where WebKitGTK may see none
 //!   user_config — ~/.ps5upload/settings.json read/write
 //!   companions  — TCP probe of known scene-tool ports
 //!   title_meta  — HTML scrape of public title-info site (cover art)
@@ -36,6 +37,7 @@ pub mod keep_awake;
 pub mod local_fs;
 pub mod pad_dualsense;
 pub mod pad_haptics;
+pub mod pad_native;
 pub mod pad_touchpad;
 pub mod payloads;
 pub mod persistence;
@@ -54,6 +56,7 @@ pub mod smp;
 pub mod system_bars;
 pub mod system_power;
 pub mod title_meta;
+pub mod update_android;
 pub mod updates;
 pub mod usb_autoloader;
 pub mod user_config;
@@ -99,6 +102,7 @@ pub use keep_awake::*;
 pub use local_fs::*;
 pub use pad_dualsense::*;
 pub use pad_haptics::*;
+pub use pad_native::*;
 pub use pad_touchpad::*;
 pub use payloads::*;
 pub use persistence::*;
@@ -115,6 +119,7 @@ pub use smp::*;
 pub use system_bars::*;
 pub use system_power::*;
 pub use title_meta::*;
+pub use update_android::*;
 pub use updates::*;
 pub use usb_autoloader::*;
 

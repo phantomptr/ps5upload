@@ -118,6 +118,83 @@ export function readPicture(v: unknown): PictureTools {
   };
 }
 
+/** A decoded frame's pixels as YUV planes in memory (VideoFrame.copyTo), drawn by the colour
+ *  pass itself: WebKitGTK hands the stream's frames over as NV12 in system memory and converts
+ *  them on the CPU when they are given to texImage2D, which costs it a 1080p frame's whole time
+ *  at 60 fps. Uploading the planes as they are and converting on the GPU costs a few ms. */
+export type PlaneFormat = "NV12" | "I420";
+
+export interface Planes {
+  format: PlaneFormat;
+  /** Visible size in pixels (the planes are this, the chroma ones half of it rounded up). */
+  w: number;
+  h: number;
+  data: Uint8Array;
+  layout: ReadonlyArray<{ offset: number; stride: number }>;
+  colorSpace: { matrix?: string | null; fullRange?: boolean | null } | null;
+}
+
+/** Whether a VideoFrame format is one the colour pass reads as planes. */
+export function isPlaneFormat(f: string | null | undefined): f is PlaneFormat {
+  return f === "NV12" || f === "I420";
+}
+
+/** A tightly packed layout for a `w`×`h` frame's planes (Y, then UV or U and V), and the bytes
+ *  it takes: what copyTo is asked to write, so the upload knows every row's place. */
+export function planeLayout(
+  format: PlaneFormat,
+  w: number,
+  h: number,
+): { layout: Array<{ offset: number; stride: number }>; size: number } {
+  const cw = Math.ceil(w / 2);
+  const ch = Math.ceil(h / 2);
+  const y = w * h;
+  if (format === "NV12") return { layout: [{ offset: 0, stride: w }, { offset: y, stride: cw * 2 }], size: y + cw * 2 * ch };
+  return {
+    layout: [{ offset: 0, stride: w }, { offset: y, stride: cw }, { offset: y + cw * ch, stride: cw }],
+    size: y + 2 * cw * ch,
+  };
+}
+
+/** Copies frames' planes out (VideoFrame.copyTo) into one buffer kept between frames, so a
+ *  stream allocates nothing per frame. One copy at a time: read() again only after the last
+ *  one's planes were drawn. */
+export class PlaneReader {
+  private buf = new Uint8Array(0);
+
+  /** The frame's visible pixels as planes, or null when it is not NV12/I420. */
+  async read(frame: VideoFrame): Promise<Planes | null> {
+    const format = frame.format;
+    if (!isPlaneFormat(format)) return null;
+    const r = frame.visibleRect;
+    const w = r?.width ?? frame.codedWidth;
+    const h = r?.height ?? frame.codedHeight;
+    const { layout, size } = planeLayout(format, w, h);
+    if (this.buf.byteLength < size) this.buf = new Uint8Array(size);
+    await frame.copyTo(this.buf, { layout });
+    return { format, w, h, data: this.buf, layout, colorSpace: frame.colorSpace };
+  }
+}
+
+/** YUV → RGB for a frame's colour space: rgb = m · (yuv − off), m column-major (GLSL mat3).
+ *  BT.709 unless the frame says BT.601 or BT.2020; limited range unless it says full. */
+export function yuvToRgb(cs: Planes["colorSpace"]): { m: number[]; off: [number, number, number] } {
+  const mx = cs?.matrix;
+  const [kr, kb] =
+    mx === "smpte170m" || mx === "bt470bg" ? [0.299, 0.114] : mx === "bt2020-ncl" ? [0.2627, 0.0593] : [0.2126, 0.0722];
+  const kg = 1 - kr - kb;
+  const full = cs?.fullRange === true;
+  const ys = full ? 1 : 255 / 219;
+  const cs_ = full ? 1 : 255 / 224;
+  const yo = full ? 0 : 16 / 255;
+  const rv = 2 * (1 - kr) * cs_;
+  const bu = 2 * (1 - kb) * cs_;
+  const gu = ((-2 * kb * (1 - kb)) / kg) * cs_;
+  const gv = ((-2 * kr * (1 - kr)) / kg) * cs_;
+  // Columns: what Y, U and V each add to R, G, B.
+  return { m: [ys, ys, ys, 0, gu, bu, rv, gv, 0], off: [yo, 128 / 255, 128 / 255] };
+}
+
 const VS = `#version 300 es
 in vec2 p;
 out vec2 uv;
@@ -128,21 +205,36 @@ void main() {
   gl_Position = vec4(p, 0.0, 1.0);
 }`;
 
-const FS = `#version 300 es
+/** The colour pass: the frame (RGB, or YUV planes converted here) with brightness, contrast and
+ *  saturation. `src` is how the pixel is read. */
+const fsColour = (decl: string, src: string) => `#version 300 es
 precision mediump float;
 in vec2 uv;
 out vec4 o;
-uniform sampler2D t;
+${decl}
 uniform float bright; // -0.5-0.5
 uniform float contr;  // 0.5-1.5
 uniform float satur;  // 0-2
 void main() {
-  vec3 c = texture(t, uv).rgb;
+  vec3 c = ${src};
   c = (c - 0.5) * contr + 0.5 + bright;
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = mix(vec3(l), c, satur);
   o = vec4(clamp(c, 0.0, 1.0), 1.0);
 }`;
+
+const FS = fsColour("uniform sampler2D t;", "texture(t, uv).rgb");
+
+const YUV_DECL = `uniform sampler2D t;  // Y
+uniform sampler2D t1; // UV (NV12) or U (I420)
+uniform sampler2D t2; // V (I420)
+uniform mat3 yuvM;
+uniform vec3 yuvOff;`;
+
+/** NV12: Y, then U and V interleaved in one half-size plane. */
+const FS_NV12 = fsColour(YUV_DECL, "yuvM * (vec3(texture(t, uv).r, texture(t1, uv).rg) - yuvOff)");
+/** I420: Y, U and V each in a plane. */
+const FS_I420 = fsColour(YUV_DECL, "yuvM * (vec3(texture(t, uv).r, texture(t1, uv).r, texture(t2, uv).r) - yuvOff)");
 
 /** A full-screen triangle strip in pixel space (no flip: these passes read and write GL space). */
 const VS_PX = `#version 300 es
@@ -288,6 +380,10 @@ void main() {
   o = vec4(clamp((lobe * (b + d + f + h) + e) * rcpL, 0.0, 1.0), 1.0);
 }`;
 
+function isPlanes(f: TexImageSource | Planes): f is Planes {
+  return (f as Planes).data instanceof Uint8Array && Array.isArray((f as Planes).layout);
+}
+
 /** A texture to render into and read back from, at a size. */
 interface Target {
   tex: WebGLTexture;
@@ -306,6 +402,10 @@ export class PicturePass {
   /** RCAS (Sharpen and FSR) and EASU (FSR), made when first used. */
   private rcas: { prog: WebGLProgram; t: WebGLUniformLocation | null; max: WebGLUniformLocation | null; sharp: WebGLUniformLocation | null } | null = null;
   private easu: { prog: WebGLProgram; t: WebGLUniformLocation | null; scale: WebGLUniformLocation | null; max: WebGLUniformLocation | null } | null = null;
+  /** The colour pass for YUV planes (NV12 or I420), made when first used, and the planes'
+   *  textures (Y, then UV or U and V) with the size each holds. */
+  private yuv: Partial<Record<PlaneFormat, { prog: WebGLProgram; u: Record<string, WebGLUniformLocation | null> }>> = {};
+  private planeTex: Array<{ tex: WebGLTexture; w: number; h: number; fmt: number }> = [];
   /** The textures between the passes: the colour pass's output (a), EASU's (b). */
   private a: Target | null = null;
   private b: Target | null = null;
@@ -423,10 +523,63 @@ export class PicturePass {
     return this.easu;
   }
 
+  private yuvProgram(format: PlaneFormat): { prog: WebGLProgram; u: Record<string, WebGLUniformLocation | null> } {
+    let y = this.yuv[format];
+    if (!y) {
+      const gl = this.gl;
+      const prog = this.program(VS, format === "NV12" ? FS_NV12 : FS_I420);
+      const u: Record<string, WebGLUniformLocation | null> = {};
+      for (const n of ["src", "bright", "contr", "satur", "t", "t1", "t2", "yuvM", "yuvOff"]) u[n] = gl.getUniformLocation(prog, n);
+      y = this.yuv[format] = { prog, u };
+    }
+    return y;
+  }
+
+  /** Upload the planes to texture units 0.., each its own size (R8, or RG8 for NV12's UV). */
+  private uploadPlanes(f: Planes): void {
+    const gl = this.gl;
+    const cw = Math.ceil(f.w / 2);
+    const ch = Math.ceil(f.h / 2);
+    const planes =
+      f.format === "NV12"
+        ? [
+            { w: f.w, h: f.h, fmt: gl.RED, ifmt: gl.R8, px: 1 },
+            { w: cw, h: ch, fmt: gl.RG, ifmt: gl.RG8, px: 2 },
+          ]
+        : [
+            { w: f.w, h: f.h, fmt: gl.RED, ifmt: gl.R8, px: 1 },
+            { w: cw, h: ch, fmt: gl.RED, ifmt: gl.R8, px: 1 },
+            { w: cw, h: ch, fmt: gl.RED, ifmt: gl.R8, px: 1 },
+          ];
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    planes.forEach((pl, i) => {
+      const t = this.planeTex[i];
+      gl.activeTexture(gl.TEXTURE0 + i);
+      if (!t || t.w !== pl.w || t.h !== pl.h || t.fmt !== pl.ifmt) {
+        // Fixed-size storage (texStorage2D): a new size is a new texture.
+        if (t) gl.deleteTexture(t.tex);
+        const tex = gl.createTexture()!;
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, pl.ifmt, pl.w, pl.h);
+        this.planeTex[i] = { tex, w: pl.w, h: pl.h, fmt: pl.ifmt };
+      } else gl.bindTexture(gl.TEXTURE_2D, t.tex);
+      const l = f.layout[i];
+      gl.pixelStorei(gl.UNPACK_ROW_LENGTH, l.stride / pl.px);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, pl.w, pl.h, pl.fmt, gl.UNSIGNED_BYTE, f.data, l.offset);
+    });
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
   /** Draw `frame` (w×h) with `p` onto the canvas, which is sized to the result (returned).
    *  `to`: the size to upscale to (upscaleSize), or null for the picture's own size. */
   render(
-    frame: TexImageSource,
+    frame: TexImageSource | Planes,
     w: number,
     h: number,
     p: PictureTools,
@@ -445,15 +598,28 @@ export class PicturePass {
     // for the sharpening and upscaling passes.
     if (sharp) this.drawInto((this.a ??= this.target()), w, crop.h);
     else this.drawToCanvas(w, crop.h);
-    gl.useProgram(this.prog);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
-    gl.uniform4f(this.u.src, 0, crop.y / h, 1, crop.h / h);
-    gl.uniform1f(this.u.bright, p.brightness / 100);
-    gl.uniform1f(this.u.contr, 1 + p.contrast / 100);
-    gl.uniform1f(this.u.satur, 1 + p.saturation / 50);
-    gl.uniform1i(this.u.t, 0);
+    let u = this.u;
+    if (isPlanes(frame)) {
+      const y = this.yuvProgram(frame.format);
+      u = y.u;
+      gl.useProgram(y.prog);
+      this.uploadPlanes(frame);
+      const c = yuvToRgb(frame.colorSpace);
+      gl.uniformMatrix3fv(u.yuvM, false, c.m);
+      gl.uniform3f(u.yuvOff, c.off[0], c.off[1], c.off[2]);
+      gl.uniform1i(u.t1, 1);
+      gl.uniform1i(u.t2, 2);
+    } else {
+      gl.useProgram(this.prog);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
+    }
+    gl.uniform4f(u.src, 0, crop.y / h, 1, crop.h / h);
+    gl.uniform1f(u.bright, p.brightness / 100);
+    gl.uniform1f(u.contr, 1 + p.contrast / 100);
+    gl.uniform1f(u.satur, 1 + p.saturation / 50);
+    gl.uniform1i(u.t, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     if (!sharp || !this.a) return out;
 
@@ -488,6 +654,8 @@ export class PicturePass {
     const gl = this.gl;
     if (gl.isContextLost()) return;
     gl.deleteTexture(this.tex);
+    for (const t of this.planeTex) gl.deleteTexture(t.tex);
+    for (const y of Object.values(this.yuv)) if (y) gl.deleteProgram(y.prog);
     for (const t of [this.a, this.b]) {
       if (!t) continue;
       gl.deleteTexture(t.tex);

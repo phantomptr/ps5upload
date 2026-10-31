@@ -34,8 +34,13 @@
 //!       "linux-aarch64":  "https://.../PS5Upload-2.2.0-linux-arm64.zip",
 //!       "android":        "https://.../PS5Upload-2.2.0-android.apk",
 //!       "android-armv7":  "https://.../PS5Upload-2.2.0-android-armv7.apk"
-//!     }
+//!     },
+//!     "sha256": { "darwin-aarch64": "<64 hex>", … }
 //!   }
+//!
+//! `sha256` (since 10.2) has the same keys as `assets`; `update_download` checks the file
+//! against it before the update is offered for install, and deletes a file that does not
+//! match. A manifest without it (an older release) is downloaded unchecked, as before.
 //!
 //! Missing platforms → the renderer reports "up to date" to users on
 //! that arch (same as if no new version exists for them).
@@ -103,6 +108,9 @@ pub struct UpdateCheck {
     /// `download_url`). Used by `update_download` to pick the local
     /// save path in ~/Downloads.
     pub download_filename: String,
+    /// Lowercase hex SHA-256 the manifest publishes for `download_url`, or empty when it
+    /// publishes none (releases before 10.2). Handed back to `update_download`.
+    pub sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -114,6 +122,76 @@ struct Manifest {
     pub_date: String,
     #[serde(default)]
     assets: std::collections::HashMap<String, String>,
+    /// Same keys as `assets`. Absent before 10.2.
+    #[serde(default)]
+    sha256: std::collections::HashMap<String, String>,
+}
+
+/// The asset this copy should download: its URL and the manifest's SHA-256 for it (empty
+/// when there is none). `keys` is `preferred_asset_keys()`, most specific first.
+fn pick_asset(manifest: &Manifest, keys: &[String]) -> (String, String) {
+    keys.iter()
+        .find_map(|k| {
+            manifest.assets.get(k).map(|url| {
+                let sha = manifest.sha256.get(k).cloned().unwrap_or_default();
+                (url.clone(), sha)
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// The checksum `update_download` was handed: None when the manifest had none, the
+/// lowercase hex when it is well formed. A malformed one is an error, not "unchecked": a
+/// manifest that tries to publish a hash and gets it wrong must not be waved through.
+fn expected_sha256(raw: Option<&str>) -> Result<Option<String>, String> {
+    let raw = raw.map(str::trim).unwrap_or("");
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    if raw.len() == 64 && raw.chars().all(|c| c.is_ascii_hexdigit()) {
+        Ok(Some(raw.to_ascii_lowercase()))
+    } else {
+        Err(format!(
+            "the release manifest's SHA-256 for this download is malformed: {raw:?}"
+        ))
+    }
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Lowercase hex SHA-256 of a file on disk.
+fn sha256_file(path: &std::path::Path) -> std::io::Result<String> {
+    use sha2::Digest;
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut h = sha2::Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(hex_lower(&h.finalize()))
+}
+
+/// Ok when `actual` matches `expected` (or nothing was published to check against).
+fn check_sha256(expected: Option<&str>, actual: &str, filename: &str) -> Result<(), String> {
+    match expected {
+        Some(exp) if !exp.eq_ignore_ascii_case(actual) => Err(format!(
+            "{filename} does not match the SHA-256 this release published (expected {exp}, got {actual}). \
+             The file was deleted and nothing was installed; try the download again."
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Writes one line to stderr without panicking when it is gone (a `println!` would).
+fn log_line(args: std::fmt::Arguments<'_>) {
+    let _ = std::io::Write::write_fmt(&mut std::io::stderr(), args);
 }
 
 /// Platform key used in the manifest. Matches the format tauri-plugin-
@@ -187,7 +265,7 @@ fn current_platform_key() -> &'static str {
 /// hand them an RPM they never installed. If neither package manager
 /// claims the file, it is portable and the plain key is right.
 #[cfg(target_os = "linux")]
-fn linux_package_kind() -> Option<&'static str> {
+pub(crate) fn linux_package_kind() -> Option<&'static str> {
     fn owns(tool: &str, args: &[&str]) -> bool {
         std::process::Command::new(tool)
             .args(args)
@@ -245,7 +323,14 @@ fn preferred_asset_keys() -> Vec<String> {
             return vec![format!("{base}-setup"), base.to_string()];
         }
     }
-    vec![base.to_string()]
+    // Android: the APK for this device's ABI (a 32-bit copy on a 64-bit phone
+    // moves to arm64), the running build's key as the fallback.
+    #[cfg(target_os = "android")]
+    let keys =
+        super::update_android::asset_keys_for_abis(&super::update_android::device_abilist(), base);
+    #[cfg(not(target_os = "android"))]
+    let keys = vec![base.to_string()];
+    keys
 }
 
 /// Minimal semver-ish comparison. Splits MAJOR.MINOR.PATCH numerics and
@@ -524,10 +609,7 @@ pub async fn update_check(app: AppHandle, channel: Option<String>) -> Result<Upd
     let available = is_newer(&current_version, &latest_version);
     // Most-specific-first: a packaged Linux install gets its own format,
     // everything else gets the single platform key.
-    let download_url = preferred_asset_keys()
-        .into_iter()
-        .find_map(|k| manifest.assets.get(&k).cloned())
-        .unwrap_or_default();
+    let (download_url, sha256) = pick_asset(&manifest, &preferred_asset_keys());
     let download_filename = download_url.rsplit('/').next().unwrap_or("").to_string();
     Ok(UpdateCheck {
         available,
@@ -537,6 +619,7 @@ pub async fn update_check(app: AppHandle, channel: Option<String>) -> Result<Upd
         pub_date: manifest.pub_date,
         download_url,
         download_filename,
+        sha256,
     })
 }
 
@@ -577,6 +660,12 @@ pub struct UpdateDownload {
     pub install_command: Option<String>,
     /// `update_install` can install this download and restart into it (commands/self_install).
     pub can_install: bool,
+    /// That install asks for the user's password (a `.deb` / `.rpm` through pkexec), so it is
+    /// never started on quit or by the automatic install; `install_command` is the fallback.
+    pub needs_password: bool,
+    /// The file matched the SHA-256 the release manifest published. False only when the
+    /// manifest published none (a release before 10.2); a mismatch is an error instead.
+    pub verified: bool,
 }
 
 /// `path` quoted for a POSIX shell.
@@ -645,7 +734,9 @@ pub async fn update_download(
     app: AppHandle,
     url: String,
     filename: String,
+    sha256: Option<String>,
 ) -> Result<UpdateDownload, String> {
+    let expected = expected_sha256(sha256.as_deref())?;
     if url.is_empty() {
         return Err("no download URL — this release has no bundle for your platform".into());
     }
@@ -735,20 +826,40 @@ pub async fn update_download(
             Some(expected) => meta.len() == expected,
             None => meta.len() > 0,
         };
-        if skip {
+        // A copy already here is only reused when it matches the published checksum; one
+        // that does not (a different build under the same name, a damaged file) is
+        // deleted and downloaded again.
+        let matches = match &expected {
+            _ if !skip => false,
+            None => true,
+            Some(exp) => {
+                let t = target.clone();
+                tokio::task::spawn_blocking(move || sha256_file(&t))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .is_some_and(|actual| actual == *exp)
+            }
+        };
+        if skip && !matches {
+            let _ = std::fs::remove_file(&target);
+        }
+        if skip && matches {
             // `reveal` is best-effort for the same reason as the fresh-download
             // path below: the bundle is already complete on disk, so a failure
             // to open the OS file manager must not be reported back to the
             // renderer as a download failure (a user re-clicking "Download"
             // would otherwise see a spurious error).
             let path = target.to_string_lossy().into_owned();
-            let can_install = super::self_install::can_install(&path);
+            let (can_install, needs_password) = super::self_install::install_ability(&path);
             if !can_install {
                 reveal(&target);
             }
             return Ok(UpdateDownload {
                 install_command: install_command(&path),
                 can_install,
+                needs_password,
+                verified: expected.is_some(),
                 path,
                 bytes: meta.len(),
             });
@@ -785,6 +896,10 @@ pub async fn update_download(
     let mut stream = resp.bytes_stream();
     use futures_util::StreamExt;
     let mut total: u64 = 0;
+    let mut hasher = {
+        use sha2::Digest;
+        sha2::Sha256::new()
+    };
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("chunk read: {e}"))?;
         total = total.saturating_add(chunk.len() as u64);
@@ -794,9 +909,19 @@ pub async fn update_download(
             ));
         }
         file.write_all(&chunk).map_err(|e| format!("write: {e}"))?;
+        sha2::Digest::update(&mut hasher, &chunk);
     }
     file.sync_all().map_err(|e| format!("fsync: {e}"))?;
     drop(file);
+    // Checked before the rename: a file that does not match never takes the update's name,
+    // and the guard deletes the `.part`.
+    let actual = hex_lower(&sha2::Digest::finalize(hasher));
+    check_sha256(expected.as_deref(), &actual, &filename)?;
+    if expected.is_none() {
+        log_line(format_args!(
+            "[updates] the manifest publishes no SHA-256 for {filename} (a release before 10.2): not verified, sha256={actual}\n"
+        ));
+    }
     super::replace_file(&tmp, &target).map_err(|e| format!("rename: {e}"))?;
     // Rename succeeded — disarm the guard so it doesn't try to remove
     // the already-moved file. (A Drop-safe `rename_if_exists` is
@@ -808,7 +933,7 @@ pub async fn update_download(
     // download itself succeeded — we shouldn't convert that into a
     // download-failed error for the user. Log + continue.
     let path = target.to_string_lossy().into_owned();
-    let can_install = super::self_install::can_install(&path);
+    let (can_install, needs_password) = super::self_install::install_ability(&path);
     // A copy that installs it itself shows "Install and restart": opening the folder (or, on
     // Windows, starting the setup, which then asks to close the running app) only gets in
     // the way.
@@ -818,6 +943,8 @@ pub async fn update_download(
     Ok(UpdateDownload {
         install_command: install_command(&path),
         can_install,
+        needs_password,
+        verified: expected.is_some(),
         path,
         bytes: total,
     })
@@ -872,6 +999,16 @@ const PINNED_PRODUCTION_HOSTS: &[&str] = &[
     "raw.githubusercontent.com",
 ];
 
+/// Whether an update asset may be downloaded from `url`: the pinned GitHub
+/// hosts, or any HTTPS host once a developer pointed the manifest elsewhere.
+pub(crate) fn is_allowed_download_url(url: &str) -> bool {
+    if std::env::var("PS5UPLOAD_UPDATE_MANIFEST_URL").is_ok() {
+        is_safe_dev_url(url)
+    } else {
+        is_safe_update_url(url)
+    }
+}
+
 fn is_safe_update_url(raw: &str) -> bool {
     is_safe_update_url_for_host(raw, PINNED_PRODUCTION_HOSTS)
 }
@@ -911,6 +1048,85 @@ fn is_safe_dev_url(raw: &str) -> bool {
             Some("127.0.0.1") | Some("localhost") | Some("::1") | Some("[::1]")
         ),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod checksum_tests {
+    use super::*;
+
+    fn manifest(json: &str) -> Manifest {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn a_manifest_without_checksums_still_parses_and_picks_its_asset() {
+        // The shape every release before 10.2 published.
+        let m = manifest(
+            r#"{"version":"10.1.0","assets":{"linux-x86_64":"https://github.com/a/b.zip"}}"#,
+        );
+        assert_eq!(
+            pick_asset(&m, &["linux-x86_64-deb".into(), "linux-x86_64".into()]),
+            ("https://github.com/a/b.zip".to_string(), String::new())
+        );
+        assert_eq!(
+            pick_asset(&m, &["darwin-aarch64".into()]),
+            Default::default()
+        );
+    }
+
+    #[test]
+    fn the_checksum_comes_from_the_same_key_as_the_url() {
+        let a = "a".repeat(64);
+        let b = "B".repeat(64);
+        let m = manifest(&format!(
+            r#"{{"version":"10.2.0",
+                "assets":{{"linux-x86_64":"https://github.com/z.zip","linux-x86_64-deb":"https://github.com/z.deb"}},
+                "sha256":{{"linux-x86_64":"{a}","linux-x86_64-deb":"{b}"}}}}"#
+        ));
+        assert_eq!(
+            pick_asset(&m, &["linux-x86_64-deb".into(), "linux-x86_64".into()]),
+            ("https://github.com/z.deb".to_string(), b.clone())
+        );
+        assert_eq!(
+            pick_asset(&m, &["linux-x86_64".into()]),
+            ("https://github.com/z.zip".to_string(), a)
+        );
+    }
+
+    #[test]
+    fn expected_checksums_are_normalised_or_refused() {
+        assert_eq!(expected_sha256(None), Ok(None));
+        assert_eq!(expected_sha256(Some("  ")), Ok(None));
+        assert_eq!(
+            expected_sha256(Some(&"AB".repeat(32))),
+            Ok(Some("ab".repeat(32)))
+        );
+        assert!(expected_sha256(Some("abc")).is_err());
+        assert!(expected_sha256(Some(&"g".repeat(64))).is_err());
+    }
+
+    #[test]
+    fn a_file_is_checked_against_the_published_hash() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-sha-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("update.bin");
+        std::fs::write(&f, b"abc").unwrap();
+        let actual = sha256_file(&f).unwrap();
+        // The well-known SHA-256 of "abc".
+        assert_eq!(
+            actual,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert!(check_sha256(Some(&actual), &actual, "update.bin").is_ok());
+        assert!(check_sha256(Some(&actual.to_ascii_uppercase()), &actual, "update.bin").is_ok());
+        assert!(check_sha256(None, &actual, "update.bin").is_ok());
+        let err = check_sha256(Some(&"0".repeat(64)), &actual, "update.bin").unwrap_err();
+        assert!(
+            err.contains("update.bin") && err.contains("deleted"),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

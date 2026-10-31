@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "10.1.0"
+version = "10.2.0"
 description = "The all-in-one PS5 companion app."
 license = "GPL-3.0-or-later"
 edition = "2021"
@@ -170,6 +170,16 @@ block2 = "0.6"
 # (notify-rust), default features and all, so this adds no new crate.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5"
+# Linux: game controllers read from /dev/input (commands/pad_native.rs), for a WebKitGTK built
+# without libmanette, whose Gamepad API sees none. Pure Rust (ioctls through nix), no system
+# library to build or run. MIT OR Apache-2.0.
+evdev = "0.13"
+# Linux: quit cleanly on SIGTERM / SIGINT / SIGHUP (quit_signals.rs). tokio is already a
+# dependency; signal-hook-registry, which this feature adds, is already in the tree.
+tokio = { version = "1", features = ["signal"] }
+# Linux: the WebKitGTK version this process runs with (linux_gpu.rs). Already in the tree
+# through wry.
+webkit2gtk-sys = "2"
 
 [features]
 # Default: build Tauri-native (no custom features yet)

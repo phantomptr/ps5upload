@@ -4,7 +4,78 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.2.0
+
+- **Updates are checked before they install.** Each release now publishes the SHA-256 of every
+  download, and the app checks the file against it; a file that doesn't match is deleted and
+  nothing is installed.
+- **One-click updates for a .deb or .rpm install on Linux.** Install and restart asks for your
+  password with the desktop's own prompt, installs the package and opens the new version. If you
+  close the prompt (or your desktop can't show one), the command to run is shown as before.
+  rpm-ostree systems (Bazzite, Silverblue) still get the command, since the change applies after
+  a reboot.
+- **Install updates when you quit** (Settings › Updates, on by default). A downloaded update is
+  installed as you quit PS5Upload, never while something is transferring, and the app stays
+  closed. Not for a .deb or .rpm, which needs your password.
+- **What's new after an update:** the first launch of a new version shows its release notes once.
+- **Skip this version** in the update banner and in Settings › Updates: no banner, badge or
+  automatic install for that version until a newer one comes out.
+- **Linux: the "keep the PC awake" hold ends with the app.** A transfer's sleep block outlived an
+  app that was killed and kept the PC awake until a reboot; it now ends when PS5Upload does.
+- **Remote Play runs at 60 fps in the Linux app.** WebKitGTK converted every frame to RGB on
+  the CPU as it was drawn (12 ms of each 16.7 ms frame at 1080p), so frames backed up: about
+  40 fps and over 100 ms of delay. The app now hands the GPU the frame's own YUV planes and
+  converts there (about 1 ms a frame).
+- **Convert checks that a folder is a whole game (#596).** A folder without
+  `sce_sys/param.json` (or a PS4 game's `param.sfo`) is refused up front, with a hint to pick
+  the game's own folder, instead of becoming a package or image that never launches.
+- **The web UI says when a new release is out.** A page served by a self-hosted engine (Docker,
+  a NAS) shows the update bar too; Details has what's new and, for Docker, the command to copy.
+- **Remote Play explains any refusal at the start.** A code nobody has explained yet (such as
+  80108b26) now comes with what to check: the console's Remote Play switch, Allow for this user,
+  and pairing.
+- **Android updates install from inside the app.** Tap Download and install: the app downloads the
+  APK for your phone (with progress), checks it, and Android asks "Update?". The first time,
+  Android asks you to allow PS5Upload to install apps. Open download page stays as the fallback.
+- **Controllers work in Remote Play on Linux where the system webview can't see them.** On
+  distributions whose WebKitGTK is built without controller support (Ubuntu 26.04, for one), the
+  app now reads plugged-in controllers itself, so a DualSense or Xbox pad drives the console.
+- **Full GPU rendering on current NVIDIA Linux setups.** With NVIDIA driver 555 or later on
+  Wayland and WebKitGTK 2.46 or later (the .deb and .rpm), the app no longer turns off WebKit's
+  GPU compositing and DMA-BUF renderer: lists scroll smoothly, Remote Play's picture has less
+  delay, and Sharpen and upscaling work in the Linux app. Every other setup, and the AppImage,
+  keeps the white-window workarounds as before; on those Remote Play draws without WebGL, as it
+  did in 10.0.3, because WebGL lags there.
+- **Safe graphics mode for a white or blank Linux window.** Settings › Window › Graphics turns the
+  workarounds on whatever the app detected, from the next launch. If the window can't be used,
+  start the app with `--safe-graphics` or `PS5UPLOAD_SAFE_GRAPHICS=1`. What the app read and chose
+  is in the startup log.
+- **The Linux app quits cleanly when it is sent SIGTERM, SIGINT or SIGHUP.** Stopping it with
+  `kill` left WebKit's web process crashing, and Ubuntu showed a crash report each time.
+- **Remote Play shows where its delay goes.** The stats overlay adds each frame's stages, measured
+  rather than estimated: network (engine to app), queue, decode and draw, as medians over the
+  last 2 s. The same numbers go into the app's logs (and so into a bug report) once a minute.
+- **A Remote Play picture that freezes while the stream runs comes back by itself.** When the
+  video decoder stops giving pictures without an error, the app starts a new one and asks the
+  PS5 for a fresh keyframe. After three tries it says so instead of trying forever.
+- **Fewer lost Remote Play keyframes on macOS and Linux.** The engine now asks every system for a
+  large network receive buffer (it did on Windows only), and logs the size it got.
+
 ## 10.1.0
+- **Updates are checked before they install.** Each release now publishes the SHA-256 of every
+  download, and the app checks the file against it; a file that doesn't match is deleted and
+  nothing is installed.
+- **One-click updates for a .deb or .rpm install on Linux.** Install and restart asks for your
+  password with the desktop's own prompt, installs the package and opens the new version. If you
+  close the prompt (or your desktop can't show one), the command to run is shown as before.
+  rpm-ostree systems (Bazzite, Silverblue) still get the command, since the change applies after
+  a reboot.
+- **Install updates when you quit** (Settings › Updates, on by default). A downloaded update is
+  installed as you quit PS5Upload, never while something is transferring, and the app stays
+  closed. Not for a .deb or .rpm, which needs your password.
+- **What's new after an update:** the first launch of a new version shows its release notes once.
+- **Skip this version** in the update banner and in Settings › Updates: no banner, badge or
+  automatic install for that version until a newer one comes out.
 
 - **Remap controller buttons in Play.** Settings › Controller buttons: choose which PS5 button each
   button on your controller sends (swap ✕ and ○, turn a button off, put Create on L3...). It works

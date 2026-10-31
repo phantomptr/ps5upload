@@ -563,6 +563,20 @@ const rpRecord = (kind: number, payload: Uint8Array) => {
   return b;
 };
 
+/** The fake engine's clock, µs, as the real one's: monotonic, its own zero. */
+const engineUs = () => Math.round(performance.now() * 1000);
+
+/** Kind 7: a video access unit after the engine's u64 BE µs time (for a page that asked). */
+const rpTimedVideo = (payload: Uint8Array) => {
+  const b = Buffer.alloc(payload.length + 9);
+  const t = engineUs();
+  b[0] = 7;
+  b.writeUInt32BE(Math.floor(t / 4294967296), 1);
+  b.writeUInt32BE(t % 4294967296, 5);
+  b.set(payload, 9);
+  return b;
+};
+
 async function rpPage(page: Page, prefs: Record<string, unknown> = {}) {
   await page.addInitScript((p) => {
     window.localStorage.setItem("ps5upload.host", "192.168.1.100");
@@ -603,14 +617,18 @@ async function rpPage(page: Page, prefs: Record<string, unknown> = {}) {
 
 /** A fake engine that streams the fixture for the size asked for and answers pings. `extra`
  *  runs on every start (its index) for what a test adds: `repeat` sends something every so often
- *  while that socket is open; returning true answers the start with nothing else. */
+ *  while that socket is open; returning true answers the start with nothing else. `timed`: as
+ *  an engine from 10.2 on, its clock in pongs and video as kind 7 to a page that asks; without
+ *  it, an older engine (pongs without a clock, video as kind 1). */
 async function rpEngine(
   page: Page,
   extra?: (ws: WebSocketRoute, n: number, repeat: (fn: () => void, ms: number) => void) => boolean | void,
+  { timed = false }: { timed?: boolean } = {},
 ) {
   const starts: Array<Record<string, unknown>> = [];
   let pings = 0;
   let stops = 0;
+  let keyframes = 0;
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     const timers: ReturnType<typeof setInterval>[] = [];
     ws.onClose(() => timers.forEach(clearInterval));
@@ -619,8 +637,9 @@ async function rpEngine(
       const msg = JSON.parse(m) as Record<string, unknown>;
       if ("ping" in msg) {
         pings++;
-        ws.send(JSON.stringify({ pong: msg.ping }));
+        ws.send(JSON.stringify(timed ? { pong: msg.ping, engine_us: engineUs() } : { pong: msg.ping }));
       }
+      if (msg.keyframe) keyframes++;
       if (msg.stop) {
         stops++;
         ws.send(JSON.stringify({ stage: "ended" }));
@@ -633,12 +652,13 @@ async function rpEngine(
       const { header, au } = splitH264(rpFixture(msg.height === 720 ? "h264_1280x720.h264" : "h264_1920x1080.h264"));
       ws.send(JSON.stringify({ stage: "first_frame" }));
       ws.send(rpRecord(0, header));
+      const video = () => (timed && msg.timing ? rpTimedVideo(au) : rpRecord(1, au));
       // The same keyframe again and again: a picture that keeps coming, as a game's does.
-      for (let i = 0; i < 3; i++) ws.send(rpRecord(1, au));
-      repeat(() => ws.send(rpRecord(1, au)), 100);
+      for (let i = 0; i < 3; i++) ws.send(video());
+      repeat(() => ws.send(video()), 100);
     });
   });
-  return { starts, pings: () => pings, stops: () => stops };
+  return { starts, pings: () => pings, stops: () => stops, keyframes: () => keyframes };
 }
 
 test("Remote Play saves a screenshot and a clip, shows its latency and asks for low latency", async ({ page }) => {
@@ -693,6 +713,56 @@ test("Remote Play saves a screenshot and a clip, shows its latency and asks for 
   expect(readFileSync(await clip.path()).length).toBeGreaterThan(1000);
   await expect(page.getByTestId("rp-recording")).toHaveCount(0);
   await expect(page.getByTestId("rp-capture-notice")).toContainText("Clip saved");
+});
+
+// Latency stages (10.2): the page asks for timed video, lines its clock up with the engine's from
+// pings, and shows each stage's median. An older engine has no "net" stage, and the rest still
+// shows.
+for (const timed of [true, false]) {
+  test(`Remote Play times each frame's stages (${timed ? "engine with timed video" : "older engine"})`, async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    await rpPage(page, { res: "1280x720", showStats: true });
+    const engine = await rpEngine(page, undefined, { timed });
+    await page.goto("/play", { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId("rp-start").click();
+    await expect.poll(() => engine.starts.length).toBe(1);
+    expect(engine.starts[0]).toMatchObject({ timing: true });
+    const stages = page.getByTestId("rp-latency-stages");
+    const net = timed ? "\\d+" : "\\?";
+    await expect(stages).toHaveText(new RegExp(`^net ${net} · queue \\d+ · decode \\d+ · screen \\d+ ms$`), {
+      timeout: 15_000,
+    });
+    // The picture is drawn either way.
+    await expect(page.getByTestId("rp-latency")).toContainText(/Latency ≈ \d+ ms engine \+ \d+ ms decode/);
+  });
+}
+
+// The decoder watchdog: frames keep going in, the decoder gives nothing back (and no error).
+// It is restarted, a little further apart each time, then the player is told once; it never
+// loops.
+test("Remote Play restarts a decoder that stopped giving pictures, then gives up", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => {
+    // A decoder that takes every frame and never outputs one.
+    VideoDecoder.prototype.decode = function () {};
+  });
+  await rpPage(page, { res: "1280x720", showStats: true });
+  const engine = await rpEngine(page);
+  await page.goto("/play", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("rp-start").click();
+  await expect.poll(() => engine.starts.length).toBe(1);
+  const stages = page.getByTestId("rp-latency-stages");
+  await expect(stages).toContainText("decoder restarts 1", { timeout: 10_000 });
+  expect(engine.keyframes()).toBeGreaterThan(0);
+  await expect(stages).toContainText("decoder restarts 3", { timeout: 30_000 });
+  await expect(page.getByText("This device could not decode the picture.")).toBeVisible({ timeout: 20_000 });
+  // Given up: no more restarts while frames keep coming.
+  await page.waitForTimeout(4000);
+  await expect(stages).toContainText("decoder restarts 3");
 });
 
 test("Remote Play offers 720p when a 1080p stream keeps losing frames, and switches on a tap", async ({ page }) => {

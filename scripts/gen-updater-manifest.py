@@ -17,20 +17,31 @@ filenames, map each to a platform key, and emit:
         "linux-aarch64":  "https://.../PS5Upload-2.2.0-linux-arm64.zip",
         "windows-x86_64": "https://.../PS5Upload-2.2.0-win-x64.zip",
         "windows-aarch64":"https://.../PS5Upload-2.2.0-win-arm64.zip"
+      },
+      "sha256": {
+        "darwin-aarch64": "<64 lowercase hex digits>",
+        ...one entry per key in "assets"
       }
     }
+
+`sha256` sits beside `assets` (same keys) rather than inside it, so the
+`assets` map keeps its plain key -> URL shape: apps from before 10.2
+parse it unchanged and ignore the new field. The app checks the
+downloaded file against it before offering to install.
 
 The desktop app's `update_check` command reads this JSON, picks the
 `assets` entry matching its own (os, arch), and hands the URL to
 `update_download` when the user clicks "Download".
 
-No signatures, no installer formats — just public HTTPS download URLs.
+No signatures, no installer formats — just public HTTPS download URLs and
+the SHA-256 of each file.
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import hashlib
 import json
 import re
 import sys
@@ -103,6 +114,15 @@ def release_asset_url(repo: str, tag: str, filename: str) -> str:
     return f"https://github.com/{repo}/releases/download/{tag}/{filename}"
 
 
+def sha256_of(path: Path) -> str:
+    """Lowercase hex SHA-256 of a file, read in 1 MiB pieces."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--release-dir", required=True, type=Path)
@@ -135,10 +155,12 @@ def main() -> int:
         notes_text = args.notes.read_text().strip()
 
     assets: dict[str, str] = {}
+    sha256: dict[str, str] = {}
     for key, path in assets_paths.items():
         url = release_asset_url(args.repo, args.tag, path.name)
         assets[key] = url
-        print(f"[gen-updater-manifest] {key} -> {path.name}")
+        sha256[key] = sha256_of(path)
+        print(f"[gen-updater-manifest] {key} -> {path.name} ({sha256[key]})")
 
     manifest = {
         "version": args.version,
@@ -147,6 +169,7 @@ def main() -> int:
             "%Y-%m-%dT%H:%M:%SZ"
         ),
         "assets": assets,
+        "sha256": sha256,
     }
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

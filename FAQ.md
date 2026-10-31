@@ -587,15 +587,24 @@ This is WebKitGTK failing to render with accelerated compositing /
 the DMABUF renderer on your GPU/compositor — common on gaming distros
 (Bazzite, SteamOS) and NVIDIA. Fixes, easiest first:
 
-1. **Update to the latest version — the fix is built in, and now adapts
-   to your graphics stack.** The app detects what it is running on at
+1. **Update to the latest version — the fix is built in, and adapts to
+   your graphics stack.** The app detects what it is running on at
    startup and applies only the workarounds that stack needs:
 
    | Your setup | What the app does automatically |
    | --- | --- |
-   | Any Linux | Disables the DMABUF renderer |
-   | **NVIDIA on Wayland** | Also disables accelerated compositing |
+   | **NVIDIA driver 555 or later on Wayland, WebKitGTK 2.46 or later** (.deb / .rpm) | Nothing: full GPU rendering |
+   | Any other Linux (AMD, Intel, X11, older driver or WebKitGTK) | Disables the DMABUF renderer |
+   | **Other NVIDIA on Wayland** | Also disables accelerated compositing |
    | **NVIDIA on Wayland, AppImage** | Also preloads your system's `libwayland-client` |
+
+   The AppImage always gets the workarounds: it brings its own WebKitGTK
+   and Wayland libraries, and a current NVIDIA driver still showed a white
+   window there (issue #285). The first row is the stack where both
+   switches were measured to be unnecessary — and costly: without them
+   lists scroll smoothly and Remote Play's picture has less delay and
+   keeps Sharpen and upscaling. What was read and decided is logged at
+   startup (`[linux] graphics: …` in the terminal output).
 
    This works for a plain double-click of `PS5Upload.AppImage`, the
    `.deb` / `.rpm` / folder build, and the `PS5Upload.sh` wrapper — with
@@ -608,12 +617,30 @@ the DMABUF renderer on your GPU/compositor — common on gaming distros
    compositing makes WebKitGTK render the whole page in software, which
    is fine for a static window but makes **scrolling sluggish** — and
    this app's main screens are long lists (a library of hundreds of
-   games, a file browser of thousands of entries). An earlier version
-   set it for everyone, which is why scrolling felt heavier on Linux
-   than on Android or Windows. It is now scoped to the stack that needs
-   it.
+   games, a file browser of thousands of entries). It also makes Remote
+   Play draw its picture without the GPU, so Sharpen and upscaling are
+   off there. An earlier version set it for everyone, which is why
+   scrolling felt heavier on Linux than on Android or Windows. It is now
+   scoped to the stack that needs it.
 
-2. **Still white?** Apply the compositing switch by hand — your stack may
+2. **White, blank or flickering on a stack the app thinks is fine? Turn
+   on Safe graphics mode.** It turns both switches on, whatever was
+   detected. If you can see the window: **Settings › Window › Graphics ›
+   Safe graphics mode**, then restart the app. If you can't, start it
+   once with the flag or the variable (the flag turns it on for that
+   launch; switch it on in Settings to keep it):
+
+   ```sh
+   ps5upload-desktop --safe-graphics          # .deb / .rpm
+   PS5UPLOAD_SAFE_GRAPHICS=1 ./PS5Upload.sh   # .zip / AppImage
+   ```
+
+   `PS5UPLOAD_SAFE_GRAPHICS=0` turns a saved Safe graphics mode off for one
+   launch. The setting is the file
+   `~/.config/com.phantomptr.ps5upload/safe-graphics`; deleting it turns
+   it off too.
+
+3. **Still white?** Apply the compositing switch by hand — your stack may
    need it without being NVIDIA-on-Wayland:
 
    ```sh
@@ -631,13 +658,13 @@ the DMABUF renderer on your GPU/compositor — common on gaming distros
    yourself, so you can also turn one back *off*
    (`WEBKIT_DISABLE_DMABUF_RENDERER=0 ./PS5Upload.sh`).
 
-3. **Still white?** Force X11 instead of Wayland:
+4. **Still white?** Force X11 instead of Wayland:
 
    ```sh
    GDK_BACKEND=x11 ./PS5Upload.sh
    ```
 
-4. **Still white?** Fall back to software rendering (slower UI, but
+5. **Still white?** Fall back to software rendering (slower UI, but
    reliable — good for confirming it's a GPU-path problem):
 
    ```sh

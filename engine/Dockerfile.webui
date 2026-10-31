@@ -102,7 +102,7 @@ COPY --from=builder /build/engine/target/release/ps5upload-unrar /ps5upload-unra
 # /data/.ps5upload), owned by the runtime user so it is writable.
 COPY --from=builder /rootfs/ /
 COPY --from=builder --chown=65532:65532 /rootfs-data/ /
-ENV HOME=/data TMPDIR=/tmp PS5UPLOAD_BASE_URL=$PS5UPLOAD_BASE_URL
+ENV HOME=/data TMPDIR=/tmp PS5UPLOAD_DOCKER=1 PS5UPLOAD_BASE_URL=$PS5UPLOAD_BASE_URL
 # Saved servers (with their encrypted credentials), install history, the
 # artwork cache and the backport library live here. Mount a volume on it so
 # they survive a container upgrade: `-v ps5upload-data:/data`.

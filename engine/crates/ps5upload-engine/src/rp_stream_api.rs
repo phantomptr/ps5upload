@@ -9,8 +9,9 @@
 //!   or "h265_hdr": HEVC Main10 in HDR), "keep_alive_s"?,
 //!   "attach_only"?, "low_latency"?, "mic"?, "dualsense"?}`, then `{"pad": {"buttons", "l2", "r2",
 //!   "lx", "ly", "rx", "ry"}}` whenever the pad changes, `{"keyframe": true}`,
-//!   `{"ping": t}` (answered at once with `{"pong": t}`, for the page to time
-//!   the round trip), or `{"stop": true}`.
+//!   `{"ping": t}` (answered at once with `{"pong": t, "engine_us": e}`, for the page to time
+//!   the round trip and, with `e` the engine's clock when the ping came, to line its clock up
+//!   with the engine's), or `{"stop": true}`.
 //!   Microphone (experimental), only for a session started with `"mic": true`:
 //!   `{"mic": true|false}` turns the console's mic
 //!   on or off, and binary `[5][one Opus packet]` is one mic frame (48 kHz
@@ -18,7 +19,10 @@
 //!   mic counts, and the mic goes off whenever the page changes.
 //! * engine → client, binary `[u8 kind][payload]`: 0 = video codec header
 //!   (Annex-B parameter sets), 1 = video access unit, 3 = audio header,
-//!   4 = audio frame (Opus), 6 = DualSense haptics frame (10 ms of 3 kHz stereo s16le PCM).
+//!   4 = audio frame (Opus), 6 = DualSense haptics frame (10 ms of 3 kHz stereo s16le PCM),
+//!   7 = video access unit with the time the engine had it whole: `[7][u64 BE engine µs][AU]`,
+//!   sent instead of 1 only to a page that started with `"timing": true` (older pages, the
+//!   watch page and rp-player never ask, and keep getting 1).
 //!   Text JSON = status (`{"stage": …}`), rumble (`{"rumble": [strong, weak]}`), light bar
 //!   (`{"light": [r, g, b]}`) and, for a session started with `"dualsense": true`, adaptive
 //!   triggers (`{"triggers": {"left": [mode, 10 bytes…], "right": […]}}`) and the console's
@@ -67,6 +71,9 @@ const MAX_KEEP_ALIVE: Duration = Duration::from_secs(600);
 const KIND_HAPTICS: u8 = 6;
 /// Page → engine binary kind: one microphone Opus packet.
 const KIND_MIC: u8 = 5;
+/// Engine → page binary kind: a video access unit after the engine's time it was whole, u64 BE
+/// µs on `engine_us`'s clock (for a page that asked with `"timing": true`).
+const KIND_VIDEO_TIMED: u8 = 7;
 /// Mic frames waiting for the stream thread (10 ms each): a stalled thread
 /// drops voice rather than playing it late.
 const MIC_QUEUE: usize = 50;
@@ -106,6 +113,9 @@ struct StartReq {
     /// Instant replay: keep the last this-many seconds (15, 30 or 60; 0 / none = off).
     #[serde(default)]
     replay_s: Option<u64>,
+    /// Video as kind 7 (each access unit with the engine's time), for the page's latency stages.
+    #[serde(default)]
+    timing: bool,
 }
 
 impl StartReq {
@@ -136,18 +146,34 @@ struct ClientMsg {
     ping: Option<serde_json::Value>,
 }
 
-/// The answer to a ping: the page's own value back, untouched.
+/// The answer to a ping: the page's own value back, untouched, and the engine's clock now.
 fn pong(m: &ClientMsg) -> Option<Message> {
     m.ping
         .as_ref()
-        .map(|t| text(serde_json::json!({ "pong": t })))
+        .map(|t| text(serde_json::json!({ "pong": t, "engine_us": engine_us() })))
 }
 
-/// The page showing the stream: its two queues.
+/// The engine's clock for latency stamps: µs since the first time it was read, monotonic.
+fn engine_us() -> u64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_micros() as u64
+}
+
+/// `[7][t_us BE][au]`: a video access unit with the engine's time.
+fn bin_timed(t_us: u64, au: &[u8]) -> Message {
+    let mut v = Vec::with_capacity(9 + au.len());
+    v.push(KIND_VIDEO_TIMED);
+    v.extend_from_slice(&t_us.to_be_bytes());
+    v.extend_from_slice(au);
+    Message::Binary(Bytes::from(v))
+}
+
+/// The page showing the stream: its two queues, and whether it takes timed video (kind 7).
 struct Viewer {
     id: u64,
     video: mpsc::Sender<Message>,
     ctl: mpsc::Sender<Message>,
+    timing: bool,
 }
 
 /// The one running session.
@@ -422,8 +448,13 @@ impl Live {
         self.viewer.lock().ok()?.as_ref().map(|v| v.ctl.clone())
     }
 
-    fn video_tx(&self) -> Option<mpsc::Sender<Message>> {
-        self.viewer.lock().ok()?.as_ref().map(|v| v.video.clone())
+    /// The page's video queue, and whether it takes timed video.
+    fn video_tx(&self) -> Option<(mpsc::Sender<Message>, bool)> {
+        self.viewer
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|v| (v.video.clone(), v.timing))
     }
 
     fn send_ctl(&self, m: Message) {
@@ -433,7 +464,12 @@ impl Live {
     }
 
     /// Show the stream on a new page; the page it was on is told it moved.
-    fn attach(&self, video: mpsc::Sender<Message>, ctl: mpsc::Sender<Message>) -> u64 {
+    fn attach(
+        &self,
+        video: mpsc::Sender<Message>,
+        ctl: mpsc::Sender<Message>,
+        timing: bool,
+    ) -> u64 {
         let id = self.next_viewer.fetch_add(1, Ordering::Relaxed);
         // The new page starts from the codec headers and the next keyframe.
         if let Some(h) = self.video_header.lock().ok().and_then(|g| g.clone()) {
@@ -449,11 +485,14 @@ impl Live {
         }
         self.need_key.store(true, Ordering::Relaxed);
         self.want_key.store(true, Ordering::Relaxed);
-        let old = self
-            .viewer
-            .lock()
-            .ok()
-            .and_then(|mut g| g.replace(Viewer { id, video, ctl }));
+        let old = self.viewer.lock().ok().and_then(|mut g| {
+            g.replace(Viewer {
+                id,
+                video,
+                ctl,
+                timing,
+            })
+        });
         if let Some(old) = old {
             let _ = old
                 .ctl
@@ -539,6 +578,8 @@ impl StreamSink for Sink {
             live.to_spectators(0, au, false);
             return true;
         }
+        // When the engine had the frame whole, before any queue: the page's "net" stage.
+        let t_us = engine_us();
         let key = is_keyframe(au, live.hevc);
         live.record(
             crate::rp_replay::KIND_VIDEO,
@@ -547,7 +588,7 @@ impl StreamSink for Sink {
             au,
         );
         live.to_spectators(1, au, key);
-        let Some(tx) = live.video_tx() else {
+        let Some((tx, timing)) = live.video_tx() else {
             return true; // nobody watching: the session waits for a page
         };
         if live.need_key.load(Ordering::Relaxed) {
@@ -557,7 +598,12 @@ impl StreamSink for Sink {
             }
             live.need_key.store(false, Ordering::Relaxed);
         }
-        if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(bin(1, au)) {
+        let m = if timing {
+            bin_timed(t_us, au)
+        } else {
+            bin(1, au)
+        };
+        if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(m) {
             // The page is behind: skip to the next keyframe rather than queue.
             live.dropped.fetch_add(1, Ordering::Relaxed);
             live.need_key.store(true, Ordering::Relaxed);
@@ -655,6 +701,8 @@ fn error_status(e: &anyhow::Error) -> serde_json::Value {
         None if text.contains("refused the control session") => ("keys", None),
         // Session init answers 80108b12 while the console's own Remote Play switch is off.
         None if text.contains("80108b12") => ("rp_off", None),
+        // Any other refusal at session init: a code nobody has explained yet (80108b26, …).
+        None if text.contains("session init refused") => ("refused", None),
         None if text.contains("did not wake") => ("wake_failed", None),
         None if text.contains("login passcode") => ("passcode", None),
         None if text.contains("Nagare") || text.contains("AvCap") => ("video_refused", None),
@@ -902,7 +950,7 @@ async fn session(mut socket: WebSocket) {
     // Pongs go on this page's own status queue, behind what is already there,
     // so the time measured is the time the page's messages really take.
     let pong_tx = ctl_tx.clone();
-    let id = live.attach(video_tx, ctl_tx);
+    let id = live.attach(video_tx, ctl_tx, start.timing);
 
     let mut reason = "ended";
     loop {
@@ -1048,7 +1096,12 @@ mod tests {
     fn a_ping_is_answered_with_its_own_value() {
         let m: ClientMsg = serde_json::from_str(r#"{"ping": 1234.5}"#).unwrap();
         match pong(&m) {
-            Some(Message::Text(t)) => assert_eq!(t.as_str(), r#"{"pong":1234.5}"#),
+            Some(Message::Text(t)) => {
+                let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+                assert_eq!(v["pong"], 1234.5);
+                // The engine's clock, for the page to line its own up with.
+                assert!(v["engine_us"].is_u64());
+            }
             other => panic!("no pong: {other:?}"),
         }
         let pad: ClientMsg = serde_json::from_str(r#"{"keyframe": true}"#).unwrap();
@@ -1093,12 +1146,53 @@ mod tests {
     fn remote_play_switched_off_has_its_own_code() {
         let e = anyhow::anyhow!("session init refused (HTTP 403): 80108b12");
         assert_eq!(error_status(&e)["code"], "rp_off");
+        let e = anyhow::anyhow!("session init refused (HTTP 403): 80108b26");
+        assert_eq!(error_status(&e)["code"], "refused");
     }
 
     #[test]
     fn a_panic_has_its_message() {
         let p = std::panic::catch_unwind(|| panic!("index out of bounds")).unwrap_err();
         assert_eq!(panic_text(&p), "index out of bounds");
+    }
+
+    #[test]
+    fn a_page_that_asks_for_timing_gets_kind_7_and_watchers_still_get_kind_1() {
+        let live = Arc::new(Live::new("h".into(), false, DEFAULT_KEEP_ALIVE));
+        let mut sink = Sink {
+            live: live.clone(),
+            t0: Instant::now(),
+        };
+        let (vt, mut vr, ct, _cr) = page();
+        live.attach(vt, ct, true);
+        let (st, mut sr) = mpsc::channel(8);
+        live.spectators.lock().unwrap().push(Spectator {
+            id: 9,
+            tx: st,
+            need_key: false,
+        });
+        let before = engine_us();
+        assert!(sink.video(KEY, false));
+        let after = engine_us();
+        let Ok(Message::Binary(b)) = vr.try_recv() else {
+            panic!("no video");
+        };
+        assert_eq!(b[0], KIND_VIDEO_TIMED);
+        let t = u64::from_be_bytes(b[1..9].try_into().unwrap());
+        assert!((before..=after).contains(&t));
+        assert_eq!(&b[9..], KEY);
+        let Ok(Message::Binary(w)) = sr.try_recv() else {
+            panic!("no watcher video");
+        };
+        assert_eq!(w[0], 1);
+        assert_eq!(&w[1..], KEY);
+
+        // A page that did not ask (an older one) gets kind 1 as before.
+        let (vt, mut vr, ct, _cr) = page();
+        live.attach(vt, ct, false);
+        live.need_key.store(false, Ordering::Relaxed);
+        assert!(sink.video(KEY, false));
+        assert_eq!(kinds(&mut vr), ["bin1"]);
     }
 
     #[test]
@@ -1115,7 +1209,7 @@ mod tests {
         sink.progress(Progress::FirstFrame(7));
 
         let (vt, mut vr, ct, mut cr) = page();
-        live.attach(vt, ct);
+        live.attach(vt, ct, false);
         let ctl = kinds(&mut cr);
         assert_eq!(&ctl[..2], ["bin0", "bin3"]);
         assert!(ctl[2].contains("first_frame"));
@@ -1131,9 +1225,9 @@ mod tests {
     fn a_second_page_takes_the_stream_and_the_first_is_told() {
         let live = Live::new("h".into(), false, DEFAULT_KEEP_ALIVE);
         let (vt, _vr, ct, mut cr) = page();
-        let first = live.attach(vt, ct);
+        let first = live.attach(vt, ct, false);
         let (vt2, _vr2, ct2, _cr2) = page();
-        live.attach(vt2, ct2);
+        live.attach(vt2, ct2, false);
         assert!(kinds(&mut cr).iter().any(|m| m.contains("moved")));
         // The first page leaving afterwards does not detach the second.
         live.detach(first);
@@ -1148,7 +1242,7 @@ mod tests {
             t0: Instant::now(),
         };
         let (vt, _vr, ct, mut cr) = page();
-        live.attach(vt, ct);
+        live.attach(vt, ct, false);
         let _ = kinds(&mut cr);
         sink.trigger_effects((0x21, [1; 10]), (0x05, [0; 10]));
         sink.dualsense_intensity(1, 2);
@@ -1177,7 +1271,7 @@ mod tests {
             t0: Instant::now(),
         };
         let (vt, _vr, ct, _cr) = page();
-        let id = live.attach(vt, ct);
+        let id = live.attach(vt, ct, false);
         assert!(!sink.stopped());
         live.detach(id);
         assert_eq!(sink.input(), Some(ControllerState::default()));
@@ -1194,7 +1288,7 @@ mod tests {
             t0: Instant::now(),
         };
         let (vt, _vr, ct, _cr) = page();
-        let first = live.attach(vt, ct);
+        let first = live.attach(vt, ct, false);
         // Frames before the mic is on are dropped.
         live.mic_frame(first, &[1; 40]);
         assert_eq!(sink.mic(), None);
@@ -1206,7 +1300,7 @@ mod tests {
         assert_eq!(sink.mic(), None);
         // Another page takes over: the mic goes off, the old page is ignored.
         let (vt2, _vr2, ct2, _cr2) = page();
-        let second = live.attach(vt2, ct2);
+        let second = live.attach(vt2, ct2, false);
         assert_eq!(sink.mic(), Some(MicInput::Off));
         live.set_mic(first, true);
         live.mic_frame(first, &[3; 40]);
@@ -1234,7 +1328,7 @@ mod tests {
             t0: Instant::now(),
         };
         let (vt, _vr, ct, _cr) = page();
-        let id = live.attach(vt, ct);
+        let id = live.attach(vt, ct, false);
         live.set_mic(id, true);
         live.mic_frame(id, &[1; 40]);
         assert_eq!(sink.mic(), None);
@@ -1251,7 +1345,7 @@ mod tests {
             t0: Instant::now(),
         };
         let (vt, mut vr, ct, _cr) = page();
-        live.attach(vt, ct);
+        live.attach(vt, ct, false);
         sink.wants_keyframe();
         sink.video(KEY, false);
         for _ in 0..VIDEO_QUEUE + 3 {

@@ -259,7 +259,12 @@ impl Takion {
         .parse()
         .unwrap();
         let sock = UdpSocket::bind(bind).context("binding the stream socket")?;
-        set_recv_buffer(&sock, 4 << 20);
+        let granted = set_recv_buffer(&sock, RECV_BUFFER);
+        crate::core_log!(
+            "rp_stream: UDP receive buffer {} KiB asked, {} granted",
+            RECV_BUFFER >> 10,
+            granted.map_or("none reported".to_string(), |g| format!("{} KiB", g >> 10))
+        );
         sock.connect(addr).context("connecting the stream socket")?;
         let mut tag = [0u8; 4];
         getrandom::fill(&mut tag).map_err(|e| anyhow!("random: {e}"))?;
@@ -816,16 +821,52 @@ fn parse_av_v12(buf: &[u8], key_state: &mut KeyState) -> Option<AvPacket> {
     })
 }
 
-/// A big receive buffer: a keyframe arrives as a burst of hundreds of packets, and Windows
-/// gives a UDP socket 64 KiB by default (this was set on Unix only, so Windows lost keyframe
-/// packets). Best effort: the OS may cap it.
-fn set_recv_buffer(sock: &UdpSocket, bytes: usize) {
-    let _ = socket2::SockRef::from(sock).set_recv_buffer_size(bytes);
+/// The receive buffer asked for: a 4K keyframe is a burst of hundreds of packets.
+const RECV_BUFFER: usize = 4 << 20;
+/// Below this a refused size is not halved further: the OS default is kept.
+const RECV_BUFFER_MIN: usize = 256 << 10;
+
+/// A big receive buffer: a keyframe arrives as a burst of hundreds of packets, and the defaults
+/// are small (64 KiB on Windows, ~200 KiB on Linux, ~768 KiB on macOS). Best effort on every OS:
+/// Linux caps it silently at net.core.rmem_max, and macOS refuses a size above
+/// kern.ipc.maxsockbuf outright, so a refused size is halved and asked again. Returns the size
+/// the OS reports (Linux reports twice what it keeps for its own bookkeeping), never an error.
+fn set_recv_buffer(sock: &UdpSocket, bytes: usize) -> Option<usize> {
+    let s = socket2::SockRef::from(sock);
+    for size in halvings(bytes, RECV_BUFFER_MIN) {
+        if s.set_recv_buffer_size(size).is_ok() {
+            break;
+        }
+    }
+    s.recv_buffer_size().ok()
+}
+
+/// `from`, then half of it, and so on while at least `min`.
+fn halvings(from: usize, min: usize) -> impl Iterator<Item = usize> {
+    std::iter::successors(Some(from), |&n| Some(n / 2)).take_while(move |&n| n >= min.max(1))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_receive_buffer_is_asked_again_at_half() {
+        assert_eq!(
+            halvings(4 << 20, 256 << 10).collect::<Vec<_>>(),
+            [4 << 20, 2 << 20, 1 << 20, 512 << 10, 256 << 10]
+        );
+        assert_eq!(halvings(100, 256).count(), 0);
+    }
+
+    #[test]
+    fn the_receive_buffer_is_raised_on_this_os() {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let before = socket2::SockRef::from(&sock).recv_buffer_size().unwrap();
+        let granted = set_recv_buffer(&sock, RECV_BUFFER).expect("a size is reported");
+        // Whatever the OS caps it at, never smaller than it was, and never an error.
+        assert!(granted >= before, "{granted} < {before}");
+    }
 
     fn buffer_with(seqs: &[u32], now: Instant) -> SendBuffer {
         let mut b = SendBuffer::default();
