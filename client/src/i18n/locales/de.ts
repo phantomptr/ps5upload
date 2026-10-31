@@ -6295,6 +6295,8 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_capture_pointer": "Klick ins Bild blendet den Zeiger aus",
 "rp_capture_pointer_hint": "Esc zeigt ihn wieder.",
 "rp_rumble": "Controller-Vibration",
+"rp_dualsense": "DualSense-Effekte",
+"rp_dualsense_hint": "Mit einem DualSense an diesem Computer: adaptive Trigger und, per USB angeschlossen, haptisches Feedback. Gilt ab dem nächsten Start.",
 "rp_mic_setting": "Mikrofon (experimentell)",
 "rp_mic_setting_hint": "Fügt eine Mikrofontaste für Sprachchat hinzu. Gilt ab dem nächsten Start.",
 "rp_touch_controls": "Bildschirm-Controller",

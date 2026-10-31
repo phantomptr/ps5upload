@@ -6287,6 +6287,8 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "rp_capture_pointer": "النقر على الصورة يُخفي المؤشر",
 "rp_capture_pointer_hint": "Esc يُظهره مجددًا.",
 "rp_rumble": "اهتزاز وحدة التحكم",
+"rp_dualsense": "تأثيرات DualSense",
+"rp_dualsense_hint": "مع توصيل DualSense بهذا الكمبيوتر: محفزات تكيفية، واستجابة لمسية عند توصيله عبر USB. يُطبَّق من البدء التالي.",
 "rp_mic_setting": "الميكروفون (تجريبي)",
 "rp_mic_setting_hint": "يضيف زر ميكروفون للدردشة الصوتية. يسري من التشغيل التالي.",
 "rp_touch_controls": "وحدة تحكم على الشاشة",

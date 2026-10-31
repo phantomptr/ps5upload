@@ -70,6 +70,7 @@ import { MicBarButton, MicSetting } from "./MicControl";
 import { fitName, PlayMenu, VolumeSlider } from "./PlayMenu";
 import { rpBrowserAdvice } from "./browserAdvice";
 import { askMotion, motionAvailable, startMotion } from "../../lib/motion";
+import { dualSenseCapable } from "../../lib/dualSense";
 import { ControllerSetup } from "./ControllerSetup";
 import { connectWebHidTouchpad, webHidTouchpadAvailable, webHidTouchpadConnected } from "../../lib/padTouchpad";
 import { PadAsks, PhonePadsPanel, usePadLink } from "./PhonePads";
@@ -698,6 +699,18 @@ function SettingsPanel({ running }: { running: boolean }) {
           onChange={(v) => setPrefs({ rumble: v })}
           label={tr("rp_rumble", undefined, "Controller vibration")}
         />
+        {dualSenseCapable() && (
+          <Toggle
+            checked={prefs.dualSense}
+            onChange={(v) => setPrefs({ dualSense: v })}
+            label={tr("rp_dualsense", undefined, "DualSense effects")}
+            hint={tr(
+              "rp_dualsense_hint",
+              undefined,
+              "With a DualSense connected to this computer: adaptive triggers, and haptics when it is plugged in with USB. Applies from the next start.",
+            )}
+          />
+        )}
         {motionAvailable() && typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches && (
           <Toggle
             checked={prefs.motion}

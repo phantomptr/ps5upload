@@ -6535,6 +6535,8 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_capture_pointer": "Kliknięcie obrazu ukrywa wskaźnik",
 "rp_capture_pointer_hint": "Esc pokazuje go ponownie.",
 "rp_rumble": "Wibracje kontrolera",
+"rp_dualsense": "Efekty DualSense",
+"rp_dualsense_hint": "Z kontrolerem DualSense podłączonym do tego komputera: adaptacyjne triggery, a po podłączeniu przez USB także haptyka. Działa od następnego uruchomienia.",
 "rp_mic_setting": "Mikrofon (eksperymentalny)",
 "rp_mic_setting_hint": "Dodaje przycisk mikrofonu do czatu głosowego. Działa od następnego startu.",
 "rp_touch_controls": "Kontroler na ekranie",

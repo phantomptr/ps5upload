@@ -23,7 +23,8 @@ import { gamepadsOf } from "../lib/nativePad";
 import { profileFor } from "../lib/padProfiles";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { setGameMode } from "../lib/gameMode";
-import { padTouchState, setPadTouchpad } from "../lib/padTouchpad";
+import { padMotion, padTouchState, setPadTouchpad } from "../lib/padTouchpad";
+import { DualSenseEffects, dualSenseCapable, findDualSense } from "../lib/dualSense";
 import { applyControls } from "../lib/gameControls";
 import { DEFAULT_PICTURE, readPicture, type PictureTools } from "../lib/rpPicture";
 import { pushNotification } from "./notifications";
@@ -55,6 +56,9 @@ export interface RpPrefs {
   touchSize: "s" | "m" | "l";
   /** A phone's motion sensors as the controller's (gyro aiming, tilt). */
   motion: boolean;
+  /** A DualSense on this computer gets the console's adaptive triggers and haptics (sessions
+   *  start in DualSense mode, lib/dualSense.ts). Off, sessions start as before. */
+  dualSense: boolean;
   /** Least delay: the smallest sound buffer and short picture queues (more dropped frames on a
    *  busy network). */
   lowLatency: boolean;
@@ -93,6 +97,7 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   touchOpacity: 1,
   touchSize: "m",
   motion: false,
+  dualSense: true,
   lowLatency: false,
   autoQuality: true,
   mic: false,
@@ -210,7 +215,8 @@ function readPad(): PadState {
   const merged = {
     ...mergePads(mergePads(keys, pads), rpInput.touchPad),
     touch: rpInput.touch ?? pt?.touch ?? rpInput.touchPad.touch ?? null,
-    motion: rpInput.motion,
+    // A phone's motion, else a DualSense's (read with its touchpad, same rule).
+    motion: rpInput.motion ?? (live ? padMotion() : null),
   };
   if (pt?.click) merged.buttons |= PadButton.TOUCHPAD;
   // The running game's turbo, mouse aim and macros (Game panel › Controls).
@@ -236,6 +242,15 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
     if (cur && cur.currentPhase !== "ended") return;
     const { prefs } = get();
     const [width, height] = prefs.res.split("x").map(Number);
+    // A DualSense here: the session starts in DualSense mode (triggers and haptics). Only the
+    // desktop app looks (and only it waits for the answer).
+    const ds = prefs.dualSense && dualSenseCapable() ? await findDualSense() : null;
+    // Started meanwhile (a second tap while the controller was looked for).
+    const now = get().stream;
+    if (now && now.currentPhase !== "ended") return;
+    const dualSense = ds
+      ? new DualSenseEffects(ds, (strong, weak) => get().stream?.vibrate(strong, weak))
+      : undefined;
     const stream: RemotePlayStream = new RemotePlayStream({
       host: t.host,
       registKey: t.registKey,
@@ -249,6 +264,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       attach: opts?.attach,
       fit: prefs.fit,
       mic: prefs.mic,
+      dualSense,
       replayS: prefs.replayS,
       picture: prefs.picture,
       decoding: prefs.decoding,
@@ -265,6 +281,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
         if (get().stream !== stream) return;
         set({ phase: p });
         if (p === "ended") {
+          dualSense?.stop();
           rpInput.held.clear();
           set({ stream: null, light: null });
         }

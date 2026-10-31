@@ -6593,6 +6593,8 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_capture_pointer": "A képre kattintás elrejti a mutatót",
 "rp_capture_pointer_hint": "Az Esc újra megjeleníti.",
 "rp_rumble": "Kontroller rezgése",
+"rp_dualsense": "DualSense-effektek",
+"rp_dualsense_hint": "A számítógéphez csatlakoztatott DualSense-szel: adaptív ravaszok, USB-n csatlakoztatva haptikus visszajelzés is. A következő indítástól érvényes.",
 "rp_mic_setting": "Mikrofon (kísérleti)",
 "rp_mic_setting_hint": "Mikrofon gombot ad a hangcsevegéshez. A következő indítástól érvényes.",
 "rp_touch_controls": "Képernyős kontroller",

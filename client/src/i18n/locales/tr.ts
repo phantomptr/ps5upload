@@ -6294,6 +6294,8 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_capture_pointer": "Görüntüye tıklamak imleci gizler",
 "rp_capture_pointer_hint": "Esc tekrar gösterir.",
 "rp_rumble": "Kumanda titreşimi",
+"rp_dualsense": "DualSense efektleri",
+"rp_dualsense_hint": "Bu bilgisayara bağlı bir DualSense ile: uyarlanabilir tetikler ve USB ile takılıyken dokunsal geri bildirim. Bir sonraki başlatmadan itibaren geçerlidir.",
 "rp_mic_setting": "Mikrofon (deneysel)",
 "rp_mic_setting_hint": "Sesli sohbet için bir mikrofon düğmesi ekler. Sonraki başlatmadan itibaren geçerli.",
 "rp_touch_controls": "Ekran kumandası",

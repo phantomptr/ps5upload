@@ -7,6 +7,7 @@
 
 import { DEFAULT_PICTURE, PicturePass, cropRect, needsPass, upscaleSize, upscales, type PictureTools } from "./rpPicture";
 import type { MotionReading } from "./motion";
+import type { DualSenseSink } from "./dualSense";
 import { getEngineUrl } from "../state/engine";
 import { log } from "../state/logs";
 import { spsVisibleRect, visibleFix, type VisibleRect } from "./rpSps";
@@ -425,6 +426,9 @@ export interface StreamOptions {
   mic?: boolean;
   /** Instant replay window in seconds (15/30/60), 0 = off. */
   replayS?: number;
+  /** A DualSense is attached (desktop app): start the session in DualSense mode and hand its
+   *  trigger effects and haptics here (lib/dualSense.ts). Absent, the session is as before. */
+  dualSense?: DualSenseSink;
   /** Picture tools to start with (rpPicture.ts). */
   picture?: PictureTools;
   /** "software": never the hardware decoder (Settings › Video decoding). */
@@ -904,6 +908,7 @@ export class RemotePlayStream {
           attach_only: attachOnly,
           low_latency: !!this.o.lowLatency,
           ...(this.o.mic ? { mic: true } : {}),
+          ...(this.o.dualSense ? { dualsense: true } : {}),
           ...(this.replayS ? { replay_s: this.replayS } : {}),
         }),
       );
@@ -917,6 +922,7 @@ export class RemotePlayStream {
       const kind = b[0];
       const payload = b.subarray(1);
       if (kind <= 1) this.onVideo(kind, payload);
+      else if (kind === 6) this.o.dualSense?.haptics(payload);
       else this.onAudio(kind, payload);
     };
     // What a close means is decided in onclose; an error alone says nothing more.
@@ -1076,6 +1082,13 @@ export class RemotePlayStream {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ mic: on }));
   }
 
+  /** Rumble on the controllers like the console's own (not when vibration is off in Settings):
+   *  a DualSense's haptics where they cannot be played (lib/dualSense.ts). */
+  vibrate(strong: number, weak: number): void {
+    if (this.o.rumble && !this.o.rumble()) return;
+    playRumble(this.o.gamepads?.() ?? navigator.getGamepads?.() ?? [], strong, weak);
+  }
+
   /** One `[5][Opus packet]` mic frame; dropped while the socket is down. */
   sendMicFrame(msg: Uint8Array<ArrayBuffer>): void {
     const ws = this.ws;
@@ -1142,6 +1155,8 @@ export class RemotePlayStream {
       rumble?: [number, number];
       light?: [number, number, number];
       pong?: unknown;
+      triggers?: { left: number[]; right: number[] };
+      ds_intensity?: [number, number];
     };
     try {
       s = JSON.parse(text);
@@ -1159,6 +1174,14 @@ export class RemotePlayStream {
     }
     if (s.light) {
       this.o.onLight?.(s.light);
+      return;
+    }
+    if (s.triggers) {
+      this.o.dualSense?.triggers(s.triggers.left, s.triggers.right);
+      return;
+    }
+    if (s.ds_intensity) {
+      this.o.dualSense?.intensity(s.ds_intensity[0], s.ds_intensity[1]);
       return;
     }
     switch (s.stage) {

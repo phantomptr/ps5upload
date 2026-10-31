@@ -6289,6 +6289,8 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_capture_pointer": "Nhấp vào hình sẽ ẩn con trỏ",
 "rp_capture_pointer_hint": "Esc để hiện lại.",
 "rp_rumble": "Rung tay cầm",
+"rp_dualsense": "Hiệu ứng DualSense",
+"rp_dualsense_hint": "Khi DualSense được kết nối với máy tính này: cò thích ứng, và phản hồi xúc giác khi cắm bằng USB. Áp dụng từ lần bắt đầu tiếp theo.",
 "rp_mic_setting": "Micrô (thử nghiệm)",
 "rp_mic_setting_hint": "Thêm nút micrô để trò chuyện bằng giọng nói. Áp dụng từ lần bắt đầu tiếp theo.",
 "rp_touch_controls": "Tay cầm trên màn hình",

@@ -6240,6 +6240,8 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_capture_pointer": "Fare clic sull'immagine nasconde il puntatore",
 "rp_capture_pointer_hint": "Esc lo mostra di nuovo.",
 "rp_rumble": "Vibrazione del controller",
+"rp_dualsense": "Effetti DualSense",
+"rp_dualsense_hint": "Con un DualSense collegato a questo computer: grilletti adattivi e, collegato via USB, feedback aptico. Vale dal prossimo avvio.",
 "rp_mic_setting": "Microfono (sperimentale)",
 "rp_mic_setting_hint": "Aggiunge un pulsante microfono per la chat vocale. Vale dal prossimo avvio.",
 "rp_touch_controls": "Controller su schermo",

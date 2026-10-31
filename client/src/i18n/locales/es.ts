@@ -6240,6 +6240,8 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_capture_pointer": "Al hacer clic en la imagen se oculta el puntero",
 "rp_capture_pointer_hint": "Esc lo vuelve a mostrar.",
 "rp_rumble": "Vibración del mando",
+"rp_dualsense": "Efectos del DualSense",
+"rp_dualsense_hint": "Con un DualSense conectado a este ordenador: gatillos adaptativos y, conectado por USB, respuesta háptica. Se aplica desde el próximo inicio.",
 "rp_mic_setting": "Micrófono (experimental)",
 "rp_mic_setting_hint": "Añade un botón de micrófono para el chat de voz. Se aplica desde el próximo inicio.",
 "rp_touch_controls": "Mando en pantalla",

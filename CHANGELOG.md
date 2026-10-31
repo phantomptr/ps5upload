@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Play: a DualSense's adaptive triggers** (desktop app). With a DualSense connected to the
+  computer, the console is told it is one, and games set the triggers' resistance as on the PS5.
+  They are let go when the stream ends or the app quits. Settings › Controls › *DualSense effects*.
+- **Play: DualSense haptics over USB** (desktop app). PS5 games' haptics play on the controller
+  plugged in with a cable; over Bluetooth they become rumble instead. On a Mac, set the
+  controller to 4 channels in Audio MIDI Setup for haptics.
+- **Play: motion controls with a DualSense** (desktop app): its gyro and accelerometer reach the
+  console, for gyro aiming and tilt.
+
 ## 10.0.3
 
 - **Fixed: after waking the PS5 from rest mode, the app said the helper was down (#593)**, and
