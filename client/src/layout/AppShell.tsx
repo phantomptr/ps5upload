@@ -16,7 +16,7 @@ import { liveCopyDeps } from "../state/helperStoredCopiesRuntime";
 import { findStoredCopies, type StoredCopy } from "../lib/helperStoredCopies";
 import ConsoleTabs from "./ConsoleTabs";
 import ActivityBar from "./ActivityBar";
-import UpdateToast from "./UpdateToast";
+import UpdateToast, { WhatsNewOnLaunch } from "./UpdateToast";
 import { Button } from "../components/Button";
 import {
   useConnectionFrozen,
@@ -1723,6 +1723,8 @@ export default function AppShell() {
             {/* Slim, dismissible "update available" bar (the auto-check already
                 ran on mount). Pinned above the scroll area so it stays visible. */}
             <UpdateToast />
+            {/* The first launch of a new version: its release notes, once. */}
+            <WhatsNewOnLaunch />
             {/* Vertical scroll only. overflow-x-hidden is a backstop: the
                 index.css width safety net makes content fit, but this guarantees
                 the page can never scroll sideways. Nested blocks that are meant

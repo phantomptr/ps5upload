@@ -4915,6 +4915,9 @@ export interface UpdateDownload {
   install_command?: string;
   /** This copy can install the download and restart into it (`updateInstall`). */
   can_install?: boolean;
+  /** That install asks for the user's password (a Linux .deb / .rpm through pkexec): never
+   *  started on quit or by the automatic install. `install_command` is the fallback. */
+  needs_password?: boolean;
   /** The file matched the release's published SHA-256 (false: the release published none). */
   verified?: boolean;
 }
@@ -4952,6 +4955,13 @@ export async function updateDownload(
  *  a rejection means nothing changed. */
 export async function updateInstall(path: string): Promise<void> {
   return invoke<void>("update_install", { path });
+}
+
+/** Arm (a downloaded update's path) or disarm (null) installing it when the app quits,
+ *  without starting it again. Resolves whether it is armed: only an update this copy installs
+ *  without a password can be. */
+export async function updateInstallOnQuit(path: string | null): Promise<boolean> {
+  return invoke<boolean>("update_install_on_quit", { path });
 }
 
 /** Whether the console's loader on :9021 answers (`healthy`), took the connection and never

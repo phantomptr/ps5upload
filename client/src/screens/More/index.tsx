@@ -79,7 +79,10 @@ export default function MoreScreen() {
   }, []);
 
   const errorCount = useLogsStore((s) => s.errorCount);
-  const updateAvailable = useUpdateStore((s) => s.phase.kind === "available");
+  const updateAvailable = useUpdateStore(
+    // Not for a version the user skipped.
+    (s) => s.phase.kind === "available" && s.phase.result.latest_version !== s.skippedVersion,
+  );
   const betaEnabled = useBetaFeaturesStore((s) => s.enabled);
 
   const visible = useMemo(
