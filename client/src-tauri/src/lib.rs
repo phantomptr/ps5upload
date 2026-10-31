@@ -612,6 +612,8 @@ pub fn run() {
             commands::pad_dualsense_reset,
             commands::pad_haptics_set,
             commands::pad_haptics_push,
+            // Linux: controllers read natively (WebKitGTK without libmanette sees none).
+            commands::pad_native_start,
             commands::user_config_load, // ~/.ps5upload/settings.json read
             commands::user_config_save, // ~/.ps5upload/settings.json atomic write
             commands::user_config_path_resolved, // show-the-path for the Settings UI
@@ -710,6 +712,7 @@ pub fn run() {
             // here after "Install and restart"). Past the limit the children are killed.
             // A DualSense left with a game's trigger resistance: let it go.
             commands::pad_touchpad_stop_on_exit();
+            commands::pad_native_stop_on_exit();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             exit_guard::set_exiting();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]

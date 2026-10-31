@@ -170,6 +170,10 @@ block2 = "0.6"
 # (notify-rust), default features and all, so this adds no new crate.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5"
+# Linux: game controllers read from /dev/input (commands/pad_native.rs), for a WebKitGTK built
+# without libmanette, whose Gamepad API sees none. Pure Rust (ioctls through nix), no system
+# library to build or run. MIT OR Apache-2.0.
+evdev = "0.13"
 
 [features]
 # Default: build Tauri-native (no custom features yet)
