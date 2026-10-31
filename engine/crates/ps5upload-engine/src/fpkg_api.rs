@@ -150,6 +150,34 @@ fn min_firmware_of(source: &Path, declared: Option<&str>) -> Option<String> {
 
 /// POST /api/fpkg/inspect — what the source is, whether it looks convertible, and what it
 /// will cost. Synchronous: a walk is fast even for a 286,000-file mount.
+/// Whether a game folder carries its title's parameters: sce_sys/param.json (PS5) or
+/// sce_sys/param.sfo (PS4).
+async fn has_title_param(dir: &Path) -> bool {
+    for name in ["param.json", "param.sfo"] {
+        if tokio::fs::metadata(dir.join("sce_sys").join(name))
+            .await
+            .is_ok_and(|m| m.is_file())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Why a folder without its title's parameters can't be converted, and the usual cause.
+fn missing_param_message(dir: &Path, package: bool) -> String {
+    let what = if package {
+        "sce_sys/param.json"
+    } else {
+        "sce_sys/param.json (or a PS4 game's param.sfo)"
+    };
+    format!(
+        "{} has no {what}, so it is not a complete game dump. Pick the game's own folder, the \
+         one with eboot.bin and sce_sys in it; if that is this folder, the dump is missing files.",
+        dir.display()
+    )
+}
+
 pub(crate) async fn fpkg_inspect_handler(
     State(_): State<AppState>,
     Json(req): Json<InspectReq>,
@@ -284,6 +312,20 @@ pub(crate) async fn fpkg_build_handler(
             }
         }
     };
+
+    // Without param.json there is no PS5 title to package (#596): the build would stop at the
+    // content id, or, given one, write a package the console cannot launch.
+    if inspection
+        .checks
+        .iter()
+        .any(|c| c.name == "param.json present" && !c.ok)
+    {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            missing_param_message(&source_path, true),
+        )
+        .into_response();
+    }
 
     // The file this build writes: a leftover of an interrupted one goes, and this one is
     // marked as being written until the build ends. Claimed before the job exists, so a
@@ -922,6 +964,15 @@ pub(crate) async fn exfat_build_handler(
         return json_err(
             StatusCode::BAD_REQUEST,
             format!("{} is not a game folder or image", source.display()),
+        )
+        .into_response();
+    }
+    // A folder on this computer has to be a game: param.json (PS5) or param.sfo (PS4) in its
+    // sce_sys (#596). Otherwise any folder became an image that mounts but never launches.
+    if !remote && !image_file && !has_title_param(&source).await {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            missing_param_message(&source, false),
         )
         .into_response();
     }
@@ -2419,5 +2470,31 @@ mod panic_tests {
         drop(unpacking);
         assert!(dest.exists());
         let _ = std::fs::remove_dir_all(&dest);
+    }
+}
+
+#[cfg(test)]
+mod title_param_tests {
+    use super::*;
+
+    /// A folder converts only with its title's parameters (#596): PS5 param.json or PS4
+    /// param.sfo in sce_sys.
+    #[tokio::test]
+    async fn a_folder_needs_param_json_or_param_sfo() {
+        let dir = std::env::temp_dir().join(format!("fpkg-param-{}", std::process::id()));
+        let sys = dir.join("sce_sys");
+        std::fs::create_dir_all(&sys).unwrap();
+        std::fs::write(dir.join("eboot.bin"), b"x").unwrap();
+        assert!(!has_title_param(&dir).await);
+        std::fs::write(sys.join("param.sfo"), b"x").unwrap();
+        assert!(has_title_param(&dir).await);
+        std::fs::remove_file(sys.join("param.sfo")).unwrap();
+        std::fs::write(sys.join("param.json"), b"{}").unwrap();
+        assert!(has_title_param(&dir).await);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let msg = missing_param_message(Path::new("/games/Foo"), true);
+        assert!(msg.contains("sce_sys/param.json") && msg.contains("eboot.bin"));
+        assert!(missing_param_message(Path::new("/x"), false).contains("param.sfo"));
     }
 }
