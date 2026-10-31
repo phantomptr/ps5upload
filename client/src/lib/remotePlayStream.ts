@@ -586,7 +586,8 @@ export class RemotePlayStream {
   private loggedVisibleFix = false;
 
   /** The frame with the stream's own visible picture where the decoder reported a smaller one
-   *  (Microsoft Edge's hardware HEVC decoder, so the Windows app: the top-left of the picture
+   *  (hardware HEVC decoding in Chromium browsers on Windows: Edge, so the Windows app, and
+   *  Opera GX; the top-left of the picture
    *  showed enlarged and cut off, #538/#575). The new frame shares the decoded pixels; the
    *  original is closed. Any other frame comes back as it is. */
   private withRealVisibleRect(frame: VideoFrame): VideoFrame {

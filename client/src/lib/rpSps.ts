@@ -1,10 +1,11 @@
 // The picture's visible size, read from the stream's own sequence parameter set (SPS).
 //
-// Why: Microsoft Edge's hardware HEVC decoder on Windows (so the Windows app's WebView2) hands
-// out frames whose visibleRect and display size are smaller than the picture (1920×1080 coming
-// out as e.g. 1280×720), while the coded size is right. drawImage draws only the visibleRect,
+// Why: hardware HEVC decoding in Chromium browsers on Windows (seen in Edge, so the Windows
+// app's WebView2, and in Opera GX; it depends on the GPU and driver) hands out frames whose
+// visibleRect and display size are smaller than the picture (1920×1080 coming out as e.g.
+// 1280×720), while the coded size is right. drawImage draws only the visibleRect,
 // so the top-left part of the picture was shown enlarged and cut off, in every picture size.
-// Chrome reports the same stream correctly. The SPS says what the visible picture really is, so
+// Elsewhere the same stream is reported correctly. The SPS says what the visible picture really is, so
 // the frame can be rebuilt with it (see visibleFix).
 
 /** The visible part of the coded picture, in luma samples. */
