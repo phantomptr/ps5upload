@@ -35,7 +35,15 @@ const NP = (o: Partial<NpState> = {}): NpState => ({
   login_flag: null,
   ...o,
 });
-const base: SetupInput = { connected: true, readiness: R(), np: NP(), paired: false, restOk: false, played: false };
+const base: SetupInput = {
+  connected: true,
+  readiness: R(),
+  np: NP(),
+  paired: false,
+  restOk: false,
+  played: false,
+  blockers: [],
+};
 
 describe("Play setup", () => {
   it("starts at connecting, with everything after it waiting", () => {
@@ -71,7 +79,7 @@ describe("Play setup", () => {
     expect(nextStep(s)).toBe("play");
     s = setupStates({ ...base, restOk: true, paired: true, played: true });
     expect(nextStep(s)).toBeNull();
-    expect(setupProgress(s)).toEqual({ done: 8, total: 8 });
+    expect(setupProgress(s)).toEqual({ done: 9, total: 9 });
   });
 
   it("needs this user allowed on firmware that asks per user", () => {
@@ -83,6 +91,20 @@ describe("Play setup", () => {
   it("counts the service already on as signed in when the PSN state can't be read", () => {
     expect(setupStates({ ...base, np: null }).signin).toBe("ok");
     expect(setupStates({ ...base, np: null, readiness: R({ service_enabled: 0 }) }).signin).toBe("todo");
+  });
+
+  it("ticks No payload blocks Remote Play when Hush is off or not loaded", () => {
+    const done = { ...base, restOk: true, paired: true };
+    expect(setupStates(done).blockers).toBe("ok");
+    const s = setupStates({ ...done, blockers: ["hush"] });
+    expect(s.blockers).toBe("todo");
+    expect(nextStep(s)).toBe("blockers");
+    // Still ready to play: a blocker is paused at the start.
+    expect(playReady(s)).toBe(true);
+    // Unread, or no console: waiting.
+    expect(setupStates({ ...done, blockers: null }).blockers).toBe("wait");
+    expect(setupStates({ ...done, blockers: undefined }).blockers).toBe("wait");
+    expect(setupStates({ ...done, connected: false }).blockers).toBe("wait");
   });
 
   it("keeps pairing done while the console is away", () => {

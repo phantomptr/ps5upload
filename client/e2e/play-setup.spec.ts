@@ -9,6 +9,8 @@ interface Console {
   readiness: Record<string, unknown>;
   paired: number;
   enabled: string[];
+  /** Hush on the console: null = not there; else whether config.ini says enabled=1. */
+  hush: { enabled: boolean } | null;
 }
 
 /** A console part-way set up: the user signed in on an activated account, the offline sign-in
@@ -32,6 +34,7 @@ async function consoleHalfSetUp(page: Page, opts: { paired?: boolean } = {}): Pr
     },
     paired: 0,
     enabled: [],
+    hush: null,
   };
   await page.addInitScript(
     ([host, paired]) => {
@@ -65,6 +68,28 @@ async function consoleHalfSetUp(page: Page, opts: { paired?: boolean } = {}): Pr
       if (path === "/api/ps5/status") body = { ok: true };
       if (path === "/api/ps5/rp/session") body = { host: null };
       if (path === "/api/ps5/remoteplay/readiness") body = c.readiness;
+      // Hush's files and its process (elfldr lists it as payload.elf; pid.lock names it).
+      if (path === "/api/ps5/fs/read-preview") {
+        const file = (req.postDataJSON() as { path: string }).path;
+        const text =
+          c.hush && file === "/data/hush/config.ini"
+            ? `# hush\nenabled=${c.hush.enabled ? 1 : 0}\nmode=apply\n`
+            : c.hush && file === "/data/hush/pid.lock"
+              ? "142\n"
+              : null;
+        if (text === null) {
+          await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "not found" }) });
+          return;
+        }
+        body = { size: text.length, base64: Buffer.from(text).toString("base64") };
+      }
+      if (path === "/api/ps5/process/list")
+        body = {
+          truncated: false,
+          processes: c.hush
+            ? [{ pid: 142, name: "payload.elf", comm: "payload.elf", title_id: "", app_id: 0, memory_mib: 1, threads: 1, kind: "payload" }]
+            : [],
+        };
       if (path === "/api/ps5/remoteplay/enable") {
         const scope = (req.postDataJSON() as { scope: string }).scope;
         c.enabled.push(scope);
@@ -150,7 +175,7 @@ test("the checklist ticks steps by itself and does the ones it can", async ({ pa
   await expect(step("pair")).toHaveAttribute("data-state", "ok");
   expect(c.paired).toBe(1);
   await expect(step("play")).toHaveAttribute("data-state", "todo");
-  await expect(page.getByTestId("play-setup")).toContainText("7 of 8 done");
+  await expect(page.getByTestId("play-setup")).toContainText("8 of 9 done");
 
   // Home now offers Play itself (in-app navigation: a reload would rerun this test's setup).
   await page.getByRole("navigation").first().locator('a[href="/home"]').first().click();
@@ -167,6 +192,18 @@ test("a step ticks by itself when the console changes", async ({ page }) => {
   // Someone signs in on the console: the next read ticks it, no button pressed.
   c.readiness = { ...c.readiness, account_uid: 0x10000000 };
   await expect(user).toHaveAttribute("data-state", "ok", { timeout: 12_000 });
+});
+
+test("No payload blocks Remote Play ticks once Hush is off", async ({ page }) => {
+  const c = await consoleHalfSetUp(page, { paired: true });
+  c.hush = { enabled: true };
+  await page.goto("/play/setup", { waitUntil: "domcontentloaded" });
+  const step = page.locator('[data-step="blockers"]');
+  await expect(step).toHaveAttribute("data-state", "todo", { timeout: 30_000 });
+  await expect(step).toContainText("No payload blocks Remote Play");
+  // Hush switched off (its card, or by hand): the next read ticks it.
+  c.hush = { enabled: false };
+  await expect(step).toHaveAttribute("data-state", "ok", { timeout: 12_000 });
 });
 
 test("Home's Play card can be hidden, and comes back from Play › Set up", async ({ page }) => {

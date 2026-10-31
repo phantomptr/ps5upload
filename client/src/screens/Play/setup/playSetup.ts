@@ -4,7 +4,16 @@
 
 import type { NpState, RemotePlayReadiness } from "../../../api/ps5";
 
-export type SetupKey = "connect" | "user" | "account" | "signin" | "service" | "rest" | "pair" | "play";
+export type SetupKey =
+  | "connect"
+  | "user"
+  | "account"
+  | "signin"
+  | "service"
+  | "rest"
+  | "pair"
+  | "blockers"
+  | "play";
 
 /** ok: done. todo: the next thing to do here. wait: can't be checked or done until an earlier
  *  step is. manual: only the console can show it; the user ticks it. */
@@ -18,6 +27,7 @@ export const SETUP_ORDER: readonly SetupKey[] = [
   "service",
   "rest",
   "pair",
+  "blockers",
   "play",
 ];
 
@@ -34,6 +44,9 @@ export interface SetupInput {
   restOk: boolean;
   /** A picture has come through from this console. */
   played: boolean;
+  /** Payloads on the console that block Remote Play's picture (lib/rpBlockers.ts), or null
+   *  while unread. */
+  blockers?: readonly string[] | null;
 }
 
 export function setupStates(i: SetupInput): Record<SetupKey, SetupState> {
@@ -55,8 +68,10 @@ export function setupStates(i: SetupInput): Record<SetupKey, SetupState> {
   const rest: SetupState = i.restOk ? "ok" : "manual";
   // Pairing needs the service on; keys kept from before still count when the console is away.
   const pair: SetupState = i.paired ? "ok" : service === "ok" ? "todo" : "wait";
+  // No payload in the way (Hush off or not loaded): read on its own, whatever the steps above.
+  const blockers: SetupState = !i.connected || i.blockers == null ? "wait" : i.blockers.length ? "todo" : "ok";
   const play: SetupState = i.played ? "ok" : pair === "ok" ? "todo" : "wait";
-  return { connect, user, account, signin, service, rest, pair, play };
+  return { connect, user, account, signin, service, rest, pair, blockers, play };
 }
 
 /** The step to open: the first one that is not done (a manual one counts as not done). */
