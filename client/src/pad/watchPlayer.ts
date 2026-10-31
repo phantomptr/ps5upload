@@ -5,7 +5,7 @@
 
 import { avcDescription, lengthPrefixed, opusInit, opusSamples, opusSegment, videoInit, videoSegment } from "../lib/fmp4";
 import { avcCodecString, isKeyframe, supportedHevc } from "../lib/rpCodec";
-import { spsVisibleRect } from "../lib/rpSps";
+import { hevcCodecString, spsVisibleRect } from "../lib/rpSps";
 
 export type WatchProblem = "no_hevc" | "decode";
 
@@ -70,7 +70,7 @@ export class WatchPlayer {
     if (this.opening) return;
     this.opening = true;
     try {
-      const codec = this.hevc ? await supportedHevc(1920, 1080) : avcCodecString(header);
+      const codec = this.hevc ? await hevcFor(header) : avcCodecString(header);
       if (!codec) {
         this.onProblem("no_hevc");
         return;
@@ -411,4 +411,19 @@ export class MsePlayer {
     this.video.close();
     this.audio.close();
   }
+}
+
+/** The HEVC codec string for this stream: the one its parameter sets name (HDR sessions send
+ *  10-bit Main10, which the plain Main strings do not decode), else the first Main one this
+ *  browser decodes. */
+async function hevcFor(header: Uint8Array): Promise<string | null> {
+  const own = hevcCodecString(header);
+  if (own && typeof VideoDecoder !== "undefined") {
+    try {
+      if ((await VideoDecoder.isConfigSupported({ codec: own, codedWidth: 1920, codedHeight: 1080 })).supported) return own;
+    } catch {
+      // Fall back to the usual strings.
+    }
+  }
+  return supportedHevc(1920, 1080);
 }
