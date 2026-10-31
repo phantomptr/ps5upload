@@ -4,6 +4,21 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **"Remote Play is switched off" is said plainly.** When the PS5's own Remote Play switch is off,
+  Start showed "session init refused (HTTP 403): 80108b12". It now says to turn on Settings ›
+  System › Remote Play › Enable Remote Play on the console, and the setup guide says that
+  switch is the one that counts.
+- **Fixed: Download couldn't be tapped in the Files ⋮ menu on a phone.** With the menu opened
+  upwards, its first item sat under the status bar, where Android takes the tap. The menu now
+  stays between the status and navigation bars.
+- **Details on "Update available" shows what's new.** It opened Settings, where the release
+  notes were far down the page as raw text; it now opens the notes, with a link to the release
+  on GitHub.
+- **"Helper updated" in plain words.** The notice says which version the PS5 starts after its
+  next restart, without file paths, and only once per console and version.
+
 ## 10.0.3
 
 - **Fixed: after waking the PS5 from rest mode, the app said the helper was down (#593)**, and
