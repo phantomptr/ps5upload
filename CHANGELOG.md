@@ -20,6 +20,18 @@ What's new in ps5upload, written for humans.
 - **Controllers work in Remote Play on Linux where the system webview can't see them.** On
   distributions whose WebKitGTK is built without controller support (Ubuntu 26.04, for one), the
   app now reads plugged-in controllers itself, so a DualSense or Xbox pad drives the console.
+- **Full GPU rendering on current NVIDIA Linux setups.** With NVIDIA driver 555 or later on
+  Wayland and WebKitGTK 2.46 or later (the .deb and .rpm), the app no longer turns off WebKit's
+  GPU compositing and DMA-BUF renderer: lists scroll smoothly, Remote Play's picture has less
+  delay, and Sharpen and upscaling work in the Linux app. Every other setup, and the AppImage,
+  keeps the white-window workarounds as before; on those Remote Play draws without WebGL, as it
+  did in 10.0.3, because WebGL lags there.
+- **Safe graphics mode for a white or blank Linux window.** Settings › Window › Graphics turns the
+  workarounds on whatever the app detected, from the next launch. If the window can't be used,
+  start the app with `--safe-graphics` or `PS5UPLOAD_SAFE_GRAPHICS=1`. What the app read and chose
+  is in the startup log.
+- **The Linux app quits cleanly when it is sent SIGTERM, SIGINT or SIGHUP.** Stopping it with
+  `kill` left WebKit's web process crashing, and Ubuntu showed a crash report each time.
 
 ## 10.1.0
 - **Updates are checked before they install.** Each release now publishes the SHA-256 of every
