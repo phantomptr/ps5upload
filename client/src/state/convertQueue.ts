@@ -75,6 +75,10 @@ export interface ConvertRunner {
   /** `installed`: the build also installed it (a console dump's swap runs inside the build). */
   build(item: ConvertItem): Promise<{ ok: boolean; packagePath?: string; message?: string; installed?: boolean }>;
   handOff(item: ConvertItem, packagePath: string): Promise<{ ok: boolean; message?: string }>;
+  /** Resolves once this computer can start the next build (a build started by hand finishes
+   *  first). The queue waits here before it takes the next game, so a game waiting behind a
+   *  hand-started build still says Waiting, and can be removed, changed or stopped. */
+  ready?(): Promise<void>;
 }
 
 let runner: ConvertRunner | null = null;
@@ -109,6 +113,11 @@ function load(): ConvertItem[] {
 interface ConvertQueueState {
   items: ConvertItem[];
   running: boolean;
+  /** Games added during a build started by hand, with "Start the queue when you add something"
+   *  on: the queue starts once that build's result is put away (Convert another, or a new
+   *  source), so the result's buttons stay until then; never after a build that failed. Start
+   *  starts it at once. */
+  armed: boolean;
   /** False (and nothing added) when this source is already waiting or building. */
   add: (item: NewConvertItem) => boolean;
   remove: (id: string) => void;
@@ -129,11 +138,23 @@ let stopRequested = false;
 /** A game added while a build runs on this computer (#621): it is made after that build, in
  *  order, without pressing Start — as Upload & Install's "Start the queue when you add
  *  something" does for the console's queue, and only when that is on. A queue already running
- *  takes it by itself; with nothing building, adding only adds, as before. */
+ *  takes it by itself; with nothing building, adding only adds, as before. The queue does not
+ *  start the moment the hand-started build ends: its result (Install, Launch, Delete, Retry…)
+ *  stays until it is put away (see `pipelinePhaseChanged`). */
 export function startAfterBuild(building: boolean): void {
   if (!building || !useUploadSettingsStore.getState().queueAutoStart) return;
-  if (!useConvertQueue.getState().items.some((i) => i.status === "pending")) return;
-  void useConvertQueue.getState().start();
+  const q = useConvertQueue.getState();
+  if (q.running || !q.items.some((i) => i.status === "pending")) return;
+  useConvertQueue.setState({ armed: true });
+}
+
+/** The Convert pipeline's phase, as it changes: an armed queue starts once the hand-started
+ *  build's result is put away (idle), and is disarmed when that build failed (its Retry and
+ *  message stay; the user starts the queue). */
+export function pipelinePhaseChanged(phase: string): void {
+  if (!useConvertQueue.getState().armed) return;
+  if (phase === "failed") useConvertQueue.setState({ armed: false });
+  else if (phase === "idle") void useConvertQueue.getState().start();
 }
 
 export const useConvertQueue = create<ConvertQueueState>((set, get) => {
@@ -146,6 +167,7 @@ export const useConvertQueue = create<ConvertQueueState>((set, get) => {
   return {
     items: typeof window === "undefined" ? [] : load(),
     running: false,
+    armed: false,
     add: (item) => {
       // The same game for the same console once; another console may have it too.
       const busy = get().items.some(
@@ -179,18 +201,24 @@ export const useConvertQueue = create<ConvertQueueState>((set, get) => {
       save();
     },
     start: async () => {
+      set({ armed: false });
       if (get().running || !runner) return;
+      const r0 = runner;
       stopRequested = false;
       set({ running: true });
       try {
         for (;;) {
+          if (stopRequested) break;
+          // A build started by hand finishes first; only then is the next game taken (it may
+          // have been removed, changed or stopped meanwhile).
+          if (r0.ready) await r0.ready();
           if (stopRequested) break;
           const next = get().items.find((i) => i.status === "pending");
           if (!next) break;
           patch(next.id, { status: "running", error: undefined });
           let r: { ok: boolean; packagePath?: string; message?: string; installed?: boolean };
           try {
-            r = await runner.build(next);
+            r = await r0.build(next);
           } catch (e) {
             r = { ok: false, message: e instanceof Error ? e.message : String(e) };
           }
@@ -205,7 +233,7 @@ export const useConvertQueue = create<ConvertQueueState>((set, get) => {
           }
           // Hand off and move on: the console queue runs the install.
           patch(next.id, { status: "installing", packagePath: pkg });
-          void runner
+          void r0
             .handOff(next, pkg)
             .then((h) =>
               patch(next.id, h.ok ? { status: "done" } : { status: "failed", error: h.message ?? "The install did not finish." }),
@@ -218,6 +246,7 @@ export const useConvertQueue = create<ConvertQueueState>((set, get) => {
     },
     stop: () => {
       stopRequested = true;
+      set({ armed: false });
     },
     clearFinished: () => {
       set({ items: get().items.filter((i) => i.status === "pending" || i.status === "running" || i.status === "installing") });

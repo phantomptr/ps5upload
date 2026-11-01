@@ -63,6 +63,7 @@ import {
   type ConvertThen,
 } from "../../state/convertQueue";
 import { gameFoldersAmong, gamesInFolder } from "../../lib/folderScan";
+import { sourcesForPath, withoutBuilding } from "../../lib/convertQueueSources";
 import { usePackageViewer } from "../../state/packageViewer";
 import { consoleSwapDeps } from "../../lib/dumpSwapConsole";
 import { amprTrace, titleIdOf } from "../../api/amprTrace";
@@ -205,8 +206,12 @@ export default function WorkshopScreen() {
   };
   /** Queue what was picked or found, then say what was left out. */
   const queueAll = (sources: { path: string; isDir: boolean }[], notGames: number) => {
-    const results = sources.map((x) => queueAdd(x.path, x.isDir));
+    // The game being made right now is not queued again.
+    const now = useFpkgConversion.getState().pipeline;
+    const { take, building } = withoutBuilding(sources, now.phase === "running" ? now.source : null);
+    const results = take.map((x) => queueAdd(x.path, x.isDir));
     const notes: string[] = [];
+    if (building) notes.push(tr("cq_building_now", undefined, "This game is being made now."));
     if (notGames)
       notes.push(
         tr("cq_not_games", { count: notGames }, "{count} folder(s) were not games and were skipped."),
@@ -333,8 +338,11 @@ export default function WorkshopScreen() {
       return;
     }
     // A dropped or handed path does not say whether it is a folder: an image, package or
-    // archive is a file, anything else is taken for a game folder.
-    queueAll([{ path, isDir: !isFolderableSource(path) && !isArchiveSource(path) }], 0);
+    // archive is a file; a folder is scanned as "Add games from a folder…" scans one (one item
+    // per game in it).
+    sourcesForPath(path)
+      .then((found) => queueAll(found.sources, found.skipped))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   };
 
   const dropActive = useWebviewDrop(chooseOrQueue, true);
