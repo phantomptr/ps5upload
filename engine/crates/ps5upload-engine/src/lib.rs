@@ -10688,6 +10688,23 @@ async fn bug_report_bundle_handler(Json(req): Json<BugBundleReq>) -> axum::respo
 /// Cooperative shutdown signal. Set by either the parent-watcher
 /// thread (stdin EOF when parent died) or a Unix signal handler
 /// (SIGTERM / SIGINT — `kill` from systemd, ^C from a dev terminal).
+/// Every connection the engine accepts sends at once (TCP_NODELAY). Without it a small
+/// write waits until the peer acknowledges the last one, and a Linux peer that is also
+/// sending (the Remote Play page's pad input) holds its acks up to 40 ms: Remote Play frames
+/// reached the page ~10-30 ms late on Linux, the "net" figure in its stats. Measured on a
+/// Linux loopback: video frames at 60/s with pad input 20/s took 9 ms (median) and 33 ms (95th
+/// percentile) to arrive; with this, 0.2 and 0.7 ms. Bulk transfers are written in large
+/// chunks, so they lose nothing by it.
+fn no_delay(
+    l: tokio::net::TcpListener,
+) -> axum::serve::TapIo<tokio::net::TcpListener, fn(&mut tokio::net::TcpStream)> {
+    use axum::serve::ListenerExt;
+    fn set(tcp: &mut tokio::net::TcpStream) {
+        let _ = tcp.set_nodelay(true);
+    }
+    l.tap_io(set as fn(&mut tokio::net::TcpStream))
+}
+
 /// `axum::serve(...).with_graceful_shutdown` awaits this future,
 /// drains in-flight requests up to the cap, then returns. Replaces
 /// a `process::exit(0)` torn-down hard exit that left in-flight
@@ -11718,7 +11735,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // and the middleware would have to fall back to header-based source
     // detection (less reliable, easier to spoof from a hostile LAN peer).
     let served = axum::serve(
-        listener,
+        no_delay(listener),
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal())
@@ -13631,5 +13648,20 @@ mod avatar_crop_position_tests {
             .await
             .unwrap();
         assert_ne!(top, center, "crop position must change the preview");
+    }
+}
+
+#[cfg(test)]
+mod no_delay_tests {
+    use axum::serve::Listener;
+
+    #[tokio::test]
+    async fn accepted_connections_send_at_once() {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let mut l = super::no_delay(l);
+        let _client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let (io, _) = l.accept().await;
+        assert!(io.nodelay().unwrap());
     }
 }

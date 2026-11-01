@@ -44,6 +44,16 @@ What's new in ps5upload, written for humans.
 - **Workshop is more compact.** Smaller drop area, one-line choices under ② What to make,
   compression levels in one row on a wide window, and tighter spacing. While ④ is scrolled out
   of view, a slim bar at the bottom keeps its main button in reach.
+- **Remote Play on Linux: the picture arrives sooner.** The engine held each frame back until
+  the app acknowledged the one before, and Linux delays that while the app is sending your
+  presses: about 10-30 ms more delay, the high "net" figure in the stats on Linux. Frames now go
+  out at once.
+- **Remote Play's stats estimate input delay:** "input ≈ X ms, plus the game's own time", from
+  the round trip to the engine, the engine's round trip to the PS5 and the picture's own delay.
+  Hover it for what is and is not counted.
+- **Fixed: Remote Play reported sound loss that never happened.** A late or repeated sound packet
+  made a whole moment's sound count as lost, which can make the PS5 lower the picture's bitrate, and
+  could bring up the 720p offer on a good network.
 
 ## 10.3.0
 

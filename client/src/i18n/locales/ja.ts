@@ -6329,6 +6329,8 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_stats_latency_decode": "遅延 ≈ デコード {decode} ms",
 "rp_stats_stages": "ネット {net} · 待ち {queue} · デコード {decode} · 画面 {draw} ms",
 "rp_stats_decoder_restarts": "デコーダー再起動 {n}",
+"rp_stats_input": "入力 ≈ {ms} ms(これにゲーム自体の時間が加わります)",
+"rp_stats_input_hint": "測定できる部分からの推定です: このアプリからエンジンまで、エンジンから PS5 までの往復、そして映像がエンジンから画面に届くまで。含まれないもの: コントローラー自体の遅延と、ゲームと PS5 が反応して映像をエンコードする時間(多くの場合 1 フレーム以上)。",
 "rp_low_latency": "低遅延",
 "rp_low_latency_hint": "遅延を最小にするため、音声バッファと映像キューを最も短くします。混雑したネットワークではフレームの欠落が増え、音が途切れることがあります。映像の設定は次の開始時から反映されます。",
 "rp_auto_quality": "混雑したネットワークでは画質を下げる",

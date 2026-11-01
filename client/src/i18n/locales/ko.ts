@@ -6327,6 +6327,8 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_stats_latency_decode": "지연 ≈ 디코딩 {decode} ms",
 "rp_stats_stages": "네트워크 {net} · 대기 {queue} · 디코딩 {decode} · 화면 {draw} ms",
 "rp_stats_decoder_restarts": "디코더 재시작 {n}",
+"rp_stats_input": "입력 ≈ {ms}ms, 여기에 게임 자체 시간이 더해짐",
+"rp_stats_input_hint": "측정할 수 있는 부분으로 낸 추정치입니다: 이 앱에서 엔진까지, 엔진에서 PS5까지 왕복, 그리고 화면이 엔진에서 내 화면까지 오는 길. 포함되지 않음: 컨트롤러 자체 지연, 그리고 게임과 PS5가 반응하고 화면을 인코딩하는 시간(흔히 한 프레임 이상).",
 "rp_low_latency": "저지연",
 "rp_low_latency_hint": "지연을 최소화하도록 가장 작은 소리 버퍼와 가장 짧은 화면 대기열을 씁니다. 혼잡한 네트워크에서는 프레임이 더 많이 빠지고 소리가 끊길 수 있습니다. 화면 부분은 다음 시작부터 적용됩니다.",
 "rp_auto_quality": "혼잡한 네트워크에서 화질 낮추기",

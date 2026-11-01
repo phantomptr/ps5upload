@@ -6319,6 +6319,8 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_stats_latency_decode": "Latensi ≈ {decode} ms dekode",
 "rp_stats_stages": "jaringan {net} · antrean {queue} · dekode {decode} · layar {draw} ms",
 "rp_stats_decoder_restarts": "dekoder dimulai ulang {n}",
+"rp_stats_input": "input ≈ {ms} ms, ditambah waktu game itu sendiri",
+"rp_stats_input_hint": "Perkiraan dari yang bisa diukur: perjalanan dari aplikasi ini ke engine, dari engine ke PS5 dan kembali, dan jalur gambar dari engine ke layarmu. Tidak termasuk: jeda kontroler itu sendiri, serta waktu yang dibutuhkan game dan PS5 untuk bereaksi dan mengodekan gambar, sering satu frame atau lebih.",
 "rp_low_latency": "Latensi rendah",
 "rp_low_latency_hint": "Buffer suara terkecil dan antrean gambar terpendek, untuk jeda paling kecil. Di jaringan yang sibuk lebih banyak frame hilang dan suara bisa berderak. Bagian gambar berlaku saat mulai berikutnya.",
 "rp_auto_quality": "Turunkan kualitas di jaringan sibuk",
