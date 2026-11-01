@@ -4,6 +4,22 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Remote Play's Settings open over the stream.** Every Settings button (on the picture's bar,
+  beside Start, in the menu) opens the same panel: at the right edge on a computer or tablet, a
+  sheet from the bottom on a phone. In full screen it opens inside full screen, so the game keeps
+  showing and playing next to it, and nothing leaves full screen any more.
+- **Easy to close:** ✕, Esc, a click or tap beside it, the Settings button again, or a swipe
+  down on a phone. Esc closes Settings instead of pressing ○, and never leaves full screen.
+- **Settings in four tabs:** Picture, Sound, Controls (with controllers, controller buttons and
+  keyboard keys) and Session. It opens on the last tab you used, and the arrow keys move between
+  tabs.
+- **While Settings is open, the game gets no keys or controller presses**, so arrows and typing
+  work in the settings; play goes on as you close it.
+- **Picture, frame rate, video decoding, video format and Keep playing can be changed during a
+  stream.** They say "Applies when you start again"; everything else applies at once.
+
 ## 10.2.0
 
 - **Updates are checked before they install.** Each release now publishes the SHA-256 of every
