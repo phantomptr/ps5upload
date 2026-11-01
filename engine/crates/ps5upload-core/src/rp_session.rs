@@ -486,6 +486,8 @@ fn hold_control_session(
             // The passcode exchange, when someone can type it.
             if let Some(p) = prompt.as_deref_mut() {
                 if flow.on_message(msg_type, &payload, p)? {
+                    // Asked (again): any earlier LOGIN success was not for this passcode.
+                    login_at = None;
                     continue;
                 }
             } else if msg_type == crate::rp_login_pin::CTRL_LOGIN_PIN_REQ {
@@ -523,7 +525,15 @@ fn hold_control_session(
 
         // Done as soon as the sign-in is confirmed and has been held through
         // its grace period; otherwise keep going until the overall deadline.
-        if let Some(at) = login_at.or(established_at) {
+        // Once the console asked for a passcode, only its LOGIN success says the user
+        // signed in: a SESSION_ID before the ask says nothing about the passcode, and
+        // nothing is confirmed while the user is still typing.
+        let confirmed = if flow.involved() {
+            login_at
+        } else {
+            login_at.or(established_at)
+        };
+        if let Some(at) = confirmed.filter(|_| !flow.asking()) {
             if at.elapsed() >= grace_after_login {
                 return Ok(SignIn::SignedIn);
             }
@@ -788,6 +798,51 @@ mod tests {
         assert_eq!(r.unwrap(), SignIn::SignedIn);
         assert_eq!(user.asked, vec![false]);
         assert_eq!(ours, 6);
+    }
+
+    #[test]
+    fn a_session_id_before_the_passcode_ask_is_not_a_sign_in() {
+        // The console declares the session live, then asks for the passcode. The user types
+        // for longer than the sign-in grace: we must keep asking, not report "signed in".
+        let mut answers: Vec<Option<Passcode>> = (0..16).map(|_| None).collect();
+        answers.push(Some(Passcode::Digits("2468".into())));
+        let mut user = Typist::new(answers);
+        let (r, ours) = sign_in_against(Some(&mut user), PASSCODE_WAIT, |mut c| {
+            let mut n = 1u64;
+            c.write_all(&console_msg(
+                CTRL_SESSION_ID,
+                &[4, b'a', b'b', b'c', b'd'],
+                &mut n,
+            ))
+            .unwrap();
+            c.write_all(&console_msg(CTRL_LOGIN_PIN_REQ, &[], &mut n))
+                .unwrap();
+            assert_eq!(read_pin(&mut c, 5), b"2468");
+            accept(&mut c, &mut n);
+        });
+        assert_eq!(r.unwrap(), SignIn::SignedIn);
+        assert_eq!(ours, 6);
+    }
+
+    #[test]
+    fn a_sent_passcode_without_login_success_is_not_a_sign_in() {
+        let mut user = Typist::new(vec![Some(Passcode::Digits("2468".into()))]);
+        let (r, _) = sign_in_against(Some(&mut user), PASSCODE_WAIT, |mut c| {
+            let mut n = 1u64;
+            c.write_all(&console_msg(
+                CTRL_SESSION_ID,
+                &[4, b'a', b'b', b'c', b'd'],
+                &mut n,
+            ))
+            .unwrap();
+            c.write_all(&console_msg(CTRL_LOGIN_PIN_REQ, &[], &mut n))
+                .unwrap();
+            assert_eq!(read_pin(&mut c, 5), b"2468");
+            // No verdict: the console never says LOGIN success.
+            let mut b = [0u8; 64];
+            while c.read(&mut b).map(|n| n > 0).unwrap_or(false) {}
+        });
+        assert!(r.is_err(), "reported {r:?} with no LOGIN success");
     }
 
     #[test]
