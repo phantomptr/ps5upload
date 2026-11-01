@@ -86,6 +86,14 @@ fn c_payload_binds_only_9120() {
             && !p.starts_with("installer/")
             && !p.starts_with("smb/")
     });
+    // The keyboard & mouse companion (payload/vinput/, a process of its own) listens on the
+    // console's loopback only; its loop lives in src/ so the host tests can run it.
+    let comp = std::fs::read_to_string(payload().join("src/vinput_companion.c")).unwrap();
+    assert!(
+        comp.contains("htonl(INADDR_LOOPBACK)"),
+        "the keyboard & mouse companion must listen on 127.0.0.1 only"
+    );
+    binders.retain(|p| p != "src/vinput_companion.c" && !p.starts_with("vinput/"));
     // The SMB daemon listens on the console's loopback only: the helper is its one client.
     let smbd = std::fs::read_to_string(payload().join("smb/smbd_main.c")).unwrap();
     assert!(
