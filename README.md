@@ -352,6 +352,8 @@ with **Settings → Engine URL**.
   proxy authentication, Docker bridge networking, and sub-path hosting.
 - **Scripting it:** [ps5upctl](https://github.com/yuanzhengze/ps5upctl) is a community
   command-line client for the engine API (unofficial; the API can change between versions).
+  A script or AI agent on the engine's computer can also watch and play a running Remote Play
+  session without taking it over: see [Remote Play automation](AUTOMATION.md).
 
 ## FAQ
 

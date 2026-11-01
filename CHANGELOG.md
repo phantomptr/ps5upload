@@ -4,6 +4,19 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.6.0
+
+- **Scripts and AI agents can see and play Remote Play without taking it over (#615).** On the
+  engine's computer, `GET /api/ps5/rp/frame` returns the picture the app shows now (PNG or JPEG,
+  with its size and age), `POST /api/ps5/rp/input` holds buttons, sticks and triggers for up to
+  5 seconds as one more controller next to yours, and `/api/ps5/rp/input/release` lets go.
+  `GET /api/ps5/rp/session` now gives the session's id, and a request naming an old session is
+  refused. Nothing on screen changes, no second stream starts, and none of it is reachable from
+  other machines. See [AUTOMATION.md](https://github.com/phantomptr/ps5upload/blob/main/AUTOMATION.md); not a
+  stable API yet (#430).
+- **The Remote Play microphone no longer switches off when a button is pressed.** Any controller
+  change (yours, a phone's) turned the experimental mic off; now only leaving the stream does.
+
 ## 10.5.1
 
 - **Pressing Play no longer crashes the Linux app (#610).** On WebKitGTK 2.54 (Fedora 44 and other

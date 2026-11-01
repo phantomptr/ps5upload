@@ -23,6 +23,7 @@ import { safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
 import { ClockSync, inputEstimate, LatencyStages, stagesLogText, type StageSummary } from "./rpLatency";
 import { decoderVerdict, FED_RECENT_MS, MAX_REBUILDS } from "./rpDecoderWatch";
 import type { RpKeyboardMsg, RpKeyboardSend } from "./rpKeyboard";
+import { parseSnapshotRequest, takeSnapshot } from "./rpSnapshot";
 
 /** Button bits, as the console (and chiaki) number them. */
 export const PadButton = {
@@ -667,6 +668,11 @@ export class RemotePlayStream {
   private reconnectTimer = 0;
   /** The page's mic is on (remotePlayMic.ts); said again on every reattach. */
   private micOn = false;
+  /** Pictures drawn on this page and when the last one was (Date.now()), for a local automation
+   *  client's snapshot (rpSnapshot.ts), and who waits for the next one. */
+  private frameSeq = 0;
+  private frameAt = 0;
+  private frameWaiters = new Set<() => void>();
 
   /** The visible picture the stream's SPS describes (rpSps.ts), to put right a decoder that
    *  reports a smaller one (Edge on Windows). */
@@ -1447,10 +1453,15 @@ export class RemotePlayStream {
       keyboard?: RpKeyboardMsg;
       retry?: boolean;
       wait_s?: number;
+      snapshot?: unknown;
     };
     try {
       s = JSON.parse(text);
     } catch {
+      return;
+    }
+    if (s && typeof s === "object" && s.snapshot !== undefined) {
+      void this.answerSnapshot(s.snapshot);
       return;
     }
     if (s && typeof s === "object" && "pong" in s) {
@@ -1785,8 +1796,45 @@ export class RemotePlayStream {
       .finally(next);
   }
 
+  /** A local automation client asked the engine for the picture (rpSnapshot.ts): answer on
+   *  the socket it came on, with what the canvas shows now. Nothing on screen changes. */
+  private async answerSnapshot(v: unknown): Promise<void> {
+    const req = parseSnapshotRequest(v);
+    const ws = this.ws;
+    if (!req || !ws) return;
+    const reply = await takeSnapshot(req, {
+      canvas: this.cv,
+      frameSeq: () => this.frameSeq,
+      frameAt: () => this.frameAt,
+      waitForFrame: (seq, ms) => this.waitForFrame(seq, ms),
+    });
+    // A socket replaced meanwhile belongs to another attach: the engine no longer waits on it.
+    if (ws === this.ws && ws.readyState === WebSocket.OPEN) ws.send(reply);
+  }
+
+  /** True once a picture after `seq` is drawn; false after `ms`. */
+  private waitForFrame(seq: number, ms: number): Promise<boolean> {
+    if (this.frameSeq > seq) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const done = () => {
+        if (this.frameSeq <= seq) return;
+        window.clearTimeout(t);
+        this.frameWaiters.delete(done);
+        resolve(true);
+      };
+      const t = window.setTimeout(() => {
+        this.frameWaiters.delete(done);
+        resolve(false);
+      }, ms);
+      this.frameWaiters.add(done);
+    });
+  }
+
   /** After a frame is drawn: the canvas's shape and the layout log line follow the picture. */
   private drawn(fw: number, fh: number, out: { w: number; h: number }, shape: number): void {
+    this.frameSeq++;
+    this.frameAt = Date.now();
+    if (this.frameWaiters.size) for (const w of [...this.frameWaiters]) w();
     // The shape on its own too: upscaled, the canvas keeps the box's size while Crop to 21:9
     // changes the shape.
     const laid = `${out.w}x${out.h}:${shape}`;
