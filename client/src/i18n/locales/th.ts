@@ -6905,6 +6905,8 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
   "saves_share_failed_v2": "บันทึกเป็นไฟล์ไม่ได้: {error}",
   "saves_use_shared_failed_v2": "โหลดไฟล์เซฟไม่ได้: {error}",
   "saves_shared_v2": "ไฟล์เซฟพร้อมแล้ว",
+  "workshop_add_locked_v2": "กำลังสร้างเกมอยู่: เกมที่คุณเลือกหรือลากวางตอนนี้จะเข้าคิวและสร้างต่อจากเกมนี้",
+  "workshop_add_locked_manual": "กำลังสร้างเกมอยู่: เกมที่คุณเลือกหรือลากวางตอนนี้จะรอในคิวจนกว่าคุณจะเริ่ม",
 };
 
 export default th;

@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
+import { useUploadSettingsStore } from "./uploadSettings";
 import {
   buildExtension,
   hydrateConvertQueue,
   setConvertRunner,
+  startAfterBuild,
   thenFor,
   useConvertQueue,
   type ConvertRunner,
@@ -98,6 +100,51 @@ describe("the Convert queue", () => {
     await flush();
     expect(builds).toHaveLength(1);
     expect(useConvertQueue.getState().items).toHaveLength(1);
+  });
+
+  // #621: games added after Start are made by the same run, in the order added.
+  it("takes games added while it runs, in order, without another Start", async () => {
+    add("/g/A", "keep");
+    void useConvertQueue.getState().start();
+    await flush();
+    add("/g/B", "keep");
+    add("/g/C", "keep");
+    builds[0].resolve({ ok: true, packagePath: "/out/A.pkg" });
+    await flush();
+    builds[1].resolve({ ok: true, packagePath: "/out/B.pkg" });
+    await flush();
+    builds[2].resolve({ ok: true, packagePath: "/out/C.pkg" });
+    await flush();
+    expect(builds.map((b) => b.source)).toEqual(["/g/A", "/g/B", "/g/C"]);
+    expect(useConvertQueue.getState().items.map((i) => i.status)).toEqual(["done", "done", "done"]);
+    expect(useConvertQueue.getState().running).toBe(false);
+  });
+
+  // #621: a game queued while a Convert started by hand runs is made after it, when "Start the
+  // queue when you add something" is on; off, it waits for Start, as the console's queue does.
+  it("starts after a hand-started build only when adding starts the queue", async () => {
+    useUploadSettingsStore.setState({ queueAutoStart: false });
+    add("/g/B", "keep");
+    startAfterBuild(true);
+    await flush();
+    expect(builds).toHaveLength(0);
+    expect(useConvertQueue.getState().running).toBe(false);
+
+    useUploadSettingsStore.setState({ queueAutoStart: true });
+    startAfterBuild(false);
+    await flush();
+    expect(builds).toHaveLength(0);
+    startAfterBuild(true);
+    await flush();
+    expect(builds.map((b) => b.source)).toEqual(["/g/B"]);
+    // A second add while it runs does not start a second run.
+    add("/g/C", "keep");
+    startAfterBuild(true);
+    await flush();
+    expect(builds).toHaveLength(1);
+    builds[0].resolve({ ok: true, packagePath: "/out/B.pkg" });
+    await flush();
+    expect(builds.map((b) => b.source)).toEqual(["/g/B", "/g/C"]);
   });
 });
 

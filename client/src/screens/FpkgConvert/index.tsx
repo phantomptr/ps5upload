@@ -36,6 +36,7 @@ import {
   useFpkgConversion,
 } from "../../state/fpkgConversion";
 import { useUploadStore } from "../../state/upload";
+import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { DEFAULT_IMAGE_SUBPATH } from "../../lib/imageUpload";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { useTr } from "../../state/lang";
@@ -52,7 +53,14 @@ import { RunCard, idleRun, lz4Active, type Lz4Choice, type RunCardProps } from "
 import { outputFor } from "../../lib/outputPlace";
 import { SwapJournals } from "./SwapJournals";
 import { QueueCard } from "./QueueCard";
-import { buildExtension, thenFor, useConvertQueue, type ConvertBuild, type ConvertThen } from "../../state/convertQueue";
+import {
+  buildExtension,
+  startAfterBuild,
+  thenFor,
+  useConvertQueue,
+  type ConvertBuild,
+  type ConvertThen,
+} from "../../state/convertQueue";
 import { gameFoldersAmong, gamesInFolder } from "../../lib/folderScan";
 import { usePackageViewer } from "../../state/packageViewer";
 import { consoleSwapDeps } from "../../lib/dumpSwapConsole";
@@ -130,6 +138,7 @@ export default function WorkshopScreen() {
   const finishReplace = useFpkgConversion((s) => s.finishReplace);
   const queueItems = useConvertQueue((s) => s.items);
   const queueRunning = useConvertQueue((s) => s.running);
+  const queueAutoStart = useUploadSettingsStore((s) => s.queueAutoStart);
   // ③'s one choice of what happens after converting, for Convert and the queue alike.
   const [thenChoice, setThen] = useState<ConvertThen>("keep");
   const [deleteAfter, setDeleteAfter] = useState(false);
@@ -207,6 +216,8 @@ export default function WorkshopScreen() {
     }
     if (results.some((r) => r === false)) notes.push(tr("cq_already", undefined, "This game is already in the queue."));
     setError(notes.length ? notes.join(" ") : null);
+    // Added while a game is being made (#621): made after it, without pressing Start.
+    if (results.some((r) => r === true)) startAfterBuild(useFpkgConversion.getState().pipeline.phase === "running");
   };
   /** Why a source was left out of the queue, said for a person. */
   const skippedText = (why: QueueSkip, n: number) =>
@@ -301,7 +312,19 @@ export default function WorkshopScreen() {
     [check, reset, setSource, setPassword],
   );
 
-  const dropActive = useWebviewDrop(chooseSource, !locked);
+  /** One game picked, dropped or handed over: checked under ①, or, while a game is being made
+   *  (① cannot change then), into the queue to be made after it (#621). */
+  const chooseOrQueue = (path: string) => {
+    if (useFpkgConversion.getState().pipeline.phase !== "running") {
+      chooseSource(path);
+      return;
+    }
+    // A dropped or handed path does not say whether it is a folder: an image, package or
+    // archive is a file, anything else is taken for a game folder.
+    queueAll([{ path, isDir: !isFolderableSource(path) && !isArchiveSource(path) }], 0);
+  };
+
+  const dropActive = useWebviewDrop(chooseOrQueue, true);
 
   // A game handed over from elsewhere (the viewer's Convert… on a drop).
   const location = useLocation();
@@ -311,7 +334,7 @@ export default function WorkshopScreen() {
   } | null;
   const handed = handedState?.source;
   useEffect(() => {
-    if (handed) chooseSource(handed);
+    if (handed) chooseOrQueue(handed);
     // Once per hand-over.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handed]);
@@ -371,15 +394,15 @@ export default function WorkshopScreen() {
   };
 
   /** A dump on the console, read in place over its FTP server. */
-  const browseConsole = useCallback(async () => {
+  const browseConsole = async () => {
     const picked = await pickPath({
       mode: "any",
       title: tr("fpkg.pickConsole", undefined, "Choose a game folder or image on the PS5"),
       filters: [{ name: "Game image or package", extensions: ["exfat", "ffpkg", "ffpfs", "ffpfsc", "pkg"] }],
       source: { console: host },
     });
-    if (picked) chooseSource(picked);
-  }, [chooseSource, host, tr]);
+    if (picked) chooseOrQueue(picked);
+  };
 
   const browseOutput = useCallback(async () => {
     try {
@@ -659,6 +682,7 @@ export default function WorkshopScreen() {
       inspection={inspection}
       checking={checking}
       locked={locked}
+      queueStarts={queueAutoStart}
       dropActive={dropActive}
       password={password}
       onPassword={setPassword}

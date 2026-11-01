@@ -6851,6 +6851,8 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
   "saves_share_failed_v2": "Impossibile salvarlo come file: {error}",
   "saves_use_shared_failed_v2": "Impossibile caricare il file di salvataggio: {error}",
   "saves_shared_v2": "File di salvataggio pronto",
+  "workshop_add_locked_v2": "Si sta creando un gioco: i giochi che scegli o trascini ora vanno in coda e vengono creati dopo.",
+  "workshop_add_locked_manual": "Si sta creando un gioco: i giochi che scegli o trascini ora restano in coda finché non la avvii.",
 };
 
 export default it;

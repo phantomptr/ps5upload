@@ -7212,6 +7212,8 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
   "saves_share_failed_v2": "Could not save it as a file: {error}",
   "saves_use_shared_failed_v2": "Could not load the save file: {error}",
   "saves_shared_v2": "Save file ready",
+  "workshop_add_locked_v2": "A game is being made: games you pick or drop now go into the queue and are made after it.",
+  "workshop_add_locked_manual": "A game is being made: games you pick or drop now wait in the queue until you start it.",
 };
 
 export default en;

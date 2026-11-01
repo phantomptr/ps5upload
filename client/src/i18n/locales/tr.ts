@@ -6905,6 +6905,8 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "saves_share_failed_v2": "Dosya olarak kaydedilemedi: {error}",
   "saves_use_shared_failed_v2": "Kayıt dosyası yüklenemedi: {error}",
   "saves_shared_v2": "Kayıt dosyası hazır",
+  "workshop_add_locked_v2": "Bir oyun hazırlanıyor: şimdi seçtiğiniz veya bıraktığınız oyunlar kuyruğa girer ve ondan sonra hazırlanır.",
+  "workshop_add_locked_manual": "Bir oyun hazırlanıyor: şimdi seçtiğiniz veya bıraktığınız oyunlar siz başlatana kadar kuyrukta bekler.",
 };
 
 export default tr;

@@ -6913,6 +6913,8 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
   "saves_share_failed_v2": "Não foi possível salvar como arquivo: {error}",
   "saves_use_shared_failed_v2": "Não foi possível carregar o arquivo de save: {error}",
   "saves_shared_v2": "Arquivo de save pronto",
+  "workshop_add_locked_v2": "Um jogo está sendo criado: os jogos que você escolher ou soltar agora vão para a fila e são criados depois dele.",
+  "workshop_add_locked_manual": "Um jogo está sendo criado: os jogos que você escolher ou soltar agora aguardam na fila até você iniciá-la.",
 };
 
 export default pt_BR;

@@ -8,6 +8,7 @@ import { create } from "zustand";
 
 import type { AmprLz4Options, FpkgCompression, ImageFormat } from "../api/fpkg";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { useUploadSettingsStore } from "./uploadSettings";
 
 export type ConvertThen = "keep" | "stream" | "upload";
 export type ConvertStatus = "pending" | "running" | "installing" | "handed" | "done" | "failed";
@@ -115,7 +116,7 @@ interface ConvertQueueState {
    *  editable while the queue runs. False when it is no longer waiting. */
   update: (id: string, change: ConvertItemChange) => boolean;
   move: (id: string, delta: -1 | 1) => void;
-  /** Run pending items until none are left or Stop. */
+  /** Run pending items until none are left or Stop; games added meanwhile are taken in order. */
   start: () => Promise<void>;
   /** Pause after the current build. */
   stop: () => void;
@@ -124,6 +125,16 @@ interface ConvertQueueState {
 
 let seq = 0;
 let stopRequested = false;
+
+/** A game added while a build runs on this computer (#621): it is made after that build, in
+ *  order, without pressing Start — as Upload & Install's "Start the queue when you add
+ *  something" does for the console's queue, and only when that is on. A queue already running
+ *  takes it by itself; with nothing building, adding only adds, as before. */
+export function startAfterBuild(building: boolean): void {
+  if (!building || !useUploadSettingsStore.getState().queueAutoStart) return;
+  if (!useConvertQueue.getState().items.some((i) => i.status === "pending")) return;
+  void useConvertQueue.getState().start();
+}
 
 export const useConvertQueue = create<ConvertQueueState>((set, get) => {
   const save = () => safeSetItem(KEY, JSON.stringify(get().items));

@@ -6912,6 +6912,8 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
   "saves_share_failed_v2": "फ़ाइल के रूप में सेव नहीं हो सका: {error}",
   "saves_use_shared_failed_v2": "सेव फ़ाइल लोड नहीं हो सकी: {error}",
   "saves_shared_v2": "सेव फ़ाइल तैयार है",
+  "workshop_add_locked_v2": "एक गेम बन रहा है: अभी चुने या छोड़े गए गेम कतार में जाते हैं और इसके बाद बनते हैं।",
+  "workshop_add_locked_manual": "एक गेम बन रहा है: अभी चुने या छोड़े गए गेम कतार में तब तक रुकते हैं जब तक आप उसे शुरू न करें।",
 };
 
 export default hi;

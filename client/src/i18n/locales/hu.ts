@@ -7204,6 +7204,8 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "saves_share_failed_v2": "Nem sikerült fájlként menteni: {error}",
   "saves_use_shared_failed_v2": "Nem sikerült betölteni a mentésfájlt: {error}",
   "saves_shared_v2": "A mentésfájl kész",
+  "workshop_add_locked_v2": "Épp készül egy játék: a most kiválasztott vagy behúzott játékok a sorba kerülnek, és utána készülnek el.",
+  "workshop_add_locked_manual": "Épp készül egy játék: a most kiválasztott vagy behúzott játékok a sorban várnak, amíg el nem indítod.",
 };
 
 export default hu;

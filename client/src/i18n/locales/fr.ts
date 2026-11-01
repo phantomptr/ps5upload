@@ -6914,6 +6914,8 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "saves_share_failed_v2": "Impossible de l'enregistrer comme fichier : {error}",
   "saves_use_shared_failed_v2": "Impossible de charger le fichier de sauvegarde : {error}",
   "saves_shared_v2": "Fichier de sauvegarde prêt",
+  "workshop_add_locked_v2": "Un jeu est en cours de création : les jeux choisis ou déposés maintenant vont dans la file et sont créés ensuite.",
+  "workshop_add_locked_manual": "Un jeu est en cours de création : les jeux choisis ou déposés maintenant attendent dans la file jusqu'à ce que vous la lanciez.",
 };
 
 export default fr;

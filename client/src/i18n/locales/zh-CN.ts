@@ -6857,6 +6857,8 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "saves_share_failed_v2": "无法另存为文件：{error}",
   "saves_use_shared_failed_v2": "无法载入存档文件：{error}",
   "saves_shared_v2": "存档文件已就绪",
+  "workshop_add_locked_v2": "正在制作一个游戏：现在选择或拖入的游戏会进入队列，并在它之后制作。",
+  "workshop_add_locked_manual": "正在制作一个游戏：现在选择或拖入的游戏会在队列中等待，直到你开始队列。",
 };
 
 export default zh_CN;

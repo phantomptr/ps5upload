@@ -6907,6 +6907,8 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "saves_share_failed_v2": "Tidak dapat menyimpannya sebagai file: {error}",
   "saves_use_shared_failed_v2": "Tidak dapat memuat file save: {error}",
   "saves_shared_v2": "File save siap",
+  "workshop_add_locked_v2": "Sebuah game sedang dibuat: game yang Anda pilih atau jatuhkan sekarang masuk antrean dan dibuat setelahnya.",
+  "workshop_add_locked_manual": "Sebuah game sedang dibuat: game yang Anda pilih atau jatuhkan sekarang menunggu di antrean sampai Anda memulainya.",
 };
 
 export default id;

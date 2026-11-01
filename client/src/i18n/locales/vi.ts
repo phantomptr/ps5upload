@@ -6900,6 +6900,8 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "saves_share_failed_v2": "Không thể lưu thành tệp: {error}",
   "saves_use_shared_failed_v2": "Không thể tải tệp dữ liệu lưu: {error}",
   "saves_shared_v2": "Tệp dữ liệu lưu đã sẵn sàng",
+  "workshop_add_locked_v2": "Đang tạo một game: các game bạn chọn hoặc thả vào bây giờ sẽ vào hàng đợi và được tạo sau nó.",
+  "workshop_add_locked_manual": "Đang tạo một game: các game bạn chọn hoặc thả vào bây giờ sẽ chờ trong hàng đợi cho đến khi bạn bắt đầu.",
 };
 
 export default vi;

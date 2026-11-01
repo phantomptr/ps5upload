@@ -6915,6 +6915,8 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "saves_share_failed_v2": "파일로 저장하지 못했습니다: {error}",
   "saves_use_shared_failed_v2": "세이브 파일을 불러오지 못했습니다: {error}",
   "saves_shared_v2": "세이브 파일 준비 완료",
+  "workshop_add_locked_v2": "게임을 만드는 중입니다. 지금 고르거나 끌어 놓은 게임은 대기열에 들어가 이후에 만들어집니다.",
+  "workshop_add_locked_manual": "게임을 만드는 중입니다. 지금 고르거나 끌어 놓은 게임은 시작할 때까지 대기열에서 기다립니다.",
 };
 
 export default ko;

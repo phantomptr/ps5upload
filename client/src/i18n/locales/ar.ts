@@ -6898,6 +6898,8 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "saves_share_failed_v2": "تعذّر حفظه كملف: {error}",
   "saves_use_shared_failed_v2": "تعذّر تحميل ملف الحفظ: {error}",
   "saves_shared_v2": "ملف الحفظ جاهز",
+  "workshop_add_locked_v2": "تُصنع لعبة الآن: الألعاب التي تختارها أو تسحبها الآن تُضاف إلى قائمة الانتظار وتُصنع بعدها.",
+  "workshop_add_locked_manual": "تُصنع لعبة الآن: الألعاب التي تختارها أو تسحبها الآن تنتظر في قائمة الانتظار حتى تبدأها.",
 };
 
 export default ar;

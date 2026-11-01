@@ -7146,6 +7146,8 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "saves_share_failed_v2": "Nie udało się zapisać jako pliku: {error}",
   "saves_use_shared_failed_v2": "Nie udało się wczytać pliku zapisu: {error}",
   "saves_shared_v2": "Plik zapisu gotowy",
+  "workshop_add_locked_v2": "Trwa tworzenie gry: gry wybrane lub upuszczone teraz trafiają do kolejki i powstaną po niej.",
+  "workshop_add_locked_manual": "Trwa tworzenie gry: gry wybrane lub upuszczone teraz czekają w kolejce, dopóki jej nie uruchomisz.",
 };
 
 export default pl;

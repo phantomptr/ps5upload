@@ -6851,6 +6851,8 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
   "saves_share_failed_v2": "No se pudo guardar como archivo: {error}",
   "saves_use_shared_failed_v2": "No se pudo cargar el archivo de partida: {error}",
   "saves_shared_v2": "Archivo de partida listo",
+  "workshop_add_locked_v2": "Se está creando un juego: los juegos que elijas o sueltes ahora van a la cola y se crean después.",
+  "workshop_add_locked_manual": "Se está creando un juego: los juegos que elijas o sueltes ahora esperan en la cola hasta que la inicies.",
 };
 
 export default es;

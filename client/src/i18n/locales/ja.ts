@@ -6917,6 +6917,8 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "saves_share_failed_v2": "ファイルとして保存できませんでした：{error}",
   "saves_use_shared_failed_v2": "セーブファイルを読み込めませんでした：{error}",
   "saves_shared_v2": "セーブファイルの準備ができました",
+  "workshop_add_locked_v2": "ゲームを作成中です。今選んだりドロップしたゲームはキューに入り、この後に作成されます。",
+  "workshop_add_locked_manual": "ゲームを作成中です。今選んだりドロップしたゲームは、開始するまでキューで待機します。",
 };
 
 export default ja;

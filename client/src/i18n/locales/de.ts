@@ -6906,6 +6906,8 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "saves_share_failed_v2": "Konnte nicht als Datei gespeichert werden: {error}",
   "saves_use_shared_failed_v2": "Die Spielstanddatei konnte nicht geladen werden: {error}",
   "saves_shared_v2": "Spielstanddatei bereit",
+  "workshop_add_locked_v2": "Gerade wird ein Spiel erstellt: Spiele, die du jetzt wählst oder ablegst, kommen in die Warteschlange und werden danach erstellt.",
+  "workshop_add_locked_manual": "Gerade wird ein Spiel erstellt: Spiele, die du jetzt wählst oder ablegst, warten in der Warteschlange, bis du sie startest.",
 };
 
 export default de;
