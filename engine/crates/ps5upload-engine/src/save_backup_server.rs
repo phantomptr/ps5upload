@@ -847,6 +847,19 @@ fn restore(
     result
 }
 
+/// Copies the backup `file` of `title_id` off the server into the local file `dest` (restoring
+/// one to another user, `save_copy`).
+pub(crate) fn fetch_to(title_id: &str, file: &str, dest: &Path) -> Result<(), String> {
+    let s = settings();
+    if s.target.trim().is_empty() {
+        return Err("no server is set for save backups".into());
+    }
+    rt().block_on(async {
+        let (fs, folder) = open_target(&s.target).await?;
+        fetch_backup(fs.as_ref(), &folder, title_id, file, dest).await
+    })
+}
+
 // ── HTTP ────────────────────────────────────────────────────────────────
 
 fn view() -> Value {

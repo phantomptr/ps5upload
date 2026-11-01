@@ -325,7 +325,7 @@ pub(crate) fn list_saves(host: &str) -> Result<Vec<SaveEntry>, String> {
 /// Backs up one save into `dir`; returns the zip's path. `tag` marks the kind (`snap`: taken
 /// while the game ran; None: automatic), and each kind keeps its own `keep`. `verify` runs once
 /// the copy is on this computer, before it is kept: an Err throws the copy away.
-fn back_up_one(
+pub(crate) fn back_up_one(
     host: &str,
     entry: &SaveEntry,
     dir: &str,
@@ -415,7 +415,7 @@ fn download(host: &str, src: &str, dest: &Path, kind: &str) -> Result<(), String
 }
 
 /// Every entry of the folder `path` on `host`.
-fn folder_entries(host: &str, path: &str) -> Result<Vec<Value>, String> {
+pub(crate) fn folder_entries(host: &str, path: &str) -> Result<Vec<Value>, String> {
     all_entries(&|offset| {
         get(&format!(
             "/api/ps5/list-dir?addr={}&path={}&offset={offset}&limit={LIST_PAGE}",
@@ -588,40 +588,132 @@ pub fn snapshot(host: &str, title_id: &str) -> Result<Vec<PathBuf>, String> {
     }
     let mut made = Vec::new();
     for entry in &saves {
-        let mut last = String::new();
-        let mut done = false;
-        for _ in 0..SNAP_TRIES {
-            let before = fingerprint(host, entry)?;
-            std::thread::sleep(SNAP_QUIET);
-            if fingerprint(host, entry)? != before {
-                last = "the game was saving".into();
-                continue;
-            }
-            let check = || match fingerprint(host, entry) {
-                Ok(after) if after == before => Ok(()),
-                Ok(_) => Err("the game saved while it was copied".to_string()),
-                Err(e) => Err(e),
-            };
-            match back_up_one(host, entry, &s.dir, s.keep, Some(SNAP_TAG), &check) {
-                Ok(p) => {
-                    made.push(p);
-                    done = true;
-                    break;
-                }
-                Err(e) => last = e,
-            }
-        }
-        if !done {
-            return Err(format!(
-                "Could not take a clean copy of {title_id}'s save ({last}). Try again in a moment."
-            ));
-        }
+        made.push(snapshot_one(host, entry, &s)?);
     }
     crate::log_info!(
         "save backup: snapshot of {title_id} on {host} ({} file(s))",
         made.len()
     );
     Ok(made)
+}
+
+/// One save's snapshot (see `snapshot`).
+fn snapshot_one(host: &str, entry: &SaveEntry, s: &Settings) -> Result<PathBuf, String> {
+    let title_id = &entry.title_id;
+    let mut last = String::new();
+    for _ in 0..SNAP_TRIES {
+        let before = fingerprint(host, entry)?;
+        std::thread::sleep(SNAP_QUIET);
+        if fingerprint(host, entry)? != before {
+            last = "the game was saving".into();
+            continue;
+        }
+        let check = || match fingerprint(host, entry) {
+            Ok(after) if after == before => Ok(()),
+            Ok(_) => Err("the game saved while it was copied".to_string()),
+            Err(e) => Err(e),
+        };
+        match back_up_one(host, entry, &s.dir, s.keep, Some(SNAP_TAG), &check) {
+            Ok(p) => return Ok(p),
+            Err(e) => last = e,
+        }
+    }
+    Err(format!(
+        "Could not take a clean copy of {title_id}'s save ({last}). Try again in a moment."
+    ))
+}
+
+/// Back up one user's save of `title_id` now (Save Data › Back up now): the whole save folder,
+/// every part of it, as one backup. While the game runs it is a snapshot (taken while the save
+/// sits still); otherwise an ordinary backup, counted with the automatic ones.
+pub fn back_up_now(host: &str, title_id: &str, user_id: u32) -> Result<PathBuf, String> {
+    let s = settings();
+    if s.dir.trim().is_empty() {
+        return Err("Choose a folder for save backups first (Saves › Automatic backups).".into());
+    }
+    let entry = list_saves(host)?
+        .into_iter()
+        .find(|e| e.title_id.eq_ignore_ascii_case(title_id) && e.user_id as u32 == user_id)
+        .ok_or_else(|| format!("{title_id} has no save of this user on the PS5."))?;
+    let made = if title_running(host, &entry.title_id)? {
+        snapshot_one(host, &entry, &s)?
+    } else {
+        back_up_one(host, &entry, &s.dir, s.keep, None, &|| Ok(()))?
+    };
+    crate::log_info!(
+        "save backup: {title_id} of user {user_id:08x} backed up now on {host} ({})",
+        made.display()
+    );
+    Ok(made)
+}
+
+#[derive(Deserialize)]
+pub struct BackUpNowBody {
+    pub addr: String,
+    pub title_id: String,
+    pub user_id: u32,
+}
+
+/// `POST /api/save-backup/now` `{addr, title_id, user_id}`: one user's save of a game, now.
+pub async fn post_back_up_now(Json(b): Json<BackUpNowBody>) -> Response {
+    let title = b.title_id.trim().to_ascii_uppercase();
+    if !plain(&title) {
+        return json_error(StatusCode::BAD_REQUEST, "unexpected title id");
+    }
+    let host = b.addr.trim().to_string();
+    match tokio::task::spawn_blocking(move || back_up_now(&host, &title, b.user_id)).await {
+        Ok(Ok(file)) => Json(json!({
+            "ok": true,
+            "file": file.file_name().and_then(|f| f.to_str()).unwrap_or_default(),
+        }))
+        .into_response(),
+        Ok(Err(e)) => json_error(StatusCode::BAD_GATEWAY, e),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// The newest backup of each game and user in `dir`: `(title_id, user_id, stamp)`, the stamp
+/// without its tag. A folder that isn't a game's, or a name that isn't a backup's, is skipped.
+pub fn latest_backups(dir: &str) -> Vec<(String, u32, String)> {
+    if dir.trim().is_empty() {
+        return Vec::new();
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut best: BTreeMap<(String, u32), String> = BTreeMap::new();
+    for title in rd.filter_map(|e| e.ok()) {
+        let Ok(title_id) = title.file_name().into_string() else {
+            continue;
+        };
+        if !plain(&title_id) || !title.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        for b in list_backups(dir, &title_id) {
+            let stamp: String = b.stamp.chars().take(17).collect();
+            let e = best.entry((title_id.clone(), b.user_id)).or_default();
+            if stamp > *e {
+                *e = stamp;
+            }
+        }
+    }
+    best.into_iter().map(|((t, u), s)| (t, u, s)).collect()
+}
+
+/// `GET /api/save-backup/latest` — `{latest: [{title_id, user_id, stamp}]}`, the newest backup of
+/// each game and user in the backup folder (Save Data's "Backed up …" line).
+pub async fn get_latest() -> Response {
+    let dir = settings().dir;
+    match tokio::task::spawn_blocking(move || latest_backups(&dir)).await {
+        Ok(list) => Json(json!({
+            "latest": list
+                .into_iter()
+                .map(|(t, u, s)| json!({ "title_id": t, "user_id": u, "stamp": s }))
+                .collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 #[derive(Deserialize)]
@@ -780,6 +872,19 @@ pub(crate) fn restore_zip(
     save_path: &str,
     user_id: u32,
 ) -> Result<(), String> {
+    restore_zip_with(host, title_id, zip, save_path, user_id, true)
+}
+
+/// `restore_zip`; with `keep_current` false the save there now is not backed up first (it is
+/// already kept: putting a save back after a failed change).
+pub(crate) fn restore_zip_with(
+    host: &str,
+    title_id: &str,
+    zip: &Path,
+    save_path: &str,
+    user_id: u32,
+    keep_current: bool,
+) -> Result<(), String> {
     let s = settings();
     let writer = save_writer(save_path, title_id, user_id)?;
     let (app, emulator) = (writer.app, writer.emulator.is_some());
@@ -810,6 +915,7 @@ pub(crate) fn restore_zip(
             user_id,
             &s,
             None,
+            keep_current,
         )
     })();
     let _ = cleanup_temp_dir(&tmp_s);
@@ -868,8 +974,10 @@ pub(crate) fn all_entries(
 /// Replace what is in the console's save folder `save_path` with the files of the local folder
 /// `src`: the save there now is backed up first (tagged `tag`, so it can be put back), then the
 /// folder is emptied (kept itself: the console refuses a fresh mkdir under its save root) and
-/// `src`'s files are uploaded into it.
-fn put_in_place(
+/// `src`'s files are uploaded into it. `keep_current` false skips that backup (the caller
+/// already kept the save).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn put_in_place(
     host: &str,
     title_id: &str,
     src: &Path,
@@ -877,6 +985,7 @@ fn put_in_place(
     user_id: u32,
     s: &Settings,
     tag: Option<&str>,
+    keep_current: bool,
 ) -> Result<(), String> {
     // Keep what is there now, so the change can be undone: in the backup folder, or (with none
     // set) on the server the save backups go to.
@@ -890,9 +999,14 @@ fn put_in_place(
             .unwrap_or_default()
             .into(),
     };
-    if !s.dir.trim().is_empty() {
-        back_up_one(host, &current, &s.dir, s.keep, tag, &|| Ok(()))
-            .map_err(|e| format!("could not back up the current save first: {e}"))?;
+    let mut kept: Option<PathBuf> = None;
+    if !keep_current {
+        // Already kept by the caller.
+    } else if !s.dir.trim().is_empty() {
+        kept = Some(
+            back_up_one(host, &current, &s.dir, s.keep, tag, &|| Ok(()))
+                .map_err(|e| format!("could not back up the current save first: {e}"))?,
+        );
     } else if crate::save_backup_server::configured() {
         crate::save_backup_server::back_up_before_restore(host, &current)
             .map_err(|e| format!("could not back up the current save first: {e}"))?;
@@ -902,33 +1016,49 @@ fn put_in_place(
     let place = crate::ps2_saves::place_of(save_path);
     let folder = place.as_ref().map_or(save_path, |p| p.folder);
     // Every name first, then the deletes: a page asked for after a delete would skip some.
-    let names = folder_entries(host, folder)?;
-    for e in names {
-        let Some(name) = e.get("name").and_then(Value::as_str) else {
-            continue;
-        };
-        if name == "." || name == ".." || place.as_ref().is_some_and(|p| !p.holds(name)) {
-            continue;
+    let replaced = (|| {
+        let names = folder_entries(host, folder)?;
+        for e in names {
+            let Some(name) = e.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            if name == "." || name == ".." || place.as_ref().is_some_and(|p| !p.holds(name)) {
+                continue;
+            }
+            post(
+                "/api/ps5/fs/delete",
+                json!({ "addr": host, "path": format!("{folder}/{name}") }),
+            )?;
         }
-        post(
-            "/api/ps5/fs/delete",
-            json!({ "addr": host, "path": format!("{folder}/{name}") }),
+        let start = post(
+            "/api/transfer/dir",
+            json!({
+                "addr": host,
+                "src_dir": src.to_string_lossy(),
+                "dest_root": folder,
+                "excludes": [],
+            }),
         )?;
+        let job = start
+            .get("job_id")
+            .and_then(Value::as_str)
+            .ok_or("upload did not start")?;
+        wait_job(job)
+    })();
+    match (replaced, kept) {
+        (Ok(()), _) => Ok(()),
+        (Err(why), None) => Err(why),
+        // Every file of the folder back as it was, so a restore never leaves a save half put in.
+        (Err(why), Some(zip)) => {
+            match restore_zip_with(host, title_id, &zip, save_path, user_id, false) {
+                Ok(()) => Err(format!("{why}. The save there before was put back.")),
+                Err(e) => Err(format!(
+                    "{why}. Putting the save back failed too ({e}); restore {} from the game's save backups.",
+                    zip.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()
+                )),
+            }
+        }
     }
-    let start = post(
-        "/api/transfer/dir",
-        json!({
-            "addr": host,
-            "src_dir": src.to_string_lossy(),
-            "dest_root": folder,
-            "excludes": [],
-        }),
-    )?;
-    let job = start
-        .get("job_id")
-        .and_then(Value::as_str)
-        .ok_or("upload did not start")?;
-    wait_job(job)
 }
 
 // ── PS4 saves onto the PS5 ──────────────────────────────────────────────
@@ -1040,6 +1170,7 @@ fn import_ps4(
         user_id,
         &s,
         Some(BEFORE_PS4_TAG),
+        true,
     )?;
     crate::log_info!("save backup: PS4 save of {title_id} put on {host} ({save_path})");
     Ok(())
@@ -1091,7 +1222,7 @@ pub const BEFORE_SHARE_TAG: &str = "beforeshare";
 /// What a shared save says about itself, inside its one folder.
 pub const SHARE_MANIFEST: &str = ".ps5upload-share.json";
 /// A save's own system folder (its owner's account and the console's view of it): kept.
-const SYS_DIR: &str = "sce_sys";
+pub(crate) const SYS_DIR: &str = "sce_sys";
 
 /// A PS5 save image, `/user/home/<8 hex>/savedata_prospero/<TITLE>/<name>`: (title, name).
 pub fn ps5_save_image(image: &str) -> Option<(String, String)> {
@@ -1103,7 +1234,8 @@ pub fn ps5_save_image(image: &str) -> Option<(String, String)> {
                 && plain(title)
                 && !name.is_empty()
                 && !name.starts_with('.')
-                && !name.ends_with(".bin") =>
+                && !name.ends_with(".bin")
+                && !is_console_backup_image(name) =>
         {
             Some((title.to_string(), name.to_string()))
         }
@@ -1111,13 +1243,20 @@ pub fn ps5_save_image(image: &str) -> Option<(String, String)> {
     }
 }
 
+/// One of the console's own backup copies of a save image (`sdimg_sce_bu_<name>`, which the PS5
+/// keeps beside `sdimg_<name>` to recover a damaged save): never shared, copied or opened as a
+/// save of its own.
+pub fn is_console_backup_image(name: &str) -> bool {
+    name.starts_with("sdimg_sce_bu_") || name.starts_with("sce_bu_")
+}
+
 /// The save folder holding `image`.
-fn folder_of(image: &str) -> &str {
+pub(crate) fn folder_of(image: &str) -> &str {
     image.rsplit_once('/').map(|(d, _)| d).unwrap_or(image)
 }
 
 /// Opens `image` decrypted on the console; its mount point.
-fn open_save(host: &str, image: &str) -> Result<String, String> {
+pub(crate) fn open_save(host: &str, image: &str) -> Result<String, String> {
     let v = post(
         "/api/ps5/saves/open",
         json!({ "addr": host, "image": image }),
@@ -1132,7 +1271,7 @@ fn open_save(host: &str, image: &str) -> Result<String, String> {
 }
 
 /// Closes the open save (written back when it changed).
-fn close_save(host: &str) -> Result<bool, String> {
+pub(crate) fn close_save(host: &str) -> Result<bool, String> {
     let v = post("/api/ps5/saves/close", json!({ "addr": host }))?;
     Ok(v.get("written_back")
         .and_then(Value::as_bool)
@@ -1140,67 +1279,11 @@ fn close_save(host: &str) -> Result<bool, String> {
 }
 
 /// A save is already open on the console (one at a time).
-fn a_save_is_open(host: &str) -> bool {
+pub(crate) fn a_save_is_open(host: &str) -> bool {
     post("/api/ps5/saves/open", json!({ "addr": host, "image": "" }))
         .ok()
         .and_then(|v| v.get("mounted").and_then(Value::as_bool))
         .unwrap_or(false)
-}
-
-/// The files of the save `image`, as a zip to give to someone else: one folder named after the
-/// game with the game's files and a small manifest, the save's sce_sys left out.
-pub fn share_save(host: &str, image: &str) -> Result<(String, Vec<u8>), String> {
-    let (title_id, name) =
-        ps5_save_image(image).ok_or_else(|| format!("{image} is not a PS5 save image"))?;
-    if title_running(host, &title_id)? {
-        return Err(format!(
-            "{title_id} is running on the PS5. Close the game, then share its save."
-        ));
-    }
-    if a_save_is_open(host) {
-        return Err("A save is open in Save Data. Close it first.".into());
-    }
-    let tmp = make_temp_dir(&title_id)?;
-    let tmp_s = tmp.to_string_lossy().into_owned();
-    let result = (|| {
-        let mount = open_save(host, image)?;
-        let copied = (|| {
-            let start = post(
-                "/api/transfer/download",
-                json!({ "addr": host, "src_path": mount, "dest_dir": tmp_s, "kind": "folder" }),
-            )?;
-            let job = start
-                .get("job_id")
-                .and_then(Value::as_str)
-                .ok_or("download did not start")?;
-            wait_job(job)
-        })();
-        // Read only: closing it changes nothing on the console.
-        let closed = close_save(host);
-        copied?;
-        closed?;
-        let leaf = mount.rsplit('/').next().unwrap_or("save_mount");
-        let got = tmp.join(leaf);
-        let dir = tmp.join(&title_id);
-        std::fs::rename(&got, &dir).map_err(|e| format!("copy: {e}"))?;
-        let _ = std::fs::remove_dir_all(dir.join(SYS_DIR));
-        let manifest = json!({
-            "kind": "ps5",
-            "title_id": title_id,
-            "image": name,
-            "shared_at_ms": now_ms(),
-            "app": env!("CARGO_PKG_VERSION"),
-        });
-        std::fs::write(dir.join(SHARE_MANIFEST), manifest.to_string())
-            .map_err(|e| format!("manifest: {e}"))?;
-        let zip = tmp.join("share.zip");
-        zip_folder(&tmp, &title_id, &zip).map_err(|e| format!("zip: {e:#}"))?;
-        let bytes = std::fs::read(&zip).map_err(|e| format!("zip: {e}"))?;
-        let file = format!("{title_id} {name} shared {}.zip", stamp(now_ms()));
-        Ok((file, bytes))
-    })();
-    let _ = cleanup_temp_dir(&tmp_s);
-    result
 }
 
 /// What a shared save holds, checked before anything on the console changes: the folder of
@@ -1228,161 +1311,6 @@ pub fn shared_save_contents(unpacked: &Path, title_id: &str) -> Result<PathBuf, 
         return Err("the shared save has no files".into());
     }
     Ok(dir)
-}
-
-/// Put a shared save's files into your own save `image` of the same game, which the console then
-/// keeps as yours. Your save is backed up first (tagged `beforeshare`) and put back if a step
-/// fails.
-pub fn use_shared_save(
-    host: &str,
-    image: &str,
-    user_id: u32,
-    zip_bytes: &[u8],
-) -> Result<(), String> {
-    let s = settings();
-    if s.dir.trim().is_empty() {
-        return Err("Choose a folder for save backups first (Save Data › Automatic backups): your own save is kept there before its files are replaced.".into());
-    }
-    let (title_id, _) =
-        ps5_save_image(image).ok_or_else(|| format!("{image} is not a PS5 save image"))?;
-    let tmp = make_temp_dir(&title_id)?;
-    let tmp_s = tmp.to_string_lossy().into_owned();
-    let result = (|| {
-        let zip = tmp.join("shared.zip");
-        std::fs::write(&zip, zip_bytes).map_err(|e| format!("save the file: {e}"))?;
-        let unpacked = tmp.join("x");
-        std::fs::create_dir_all(&unpacked).map_err(|e| format!("unpack: {e}"))?;
-        unzip_strict(&zip, &unpacked, &title_id)
-            .map_err(|e| format!("this file is not a shared save of {title_id}: {e:#}"))?;
-        let src = shared_save_contents(&unpacked, &title_id)?;
-        if title_running(host, &title_id)? {
-            return Err(format!(
-                "{title_id} is running on the PS5. Close the game, then try again."
-            ));
-        }
-        if a_save_is_open(host) {
-            return Err("A save is open in Save Data. Close it first.".into());
-        }
-        // Yours first, so this can be undone.
-        let folder = folder_of(image).to_string();
-        let mine = SaveEntry {
-            title_id: title_id.clone(),
-            user_id: user_id as i32,
-            path: folder.clone(),
-            size: 0,
-            mtime: 0,
-            kind: "ps5".into(),
-        };
-        let backup = back_up_one(host, &mine, &s.dir, s.keep, Some(BEFORE_SHARE_TAG), &|| {
-            Ok(())
-        })
-        .map_err(|e| format!("could not back up your save first: {e}"))?;
-        let mount = open_save(host, image)?;
-        let replaced = (|| {
-            let listing = get(&format!(
-                "/api/ps5/list-dir?addr={}&path={}&offset=0&limit=4096",
-                enc(host),
-                enc(&mount)
-            ))?;
-            for e in listing
-                .get("entries")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-            {
-                let Some(name) = e.get("name").and_then(Value::as_str) else {
-                    continue;
-                };
-                if name == "." || name == ".." || name == SYS_DIR {
-                    continue;
-                }
-                post(
-                    "/api/ps5/fs/delete",
-                    json!({ "addr": host, "path": format!("{mount}/{name}") }),
-                )?;
-            }
-            let start = post(
-                "/api/transfer/dir",
-                json!({ "addr": host, "src_dir": src.to_string_lossy(), "dest_root": mount, "excludes": [] }),
-            )?;
-            let job = start
-                .get("job_id")
-                .and_then(Value::as_str)
-                .ok_or("upload did not start")?;
-            wait_job(job)
-        })();
-        let closed = close_save(host);
-        match (replaced, closed) {
-            (Ok(()), Ok(_)) => {
-                crate::log_info!("save backup: shared save of {title_id} put on {host} ({image})");
-                Ok(())
-            }
-            (r, c) => {
-                let why = r.err().or_else(|| c.err()).unwrap_or_default();
-                let file = backup
-                    .file_name()
-                    .map(|f| f.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                match restore(host, &title_id, &file, &folder, user_id) {
-                    Ok(()) => Err(format!("{why}. Your own save was put back.")),
-                    Err(e) => Err(format!(
-                        "{why}. Putting your save back failed too ({e}); restore {file} from Save Data."
-                    )),
-                }
-            }
-        }
-    })();
-    let _ = cleanup_temp_dir(&tmp_s);
-    result
-}
-
-#[derive(Deserialize)]
-pub struct ShareBody {
-    pub addr: String,
-    pub image: String,
-}
-
-/// `POST /api/save-backup/share` `{addr, image}`: the save's files as a zip (see `share_save`).
-pub async fn post_share(Json(b): Json<ShareBody>) -> Response {
-    let r = tokio::task::spawn_blocking(move || share_save(b.addr.trim(), b.image.trim())).await;
-    match r {
-        Ok(Ok((file, bytes))) => (
-            [
-                (
-                    axum::http::header::CONTENT_TYPE,
-                    "application/zip".to_string(),
-                ),
-                (
-                    axum::http::header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"{}\"", file.replace('"', "")),
-                ),
-            ],
-            bytes,
-        )
-            .into_response(),
-        Ok(Err(e)) => json_error(StatusCode::BAD_GATEWAY, e),
-        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct UseSharedQuery {
-    pub addr: String,
-    pub image: String,
-    pub user_id: u32,
-}
-
-/// `POST /api/save-backup/use-shared?addr=&image=&user_id=` with the shared zip as the body.
-pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::Bytes) -> Response {
-    let r = tokio::task::spawn_blocking(move || {
-        use_shared_save(q.addr.trim(), q.image.trim(), q.user_id, &body)
-    })
-    .await;
-    match r {
-        Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
-        Ok(Err(e)) => json_error(StatusCode::BAD_GATEWAY, e),
-        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    }
 }
 
 // ── HTTP ────────────────────────────────────────────────────────────────
@@ -1525,6 +1453,33 @@ pub async fn post_restore(Json(b): Json<RestoreBody>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Save Data's "Backed up …" line: the newest of each game and user, tags left off.
+    #[test]
+    fn the_newest_backup_of_each_game_and_user() {
+        let base = std::env::temp_dir().join(format!("ps5u-latest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let t = base.join("PPSA01234");
+        std::fs::create_dir_all(&t).unwrap();
+        for f in [
+            "PPSA01234_user10000000_2026-10-01_100000.zip",
+            "PPSA01234_user10000000_2026-10-03_090000_snap.zip",
+            "PPSA01234_user20000000_2026-09-01_100000.zip",
+            "notes.txt",
+        ] {
+            std::fs::write(t.join(f), b"x").unwrap();
+        }
+        std::fs::create_dir_all(base.join("not a game")).unwrap();
+        assert_eq!(
+            latest_backups(base.to_str().unwrap()),
+            vec![
+                ("PPSA01234".into(), 0x1000_0000, "2026-10-03_090000".into()),
+                ("PPSA01234".into(), 0x2000_0000, "2026-09-01_100000".into()),
+            ]
+        );
+        assert!(latest_backups("").is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// Sharing works on PS5 save images only, named as the console keeps them.
     #[test]

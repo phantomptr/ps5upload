@@ -99,6 +99,7 @@ mod rp_replay;
 mod rp_stream_api;
 mod save_backup;
 mod save_backup_server;
+mod save_copy;
 mod settings_backup;
 mod shared_state;
 mod state_io;
@@ -11131,12 +11132,20 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             "/api/save-backup/import-ps4",
             post(save_backup::post_import_ps4),
         )
-        .route("/api/save-backup/share", post(save_backup::post_share))
+        .route("/api/save-backup/share", post(save_copy::post_share))
         // A shared save's zip comes as the body: saves run from a few KB to a few hundred MB.
         .route(
             "/api/save-backup/use-shared",
-            post(save_backup::post_use_shared)
+            post(save_copy::post_use_shared)
                 .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024)),
+        )
+        // Another user's save of the same game on the same console (#612).
+        .route("/api/save-backup/copy", post(save_copy::post_copy))
+        .route("/api/save-backup/now", post(save_backup::post_back_up_now))
+        .route("/api/save-backup/latest", get(save_backup::get_latest))
+        .route(
+            "/api/save-backup/restore-to-user",
+            post(save_copy::post_restore_to_user),
         )
         .route(
             "/api/shared/{name}",
