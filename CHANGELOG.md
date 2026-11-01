@@ -4,36 +4,47 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 10.4.0
 
-- **Groundwork: your computer's keyboard and mouse as the PS5's own.** Remote Play's Settings ›
-  Controls now has three modes, kept per game (the home screen has its own): **Controller** (the
-  keys and mouse act as a controller, exactly as before, and the default), **Keyboard & mouse**
-  (the PS5 gets a real keyboard and mouse, for games and apps that support them) and **Mixed** (a
-  real mouse; the keys act as a controller, WASD moves). Ctrl+Alt+M switches. A line says what the
-  PS5 sees: "PS5 sees: mouse ✓/– keyboard ✓/–".
-- **Still off by default.** The console side now runs as a small companion process the helper
-  starts through the PS5's payload loader (port 9021) when you pick Keyboard & mouse or Mixed, so
-  a hang or crash there no longer takes the helper down. On a FW 13.60 console it has been tested end to end:
-  every move, click, scroll and key arrived, and the PS5 let go of everything when the stream
-  ended, the computer went quiet, or the companion or helper was restarted. Whether a game takes
-  the input is still untested, so it only turns on for testers (FW 13.60 with
-  `/data/ps5upload/vinput.enable`); everywhere else Settings says "Native keyboard & mouse isn't
-  available on this console yet" and Controller works exactly as before.
-- **A mode button on the stream bar**, next to Game: it shows the mode (controller, keyboard &
-  mouse, or both for Mixed) and a click switches like Ctrl+Alt+M. It spins while the PS5 starts its
-  keyboard & mouse side, and is greyed out with the reason when the console can't do it (for
-  example "Needs a payload loader on port 9021").
-- How it works once on: the mouse goes to the PS5 only while it is captured on the picture;
-  keys are sent by their place on the keyboard, whatever its layout; everything held is let go
-  when the window loses focus, Settings opens, the mode changes or the stream stops, and the
-  console lets go by itself if the computer goes quiet for 2 seconds.
+- **Your computer's keyboard and mouse as the PS5's own, in Remote Play (FW 13.60).** Settings ›
+  Controls has three modes, kept per game: **Controller** (the keys and mouse act as a controller,
+  exactly as before, and the default), **Keyboard & mouse** (the PS5 gets a real keyboard and
+  mouse, for games and apps that support them) and **Mixed** (a real mouse; the keys act as a
+  controller, WASD moves). A button on the stream bar shows the mode and switches it, and
+  Ctrl+Option+M (Ctrl+Alt+M on Windows and Linux) does too. Tested end to end on FW 13.60; other
+  firmwares say it isn't available yet and keep Controller.
+- **Click the picture to give the PS5 your keyboard and mouse; press and let go of Ctrl+Option
+  (Ctrl+Alt) to get them back.** Ctrl+Option with another key still goes to the PS5. They also
+  come back when the window loses focus, Settings or the text box opens, or the stream stops, and
+  everything held on the PS5 is let go first. While they're released, keys work in the app again.
+- **Hard to miss the way out.** The first capture shows a card with the keys to press; a faint
+  "⌃ ⌥ to release" stays at the top while captured, and the card comes back when you seem to be
+  trying to get out (Esc twice, ⌘ or the Windows key, pushing against an edge, clicking where the
+  bar is).
+- **Both shortcuts can be changed** in Settings › Controls › Shortcuts: press the new keys, or
+  Reset. A shortcut the app already uses, a single letter, or Esc alone is refused. Hold Esc to
+  release is an option there too.
+- **Phones and tablets as the PS5's touchpad and keyboard.** A Controller / Touchpad switch over
+  the picture: drag moves the pointer, tap clicks, a two-finger tap right-clicks, a two-finger
+  drag scrolls, tap then drag selects. ⌨ opens the phone's keyboard and types on the PS5. The
+  phone-as-controller page has a Touchpad & keyboard tab as well.
+- How it works: the console side is a small companion process the helper starts through the
+  PS5's payload loader (port 9021), so a problem there never takes the helper down. The PS5 lets
+  go of every key and button by itself if the computer goes quiet for 2 seconds. To turn it off on
+  a console, create `/data/ps5upload/vinput.disable`.
 - **Type into the PS5's on-screen keyboard during Remote Play (experimental).** When a game or
   the PS5 opens its keyboard, a text box shows over the stream (in full screen too) with the
   console's text in it, ready to type, and a phone opens its own keyboard. What you type reaches
   the PS5 as you go; Enter or Done keeps it, Esc or Cancel drops it, and the box closes when the
   PS5 closes its keyboard. The game gets no keys or controller presses while you type. Needs the
   engine from this version; not yet tried on a console.
+- **Fixed: play time went to the wrong game.** The helper credited the first game it found
+  running, so a game left in the background collected the hours of the one being played, and
+  the one being played showed minutes. It now counts only the game that is actually running in
+  front, nothing while the console sleeps, and bringing a game back to the front is not a new
+  launch. Times recorded before stay as they were; Reset play time on the Games tab clears them.
+- **After an AppImage update the app starts again through PS5Upload.sh** when it sits beside the
+  AppImage, so its rescues for FUSE and the picture apply to the new version too.
 - **Workshop: save each next to its source.** A new option under Options puts every package,
   image or folder in the folder that holds its game or image (never inside a game folder),
   instead of the one Output folder. It is remembered. If the name is taken there, " (2)" is
@@ -72,7 +83,6 @@ What's new in ps5upload, written for humans.
   more. Cards are tighter, and the Upload / Stream & install buttons stay at the bottom of the
   window however long the options above them are.
 
----
 - **Fixed: "Install and restart" did nothing in the Linux AppImage on some systems.** The update
   script inherited the AppImage's own library paths, so on Arch the system shell loaded the
   bundled, older readline and quit at once: the app closed and the update was never installed.
