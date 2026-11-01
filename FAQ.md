@@ -331,8 +331,9 @@ back. **Restore to another user…** puts a backup into another account's save o
 same PS5 instead (that account must have a save of the game; its current save is backed up
 first).
 
-The saves of ProsperoEden, the Switch emulator (PPSA99008), are backed up too, locally and to a
-server, and "after a game closes" means after ProsperoEden closes. Each game's save of each
+The saves of ProsperoEden, the Switch emulator (PPSA99008, or PPSA99016 for "ProsperoEden
+(Mirror)" on ProsperoStore), are backed up too, locally and to a server, and "after a game
+closes" means after ProsperoEden closes. Each game's save of each
 profile is its own backup, in a folder named after the game's 16-character title ID. They are
 listed under Saves, in "Switch games (ProsperoEden)": each game by its title ID (no names are
 known), per profile ("Console" is the console's own save), with Back up now and its backups. To
