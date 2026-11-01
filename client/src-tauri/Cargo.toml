@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "10.4.1"
+version = "10.5.0"
 description = "The all-in-one PS5 companion app."
 license = "GPL-3.0-or-later"
 edition = "2021"
