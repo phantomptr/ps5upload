@@ -13,6 +13,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,12 @@
 #include "vinput_wire.h"
 
 #define IO_ERR (-100)
+/* start_companion: the loader took the ELF but the companion never answered (its Init hung, or it
+ * died before listening). */
+#define START_INIT_FAILED (-3)
+/* After an Init failure, only an open that comes this long after the one before it (the user
+ * turning the mode on again, not the engine's 300 ms "starting" re-asks) tries once more. */
+#define FRESH_ASK_MS 2000
 
 enum { ST_IDLE, ST_STARTING, ST_RUNNING, ST_STOPPED, ST_UNAVAILABLE };
 static const char *const ST_NAME[] = {"idle", "starting", "running", "stopped", "unavailable"};
@@ -43,6 +50,9 @@ static int g_want_m, g_want_k; /* what the session has open (made again after a 
 static int g_m_open, g_k_open; /* what the companion has open */
 static uint8_t g_buttons, g_mods, g_keys[VINPUT_KEYS];
 static int g_fails;
+/* The companion did not get through Init: no automatic retry (an unknown firmware's Init may hang
+ * for good, unkillable); g_init_pid is that companion, never joined by another while it lives. */
+static int g_init_failed, g_init_pid;
 static int g_kill_pid; /* a silent companion to end: the relay thread does it, without g_mu */
 static long long g_retry_at, g_last_reply, g_last_hb, g_running_since, g_unavail_at, g_asked_at = -100000;
 static int g_thread_on, g_shutdown;
@@ -313,13 +323,14 @@ static int start_companion(started_t *s) {
     }
     memset(hello, 0, sizeof hello);
     unlink(token_path);
-    /* It started but never answered (a hung Init): end it. */
+    /* It started but never answered (a hung Init, or it died in it): end it. */
     pid = read_pid(pid_path);
+    s->pid = pid;
     if (pid > 0 && C.kill) {
         fprintf(stderr, "[vinput] companion pid %d never answered: killed\n", pid);
         C.kill(C.ctx, pid);
     }
-    return -1;
+    return START_INIT_FAILED;
 }
 
 /* ── the relay thread: starts, keeps, and starts again ──────────────────────────────────────── */
@@ -371,6 +382,14 @@ static void *relay_main(void *arg) {
                 if (g_want_m || g_want_k) (void)open_locked(g_want_m, g_want_k);
                 g_buttons = g_mods = 0;
                 memset(g_keys, 0, sizeof g_keys);
+            } else if (rc == START_INIT_FAILED) {
+                /* Not tried again on its own: only a fresh open does (ask_start_locked). */
+                fprintf(stderr, "[vinput] companion (pid %d) did not get through Init: not retried\n", s.pid);
+                g_init_failed = 1;
+                g_init_pid = s.pid;
+                g_st = ST_UNAVAILABLE;
+                g_reason = "vinput_companion_failed";
+                g_unavail_at = now;
             } else if (rc == VRELAY_NO_LOADER) {
                 fprintf(stderr, "[vinput] no payload loader on :9021\n");
                 g_st = ST_UNAVAILABLE;
@@ -446,16 +465,33 @@ static void wake_thread_locked(void) {
 /* "unavailable" is asked again after a while: a loader may have been started since (or whatever
  * stopped the companion has passed). Lock held. */
 static int unavailable_over_locked(long long now) {
+    if (g_init_failed) return 0; /* only a fresh open (ask_start_locked) */
     long long wait = strcmp(g_reason ? g_reason : "", "vinput_needs_loader") == 0 ? CFG(loader_retry_ms, 10000)
                                                                                  : CFG(healthy_ms, 30000);
     return now - g_unavail_at >= wait;
 }
 
+/* 1 while pid is a live process. */
+static int pid_alive(int pid) {
+    if (pid <= 0) return 0;
+    if (C.alive) return C.alive(C.ctx, pid);
+    return kill(pid, 0) == 0 || errno == EPERM;
+}
+
 static int ask_start_locked(void) {
-    long long now = now_ms();
+    long long now = now_ms(), before = g_asked_at;
     g_asked_at = now;
     if (g_st == ST_UNAVAILABLE) {
-        if (!unavailable_over_locked(now)) return VINPUT_E_UNSUPPORTED;
+        if (g_init_failed) {
+            /* Once more only for a fresh open, and never while the last one is still there
+             * (stuck in Init: a second would only pile up behind it). */
+            if (now - before < FRESH_ASK_MS || pid_alive(g_init_pid)) return VINPUT_E_UNSUPPORTED;
+            fprintf(stderr, "[vinput] a fresh open after an Init failure: trying once more\n");
+            g_init_failed = 0;
+            g_init_pid = 0;
+        } else if (!unavailable_over_locked(now)) {
+            return VINPUT_E_UNSUPPORTED;
+        }
         g_fails = 0;
         g_reason = NULL;
         g_st = ST_IDLE;
@@ -472,7 +508,8 @@ static void r_caps(int *mouse, int *keyboard) {
     if (g_st == ST_RUNNING) {
         *mouse = g_cm;
         *keyboard = g_ck;
-    } else if (g_st == ST_UNAVAILABLE && !unavailable_over_locked(now_ms())) {
+    } else if (g_st == ST_UNAVAILABLE && !g_init_failed && !unavailable_over_locked(now_ms())) {
+        /* (after an Init failure caps stays 1, so a fresh open reaches ask_start_locked) */
         *mouse = *keyboard = 0;
     } else {
         *mouse = *keyboard = 1; /* not known until it runs: it can be started */
@@ -619,6 +656,7 @@ void vinput_relay_reset(void) {
     g_buttons = g_mods = 0;
     memset(g_keys, 0, sizeof g_keys);
     g_fails = 0;
+    g_init_failed = g_init_pid = 0;
     g_retry_at = g_last_reply = g_last_hb = g_running_since = g_unavail_at = g_asked_at = 0;
     g_asked_at = -100000;
     g_thread_on = 0;

@@ -6,7 +6,7 @@
  *   - the relay (vinput_relay.c) under vinput.c, against the real companion loop on a thread with a
  *     fake device ("launch" starts that thread, "kill" ends it): a session starts it ("starting"),
  *     input flows, a companion that dies or goes silent is killed (without the relay's lock) and
- *     started again with the session's devices made again, three failed starts make it "unavailable", no loader says so.
+ *     started again with the session's devices made again, a companion that never gets through Init is not started again on its own (only a fresh open, never while it lives), no loader says so.
  * Build: see the root Makefile test-root (also under ASan and TSan). */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -126,6 +126,7 @@ static pthread_mutex_t l_mu = PTHREAD_MUTEX_INITIALIZER;
 static comp_t *g_comp;
 static int l_mode; /* 0 start a companion, 1 no loader, 2 sent but nothing starts */
 static int l_launches, l_kills;
+static char l_pidfile[256]; /* mode 2 writes its pid here, as a companion does before its Init */
 static const char *g_comp_pid = ""; /* the pid file of the next comp_start */
 
 #define DONE(c) __atomic_load_n(&(c)->done, __ATOMIC_ACQUIRE)
@@ -423,6 +424,13 @@ static int fake_launch(void *ctx) {
         }
         if (!g_comp) g_comp = comp_start(400, 100000);
     }
+    if (l_mode == 2 && l_pidfile[0]) {
+        FILE *f = fopen(l_pidfile, "w");
+        if (f) {
+            fprintf(f, "%d\n", (int)getpid());
+            fclose(f);
+        }
+    }
     pthread_mutex_unlock(&l_mu);
     return l_mode == 1 ? VRELAY_NO_LOADER : 0;
 }
@@ -629,23 +637,103 @@ static void test_relay_no_loader(void) {
     CHECK(launches() == 2);
 }
 
-static void test_relay_gives_up(void) {
+/* A companion that never gets through Init (mode 2: the loader took it, nothing answers; on an
+ * untested firmware an Init that hangs, maybe unkillably): ended by pid, and NOT started again on its
+ * own, neither by the engine's quick "starting" re-asks nor after a while. A fresh open (the mode
+ * turned on again) tries once more, but never while the stuck one still lives. */
+static int f_stuck_alive; /* the fake's answer for the stuck pid */
+static int fake_alive(void *ctx, int pid) {
+    (void)ctx;
+    (void)pid;
+    return __atomic_load_n(&f_stuck_alive, __ATOMIC_ACQUIRE);
+}
+
+static void test_relay_init_failure_not_retried(void) {
+    char pidf[256];
+    vrelay_cfg_t cfg;
     long long until;
     relay_setup(2);
+    snprintf(pidf, sizeof pidf, "%s/vinput.pid", g_dir);
+    pthread_mutex_lock(&l_mu);
+    snprintf(l_pidfile, sizeof l_pidfile, "%s", pidf);
+    pthread_mutex_unlock(&l_mu);
+    vinput_set_backend(NULL);
+    vinput_relay_reset();
+    memset(&cfg, 0, sizeof cfg);
+    cfg.launch = fake_launch;
+    cfg.kill = fake_kill;
+    cfg.alive = fake_alive;
+    cfg.port = g_port;
+    cfg.token_path = g_token;
+    cfg.pid_path = pidf;
+    cfg.call_timeout_ms = 100;
+    cfg.silent_ms = 300;
+    cfg.hb_ms = 50;
+    cfg.connect_wait_ms = 400;
+    cfg.max_fails = 3;
+    cfg.backoff_ms = 50;
+    cfg.healthy_ms = 300; /* the old "asked again after" wait: must not apply */
+    cfg.loader_retry_ms = 300;
+    vinput_relay_configure(&cfg);
+    vinput_set_backend(vinput_relay_backend());
+    __atomic_store_n(&f_stuck_alive, 0, __ATOMIC_RELEASE);
+
+    /* the engine's open, re-asked every 300 ms while it answers "starting" */
     session("{\"op\":\"open\",\"id\":7,\"mouse\":true,\"keyboard\":true}");
-    until = now_ms() + 5000;
-    while (now_ms() < until) {
-        vinput_caps_json(g_out, sizeof g_out);
-        if (has("unavailable")) break;
+    CHECK(has("vinput_starting"));
+    until = now_ms() + 3000;
+    while (now_ms() < until && has("vinput_starting")) {
+        nap(300);
         session("{\"op\":\"open\",\"id\":7,\"mouse\":true,\"keyboard\":true}");
-        nap(50);
     }
+    CHECK(has("\"err\":\"vinput_companion_failed\""));
+    CHECK(launches() == 1); /* one start, no backoff restarts */
+    vinput_caps_json(g_out, sizeof g_out);
     CHECK(has("\"companion\":\"unavailable\"") && has("\"reason\":\"vinput_companion_failed\""));
-    CHECK(launches() == 3);
-    session("{\"op\":\"open\",\"id\":7,\"mouse\":true,\"keyboard\":true}");
+    /* well past every old retry wait, with quick asks: still not started again */
+    for (int i = 0; i < 6; i++) {
+        nap(150);
+        session("{\"op\":\"open\",\"id\":7,\"mouse\":true,\"keyboard\":true}");
+        CHECK(has("\"err\":\"vinput_companion_failed\""));
+    }
+    nap(400);
+    CHECK(launches() == 1);
+    CHECK(kills() == 1); /* the one in Init was ended by its pid */
+
+    /* a fresh open (asks stopped for > 2 s), while the stuck one still lives: not started */
+    __atomic_store_n(&f_stuck_alive, 1, __ATOMIC_RELEASE);
+    nap(2100);
+    session("{\"op\":\"open\",\"id\":8,\"mouse\":true,\"keyboard\":true}");
     CHECK(has("\"err\":\"vinput_companion_failed\""));
     nap(300);
-    CHECK(launches() == 3); /* no retry loop */
+    CHECK(launches() == 1);
+
+    /* it is gone: the next fresh open tries once more (and only once) */
+    __atomic_store_n(&f_stuck_alive, 0, __ATOMIC_RELEASE);
+    nap(2100);
+    session("{\"op\":\"open\",\"id\":9,\"mouse\":true,\"keyboard\":true}");
+    CHECK(has("vinput_starting"));
+    until = now_ms() + 3000;
+    while (now_ms() < until && has("vinput_starting")) {
+        nap(300);
+        session("{\"op\":\"open\",\"id\":9,\"mouse\":true,\"keyboard\":true}");
+    }
+    CHECK(has("\"err\":\"vinput_companion_failed\""));
+    nap(500);
+    CHECK(launches() == 2);
+
+    /* and a fresh open on a console where it works: up again */
+    pthread_mutex_lock(&l_mu);
+    l_mode = 0;
+    pthread_mutex_unlock(&l_mu);
+    nap(2100);
+    CHECK(open_until_ok(3000, NULL));
+    CHECK(launches() == 3);
+    session("{\"op\":\"close\",\"id\":9}");
+    pthread_mutex_lock(&l_mu);
+    l_pidfile[0] = '\0';
+    pthread_mutex_unlock(&l_mu);
+    unlink(pidf);
 }
 
 int main(void) {
@@ -660,7 +748,7 @@ int main(void) {
     test_companion_remake();
     test_relay();
     test_relay_no_loader();
-    test_relay_gives_up();
+    test_relay_init_failure_not_retried();
 
     vinput_set_backend(NULL);
     vinput_relay_reset();

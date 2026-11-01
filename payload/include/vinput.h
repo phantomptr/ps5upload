@@ -34,8 +34,8 @@
  * so is one whose owner closes it, and every session when the helper stops (vinput_stop).
  *
  * The firmware side is a backend behind vinput_backend_t. The built-in one is a stub: it reports no
- * devices and refuses to open any ("vinput_unsupported"). The console's own devices replace it only
- * when switched on (vinput_ps5.h: off by default, FW 13.60 only): src/vinput_relay.c relays to the
+ * devices and refuses to open any ("vinput_unsupported"). The console's own devices replace it
+ * unless switched off (vinput_ps5.h: on for every firmware, tested on 13.60): src/vinput_relay.c relays to the
  * companion process payload/vinput/ (ps5u-vinput), which drives libSceMouse / libSceKeyboard
  * (src/vinput_dev.c); the helper never calls them itself. Everything here (the methods, ownership, heartbeat and release) is
  * real and host-tested (payload/tests/vinput_selftest.c). */

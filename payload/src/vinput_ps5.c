@@ -4,12 +4,12 @@
  * libSceMouse / libSceKeyboard: sceMouseInit / sceKeyboardInit hung the whole helper when it did
  * (payload/vinput/README.md).
  *
- * vinput_ps5_backend() hands the relay out when BOTH hold:
- *   - the firmware is on vinput_ps5_firmware_allowed's list (only "13.60": the one the calls were
- *     probed and tested end to end on), and
- *   - it is not switched off: built with -DVINPUT_PS5=0, or the file VINPUT_PS5_DISABLE_FILE
- *     exists (a way out for a console where the companion misbehaves, without a new helper).
- * Otherwise the helper keeps vinput.c's stub (no devices, "vinput_unsupported"). */
+ * vinput_ps5_backend() hands the relay out on every firmware (tested end to end on 13.60) unless it
+ * is switched off: built with -DVINPUT_PS5=0, or the file VINPUT_PS5_DISABLE_FILE exists (a way out
+ * for a console where the companion misbehaves, without a new helper); then the helper keeps
+ * vinput.c's stub (no devices, "vinput_unsupported"). A firmware without the virtual-device symbols
+ * gets a companion whose caps say no mouse / keyboard ("vinput_unsupported"); one whose Init hangs
+ * or crashes is ended and not retried on its own (src/vinput_relay.c). */
 #include "vinput_ps5.h"
 
 #include <arpa/inet.h>
@@ -153,9 +153,8 @@ const vinput_backend_t *vinput_ps5_backend(void) {
     if (sysctlbyname("kern.version", kv, &len, NULL, 0) != 0) kv[0] = '\0';
     kv[sizeof kv - 1] = '\0';
     ps5_firmware_from_kernel(kv, fw, sizeof fw);
-    if (!on || !vinput_ps5_firmware_allowed(fw)) {
-        fprintf(stderr, "[vinput] console devices %s (firmware %s): the stub answers\n", on ? "not allowed" : "off",
-                fw);
+    if (!on) {
+        fprintf(stderr, "[vinput] console devices off (firmware %s): the stub answers\n", fw);
         return NULL;
     }
     memset(&cfg, 0, sizeof cfg);

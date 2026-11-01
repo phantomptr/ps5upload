@@ -5,7 +5,11 @@
  * VINPUT_E_STARTING ("vinput_starting"); the engine asks again until it is up. Every request waits
  * at most call_timeout_ms; a companion silent for silent_ms is ended by pid and started again,
  * with backoff, at most max_fails times in a row, then it is "unavailable"
- * (vinput_companion_failed). No loader on :9021 is "unavailable" with vinput_needs_loader (asked
+ * (vinput_companion_failed). A companion that never gets through Init (launched, never answers:
+ * an Init that hangs or dies, as an untested firmware might) is ended by pid and NOT started again
+ * on its own: "unavailable" (vinput_companion_failed) until a fresh open (one at least 2 s after the
+ * previous ask: the user turning the mode on again), and never while that companion still lives
+ * (stuck unkillably in Init). No loader on :9021 is "unavailable" with vinput_needs_loader (asked
  * again after loader_retry_ms). Devices the session had open are made again once a restarted
  * companion answers. Host-tested over a fake companion (payload/tests/vinput_relay_selftest.c). */
 #ifndef PS5UPLOAD_VINPUT_RELAY_H
@@ -22,6 +26,8 @@ typedef struct {
     /* Ends the companion with this pid: asked to let go first (SIGTERM), killed if it has not
      * gone after a short wait. Called without the relay's lock (on its thread). */
     void (*kill)(void *ctx, int pid);
+    /* 1 while pid lives. NULL: kill(pid, 0). */
+    int (*alive)(void *ctx, int pid);
     void *ctx;
     int port;                              /* 0: VWIRE_PORT */
     const char *token_path, *pid_path;     /* NULL: VWIRE_TOKEN_PATH / VWIRE_PID_PATH */
