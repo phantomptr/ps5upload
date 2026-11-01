@@ -90,6 +90,7 @@ mod pkg_install;
 mod pkg_sidecar;
 mod pldmgr_api;
 mod profile_image;
+mod ps2_saves;
 mod remote;
 mod remote_download;
 mod remote_pkg;
