@@ -6141,6 +6141,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_kbm_per_game": "Disimpan untuk {title}.",
 "rp_kbm_home": "Disimpan untuk layar beranda; setiap game menyimpan miliknya sendiri.",
 "rp_kbm_hint": "Jika game mengabaikan mouse, kembali ke Controller.",
+"rp_capture_hint": "Klik gambar untuk menangkap mouse",
 "rp_kbm_needs_loader": "Memerlukan pemuat payload di port 9021",
 "rp_kbm_companion_failed": "Helper keyboard & mouse tidak dapat dimulai di PS5",
 "rp_kbm_starting": "Memulai keyboard & mouse di PS5…",

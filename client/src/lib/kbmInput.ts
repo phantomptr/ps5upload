@@ -184,8 +184,11 @@ export interface RouteContext {
   owner: boolean;
   /** Settings is open over the stream, or a text box of the app has the focus. */
   appFirst: boolean;
-  /** The pointer is locked to the picture. */
+  /** The mouse is captured by the picture (the browser's lock or the desktop app's grab). */
   pointerLocked: boolean;
+  /** Neither capture works here (a browser that refuses the lock) and the pointer is over the
+   *  picture: its movement is sent as it is. */
+  hoverFallback?: boolean;
 }
 
 /** Where keys and the mouse go now, in `mode` (already effective). */
@@ -194,9 +197,9 @@ export function routeFor(mode: KbmMode, ctx: RouteContext): Route {
   const mouseNative = mode !== "controller";
   return {
     keys: mode === "native" ? "native" : "pad",
-    // The mouse reaches the PS5 only while it is locked to the picture. Mouse aim (pad) reads the
-    // lock itself, as it always has.
-    mouse: mouseNative ? (ctx.pointerLocked ? "native" : "none") : "pad",
+    // The mouse reaches the PS5 only while the picture has it captured (or, where nothing can
+    // capture it, while it is over the picture). Mouse aim (pad) reads the capture itself.
+    mouse: mouseNative ? (ctx.pointerLocked || ctx.hoverFallback ? "native" : "none") : "pad",
   };
 }
 

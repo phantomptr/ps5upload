@@ -6380,6 +6380,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_kbm_per_game": "Zapisane dla {title}.",
 "rp_kbm_home": "Zapisane dla ekranu głównego; każda gra ma własne.",
 "rp_kbm_hint": "Jeśli gra ignoruje mysz, wróć do trybu Kontroler.",
+"rp_capture_hint": "Kliknij obraz, aby przechwycić mysz",
 "rp_kbm_needs_loader": "Wymaga programu ładującego payloady na porcie 9021",
 "rp_kbm_companion_failed": "Nie udało się uruchomić pomocnika klawiatury i myszy na PS5",
 "rp_kbm_starting": "Uruchamianie klawiatury i myszy na PS5…",

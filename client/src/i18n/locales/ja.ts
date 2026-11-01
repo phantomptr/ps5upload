@@ -6151,6 +6151,7 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_kbm_per_game": "{title} 用に保存。",
 "rp_kbm_home": "ホーム画面用に保存。ゲームごとに別々に保存されます。",
 "rp_kbm_hint": "ゲームがマウスに反応しない場合は、コントローラーに戻してください。",
+"rp_capture_hint": "画像をクリックするとマウスを取り込みます",
 "rp_kbm_needs_loader": "ポート 9021 でペイロードローダーが必要です",
 "rp_kbm_companion_failed": "PS5 でキーボードとマウスのヘルパーを起動できませんでした",
 "rp_kbm_starting": "PS5 でキーボードとマウスを起動しています…",

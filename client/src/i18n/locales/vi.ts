@@ -6134,6 +6134,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_kbm_per_game": "Đã lưu cho {title}.",
 "rp_kbm_home": "Đã lưu cho màn hình chính; mỗi game giữ cài đặt riêng.",
 "rp_kbm_hint": "Nếu game bỏ qua chuột, hãy chuyển lại Tay cầm.",
+"rp_capture_hint": "Nhấp vào hình để bắt chuột",
 "rp_kbm_needs_loader": "Cần một trình nạp payload trên cổng 9021",
 "rp_kbm_companion_failed": "Không thể khởi động trình trợ giúp bàn phím & chuột trên PS5",
 "rp_kbm_starting": "Đang khởi động bàn phím & chuột trên PS5…",

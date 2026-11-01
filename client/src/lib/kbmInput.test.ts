@@ -84,6 +84,13 @@ describe("routing", () => {
     expect(routeFor("controller", free).mouse).toBe("pad");
   });
 
+  it("sends the mouse over the picture where nothing can capture it", () => {
+    const hover = { ...PLAY, pointerLocked: false, hoverFallback: true };
+    expect(routeFor("native", hover).mouse).toBe("native");
+    expect(routeFor("mixed", hover).mouse).toBe("native");
+    expect(routeFor("native", { ...hover, appFirst: true }).mouse).toBe("none");
+  });
+
   it("gives nothing to the game while the app comes first, or on a page that does not own the session", () => {
     for (const m of ["controller", "native", "mixed"] as KbmMode[]) {
       expect(routeFor(m, { ...PLAY, appFirst: true })).toEqual({ keys: "none", mouse: "none" });

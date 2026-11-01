@@ -6438,6 +6438,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_kbm_per_game": "Mentve ehhez: {title}.",
 "rp_kbm_home": "Mentve a kezdőképernyőhöz; minden játék a sajátját tartja meg.",
 "rp_kbm_hint": "Ha a játék nem reagál az egérre, válts vissza Kontrollerre.",
+"rp_capture_hint": "Kattints a képre az egér befogásához",
 "rp_kbm_needs_loader": "Payload-betöltő szükséges a 9021-es porton",
 "rp_kbm_companion_failed": "A billentyűzet- és egérsegéd nem tudott elindulni a PS5-ön",
 "rp_kbm_starting": "Billentyűzet és egér indítása a PS5-ön…",

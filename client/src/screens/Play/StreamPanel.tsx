@@ -74,6 +74,7 @@ import { DropChoice, DropZone, useStreamDropZone } from "./game/DropToInstall";
 import { useStreamLaunchRunner } from "./game/streamLaunch";
 import { rpControls, useGameControlsStore } from "../../state/gameControls";
 import { mouseMoved } from "../../lib/gameControls";
+import { captureDelta, isCaptured, releaseCapture, requestCapture, subscribeCapture } from "../../lib/pointerCapture";
 import { kbmBlockText, kbmModeLabel, useNativeKbm } from "./useNativeKbm";
 import { kbmButtonView, type KbmMode } from "../../lib/kbmInput";
 import { useKbmStore } from "../../state/kbm";
@@ -534,9 +535,10 @@ export function StreamPanel() {
   // right stick and the triggers.
   useEffect(() => {
     if (!running || !mouseAim) return;
-    const locked = () => !!stage.current && document.pointerLockElement === stage.current;
+    const locked = () => isCaptured(stage.current);
     const move = (e: MouseEvent) => {
-      if (locked()) mouseMoved(rpControls.mouse, e.movementX, e.movementY);
+      const [dx, dy] = captureDelta(e);
+      if (locked()) mouseMoved(rpControls.mouse, dx, dy);
     };
     const button = (e: MouseEvent, down: boolean) => {
       if (!locked() && down) return;
@@ -551,15 +553,38 @@ export function StreamPanel() {
     document.addEventListener("mousemove", move);
     document.addEventListener("mousedown", down);
     document.addEventListener("mouseup", up);
-    document.addEventListener("pointerlockchange", lost);
+    const unsub = subscribeCapture(lost);
     return () => {
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mousedown", down);
       document.removeEventListener("mouseup", up);
-      document.removeEventListener("pointerlockchange", lost);
+      unsub();
       rpControls.mouse.left = rpControls.mouse.right = false;
     };
   }, [running, mouseAim]);
+
+  // The mouse is the user's again whenever play stops being in front: the window loses the
+  // focus or is hidden, a text box of the app (the on-screen keyboard's) takes the keys, the
+  // stream stops, or this screen is left (a hidden Activity runs this cleanup too). The browser
+  // ends its own lock on most of these; the desktop app's grab only ends here.
+  useEffect(() => {
+    if (!running) return;
+    const onBlur = () => releaseCapture();
+    const onVis = () => document.visibilityState === "hidden" && releaseCapture();
+    const onFocusIn = (e: FocusEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) releaseCapture();
+    };
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onVis);
+    document.addEventListener("focusin", onFocusIn);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVis);
+      document.removeEventListener("focusin", onFocusIn);
+      releaseCapture();
+    };
+  }, [running]);
 
   // A package dropped on the picture is installed on this console (when the stream ends, by
   // default).
@@ -814,8 +839,26 @@ export function StreamPanel() {
     if (!full) dropEscHold();
   }, [full, dropEscHold]);
   useEffect(() => dropEscHold, [dropEscHold]);
+  // Esc held while the picture has the mouse (not in full screen, where holding it leaves full
+  // screen): the mouse is given back. The browser does this for its own lock; the desktop app's
+  // grab has no other way out but switching apps. The key itself still goes to the game.
+  const escRelease = useRef<number | null>(null);
+  const dropEscRelease = useCallback(() => {
+    if (escRelease.current !== null) window.clearTimeout(escRelease.current);
+    escRelease.current = null;
+  }, []);
+  useEffect(() => dropEscRelease, [dropEscRelease]);
   const onKey = useCallback(
     (e: React.KeyboardEvent, down: boolean) => {
+      if (e.code === "Escape" && !full) {
+        if (!down) dropEscRelease();
+        else if (!e.repeat && escRelease.current === null && isCaptured(stage.current))
+          escRelease.current = window.setTimeout(() => {
+            escRelease.current = null;
+            kbm.releaseAll();
+            releaseCapture();
+          }, ESC_HOLD_MS);
+      }
       if (e.code === "Escape" && full) {
         e.preventDefault();
         if (down) {
@@ -825,6 +868,7 @@ export function StreamPanel() {
             timer: window.setTimeout(() => {
               hold.left = true;
               kbm.releaseAll();
+              releaseCapture();
               exitFull();
             }, ESC_HOLD_MS),
           };
@@ -856,7 +900,7 @@ export function StreamPanel() {
       else rpInput.held.delete(e.code);
       stream?.sendPad();
     },
-    [full, exitFull, stream, running, dropEscHold, kbm],
+    [full, exitFull, stream, running, dropEscHold, dropEscRelease, kbm],
   );
 
   // Shift + drag on the picture is a finger on the touchpad (for games that use it, like
@@ -880,8 +924,10 @@ export function StreamPanel() {
     [stream, showChrome, running],
   );
 
-  // Clicking the picture takes the keyboard and (if set) hides the pointer; the browser keeps
-  // Esc for giving it back, so Circle is Backspace too. Only a mouse press locks the pointer:
+  // Clicking the picture takes the keyboard and (if set, or always in a mode that sends the mouse
+  // to the PS5) captures the mouse (lib/pointerCapture.ts: the browser's lock, else the desktop
+  // app's grab); Esc (held, in the app) gives it back, so Circle is Backspace too. Only a mouse
+  // press captures it:
   // a finger has no pointer to hide, and a lock taken from a tap (a touch-screen laptop, Linux
   // Chrome) freezes every later touch's position and makes the touch controller's
   // setPointerCapture throw, so its buttons stop answering.
@@ -890,15 +936,9 @@ export function StreamPanel() {
     if (!el) return;
     el.focus();
     if (lastPointer.current !== "mouse") return;
-    if (!prefs.capturePointer || !document.hasFocus() || document.pointerLockElement === el) return;
-    try {
-      // A promise in current browsers: refused (window not focused, too soon after Esc) is fine.
-      const r = el.requestPointerLock?.() as unknown as Promise<void> | undefined;
-      r?.catch?.(() => {});
-    } catch {
-      // Older browsers throw instead.
-    }
-  }, [prefs.capturePointer]);
+    if (!(prefs.capturePointer || kbm.mouseNative) || !document.hasFocus() || isCaptured(el)) return;
+    requestCapture(el);
+  }, [prefs.capturePointer, kbm.mouseNative]);
 
   if (!canStream()) {
     return (
@@ -1051,6 +1091,14 @@ export function StreamPanel() {
               <Button size="sm" variant="primary" onClick={() => stream?.takeOver()}>
                 {tr("rp_play_here", undefined, "Play here")}
               </Button>
+            </div>
+          )}
+          {playing && kbm.captureHint && !settingsOpen && !pip && (
+            <div
+              className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-xs text-white/85"
+              data-testid="rp-capture-hint"
+            >
+              {tr("rp_capture_hint", undefined, "Click the picture to capture the mouse")}
             </div>
           )}
           {running && <PadAsks pending={padLink.pending} />}

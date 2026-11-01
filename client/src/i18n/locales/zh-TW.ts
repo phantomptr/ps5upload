@@ -6085,6 +6085,7 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_kbm_per_game": "已為 {title} 儲存。",
 "rp_kbm_home": "已為主畫面儲存；每個遊戲各自儲存。",
 "rp_kbm_hint": "如果遊戲不回應滑鼠，請切換回手把。",
+"rp_capture_hint": "點擊畫面以擷取滑鼠",
 "rp_kbm_needs_loader": "需要在連接埠 9021 上執行酬載載入器",
 "rp_kbm_companion_failed": "鍵盤和滑鼠助手無法在 PS5 上啟動",
 "rp_kbm_starting": "正在 PS5 上啟動鍵盤和滑鼠…",

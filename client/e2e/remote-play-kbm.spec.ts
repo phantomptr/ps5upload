@@ -281,3 +281,157 @@ test("the bar button spins while the console's keyboard & mouse helper starts", 
   await expect(iconOf(page)).toHaveAttribute("data-kbm-icon", "native", { timeout: 5_000 });
   await expect(b).toHaveAttribute("aria-label", "Keyboard & mouse — applies to the home screen");
 });
+
+// Capturing the mouse (lib/pointerCapture.ts). WKWebView in the macOS app accepts
+// requestPointerLock and never locks: the app then grabs the window's cursor (Tauri's
+// setCursorGrab / setCursorVisible) and mousemove carries the movement. A browser that refuses the
+// lock sends the mouse while it is over the picture instead.
+
+/** requestPointerLock that never locks, as in WKWebView. */
+async function noPointerLock(page: Page) {
+  await page.addInitScript(() => {
+    Element.prototype.requestPointerLock = function () {
+      return Promise.resolve();
+    } as typeof Element.prototype.requestPointerLock;
+  });
+}
+
+/** The macOS desktop app's IPC, recording the window's cursor calls. */
+async function desktopApp(page: Page) {
+  await page.addInitScript(() => {
+    const ua = navigator.userAgent.replace(/\([^)]*\)/, "(Macintosh; Intel Mac OS X 10_15_7)");
+    Object.defineProperty(navigator, "userAgent", { get: () => ua });
+    const w = window as unknown as Record<string, unknown>;
+    const calls: Array<[string, unknown]> = [];
+    w.__cursorCalls = calls;
+    let id = 0;
+    w.__TAURI_INTERNALS__ = {
+      invoke: async (cmd: string, args: { value?: unknown }) => {
+        if (cmd.startsWith("plugin:window|set_cursor_")) calls.push([cmd.slice("plugin:window|".length), args?.value]);
+        return null;
+      },
+      transformCallback: () => ++id,
+      unregisterCallback: () => {},
+      convertFileSrc: (p: string) => p,
+      metadata: { currentWindow: { label: "main" }, currentWebview: { windowLabel: "main", label: "main" } },
+      plugins: {},
+    };
+    w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+  });
+}
+const cursorCalls = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __cursorCalls: Array<[string, unknown]> }).__cursorCalls.slice());
+const GRAB = [
+  ["set_cursor_grab", true],
+  ["set_cursor_visible", false],
+];
+const UNGRAB = [
+  ["set_cursor_grab", false],
+  ["set_cursor_visible", true],
+];
+/** Reports that moved the mouse. */
+const moves = (e: Engine) => e.reports.filter((r) => r[2] | r[3] | r[4] | r[5]);
+
+async function nativeMode(page: Page, engine: Engine) {
+  const kbm = await openControls(page);
+  await kbm.getByTestId("rp-kbm-mode-native").click();
+  await expect.poll(() => engine.kbm[engine.kbm.length - 1]).toEqual({ on: true, mouse: true, keyboard: true });
+  await closeSettings(page);
+}
+
+test("the desktop app grabs the cursor when no pointer lock comes, sends the mouse, and always gives it back", async ({
+  page,
+}) => {
+  await desktopApp(page);
+  await noPointerLock(page);
+  const engine = await mockConsole(page, { mouse: true, keyboard: true });
+  await start(page);
+  await nativeMode(page, engine);
+  const stage = page.getByTestId("rp-stage").filter({ visible: true });
+  const hint = page.getByTestId("rp-capture-hint");
+  await expect(hint).toHaveText("Click the picture to capture the mouse");
+
+  // Before a click nothing is sent.
+  const box = (await stage.boundingBox())!;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  engine.reports.length = 0;
+  await page.mouse.move(cx + 20, cy + 10);
+  await page.waitForTimeout(200);
+  expect(moves(engine)).toEqual([]);
+
+  await stage.click();
+  await expect.poll(() => cursorCalls(page)).toEqual(GRAB);
+  await expect(hint).toHaveCount(0);
+  await expect(stage).toHaveAttribute("data-mouse-grab", "");
+  // Moves reach the PS5's mouse.
+  engine.reports.length = 0;
+  await page.mouse.move(cx + 40, cy + 25);
+  await expect.poll(() => moves(engine).length).toBeGreaterThan(0);
+
+  // Esc held gives the mouse back.
+  await page.keyboard.down("Escape");
+  await expect.poll(() => cursorCalls(page)).toEqual([...GRAB, ...UNGRAB]);
+  await page.keyboard.up("Escape");
+  await expect(hint).toBeVisible();
+  await expect(stage).not.toHaveAttribute("data-mouse-grab", "");
+  engine.reports.length = 0;
+  await page.mouse.move(cx, cy);
+  await page.waitForTimeout(200);
+  expect(moves(engine)).toEqual([]);
+
+  // Again; the window losing the focus gives it back.
+  await stage.click();
+  await expect.poll(() => cursorCalls(page)).toEqual([...GRAB, ...UNGRAB, ...GRAB]);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect.poll(() => cursorCalls(page)).toEqual([...GRAB, ...UNGRAB, ...GRAB, ...UNGRAB]);
+
+  // Settings opening gives it back.
+  await stage.click();
+  await expect.poll(async () => (await cursorCalls(page)).length).toBe(10);
+  await openControls(page);
+  await expect.poll(async () => (await cursorCalls(page)).slice(-2)).toEqual(UNGRAB);
+  // Controller mode gives it back.
+  await page.getByTestId("rp-kbm").getByTestId("rp-kbm-mode-mixed").click();
+  await closeSettings(page);
+  await stage.click();
+  await expect.poll(async () => (await cursorCalls(page)).slice(-2)).toEqual(GRAB);
+  await page.keyboard.press("Control+Alt+KeyM"); // Mixed → Controller
+  await expect.poll(() => engine.kbm[engine.kbm.length - 1]).toEqual({ on: false });
+  await expect.poll(async () => (await cursorCalls(page)).slice(-2)).toEqual(UNGRAB);
+
+  // Leaving the Play screen gives it back.
+  await page.keyboard.press("Control+Alt+KeyM"); // → Keyboard & mouse
+  await expect.poll(() => engine.kbm[engine.kbm.length - 1]).toEqual({ on: true, mouse: true, keyboard: true });
+  await stage.click();
+  await expect.poll(async () => (await cursorCalls(page)).slice(-2)).toEqual(GRAB);
+  await page.evaluate(() => {
+    window.history.pushState({}, "", "/connection");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await expect.poll(async () => (await cursorCalls(page)).slice(-2)).toEqual(UNGRAB);
+});
+
+test("a browser that refuses the pointer lock sends the mouse while it is over the picture", async ({ page }) => {
+  await noPointerLock(page);
+  const engine = await mockConsole(page, { mouse: true, keyboard: true });
+  await start(page);
+  await nativeMode(page, engine);
+  const stage = page.getByTestId("rp-stage").filter({ visible: true });
+  await expect(page.getByTestId("rp-capture-hint")).toHaveText("Click the picture to capture the mouse");
+  await stage.click();
+  await page.waitForTimeout(300); // the lock's wait runs out
+  await expect(page.getByTestId("rp-capture-hint")).toBeVisible();
+  const box = (await stage.boundingBox())!;
+  engine.reports.length = 0;
+  await page.mouse.move(box.x + box.width / 2 + 30, box.y + box.height / 2 + 15);
+  await expect.poll(() => moves(engine).length).toBeGreaterThan(0);
+  // Off the picture, nothing.
+  await page.mouse.move(box.x + box.width / 2, box.y - 5);
+  await page.waitForTimeout(100);
+  engine.reports.length = 0;
+  await page.mouse.move(box.x + box.width / 2 + 10, box.y - 30);
+  await page.waitForTimeout(200);
+  expect(moves(engine)).toEqual([]);
+});

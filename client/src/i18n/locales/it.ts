@@ -6085,6 +6085,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_kbm_per_game": "Salvato per {title}.",
 "rp_kbm_home": "Salvato per la schermata Home; ogni gioco ha il suo.",
 "rp_kbm_hint": "Se il gioco ignora il mouse, torna a Controller.",
+"rp_capture_hint": "Fai clic sull'immagine per catturare il mouse",
 "rp_kbm_needs_loader": "Serve un loader di payload sulla porta 9021",
 "rp_kbm_companion_failed": "L'helper di tastiera e mouse non è riuscito ad avviarsi sulla PS5",
 "rp_kbm_starting": "Avvio di tastiera e mouse sulla PS5…",

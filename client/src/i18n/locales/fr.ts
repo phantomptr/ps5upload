@@ -6148,6 +6148,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_kbm_per_game": "Enregistré pour {title}.",
 "rp_kbm_home": "Enregistré pour l'écran d'accueil ; chaque jeu garde le sien.",
 "rp_kbm_hint": "Si le jeu ignore la souris, revenez à Manette.",
+"rp_capture_hint": "Cliquez sur l'image pour capturer la souris",
 "rp_kbm_needs_loader": "Nécessite un chargeur de payload sur le port 9021",
 "rp_kbm_companion_failed": "L'assistant clavier et souris n'a pas pu démarrer sur la PS5",
 "rp_kbm_starting": "Démarrage du clavier et de la souris sur la PS5…",

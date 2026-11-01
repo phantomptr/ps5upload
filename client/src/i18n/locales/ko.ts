@@ -6149,6 +6149,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_kbm_per_game": "{title}에 저장됨.",
 "rp_kbm_home": "홈 화면에 저장됨. 게임마다 따로 저장됩니다.",
 "rp_kbm_hint": "게임이 마우스를 무시하면 컨트롤러로 다시 전환하세요.",
+"rp_capture_hint": "마우스를 잡으려면 화면을 클릭하세요",
 "rp_kbm_needs_loader": "포트 9021에 페이로드 로더가 필요합니다",
 "rp_kbm_companion_failed": "PS5에서 키보드 및 마우스 도우미를 시작하지 못했습니다",
 "rp_kbm_starting": "PS5에서 키보드 및 마우스를 시작하는 중…",

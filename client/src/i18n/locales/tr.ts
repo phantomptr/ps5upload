@@ -6139,6 +6139,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_kbm_per_game": "{title} için kaydedildi.",
 "rp_kbm_home": "Ana ekran için kaydedildi; her oyun kendininkini tutar.",
 "rp_kbm_hint": "Oyun fareyi yok sayarsa Kumanda'ya geri dönün.",
+"rp_capture_hint": "Fareyi yakalamak için görüntüye tıklayın",
 "rp_kbm_needs_loader": "9021 numaralı bağlantı noktasında bir payload yükleyici gerekir",
 "rp_kbm_companion_failed": "Klavye ve fare yardımcısı PS5'te başlatılamadı",
 "rp_kbm_starting": "PS5'te klavye ve fare başlatılıyor…",

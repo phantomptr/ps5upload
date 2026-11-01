@@ -2,7 +2,7 @@
 // mouse go to in the running game's mode, and the PS5's virtual devices kept, fed and let go.
 // Controller mode is the stream as it always was: this hook then sends nothing and takes no key.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import {
   KBM_BLOCK_TEXT,
@@ -23,6 +23,7 @@ import { rpControls } from "../../state/gameControls";
 import { fetchKbmCaps, rememberedMode, useKbmStore } from "../../state/kbm";
 import { rpInput } from "../../state/remotePlay";
 import { trStatic } from "../../lib/trStatic";
+import { captureDelta, captureState, releaseCapture, subscribeCapture } from "../../lib/pointerCapture";
 
 /** How long a quick Esc holds its key down on the console. */
 const ESC_TAP_MS = 80;
@@ -78,7 +79,9 @@ export function useNativeKbm({ stream, owner, host, title, stage, full, settings
   const remembered = rememberedMode(modes, title);
   const hostCaps = caps && caps.host === host ? caps : null;
   const mode = effectiveMode(remembered, hostCaps);
-  const [locked, setLocked] = useState(false);
+  // The picture has the mouse: the browser's lock or the desktop app's grab (lib/pointerCapture.ts).
+  const cap = useSyncExternalStore(subscribeCapture, captureState, captureState);
+  const locked = cap.kind !== "none" && !!cap.el && cap.el === stage.current;
 
   // What the console can make, asked once per console the stream shows.
   useEffect(() => {
@@ -118,9 +121,16 @@ export function useNativeKbm({ stream, owner, host, title, stage, full, settings
   );
   useEffect(() => () => sender?.dispose(), [sender]);
 
+  /** `over`: the pointer is over the picture (counts only where nothing can capture it). */
   const route = useCallback(
-    (): Route => routeFor(mode, { owner, appFirst: settingsOpen || rpInput.paused || typingInApp(), pointerLocked: locked }),
-    [mode, owner, settingsOpen, locked],
+    (over = false): Route =>
+      routeFor(mode, {
+        owner,
+        appFirst: settingsOpen || rpInput.paused || typingInApp(),
+        pointerLocked: locked,
+        hoverFallback: over && cap.failed,
+      }),
+    [mode, owner, settingsOpen, locked, cap.failed],
   );
 
   // A mode or game change: everything held in the old sinks is let go first (the pad neutral,
@@ -136,6 +146,8 @@ export function useNativeKbm({ stream, owner, host, title, stage, full, settings
       rpControls.mouse.vx = rpControls.mouse.vy = 0;
       stream?.sendPad();
       sender.releaseAll();
+      // Controller: the mouse is the user's again (a click takes it back for mouse aim).
+      if (mode === "controller") releaseCapture();
     }
     sender.setWant(owner ? devicesFor(mode) : { mouse: false, keyboard: false });
   }, [sender, stream, modeKey, mode, owner]);
@@ -161,30 +173,30 @@ export function useNativeKbm({ stream, owner, host, title, stage, full, settings
 
   // The mouse: only while it is locked to the picture, and only in a mode that sends it natively.
   const mouseNative = owner && mode !== "controller";
+  // The capture lost: nothing stays held on the PS5.
+  const wasLocked = useRef(locked);
   useEffect(() => {
-    const isLocked = () => !!stage.current && document.pointerLockElement === stage.current;
-    const lockChange = () => {
-      const l = isLocked();
-      setLocked(l);
-      if (!l) sender?.releaseAll();
-    };
-    setLocked(isLocked());
-    document.addEventListener("pointerlockchange", lockChange);
-    return () => document.removeEventListener("pointerlockchange", lockChange);
-  }, [stage, sender]);
+    if (wasLocked.current && !locked) sender?.releaseAll();
+    wasLocked.current = locked;
+  }, [locked, sender]);
   useEffect(() => {
     if (!sender || !mouseNative) return;
-    const native = () => route().mouse === "native";
-    const move = (e: MouseEvent) => native() && sender.move(e.movementX, e.movementY);
+    const over = (e: Event) => !!stage.current && e.target instanceof Node && stage.current.contains(e.target);
+    const native = (e: Event) => route(over(e)).mouse === "native";
+    const move = (e: MouseEvent) => {
+      // Read on every move: the screen position is the delta where a grab leaves the cursor free.
+      const [dx, dy] = captureDelta(e);
+      if (native(e)) sender.move(dx, dy);
+    };
     const down = (e: MouseEvent) => {
-      if (!native()) return;
+      if (!native(e)) return;
       e.preventDefault();
       sender.button(e.button, true);
     };
     // A release always counts: a button pressed while locked is never left down.
     const up = (e: MouseEvent) => sender.button(e.button, false);
     const wheel = (e: WheelEvent) => {
-      if (!native()) return;
+      if (!native(e)) return;
       e.preventDefault();
       sender.scroll(e.deltaY, e.deltaX, e.deltaMode);
     };
@@ -198,7 +210,7 @@ export function useNativeKbm({ stream, owner, host, title, stage, full, settings
       document.removeEventListener("mouseup", up);
       document.removeEventListener("wheel", wheel);
     };
-  }, [sender, mouseNative, route]);
+  }, [sender, mouseNative, route, stage]);
 
   // In full screen, Keyboard Lock (where there is one) gives the game keys the system would keep.
   const keysNative = owner && mode === "native";
@@ -247,5 +259,8 @@ export function useNativeKbm({ stream, owner, host, title, stage, full, settings
   /** Lets go of everything native (Esc held to leave full screen, stop). */
   const releaseAll = useCallback(() => sender?.releaseAll(), [sender]);
 
-  return { mode, remembered, hostCaps, mouseNative, keysNative, onKey, escTap, releaseAll, cycle };
+  /** A native mouse mode, and the picture does not have the mouse: say how to give it. */
+  const captureHint = !!mouseNative && !locked;
+
+  return { mode, remembered, hostCaps, mouseNative, keysNative, onKey, escTap, releaseAll, cycle, captureHint };
 }

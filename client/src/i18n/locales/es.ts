@@ -6085,6 +6085,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_kbm_per_game": "Guardado para {title}.",
 "rp_kbm_home": "Guardado para la pantalla de inicio; cada juego guarda el suyo.",
 "rp_kbm_hint": "Si el juego ignora el ratón, vuelve a Mando.",
+"rp_capture_hint": "Haz clic en la imagen para capturar el ratón",
 "rp_kbm_needs_loader": "Necesita un cargador de payloads en el puerto 9021",
 "rp_kbm_companion_failed": "El ayudante de teclado y ratón no pudo iniciarse en la PS5",
 "rp_kbm_starting": "Iniciando teclado y ratón en la PS5…",

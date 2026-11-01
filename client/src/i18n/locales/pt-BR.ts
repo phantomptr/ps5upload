@@ -6147,6 +6147,7 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_kbm_per_game": "Salvo para {title}.",
 "rp_kbm_home": "Salvo para a tela inicial; cada jogo guarda o seu.",
 "rp_kbm_hint": "Se o jogo ignorar o mouse, volte para Controle.",
+"rp_capture_hint": "Clique na imagem para capturar o mouse",
 "rp_kbm_needs_loader": "Precisa de um carregador de payloads na porta 9021",
 "rp_kbm_companion_failed": "O auxiliar de teclado e mouse não pôde iniciar no PS5",
 "rp_kbm_starting": "Iniciando teclado e mouse no PS5…",

@@ -6140,6 +6140,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_kbm_per_game": "Gespeichert für {title}.",
 "rp_kbm_home": "Gespeichert für den Startbildschirm; jedes Spiel hat seine eigene Einstellung.",
 "rp_kbm_hint": "Wenn das Spiel die Maus ignoriert, wechsle zurück zu Controller.",
+"rp_capture_hint": "Klicke auf das Bild, um die Maus zu übernehmen",
 "rp_kbm_needs_loader": "Benötigt einen Payload-Loader auf Port 9021",
 "rp_kbm_companion_failed": "Der Tastatur-&-Maus-Helfer konnte auf der PS5 nicht starten",
 "rp_kbm_starting": "Tastatur & Maus wird auf der PS5 gestartet…",

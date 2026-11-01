@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { useTr } from "../../state/lang";
 import { rpInput, useRemotePlayStore } from "../../state/remotePlay";
 import { activateFocusTrap } from "../../lib/focusTrap";
+import { releaseCapture } from "../../lib/pointerCapture";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { SettingsBody, type SettingsTab } from "./Settings";
 
@@ -108,7 +109,7 @@ export function SettingsDrawer({
     rpInput.touch = null;
     useRemotePlayStore.getState().stream?.sendPad();
     // A hidden pointer could not reach the settings.
-    if (document.pointerLockElement) document.exitPointerLock?.();
+    releaseCapture();
     queueMicrotask(() => {
       const el = panel.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
       (el ?? panel.current)?.focus({ preventScroll: true });

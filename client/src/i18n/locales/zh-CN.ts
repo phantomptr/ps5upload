@@ -6091,6 +6091,7 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_kbm_per_game": "已为 {title} 保存。",
 "rp_kbm_home": "已为主屏幕保存；每个游戏各自保存。",
 "rp_kbm_hint": "如果游戏不响应鼠标，请切换回手柄。",
+"rp_capture_hint": "点击画面以捕获鼠标",
 "rp_kbm_needs_loader": "需要在端口 9021 上运行载荷加载器",
 "rp_kbm_companion_failed": "键盘和鼠标助手无法在 PS5 上启动",
 "rp_kbm_starting": "正在 PS5 上启动键盘和鼠标…",
