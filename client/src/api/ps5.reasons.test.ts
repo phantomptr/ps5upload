@@ -14,7 +14,9 @@ const EN_TS = (
 )["../i18n/locales/en.ts"];
 
 // String literals that LOOK like reasons but are protocol keys / internals, not reasons.
-const NOT_REASONS = new Set(["ava1_port"]);
+// vinput_unsupported is the console's keyboard & mouse answer (Settings › Controls shows it), never
+// a job's failure.
+const NOT_REASONS = new Set(["ava1_port", "vinput_unsupported"]);
 
 const REASON_LITERAL =
   /"(ava1_[a-z0-9_]+|zip_read_error|[0-9a-z]+_unsupported(?:_layout)?|rar_password_(?:required|wrong)|helper_(?:not_ava1|old|starting|not_running)|not_paired)"/g;

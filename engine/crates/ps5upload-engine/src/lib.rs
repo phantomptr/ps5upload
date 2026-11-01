@@ -101,6 +101,7 @@ mod settings_backup;
 mod shared_state;
 mod state_io;
 mod telemetry;
+mod vinput_api;
 #[cfg(feature = "webui")]
 mod webui;
 mod win_net;
@@ -11308,6 +11309,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/rp/ws", get(rp_stream_api::ws))
         .route("/api/ps5/rp/session", get(rp_stream_api::current))
         .route("/api/ps5/rp/replay", get(rp_stream_api::replay))
+        .route("/api/ps5/vinput/caps", get(vinput_api::caps))
+        .route("/api/ps5/vinput/ws", get(vinput_api::ws))
         .route("/rp-player", get(rp_stream_api::player))
         .route("/pad", get(pad_link::page))
         .route("/api/pad/ws", get(pad_link::ws))

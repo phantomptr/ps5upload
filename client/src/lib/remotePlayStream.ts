@@ -464,6 +464,8 @@ export interface StreamOptions {
   /** The console's light-bar colour for this pad. Browsers cannot set a controller's light
    *  bar (the Gamepad API has no such control), so the screen shows it. */
   onLight?: (rgb: [number, number, number]) => void;
+  /** The engine's answer about native keyboard & mouse (`{"kbm": …}`, lib/kbmInput.ts). */
+  onKbm?: (s: unknown) => void;
   /** The pad state to send; polled every animation frame and on key events. */
   readPad: () => PadState;
   /** The controllers rumble is played on (default: this page's). A picture-in-picture window
@@ -1263,6 +1265,15 @@ export class RemotePlayStream {
     ws.send(JSON.stringify({ pad: p }));
   }
 
+  /** Native keyboard & mouse (lib/kbmInput.ts): `{"kbm": …}` or a binary `[8][report]`. False
+   *  while the socket is down (the heartbeat sends it again). */
+  sendKbm(msg: { kbm: unknown } | Uint8Array<ArrayBuffer>): boolean {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(msg instanceof Uint8Array ? msg : JSON.stringify(msg));
+    return true;
+  }
+
   /** This session was started with the mic set up (Settings › Microphone). */
   get micEnabled(): boolean {
     return !!this.o.mic;
@@ -1362,6 +1373,7 @@ export class RemotePlayStream {
       engine_us?: unknown;
       triggers?: { left: number[]; right: number[] };
       ds_intensity?: [number, number];
+      kbm?: unknown;
     };
     try {
       s = JSON.parse(text);
@@ -1372,6 +1384,10 @@ export class RemotePlayStream {
       const now = performance.now();
       this.rttMs = nextRtt(this.rttMs, s.pong, now);
       this.clock.push(s.pong, s.engine_us, now);
+      return;
+    }
+    if (s.kbm !== undefined) {
+      this.o.onKbm?.(s.kbm);
       return;
     }
     if (s.rumble) {

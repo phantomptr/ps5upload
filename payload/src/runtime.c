@@ -62,6 +62,8 @@
 #include "net_probe.h"
 #include "net_ports.h"
 #include "files_handoff.h"
+#include "vinput.h"
+#include "vinput_ps5.h"
 #include "focus_probe.h"
 #include "proc_list.h"
 #include "proc_identity.h"
@@ -331,6 +333,13 @@
 #define MGMT_FRAME_PROFILE_NP_BACKUP_ACK 337u
 #define MGMT_FRAME_PROFILE_NP_RESTORE 338u
 #define MGMT_FRAME_PROFILE_NP_RESTORE_ACK 339u
+/* The PC's keyboard and mouse as the console's own (vinput.c): caps, session (open/hb/close), reports */
+#define MGMT_FRAME_VINPUT_CAPS 340u
+#define MGMT_FRAME_VINPUT_CAPS_ACK 341u
+#define MGMT_FRAME_VINPUT_SESSION 342u
+#define MGMT_FRAME_VINPUT_SESSION_ACK 343u
+#define MGMT_FRAME_VINPUT_REPORT 344u
+#define MGMT_FRAME_VINPUT_REPORT_ACK 345u
 #define MGMT_FRAME_SDK_SCAN 214u
 #define MGMT_FRAME_SDK_SCAN_ACK 215u
 #define MGMT_FRAME_SDK_PATCH 216u
@@ -8185,6 +8194,49 @@ static int handle_files_handoff_put(runtime_state_t *state, const char *body, ui
 
 static int handle_files_handoff_take(runtime_state_t *state, const char *body, uint64_t body_len) {
     return files_method_reply(state, MGMT_FRAME_FILES_HANDOFF_TAKE_ACK, 3, body, body_len);
+}
+
+/* ── The PC's keyboard and mouse (vinput.c) ─────────────────────────────
+ * The answers are the bodies vinput.c writes; a refusal ({"ok":false,"err":..}) is kept as the answer
+ * (mgmt_call_text_keep), so the engine reads which device is missing and why. The console's own
+ * devices (vinput_ps5.c, libSceMouse / libSceKeyboard) are off by default; then vinput.c's stub
+ * answers "vinput_unsupported". */
+/* The console's devices replace the stub on first use, when vinput_ps5.c allows them (off by
+ * default). */
+static pthread_once_t g_vinput_backend_once = PTHREAD_ONCE_INIT;
+static void vinput_backend_pick(void) {
+    const vinput_backend_t *b = vinput_ps5_backend();
+    if (b) vinput_set_backend(b);
+}
+
+static int handle_vinput_caps(runtime_state_t *state) {
+    char out[VINPUT_OUT_MAX];
+    int n;
+    if (!state) return -1;
+    pthread_once(&g_vinput_backend_once, vinput_backend_pick);
+    n = vinput_caps_json(out, sizeof out);
+    if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    return mgmt_reply(MGMT_FRAME_VINPUT_CAPS_ACK, out, (uint64_t)n);
+}
+
+static int handle_vinput_session(runtime_state_t *state, const char *body, uint64_t body_len) {
+    char out[VINPUT_OUT_MAX];
+    int n;
+    if (!state || body_len > VINPUT_REQ_MAX) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    pthread_once(&g_vinput_backend_once, vinput_backend_pick);
+    n = vinput_session_json(body ? body : "", (size_t)body_len, vinput_now_ms(), out, sizeof out);
+    if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    return mgmt_reply(MGMT_FRAME_VINPUT_SESSION_ACK, out, (uint64_t)n);
+}
+
+static int handle_vinput_report(runtime_state_t *state, const char *body, uint64_t body_len) {
+    char out[VINPUT_OUT_MAX];
+    int n;
+    if (!state || body_len > VINPUT_REQ_MAX) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    pthread_once(&g_vinput_backend_once, vinput_backend_pick);
+    n = vinput_report_json(body ? body : "", (size_t)body_len, vinput_now_ms(), out, sizeof out);
+    if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    return mgmt_reply(MGMT_FRAME_VINPUT_REPORT_ACK, out, (uint64_t)n);
 }
 
 static int handle_minion_tile(runtime_state_t *state, const char *body, uint64_t body_len) {

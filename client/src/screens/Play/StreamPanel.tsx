@@ -70,6 +70,7 @@ import { DropChoice, DropZone, useStreamDropZone } from "./game/DropToInstall";
 import { useStreamLaunchRunner } from "./game/streamLaunch";
 import { rpControls, useGameControlsStore } from "../../state/gameControls";
 import { mouseMoved } from "../../lib/gameControls";
+import { useNativeKbm } from "./useNativeKbm";
 import { useRunningTitleIds } from "../../state/runningApps";
 import { useGameLaunch } from "../../lib/useGameLaunch";
 import { hostOf } from "../../lib/addr";
@@ -468,7 +469,18 @@ export function StreamPanel() {
   useEffect(() => {
     setControlsTitle(running ? ([...runningTitles][0] ?? null) : null);
   }, [running, runningTitles, setControlsTitle]);
-  const mouseAim = useGameControlsStore((s) => (s.title ? !!s.byTitle[s.title]?.mouse : false));
+  // Native keyboard & mouse (useNativeKbm.ts): the running game's mode routes keys and the mouse.
+  const controlsTitle = useGameControlsStore((s) => s.title);
+  const kbm = useNativeKbm({
+    stream,
+    owner: playing,
+    host: running ? (target?.host ?? null) : null,
+    title: controlsTitle,
+    stage,
+    full,
+    settingsOpen,
+  });
+  const mouseAim = useGameControlsStore((s) => (s.title ? !!s.byTitle[s.title]?.mouse : false)) && !kbm.mouseNative;
   // Mouse aim: while the pointer is captured on the picture, its movement and buttons are the
   // right stick and the triggers.
   useEffect(() => {
@@ -763,6 +775,7 @@ export function StreamPanel() {
             left: false,
             timer: window.setTimeout(() => {
               hold.left = true;
+              kbm.releaseAll();
               exitFull();
             }, ESC_HOLD_MS),
           };
@@ -772,6 +785,8 @@ export function StreamPanel() {
         const hold = escHold.current;
         dropEscHold();
         if (!hold || hold.left) return;
+        // Native keyboard: the PS5 keyboard's Esc.
+        if (kbm.escTap()) return;
         // Not a key for the game: a press leaves full screen, as everywhere else.
         if (!running || !useRemotePlayStore.getState().keymap.Escape) {
           exitFull();
@@ -785,13 +800,14 @@ export function StreamPanel() {
         }, ESC_TAP_MS);
         return;
       }
+      if (kbm.onKey(e, down)) return;
       if (!running || !useRemotePlayStore.getState().keymap[e.code]) return;
       e.preventDefault();
       if (down) rpInput.held.add(e.code);
       else rpInput.held.delete(e.code);
       stream?.sendPad();
     },
-    [full, exitFull, stream, running, dropEscHold],
+    [full, exitFull, stream, running, dropEscHold, kbm],
   );
 
   // Shift + drag on the picture is a finger on the touchpad (for games that use it, like

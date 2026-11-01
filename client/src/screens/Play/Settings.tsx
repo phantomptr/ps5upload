@@ -17,6 +17,7 @@ import { ControllerSetup } from "./ControllerSetup";
 import { ButtonRemap } from "./ButtonRemap";
 import { RpNetworkSettings } from "./NetworkExtras";
 import { RpBlockerSetting } from "./RpBlockers";
+import { KbmModeSection } from "./KbmModeSection";
 
 /** Remote Play's settings, one tab at a time (in the settings drawer, SettingsDrawer.tsx). */
 export type SettingsTab = "picture" | "sound" | "controls" | "session";
@@ -471,6 +472,7 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
 
   return (
     <div className="space-y-6">
+      <KbmModeSection running={running} />
       <Section>
         <Toggle
           checked={prefs.capturePointer}

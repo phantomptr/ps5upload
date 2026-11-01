@@ -17,6 +17,9 @@
 //!   on or off, and binary `[5][one Opus packet]` is one mic frame (48 kHz
 //!   stereo, 10 ms, 40 bytes; see `rp_stream::mic`). Only the attached page's
 //!   mic counts, and the mic goes off whenever the page changes.
+//!   Native keyboard & mouse (vinput_api.rs): `{"kbm": {"on", "mouse", "keyboard"}}` (repeated as
+//!   its heartbeat) and binary `[8][16-byte report]`, from the attached page only; answered with
+//!   `{"kbm": {"on", "mouse", "keyboard", "err", "reason"}}`.
 //! * engine → client, binary `[u8 kind][payload]`: 0 = video codec header
 //!   (Annex-B parameter sets), 1 = video access unit, 3 = audio header,
 //!   4 = audio frame (Opus), 6 = DualSense haptics frame (10 ms of 3 kHz stereo s16le PCM),
@@ -144,6 +147,9 @@ struct ClientMsg {
     /// The page's clock, echoed back as `{"pong": …}`.
     #[serde(default)]
     ping: Option<serde_json::Value>,
+    /// Native keyboard & mouse on or off, and its heartbeat (vinput_api.rs).
+    #[serde(default)]
+    kbm: Option<crate::vinput_api::KbmMsg>,
 }
 
 /// The answer to a ping: the page's own value back, untouched, and the engine's clock now.
@@ -267,6 +273,16 @@ pub(crate) fn remove_spectator(id: u64) {
             g.retain(|s| s.id != id);
         }
     }
+}
+
+/// A page shows the Remote Play session of `host` (that page owns the console's keyboard and mouse
+/// input, vinput_api.rs).
+pub(crate) fn page_attached(host: &str) -> bool {
+    let key = crate::vinput_api::host_key(host);
+    live().is_some_and(|l| {
+        crate::vinput_api::host_key(&l.host) == key
+            && l.viewer.lock().map(|g| g.is_some()).unwrap_or(false)
+    })
 }
 
 /// The console being played, if any.
@@ -950,6 +966,7 @@ async fn session(mut socket: WebSocket) {
     // Pongs go on this page's own status queue, behind what is already there,
     // so the time measured is the time the page's messages really take.
     let pong_tx = ctl_tx.clone();
+    let kbm_tx = ctl_tx.clone();
     let id = live.attach(video_tx, ctl_tx, start.timing);
 
     let mut reason = "ended";
@@ -1000,14 +1017,30 @@ async fn session(mut socket: WebSocket) {
                         if m.replay_s.is_some() {
                             live.set_replay(m.replay_s);
                         }
+                        if let Some(k) = &m.kbm {
+                            if live.is_viewer(id) {
+                                let tx = kbm_tx.clone();
+                                let status: crate::vinput_api::StatusFn = Arc::new(move |v| {
+                                    let _ = tx.try_send(text(v));
+                                });
+                                crate::vinput_api::control(&live.host, crate::vinput_api::Owner::Page(id), k, status);
+                            }
+                        }
                     }
                 }
                 Some(Ok(Message::Binary(b))) if b.first() == Some(&KIND_MIC) => {
                     live.mic_frame(id, &b[1..]);
                 }
+                // A native keyboard & mouse report: only from the page the session is shown on.
+                Some(Ok(Message::Binary(b))) if b.first() == Some(&crate::vinput_api::KIND_KBM) => {
+                    if live.is_viewer(id) {
+                        crate::vinput_api::report(&live.host, crate::vinput_api::Owner::Page(id), &b[1..]);
+                    }
+                }
                 // The page left: the session waits for it (or another).
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
                     live.detach(id);
+                    crate::vinput_api::off(&live.host, crate::vinput_api::Owner::Page(id), "left");
                     return;
                 }
                 _ => {}
@@ -1015,6 +1048,8 @@ async fn session(mut socket: WebSocket) {
         }
     }
     live.detach(id);
+    // Whatever ended it (stop, the session over, another page): this page's keys and buttons go.
+    crate::vinput_api::off(&live.host, crate::vinput_api::Owner::Page(id), "left");
     close(&mut socket, reason).await;
 }
 
