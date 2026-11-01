@@ -6737,6 +6737,18 @@ helper_mismatch_boot_copy: "你的 PS5 啟動了為開機保留的舊版助手�
   "workshop_bar_running": "正在處理 {title}…",
   "workshop_bar_show": "查看進度",
   "workshop_bar_review": "查看",
+  "queue_drag": "拖曳以調整順序",
+  "arcpkg.target": "解壓縮到：",
+  "arcpkg.space.fits": "需要 {need}；{drive} 可用 {room}。",
+  "arcpkg.space.tight": "需要 {need}；{drive} 可用 {room}。可能放不下。",
+  "arcpkg.space.noRoom": "空間不足：需要 {need}，{drive} 僅剩 {room}。請釋放空間，或在「儲存區」中為安裝包選擇其他硬碟。",
+  "arcpkg.space.unknown": "需要 {need}。無法讀取 PS5 的可用空間。",
+  "arcpkg.leftovers.line": "PS5 上殘留 {count} 個解壓縮資料夾，{size}",
+  "arcpkg.leftovers.remove": "刪除",
+  "arcpkg.leftovers.removing": "正在刪除…",
+  "arcpkg.leftovers.confirmTitle": "要從 PS5 刪除 {count} 個解壓縮資料夾嗎？",
+  "arcpkg.leftovers.confirmBody": "之後將無法重試這些檔案中失敗的安裝。",
+  "arcpkg.leftovers.failed": "無法刪除：{error}",
 };
 
 export default zh_TW;

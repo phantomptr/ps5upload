@@ -54,6 +54,25 @@ What's new in ps5upload, written for humans.
 - **Fixed: Remote Play reported sound loss that never happened.** A late or repeated sound packet
   made a whole moment's sound count as lost, which can make the PS5 lower the picture's bitrate, and
   could bring up the 720p offer on a good network.
+- **Drag to reorder the queue.** Hold the grip at the left of a waiting row and drop it where it
+  should go, with a mouse, pen or finger. The same rules as the arrow buttons apply: a row moves
+  only among the waiting rows of its own console and kind (base game, update, DLC). The arrows
+  stay for the keyboard; Esc cancels a drag.
+- **Archive installs say where they unpack, and check the space first.** Before you start, the
+  card shows the PS5 folder the packages go to, how much they need and how much is free on that
+  drive. When they certainly cannot fit, Install is refused with a clear message; when they may
+  not fit, it warns.
+- **The unpacked packages are deleted after a fully successful run.** When any install fails the
+  folder stays, so a retry works, and the message says where it is.
+- **Leftovers from earlier runs can be removed.** The card shows "N leftover unpacked folder(s)"
+  with their size and a Remove button; folders a queued install still reads are never touched.
+- **A more compact Upload & Install.** The drop area is shorter (a small icon beside its title,
+  what each kind becomes in two columns), so Choose file and Choose folder are on screen without
+  scrolling. Once something is chosen it shrinks to one slim row that still takes drops and adds
+  more. Cards are tighter, and the Upload / Stream & install buttons stay at the bottom of the
+  window however long the options above them are.
+
+---
 
 ## 10.3.0
 

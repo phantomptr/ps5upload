@@ -34,6 +34,7 @@ import { fileResumeTxId } from "../lib/fileResumeTx";
 import { restAfterUploadEnabled } from "./restAfterUpload";
 import {
   moveItemDownWithinGroup,
+  moveItemToWithinGroup,
   moveItemUpWithinGroup,
   patchItem,
   removeItem,
@@ -460,6 +461,9 @@ interface QueueState {
   noteSourceSize: (id: string, bytes: number) => void;
   moveUp: (id: string) => void;
   moveDown: (id: string) => void;
+  /** Drag and drop: put `id` where `targetId` is. Only between waiting rows of the same
+   *  console and install tier (as moveUp/moveDown); anything else is ignored. */
+  moveTo: (id: string, targetId: string) => void;
   /** Drop every item (or, with `host`, that console's), finished ones included. A running
    *  upload is stopped; a running install stays. */
   clear: (host?: string) => void;
@@ -2557,6 +2561,13 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       scheduleSave();
     },
 
+    moveTo(id, targetId) {
+      set((s) => ({
+        items: moveItemToWithinGroup(s.items, id, targetId, moveGroupOf),
+      }));
+      scheduleSave();
+    },
+
     clear(host) {
       // `host`: only that console's items (the panel shows one console at a
       // time; Clear on it must not discard another console's queue).
@@ -2949,6 +2960,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
     noteSourceSize: () => undefined,
     moveUp: () => undefined,
     moveDown: () => undefined,
+    moveTo: () => undefined,
     clear: () => undefined,
     retryFailed: () => undefined,
     restartItem: () => undefined,

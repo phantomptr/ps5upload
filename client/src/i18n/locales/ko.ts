@@ -6801,6 +6801,18 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "workshop_bar_running": "{title} 작업 중…",
   "workshop_bar_show": "진행 상황 보기",
   "workshop_bar_review": "검토",
+  "queue_drag": "끌어서 순서 변경",
+  "arcpkg.target": "압축 해제 위치:",
+  "arcpkg.space.fits": "필요: {need}, {drive} 여유 공간: {room}.",
+  "arcpkg.space.tight": "필요: {need}, {drive} 여유 공간: {room}. 공간이 부족할 수 있습니다.",
+  "arcpkg.space.noRoom": "공간이 부족합니다: {need}이(가) 필요하지만 {drive}의 여유 공간은 {room}뿐입니다. 공간을 확보하거나 볼륨에서 패키지용 다른 드라이브를 선택하세요.",
+  "arcpkg.space.unknown": "필요: {need}. PS5의 여유 공간을 읽을 수 없습니다.",
+  "arcpkg.leftovers.line": "PS5에 남은 압축 해제 폴더 {count}개, {size}",
+  "arcpkg.leftovers.remove": "삭제",
+  "arcpkg.leftovers.removing": "삭제 중…",
+  "arcpkg.leftovers.confirmTitle": "PS5에서 압축 해제 폴더 {count}개를 삭제할까요?",
+  "arcpkg.leftovers.confirmBody": "이 파일에서 실패한 설치는 이후 다시 시도할 수 없습니다.",
+  "arcpkg.leftovers.failed": "삭제하지 못했습니다: {error}",
 };
 
 export default ko;

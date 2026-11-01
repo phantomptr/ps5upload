@@ -54,6 +54,52 @@ export function moveItemDownWithinGroup<T extends { id: string }>(
   return next;
 }
 
+/** Move `id` to where `targetId` is (drag and drop), within their shared group. The
+ *  group's members keep the array slots they had, so other groups' rows never move; inside
+ *  the group, `id` takes `targetId`'s place and the rows between shift by one. Returns the
+ *  same reference when the two are in different groups, are the same row, or either is
+ *  missing. Pure — exported for tests. */
+export function moveItemToWithinGroup<T extends { id: string }>(
+  items: T[],
+  id: string,
+  targetId: string,
+  groupOf: (it: T) => string,
+): T[] {
+  if (id === targetId) return items;
+  const from = items.find((it) => it.id === id);
+  const to = items.find((it) => it.id === targetId);
+  if (!from || !to) return items;
+  const g = groupOf(from);
+  if (groupOf(to) !== g) return items;
+  const slots: number[] = [];
+  items.forEach((it, i) => {
+    if (groupOf(it) === g) slots.push(i);
+  });
+  const members = slots.map((i) => items[i]);
+  const fi = members.indexOf(from);
+  const ti = members.indexOf(to);
+  members.splice(fi, 1);
+  members.splice(ti, 0, from);
+  const next = items.slice();
+  slots.forEach((slot, k) => {
+    next[slot] = members[k];
+  });
+  return next;
+}
+
+/** Where to draw the drop line while `dragId` is held over `overId` in a list shown in
+ *  `order`: below the target when the row moves down, above it when it moves up. */
+export function dropSide(
+  order: readonly string[],
+  dragId: string,
+  overId: string,
+): "before" | "after" | null {
+  const from = order.indexOf(dragId);
+  const to = order.indexOf(overId);
+  if (from < 0 || to < 0 || from === to) return null;
+  return from < to ? "after" : "before";
+}
+
 /** Remove the item with `id`. Same-reference short-circuit when not
  *  found. */
 export function removeItem<T extends { id: string }>(items: T[], id: string): T[] {

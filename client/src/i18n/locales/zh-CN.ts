@@ -6743,6 +6743,18 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "workshop_bar_running": "正在处理 {title}…",
   "workshop_bar_show": "查看进度",
   "workshop_bar_review": "查看",
+  "queue_drag": "拖动以调整顺序",
+  "arcpkg.target": "解压到：",
+  "arcpkg.space.fits": "需要 {need}；{drive} 可用 {room}。",
+  "arcpkg.space.tight": "需要 {need}；{drive} 可用 {room}。可能放不下。",
+  "arcpkg.space.noRoom": "空间不足：需要 {need}，{drive} 仅剩 {room}。请释放空间，或在“存储卷”中为安装包选择其他硬盘。",
+  "arcpkg.space.unknown": "需要 {need}。无法读取 PS5 的可用空间。",
+  "arcpkg.leftovers.line": "PS5 上残留 {count} 个解压文件夹，{size}",
+  "arcpkg.leftovers.remove": "删除",
+  "arcpkg.leftovers.removing": "正在删除…",
+  "arcpkg.leftovers.confirmTitle": "要从 PS5 删除 {count} 个解压文件夹吗？",
+  "arcpkg.leftovers.confirmBody": "之后将无法重试这些文件中失败的安装。",
+  "arcpkg.leftovers.failed": "无法删除：{error}",
 };
 
 export default zh_CN;

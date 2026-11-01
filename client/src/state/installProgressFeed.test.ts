@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { installSampleFeed, type InstallSample } from "./pkgLibrary";
+import { moveItemToWithinGroup } from "../lib/queueOps";
 import { moveGroupOf, type QueueItem } from "./uploadQueue";
 
 const sample = (over: Partial<InstallSample>): InstallSample => ({
@@ -72,5 +73,26 @@ describe("moveGroupOf", () => {
 
   it("keeps a finished row out of every group", () => {
     expect(moveGroupOf(q({ id: "a", status: "done" }))).not.toBe(moveGroupOf(q({ id: "b" })));
+  });
+
+  it("a drag never moves a row onto a running row, another tier or another console", () => {
+    const items = [
+      q({ id: "run", status: "running" }),
+      q({ id: "a" }),
+      q({ id: "b" }),
+      q({ id: "upd", category: "gp" }),
+      q({ id: "other", addr: "10.0.0.3:9113" }),
+    ];
+    expect(moveItemToWithinGroup(items, "b", "run", moveGroupOf)).toBe(items);
+    expect(moveItemToWithinGroup(items, "run", "a", moveGroupOf)).toBe(items);
+    expect(moveItemToWithinGroup(items, "a", "upd", moveGroupOf)).toBe(items);
+    expect(moveItemToWithinGroup(items, "a", "other", moveGroupOf)).toBe(items);
+    expect(moveItemToWithinGroup(items, "b", "a", moveGroupOf).map((i) => i.id)).toEqual([
+      "run",
+      "b",
+      "a",
+      "upd",
+      "other",
+    ]);
   });
 });

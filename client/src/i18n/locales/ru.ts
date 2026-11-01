@@ -6737,6 +6737,18 @@ helper_mismatch_boot_copy: "PS5 запустила старую копию по�
   "workshop_bar_running": "Обработка {title}…",
   "workshop_bar_show": "Показать ход",
   "workshop_bar_review": "Проверить",
+  "queue_drag": "Перетащите, чтобы изменить порядок",
+  "arcpkg.target": "Распаковка в:",
+  "arcpkg.space.fits": "Нужно {need}; свободно {room} на {drive}.",
+  "arcpkg.space.tight": "Нужно {need}; свободно {room} на {drive}. Может не поместиться.",
+  "arcpkg.space.noRoom": "Недостаточно места: нужно {need}, свободно только {room} на {drive}. Освободите место или выберите другой диск для пакетов в разделе «Тома».",
+  "arcpkg.space.unknown": "Нужно {need}. Не удалось узнать свободное место на PS5.",
+  "arcpkg.leftovers.line": "Оставшихся распакованных папок на PS5: {count}, {size}",
+  "arcpkg.leftovers.remove": "Удалить",
+  "arcpkg.leftovers.removing": "Удаление…",
+  "arcpkg.leftovers.confirmTitle": "Удалить распакованные папки с PS5 ({count})?",
+  "arcpkg.leftovers.confirmBody": "Неудачные установки из этих файлов потом нельзя будет повторить.",
+  "arcpkg.leftovers.failed": "Не удалось удалить: {error}",
 };
 
 export default ru;

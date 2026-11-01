@@ -6786,6 +6786,18 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "workshop_bar_running": "Đang xử lý {title}…",
   "workshop_bar_show": "Xem tiến độ",
   "workshop_bar_review": "Xem lại",
+  "queue_drag": "Kéo để sắp xếp lại",
+  "arcpkg.target": "Giải nén vào:",
+  "arcpkg.space.fits": "Cần {need}; {drive} còn trống {room}.",
+  "arcpkg.space.tight": "Cần {need}; {drive} còn trống {room}. Có thể không đủ chỗ.",
+  "arcpkg.space.noRoom": "Không đủ dung lượng: cần {need}, {drive} chỉ còn trống {room}. Hãy giải phóng dung lượng hoặc chọn ổ khác cho gói trong mục Ổ đĩa.",
+  "arcpkg.space.unknown": "Cần {need}. Không đọc được dung lượng trống trên PS5.",
+  "arcpkg.leftovers.line": "{count} thư mục giải nén còn sót trên PS5, {size}",
+  "arcpkg.leftovers.remove": "Xóa",
+  "arcpkg.leftovers.removing": "Đang xóa…",
+  "arcpkg.leftovers.confirmTitle": "Xóa {count} thư mục giải nén khỏi PS5?",
+  "arcpkg.leftovers.confirmBody": "Các lần cài đặt thất bại từ những tệp này sẽ không thể thử lại sau đó.",
+  "arcpkg.leftovers.failed": "Không xóa được: {error}",
 };
 
 export default vi;

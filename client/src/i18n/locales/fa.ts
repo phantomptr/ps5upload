@@ -7076,6 +7076,18 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
   "workshop_bar_running": "در حال کار روی {title}…",
   "workshop_bar_show": "نمایش پیشرفت",
   "workshop_bar_review": "بازبینی",
+  "queue_drag": "برای تغییر ترتیب بکشید",
+  "arcpkg.target": "از حالت فشرده خارج می‌شود در:",
+  "arcpkg.space.fits": "{need} لازم است؛ {room} فضای آزاد روی {drive}.",
+  "arcpkg.space.tight": "{need} لازم است؛ {room} فضای آزاد روی {drive}. ممکن است جا نشود.",
+  "arcpkg.space.noRoom": "فضای کافی نیست: {need} لازم است و فقط {room} روی {drive} آزاد است. فضا آزاد کنید یا در بخش درایوها درایو دیگری برای بسته‌ها انتخاب کنید.",
+  "arcpkg.space.unknown": "{need} لازم است. فضای آزاد PS5 خوانده نشد.",
+  "arcpkg.leftovers.line": "{count} پوشه باقی‌مانده از استخراج روی PS5، {size}",
+  "arcpkg.leftovers.remove": "حذف",
+  "arcpkg.leftovers.removing": "در حال حذف…",
+  "arcpkg.leftovers.confirmTitle": "{count} پوشه استخراج‌شده از PS5 حذف شود؟",
+  "arcpkg.leftovers.confirmBody": "نصب‌های ناموفق از این فایل‌ها بعداً قابل تلاش دوباره نیستند.",
+  "arcpkg.leftovers.failed": "حذف نشد: {error}",
 };
 
 export default fa;

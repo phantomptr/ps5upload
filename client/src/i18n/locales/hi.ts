@@ -6798,6 +6798,18 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
   "workshop_bar_running": "{title} पर काम चल रहा है…",
   "workshop_bar_show": "प्रगति दिखाएँ",
   "workshop_bar_review": "देखें",
+  "queue_drag": "क्रम बदलने के लिए खींचें",
+  "arcpkg.target": "यहाँ अनपैक होगा:",
+  "arcpkg.space.fits": "{need} चाहिए; {drive} पर {room} खाली है।",
+  "arcpkg.space.tight": "{need} चाहिए; {drive} पर {room} खाली है। शायद जगह कम पड़े।",
+  "arcpkg.space.noRoom": "पर्याप्त जगह नहीं: {need} चाहिए, {drive} पर केवल {room} खाली है। जगह खाली करें, या Volumes में पैकेज के लिए दूसरी ड्राइव चुनें।",
+  "arcpkg.space.unknown": "{need} चाहिए। PS5 की खाली जगह पढ़ी नहीं जा सकी।",
+  "arcpkg.leftovers.line": "PS5 पर {count} बचे हुए अनपैक फ़ोल्डर, {size}",
+  "arcpkg.leftovers.remove": "हटाएँ",
+  "arcpkg.leftovers.removing": "हटाया जा रहा है…",
+  "arcpkg.leftovers.confirmTitle": "PS5 से {count} अनपैक फ़ोल्डर हटाएँ?",
+  "arcpkg.leftovers.confirmBody": "इन फ़ाइलों से विफल इंस्टॉल बाद में दोबारा नहीं आज़माए जा सकेंगे।",
+  "arcpkg.leftovers.failed": "हटाया नहीं जा सका: {error}",
 };
 
 export default hi;

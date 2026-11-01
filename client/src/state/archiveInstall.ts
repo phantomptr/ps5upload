@@ -4,9 +4,15 @@ import type { RarPackage } from "../api/links";
 import { hostOf } from "../lib/addr";
 import type { RarPasswordProblem } from "../lib/rarPassword";
 import { useTaskStore } from "./tasks";
+import type { QueueItem } from "./uploadQueue";
 import {
   archiveKindOf,
+  findArchiveLeftovers,
   installRarPackages,
+  planArchiveTarget,
+  removeConsoleFolder,
+  type ArchiveLeftover,
+  type ArchiveTarget,
   isArchiveFirstVolume,
   listRarPackages,
   type RarInstallResult,
@@ -25,6 +31,8 @@ export interface ArchiveInstallState {
   archive: string;
   /** null until listed (or while a password is needed). */
   packages: RarPackage[] | null;
+  /** Where the packages will be unpacked and whether they fit; null until worked out. */
+  target: ArchiveTarget | null;
   password: string | null;
   passwordProblem: RarPasswordProblem | null;
   inspecting: boolean;
@@ -46,11 +54,25 @@ export interface ArchiveInstallState {
   error: string | null;
 }
 
-interface Store {
-  byHost: Record<string, ArchiveInstallState>;
+/** Folders earlier runs left on a console (failed or interrupted), for the card's
+ *  "Remove" line. */
+export interface ArchiveLeftoverState {
+  items: ArchiveLeftover[];
+  scanning: boolean;
+  removing: boolean;
+  /** The last removal's failure, raw. */
+  error: string | null;
 }
 
-export const useArchiveInstallStore = create<Store>(() => ({ byHost: {} }));
+interface Store {
+  byHost: Record<string, ArchiveInstallState>;
+  leftoversByHost: Record<string, ArchiveLeftoverState>;
+}
+
+export const useArchiveInstallStore = create<Store>(() => ({
+  byHost: {},
+  leftoversByHost: {},
+}));
 
 export function archiveInstallFor(
   s: Store,
@@ -71,6 +93,7 @@ function put(host: string, patch: Partial<ArchiveInstallState>) {
 const fresh = (archive: string): ArchiveInstallState => ({
   archive,
   packages: null,
+  target: null,
   password: null,
   passwordProblem: null,
   inspecting: false,
@@ -107,7 +130,29 @@ async function inspect(host: string, path: string, password: string | null) {
     });
     return;
   }
-  put(host, { inspecting: false, passwordProblem: null, packages: r.packages });
+  put(host, {
+    inspecting: false,
+    passwordProblem: null,
+    packages: r.packages,
+    target: null,
+  });
+  if (r.packages.length > 0) await planTarget(host);
+}
+
+/** Works out (again) where the chosen archive's packages go and whether they fit. */
+export async function planTarget(host: string): Promise<void> {
+  const cur = archiveInstallFor(useArchiveInstallStore.getState(), host);
+  if (!cur?.packages?.length) return;
+  const archive = cur.archive;
+  let target: ArchiveTarget | null;
+  try {
+    target = await planArchiveTarget(host, archive, cur.packages);
+  } catch {
+    target = null; // unknown: the run checks again before it sends anything
+  }
+  if (archiveInstallFor(useArchiveInstallStore.getState(), host)?.archive !== archive)
+    return;
+  put(host, { target });
 }
 
 /** The user picked `path`: remember it for this console and read what it holds. */
@@ -198,6 +243,7 @@ export async function runArchiveInstall(host: string): Promise<void> {
     put(host, {
       result: r,
       ...(r.password ? { passwordProblem: r.password } : {}),
+      ...(r.space ? { target: { dest: r.dest, already: 0, space: r.space } } : {}),
     });
     useTaskStore
       .getState()
@@ -209,6 +255,105 @@ export async function runArchiveInstall(host: string): Promise<void> {
   } finally {
     put(host, { busy: false, phase: null });
   }
+}
+
+// ── Folders left by earlier runs ────────────────────────────────────────────────────────
+
+function putLeftovers(host: string, patch: Partial<ArchiveLeftoverState>) {
+  const key = hostOf(host);
+  useArchiveInstallStore.setState((s) => {
+    const cur = s.leftoversByHost[key] ?? {
+      items: [],
+      scanning: false,
+      removing: false,
+      error: null,
+    };
+    return {
+      leftoversByHost: { ...s.leftoversByHost, [key]: { ...cur, ...patch } },
+    };
+  });
+}
+
+export function archiveLeftoversFor(
+  s: Store,
+  host: string,
+): ArchiveLeftoverState | null {
+  return s.leftoversByHost[hostOf(host)] ?? null;
+}
+
+/** Console files that waiting or running installs on `host` still read. */
+export function queuedInstallPaths(
+  items: readonly QueueItem[],
+  host: string,
+): string[] {
+  const h = hostOf(host);
+  const out: string[] = [];
+  for (const it of items) {
+    if (it.status !== "pending" && it.status !== "running") continue;
+    if (hostOf(it.addr) !== h) continue;
+    const r = it.install;
+    if (r && (r.via === "console-path" || r.via === "library")) out.push(r.path);
+  }
+  return out;
+}
+
+/** True when `path` is the folder of a run going on now, or holds a file a queued or
+ *  running install still reads (`queuedPaths`). */
+export function leftoverInUse(
+  path: string,
+  host: string,
+  queuedPaths: readonly string[],
+): boolean {
+  const cur = archiveInstallFor(useArchiveInstallStore.getState(), host);
+  if (cur?.busy && (cur.target?.dest === path || cur.result?.dest === path))
+    return true;
+  // A run that is going and has not worked out its folder yet: hold every folder.
+  if (cur?.busy && !cur.target) return true;
+  return queuedPaths.some((p) => p === path || p.startsWith(`${path}/`));
+}
+
+/** Looks for unpacked folders earlier runs left on this console. */
+export async function scanArchiveLeftovers(
+  host: string,
+  queuedPaths: readonly string[],
+): Promise<void> {
+  if (archiveLeftoversFor(useArchiveInstallStore.getState(), host)?.scanning) return;
+  putLeftovers(host, { scanning: true });
+  try {
+    const items = await findArchiveLeftovers(host, (p) =>
+      leftoverInUse(p, host, queuedPaths),
+    );
+    putLeftovers(host, { items, scanning: false });
+  } catch {
+    putLeftovers(host, { items: [], scanning: false });
+  }
+}
+
+/** Deletes the leftover folders found by the last scan (those still not in use). */
+export async function removeArchiveLeftovers(
+  host: string,
+  queuedPaths: readonly string[],
+): Promise<void> {
+  const cur = archiveLeftoversFor(useArchiveInstallStore.getState(), host);
+  if (!cur || cur.removing || cur.items.length === 0) return;
+  putLeftovers(host, { removing: true, error: null });
+  const kept: ArchiveLeftover[] = [];
+  let error: string | null = null;
+  for (const it of cur.items) {
+    if (leftoverInUse(it.path, host, queuedPaths)) {
+      kept.push(it);
+      continue;
+    }
+    try {
+      await removeConsoleFolder(host, it.path);
+    } catch (e) {
+      kept.push(it);
+      error = `${it.path}: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+  putLeftovers(host, { items: kept, removing: false, error });
+  // The chosen archive's folder may have been one of them: what is already there changed.
+  await planTarget(host);
 }
 
 /** Forgets this console's archive (the user is done with it). A running one stays. */

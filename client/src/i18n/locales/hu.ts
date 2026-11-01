@@ -7090,6 +7090,18 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "workshop_bar_running": "Dolgozik ezen: {title}…",
   "workshop_bar_show": "Folyamat mutatása",
   "workshop_bar_review": "Áttekintés",
+  "queue_drag": "Húzd az átrendezéshez",
+  "arcpkg.target": "Kicsomagolás ide:",
+  "arcpkg.space.fits": "{need} kell; {room} szabad ezen: {drive}.",
+  "arcpkg.space.tight": "{need} kell; {room} szabad ezen: {drive}. Lehet, hogy nem fér el.",
+  "arcpkg.space.noRoom": "Nincs elég hely: {need} kell, de csak {room} szabad ezen: {drive}. Szabadíts fel helyet, vagy válassz másik meghajtót a csomagokhoz a Kötetekben.",
+  "arcpkg.space.unknown": "{need} kell. A PS5 szabad helyét nem sikerült kiolvasni.",
+  "arcpkg.leftovers.line": "{count} megmaradt kicsomagolt mappa a PS5-ön, {size}",
+  "arcpkg.leftovers.remove": "Eltávolítás",
+  "arcpkg.leftovers.removing": "Eltávolítás…",
+  "arcpkg.leftovers.confirmTitle": "Törlöd a(z) {count} kicsomagolt mappát a PS5-ről?",
+  "arcpkg.leftovers.confirmBody": "Az ezekből a fájlokból sikertelen telepítéseket utána nem lehet újrapróbálni.",
+  "arcpkg.leftovers.failed": "Nem sikerült törölni: {error}",
 };
 
 export default hu;

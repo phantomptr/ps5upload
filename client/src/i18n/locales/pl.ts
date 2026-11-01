@@ -7032,6 +7032,18 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "workshop_bar_running": "Praca nad {title}…",
   "workshop_bar_show": "Pokaż postęp",
   "workshop_bar_review": "Przejrzyj",
+  "queue_drag": "Przeciągnij, aby zmienić kolejność",
+  "arcpkg.target": "Rozpakowanie do:",
+  "arcpkg.space.fits": "Potrzeba {need}; wolne na {drive}: {room}.",
+  "arcpkg.space.tight": "Potrzeba {need}; wolne na {drive}: {room}. Może się nie zmieścić.",
+  "arcpkg.space.noRoom": "Za mało miejsca: potrzeba {need}, wolne na {drive} tylko {room}. Zwolnij miejsce lub wybierz inny dysk na pakiety w Woluminach.",
+  "arcpkg.space.unknown": "Potrzeba {need}. Nie udało się odczytać wolnego miejsca na PS5.",
+  "arcpkg.leftovers.line": "Pozostałe rozpakowane foldery na PS5: {count}, {size}",
+  "arcpkg.leftovers.remove": "Usuń",
+  "arcpkg.leftovers.removing": "Usuwanie…",
+  "arcpkg.leftovers.confirmTitle": "Usunąć rozpakowane foldery z PS5 ({count})?",
+  "arcpkg.leftovers.confirmBody": "Nieudanych instalacji z tych plików nie będzie można potem ponowić.",
+  "arcpkg.leftovers.failed": "Nie udało się usunąć: {error}",
 };
 
 export default pl;

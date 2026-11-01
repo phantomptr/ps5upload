@@ -6791,6 +6791,18 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "workshop_bar_running": "{title} üzerinde çalışılıyor…",
   "workshop_bar_show": "İlerlemeyi göster",
   "workshop_bar_review": "Gözden geçir",
+  "queue_drag": "Sıralamak için sürükleyin",
+  "arcpkg.target": "Şuraya açılır:",
+  "arcpkg.space.fits": "{need} gerekli; {drive} üzerinde {room} boş.",
+  "arcpkg.space.tight": "{need} gerekli; {drive} üzerinde {room} boş. Sığmayabilir.",
+  "arcpkg.space.noRoom": "Yer yetersiz: {need} gerekli, {drive} üzerinde yalnızca {room} boş. Yer açın veya Birimler'de paketler için başka bir sürücü seçin.",
+  "arcpkg.space.unknown": "{need} gerekli. PS5'teki boş alan okunamadı.",
+  "arcpkg.leftovers.line": "PS5'te {count} artık açılmış klasör, {size}",
+  "arcpkg.leftovers.remove": "Kaldır",
+  "arcpkg.leftovers.removing": "Kaldırılıyor…",
+  "arcpkg.leftovers.confirmTitle": "PS5'ten {count} açılmış klasör silinsin mi?",
+  "arcpkg.leftovers.confirmBody": "Bu dosyalardan başarısız olan kurulumlar daha sonra yeniden denenemez.",
+  "arcpkg.leftovers.failed": "Silinemedi: {error}",
 };
 
 export default tr;

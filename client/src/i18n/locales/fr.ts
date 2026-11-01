@@ -6800,6 +6800,18 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "workshop_bar_running": "Travail sur {title}…",
   "workshop_bar_show": "Voir la progression",
   "workshop_bar_review": "Vérifier",
+  "queue_drag": "Glisser pour réordonner",
+  "arcpkg.target": "Décompressé dans :",
+  "arcpkg.space.fits": "Nécessite {need} ; {room} libres sur {drive}.",
+  "arcpkg.space.tight": "Nécessite {need} ; {room} libres sur {drive}. Cela risque de ne pas tenir.",
+  "arcpkg.space.noRoom": "Pas assez d'espace : {need} nécessaires, seulement {room} libres sur {drive}. Libérez de l'espace ou choisissez un autre disque pour les paquets dans Volumes.",
+  "arcpkg.space.unknown": "Nécessite {need}. L'espace libre de la PS5 n'a pas pu être lu.",
+  "arcpkg.leftovers.line": "{count} dossier(s) décompressé(s) restant(s) sur la PS5, {size}",
+  "arcpkg.leftovers.remove": "Supprimer",
+  "arcpkg.leftovers.removing": "Suppression…",
+  "arcpkg.leftovers.confirmTitle": "Supprimer {count} dossier(s) décompressé(s) de la PS5 ?",
+  "arcpkg.leftovers.confirmBody": "Les installations échouées depuis ces fichiers ne pourront plus être relancées.",
+  "arcpkg.leftovers.failed": "Suppression impossible : {error}",
 };
 
 export default fr;

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  dropSide,
   moveItemDownWithinGroup,
+  moveItemToWithinGroup,
   moveItemUpWithinGroup,
   nextPending,
   patchItem,
@@ -195,5 +197,57 @@ describe("moveItemUpWithinGroup / moveItemDownWithinGroup", () => {
   it("returns same reference when id is absent", () => {
     expect(moveItemUpWithinGroup(arr, "nope", groupOf)).toBe(arr);
     expect(moveItemDownWithinGroup(arr, "nope", groupOf)).toBe(arr);
+  });
+});
+
+describe("moveItemToWithinGroup (drag and drop)", () => {
+  type G = { id: string; host: string };
+  const groupOf = (it: G) => it.host;
+  // A B A B A A
+  const arr: G[] = [
+    { id: "a1", host: "A" },
+    { id: "b1", host: "B" },
+    { id: "a2", host: "A" },
+    { id: "b2", host: "B" },
+    { id: "a3", host: "A" },
+    { id: "a4", host: "A" },
+  ];
+  const ids = (xs: G[]) => xs.map((x) => x.id);
+
+  it("moves a row down past several of its group, keeping other groups in place", () => {
+    const next = moveItemToWithinGroup(arr, "a1", "a3", groupOf);
+    expect(ids(next)).toEqual(["a2", "b1", "a3", "b2", "a1", "a4"]);
+    // B rows keep their slots.
+    expect(next[1].id).toBe("b1");
+    expect(next[3].id).toBe("b2");
+  });
+
+  it("moves a row up to the top of its group", () => {
+    const next = moveItemToWithinGroup(arr, "a4", "a1", groupOf);
+    expect(ids(next)).toEqual(["a4", "b1", "a1", "b2", "a2", "a3"]);
+  });
+
+  it("dropping on a neighbour is the same as one arrow press", () => {
+    expect(ids(moveItemToWithinGroup(arr, "a2", "a3", groupOf))).toEqual(
+      ids(moveItemDownWithinGroup(arr, "a2", groupOf)),
+    );
+    expect(ids(moveItemToWithinGroup(arr, "a2", "a1", groupOf))).toEqual(
+      ids(moveItemUpWithinGroup(arr, "a2", groupOf)),
+    );
+  });
+
+  it("ignores a drop on another group, on itself, or on a missing row", () => {
+    expect(moveItemToWithinGroup(arr, "a1", "b2", groupOf)).toBe(arr);
+    expect(moveItemToWithinGroup(arr, "a1", "a1", groupOf)).toBe(arr);
+    expect(moveItemToWithinGroup(arr, "nope", "a1", groupOf)).toBe(arr);
+    expect(moveItemToWithinGroup(arr, "a1", "nope", groupOf)).toBe(arr);
+  });
+
+  it("draws the drop line on the side the row is moving to", () => {
+    const order = ["x", "y", "z"];
+    expect(dropSide(order, "x", "z")).toBe("after");
+    expect(dropSide(order, "z", "x")).toBe("before");
+    expect(dropSide(order, "y", "y")).toBeNull();
+    expect(dropSide(order, "y", "q")).toBeNull();
   });
 });
