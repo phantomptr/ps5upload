@@ -4,6 +4,23 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Groundwork: your computer's keyboard and mouse as the PS5's own.** Remote Play's Settings ›
+  Controls now has three modes, kept per game (the home screen has its own): **Controller** (the
+  keys and mouse act as a controller, exactly as before, and the default), **Keyboard & mouse**
+  (the PS5 gets a real keyboard and mouse, for games and apps that support them) and **Mixed** (a
+  real mouse; the keys act as a controller, WASD moves). Ctrl+Alt+M switches. A line says what the
+  PS5 sees: "PS5 sees: mouse ✓/– keyboard ✓/–".
+- **Not available on consoles yet.** The helper's side is built and tested, but the console's
+  virtual keyboard and mouse stay off until they are confirmed working on real hardware, so for
+  now Settings says "Native keyboard & mouse isn't available on this console yet" and the two new
+  modes can't be picked. Controller emulation works exactly as before.
+- How it will work once on: the mouse goes to the PS5 only while it is captured on the picture;
+  keys are sent by their place on the keyboard, whatever its layout; everything held is let go
+  when the window loses focus, Settings opens, the mode changes or the stream stops, and the
+  console lets go by itself if the computer goes quiet for 2 seconds.
+
 ## 10.3.0
 
 - **Remote Play's Settings open over the stream.** Every Settings button (on the picture's bar,
