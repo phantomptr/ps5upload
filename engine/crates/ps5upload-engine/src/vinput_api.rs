@@ -958,7 +958,10 @@ mod tests {
         let mut l = LinkState::new("h", port.clone(), t0);
         let (st, seen) = sink();
         l.on_cmd(want_cmd(P1, true, true, &st), t0);
-        assert_eq!(seen.lock().unwrap().last().unwrap()["err"], "vinput_helper_old");
+        assert_eq!(
+            seen.lock().unwrap().last().unwrap()["err"],
+            "vinput_helper_old"
+        );
 
         let port = Arc::new(Fake::default());
         *port.unreachable.lock().unwrap() = true;
