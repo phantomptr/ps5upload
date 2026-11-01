@@ -22,17 +22,34 @@
 //!   neither). That folder also holds its BIOS, games, covers and caches, so there a save is only
 //!   its own files, and its path says which: `/data/PCSX2/*.ps2` the cards, `/data/PCSX2/*.p2s`
 //!   the states.
+//!
+//! The PlayStation emulator PSSwanStation (PPSA99248, a port of SwanStation) keeps its saves the
+//! same way, so they are here too, with their own `kind` ("ps1"): its memory cards in `data/saves`
+//! (`<game>_1.mcd`, a card for each game, and the copies it keeps of them in `backups`) and its
+//! saved states in `data/states` (`<game>.<slot>.state` with its picture, `.state.png`, and
+//! `<game>.resume.state`, the one it makes by itself), both in the folder its files are kept in.
+//! That is the title's own folder, wherever it was installed, unless "Where my files are kept"
+//! moved them to `/data/psswanstation` or to a `PSSwanStation` folder at the top of a USB drive
+//! (`OutsideDir`, `UsbFolder` and `filesAt` in its ps5/src/fe.h and ps5/src/ps5/platform_ps5.cpp).
+//! A `PSSwanStation` folder on a USB drive may hold only themes or mods, so a folder outside the
+//! title's counts once it has its `data` folder.
 
 use ps5upload_core::fs_ops::DirEntry;
 use ps5upload_core::saves::SaveEntry;
 
 use crate::emulator_saves::{measure, DEPTH};
 
-/// `SaveEntry::kind` of their saves.
+/// `SaveEntry::kind` of the PlayStation 2 emulators' saves.
 pub const KIND: &str = "ps2";
+/// `SaveEntry::kind` of the PlayStation emulator's saves.
+pub const PS1_KIND: &str = "ps1";
 
-/// The folder of the memory cards in a data folder, and its save's user number.
-const CARDS: &str = "memcards";
+/// `kind` is one of these emulators' saves.
+pub fn is_kind(kind: &str) -> bool {
+    kind == KIND || kind == PS1_KIND
+}
+
+/// The memory cards' save's user number.
 pub const CARDS_USER: i32 = 0;
 /// The saved states' user number.
 pub const STATES_USER: i32 = 1;
@@ -44,12 +61,19 @@ const LOOSE: [(&str, i32); 2] = [("*.ps2", CARDS_USER), ("*.p2s", STATES_USER)];
 pub struct Emulator {
     pub app: &'static str,
     pub name: &'static str,
+    /// `SaveEntry::kind` of its saves: [`KIND`] or [`PS1_KIND`].
+    pub kind: &'static str,
+    /// Its memory cards' folder in a data folder.
+    cards: &'static str,
     /// Its saved states' folder in a data folder.
     states: &'static str,
     /// Without a save's folder, that save is loose in the data folder.
     loose: bool,
-    /// Its data folders outside the title's, the first one there used.
+    /// Its data folders outside the title's, the first one in use taken.
     outside: &'static [&'static str],
+    /// What a data folder outside the title's holds once the emulator uses it; empty when being
+    /// there is enough.
+    in_use: &'static str,
     /// Where its title folder may be installed, the first one there used when no data folder
     /// outside it is.
     installed: &'static [&'static str],
@@ -58,17 +82,20 @@ pub struct Emulator {
 impl Emulator {
     /// Its save folders in a data folder, each with its save's user number.
     fn folders(&self) -> [(&'static str, i32); 2] {
-        [(CARDS, CARDS_USER), (self.states, STATES_USER)]
+        [(self.cards, CARDS_USER), (self.states, STATES_USER)]
     }
 
-    fn has_data_folder(&self, path: &str) -> bool {
-        self.outside.contains(&path) || self.installed.contains(&path)
+    /// Every folder its data may be in.
+    fn data_folders(&self) -> impl Iterator<Item = &'static str> {
+        self.outside.iter().chain(self.installed).copied()
     }
 }
 
 pub const CRUX2: Emulator = Emulator {
     app: "PPSA99249",
     name: "Crux2",
+    kind: KIND,
+    cards: "memcards",
     states: "sstates",
     loose: false,
     outside: &[
@@ -82,6 +109,7 @@ pub const CRUX2: Emulator = Emulator {
         "/mnt/usb6/crux2-data",
         "/mnt/usb7/crux2-data",
     ],
+    in_use: "",
     installed: &[
         "/data/homebrew/PPSA99249",
         "/user/app/PPSA99249",
@@ -95,13 +123,45 @@ pub const CRUX2: Emulator = Emulator {
 pub const PS5SX2: Emulator = Emulator {
     app: "PPSA99203",
     name: "PS5SX2",
+    kind: KIND,
+    cards: "memcards",
     states: "savestates",
     loose: true,
     outside: &["/data/PCSX2"],
+    in_use: "",
     installed: &[],
 };
 
-pub const EMULATORS: [&Emulator; 2] = [&CRUX2, &PS5SX2];
+pub const PSSWANSTATION: Emulator = Emulator {
+    app: "PPSA99248",
+    name: "PSSwanStation",
+    kind: PS1_KIND,
+    cards: "data/saves",
+    states: "data/states",
+    loose: false,
+    outside: &[
+        "/data/psswanstation",
+        "/mnt/usb0/PSSwanStation",
+        "/mnt/usb1/PSSwanStation",
+        "/mnt/usb2/PSSwanStation",
+        "/mnt/usb3/PSSwanStation",
+        "/mnt/usb4/PSSwanStation",
+        "/mnt/usb5/PSSwanStation",
+        "/mnt/usb6/PSSwanStation",
+        "/mnt/usb7/PSSwanStation",
+    ],
+    in_use: "data",
+    installed: &[
+        "/data/homebrew/PPSA99248",
+        "/user/app/PPSA99248",
+        "/mnt/ext0/homebrew/PPSA99248",
+        "/mnt/ext1/homebrew/PPSA99248",
+        "/mnt/usb0/homebrew/PPSA99248",
+        "/mnt/usb1/homebrew/PPSA99248",
+    ],
+};
+
+pub const EMULATORS: [&Emulator; 3] = [&CRUX2, &PS5SX2, &PSSWANSTATION];
 
 /// Where a save of an emulator is on the console.
 pub struct Place<'a> {
@@ -135,23 +195,32 @@ fn is_loose_save(user: i32, name: &str) -> bool {
 /// Where the save whose path is `path` is: a save folder of an emulator (one of the places it may
 /// be, exactly), or, for one that keeps them loose, `<data folder>/*.ps2` or `/*.p2s`.
 pub fn place_of(path: &str) -> Option<Place<'_>> {
-    let (data, last) = path.rsplit_once('/')?;
-    let emulator = EMULATORS.into_iter().find(|e| e.has_data_folder(data))?;
-    if let Some((_, user)) = emulator.folders().into_iter().find(|(f, _)| *f == last) {
-        return Some(Place {
-            emulator,
-            user,
-            folder: path,
-            loose: false,
-        });
+    for emulator in EMULATORS {
+        for data in emulator.data_folders() {
+            let Some(rest) = path.strip_prefix(data).and_then(|r| r.strip_prefix('/')) else {
+                continue;
+            };
+            if let Some((_, user)) = emulator.folders().into_iter().find(|(f, _)| *f == rest) {
+                return Some(Place {
+                    emulator,
+                    user,
+                    folder: path,
+                    loose: false,
+                });
+            }
+            if let Some((_, user)) = LOOSE.into_iter().find(|(l, _)| *l == rest) {
+                if emulator.loose {
+                    return Some(Place {
+                        emulator,
+                        user,
+                        folder: data,
+                        loose: true,
+                    });
+                }
+            }
+        }
     }
-    let (_, user) = LOOSE.into_iter().find(|(l, _)| *l == last)?;
-    emulator.loose.then_some(Place {
-        emulator,
-        user,
-        folder: data,
-        loose: true,
-    })
+    None
 }
 
 /// `dir` holds the title, as the emulator tells it: its `eboot.bin` and `sce_sys/param.json`.
@@ -163,16 +232,21 @@ fn is_title_folder(ls: &dyn Fn(&str) -> Result<Vec<DirEntry>, String>, dir: &str
     has(dir, "eboot.bin") && has(&format!("{dir}/sce_sys"), "param.json")
 }
 
-/// The data folder `emulator` uses on the console: the first of its data folders that is there,
-/// else the first folder it is installed in. None when neither is.
+/// The data folder `emulator` uses on the console: the first of its data folders that is there
+/// (holding what it holds once in use), else the first folder it is installed in. None when
+/// neither is.
 fn data_folder(
     ls: &dyn Fn(&str) -> Result<Vec<DirEntry>, String>,
     emulator: &Emulator,
 ) -> Option<&'static str> {
+    let in_use = |d: &str| match emulator.in_use {
+        "" => ls(d).is_ok(),
+        mark => ls(&format!("{d}/{mark}")).is_ok(),
+    };
     emulator
         .outside
         .iter()
-        .find(|d| ls(d).is_ok())
+        .find(|d| in_use(d))
         .or_else(|| emulator.installed.iter().find(|d| is_title_folder(ls, d)))
         .copied()
 }
@@ -226,7 +300,7 @@ pub fn saves_in(ls: &dyn Fn(&str) -> Result<Vec<DirEntry>, String>) -> Vec<SaveE
                 path,
                 size: size as i64,
                 mtime,
-                kind: KIND.into(),
+                kind: emulator.kind.into(),
             });
         }
     }
@@ -267,7 +341,7 @@ fn measure_loose(
 pub struct Ps2Save {
     #[serde(flatten)]
     pub save: SaveEntry,
-    /// The emulator's name (Crux2, PS5SX2).
+    /// The emulator's name (Crux2, PS5SX2, PSSwanStation).
     pub emulator: &'static str,
     /// The folder the save's files are in (a loose save's `path` names only some of them).
     pub folder: String,
@@ -276,9 +350,9 @@ pub struct Ps2Save {
     pub running: Option<bool>,
 }
 
-/// `GET /api/save-backup/ps2?addr=` — the PlayStation 2 emulators' cards and saved states on that
-/// console, each with whether its emulator runs now: `{saves}`. None when neither is installed or
-/// has saved anything.
+/// `GET /api/save-backup/ps2?addr=` — the emulators' cards and saved states on that console (the
+/// PlayStation 2 emulators', `kind` "ps2", and PSSwanStation's, `kind` "ps1"), each with whether
+/// its emulator runs now: `{saves}`. None when none is installed or has saved anything.
 pub async fn get_ps2(
     axum::extract::Query(q): axum::extract::Query<crate::emulator_saves::SwitchQuery>,
 ) -> axum::response::Response {
@@ -587,6 +661,168 @@ mod tests {
         assert!(saves_in(&ls_of(&fs)).is_empty());
     }
 
+    const SWAN_HOME: &str = "/mnt/ext1/homebrew/PPSA99248";
+
+    /// PSSwanStation installed on the M.2 drive with its files in its own folder: a game's card,
+    /// the backups it keeps of it, and two saved states.
+    fn psswanstation(fs: &mut BTreeMap<String, Vec<DirEntry>>) {
+        fs.insert(
+            SWAN_HOME.into(),
+            vec![
+                entry("eboot.bin", "file", 49_981_838, 10),
+                entry("sce_sys", "dir", 0, 10),
+                entry("data", "dir", 0, 10),
+                entry("games", "dir", 0, 10),
+                entry("bios", "dir", 0, 10),
+            ],
+        );
+        fs.insert(
+            format!("{SWAN_HOME}/sce_sys"),
+            vec![entry("param.json", "file", 900, 10)],
+        );
+        fs.insert(
+            format!("{SWAN_HOME}/data"),
+            vec![
+                entry("saves", "dir", 0, 20),
+                entry("states", "dir", 0, 20),
+                entry("cache", "dir", 0, 20),
+                entry("history.txt", "file", 90, 900),
+            ],
+        );
+        fs.insert(
+            format!("{SWAN_HOME}/data/saves"),
+            vec![
+                entry("Digimon Rumble Arena (Europe)_1.mcd", "file", 131_072, 500),
+                entry("backups", "dir", 0, 450),
+            ],
+        );
+        fs.insert(
+            format!("{SWAN_HOME}/data/saves/backups"),
+            vec![entry("Digimon Rumble Arena (Europe)_1", "dir", 0, 450)],
+        );
+        fs.insert(
+            format!("{SWAN_HOME}/data/saves/backups/Digimon Rumble Arena (Europe)_1"),
+            vec![entry("20261101-180000.mcd", "file", 131_072, 450)],
+        );
+        fs.insert(
+            format!("{SWAN_HOME}/data/states"),
+            vec![
+                entry(
+                    "Digimon Rumble Arena (Europe).1.state",
+                    "file",
+                    2_100_000,
+                    600,
+                ),
+                entry(
+                    "Digimon Rumble Arena (Europe).resume.state",
+                    "file",
+                    2_100_000,
+                    650,
+                ),
+            ],
+        );
+    }
+
+    #[test]
+    fn psswanstations_cards_and_states_are_its_ps1_saves() {
+        let mut fs = BTreeMap::new();
+        psswanstation(&mut fs);
+        let saves = saves_in(&ls_of(&fs));
+        assert_eq!(saves.len(), 2);
+        let (cards, states) = (&saves[0], &saves[1]);
+        assert_eq!(cards.title_id, PSSWANSTATION.app);
+        assert_eq!(cards.path, format!("{SWAN_HOME}/data/saves"));
+        assert_eq!((cards.user_id, cards.kind.as_str()), (CARDS_USER, PS1_KIND));
+        // The card and the backup of it the emulator keeps.
+        assert_eq!(cards.size, 2 * 131_072);
+        assert_eq!(cards.mtime, 500);
+        assert_eq!(states.path, format!("{SWAN_HOME}/data/states"));
+        assert_eq!(
+            (states.user_id, states.kind.as_str()),
+            (STATES_USER, PS1_KIND)
+        );
+        assert_eq!(states.size, 2 * 2_100_000);
+        assert_eq!(states.mtime, 650);
+        for s in &saves {
+            assert!(crate::emulator_saves::backs_up(s));
+            assert!(crate::emulator_saves::is_emulator_save(s));
+            assert_eq!(crate::emulator_saves::kind_of_path(&s.path), Some(PS1_KIND));
+            let p = place_of(&s.path).unwrap();
+            assert_eq!((p.emulator.name, p.user), ("PSSwanStation", s.user_id));
+            assert!(!p.loose && p.folder == s.path);
+        }
+        // Beside the other emulators, it keeps its own kind and they theirs.
+        let mut both = console();
+        psswanstation(&mut both);
+        let saves = saves_in(&ls_of(&both));
+        assert_eq!(saves.len(), 5);
+        for s in &saves {
+            let want = if s.title_id == PSSWANSTATION.app {
+                PS1_KIND
+            } else {
+                KIND
+            };
+            assert_eq!(s.kind, want, "{}", s.path);
+        }
+    }
+
+    #[test]
+    fn psswanstations_files_outside_its_folder_are_used_once_they_hold_its_data() {
+        let mut fs = BTreeMap::new();
+        psswanstation(&mut fs);
+        // A PSSwanStation folder on a USB drive with only themes in it: still the title's folder.
+        fs.insert(
+            "/mnt/usb0/PSSwanStation".into(),
+            vec![entry("themes", "dir", 0, 50)],
+        );
+        assert_eq!(
+            saves_in(&ls_of(&fs))[0].path,
+            format!("{SWAN_HOME}/data/saves")
+        );
+        // "Where my files are kept" on the console, outside the title's folder.
+        fs.insert(
+            "/data/psswanstation".into(),
+            vec![entry("data", "dir", 0, 50)],
+        );
+        fs.insert(
+            "/data/psswanstation/data".into(),
+            vec![entry("saves", "dir", 0, 50)],
+        );
+        fs.insert(
+            "/data/psswanstation/data/saves".into(),
+            vec![entry("Crash Bandicoot (USA)_1.mcd", "file", 131_072, 800)],
+        );
+        let saves = saves_in(&ls_of(&fs));
+        assert_eq!(saves.len(), 1);
+        assert_eq!(saves[0].path, "/data/psswanstation/data/saves");
+        assert_eq!(saves[0].mtime, 800);
+        // On a USB drive.
+        fs.retain(|path, _| !path.starts_with("/data/psswanstation"));
+        fs.insert(
+            "/mnt/usb0/PSSwanStation".into(),
+            vec![entry("themes", "dir", 0, 50), entry("data", "dir", 0, 60)],
+        );
+        fs.insert(
+            "/mnt/usb0/PSSwanStation/data".into(),
+            vec![entry("states", "dir", 0, 60)],
+        );
+        fs.insert(
+            "/mnt/usb0/PSSwanStation/data/states".into(),
+            vec![entry(
+                "Crash Bandicoot (USA).1.state",
+                "file",
+                2_000_000,
+                900,
+            )],
+        );
+        let saves = saves_in(&ls_of(&fs));
+        assert_eq!(saves.len(), 1);
+        assert_eq!(
+            (saves[0].path.as_str(), saves[0].user_id),
+            ("/mnt/usb0/PSSwanStation/data/states", STATES_USER)
+        );
+    }
+
     #[test]
     fn only_a_save_of_an_emulator_has_a_place() {
         assert_eq!(
@@ -613,6 +849,14 @@ mod tests {
             place(&format!("{CRUX2_HOME}/sstates")).map(|p| (p.0, p.1)),
             Some(("Crux2", STATES_USER))
         );
+        assert_eq!(
+            place("/data/homebrew/PPSA99248/data/saves").map(|p| (p.0, p.1, p.3)),
+            Some(("PSSwanStation", CARDS_USER, false))
+        );
+        assert_eq!(
+            place("/mnt/usb2/PSSwanStation/data/states").map(|p| (p.0, p.1, p.3)),
+            Some(("PSSwanStation", STATES_USER, false))
+        );
         for not in [
             "/data/PCSX2",
             "/data/PCSX2/",
@@ -629,6 +873,15 @@ mod tests {
             "/mnt/ext1/homebrew/PPSA99249/inis",
             "/mnt/ext1/homebrew/PPSA01234/memcards",
             "/user/home/1a2b3c4d/savedata_prospero/PPSA99249",
+            "/mnt/ext1/homebrew/PPSA99248/data",
+            "/mnt/ext1/homebrew/PPSA99248/saves",
+            "/mnt/ext1/homebrew/PPSA99248/memcards",
+            "/mnt/ext1/homebrew/PPSA99248/data/saves/backups",
+            "/mnt/ext1/homebrew/PPSA99248/data/cache",
+            "/mnt/ext1/homebrew/PPSA99248/*.ps2",
+            "/data/psswanstation/data/../saves",
+            "/data/psswanstationx/data/saves",
+            "/mnt/usb0/PSSwanStation/themes",
         ] {
             assert!(place_of(not).is_none(), "{not}");
         }

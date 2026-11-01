@@ -6816,6 +6816,7 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "arcpkg.leftovers.confirmBody": "لن يمكن بعد ذلك إعادة محاولة التثبيتات الفاشلة من هذه الملفات.",
   "arcpkg.leftovers.failed": "تعذّر الحذف: {error}",
   "saves_ps2_title": "محاكيات PS2 (Crux2، PS5SX2)",
+  "saves_ps1_title": "محاكي PS1 (PSSwanStation)",
   "saves_ps2_running": "{name} قيد التشغيل. أغلقه قبل الاستعادة.",
   "saves_ps2_close_note": "أغلق {name} قبل الاستعادة.",
   "saves_ps2_cards": "بطاقات الذاكرة",

@@ -89,8 +89,8 @@ pub(crate) fn done_key(host: &str, path: &str) -> String {
 }
 
 /// The saves that need a backup: a game's (a PS5 game's, one in the Switch emulator, or a
-/// PlayStation 2 emulator's cards or saved states; not the console's own `sce_backup*` folders,
-/// which it lists among the saves, empty), changed since the
+/// PlayStation or PlayStation 2 emulator's cards or saved states; not the console's own
+/// `sce_backup*` folders, which it lists among the saves, empty), changed since the
 /// last one, and not written to in the last few minutes. A save never backed up counts as changed.
 pub fn needing_backup<'a>(
     host: &str,
@@ -308,7 +308,8 @@ pub fn mentions_host(text: &str, host: &str) -> bool {
 }
 
 /// The console's saves, and the emulators' (files of their own, which the console's list leaves
-/// out): the Switch emulator's, and the PlayStation 2 emulators' cards and saved states.
+/// out): the Switch emulator's, and the PlayStation and PlayStation 2 emulators' cards and saved
+/// states.
 pub(crate) fn list_saves(host: &str) -> Result<Vec<SaveEntry>, String> {
     let v = get(&format!("/api/ps5/saves/list?addr={}", enc(host)))?;
     let mut saves: Vec<SaveEntry> =
@@ -736,8 +737,8 @@ pub(crate) struct Writer<'a> {
 
 /// Who writes `save_path`, when it is the save folder of `title_id` and `user_id`: the game, for a
 /// PS5 save (`…/<title_id>`) or one of the Switch emulator (`…/<profile>/<game>`); the emulator,
-/// for a PlayStation 2 emulator's cards or saved states (saved under its own title, the user
-/// number telling which, so neither is ever put back into the other's folder).
+/// for a PlayStation or PlayStation 2 emulator's cards or saved states (saved under its own title,
+/// the user number telling which, so neither is ever put back into the other's folder).
 pub(crate) fn save_writer<'a>(
     save_path: &str,
     title_id: &'a str,
@@ -1873,6 +1874,16 @@ mod tests {
         assert_eq!((ps5sx2.app, ps5sx2.emulator), ("PPSA99203", Some("PS5SX2")));
         let loose = save_writer("/data/PCSX2/*.ps2", "PPSA99203", 0).unwrap();
         assert_eq!((loose.app, loose.emulator), ("PPSA99203", Some("PS5SX2")));
+        let swan = save_writer("/mnt/ext1/homebrew/PPSA99248/data/saves", "PPSA99248", 0).unwrap();
+        assert_eq!(
+            (swan.app, swan.emulator),
+            ("PPSA99248", Some("PSSwanStation"))
+        );
+        let swan = save_writer("/data/psswanstation/data/states", "PPSA99248", 1).unwrap();
+        assert_eq!(
+            (swan.app, swan.emulator),
+            ("PPSA99248", Some("PSSwanStation"))
+        );
         // Another title's folder, an emulator's folder under another title, the cards' backups
         // into the states' folder (or the other way), or anything else of the emulator's: refused.
         for (path, title, user) in [
@@ -1887,6 +1898,10 @@ mod tests {
             ("/data/PCSX2/*.p2s", "PPSA99203", 0),
             ("/data/crux2/*.ps2", "PPSA99249", 0),
             ("/mnt/ext1/homebrew/PPSA99249/inis", "PPSA99249", 0),
+            ("/mnt/ext1/homebrew/PPSA99248/data/saves", "PPSA99248", 1),
+            ("/mnt/ext1/homebrew/PPSA99248/data/states", "PPSA99249", 1),
+            ("/mnt/ext1/homebrew/PPSA99248/data", "PPSA99248", 0),
+            ("/mnt/ext1/homebrew/PPSA99249/data/saves", "PPSA99249", 0),
         ] {
             assert!(
                 save_writer(path, title, user).is_err(),

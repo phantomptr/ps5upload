@@ -6769,6 +6769,7 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
   "arcpkg.leftovers.confirmBody": "Después no se podrán reintentar las instalaciones fallidas de estos archivos.",
   "arcpkg.leftovers.failed": "No se pudo eliminar: {error}",
   "saves_ps2_title": "Emuladores de PS2 (Crux2, PS5SX2)",
+  "saves_ps1_title": "Emulador de PS1 (PSSwanStation)",
   "saves_ps2_running": "{name} se está ejecutando. Ciérralo antes de restaurar.",
   "saves_ps2_close_note": "Cierra {name} antes de restaurar.",
   "saves_ps2_cards": "Tarjetas de memoria",

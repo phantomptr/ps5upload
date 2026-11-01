@@ -7064,6 +7064,7 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "arcpkg.leftovers.confirmBody": "Nieudanych instalacji z tych plików nie będzie można potem ponowić.",
   "arcpkg.leftovers.failed": "Nie udało się usunąć: {error}",
   "saves_ps2_title": "Emulatory PS2 (Crux2, PS5SX2)",
+  "saves_ps1_title": "Emulator PS1 (PSSwanStation)",
   "saves_ps2_running": "{name} jest uruchomiony. Zamknij go przed przywróceniem.",
   "saves_ps2_close_note": "Zamknij {name} przed przywróceniem.",
   "saves_ps2_cards": "Karty pamięci",

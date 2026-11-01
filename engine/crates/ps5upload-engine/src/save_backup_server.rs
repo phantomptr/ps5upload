@@ -201,9 +201,9 @@ pub struct Pick<'a> {
 
 /// The saves of `host` that need a backup on the server: a game's, changed since its last one
 /// there, of a chosen user, and (see [`Pick`]) not still being written. An emulator's save (the
-/// Switch emulator's, a PlayStation 2 emulator's cards or states) belongs to none of the console's
-/// users, and goes with the emulator: it is due when the emulator was closed, and waits while it
-/// runs.
+/// Switch emulator's, a PlayStation or PlayStation 2 emulator's cards or states) belongs to none of
+/// the console's users, and goes with the emulator: it is due when the emulator was closed, and
+/// waits while it runs.
 pub fn due_saves<'a>(
     host: &str,
     saves: &'a [SaveEntry],

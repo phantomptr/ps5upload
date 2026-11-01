@@ -6816,6 +6816,7 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
   "arcpkg.leftovers.confirmBody": "এই ফাইলগুলো থেকে ব্যর্থ ইনস্টল পরে আর আবার চেষ্টা করা যাবে না।",
   "arcpkg.leftovers.failed": "মোছা যায়নি: {error}",
   "saves_ps2_title": "PS2 এমুলেটর (Crux2, PS5SX2)",
+  "saves_ps1_title": "PS1 এমুলেটর (PSSwanStation)",
   "saves_ps2_running": "{name} চলছে। রিস্টোর করার আগে এটি বন্ধ করুন।",
   "saves_ps2_close_note": "রিস্টোর করার আগে {name} বন্ধ করুন।",
   "saves_ps2_cards": "মেমরি কার্ড",

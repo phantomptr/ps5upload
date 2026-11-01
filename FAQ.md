@@ -345,6 +345,13 @@ saved states, and is refused while the emulator runs. A restore into `/data/PCSX
 refused if the backup holds anything other than that save's own files, so it never overwrites the
 emulator's BIOS, games or settings.
 
+The PS1 emulator PSSwanStation (PPSA99248) is backed up the same way: its memory cards
+(`data/saves`, with the copies of each card it keeps in `data/saves/backups`) as user 0 and its
+saved states (`data/states`) as user 1, under its own title ID. They are in the folder its files
+are kept in: its own folder, wherever it is installed, or `/data/psswanstation` or
+`PSSwanStation` at the top of a USB drive when "Where my files are kept" says so. **Saves** lists
+them under **PS1 emulator (PSSwanStation)**, with the same **Back up now** and **Restore**.
+
 **Q: How do I make room for a big game?**
 Open Clean up and press Make room, or follow "Plan space" when an install says there isn't enough
 room. Enter the size and pick the drive. The plan only suggests safe steps: removing leftovers,

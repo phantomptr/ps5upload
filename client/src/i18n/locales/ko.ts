@@ -6833,6 +6833,7 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "arcpkg.leftovers.confirmBody": "이 파일에서 실패한 설치는 이후 다시 시도할 수 없습니다.",
   "arcpkg.leftovers.failed": "삭제하지 못했습니다: {error}",
   "saves_ps2_title": "PS2 에뮬레이터 (Crux2, PS5SX2)",
+  "saves_ps1_title": "PS1 에뮬레이터 (PSSwanStation)",
   "saves_ps2_running": "{name}이(가) 실행 중입니다. 복원하기 전에 닫으세요.",
   "saves_ps2_close_note": "복원하기 전에 {name}을(를) 닫으세요.",
   "saves_ps2_cards": "메모리 카드",

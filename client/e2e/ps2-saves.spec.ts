@@ -125,4 +125,40 @@ test("Saves shows no PS2 group when no emulator has saves", async ({ page }) => 
   await page.goto("/saves", { waitUntil: "domcontentloaded" });
   await expect(page.locator('[data-title-id="PPSA01234"]')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("ps2-saves")).toHaveCount(0);
+  await expect(page.getByTestId("ps1-saves")).toHaveCount(0);
+});
+
+test("Saves lists PSSwanStation's cards and saved states in a PS1 group of their own", async ({ page }) => {
+  const swan = "PPSA99248";
+  const home = "/mnt/ext1/homebrew/PPSA99248";
+  const saves = [
+    { title_id: CRUX2, user_id: 0, path: "/data/crux2/memcards", size: 8_650_752, mtime: 1761600000, kind: "ps2", emulator: "Crux2", folder: "/data/crux2/memcards", running: false },
+    { title_id: swan, user_id: 1, path: `${home}/data/states`, size: 4_200_000, mtime: 1761900000, kind: "ps1", emulator: "PSSwanStation", folder: `${home}/data/states`, running: false },
+    { title_id: swan, user_id: 0, path: `${home}/data/saves`, size: 262_144, mtime: 1761800000, kind: "ps1", emulator: "PSSwanStation", folder: `${home}/data/saves`, running: false },
+  ];
+  const { calls, handler } = mockEngine(saves);
+  await page.addInitScript((h) => window.localStorage.setItem("ps5upload.host", h), HOST);
+  await page.route((url) => url.pathname.startsWith("/api/"), handler);
+  await page.goto("/saves", { waitUntil: "domcontentloaded" });
+
+  const ps1 = page.getByTestId("ps1-saves");
+  await expect(ps1).toBeVisible({ timeout: 30_000 });
+  await expect(ps1.getByRole("heading", { name: "PS1 emulator (PSSwanStation)" })).toBeVisible();
+  // Each kind in its own group: Crux2 only in the PS2 one, PSSwanStation only in the PS1 one.
+  const ps2 = page.getByTestId("ps2-saves");
+  await expect(ps2.locator(`[data-title-id="${CRUX2}"]`)).toBeVisible();
+  await expect(ps2.locator(`[data-title-id="${swan}"]`)).toHaveCount(0);
+  await expect(ps1.locator(`[data-title-id="${CRUX2}"]`)).toHaveCount(0);
+  const mine = ps1.locator(`[data-title-id="${swan}"]`);
+  await expect(mine.getByTestId("ps2-saves-note")).toHaveText("Close PSSwanStation before restoring.");
+  const rows = mine.getByTestId("ps2-save");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText("Memory cards");
+  await expect(rows.nth(1)).toContainText("Saved states");
+
+  await page.screenshot({ path: test.info().outputPath("ps1-saves.png"), fullPage: true });
+
+  await rows.nth(0).getByTestId("ps2-save-backup").click();
+  await expect.poll(() => calls.snapshot.length).toBe(1);
+  expect(calls.snapshot[0]).toEqual({ addr: HOST, title_id: swan });
 });

@@ -7122,6 +7122,7 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "arcpkg.leftovers.confirmBody": "Az ezekből a fájlokból sikertelen telepítéseket utána nem lehet újrapróbálni.",
   "arcpkg.leftovers.failed": "Nem sikerült törölni: {error}",
   "saves_ps2_title": "PS2-emulátorok (Crux2, PS5SX2)",
+  "saves_ps1_title": "PS1-emulátor (PSSwanStation)",
   "saves_ps2_running": "A(z) {name} fut. Zárd be visszaállítás előtt.",
   "saves_ps2_close_note": "Zárd be a(z) {name} emulátort visszaállítás előtt.",
   "saves_ps2_cards": "Memóriakártyák",
