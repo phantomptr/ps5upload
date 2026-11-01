@@ -196,9 +196,10 @@ export const fpkg = {
    *  {@link AmprIndexOutcome}. */
   rebuildAmprIndex: (source: string) => invoke<{ job_id: string }>("fpkg_ampr_index", { source }),
   /** An edited copy of a game image whose one change is a regenerated `ampr_emu.index` (#621),
-   *  named `<name>-edited` next to it. The image itself is only read; a .ffpfsc is refused. */
+   *  named `<name>-edited` next to it (`<name>-edited (2)` when a rebuild already made one).
+   *  The image itself is only read; a .ffpfsc is refused. */
   rebuildImageAmprIndex: (source: string) =>
-    invoke<{ job_id: string }>("exfat_build", { source, edits: [], rebuildAmprIndex: true }),
+    invoke<{ job_id: string }>("exfat_build", { source, edits: [], rebuildAmprIndex: true, keepBoth: true }),
 };
 
 /** What a folder's index rebuild did. */

@@ -80,6 +80,9 @@ fn target_of(source: &str) -> Result<Target, String> {
             );
         }
         let (host, path) = crate::convert_source::console_target(source)?;
+        if in_image_mount_root(&path) {
+            return Err(MOUNTED_IMAGE.into());
+        }
         return Ok(Target::Console {
             addr: crate::console_addr(&host),
             path,
@@ -103,11 +106,62 @@ fn target_of(source: &str) -> Result<Target, String> {
     Ok(Target::Local(path))
 }
 
+/// Why a console folder that is a mounted image is refused: an image is mounted read-write by
+/// default, so the index (and its backup) would be written into the user's image.
+const MOUNTED_IMAGE: &str = "This folder is a mounted image; rebuild the index on the image's \
+                             file instead (copy it to this computer)";
+
+/// Where images are mounted on a console: ps5upload's own mounts, ShadowMount+'s, a running
+/// game's sandbox (its own image) and a disc.
+const CONSOLE_IMAGE_MOUNT_ROOTS: &[&str] = &[
+    "/mnt/ps5upload",
+    "/mnt/shadowmnt",
+    "/mnt/sandbox",
+    "/mnt/disc",
+];
+
+/// `path` is one of [`CONSOLE_IMAGE_MOUNT_ROOTS`] or inside one.
+fn in_image_mount_root(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    CONSOLE_IMAGE_MOUNT_ROOTS
+        .iter()
+        .any(|root| path == *root || path.starts_with(&format!("{root}/")))
+}
+
+/// The console's mount holding `path` is an image: one the payload mounted (it records the
+/// image, and may mount it anywhere, e.g. `/data/homebrew/<title>`), a disk-image device
+/// (`/dev/lvd*`, `/dev/md*`), or a mount from or at an image mount root (a nullfs of one).
+fn on_mounted_image(vols: &ps5upload_core::volumes::VolumeList, path: &str) -> bool {
+    vols.find_for_path(path.trim_end_matches('/'))
+        .is_some_and(|v| {
+            !v.source_image.is_empty()
+                || v.mount_from.starts_with("/dev/lvd")
+                || v.mount_from.starts_with("/dev/md")
+                || in_image_mount_root(&v.path)
+                || in_image_mount_root(&v.mount_from)
+        })
+}
+
+/// A console folder is written only when the console's mount list says it is not inside a
+/// mounted image; when the list cannot be read, it is not written either.
+fn check_console_folder(addr: &str, path: &str) -> Result<(), String> {
+    let vols = ps5upload_core::volumes::list_volumes(addr).map_err(|e| {
+        format!("could not tell whether this folder is a mounted image (the PS5's drives: {e:#})")
+    })?;
+    if on_mounted_image(&vols, path) {
+        return Err(MOUNTED_IMAGE.into());
+    }
+    Ok(())
+}
+
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
 }
+
+/// Where [`write_local`] writes the new index before renaming it over the old one.
+const PARTIAL: &str = ".ampr_emu.index.partial";
 
 /// Writes a rebuilt index into a folder on this computer: the game's own kept once as
 /// [`BACKUP`] (never over one already there), then the new one put in place whole (written
@@ -132,7 +186,7 @@ pub(crate) fn write_local(root: &Path, r: &Rebuilt) -> Result<Outcome, String> {
     // The game's own spelling of the name, when it had one.
     let name = r.old.as_ref().map_or(NAME, |(p, _)| p.as_str());
     let target = root.join(name);
-    let partial = root.join(format!(".{NAME}.partial"));
+    let partial = root.join(PARTIAL);
     let written = std::fs::File::create(&partial)
         .and_then(|mut f| f.write_all(&r.index).and_then(|()| f.sync_all()))
         .and_then(|()| std::fs::rename(&partial, &target));
@@ -192,7 +246,12 @@ fn run(
     let stopped = || cancel.load(Ordering::Relaxed);
     stage("list", 0, 0);
     let open_at = match target {
-        Target::Local(p) => p.clone(),
+        Target::Local(p) => {
+            // A rebuild's own temp file left by an engine that was killed mid-write: never
+            // part of the game, so never listed in its index.
+            let _ = std::fs::remove_file(p.join(PARTIAL));
+            p.clone()
+        }
         Target::Console { .. } => PathBuf::from(source),
     };
     let mut tree = ps5upload_fpkg::source::open(&open_at).map_err(|e| e.to_string())?;
@@ -248,6 +307,15 @@ pub(crate) async fn ampr_index_handler(
         Ok(t) => t,
         Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
     };
+    if let Target::Console { addr, path } = &target {
+        let (addr, path) = (addr.clone(), path.clone());
+        let checked = tokio::task::spawn_blocking(move || check_console_folder(&addr, &path))
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+        if let Err(e) = checked {
+            return json_err(StatusCode::BAD_REQUEST, e).into_response();
+        }
+    }
     let job_id = Uuid::new_v4();
     let cancel = register_transfer_cancel(job_id);
     let started_at_ms = now_ms();
@@ -444,7 +512,7 @@ mod tests {
         );
         // Nothing was there to keep, and nothing is left half-written.
         assert!(!src.join(BACKUP).exists());
-        assert!(!src.join(format!(".{NAME}.partial")).exists());
+        assert!(!src.join(PARTIAL).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -548,6 +616,71 @@ mod tests {
         assert_eq!(err, "cancelled");
         assert!(!src.join(NAME).exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A killed engine's temp file is not listed by the next rebuild (nor left behind).
+    #[test]
+    fn a_leftover_partial_is_not_listed() {
+        let root = scratch("partial");
+        let src = game(&root, true);
+        std::fs::write(src.join(PARTIAL), b"half an index").unwrap();
+        let target = target_of(&src.display().to_string()).unwrap();
+        let (outcome, dest) = run(
+            &target,
+            &src.display().to_string(),
+            &AtomicBool::new(false),
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        assert_eq!(outcome.files, 4);
+        let now = listed(&std::fs::read(dest).unwrap());
+        assert!(now.iter().all(|(p, _)| p != PARTIAL), "{now:?}");
+        assert!(!src.join(PARTIAL).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A console folder inside a mounted image is refused: the rebuild would write into the
+    /// user's image.
+    #[test]
+    fn a_mounted_image_on_the_console_is_refused() {
+        for source in [
+            "ps5://192.168.1.5/mnt/ps5upload/PPSA01234",
+            "ps5://192.168.1.5/mnt/shadowmnt/Game_ca51a0d7/",
+            "ps5://192.168.1.5/mnt/sandbox/pfsmnt/PPSA01234-app0",
+        ] {
+            assert_eq!(target_of(source).unwrap_err(), MOUNTED_IMAGE, "{source}");
+        }
+        // Not a prefix by name alone.
+        assert!(target_of("ps5://192.168.1.5/mnt/ps5uploads/g").is_ok());
+
+        let vols: ps5upload_core::volumes::VolumeList = serde_json::from_str(
+            r#"{"volumes":[
+            {"path":"/data","mount_from":"/dev/ssd0.user","fs_type":"ufs","total_bytes":1,"free_bytes":1,"writable":true},
+            {"path":"/mnt/ext0","mount_from":"/dev/nvme1","fs_type":"exfatfs","total_bytes":1,"free_bytes":1,"writable":true},
+            {"path":"/data/homebrew/PPSA17599","mount_from":"/dev/lvd0","fs_type":"ufs","total_bytes":1,"free_bytes":0,"writable":true,"source_image":"/data/homebrew/PPSA17599.ffpkg"},
+            {"path":"/data/img","mount_from":"/dev/md3","fs_type":"exfatfs","total_bytes":1,"free_bytes":1,"writable":true},
+            {"path":"/system_ex/app/PPSA02222","mount_from":"/mnt/shadowmnt/G_1","fs_type":"nullfs","total_bytes":1,"free_bytes":1,"writable":true},
+            {"path":"/system_ex/app/PPSA03333","mount_from":"/data/homebrew/PPSA03333","fs_type":"nullfs","total_bytes":1,"free_bytes":1,"writable":true}
+            ]}"#,
+        )
+        .unwrap();
+        for path in [
+            "/data/homebrew/PPSA17599",
+            "/data/homebrew/PPSA17599/",
+            "/data/homebrew/PPSA17599/sub",
+            "/data/img/G",
+            "/system_ex/app/PPSA02222",
+        ] {
+            assert!(on_mounted_image(&vols, path), "{path}");
+        }
+        for path in [
+            "/data/homebrew/PPSA01234",
+            "/data/homebrew/PPSA175990",
+            "/mnt/ext0/games/G",
+            "/system_ex/app/PPSA03333",
+        ] {
+            assert!(!on_mounted_image(&vols, path), "{path}");
+        }
     }
 
     #[test]

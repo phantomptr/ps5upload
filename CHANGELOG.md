@@ -9,17 +9,22 @@ What's new in ps5upload, written for humans.
 - **Add games to Workshop's queue while one converts (For #621).** While a game is being made,
   games picked or dropped under **① Game**, picked **On the PS5…** or sent with **Convert first**
   now go into **⑤ Queue** (dropping and the PS5 picker did nothing before) and are made after it,
-  one at a time and in order, without pressing Start. This follows **Start the queue when you add
-  something**; with it off they wait for **Convert N queued**. Installs still go on to Upload &
-  Install's queue as before.
+  one at a time and in order, without pressing Start. A dropped folder of games adds each game in
+  it, and the game being made is not added again. The first queued game starts once you put the
+  finished game's result away (**Convert another game**), so its Install, Launch and Delete
+  buttons stay until then; after a build that failed, the queue waits for you. This follows
+  **Start the queue when you add something**; with it off they wait for **Convert N queued**.
+  Installs still go on to Upload & Install's queue as before.
 - **Rebuild AMPR index (For #621).** A backported game that reads its files through libSceAmpr
   needs an `ampr_emu.index` that matches its files, or it can crash or stop at start. Workshop's
   new **Rebuild AMPR index** makes it again from the game's files, without converting: a folder on
   this computer or on the PS5 gets it in place (the old one kept once as `ampr_emu.index.bak`,
   and you are told how many files it lists and whether the old one differed); an `.exfat`,
   `.ffpkg` or `.ffpfs` image gets an edited copy with it (the image is not changed); a `.ffpfsc`
-  is compressed and read-only, so it offers to convert it again. It is only offered for a game
-  that uses libSceAmpr. Thanks to Constantine-HD for both ideas.
+  is compressed and read-only, so it offers to convert it again (rebuilding the same image again
+  makes `-edited (2)`). A folder on the PS5 that is a mounted image is refused, so the image is
+  never changed by it. It is only offered for a game that uses libSceAmpr. Thanks to
+  Constantine-HD for both ideas.
 
 ## 10.6.0
 
