@@ -734,8 +734,8 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
     // status: that probes sceRemoteplayConfirmDeviceRegist, which finalises
     // the pending registration on the console, and the handshake below is
     // then refused (measured: HTTP 403, reason 80108b03).
-    let snap = crate::remoteplay::remoteplay_request(mgmt_addr, None)
-        .context("asking the console for a pairing PIN")?;
+    // Its error already says what failed (the payload's Sony call and code).
+    let snap = crate::remoteplay::remoteplay_request(mgmt_addr, None)?;
 
     let pin = snap.pin.trim().to_string();
     if pin.is_empty() {
@@ -761,4 +761,84 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
         account_id_b64: account_id,
         account_via: readiness.account_via,
     })
+}
+
+/// A PIN as the user typed it from the PS5's Link Device screen: eight digits, spaces and dashes
+/// allowed between them.
+pub fn parse_manual_pin(raw: &str) -> Result<u32> {
+    let digits: String = raw
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .collect();
+    if digits.len() != 8 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        bail!("the PIN is the 8 digits the PS5 shows under Settings › System › Remote Play › Link Device");
+    }
+    digits
+        .parse()
+        .map_err(|_| anyhow!("the PIN is not a number"))
+}
+
+/// Pair with the PIN the PS5 itself shows (Settings › System › Remote Play › Link Device), the
+/// way PS Remote Play and chiaki-ng do: no helper, so any firmware. `account_id_b64` is the PSN
+/// account id of the user the console pairs (the base64 of its 8 bytes).
+pub fn pair_with_pin(host: &str, account_id_b64: &str, pin: &str) -> Result<PairResult> {
+    let pin = parse_manual_pin(pin)?;
+    if account_id_b64.trim().is_empty() {
+        bail!("pairing with the PS5's PIN needs the account ID of the user on the console");
+    }
+    let reg = register(host, account_id_b64, pin)?;
+    let credential = credential_from_regist_key(&reg.regist_key)?;
+    Ok(PairResult {
+        credential: credential.to_string(),
+        regist_key: pad_session_key_hex(&reg.regist_key),
+        rp_key: pad_session_key_hex(&reg.rp_key),
+        nickname: reg.nickname,
+        mac: reg.mac,
+        account_id_b64: account_id_b64.trim().to_string(),
+        account_via: "manual_pin".into(),
+    })
+}
+
+#[cfg(test)]
+mod manual_pin_tests {
+    use super::*;
+
+    #[test]
+    fn the_pin_is_eight_digits_as_the_ps5_shows_them() {
+        assert_eq!(parse_manual_pin("12345678").unwrap(), 12345678);
+        assert_eq!(parse_manual_pin(" 1234 5678 ").unwrap(), 12345678);
+        assert_eq!(parse_manual_pin("0123-4567").unwrap(), 1234567);
+        for bad in ["1234567", "123456789", "1234abcd", ""] {
+            let e = parse_manual_pin(bad).unwrap_err().to_string();
+            assert!(e.contains("Link Device"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn a_manual_pin_needs_an_account_and_is_checked_before_any_network() {
+        // Both fail before a socket opens (the host would not resolve).
+        let e = pair_with_pin("no-such-host.invalid", "AAAAAAAAAAE=", "123").unwrap_err();
+        assert!(e.to_string().contains("8 digits"), "{e}");
+        let e = pair_with_pin("no-such-host.invalid", " ", "12345678").unwrap_err();
+        assert!(e.to_string().contains("account ID"), "{e}");
+        let e = pair_with_pin("no-such-host.invalid", "AAAA", "12345678").unwrap_err();
+        assert!(e.to_string().contains("8 bytes"), "{e}");
+    }
+
+    #[test]
+    fn a_typed_pin_builds_the_same_request_as_a_helper_pin() {
+        // The registration body is the helper path's, keyed on the typed PIN (chiaki regist.c:
+        // the PIN seeds the AES key the request and the reply are encrypted with).
+        let nonce = [4u8; NONCE_LEN];
+        let typed = build_request_body(
+            "AAAAAAAAAAE=",
+            parse_manual_pin("0012 3456").unwrap(),
+            &nonce,
+        );
+        let helper = build_request_body("AAAAAAAAAAE=", 123456, &nonce);
+        assert_eq!(typed.body, helper.body);
+        assert_eq!(typed.seed, helper.seed);
+        let other = build_request_body("AAAAAAAAAAE=", 123457, &nonce);
+        assert_ne!(other.seed, typed.seed);
+    }
 }

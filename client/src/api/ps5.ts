@@ -2418,11 +2418,17 @@ export interface PairForWakeResult {
 export async function pairForWake(
   host: string,
   addr?: string,
+  /** Pair with the PIN the PS5 shows (Settings › System › Remote Play › Link Device) instead:
+   *  the engine registers on its own, no helper needed. `accountIdB64`: the user's PSN account
+   *  id, base64 of its 8 bytes. */
+  manual?: { pin: string; accountIdB64: string },
 ): Promise<PairForWakeResult> {
   const res = await fetch(`${getEngineUrl()}/api/ps5/power/pair`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ host, addr }),
+    body: JSON.stringify(
+      manual ? { host, addr, pin: manual.pin, account_id: manual.accountIdB64 } : { host, addr },
+    ),
   });
   const body = (await res.json().catch(() => ({}))) as PairForWakeResult & {
     error?: string;

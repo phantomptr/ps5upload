@@ -12,6 +12,7 @@ import { usePlaySetupMarks } from "../../../state/playSetup";
 import { blockerNames } from "../../../state/rpBlockers";
 import { payloadCardLink } from "../../Payloads/payloadTabs";
 import { NpSignInSection } from "../../Accounts/NpSignInSection";
+import { PinPairForm } from "./PinPairForm";
 import { SETUP_ORDER, type SetupKey, type SetupState } from "./playSetup";
 import { usePlaySetup } from "./usePlaySetup";
 
@@ -37,6 +38,8 @@ export default function PlaySetupScreen() {
   }
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<{ step: SetupKey; text: string } | null>(null);
+  // Pairing with the PIN the PS5 shows: offered under the pair step, opened when pairing fails.
+  const [pinPair, setPinPair] = useState(false);
   const open = opened === null ? s.next : opened === "none" ? null : opened;
   const addr = s.host ? mgmtAddr(s.host) : "";
 
@@ -48,6 +51,7 @@ export default function PlaySetupScreen() {
       await s.refresh();
     } catch (e) {
       setError({ step, text: humanizePs5Error(e instanceof Error ? e.message : String(e)) });
+      if (step === "pair") setPinPair(true);
     } finally {
       setBusy(null);
     }
@@ -55,7 +59,7 @@ export default function PlaySetupScreen() {
 
   const r = s.readiness;
   const serviceOff = !!r && r.service_enabled === 0;
-  const steps: Record<SetupKey, { title: string; body: string; act?: ReactNode }> = {
+  const steps: Record<SetupKey, { title: string; body: string; act?: ReactNode; always?: ReactNode }> = {
     connect: {
       title: tr("play_setup_connect_title", undefined, "Connect to your PS5"),
       body: tr(
@@ -74,7 +78,7 @@ export default function PlaySetupScreen() {
       body: tr(
         "rpg_user_body",
         undefined,
-        "On the console, pick the user you will play as. Nobody has to stay on screen, but the user must be signed in. Use a user without a login passcode: a passcode stops the automatic sign-in when the console wakes.",
+        "On the console, pick the user you will play as. Nobody has to stay on screen, but the user must be signed in. If the user has a login passcode, Play asks for it when you press Start.",
       ),
     },
     account: {
@@ -157,6 +161,40 @@ export default function PlaySetupScreen() {
         >
           {tr("play_setup_pair", undefined, "Pair")}
         </Button>
+      ) : undefined,
+      // Needs no helper, so it is there whatever the steps above say.
+      always: s.profileId ? (
+        <div className="space-y-2">
+          {error?.step === "pair" && (
+            <p className="text-xs" data-testid="play-setup-pair-fallback">
+              {tr(
+                "play_setup_pair_failed_try_pin",
+                undefined,
+                "Automatic pairing did not work on this console. Pair with the PIN shown on the PS5 instead:",
+              )}
+            </p>
+          )}
+          <button
+            type="button"
+            className="text-xs font-medium text-[var(--color-accent)] hover:underline"
+            aria-expanded={pinPair}
+            onClick={() => setPinPair((v) => !v)}
+            data-testid="play-setup-pin-pair"
+          >
+            {tr("play_setup_pair_with_pin", undefined, "Pair with the PIN shown on the PS5")}
+          </button>
+          {pinPair && (
+            <PinPairForm
+              host={s.host}
+              profileId={s.profileId}
+              accountIdB64={r?.account_id_b64 ?? null}
+              onPaired={() => {
+                setError(null);
+                void s.refresh();
+              }}
+            />
+          )}
+        </div>
       ) : undefined,
     },
     blockers: {
@@ -263,6 +301,7 @@ export default function PlaySetupScreen() {
                       </p>
                     )}
                     {error?.step === key && <Callout tone="error" title={error.text} />}
+                    {step.always}
                   </div>
                 )}
               </li>

@@ -19,6 +19,11 @@ int remoteplay_get_status(char *buf, size_t cap);
  * it is trying to complete. This is that read, and nothing else. */
 int remoteplay_pin_snapshot(char *out, size_t out_size);
 
+/* Why the last request failed (e.g. "sceRemoteplayGeneratePinCode failed:
+ * 0x80XXXXXX"), JSON-escaped into out; "" when it did not. No Sony call and
+ * no Sony lock, so it is safe right after a failed remoteplay_request. */
+int remoteplay_last_error_json(char *out, size_t out_size);
+
 int remoteplay_cancel(void);
 
 /* Read-only readiness snapshot as JSON. Returns the snprintf length, or

@@ -20,6 +20,17 @@ What's new in ps5upload, written for humans.
   item goes, and the paused upload carries on by itself when it's done (or fails). Several Send
   nows run in the order you clicked them, and the paused upload continues after the last one. An
   upload you paused yourself is never resumed for you. Still one transfer at a time per console.
+- **Remote Play asks for your PS5 passcode instead of giving up (#608).** If the user you play as
+  has a sign-in passcode, a box over the stream asks for its four digits when you press Start (a
+  number pad on phones), and asks again if it was wrong. It goes straight to the console and is
+  never saved. Cancel ends the start.
+- **Pair with the PIN shown on the PS5 (#609).** Play › Set up's pairing step (and Wake & sign in,
+  when pairing fails) can now pair the way PS Remote Play and chiaki-ng do: open Settings › System
+  › Remote Play › Link Device on the PS5 and type the 8-digit number it shows. It needs no helper,
+  so it works on any firmware, including ones where the app can't make a pairing PIN itself.
+- **A failed pairing says why (#609).** Instead of "the Remote Play request failed on-console",
+  you see the console's own reason and code (for example "sceRemoteplayGeneratePinCode failed:
+  0x…"), with the PIN pairing offered right there.
 
 ## 10.4.1
 
