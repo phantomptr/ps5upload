@@ -259,6 +259,16 @@ known), per profile ("Console" is the console's own save), with Back up now and 
 put one back, close ProsperoEden and press Restore on the version you want; the save there now is
 backed up first. A restore is refused while ProsperoEden runs.
 
+The saves of the PS2 emulators Crux2 (PPSA99249) and PS5SX2 (PPSA99203) are backed up the same
+way, after the emulator closes: its memory cards folder and its saved states folder, each as one
+save under the emulator's own title ID (user 0 the cards, user 1 the saved states). Crux2 keeps
+them in `memcards` and `sstates` of `/data/crux2` when you made that folder, of `crux2-data` at
+the top of a USB drive, or of Crux2's own folder; PS5SX2 in `/data/PCSX2/memcards` and
+`/data/PCSX2/savestates` when those folders are there, else loose in `/data/PCSX2` (as installed
+from the Prospero Store), where only its `.ps2` and `.p2s` files are taken, never its BIOS, games
+or caches. The backups are in the backup folder under the emulator's title ID. A restore puts back
+all the emulator's cards, or all its saved states, and is refused while the emulator runs.
+
 **Q: How do I make room for a big game?**
 Open Clean up and press Make room, or follow "Plan space" when an install says there isn't enough
 room. Enter the size and pick the drive. The plan only suggests safe steps: removing leftovers,
