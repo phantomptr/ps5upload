@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { fsUploadForHost, useFsUploadStore, type FsUploadDeps, type FsUploadRequest } from "./fsUpload";
+import { fsUploadForHost, runFsUpload, useFsUploadStore, type FsUploadDeps, type FsUploadRequest } from "./fsUpload";
 import {
   enqueueFsUpload,
   fsUploadQueueFor,
@@ -188,3 +188,40 @@ it("paused picks survive a restart; one paused for a finished Send now waits in 
     ]);
   } finally { vi.unstubAllGlobals(); }
 });
+
+it("pausing a copy started outside the line leaves no pause behind for the next pick", async () => {
+  const e = engine();
+  // A Replace / Resume copy: not one of the line's picks.
+  void runFsUpload(request("outside.bin"), e.deps);
+  await vi.waitFor(() => expect(active()).toBe("outside.bin"));
+  enqueueFsUpload(request("a.bin"), e.deps, []);
+  enqueueFsUpload(request("b.bin"), e.deps, []);
+  pauseFsUpload(host, e.deps);
+  await vi.waitFor(() => expect(active()).toBe("a.bin"));
+  expect(queued()[0]).toEqual({ name: "outside.bin", paused: "user" });
+
+  // a.bin fails: that is a failure (the line holds), not the pause of outside.bin.
+  e.failing.add("a.bin");
+  await vi.waitFor(() => expect(fsUploadQueueFor(host).paused).toBe(true));
+  await vi.waitFor(() => expect(active()).toBeNull());
+  expect(fsUploadForHost(useFsUploadStore.getState(), host).stopped?.why).toBe("failed");
+  expect(e.started()).toEqual(["outside.bin", "a.bin"]);
+});
+
+it("Send now still runs when the copy it paused finished just as the stop landed", async () => {
+  const e = engine();
+  // The stop reaches the engine after the job's last byte: the job ends done.
+  e.deps.jobCancel = async (id) => { e.finish.add(id.split("#")[0]); };
+  enqueueFsUpload(request("big.bin"), e.deps, []);
+  const small = enqueueFsUpload(request("small.txt"), e.deps, []);
+  await vi.waitFor(() => expect(active()).toBe("big.bin"));
+  sendFsUploadNow(host, small, e.deps);
+  await vi.waitFor(() => expect(active()).toBe("small.txt"));
+  // The stop landed: big waits as a pick the Send now paused (its resume re-sends nothing the
+  // console has), and the line is not held.
+  expect(fsUploadQueueFor(host).paused).toBe(false);
+  e.finish.add("small.txt");
+  await vi.waitFor(() => expect(queued()).toEqual([]));
+  expect(e.started()).toEqual(["big.bin", "small.txt", "big.bin"]);
+});
+

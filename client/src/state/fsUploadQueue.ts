@@ -126,7 +126,13 @@ function pick(slot: Slot, held: boolean): PendingFsUpload | undefined {
 /** Turns the console's stopped run into a paused pick at the front of the line (it was ahead
  *  of every waiting pick) and clears the stopped card. Resuming it sends the same steps under
  *  the same job ids, so the console's journal skips what it already has. */
-function parkStopped(host: string, why: "user" | "sendNow", st: FsUploadStopped, error?: string) {
+function parkStopped(
+  host: string,
+  why: "user" | "sendNow",
+  st: FsUploadStopped,
+  error?: string,
+  inQueue = true,
+) {
   const id = `fsq-${Date.now()}-${++seq}`;
   const request: FsUploadRequest = {
     host,
@@ -148,8 +154,10 @@ function parkStopped(host: string, why: "user" | "sendNow", st: FsUploadStopped,
     error: error ?? null,
   };
   patch(host, { items: [item, ...fsUploadQueueFor(host).items] });
+  // Only the queue's own drain loop reads (and clears) the mark. Set it after the dismiss
+  // below: that store change can start the drain loop for the next pick at once.
   dismissFsUploadStopped(host);
-  parked.add(hostOf(host));
+  if (inQueue) parked.add(hostOf(host));
 }
 
 /** Once no pick sent now is waiting or running on `host`, the picks a Send now paused go back
@@ -264,10 +272,12 @@ useFsUploadStore.subscribe(() => {
     const st = fsUploadForHost(useFsUploadStore.getState(), key);
     if (st.active) continue;
     pausing.delete(key);
+    // A copy outside the queue (Replace / Resume) has no drain loop to read the pause mark.
+    // Read before parking: parking can start the loop for the next pick, and that pick's
+    // ending must not be taken for this pause.
+    const inQueue = fsUploadQueueFor(key).running;
     // It finished before the stop landed: nothing to pause.
-    if (st.stopped) parkStopped(key, why, st.stopped);
-    // A copy outside the queue has no drain loop to settle a Send now for it.
-    if (!fsUploadQueueFor(key).running) parked.delete(key);
+    if (st.stopped) parkStopped(key, why, st.stopped, undefined, inQueue);
   }
   for (const [host, deps] of runners) void drainFsUploadQueue(host, deps);
 });
