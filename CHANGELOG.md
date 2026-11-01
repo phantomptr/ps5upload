@@ -4,6 +4,19 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.5.0
+
+- **Pause an upload, send something else, carry on.** A running upload has a **Pause** button,
+  on the Upload & Install queue and on the Files screen alike. It stops the upload keeping what
+  already reached the PS5, marks it **Paused**, and the next item goes. **Resume** puts it back in
+  line where it was and it continues from where it stopped (nothing is sent twice); with nothing
+  else running it starts at once. Paused stays paused after you leave the screen or restart the
+  app. Asked for by Marc.
+- **Send now.** A waiting item has **Send now**: the upload running on that console pauses, this
+  item goes, and the paused upload carries on by itself when it's done (or fails). Several Send
+  nows run in the order you clicked them, and the paused upload continues after the last one. An
+  upload you paused yourself is never resumed for you. Still one transfer at a time per console.
+
 ## 10.4.1
 
 - **Keyboard & mouse in Remote Play now works on every firmware**, not only FW 13.60 (still the
