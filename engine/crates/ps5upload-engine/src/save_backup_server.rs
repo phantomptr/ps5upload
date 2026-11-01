@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::emulator_saves;
 use crate::remote::{self, PutProgress, RemoteFs};
 use crate::save_backup::{
     self as local, done_key, json_error, now_ms, parse_backup_name, plain, stamp, BackupFile, Done,
@@ -199,7 +200,9 @@ pub struct Pick<'a> {
 }
 
 /// The saves of `host` that need a backup on the server: a game's, changed since its last one
-/// there, of a chosen user, and (see [`Pick`]) not still being written.
+/// there, of a chosen user, and (see [`Pick`]) not still being written. A save of the Switch
+/// emulator belongs to none of the console's users, and goes with the emulator: it is due when
+/// the emulator was closed, and waits while it runs.
 pub fn due_saves<'a>(
     host: &str,
     saves: &'a [SaveEntry],
@@ -210,14 +213,15 @@ pub fn due_saves<'a>(
     saves
         .iter()
         .filter(|e| {
-            crate::looks_like_title_id(&e.title_id)
+            let app = emulator_saves::app_of(e);
+            emulator_saves::backs_up(e)
                 && e.mtime > 0
                 && e.mtime > done.get(&done_key(host, &e.path)).copied().unwrap_or(0)
-                && (pick.users.is_empty() || pick.users.contains(&(e.user_id as u32)))
-                && pick
-                    .title
-                    .is_none_or(|t| e.title_id.eq_ignore_ascii_case(t))
-                && !pick.running.contains(&e.title_id.to_ascii_uppercase())
+                && (pick.users.is_empty()
+                    || emulator_saves::is_emulator_save(e)
+                    || pick.users.contains(&(e.user_id as u32)))
+                && pick.title.is_none_or(|t| app.eq_ignore_ascii_case(t))
+                && !pick.running.contains(&app.to_ascii_uppercase())
                 && (!pick.settle || now_secs - e.mtime >= SETTLE_SECS)
         })
         .collect()
@@ -1149,6 +1153,55 @@ mod tests {
             paths(due_saves("h", &saves, &done, 2000, &all)),
             ["/u2/A", "/u1/B"]
         );
+    }
+
+    #[test]
+    fn switch_saves_go_with_the_emulator() {
+        let mut sw = save(
+            "/data/prosperoeden/user/nand/user/save/0000000000000000/P/0100F2C0115B6000",
+            "0100F2C0115B6000",
+            0x1F1E_1D1C,
+            1000,
+        );
+        sw.kind = emulator_saves::KIND.into();
+        let saves = [save("/u1/A", "PPSA00001", 1, 1000), sw];
+        let none = BTreeSet::new();
+        let ids = |v: Vec<&SaveEntry>| v.iter().map(|e| e.title_id.clone()).collect::<Vec<_>>();
+        let all = Pick {
+            users: &[],
+            title: None,
+            settle: false,
+            running: &none,
+        };
+        // The emulator was closed: its games' saves are due, not the PS5 game's.
+        let closed = Pick {
+            title: Some(emulator_saves::APP),
+            ..all
+        };
+        assert_eq!(
+            ids(due_saves("h", &saves, &Done::new(), 2000, &closed)),
+            ["0100F2C0115B6000"]
+        );
+        // They belong to none of the console's users, so a chosen user does not leave them out.
+        let user = Pick { users: &[1], ..all };
+        assert_eq!(
+            ids(due_saves("h", &saves, &Done::new(), 2000, &user)),
+            ["PPSA00001", "0100F2C0115B6000"]
+        );
+        // While the emulator runs, they wait.
+        let running: BTreeSet<String> = [emulator_saves::APP.to_string()].into();
+        let busy = Pick {
+            running: &running,
+            ..all
+        };
+        assert_eq!(
+            ids(due_saves("h", &saves, &Done::new(), 2000, &busy)),
+            ["PPSA00001"]
+        );
+        // A Switch title ID on a save that is not the emulator's is not a game.
+        let mut odd = saves[1].clone();
+        odd.kind = "ps5".into();
+        assert!(due_saves("h", &[odd], &Done::new(), 2000, &all).is_empty());
     }
 
     fn scratch(name: &str) -> PathBuf {

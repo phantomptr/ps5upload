@@ -55,6 +55,7 @@ mod convert_source;
 mod disk_usage;
 mod download_relay;
 mod elfldr_guard;
+mod emulator_saves;
 mod engine_log;
 mod engine_update;
 mod event_journal;
