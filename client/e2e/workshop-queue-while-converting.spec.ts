@@ -95,7 +95,12 @@ test("a game added while one converts is made after it", async ({ page }) => {
   await expect(main.getByText("Bloodborne", { exact: true })).toBeVisible();
   expect(builds).toEqual(["/games/Astro"]);
 
-  // Once game 1 is made, game 2 is made, with no Start pressed.
+  // Game 1's result stays on screen (its Install / Launch / Show folder stay reachable) and
+  // game 2 waits for it; putting the result away starts game 2, with no Start pressed.
+  const another = main.getByRole("button", { name: "Convert another game" });
+  await expect(another).toBeVisible({ timeout: 20_000 });
+  expect(builds).toEqual(["/games/Astro"]);
+  await another.click();
   await expect.poll(() => builds, { timeout: 20_000 }).toEqual(["/games/Astro", "/games/Bloodborne"]);
   await expect(main.getByText(/Done — \/out\/Bloodborne\.pkg/)).toBeVisible({ timeout: 20_000 });
 });
