@@ -6733,6 +6733,12 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "saves_switch_need_dir": "먼저 자동 백업 폴더를 선택하세요.",
   "saves_switch_backup_now": "지금 백업",
   "saves_switch_no_backups": "아직 백업이 없습니다.",
+  "saves_ps2_title": "PS2 에뮬레이터 (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name}이(가) 실행 중입니다. 복원하기 전에 닫으세요.",
+  "saves_ps2_close_note": "복원하기 전에 {name}을(를) 닫으세요.",
+  "saves_ps2_cards": "메모리 카드",
+  "saves_ps2_states": "저장된 상태",
+  "saves_ps2_backup_hint": "이 에뮬레이터의 메모리 카드와 저장된 상태를 지금 자동 백업 폴더에 백업합니다.",
 };
 
 export default ko;

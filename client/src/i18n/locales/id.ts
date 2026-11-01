@@ -6725,6 +6725,12 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "saves_switch_need_dir": "Pilih folder untuk cadangan otomatis dulu.",
   "saves_switch_backup_now": "Cadangkan sekarang",
   "saves_switch_no_backups": "Belum ada cadangan.",
+  "saves_ps2_title": "Emulator PS2 (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name} sedang berjalan. Tutup sebelum memulihkan.",
+  "saves_ps2_close_note": "Tutup {name} sebelum memulihkan.",
+  "saves_ps2_cards": "Kartu memori",
+  "saves_ps2_states": "Save state",
+  "saves_ps2_backup_hint": "Cadangkan kartu memori dan save state emulator ini sekarang ke folder cadangan otomatis.",
 };
 
 export default id;

@@ -6735,6 +6735,12 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "saves_switch_need_dir": "先に自動バックアップのフォルダーを選んでください。",
   "saves_switch_backup_now": "今すぐバックアップ",
   "saves_switch_no_backups": "バックアップはまだありません。",
+  "saves_ps2_title": "PS2 エミュレーター（Crux2、PS5SX2）",
+  "saves_ps2_running": "{name} が実行中です。復元する前に閉じてください。",
+  "saves_ps2_close_note": "復元する前に {name} を閉じてください。",
+  "saves_ps2_cards": "メモリーカード",
+  "saves_ps2_states": "ステートセーブ",
+  "saves_ps2_backup_hint": "このエミュレーターのメモリーカードとステートセーブを、自動バックアップのフォルダーに今すぐバックアップします。",
 };
 
 export default ja;

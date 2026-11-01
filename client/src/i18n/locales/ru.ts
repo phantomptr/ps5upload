@@ -6669,6 +6669,12 @@ helper_mismatch_boot_copy: "PS5 запустила старую копию по�
   "saves_switch_need_dir": "Сначала выберите папку для автоматических копий.",
   "saves_switch_backup_now": "Сделать копию",
   "saves_switch_no_backups": "Копий пока нет.",
+  "saves_ps2_title": "Эмуляторы PS2 (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name} запущен. Закройте его перед восстановлением.",
+  "saves_ps2_close_note": "Закройте {name} перед восстановлением.",
+  "saves_ps2_cards": "Карты памяти",
+  "saves_ps2_states": "Сохранённые состояния",
+  "saves_ps2_backup_hint": "Сделать сейчас резервную копию карт памяти и сохранённых состояний этого эмулятора в папку автоматических копий.",
 };
 
 export default ru;

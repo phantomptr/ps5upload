@@ -6716,6 +6716,12 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "saves_switch_need_dir": "اختر مجلدًا للنسخ الاحتياطية التلقائية أولًا.",
   "saves_switch_backup_now": "انسخ الآن",
   "saves_switch_no_backups": "لا توجد نسخ احتياطية بعد.",
+  "saves_ps2_title": "محاكيات PS2 (Crux2، PS5SX2)",
+  "saves_ps2_running": "{name} قيد التشغيل. أغلقه قبل الاستعادة.",
+  "saves_ps2_close_note": "أغلق {name} قبل الاستعادة.",
+  "saves_ps2_cards": "بطاقات الذاكرة",
+  "saves_ps2_states": "الحالات المحفوظة",
+  "saves_ps2_backup_hint": "انسخ بطاقات الذاكرة والحالات المحفوظة لهذا المحاكي احتياطيًا الآن إلى مجلد النسخ الاحتياطية التلقائية.",
 };
 
 export default ar;

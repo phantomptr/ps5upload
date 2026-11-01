@@ -6723,6 +6723,12 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "saves_switch_need_dir": "Önce otomatik yedekler için bir klasör seçin.",
   "saves_switch_backup_now": "Şimdi yedekle",
   "saves_switch_no_backups": "Henüz yedek yok.",
+  "saves_ps2_title": "PS2 emülatörleri (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name} çalışıyor. Geri yüklemeden önce kapatın.",
+  "saves_ps2_close_note": "Geri yüklemeden önce {name} uygulamasını kapatın.",
+  "saves_ps2_cards": "Hafıza kartları",
+  "saves_ps2_states": "Kayıtlı durumlar",
+  "saves_ps2_backup_hint": "Bu emülatörün hafıza kartlarını ve kayıtlı durumlarını şimdi otomatik yedekler klasörüne yedekleyin.",
 };
 
 export default tr;

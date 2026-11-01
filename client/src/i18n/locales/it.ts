@@ -6669,6 +6669,12 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
   "saves_switch_need_dir": "Scegli prima una cartella per i backup automatici.",
   "saves_switch_backup_now": "Backup ora",
   "saves_switch_no_backups": "Ancora nessun backup.",
+  "saves_ps2_title": "Emulatori PS2 (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name} è in esecuzione. Chiudilo prima di ripristinare.",
+  "saves_ps2_close_note": "Chiudi {name} prima di ripristinare.",
+  "saves_ps2_cards": "Memory card",
+  "saves_ps2_states": "Stati salvati",
+  "saves_ps2_backup_hint": "Esegui ora il backup delle memory card e degli stati salvati di questo emulatore nella cartella dei backup automatici.",
 };
 
 export default it;

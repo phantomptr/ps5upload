@@ -7022,6 +7022,12 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "saves_switch_need_dir": "Előbb válassz mappát az automatikus mentésekhez.",
   "saves_switch_backup_now": "Mentés most",
   "saves_switch_no_backups": "Még nincs biztonsági mentés.",
+  "saves_ps2_title": "PS2-emulátorok (Crux2, PS5SX2)",
+  "saves_ps2_running": "A(z) {name} fut. Zárd be visszaállítás előtt.",
+  "saves_ps2_close_note": "Zárd be a(z) {name} emulátort visszaállítás előtt.",
+  "saves_ps2_cards": "Memóriakártyák",
+  "saves_ps2_states": "Mentett állapotok",
+  "saves_ps2_backup_hint": "Az emulátor memóriakártyáinak és mentett állapotainak biztonsági mentése most, az automatikus mentések mappájába.",
 };
 
 export default hu;

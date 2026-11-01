@@ -6669,6 +6669,12 @@ helper_mismatch_boot_copy: "你的 PS5 啟動了為開機保留的舊版助手�
   "saves_switch_need_dir": "請先選擇自動備份的資料夾。",
   "saves_switch_backup_now": "立即備份",
   "saves_switch_no_backups": "還沒有備份。",
+  "saves_ps2_title": "PS2 模擬器（Crux2、PS5SX2）",
+  "saves_ps2_running": "{name} 正在執行。還原前請先關閉它。",
+  "saves_ps2_close_note": "還原前請先關閉 {name}。",
+  "saves_ps2_cards": "記憶卡",
+  "saves_ps2_states": "即時存檔",
+  "saves_ps2_backup_hint": "立即將此模擬器的記憶卡與即時存檔備份到自動備份資料夾。",
 };
 
 export default zh_TW;

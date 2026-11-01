@@ -6716,6 +6716,12 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
   "saves_switch_need_dir": "আগে স্বয়ংক্রিয় ব্যাকআপের জন্য একটি ফোল্ডার বেছে নিন।",
   "saves_switch_backup_now": "এখনই ব্যাকআপ",
   "saves_switch_no_backups": "এখনও কোনো ব্যাকআপ নেই।",
+  "saves_ps2_title": "PS2 এমুলেটর (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name} চলছে। রিস্টোর করার আগে এটি বন্ধ করুন।",
+  "saves_ps2_close_note": "রিস্টোর করার আগে {name} বন্ধ করুন।",
+  "saves_ps2_cards": "মেমরি কার্ড",
+  "saves_ps2_states": "সেভ করা স্টেট",
+  "saves_ps2_backup_hint": "এই এমুলেটরের মেমরি কার্ড ও সেভ করা স্টেট এখনই স্বয়ংক্রিয় ব্যাকআপের ফোল্ডারে ব্যাকআপ নিন।",
 };
 
 export default bn;

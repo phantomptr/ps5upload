@@ -6718,6 +6718,12 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "saves_switch_need_dir": "Hãy chọn thư mục cho sao lưu tự động trước.",
   "saves_switch_backup_now": "Sao lưu ngay",
   "saves_switch_no_backups": "Chưa có bản sao lưu.",
+  "saves_ps2_title": "Trình giả lập PS2 (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name} đang chạy. Hãy đóng nó trước khi khôi phục.",
+  "saves_ps2_close_note": "Hãy đóng {name} trước khi khôi phục.",
+  "saves_ps2_cards": "Thẻ nhớ",
+  "saves_ps2_states": "Trạng thái đã lưu",
+  "saves_ps2_backup_hint": "Sao lưu ngay thẻ nhớ và trạng thái đã lưu của trình giả lập này vào thư mục sao lưu tự động.",
 };
 
 export default vi;
