@@ -151,6 +151,8 @@ export function streamErrorMessage(tr: Tr, e: StreamError): string {
       );
     case "passcode_cancelled":
       return tr("rp_err_passcode_cancelled", undefined, "Start cancelled: the PS5 needs this user's passcode to start Remote Play.");
+    case "passcode_too_many":
+      return tr("rp_err_passcode_too_many", undefined, "Too many wrong passcodes; enter it on the PS5.");
     case "passcode_timeout":
       return tr(
         "rp_err_passcode_timeout",

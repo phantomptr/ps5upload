@@ -29,6 +29,10 @@ const lastSent = new Map<string, number>();
  * Wake a sleeping console because an upload is waiting for it. Fire-and-forget: the queue's
  * own wake path (the helper is re-sent by auto-redeploy, the parked rows resume on the
  * helper-up edge) carries the upload from there. Returns whether a wake was sent.
+ *
+ * Nobody is asked for anything: when the PS5 user has a login passcode the sign-in stops there
+ * and the wake counts as done. The console is up at its sign-in screen, where the helper and
+ * transfers work (they need no signed-in user).
  */
 export function wakeForUpload(addr: string, enabled: boolean, now = Date.now()): boolean {
   const h = hostOf(addr) || addr;
@@ -41,7 +45,13 @@ export function wakeForUpload(addr: string, enabled: boolean, now = Date.now()):
     : powerWake(h, creds.credential);
   log.info("queue", `${h} is in rest mode — sending a wake for the waiting upload`);
   audit("system_wake", withConsolePrefix(h, "woken for a waiting upload"));
-  send.catch((e) => log.warn("queue", `${h}: wake for upload failed: ${String(e)}`));
+  send.then(
+    (r) => {
+      if (r && "state" in r && r.state === "passcode_needed")
+        log.info("queue", `${h} is awake at its sign-in screen (the user has a passcode); the upload carries on`);
+    },
+    (e) => log.warn("queue", `${h}: wake for upload failed: ${String(e)}`),
+  );
   return true;
 }
 

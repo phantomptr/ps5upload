@@ -2437,6 +2437,53 @@ export async function pairForWake(
   return body;
 }
 
+/** How a Wake & sign in call ended (or paused). */
+export type WakeLoginResult =
+  /** The console signed the user in. */
+  | { state: "signed_in" }
+  /** An automatic wake (no `askPasscode`) met a login passcode: the console is awake at its
+   *  sign-in screen. */
+  | { state: "passcode_needed" }
+  /** The console waits for the user's passcode; answer with `answerWakePasscode(id, …)`.
+   *  `retry`: the last one was wrong. */
+  | { state: "passcode"; id: string; retry: boolean; waitS: number };
+
+/** A failed Wake & sign in. `code`: passcode_cancelled, passcode_timeout, passcode_too_many,
+ *  passcode_expired, or undefined (the console's own reason is the message). */
+export class WakeLoginError extends Error {
+  code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "WakeLoginError";
+    this.code = code;
+  }
+}
+
+async function wakeLoginCall(path: string, payload: unknown): Promise<WakeLoginResult> {
+  const res = await fetch(`${getEngineUrl()}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    signed_in?: boolean;
+    passcode_needed?: boolean;
+    state?: string;
+    id?: string;
+    retry?: boolean;
+    wait_s?: number;
+    error?: string;
+    code?: string;
+  };
+  if (!res.ok)
+    throw new WakeLoginError(body.error || `wake + sign-in failed (${res.status})`, body.code);
+  if (body.state === "passcode" && body.id)
+    return { state: "passcode", id: body.id, retry: !!body.retry, waitS: body.wait_s ?? 180 };
+  if (body.passcode_needed) return { state: "passcode_needed" };
+  return { state: "signed_in" };
+}
+
 /** Wake a console AND sign its user in.
  *
  *  A bare wake lands at the user-select screen; this follows it with a
@@ -2444,31 +2491,34 @@ export async function pairForWake(
  *  screen. Needs the full session keys (regist + rp, both hex) as well as
  *  the wake credential. Long-running — it waits for the console to boot.
  *
- *  Resolves when the user is signed in; rejects with the console's reason
- *  (wrong keys, or a login passcode blocking sign-in). */
-export async function wakeAndSignIn(
+ *  `askPasscode`: someone is there to type the user's login passcode, so a console that asks
+ *  for one resolves `{state: "passcode"}` (#608). Without it the wake just ends at the sign-in
+ *  screen (`passcode_needed`). Rejects with a WakeLoginError otherwise. */
+export function wakeAndSignIn(
   host: string,
   credential: string,
   registKey: string,
   rpKey: string,
-): Promise<{ ok: boolean }> {
-  const res = await fetch(`${getEngineUrl()}/api/ps5/power/wake-login`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      host,
-      credential,
-      regist_key: registKey,
-      rp_key: rpKey,
-    }),
+  opts: { askPasscode?: boolean } = {},
+): Promise<WakeLoginResult> {
+  return wakeLoginCall("/api/ps5/power/wake-login", {
+    host,
+    credential,
+    regist_key: registKey,
+    rp_key: rpKey,
+    ask_passcode: !!opts.askPasscode,
   });
-  const body = (await res.json().catch(() => ({}))) as {
-    ok?: boolean;
-    error?: string;
-  };
-  if (!res.ok)
-    throw new Error(body.error || `wake + sign-in failed (${res.status})`);
-  return { ok: !!body.ok };
+}
+
+/** The user's passcode for a held Wake & sign in. Sent to the console, never kept. Resolves
+ *  with the next step: signed in, or asked again. */
+export function answerWakePasscode(id: string, passcode: string): Promise<WakeLoginResult> {
+  return wakeLoginCall("/api/ps5/power/wake-login/passcode", { id, passcode });
+}
+
+/** Leave the console at its sign-in screen: always rejects (code passcode_cancelled). */
+export function cancelWakePasscode(id: string): Promise<WakeLoginResult> {
+  return wakeLoginCall("/api/ps5/power/wake-login/passcode", { id, cancel: true });
 }
 
 /** Is the console awake, in standby, or not answering?

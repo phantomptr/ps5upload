@@ -7,6 +7,7 @@
 // engine sends 1), JSON status lines out, pad state in. This file
 // turns that into pixels on a canvas, sound, and input; the screen only drives it.
 
+import { isPasscode } from "./passcode";
 import { DEFAULT_PICTURE, PicturePass, PlaneReader, cropRect, isPlaneFormat, needsPass, sharpens, upscaleSize, upscales, type PictureTools } from "./rpPicture";
 import { isLinuxDesktop } from "./platform";
 import { linuxCompositingOff } from "./linuxGraphics";
@@ -431,10 +432,7 @@ export interface PasscodeAsk {
   waitS: number;
 }
 
-/** A PS5 user passcode: four digits. */
-export function isPasscode(s: string): boolean {
-  return /^[0-9]{4}$/.test(s);
-}
+export { isPasscode };
 
 export interface StreamOptions {
   host: string;

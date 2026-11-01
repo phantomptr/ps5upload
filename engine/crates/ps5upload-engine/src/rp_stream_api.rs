@@ -73,7 +73,7 @@ use axum::Json;
 use ps5upload_core::rp_stream::{
     run_stream, valid_passcode, Codec, ControllerState, KeyboardEvent, KeyboardInput, MicInput,
     Passcode, Progress, StreamConfig, StreamSink, PASSCODE_CANCELLED, PASSCODE_CONSOLE_GAVE_UP,
-    PASSCODE_TIMEOUT, PASSCODE_WAIT,
+    PASSCODE_TIMEOUT, PASSCODE_TOO_MANY, PASSCODE_WAIT,
 };
 use tokio::sync::mpsc;
 
@@ -856,6 +856,7 @@ fn error_status(e: &anyhow::Error) -> serde_json::Value {
         None if text.contains("session init refused") => ("refused", None),
         None if text.contains("did not wake") => ("wake_failed", None),
         None if text.contains(PASSCODE_CANCELLED) => ("passcode_cancelled", None),
+        None if text.contains(PASSCODE_TOO_MANY) => ("passcode_too_many", None),
         None if text.contains(PASSCODE_TIMEOUT) || text.contains(PASSCODE_CONSOLE_GAVE_UP) => {
             ("passcode_timeout", None)
         }
@@ -1269,6 +1270,7 @@ mod tests {
         assert_eq!(code(PASSCODE_CANCELLED), "passcode_cancelled");
         assert_eq!(code(PASSCODE_TIMEOUT), "passcode_timeout");
         assert_eq!(code(PASSCODE_CONSOLE_GAVE_UP), "passcode_timeout");
+        assert_eq!(code(PASSCODE_TOO_MANY), "passcode_too_many");
     }
 
     #[test]

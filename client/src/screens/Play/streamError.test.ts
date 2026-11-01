@@ -31,4 +31,10 @@ describe("streamErrorMessage", () => {
     expect(cancelled).not.toBe(timeout);
     expect(`${cancelled} ${timeout}`).not.toContain("cannot enter it");
   });
+
+  it("after five wrong passcodes says to enter it on the PS5", () => {
+    expect(streamErrorMessage(tr, { code: "passcode_too_many", detail: "" })).toBe(
+      "Too many wrong passcodes; enter it on the PS5.",
+    );
+  });
 });

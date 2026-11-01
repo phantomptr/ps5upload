@@ -44,6 +44,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 
+use crate::rp_login_pin::{ctrl_message, PasscodePrompt, PinFlow, CTRL_LOGIN};
+pub use crate::rp_login_pin::{
+    valid_passcode, Passcode, MAX_WRONG_PASSCODES, PASSCODE_CANCELLED, PASSCODE_CONSOLE_GAVE_UP,
+    PASSCODE_TIMEOUT, PASSCODE_TOO_MANY, PASSCODE_WAIT,
+};
 use crate::rp_regist::split_http;
 use crate::rp_session::{
     ambassador, auth_decrypt, auth_encrypt, b64, bright, make_did, session_init, SessionCreds,
@@ -77,46 +82,9 @@ const MIN_HOLD: Duration = Duration::from_millis(50);
 const CTRL_ATTEMPTS: u32 = 8;
 const CTRL_HEARTBEAT_REQ: u16 = 0x00fe;
 const CTRL_HEARTBEAT_REP: u16 = 0x01fe;
-/// The console wants the user's sign-in passcode (chiaki `CTRL_MESSAGE_TYPE_LOGIN_PIN_REQ`,
-/// empty payload), our answer to it (`LOGIN_PIN_REP`: the digits as ASCII, encrypted on our
-/// counter like any payload) and its verdict (`LOGIN`: one byte, 0 success, 1 incorrect).
-const CTRL_LOGIN_PIN_REQ: u16 = 0x0004;
-const CTRL_LOGIN_PIN_REP: u16 = 0x8004;
-const CTRL_LOGIN: u16 = 0x0005;
-const LOGIN_STATE_PIN_INCORRECT: u8 = 1;
 /// How long the ctrl handshake waits for the session id (and, after a passcode went out, for
 /// the console's verdict; chiaki allows 10 s there).
 const CTRL_SESSION_WAIT: Duration = Duration::from_secs(15);
-/// How long the user has to type the passcode. chiaki waits for ever; a start nobody answers
-/// has to end, and the console drops ctrl on its own if it tires first (that is reported too).
-pub const PASSCODE_WAIT: Duration = Duration::from_secs(180);
-/// The error texts the engine maps to `passcode_cancelled` / `passcode_timeout`.
-pub const PASSCODE_CANCELLED: &str = "the login passcode prompt was cancelled";
-pub const PASSCODE_TIMEOUT: &str = "no login passcode was entered in time";
-pub const PASSCODE_CONSOLE_GAVE_UP: &str = "the console stopped waiting for the login passcode";
-
-/// The page's answer when the console asks for the user's passcode.
-pub enum Passcode {
-    /// The digits typed (a PS5 passcode is four).
-    Digits(String),
-    /// The user would rather not: the start ends.
-    Cancel,
-}
-
-// Never print a passcode, not even in a debug dump.
-impl std::fmt::Debug for Passcode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Passcode::Digits(_) => f.write_str("Digits(<redacted>)"),
-            Passcode::Cancel => f.write_str("Cancel"),
-        }
-    }
-}
-
-/// A PS5 user passcode: exactly four digits.
-pub fn valid_passcode(s: &str) -> bool {
-    s.len() == 4 && s.bytes().all(|b| b.is_ascii_digit())
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Codec {
@@ -459,10 +427,8 @@ fn await_session_id(
 ) -> Result<String> {
     let mut buf = [0u8; 2048];
     let mut deadline = Instant::now() + CTRL_SESSION_WAIT;
-    // Since when the page has been asked, while it has not answered.
-    let mut asking: Option<Instant> = None;
-    // Passcodes sent so far: a request after one is a retry.
-    let mut sent = 0u32;
+    let mut flow = PinFlow::new(PASSCODE_WAIT);
+    let mut page = SinkPrompt(sink);
     s.set_read_timeout(Some(Duration::from_millis(250)))?;
     loop {
         if pending.len() >= 8 {
@@ -479,15 +445,11 @@ fn await_session_id(
                     payload = auth_decrypt(brt, amb, *remote_counter, &raw_payload);
                     *remote_counter += 1;
                 }
-                let mut ask = false;
+                if flow.on_message(kind, &payload, &mut page)? {
+                    continue;
+                }
                 match kind {
                     CTRL_HEARTBEAT_REQ => s.write_all(&ctrl_msg(CTRL_HEARTBEAT_REP))?,
-                    CTRL_LOGIN_PIN_REQ => ask = true,
-                    // A wrong passcode: ask again (chiaki re-requests only after one was
-                    // asked for; success needs nothing, the session id follows).
-                    CTRL_LOGIN => {
-                        ask = payload.first() == Some(&LOGIN_STATE_PIN_INCORRECT) && sent > 0
-                    }
                     CTRL_SESSION_ID => {
                         // A length byte, then the id. chiaki takes the console's
                         // id only when it is 24+ alphanumeric characters and
@@ -499,40 +461,23 @@ fn await_session_id(
                         }
                         return fallback_session_id();
                     }
+                    // LOGIN success: the session id follows.
+                    CTRL_LOGIN => {}
                     _ => {}
-                }
-                // One prompt at a time: the console may both say "incorrect" and ask again.
-                if ask && asking.is_none() {
-                    asking = Some(Instant::now());
-                    sink.passcode_needed(sent > 0);
                 }
                 continue;
             }
         }
         // Every whole message is read first: the console may say "incorrect" and ask again.
-        if let Some(since) = asking {
-            if sink.stopped() {
-                bail!(PASSCODE_CANCELLED);
-            }
-            match sink.passcode() {
-                Some(Passcode::Digits(d)) => {
-                    let m =
-                        ctrl_message(CTRL_LOGIN_PIN_REP, d.as_bytes(), brt, amb, *counter_local);
-                    *counter_local += 1;
-                    s.write_all(&m)?;
-                    sent += 1;
-                    asking = None;
-                    deadline = Instant::now() + CTRL_SESSION_WAIT;
-                }
-                Some(Passcode::Cancel) => bail!(PASSCODE_CANCELLED),
-                None if since.elapsed() > PASSCODE_WAIT => bail!(PASSCODE_TIMEOUT),
-                None => {}
+        if flow.asking() {
+            if flow.poll(s, brt, amb, counter_local, &mut page)? {
+                deadline = Instant::now() + CTRL_SESSION_WAIT;
             }
         } else if Instant::now() > deadline {
             bail!("the console never sent a session id over ctrl");
         }
         match s.read(&mut buf) {
-            Ok(0) if asking.is_some() || sent > 0 => bail!(PASSCODE_CONSOLE_GAVE_UP),
+            Ok(0) if flow.involved() => bail!(PASSCODE_CONSOLE_GAVE_UP),
             Ok(0) => bail!("the console closed ctrl before sending a session id"),
             Ok(n) => pending.extend_from_slice(&buf[..n]),
             Err(e)
@@ -542,6 +487,21 @@ fn await_session_id(
                 ) => {}
             Err(e) => return Err(anyhow!("reading ctrl: {e}")),
         }
+    }
+}
+
+/// The stream's consumer as the one who types the passcode.
+struct SinkPrompt<'a>(&'a mut dyn StreamSink);
+
+impl PasscodePrompt for SinkPrompt<'_> {
+    fn passcode_needed(&mut self, retry: bool) {
+        self.0.passcode_needed(retry);
+    }
+    fn passcode(&mut self) -> Option<Passcode> {
+        self.0.passcode()
+    }
+    fn stopped(&mut self) -> bool {
+        self.0.stopped()
     }
 }
 
@@ -647,23 +607,6 @@ fn ctrl_msg(kind: u16) -> [u8; 8] {
     let mut h = [0u8; 8];
     h[4..6].copy_from_slice(&kind.to_be_bytes());
     h
-}
-
-/// `[size BE32][kind BE16][0, 0]` then the payload, encrypted with the ctrl
-/// cipher at `counter` (chiaki `ctrl_message_send`).
-fn ctrl_message(
-    kind: u16,
-    payload: &[u8],
-    brt: &[u8; 16],
-    amb: &[u8; 16],
-    counter: u64,
-) -> Vec<u8> {
-    let mut m = Vec::with_capacity(8 + payload.len());
-    m.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    m.extend_from_slice(&kind.to_be_bytes());
-    m.extend_from_slice(&[0, 0]);
-    m.extend_from_slice(&auth_encrypt(brt, amb, counter, payload));
-    m
 }
 
 fn launch_spec(cfg: &StreamConfig, handshake_key: &[u8; HANDSHAKE_KEY_SIZE]) -> String {
@@ -1490,30 +1433,8 @@ mod tests {
         }
     }
 
-    const BRT: [u8; 16] = [7u8; 16];
-    const AMB: [u8; 16] = [9u8; 16];
-
-    /// A console's ctrl message: its payload encrypted on the console's counter.
-    fn console_msg(kind: u16, payload: &[u8], counter: &mut u64) -> Vec<u8> {
-        let mut m = Vec::new();
-        m.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-        m.extend_from_slice(&kind.to_be_bytes());
-        m.extend_from_slice(&[0, 0]);
-        if !payload.is_empty() {
-            m.extend_from_slice(&auth_encrypt(&BRT, &AMB, *counter, payload));
-            *counter += 1;
-        }
-        m
-    }
-
-    fn read_msg(c: &mut TcpStream) -> (u16, Vec<u8>) {
-        let mut h = [0u8; 8];
-        c.read_exact(&mut h).unwrap();
-        let size = u32::from_be_bytes(h[0..4].try_into().unwrap()) as usize;
-        let mut p = vec![0u8; size];
-        c.read_exact(&mut p).unwrap();
-        (u16::from_be_bytes([h[4], h[5]]), p)
-    }
+    use crate::rp_login_pin::test_support::{console_msg, read_msg, read_pin, AMB, BRT};
+    use crate::rp_login_pin::{CTRL_LOGIN_PIN_REP, CTRL_LOGIN_PIN_REQ, LOGIN_STATE_PIN_INCORRECT};
 
     const SESSION: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123";
 
@@ -1676,11 +1597,32 @@ mod tests {
     }
 
     #[test]
-    fn passcodes_are_four_digits_and_never_printed() {
-        assert!(valid_passcode("0042"));
-        assert!(!valid_passcode("123"));
-        assert!(!valid_passcode("12345"));
-        assert!(!valid_passcode("12a4"));
-        assert!(!format!("{:?}", Passcode::Digits("1234".into())).contains("1234"));
+    fn five_wrong_passcodes_stop_the_asking() {
+        let mut page = PinPage {
+            asked: vec![],
+            answers: (0..6)
+                .map(|_| Some(Passcode::Digits("0000".into())))
+                .collect(),
+        };
+        let (r, ours) = with_console(&mut page, |mut c| {
+            let mut n = 1u64;
+            c.write_all(&console_msg(CTRL_LOGIN_PIN_REQ, &[], &mut n))
+                .unwrap();
+            for i in 0..5u64 {
+                assert_eq!(read_pin(&mut c, 5 + i), b"0000");
+                c.write_all(&console_msg(
+                    CTRL_LOGIN,
+                    &[LOGIN_STATE_PIN_INCORRECT],
+                    &mut n,
+                ))
+                .unwrap();
+            }
+            // No sixth passcode: ctrl just closes.
+            let mut b = [0u8; 1];
+            assert_eq!(c.read(&mut b).unwrap_or(0), 0);
+        });
+        assert!(format!("{:#}", r.unwrap_err()).contains(PASSCODE_TOO_MANY));
+        assert_eq!(page.asked, vec![false, true, true, true, true]);
+        assert_eq!(ours, 10);
     }
 }

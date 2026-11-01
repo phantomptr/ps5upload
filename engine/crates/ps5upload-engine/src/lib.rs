@@ -104,6 +104,7 @@ mod shared_state;
 mod state_io;
 mod telemetry;
 mod vinput_api;
+mod wake_login_api;
 #[cfg(feature = "webui")]
 mod webui;
 mod win_net;
@@ -4127,6 +4128,11 @@ struct PowerWakeLoginReq {
     /// full session keys, not just the wake credential.
     regist_key: String,
     rp_key: String,
+    /// Someone is there to type the user's login passcode if the console asks: the sign-in is
+    /// held and the passcode asked for (wake_login_api). Otherwise (an automatic wake) a
+    /// passcode request ends it with the console awake at its sign-in screen.
+    #[serde(default)]
+    ask_passcode: bool,
 }
 
 /// POST /api/ps5/power/wake-login — wake the console AND sign its user in.
@@ -4144,7 +4150,7 @@ async fn ps5_power_wake_login(Json(req): Json<PowerWakeLoginReq>) -> impl IntoRe
             Err(e) => return json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
         };
     let regist_key = req.regist_key.clone();
-    let r = tokio::task::spawn_blocking(move || {
+    let job: wake_login_api::SignInJob = Box::new(move |prompt| {
         // The wake credential is the registration key as a number, so derive
         // it from the regist key when the client did not send one — a console
         // with sign-in keys can then always be woken, not just signed in.
@@ -4169,19 +4175,10 @@ async fn ps5_power_wake_login(Json(req): Json<PowerWakeLoginReq>) -> impl IntoRe
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(90),
             ),
+            prompt,
         )
-    })
-    .await
-    .map_err(anyhow::Error::from)
-    .and_then(|r| r);
-    match r {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "ok": true, "signed_in": true })),
-        )
-            .into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
+    });
+    wake_login_api::start(job, req.ask_passcode).await
 }
 
 async fn ps5_power_wake(Json(req): Json<PowerWakeReq>) -> impl IntoResponse {
@@ -11345,6 +11342,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/power/telemetry", get(ps5_power_telemetry))
         .route("/api/ps5/power/wake", post(ps5_power_wake))
         .route("/api/ps5/power/wake-login", post(ps5_power_wake_login))
+        .route(
+            "/api/ps5/power/wake-login/passcode",
+            post(wake_login_api::answer),
+        )
         // Remote Play stream spike (rp_stream_api).
         .route("/api/ps5/rp/ws", get(rp_stream_api::ws))
         .route("/api/ps5/rp/session", get(rp_stream_api::current))

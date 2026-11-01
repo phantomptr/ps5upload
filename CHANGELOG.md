@@ -23,7 +23,9 @@ What's new in ps5upload, written for humans.
 - **Remote Play asks for your PS5 passcode instead of giving up (#608).** If the user you play as
   has a sign-in passcode, a box over the stream asks for its four digits when you press Start (a
   number pad on phones), and asks again if it was wrong. It goes straight to the console and is
-  never saved. Cancel ends the start.
+  never saved. Cancel ends the start. Wake & sign in asks the same way (Cancel leaves the PS5 at
+  its sign-in screen); automatic wakes for uploads don't ask and just wake the console. After five
+  wrong passcodes the app stops asking and says to enter it on the PS5.
 - **Pair with the PIN shown on the PS5 (#609).** Play › Set up's pairing step (and Wake & sign in,
   when pairing fails) can now pair the way PS Remote Play and chiaki-ng do: open Settings › System
   › Remote Play › Link Device on the PS5 and type the 8-digit number it shows. It needs no helper,
