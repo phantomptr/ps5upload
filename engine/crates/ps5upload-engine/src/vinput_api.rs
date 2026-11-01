@@ -43,6 +43,9 @@ const RETRY_AFTER: Duration = Duration::from_secs(3);
 /// are removed, so switching modes back and forth does not add and remove them each time. Leaving
 /// the stream, or going quiet, removes them at once.
 pub(crate) const LINGER: Duration = Duration::from_secs(5);
+/// While the console's keyboard & mouse process starts (`vinput_starting`), the open is asked
+/// again this often.
+const STARTING_RETRY: Duration = Duration::from_millis(300);
 /// A link with no owner ends after this long.
 const IDLE_END: Duration = Duration::from_secs(5);
 /// Reports waiting for the link thread: past this the page is far ahead of the console and the
@@ -119,7 +122,9 @@ fn new_token() -> u64 {
 
 /// What the owner's page is told: `on` (input is wanted), what the PS5 sees (`mouse`, `keyboard`:
 /// its virtual devices are open), and why not (`err`: `vinput_unsupported` (this console cannot
-/// make them yet), `vinput_helper_old`, `unreachable`, `vinput_failed`, `rp_session_owns_input`), or why
+/// make them yet), `vinput_starting` (its keyboard & mouse process is starting: asked again on its
+/// own), `vinput_needs_loader`, `vinput_companion_failed`, `vinput_helper_old`, `unreachable`,
+/// `vinput_failed`, `rp_session_owns_input`), or why
 /// it ended (`reason`: `off`, `timeout`, `taken`, `left`).
 fn status_json(
     on: bool,
@@ -228,6 +233,13 @@ impl<P: Port> LinkState<P> {
             .port
             .session(&self.host, SessionOp::Open { mouse, keyboard }, self.token)
         {
+            Ok(Some(s)) if s.err.as_deref() == Some("vinput_starting") && !s.open => {
+                // The console starts its keyboard & mouse process: ask again shortly.
+                self.err = s.err.clone();
+                self.helper = s;
+                self.asked = None;
+                self.retry_at = Some(now + STARTING_RETRY);
+            }
             Ok(Some(s)) => {
                 self.err = s.err.clone();
                 self.helper = s;
@@ -364,7 +376,10 @@ impl<P: Port> LinkState<P> {
         if !self.pending.is_empty() {
             let batch = coalesce(self.pending.drain(..));
             match self.port.report(&self.host, self.token, &batch) {
-                Ok(Some(a)) if a.ok => self.helper_hb = now,
+                Ok(Some(a)) if a.ok => {
+                    self.helper_hb = now;
+                    self.err = None;
+                }
                 Ok(Some(a)) => {
                     let err = a.err.unwrap_or_else(|| "vinput_failed".into());
                     if err == "vinput_not_open" || err == "vinput_not_owner" {
@@ -385,7 +400,11 @@ impl<P: Port> LinkState<P> {
                 .port
                 .session(&self.host, SessionOp::Heartbeat, self.token)
             {
-                Ok(Some(s)) if s.ok => self.helper_hb = now,
+                Ok(Some(s)) if s.ok => {
+                    // Still ours; `vinput_starting` while the console restarts its process.
+                    self.helper_hb = now;
+                    self.err = s.err;
+                }
                 Ok(Some(s)) => self.lost_session(s.err),
                 Ok(None) => self.lost(Some("vinput_helper_old".into())),
                 Err(_) => self.lost(Some("unreachable".into())),
@@ -662,6 +681,10 @@ mod tests {
         old: Mutex<bool>,
         /// The helper forgot the session (it timed out).
         forgot: Mutex<bool>,
+        /// Opens still answered `vinput_starting` (the console's process is starting).
+        starting: Mutex<u32>,
+        /// Heartbeats say the process is being started again.
+        restarting: Mutex<bool>,
     }
 
     impl Fake {
@@ -682,6 +705,20 @@ mod tests {
             }
             let (cm, ck) = *self.can.lock().unwrap();
             Ok(Some(match op {
+                SessionOp::Open { .. } if *self.starting.lock().unwrap() > 0 => {
+                    *self.starting.lock().unwrap() -= 1;
+                    SessionState {
+                        err: Some("vinput_starting".into()),
+                        ..Default::default()
+                    }
+                }
+                SessionOp::Heartbeat if *self.restarting.lock().unwrap() => SessionState {
+                    ok: true,
+                    open: true,
+                    mouse: cm,
+                    keyboard: ck,
+                    err: Some("vinput_starting".into()),
+                },
                 SessionOp::Open { mouse, keyboard } => {
                     let (m, k) = (mouse && cm, keyboard && ck);
                     SessionState {
@@ -751,6 +788,61 @@ mod tests {
     }
 
     const P1: Owner = Owner::Page(1);
+
+    #[test]
+    fn a_starting_console_is_asked_again_until_its_devices_open() {
+        let port = Arc::new(Fake::default());
+        *port.can.lock().unwrap() = (true, true);
+        *port.starting.lock().unwrap() = 2;
+        let t0 = Instant::now();
+        let mut l = LinkState::new("10.0.0.2", port.clone(), t0);
+        let (st, seen) = sink();
+        l.on_cmd(want_cmd(P1, true, true, &st), t0);
+        let s = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(s["err"], "vinput_starting");
+        assert_eq!(s["mouse"], false);
+        // a heartbeat right away does not ask again; after the wait it does, twice
+        l.on_cmd(
+            want_cmd(P1, true, true, &st),
+            t0 + Duration::from_millis(100),
+        );
+        l.tick(t0 + Duration::from_millis(100));
+        assert_eq!(port.log().len(), 1);
+        let mut now = t0;
+        for _ in 0..4 {
+            now += STARTING_RETRY;
+            l.on_cmd(want_cmd(P1, true, true, &st), now);
+            l.tick(now);
+        }
+        assert_eq!(
+            port.log().iter().filter(|e| e.starts_with("Open")).count(),
+            2
+        );
+        let s = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(s["mouse"], true);
+        assert_eq!(s["keyboard"], true);
+        assert!(s["err"].is_null());
+        // the console restarting its process: the session stays, the page sees it, then it clears
+        *port.restarting.lock().unwrap() = true;
+        now += vinput::HEARTBEAT;
+        l.on_cmd(want_cmd(P1, true, true, &st), now);
+        l.tick(now);
+        assert_eq!(
+            seen.lock().unwrap().last().unwrap()["err"],
+            "vinput_starting"
+        );
+        assert_eq!(seen.lock().unwrap().last().unwrap()["mouse"], true);
+        *port.restarting.lock().unwrap() = false;
+        l.on_cmd(
+            Cmd::Report {
+                owner: P1,
+                report: rep(1, 3),
+            },
+            now,
+        );
+        l.tick(now);
+        assert!(seen.lock().unwrap().last().unwrap()["err"].is_null());
+    }
 
     #[test]
     fn the_stub_console_says_not_supported_and_nothing_is_sent() {

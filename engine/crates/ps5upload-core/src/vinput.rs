@@ -166,9 +166,14 @@ pub struct Caps {
     /// The helper's backend: "stub" until the firmware's calls are in.
     #[serde(default)]
     pub backend: String,
-    /// Why nothing can be made (`vinput_unsupported`).
+    /// Why nothing can be made (`vinput_unsupported`, `vinput_needs_loader`,
+    /// `vinput_companion_failed`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The on-console keyboard & mouse process (`ps5u-vinput`): `idle`, `starting`, `running`,
+    /// `stopped` (being started again) or `unavailable`. Absent from helpers without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companion: Option<String>,
 }
 
 /// The session's state after a `vinput.session` call.
