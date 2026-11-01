@@ -10,7 +10,7 @@ import {
   payloadTabsFor,
 } from "./payloadTabs";
 
-const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url).pathname, "utf8");
+const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url), "utf8");
 const app = read("../../App.tsx");
 const shim = read("../../lib/browserInvoke.ts");
 

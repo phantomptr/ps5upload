@@ -71,7 +71,10 @@ describe("console strings", () => {
 
   it("the committed locale files match the locale sources (run npm run build:console)", () => {
     const want = consoleStringFiles() as Record<string, string>;
-    const have = Object.fromEntries(Object.entries(committed).map(([p, text]) => [p.replace("./locales/", ""), text]));
+    // Git for Windows checks them out with CRLF (core.autocrlf); the script writes LF.
+    const have = Object.fromEntries(
+      Object.entries(committed).map(([p, text]) => [p.replace("./locales/", ""), text.replace(/\r\n/g, "\n")]),
+    );
     expect(Object.keys(have).sort()).toEqual(Object.keys(want).sort());
     for (const [f, text] of Object.entries(want)) expect(have[f], f).toBe(text);
   });

@@ -6,7 +6,7 @@ import en from "../../i18n/locales/en";
 
 // The USB backup copies the save to this computer, zips it and uploads it back,
 // so the old "without leaving the PS5" was false. Keep the shown copy honest.
-const screen: string = readFileSync(new URL("./index.tsx", import.meta.url).pathname, "utf8");
+const screen: string = readFileSync(new URL("./index.tsx", import.meta.url), "utf8");
 
 describe("Save data USB copy", () => {
   it("says the save goes through this computer", () => {
