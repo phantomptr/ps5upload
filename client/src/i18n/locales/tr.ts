@@ -6710,6 +6710,19 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "rp_settings_close": "Ayarları kapat",
   "rp_settings_paused": "Ayarlar açıkken oyun hiçbir tuş ya da kumanda basışı almaz.",
   "rp_picture_tools": "Görüntü araçları",
+  "saves_switch_title": "Switch oyunları (ProsperoEden)",
+  "saves_switch_running": "ProsperoEden açık. Geri yüklemeden önce kapatın.",
+  "saves_switch_close_note": "Geri yüklemeden önce ProsperoEden'i kapatın.",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "Konsol",
+  "saves_switch_profile": "Profil {id}",
+  "saves_switch_changed": "Son değişiklik {when}",
+  "saves_switch_backed_up": "{title} yedeklendi",
+  "saves_switch_backup_failed": "{title} yedeklenemedi",
+  "saves_switch_backup_hint": "Bu oyunun kaydını şimdi otomatik yedek klasörüne yedekle.",
+  "saves_switch_need_dir": "Önce otomatik yedekler için bir klasör seçin.",
+  "saves_switch_backup_now": "Şimdi yedekle",
+  "saves_switch_no_backups": "Henüz yedek yok.",
 };
 
 export default tr;

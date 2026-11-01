@@ -10,8 +10,14 @@
 //! differences: its files go as they are (`backup_finalize` and `restore_prepare` shape PS5 save
 //! images), and the app that writes it is the emulator, not the game.
 
-use ps5upload_core::fs_ops::{list_dir, DirEntry, ListDirOptions};
+use axum::extract::Query;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use ps5upload_core::fs_ops::{list_dir, DirEntry, DirListing, ListDirOptions};
 use ps5upload_core::saves::SaveEntry;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 /// The emulator's title.
 pub const APP: &str = "PPSA99008";
@@ -20,7 +26,7 @@ pub const KIND: &str = "switch";
 /// Where it keeps every profile's saves.
 pub const ROOT: &str = "/data/prosperoeden/user/nand/user/save/0000000000000000";
 /// How many folders down a game's save is looked into for its newest file.
-const DEPTH: u32 = 4;
+pub const DEPTH: u32 = 4;
 
 fn hex_digits(name: &str, len: usize) -> bool {
     name.len() == len && name.bytes().all(|b| b.is_ascii_hexdigit())
@@ -63,19 +69,43 @@ pub fn backs_up(e: &SaveEntry) -> bool {
     crate::looks_like_title_id(&e.title_id) || (is_emulator_save(e) && is_game(&e.title_id))
 }
 
-/// The profile as the user number in a backup's name: its first 8 hex digits (0 for the
-/// console's own), enough to keep two profiles' backups of one game apart.
+/// The profile as the user number in a backup's name: its first 7 hex digits (0 for the
+/// console's own), enough to keep two profiles' backups of one game apart. Seven, not eight,
+/// so the number stays positive where it is kept as an `i32`.
 fn user_of(profile: &str) -> i32 {
-    u32::from_str_radix(&profile[..8], 16).unwrap_or(0) as i32
+    i32::from_str_radix(&profile[..7], 16).unwrap_or(0)
 }
 
 /// The emulator's saves on `host`: none when it is not there or has no save yet.
 pub fn list(host: &str) -> Vec<SaveEntry> {
     saves_in(&|path: &str| {
-        list_dir(host, path, ListDirOptions::default())
-            .map(|l| l.entries)
+        all_pages(&|offset| {
+            list_dir(
+                host,
+                path,
+                ListDirOptions {
+                    offset,
+                    ..Default::default()
+                },
+            )
             .map_err(|e| format!("{e:#}"))
+        })
     })
+}
+
+/// Every entry of a folder, page by page (`page(offset)`): a full page, or one cut short
+/// because its buffer filled, means there may be more.
+fn all_pages(page: &dyn Fn(u64) -> Result<DirListing, String>) -> Result<Vec<DirEntry>, String> {
+    let limit = ListDirOptions::default().limit;
+    let mut out = Vec::new();
+    loop {
+        let l = page(out.len() as u64)?;
+        let n = l.entries.len() as u64;
+        out.extend(l.entries);
+        if n == 0 || (!l.truncated && n < limit) {
+            return Ok(out);
+        }
+    }
 }
 
 /// [`list`], with `ls` giving the entries of a folder on the console.
@@ -145,6 +175,56 @@ fn measure(
         }
     }
     Ok((size, newest, files))
+}
+
+// ── HTTP ────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct SwitchQuery {
+    /// The console (bare IP).
+    pub addr: String,
+}
+
+/// One of the emulator's saves, as the app lists it.
+#[derive(Serialize)]
+pub struct SwitchSave {
+    #[serde(flatten)]
+    pub save: SaveEntry,
+    /// The emulator runs now (its saves cannot be restored meanwhile); None when the console did
+    /// not say.
+    pub running: Option<bool>,
+}
+
+/// `GET /api/save-backup/switch?addr=` — the emulator's saves on that console, each with whether
+/// the emulator runs now: `{saves, running}`. None (and `running` null) when it is not installed
+/// or has saved nothing.
+pub async fn get_switch(Query(q): Query<SwitchQuery>) -> Response {
+    let host = q.addr.trim().to_string();
+    if host.is_empty() {
+        return crate::save_backup::json_error(StatusCode::BAD_REQUEST, "addr is required");
+    }
+    let r = tokio::task::spawn_blocking(move || {
+        let saves = list(&host);
+        // Only asked when there is something to restore.
+        let running = if saves.is_empty() {
+            None
+        } else {
+            crate::save_backup::title_running(&host, APP).ok()
+        };
+        (saves, running)
+    })
+    .await;
+    match r {
+        Ok((saves, running)) => Json(json!({
+            "running": running,
+            "saves": saves
+                .into_iter()
+                .map(|save| SwitchSave { save, running })
+                .collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(e) => crate::save_backup::json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -218,7 +298,7 @@ mod tests {
         let mine = &saves[0];
         assert_eq!(mine.title_id, GAME);
         assert_eq!(mine.path, format!("{ROOT}/{P1}/{GAME}"));
-        assert_eq!(mine.user_id as u32, 0x1F1E_1D1C);
+        assert_eq!(mine.user_id, 0x1F1_E1D1);
         assert_eq!(mine.kind, KIND);
         // The file in the subfolder is the newest, and both files count.
         assert_eq!(mine.mtime, 500);
@@ -253,6 +333,47 @@ mod tests {
         let saves = saves_in(&ls_of(&fs));
         assert_eq!(saves.len(), 1);
         assert_eq!(saves[0].path, format!("{ROOT}/{P1}/{GAME}"));
+    }
+
+    /// The app reads a listed save as the console's saves list gives one, plus `running`.
+    #[test]
+    fn a_listed_save_carries_whether_the_emulator_runs() {
+        let fs = console();
+        let save = saves_in(&ls_of(&fs)).remove(0);
+        let v = serde_json::to_value(SwitchSave {
+            save,
+            running: Some(true),
+        })
+        .unwrap();
+        assert_eq!(v["title_id"], GAME);
+        assert_eq!(v["kind"], KIND);
+        assert_eq!(v["user_id"], 0x1F1_E1D1);
+        assert_eq!(v["running"], true);
+    }
+
+    #[test]
+    fn a_big_folder_is_read_page_by_page() {
+        let all: Vec<DirEntry> = (0..300)
+            .map(|i| entry(&format!("f{i}"), "file", 1, i))
+            .collect();
+        let got = all_pages(&|offset| {
+            let entries: Vec<DirEntry> = all
+                .iter()
+                .skip(offset as usize)
+                .take(256)
+                .cloned()
+                .collect();
+            Ok(DirListing {
+                path: ROOT.into(),
+                returned: entries.len() as u64,
+                entries,
+                truncated: false,
+                total_scanned: 300,
+            })
+        })
+        .unwrap();
+        assert_eq!(got.len(), 300);
+        assert_eq!(got[299].name, "f299");
     }
 
     #[test]

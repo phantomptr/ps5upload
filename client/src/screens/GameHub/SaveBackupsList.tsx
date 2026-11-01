@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { RotateCcw } from "lucide-react";
 
 import { Button } from "../../components";
@@ -35,7 +35,19 @@ export function mergeBackups(local: SaveBackupFile[], server: SaveBackupFile[]):
 /** The automatic backups of one save, newest first, each with Restore: those in the backup
  *  folder and those on the network share. The engine puts the backup back after keeping what is
  *  there now, so a restore can itself be undone. */
-export function SaveBackupsList({ host, save }: { host: string; save: SaveEntry }) {
+export function SaveBackupsList({
+  host,
+  save,
+  reload = 0,
+  empty = null,
+}: {
+  host: string;
+  save: SaveEntry;
+  /** Changed to look again (a backup was just made). */
+  reload?: number;
+  /** Shown when the save has no backup yet. */
+  empty?: ReactNode;
+}) {
   const tr = useTr();
   const { confirm, dialog } = useConfirm();
   const settings = useAutoSaveBackupStore((s) => s.settings);
@@ -45,6 +57,8 @@ export function SaveBackupsList({ host, save }: { host: string; save: SaveEntry 
   const [backups, setBackups] = useState<ListedBackup[]>([]);
   const [all, setAll] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  // Why the last restore was refused (the game is running, say), shown under the list too.
+  const [failed, setFailed] = useState<string | null>(null);
 
   useEffect(() => {
     if (!settings) void refreshSettings();
@@ -66,9 +80,9 @@ export function SaveBackupsList({ host, save }: { host: string; save: SaveEntry 
   }, [dir, target, save.title_id, save.user_id]);
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, reload]);
 
-  if (backups.length === 0) return null;
+  if (backups.length === 0) return <>{empty}</>;
   const shown = all ? backups : backups.slice(0, SHOWN);
 
   const key = (b: ListedBackup) => `${b.server ? "server" : "local"}:${b.file}`;
@@ -95,6 +109,7 @@ export function SaveBackupsList({ host, save }: { host: string; save: SaveEntry 
     });
     if (!ok) return;
     setBusy(key(b));
+    setFailed(null);
     try {
       await (b.server ? serverBackupApi : saveBackupApi).restore({
         addr: hostOf(host),
@@ -109,8 +124,10 @@ export function SaveBackupsList({ host, save }: { host: string; save: SaveEntry 
       );
       await load();
     } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      setFailed(why);
       pushNotification("error", tr("save_backup_restore_failed", undefined, "Couldn't restore the save"), {
-        body: e instanceof Error ? e.message : String(e),
+        body: why,
       });
     } finally {
       setBusy(null);
@@ -171,6 +188,11 @@ export function SaveBackupsList({ host, save }: { host: string; save: SaveEntry 
             ? tr("save_backup_show_fewer", undefined, "Show fewer")
             : tr("save_backup_show_all", { n: backups.length }, "Show all {n}")}
         </button>
+      )}
+      {failed && (
+        <p className="mt-1 text-xs text-[var(--color-bad)]" role="alert" data-testid="save-backup-restore-error">
+          {tr("save_backup_restore_failed", undefined, "Couldn't restore the save")}: {failed}
+        </p>
       )}
       {dialog}
     </div>

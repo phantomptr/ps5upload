@@ -6717,6 +6717,19 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
   "rp_settings_close": "सेटिंग्स बंद करें",
   "rp_settings_paused": "सेटिंग्स खुली रहने तक गेम को कोई कुंजी या कंट्रोलर का दबाव नहीं मिलता।",
   "rp_picture_tools": "चित्र के टूल",
+  "saves_switch_title": "Switch गेम (ProsperoEden)",
+  "saves_switch_running": "ProsperoEden चल रहा है। रीस्टोर करने से पहले इसे बंद करें।",
+  "saves_switch_close_note": "रीस्टोर करने से पहले ProsperoEden बंद करें।",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "कंसोल",
+  "saves_switch_profile": "प्रोफ़ाइल {id}",
+  "saves_switch_changed": "आख़िरी बदलाव {when}",
+  "saves_switch_backed_up": "{title} का बैकअप लिया गया",
+  "saves_switch_backup_failed": "{title} का बैकअप नहीं लिया जा सका",
+  "saves_switch_backup_hint": "इस गेम के सेव का अभी बैकअप लें, ऑटोमैटिक बैकअप फ़ोल्डर में।",
+  "saves_switch_need_dir": "पहले ऑटोमैटिक बैकअप के लिए फ़ोल्डर चुनें।",
+  "saves_switch_backup_now": "अभी बैकअप लें",
+  "saves_switch_no_backups": "अभी कोई बैकअप नहीं।",
 };
 
 export default hi;

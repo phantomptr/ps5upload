@@ -109,6 +109,19 @@ export const serverBackupApi = {
     call<{ ok: boolean }>("/server/restore", { method: "POST", body: JSON.stringify(req) }),
 };
 
+/** A save of ProsperoEden, the Switch emulator (PPSA99008): `title_id` is the game's 16-hex-digit
+ *  title ID and `user_id` its profile's first 7 hex digits (0 for the console's own save). */
+export interface SwitchSave {
+  title_id: string;
+  user_id: number;
+  path: string;
+  size: number;
+  mtime: number;
+  kind: "switch";
+  /** ProsperoEden runs now; null when the console did not say. */
+  running: boolean | null;
+}
+
 export const saveBackupApi = {
   view: () => call<SaveBackupView>(""),
   set: (patch: Partial<SaveBackupSettings>) =>
@@ -122,4 +135,7 @@ export const saveBackupApi = {
    *  still, kept apart from the automatic backups. */
   snapshot: (req: { addr: string; title_id: string }) =>
     call<{ ok: boolean; files: string[] }>("/snapshot", { method: "POST", body: JSON.stringify(req) }),
+  /** ProsperoEden's saves on a console (bare IP): none when it is not installed. */
+  switchSaves: (addr: string) =>
+    call<{ saves: SwitchSave[]; running: boolean | null }>(`/switch?addr=${encodeURIComponent(addr)}`),
 };

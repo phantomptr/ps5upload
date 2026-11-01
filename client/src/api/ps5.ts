@@ -2593,8 +2593,9 @@ export interface SaveEntry {
   path: string;
   size: number;
   mtime: number;
-  /** "ps5" for native, "ps4" for legacy savedata. */
-  kind: "ps5" | "ps4";
+  /** "ps5" for native, "ps4" for legacy savedata, "switch" for a save of the Switch emulator
+   *  ProsperoEden (never in the console's saves list; see `saveBackupApi.switchSaves`). */
+  kind: "ps5" | "ps4" | "switch";
 }
 
 export interface SaveList {

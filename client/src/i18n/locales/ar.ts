@@ -6703,6 +6703,19 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "rp_settings_close": "إغلاق الإعدادات",
   "rp_settings_paused": "لا تصل أي مفاتيح أو ضغطات من وحدة التحكم إلى اللعبة ما دامت الإعدادات مفتوحة.",
   "rp_picture_tools": "أدوات الصورة",
+  "saves_switch_title": "ألعاب Switch (ProsperoEden)",
+  "saves_switch_running": "ProsperoEden يعمل. أغلقه قبل الاستعادة.",
+  "saves_switch_close_note": "أغلق ProsperoEden قبل الاستعادة.",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "الجهاز",
+  "saves_switch_profile": "الملف الشخصي {id}",
+  "saves_switch_changed": "آخر تغيير {when}",
+  "saves_switch_backed_up": "تم نسخ {title} احتياطيًا",
+  "saves_switch_backup_failed": "تعذّر نسخ {title} احتياطيًا",
+  "saves_switch_backup_hint": "انسخ حفظ هذه اللعبة الآن إلى مجلد النسخ الاحتياطية التلقائية.",
+  "saves_switch_need_dir": "اختر مجلدًا للنسخ الاحتياطية التلقائية أولًا.",
+  "saves_switch_backup_now": "انسخ الآن",
+  "saves_switch_no_backups": "لا توجد نسخ احتياطية بعد.",
 };
 
 export default ar;

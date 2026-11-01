@@ -6703,6 +6703,19 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
   "rp_settings_close": "সেটিংস বন্ধ করুন",
   "rp_settings_paused": "সেটিংস খোলা থাকাকালীন গেম কোনো কী বা কন্ট্রোলারের চাপ পায় না।",
   "rp_picture_tools": "ছবির টুল",
+  "saves_switch_title": "Switch গেম (ProsperoEden)",
+  "saves_switch_running": "ProsperoEden চলছে। রিস্টোর করার আগে এটি বন্ধ করুন।",
+  "saves_switch_close_note": "রিস্টোর করার আগে ProsperoEden বন্ধ করুন।",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "কনসোল",
+  "saves_switch_profile": "প্রোফাইল {id}",
+  "saves_switch_changed": "শেষ পরিবর্তন {when}",
+  "saves_switch_backed_up": "{title} ব্যাকআপ হয়েছে",
+  "saves_switch_backup_failed": "{title} ব্যাকআপ করা যায়নি",
+  "saves_switch_backup_hint": "এই গেমের সেভ এখনই স্বয়ংক্রিয় ব্যাকআপ ফোল্ডারে ব্যাকআপ করুন।",
+  "saves_switch_need_dir": "আগে স্বয়ংক্রিয় ব্যাকআপের জন্য একটি ফোল্ডার বেছে নিন।",
+  "saves_switch_backup_now": "এখনই ব্যাকআপ",
+  "saves_switch_no_backups": "এখনও কোনো ব্যাকআপ নেই।",
 };
 
 export default bn;

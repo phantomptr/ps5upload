@@ -6705,6 +6705,19 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "rp_settings_close": "Đóng cài đặt",
   "rp_settings_paused": "Khi Cài đặt đang mở, trò chơi không nhận phím hay nút tay cầm nào.",
   "rp_picture_tools": "Công cụ hình ảnh",
+  "saves_switch_title": "Game Switch (ProsperoEden)",
+  "saves_switch_running": "ProsperoEden đang chạy. Hãy đóng nó trước khi khôi phục.",
+  "saves_switch_close_note": "Đóng ProsperoEden trước khi khôi phục.",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "Máy",
+  "saves_switch_profile": "Hồ sơ {id}",
+  "saves_switch_changed": "Thay đổi lần cuối {when}",
+  "saves_switch_backed_up": "Đã sao lưu {title}",
+  "saves_switch_backup_failed": "Không thể sao lưu {title}",
+  "saves_switch_backup_hint": "Sao lưu bản lưu của game này ngay, vào thư mục sao lưu tự động.",
+  "saves_switch_need_dir": "Hãy chọn thư mục cho sao lưu tự động trước.",
+  "saves_switch_backup_now": "Sao lưu ngay",
+  "saves_switch_no_backups": "Chưa có bản sao lưu.",
 };
 
 export default vi;

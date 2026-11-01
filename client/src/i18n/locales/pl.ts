@@ -6951,6 +6951,19 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "rp_settings_close": "Zamknij ustawienia",
   "rp_settings_paused": "Gdy Ustawienia są otwarte, gra nie dostaje klawiszy ani przycisków kontrolera.",
   "rp_picture_tools": "Narzędzia obrazu",
+  "saves_switch_title": "Gry Switch (ProsperoEden)",
+  "saves_switch_running": "ProsperoEden jest uruchomiony. Zamknij go przed przywróceniem.",
+  "saves_switch_close_note": "Zamknij ProsperoEden przed przywróceniem.",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "Konsola",
+  "saves_switch_profile": "Profil {id}",
+  "saves_switch_changed": "Ostatnia zmiana {when}",
+  "saves_switch_backed_up": "Zrobiono kopię {title}",
+  "saves_switch_backup_failed": "Nie udało się zrobić kopii {title}",
+  "saves_switch_backup_hint": "Zrób teraz kopię zapisu tej gry w folderze automatycznych kopii.",
+  "saves_switch_need_dir": "Najpierw wybierz folder na automatyczne kopie.",
+  "saves_switch_backup_now": "Zrób kopię teraz",
+  "saves_switch_no_backups": "Brak kopii.",
 };
 
 export default pl;
