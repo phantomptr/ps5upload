@@ -234,6 +234,24 @@ pub fn is_unsupported(e: &anyhow::Error) -> bool {
         .is_some_and(|m| m.status == crate::console_files::ERR_UNKNOWN_METHOD)
 }
 
+/// The helper's answer: `vinput.session` and `vinput.report` send a refusal (`{"ok":false,...,
+/// "err":..}`) as the call's error cause (mgmt_call_text_keep), which is the answer all the same.
+fn answer<T: serde::de::DeserializeOwned>(r: Result<Vec<u8>>) -> Result<T> {
+    match r {
+        Ok(b) => Ok(serde_json::from_slice(&b)?),
+        Err(e) => {
+            if let Some(m) = e.downcast_ref::<MgmtError>() {
+                if m.cause.trim_start().starts_with('{') {
+                    if let Ok(v) = serde_json::from_str::<T>(&m.cause) {
+                        return Ok(v);
+                    }
+                }
+            }
+            Err(e)
+        }
+    }
+}
+
 fn supported<T>(r: Result<T>) -> Result<Option<T>> {
     match r {
         Ok(v) => Ok(Some(v)),
@@ -259,16 +277,13 @@ pub fn caps(addr: &str) -> Result<Option<Caps>> {
 /// One `vinput.session` call for owner `id`; `None` from a helper without the method.
 pub fn session(addr: &str, op: SessionOp, id: u64) -> Result<Option<SessionState>> {
     let body = serde_json::to_vec(&op.body(id))?;
-    supported(
-        mgmt::call_with(
-            addr,
-            m::VINPUT_SESSION,
-            m::VINPUT_SESSION.label,
-            &body,
-            Some(CALL_TIMEOUT),
-        )
-        .and_then(|b| Ok(serde_json::from_slice(&b)?)),
-    )
+    supported(answer(mgmt::call_with(
+        addr,
+        m::VINPUT_SESSION,
+        m::VINPUT_SESSION.label,
+        &body,
+        Some(CALL_TIMEOUT),
+    )))
 }
 
 /// Sends `reports` (in calls of at most [`MAX_REPORTS`]) for owner `id`; the last answer, or the
@@ -280,16 +295,13 @@ pub fn report(addr: &str, id: u64, reports: &[Report]) -> Result<Option<ReportAc
     };
     for chunk in reports.chunks(MAX_REPORTS) {
         let body = serde_json::to_vec(&serde_json::json!({"id": id, "r": to_hex(chunk)}))?;
-        let ack: Option<ReportAck> = supported(
-            mgmt::call_with(
-                addr,
-                m::VINPUT_REPORT,
-                m::VINPUT_REPORT.label,
-                &body,
-                Some(CALL_TIMEOUT),
-            )
-            .and_then(|b| Ok(serde_json::from_slice(&b)?)),
-        )?;
+        let ack: Option<ReportAck> = supported(answer(mgmt::call_with(
+            addr,
+            m::VINPUT_REPORT,
+            m::VINPUT_REPORT.label,
+            &body,
+            Some(CALL_TIMEOUT),
+        )))?;
         let Some(ack) = ack else { return Ok(None) };
         if !ack.ok {
             return Ok(Some(ack));
@@ -301,6 +313,27 @@ pub fn report(addr: &str, id: u64, reports: &[Report]) -> Result<Option<ReportAc
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_refusal_body_is_the_answer() {
+        let e = anyhow::Error::new(MgmtError {
+            label: "VINPUT_SESSION".into(),
+            status: 7,
+            cause: r#"{"ok":false,"open":false,"mouse":false,"keyboard":false,"err":"vinput_starting"}"#.into(),
+        });
+        let s: SessionState = answer(Err(e)).unwrap();
+        assert!(!s.ok);
+        assert_eq!(s.err.as_deref(), Some("vinput_starting"));
+        let e = anyhow::Error::new(MgmtError {
+            label: "VINPUT_SESSION".into(),
+            status: 7,
+            cause: "busy".into(),
+        });
+        assert!(answer::<SessionState>(Err(e)).is_err());
+        let a: ReportAck = answer(Ok(br#"{"ok":true,"applied":2}"#.to_vec())).unwrap();
+        assert_eq!(a.applied, 2);
+    }
+
     use super::*;
 
     fn rep(buttons: u8, dx: i16, dy: i16, key: u8) -> Report {
