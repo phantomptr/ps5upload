@@ -114,6 +114,21 @@ static void vps5_resolve_once(void) {
         k_del = (del_fn)vps5_sym(hk, "sceKeyboardVirtualDeviceDeleteDevice");
         k_insert = (insert_fn)vps5_sym(hk, "sceKeyboardVirtualDeviceInsertData");
     }
+    /* AddDevice answers 0x80df0005 (mouse) / 0x80da0005 (keyboard), "not initialised", until the
+     * library's own Init has run in this process (measured on 13.60; the test payload that
+     * worked called both first). Init again in a process that already has it is harmless. */
+    {
+        typedef int (*init_fn)(void);
+        init_fn m_init = hm ? (init_fn)vps5_sym(hm, "sceMouseInit") : NULL;
+        init_fn k_init = hk ? (init_fn)vps5_sym(hk, "sceKeyboardInit") : NULL;
+        int mi = -1, ki = -1;
+        pthread_mutex_lock(&sony_api_lock);
+        if (m_init) mi = m_init();
+        if (k_init) ki = k_init();
+        usleep(SONY_API_POST_SLEEP_US);
+        pthread_mutex_unlock(&sony_api_lock);
+        fprintf(stderr, "[vinput] sceMouseInit 0x%x, sceKeyboardInit 0x%x\n", (unsigned)mi, (unsigned)ki);
+    }
     fprintf(stderr, "[vinput] libSceMouse virtual device %s, libSceKeyboard virtual device %s\n",
             m_add && m_del && m_insert ? "resolved" : "missing", k_add && k_del && k_insert ? "resolved" : "missing");
 }
