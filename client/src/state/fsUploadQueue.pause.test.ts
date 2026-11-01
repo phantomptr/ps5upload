@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { fsUploadForHost, runFsUpload, useFsUploadStore, type FsUploadDeps, type FsUploadRequest } from "./fsUpload";
 import {
   enqueueFsUpload,
@@ -19,7 +19,12 @@ let host = "";
 const request = (name: string): FsUploadRequest => ({
   host, addr: host, destDir: "/data", srcPaths: [], steps: [{ kind: "one", src: `/pc/${name}`, name }],
 });
+/** Every fake engine a test made: after the test each one fails its jobs, so no copy loop is
+ *  left polling (and logging) once the test file ends. */
+const engines: { stop: boolean }[] = [];
 function engine() {
+  const life = { stop: false };
+  engines.push(life);
   const finish = new Set<string>();
   const failing = new Set<string>();
   const cancelled = new Set<string>();
@@ -29,7 +34,7 @@ function engine() {
     pathKind: async () => "file", startFile, startDir: startFile,
     jobStatus: async (id) => {
       const name = id.split("#")[0];
-      if (cancelled.has(id)) return { status: "failed", error: "cancelled" };
+      if (life.stop || cancelled.has(id)) return { status: "failed", error: "cancelled" };
       if (failing.has(name)) return { status: "failed", error: "disk full" };
       return { status: finish.has(name) ? "done" : "running", bytes_sent: 1, total_bytes: 10 };
     },
@@ -46,6 +51,12 @@ const queued = () => fsUploadQueueFor(host).items.map((i) => ({
   name: i.request.steps?.[0]?.kind === "one" ? i.request.steps[0].name : "",
   paused: i.paused ?? null,
 }));
+
+afterEach(async () => {
+  for (const e of engines) e.stop = true;
+  engines.length = 0;
+  await vi.waitFor(() => expect(active()).toBeNull());
+});
 
 beforeEach(() => {
   host = `192.0.2.${++hostN}`;
