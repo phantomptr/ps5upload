@@ -42,20 +42,16 @@ fn seq16_gt(a: u16, b: u16) -> bool {
 /// How far back a frame may arrive and still be played.
 const WINDOW: u16 = 64;
 
+/// Which of the last [`WINDOW`] indexes were seen.
 #[derive(Default)]
-pub struct AudioAssembler {
+struct SeenWindow {
     newest: Option<u16>,
-    /// Bit i set = frame `newest - i` already delivered.
+    /// Bit i set = index `newest - i` already seen.
     seen: u64,
-    pub frames: u64,
-    /// Packet sequence stats since the last [`AudioAssembler::take_seq`]
-    /// (chiaki's "seq" stats over audio packet frame indexes).
-    seq_min: Option<u16>,
-    seq_max: u16,
-    seq_received: u64,
 }
 
-impl AudioAssembler {
+impl SeenWindow {
+    /// True the first time `idx` is seen (and not too old to tell).
     fn mark(&mut self, idx: u16) -> bool {
         match self.newest {
             None => {
@@ -84,15 +80,31 @@ impl AudioAssembler {
             }
         }
     }
+}
 
+#[derive(Default)]
+pub struct AudioAssembler {
+    /// Frames already delivered (a packet's own, or an FEC copy).
+    delivered: SeenWindow,
+    /// Packets already counted, by their frame index: a repeated packet is not a second one.
+    packets: SeenWindow,
+    pub frames: u64,
+    /// Packet sequence stats since the last [`AudioAssembler::take_seq`]
+    /// (chiaki's "seq" stats over audio packet frame indexes).
+    seq_min: Option<u16>,
+    seq_max: u16,
+    seq_received: u64,
+}
+
+impl AudioAssembler {
     /// Packets received and lost since the last call, as chiaki counts them:
     /// the spread of frame indexes seen against how many packets came.
     ///
     /// chiaki-ng (`packetstats.c`) reports the whole spread as lost when more packets came
     /// than it spans: the first window (its first packet is counted and spans nothing), or a
-    /// late or repeated packet from the window before. That told the console a burst of loss
-    /// that never happened, and it cuts its bitrate on that. More packets than the spread
-    /// means none of it was lost.
+    /// late packet from the window before. That told the console a burst of loss that never
+    /// happened, and it cuts its bitrate on that. More packets than the spread means none of it
+    /// was lost. A repeated packet is counted once, so it cannot hide a real loss.
     pub fn take_seq(&mut self) -> (u64, u64) {
         let Some(min) = self.seq_min else {
             return (0, 0);
@@ -108,12 +120,15 @@ impl AudioAssembler {
     /// Opus frames in this packet not delivered before, with their index.
     pub fn push(&mut self, p: &AvPacket) -> Vec<(u16, Vec<u8>)> {
         let mut out = Vec::new();
-        self.seq_received += 1;
-        if self.seq_min.is_none() {
-            self.seq_min = Some(p.frame_index);
-            self.seq_max = p.frame_index;
-        } else if seq16_gt(p.frame_index, self.seq_max) {
-            self.seq_max = p.frame_index;
+        // Counted once: a repeated packet must not cancel out a real loss.
+        if self.packets.mark(p.frame_index) {
+            self.seq_received += 1;
+            if self.seq_min.is_none() {
+                self.seq_min = Some(p.frame_index);
+                self.seq_max = p.frame_index;
+            } else if seq16_gt(p.frame_index, self.seq_max) {
+                self.seq_max = p.frame_index;
+            }
         }
         if p.codec != 5 {
             return out;
@@ -140,7 +155,7 @@ impl AudioAssembler {
                     .wrapping_sub(fec as u16)
                     .wrapping_add((i - source) as u16)
             };
-            if self.mark(idx) {
+            if self.delivered.mark(idx) {
                 self.frames += 1;
                 out.push((idx, p.data[unit * i..unit * (i + 1)].to_vec()));
             }
@@ -226,16 +241,34 @@ mod tests {
             a.push(&pkt(f, 1, 0, 4));
         }
         assert_eq!(a.take_seq(), (5, 0));
-        // 16 and 17 missing, but a late 13 from the window before is counted here: 1 lost.
+        // 16 and 17 missing; a repeat of 13 (already counted) does not hide one of them.
         for f in [15, 13, 18, 19] {
             a.push(&pkt(f, 1, 0, 4));
         }
-        assert_eq!(a.take_seq(), (4, 1));
-        // 20..=23 with one repeated: more packets than the spread, so none lost (chiaki-ng: 4).
+        assert_eq!(a.take_seq(), (3, 2));
+        // 20..=23 with one repeated: counted once, none lost (chiaki-ng: 4).
         for f in [20, 21, 21, 22, 23] {
             a.push(&pkt(f, 1, 0, 4));
         }
-        assert_eq!(a.take_seq(), (5, 0));
+        assert_eq!(a.take_seq(), (4, 0));
+        // A late packet from the window before that never came then: it came, more packets than
+        // the spread, none lost.
+        let mut b = AudioAssembler::default();
+        for f in [30, 33] {
+            b.push(&pkt(f, 1, 0, 4));
+        }
+        assert_eq!(b.take_seq(), (2, 1));
+        for f in [34, 31, 35] {
+            b.push(&pkt(f, 1, 0, 4));
+        }
+        assert_eq!(b.take_seq(), (3, 0));
+        // A packet whose frame came first as an FEC copy is still a packet that arrived.
+        let mut c = AudioAssembler::default();
+        c.push(&pkt(40, 1, 0, 4));
+        c.take_seq();
+        c.push(&pkt(42, 1, 2, 4)); // carries 41 (FEC)
+        c.push(&pkt(41, 1, 0, 4)); // 41's own packet, late
+        assert_eq!(c.take_seq(), (2, 0));
         // Two of 24..=27 missing.
         for f in [24, 27] {
             a.push(&pkt(f, 1, 0, 4));
