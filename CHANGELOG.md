@@ -4,6 +4,41 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.6.0
+
+- **Save Data is laid out around what you do with a save.** Each game shows one row per user
+  with when it was last backed up ("Backed up 2 hours ago", or "Not backed up yet" in amber) and
+  four actions: **Back up now**, **Restore…** (the game's backups, newest first), **Copy to…**
+  and **Open**. A short "How saves work here" card explains them once; dismiss it when you know.
+  Backing up to a `.zip` on this computer and the USB actions are under **More** (desktop app).
+- **Copy a save to another user on the same PS5 (For #612).** **Copy to… › Another user on this
+  PS5** lists the console's other users: those with a save of the game can be picked, the others
+  say what to do first (start the game once as them and save). The engine shares the save and
+  puts it into theirs in one go, so no file lands in your Downloads; their save is backed up
+  first and put back if anything fails, and it is refused while the game runs. A console with
+  two or more users shows a tip pointing to it.
+- **Restore a backup to another user (For #612).** **Restore… › Restore to another user…** puts a
+  backup of one account's save into another account's save of the game on the same PS5, with the
+  same rules.
+- **A game's save is one thing.** Many games keep several parts (`sdimg_STARBOARD`,
+  `sdimg_sce_sdmemory`, …). Share (now **Copy to… › Save as a file for a friend or another
+  PS5**) puts every part in one `.zip`, and **Load a save file** puts each part into the part of
+  the same name, all backed up first and all put back on failure. If the target lacks a part,
+  nothing changes and the message names it ("…'s STARBOARD isn't on Ben yet: start the game once
+  as Ben and save"). No more picking a raw image name. Files shared by earlier versions still
+  load; a file saved by 10.6.0 needs 10.6.0 or later.
+- **Fixed: picking a save in "Which save of PPSA…?" did nothing**, and it listed the console's own
+  backup copies (`sdimg_sce_bu_…`). The picker is gone from sharing and loading; Open, the only
+  place a single part is still chosen, names the parts ("STARBOARD", "main save") and never
+  offers the console's backup copies.
+- **A restore that fails part way puts the save back** as it was, from the backup taken just
+  before it.
+- **PS1 emulator saves.** PSSwanStation's (PPSA99248) memory cards and saved states are listed,
+  backed up and restored in Save Data like the PS2 emulators'. Thanks to EnriqueWood (#618).
+- **Save Data rows wrap instead of squeezing.** A save's buttons move to a new line when they
+  don't fit, instead of crushing its details to one letter per line. Thanks to EnriqueWood
+  (#619).
+
 ## 10.5.1
 
 - **Pressing Play no longer crashes the Linux app (#610).** On WebKitGTK 2.54 (Fedora 44 and other

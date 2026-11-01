@@ -320,8 +320,12 @@ ten minutes the engine copies each console's saves that changed since their last
 written in the last few minutes waits for the next round). In the desktop app this runs while the
 app runs; in Docker it runs all the time, with no browser open. Use a folder the container keeps,
 such as `/data/save-backups`, or a NAS share you mount into the container. To restore, close the
-game, open its page in PS5Upload, go to Saves and press Restore on the version you want. The save
-on the PS5 is backed up first, so you can go back.
+game, then in Save Data press **Restore…** on the game's save (or open its page in PS5Upload and
+go to Saves) and press Restore on the version you want. The save on the PS5 is backed up first,
+so you can go back. A backup holds every part of the game's save, and a restore puts them all
+back. **Restore to another user…** puts a backup into another account's save of the game on the
+same PS5 instead (that account must have a save of the game; its current save is backed up
+first).
 
 The saves of ProsperoEden, the Switch emulator (PPSA99008), are backed up too, locally and to a
 server, and "after a game closes" means after ProsperoEden closes. Each game's save of each
@@ -2015,30 +2019,66 @@ The PS4 is never written to, and no users, system files or trophies are changed.
 on a PS5 have mixed reports: try one game first. Moving trophies is not offered: it needs
 renaming system folders and rebuilding the database, which can leave a user unusable.
 
+**Q: Saves: what can I do in Save Data?**
+Save Data shows one row per game and user, with a line saying when it was last backed up. What
+people do there, most common first:
+
+- **Don't lose progress** (a crash that damages a save, a reinstall, a firmware update or a new
+  jailbreak): turn on **Automatic backups** (a folder on this computer) and the engine keeps
+  copies of every game's save. **Back up now** makes one at once (while the game runs it waits
+  for the save to sit still). **Restore…** lists the game's backups; Restore puts one back.
+- **Put a save on another account on this PS5**: **Copy to… › Another user on this PS5** (see
+  below).
+- **Take a save to another PS5, or give it to a friend**: **Copy to… › Save as a file for a
+  friend or another PS5**, then on the other PS5 **Copy to… › Load a save file**.
+- **Use a save you downloaded** (a 100% save, say): **Copy to… › Load a save file**, if it was
+  shared from PS5Upload. A save folder copied off another console as it is can't be used this way.
+- **Look inside or edit a save** (save editors): **Open** mounts it on the PS5 and shows it in
+  Files; **Close & write back** puts your changes into the save.
+
+A game's save is often several parts (files such as `sdimg_STARBOARD` and `sdimg_sce_sdmemory`
+in its folder, which the app names "STARBOARD" and "main save"). Back up, Restore, Copy, Save as
+a file and Load a save file always take every part together. The console also keeps its own
+backup copy of each part (`sdimg_sce_bu_…`); those are never offered as saves. Open works on one
+part at a time and asks which when there are several.
+
+**Q: Move a save to another account on the same PS5**
+From 10.6.0, PS5 saves only. On the save, **Copy to… › Another user on this PS5** lists the
+console's other users. Those with a save of the game can be picked; for the others it says what to
+do first: start the game once as that user and save, then come back (the PS5 has to make that
+account's own save; PS5Upload only puts files into one). Confirm, and every part of the save is
+put into theirs, which the PS5 then keeps as theirs. Their current save is backed up first (set a
+folder in Automatic backups) and put back if anything fails. Close the game first. If the other
+user's save lacks a part this one has (the game hasn't made it for them yet), nothing is changed
+and the message names the part: play on as that user until the game saves it, then try again.
+To take a save to another PS5 instead, use **Save as a file for a friend or another PS5**.
+
 **Q: Can a friend's save work on my PS5 under my account?**
 Experimental, from 10.0.1, PS5 saves only. A save is tied to the account that made it, so copying
 your friend's save files over, or switching to their account ID, doesn't work. Instead your
-friend opens the save in PS5Upload and presses **Share** (Saves, on the game): the app saves the
-save's contents, decrypted, as a `.zip` without the owner's account details. On your PS5, start the
-game once and save so you have a save of your own, close it, then press **Use a shared save** on
-that game and pick the `.zip`. The contents go into your own save, and the PS5 encrypts it again
-as yours: no account ID change needed. Your save is backed up first (set a folder in Saves ›
-Automatic backups) and put back if anything fails. Both consoles need PS5Upload, and the game
-must be the same title ID (same region). Some games check more inside the save itself; if one
-won't load it, restore your backup from the game's save backups.
+friend picks **Copy to… › Save as a file for a friend or another PS5** on the save in Save Data:
+the app saves every part of the save, decrypted, as one `.zip` without the owner's account
+details. On your PS5, start the game once and save so you have a save of your own, close it, then
+pick **Copy to… › Load a save file** on that game and choose the `.zip`. Each part goes into your
+save's part of the same name, and the PS5 encrypts it again as yours: no account ID change needed.
+Your save is backed up first (set a folder in Saves › Automatic backups) and put back if anything
+fails. Both consoles need PS5Upload, and the game must be the same title ID (same region). Some
+games check more inside the save itself; if one won't load it, restore your backup with
+**Restore…**. A file saved by 10.6.0 or later needs 10.6.0 or later to load; files from earlier
+versions still load.
 
 **Q: Can I move a save between consoles, profiles or game regions?**
 
 Saves backup and restore copies the existing encrypted save files (to give a save to another
-account, see **Share** above). It does **not**
+account, see **Copy to…** above). It does **not**
 re-sign saves, change their owning account, or convert title IDs/regions. A backup
 must match the target title and account, and the target environment must accept
 its encryption. Renaming a GTA V (or other game's) title folder does not convert it.
 Cross-console compatibility is not guaranteed, even with matching title IDs.
 
 Download a backup of the target save before trying a restore. The target must
-already list a save for that title: launch the game once to create it. Restore
-wipes the current save first, with no automatic rollback if an upload is interrupted.
+already list a save for that title: launch the game once to create it. From 10.6.0 a restore
+from the backup folder puts the save back as it was if the upload fails part way.
 
 PS4-format restore has unresolved reliability reports. Closing the game or
 restarting the console may help some cases, but is not a verified fix. If a restore
