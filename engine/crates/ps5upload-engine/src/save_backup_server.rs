@@ -612,7 +612,7 @@ pub fn back_up_before_restore(host: &str, entry: &SaveEntry) -> Result<(), Strin
 }
 
 /// The titles running on `host`, upper-case; Err when the console does not answer.
-fn running_titles(host: &str) -> Result<BTreeSet<String>, String> {
+pub(crate) fn running_titles(host: &str) -> Result<BTreeSet<String>, String> {
     let list = ps5upload_core::process_mgr::process_list(host).map_err(|e| format!("{e:#}"))?;
     Ok(list
         .processes

@@ -14,7 +14,7 @@
 //!
 //! Settings, and what was last backed up, are kept in `state/` under the data folder.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -92,16 +92,21 @@ pub(crate) fn done_key(host: &str, path: &str) -> String {
 /// PlayStation or PlayStation 2 emulator's cards or saved states; not the console's own
 /// `sce_backup*` folders, which it lists among the saves, empty), changed since the
 /// last one, and not written to in the last few minutes. A save never backed up counts as changed.
+/// Not while its game (or emulator) runs (`running`, upper-case title IDs): the game may be
+/// writing it, and a long pause between writes looks settled. It is due again once the game
+/// closes, as nothing marks it done.
 pub fn needing_backup<'a>(
     host: &str,
     saves: &'a [SaveEntry],
     done: &Done,
     now_secs: i64,
+    running: &BTreeSet<String>,
 ) -> Vec<&'a SaveEntry> {
     saves
         .iter()
         .filter(|e| {
-            crate::emulator_saves::backs_up(e)
+            !running.contains(&crate::emulator_saves::app_of(e).to_ascii_uppercase())
+                && crate::emulator_saves::backs_up(e)
                 && e.mtime > 0
                 && now_secs - e.mtime >= SETTLE_SECS
                 && e.mtime > done.get(&done_key(host, &e.path)).copied().unwrap_or(0)
@@ -451,8 +456,12 @@ pub fn run_pass() -> Result<(), String> {
         }
         // A console that does not answer (off, asleep, no helper) is simply not due now.
         let Ok(list) = list_saves(host) else { continue };
+        // Nor one that can't say what runs: a save being written is never copied.
+        let Ok(running) = crate::save_backup_server::running_titles(host) else {
+            continue;
+        };
         let now = (now_ms() / 1000) as i64;
-        for entry in needing_backup(host, &list, &done, now) {
+        for entry in needing_backup(host, &list, &done, now, &running) {
             // The switch may be turned off part-way through a long pass.
             if !settings().enabled {
                 break;
@@ -1654,14 +1663,34 @@ mod tests {
         ];
         let mut done = Done::new();
         done.insert(done_key("h", "/a"), 1000); // already backed up at this mtime
-        let due: Vec<&str> = needing_backup("h", &saves, &done, 2000)
+        let due: Vec<&str> = needing_backup("h", &saves, &done, 2000, &BTreeSet::new())
             .iter()
             .map(|e| e.path.as_str())
             .collect();
         // /c changed 100 s ago: still settling. /d has no time: skipped.
         assert_eq!(due, vec!["/b"]);
         // Another console's record does not count for this one.
-        assert_eq!(needing_backup("other", &saves, &done, 2000).len(), 2);
+        assert_eq!(
+            needing_backup("other", &saves, &done, 2000, &BTreeSet::new()).len(),
+            2
+        );
+    }
+
+    /// A running game's save waits (it may be mid-write); due again once the game closed.
+    #[test]
+    fn a_running_games_save_is_not_backed_up() {
+        let mut other = save("/b", 1000);
+        other.title_id = "PPSA09999".into();
+        let saves = [save("/a", 1000), other];
+        // As the process list gives it: upper case.
+        let running: BTreeSet<String> = ["PPSA01234".to_string()].into();
+        let due = needing_backup("h", &saves, &Done::new(), 2000, &running);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].path, "/b");
+        assert_eq!(
+            needing_backup("h", &saves, &Done::new(), 2000, &BTreeSet::new()).len(),
+            2
+        );
     }
 
     #[test]
@@ -1670,7 +1699,7 @@ mod tests {
         let mut sys = save("/user/home/1/savedata/sce_backup2", 1000);
         sys.title_id = "sce_backup2".into();
         let saves = [sys, save("/user/home/1/savedata_prospero/PPSA01234", 1000)];
-        let due = needing_backup("h", &saves, &Done::new(), 2000);
+        let due = needing_backup("h", &saves, &Done::new(), 2000, &BTreeSet::new());
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].title_id, "PPSA01234");
     }
@@ -1751,7 +1780,13 @@ mod tests {
         );
         sw.title_id = "0100F2C0115B6000".into();
         sw.kind = crate::emulator_saves::KIND.into();
-        let due = needing_backup("h", std::slice::from_ref(&sw), &Done::new(), 2000);
+        let due = needing_backup(
+            "h",
+            std::slice::from_ref(&sw),
+            &Done::new(),
+            2000,
+            &BTreeSet::new(),
+        );
         assert_eq!(due.len(), 1);
         // Its backup is named, kept and listed as a PS5 save's is.
         let name = format!(
@@ -1778,7 +1813,10 @@ mod tests {
             ps2("/mnt/ext1/homebrew/PPSA99249/memcards", CARDS_USER),
             ps2("/mnt/ext1/homebrew/PPSA99249/sstates", STATES_USER),
         ];
-        assert_eq!(needing_backup("h", &saves, &Done::new(), 2000).len(), 2);
+        assert_eq!(
+            needing_backup("h", &saves, &Done::new(), 2000, &BTreeSet::new()).len(),
+            2
+        );
         // Both under the emulator's title, the user number keeping their backups apart.
         for user in [CARDS_USER, STATES_USER] {
             let name = format!(
