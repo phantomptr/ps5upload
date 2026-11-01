@@ -63,10 +63,11 @@ pub fn backs_up(e: &SaveEntry) -> bool {
     crate::looks_like_title_id(&e.title_id) || (is_emulator_save(e) && is_game(&e.title_id))
 }
 
-/// The profile as the user number in a backup's name: its first 8 hex digits (0 for the
-/// console's own), enough to keep two profiles' backups of one game apart.
+/// The profile as the user number in a backup's name: its first 7 hex digits (0 for the
+/// console's own), enough to keep two profiles' backups of one game apart. Seven, not eight,
+/// so the number stays positive where it is kept as an `i32`.
 fn user_of(profile: &str) -> i32 {
-    u32::from_str_radix(&profile[..8], 16).unwrap_or(0) as i32
+    i32::from_str_radix(&profile[..7], 16).unwrap_or(0)
 }
 
 /// The emulator's saves on `host`: none when it is not there or has no save yet.
@@ -218,7 +219,7 @@ mod tests {
         let mine = &saves[0];
         assert_eq!(mine.title_id, GAME);
         assert_eq!(mine.path, format!("{ROOT}/{P1}/{GAME}"));
-        assert_eq!(mine.user_id as u32, 0x1F1E_1D1C);
+        assert_eq!(mine.user_id, 0x1F1_E1D1);
         assert_eq!(mine.kind, KIND);
         // The file in the subfolder is the newest, and both files count.
         assert_eq!(mine.mtime, 500);
