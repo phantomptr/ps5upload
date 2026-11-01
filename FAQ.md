@@ -253,9 +253,11 @@ on the PS5 is backed up first, so you can go back.
 
 The saves of ProsperoEden, the Switch emulator (PPSA99008), are backed up too, locally and to a
 server, and "after a game closes" means after ProsperoEden closes. Each game's save of each
-profile is its own backup, in a folder named after the game's 16-character title ID. They are not
-listed under Saves yet: to put one back, close ProsperoEden and copy the folder inside the zip to
-`/data/prosperoeden/user/nand/user/save/0000000000000000/<profile>/` on the PS5.
+profile is its own backup, in a folder named after the game's 16-character title ID. They are
+listed under Saves, in "Switch games (ProsperoEden)": each game by its title ID (no names are
+known), per profile ("Console" is the console's own save), with Back up now and its backups. To
+put one back, close ProsperoEden and press Restore on the version you want; the save there now is
+backed up first. A restore is refused while ProsperoEden runs.
 
 **Q: How do I make room for a big game?**
 Open Clean up and press Make room, or follow "Plan space" when an install says there isn't enough

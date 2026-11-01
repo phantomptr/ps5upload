@@ -19,6 +19,17 @@ What's new in ps5upload, written for humans.
   work in the settings; play goes on as you close it.
 - **Picture, frame rate, video decoding, video format and Keep playing can be changed during a
   stream.** They say "Applies when you start again"; everything else applies at once.
+- **Switch saves are backed up.** The saves of ProsperoEden, the Switch emulator (PPSA99008), are
+  backed up with the PS5 saves, locally and to a server; "after a game closes" means after
+  ProsperoEden closes. Thanks to EnriqueWood (#600).
+- **Switch saves in Saves.** "Switch games (ProsperoEden)" lists each game's save per profile,
+  with Back up now and its local and server backups, so you can restore one in the app. Close
+  ProsperoEden first: a restore is refused while it runs.
+- **A refused restore says why** under the game's backups, not only in Notifications.
+- **Fixed: a restore could leave old files in a big save.** A save folder with more than 256 files
+  was emptied only in part before the backup went in, so stale files stayed mixed with the
+  restored ones. The whole folder is emptied now.
+
 ## 10.2.1
 
 - **Fixed: Play crashed on a Mac with a DualSense connected.** The app quit while starting or
