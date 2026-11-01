@@ -26,6 +26,9 @@ export interface PadClientOptions {
   onLight?: (rgb: [number, number, number]) => void;
   /** The phone's latest motion reading, while motion controls are on. */
   motion?: () => MotionReading | null;
+  /** What the console's native keyboard & mouse can do (`{"kbm_caps": …}`): the Touchpad &
+   *  keyboard tab is offered only with a mouse. */
+  onKbmCaps?: (c: { mouse: boolean; keyboard: boolean; reason: string | null }) => void;
   /** Watch party: this page watches the stream (binary picture and sound arrive) and plays only
    *  once the computer hands it the controller. */
   watch?: {
@@ -98,6 +101,18 @@ export class PadClient {
         if (e.data instanceof ArrayBuffer) this.o.watch?.onFrame(e.data);
         return;
       }
+      if (e.data.includes('"kbm_caps"')) {
+        try {
+          const v = JSON.parse(e.data) as { kbm_caps?: { mouse?: boolean; keyboard?: boolean; reason?: unknown } };
+          if (v.kbm_caps) {
+            const c = v.kbm_caps;
+            this.o.onKbmCaps?.({ mouse: c.mouse === true, keyboard: c.keyboard === true, reason: typeof c.reason === "string" ? c.reason : null });
+            return;
+          }
+        } catch {
+          // Not JSON: not for us.
+        }
+      }
       if (this.o.watch) {
         try {
           const v = JSON.parse(e.data) as { watch?: { hevc?: boolean }; control?: boolean };
@@ -152,6 +167,15 @@ export class PadClient {
     if (!force && samePad(p, this.last)) return;
     this.last = p;
     ws.send(JSON.stringify({ pad: { ...p, touch: p.touch ?? null, motion: p.motion ?? null } }));
+  }
+
+  /** Native keyboard & mouse (the Touchpad & keyboard tab): `{"kbm": …}` or a binary report,
+   *  forwarded by the computer's engine to its page. False when it cannot be sent now. */
+  sendKbm(m: { kbm: unknown } | Uint8Array<ArrayBuffer>): boolean {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !this.control) return false;
+    ws.send(m instanceof Uint8Array ? m : JSON.stringify(m));
+    return true;
   }
 
   /** What the on-screen controller calls on every touch. */

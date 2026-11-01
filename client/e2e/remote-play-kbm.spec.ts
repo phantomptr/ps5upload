@@ -121,6 +121,15 @@ async function closeSettings(page: Page) {
 
 const keysOf = (r: number[]) => r.slice(8).filter((k) => k !== 0);
 
+/** Clicks the picture (a corner, clear of the first capture's card): the PS5 gets the keyboard
+ *  and mouse. */
+async function capture(page: Page) {
+  const stage = page.getByTestId("rp-stage").filter({ visible: true });
+  const box = (await stage.boundingBox())!;
+  await page.mouse.click(box.x + 40, box.y + box.height - 40);
+  return stage;
+}
+
 test("a console without the devices: native modes are off, controller emulation is unchanged", async ({ page }) => {
   const engine = await mockConsole(page, { mouse: false, keyboard: false });
   await start(page);
@@ -156,17 +165,19 @@ test("Keyboard & mouse sends raw keys, Mixed sends the pad, the hotkey cycles an
   await expect(kbm.getByTestId("rp-kbm-mode-native")).toHaveAttribute("aria-checked", "true");
   await expect.poll(() => engine.kbm[engine.kbm.length - 1]).toEqual({ on: true, mouse: true, keyboard: true });
   await expect(kbm.getByTestId("rp-kbm-status")).toHaveText("PS5 sees: mouse ✓ keyboard ✓");
-  // The first pick says what to do if the game ignores the mouse.
-  await expect(kbm.getByTestId("rp-kbm-hint")).toHaveText("If the game ignores the mouse, switch back to Controller.");
+  // The first pick says how to play, how to get the keyboard and mouse back, and what to do if
+  // the game ignores the mouse.
+  await expect(kbm.getByTestId("rp-kbm-hint")).toHaveText(
+    "Click the picture to play with your keyboard and mouse. Press Ctrl+Alt to get them back. If the game ignores the mouse, switch back to Controller.",
+  );
   // While Settings is open, keys are the app's.
   engine.reports.length = 0;
   await page.keyboard.press("KeyA");
   expect(engine.reports.filter((r) => keysOf(r).length)).toEqual([]);
   await closeSettings(page);
 
-  // Keys go to the PS5's keyboard as HID usages, and never to the pad.
-  const stage = page.getByTestId("rp-stage").filter({ visible: true });
-  await stage.focus();
+  // Keys go to the PS5's keyboard as HID usages, and never to the pad, once the picture has them.
+  const stage = await capture(page);
   engine.pads.length = 0;
   engine.reports.length = 0;
   await page.keyboard.press("Enter");
@@ -186,10 +197,12 @@ test("Keyboard & mouse sends raw keys, Mixed sends the pad, the hotkey cycles an
   await expect.poll(() => engine.reports[engine.reports.length - 1]).toEqual(new Array(16).fill(0));
   await page.keyboard.up("KeyW");
 
-  // Ctrl+Alt+M: Mixed (mouse only; keys are the pad again), remembered for the home screen.
+  // Ctrl+Alt+M (released too): Mixed (mouse only; keys are the pad again), remembered for the
+  // home screen.
   await stage.focus();
   await page.keyboard.press("Control+Alt+KeyM");
   await expect.poll(() => engine.kbm[engine.kbm.length - 1]).toEqual({ on: true, mouse: true, keyboard: false });
+  await capture(page);
   engine.pads.length = 0;
   engine.reports.length = 0;
   await page.keyboard.press("Enter");
@@ -387,19 +400,22 @@ test("the desktop app grabs the cursor when no pointer lock comes, sends the mou
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
   await expect.poll(() => cursorCalls(page)).toEqual([...GRAB, ...UNGRAB, ...GRAB, ...UNGRAB]);
 
-  // Settings opening gives it back.
+  // Settings opening gives it back (the bar stays hidden while captured: opened from code).
   await stage.click();
   await expect.poll(async () => (await cursorCalls(page)).length).toBe(10);
-  await openControls(page);
+  await page.getByTestId("rp-settings-button").dispatchEvent("click");
+  await page.getByTestId("rp-settings-tab-controls").click();
   await expect.poll(async () => (await cursorCalls(page)).slice(-2)).toEqual(UNGRAB);
-  // Controller mode gives it back.
+  // Switching the mode keeps the capture (Controller captures the pointer for mouse aim too).
   await page.getByTestId("rp-kbm").getByTestId("rp-kbm-mode-mixed").click();
   await closeSettings(page);
   await stage.click();
   await expect.poll(async () => (await cursorCalls(page)).slice(-2)).toEqual(GRAB);
+  const grabbed = (await cursorCalls(page)).length;
   await page.keyboard.press("Control+Alt+KeyM"); // Mixed → Controller
   await expect.poll(() => engine.kbm[engine.kbm.length - 1]).toEqual({ on: false });
-  await expect.poll(async () => (await cursorCalls(page)).slice(-2)).toEqual(UNGRAB);
+  await page.waitForTimeout(300);
+  expect((await cursorCalls(page)).length).toBe(grabbed);
 
   // Leaving the Play screen gives it back.
   await page.keyboard.press("Control+Alt+KeyM"); // → Keyboard & mouse
@@ -422,7 +438,9 @@ test("a browser that refuses the pointer lock sends the mouse while it is over t
   await expect(page.getByTestId("rp-capture-hint")).toHaveText("Click the picture to capture the mouse");
   await stage.click();
   await page.waitForTimeout(300); // the lock's wait runs out
-  await expect(page.getByTestId("rp-capture-hint")).toBeVisible();
+  // The click gave the PS5 the keyboard and mouse all the same: the release key shows instead.
+  await expect(page.getByTestId("rp-capture-hint")).toHaveCount(0);
+  await expect(page.getByTestId("rp-kbm-card").or(page.getByTestId("rp-kbm-chip"))).toBeVisible();
   const box = (await stage.boundingBox())!;
   engine.reports.length = 0;
   await page.mouse.move(box.x + box.width / 2 + 30, box.y + box.height / 2 + 15);

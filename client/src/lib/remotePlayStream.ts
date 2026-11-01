@@ -467,6 +467,8 @@ export interface StreamOptions {
   onLight?: (rgb: [number, number, number]) => void;
   /** The engine's answer about native keyboard & mouse (`{"kbm": …}`, lib/kbmInput.ts). */
   onKbm?: (s: unknown) => void;
+  /** A phone's touchpad & keyboard, forwarded by the engine (`{"pad_kbm": …}`, lib/kbmInput.ts). */
+  onPadKbm?: (m: unknown) => void;
   /** The console's on-screen keyboard opened, changed or closed (lib/rpKeyboard.ts). */
   onKeyboard?: (m: RpKeyboardMsg) => void;
   /** The pad state to send; polled every animation frame and on key events. */
@@ -1385,6 +1387,7 @@ export class RemotePlayStream {
       triggers?: { left: number[]; right: number[] };
       ds_intensity?: [number, number];
       kbm?: unknown;
+      pad_kbm?: unknown;
       keyboard?: RpKeyboardMsg;
     };
     try {
@@ -1400,6 +1403,10 @@ export class RemotePlayStream {
     }
     if (s.kbm !== undefined) {
       this.o.onKbm?.(s.kbm);
+      return;
+    }
+    if (s.pad_kbm !== undefined) {
+      this.o.onPadKbm?.(s.pad_kbm);
       return;
     }
     if (s.rumble) {

@@ -7,8 +7,23 @@ import { create } from "zustand";
 import { getEngineUrl } from "./engine";
 import { KBM_MODES, type KbmCaps, type KbmMode, type KbmStatus } from "../lib/kbmInput";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { DEFAULT_SHORTCUTS, readShortcut, type Shortcut, type ShortcutKind, type Shortcuts } from "../lib/kbmShortcuts";
 
 const KEY = "ps5upload.rp_kbm.v1";
+/** The stream's keyboard & mouse shortcuts (lib/kbmShortcuts.ts), on this device only. */
+const SHORTCUTS_KEY = "ps5upload.rp_kbm_keys.v1";
+
+function loadShortcuts(): Shortcuts {
+  try {
+    const raw = JSON.parse(safeGetItem(SHORTCUTS_KEY) ?? "{}") as Partial<Record<ShortcutKind, unknown>>;
+    return {
+      release: readShortcut(raw.release) ?? { ...DEFAULT_SHORTCUTS.release },
+      cycle: readShortcut(raw.cycle) ?? { ...DEFAULT_SHORTCUTS.cycle },
+    };
+  } catch {
+    return { release: { ...DEFAULT_SHORTCUTS.release }, cycle: { ...DEFAULT_SHORTCUTS.cycle } };
+  }
+}
 /** The mode's key when no game is known (the console's home screen). */
 export const HOME = "home";
 
@@ -29,6 +44,8 @@ interface Saved {
   modes: Record<string, KbmMode>;
   /** The "If the game ignores the mouse" hint was shown once. */
   hinted: boolean;
+  /** The first capture's "how to get your keyboard & mouse back" card was shown on this device. */
+  captureHinted: boolean;
 }
 
 function load(): Saved {
@@ -37,9 +54,9 @@ function load(): Saved {
     const modes: Record<string, KbmMode> = {};
     for (const [t, m] of Object.entries(raw.modes ?? {}))
       if ((t === HOME || /^[A-Z]{4}\d{5}$/.test(t)) && KBM_MODES.includes(m as KbmMode)) modes[t] = m as KbmMode;
-    return { modes, hinted: raw.hinted === true };
+    return { modes, hinted: raw.hinted === true, captureHinted: raw.captureHinted === true };
   } catch {
-    return { modes: {}, hinted: false };
+    return { modes: {}, hinted: false, captureHinted: false };
   }
 }
 
@@ -50,12 +67,17 @@ interface State extends Saved {
   hintNow: boolean;
   setMode: (title: string | null, mode: KbmMode) => void;
   markHinted: () => void;
+  markCaptureHinted: () => void;
+  shortcuts: Shortcuts;
+  /** Sets a shortcut (null: back to the default). */
+  setShortcut: (kind: ShortcutKind, s: Shortcut | null) => void;
   setCaps: (c: KbmConsoleCaps | null) => void;
   setStatus: (s: KbmStatus | null) => void;
 }
 
 export const useKbmStore = create<State>((set, get) => {
-  const save = () => safeSetItem(KEY, JSON.stringify({ modes: get().modes, hinted: get().hinted }));
+  const save = () =>
+    safeSetItem(KEY, JSON.stringify({ modes: get().modes, hinted: get().hinted, captureHinted: get().captureHinted }));
   return {
     ...load(),
     caps: null,
@@ -68,6 +90,16 @@ export const useKbmStore = create<State>((set, get) => {
     markHinted: () => {
       set({ hinted: true, hintNow: true });
       save();
+    },
+    markCaptureHinted: () => {
+      set({ captureHinted: true });
+      save();
+    },
+    shortcuts: loadShortcuts(),
+    setShortcut: (kind, sc) => {
+      const shortcuts = { ...get().shortcuts, [kind]: sc ?? { ...DEFAULT_SHORTCUTS[kind] } };
+      set({ shortcuts });
+      safeSetItem(SHORTCUTS_KEY, JSON.stringify(shortcuts));
     },
     setCaps: (caps) => set({ caps }),
     setStatus: (status) => set({ status }),

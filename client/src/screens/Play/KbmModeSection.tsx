@@ -3,6 +3,7 @@ import { effectiveMode, kbmBlockReason, KBM_MODES, modeUnavailable, type KbmMode
 import { useTr } from "../../state/lang";
 import { useGameControlsStore } from "../../state/gameControls";
 import { rememberedMode, useKbmStore } from "../../state/kbm";
+import { shortcutLabel } from "../../lib/kbmShortcuts";
 import { chooseKbmMode, kbmBlockText, kbmModeLabel } from "./useNativeKbm";
 
 /** Settings › Controls: how this computer's keyboard and mouse play the running game (or the
@@ -14,6 +15,8 @@ export function KbmModeSection({ running }: { running: boolean }) {
   const caps = useKbmStore((s) => s.caps);
   const status = useKbmStore((s) => s.status);
   const hintNow = useKbmStore((s) => s.hintNow);
+  const cycleKey = useKbmStore((s) => shortcutLabel(s.shortcuts.cycle));
+  const releaseKey = useKbmStore((s) => shortcutLabel(s.shortcuts.release));
   const remembered = rememberedMode(modes, title);
   const mode = effectiveMode(remembered, caps);
   const label: Record<KbmMode, string> = {
@@ -54,11 +57,15 @@ export function KbmModeSection({ running }: { running: boolean }) {
       </div>
       <p className="text-xs text-[var(--color-muted)]">
         {what[mode]}{" "}
-        {tr("rp_kbm_hotkey", undefined, "Ctrl+Alt+M switches.")}
+        {tr("rp_kbm_hotkey2", { key: cycleKey }, `${cycleKey} switches.`)}
       </p>
       {hintNow && mode !== "controller" && (
         <p className="text-xs" data-testid="rp-kbm-hint">
-          {tr("rp_kbm_hint", undefined, "If the game ignores the mouse, switch back to Controller.")}
+          {tr(
+            "rp_kbm_first_hint",
+            { key: releaseKey },
+            `Click the picture to play with your keyboard and mouse. Press ${releaseKey} to get them back. If the game ignores the mouse, switch back to Controller.`,
+          )}
         </p>
       )}
       {unsupported && (

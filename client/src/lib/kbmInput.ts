@@ -138,6 +138,48 @@ export function encodeReport(
   return b;
 }
 
+/** A report back from its 16 bytes (a phone's, forwarded by the engine as hex). Null when malformed. */
+export function decodeReport(
+  bytes: Uint8Array,
+): (KbmState & { dx: number; dy: number; wheel: number; hwheel: number }) | null {
+  if (bytes.length !== REPORT_LEN) return null;
+  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return {
+    buttons: bytes[0],
+    mods: bytes[1],
+    dx: v.getInt16(2, true),
+    dy: v.getInt16(4, true),
+    wheel: v.getInt8(6),
+    hwheel: v.getInt8(7),
+    keys: [...bytes.slice(8)].filter((k) => k !== 0),
+  };
+}
+
+/** Bytes from lower-case hex ("0a1b…"); null when it is not hex of whole bytes. */
+export function fromHex(hex: string): Uint8Array | null {
+  if (typeof hex !== "string" || hex.length % 2 || !/^[0-9a-f]*$/i.test(hex)) return null;
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+
+/** What is held by the page and every phone together: buttons and modifiers from all, keys in
+ *  the order they came (the page's first), at most MAX_KEYS. */
+export function mergeHeld(states: Iterable<KbmState>): KbmState {
+  const m: KbmState = { buttons: 0, mods: 0, keys: [] };
+  for (const s of states) {
+    m.buttons |= s.buttons;
+    m.mods |= s.mods;
+    for (const k of s.keys) if (!m.keys.includes(k) && m.keys.length < MAX_KEYS) m.keys.push(k);
+  }
+  return m;
+}
+
+/** The union of what each input wants (the mode, the touchpad, phones). */
+export function unionCaps(...all: KbmCaps[]): KbmCaps {
+  return { mouse: all.some((c) => c.mouse), keyboard: all.some((c) => c.keyboard) };
+}
+
 /** Wheel notches from a WheelEvent's delta (pixels, lines or pages), with what is left over.
  *  Up (away) is positive, as HID has it: the opposite of deltaY. */
 export function wheelNotches(carry: number, delta: number, mode: number): { notches: number; carry: number } {
@@ -186,6 +228,10 @@ export interface RouteContext {
   appFirst: boolean;
   /** The mouse is captured by the picture (the browser's lock or the desktop app's grab). */
   pointerLocked: boolean;
+  /** The PS5 has the keyboard and mouse now: the picture was clicked and nothing released them
+   *  since (a capture, or a click where nothing can capture). Released, keys stay on this
+   *  computer in Keyboard & mouse and Mixed; Controller sends its keys as it always has. */
+  captured?: boolean;
   /** Neither capture works here (a browser that refuses the lock) and the pointer is over the
    *  picture: its movement is sent as it is. */
   hoverFallback?: boolean;
@@ -195,11 +241,12 @@ export interface RouteContext {
 export function routeFor(mode: KbmMode, ctx: RouteContext): Route {
   if (!ctx.owner || ctx.appFirst) return { keys: "none", mouse: "none" };
   const mouseNative = mode !== "controller";
+  const held = ctx.captured ?? true;
   return {
-    keys: mode === "native" ? "native" : "pad",
+    keys: mode === "controller" ? "pad" : !held ? "none" : mode === "native" ? "native" : "pad",
     // The mouse reaches the PS5 only while the picture has it captured (or, where nothing can
     // capture it, while it is over the picture). Mouse aim (pad) reads the capture itself.
-    mouse: mouseNative ? (ctx.pointerLocked || ctx.hoverFallback ? "native" : "none") : "pad",
+    mouse: mouseNative ? (ctx.pointerLocked || (ctx.hoverFallback && held) ? "native" : "none") : "pad",
   };
 }
 
@@ -246,6 +293,8 @@ export class KbmSender {
   private moveTimer: number | null = null;
   private hb: number | null = null;
   private want: KbmCaps = { mouse: false, keyboard: false };
+  /** What each phone holds (the phone link's Touchpad & keyboard), merged into every report. */
+  private guests = new Map<number, KbmState>();
   private readonly d: Required<KbmSenderDeps>;
 
   constructor(deps: KbmSenderDeps) {
@@ -322,6 +371,26 @@ export class KbmSender {
     this.flush();
   }
 
+  /** A phone's held keys and buttons (null: it let go or left). Sent at once, merged. */
+  guest(id: number, state: KbmState | null): void {
+    if (state) this.guests.set(id, { buttons: state.buttons, mods: state.mods, keys: state.keys.slice(0, MAX_KEYS) });
+    else if (!this.guests.delete(id)) return;
+    this.flush();
+  }
+
+  /** A phone's motion, merged into the page's. */
+  guestMotion(dx: number, dy: number, wheel: number, hwheel: number): void {
+    this.dx += dx;
+    this.dy += dy;
+    this.wheel += wheel;
+    this.hwheel += hwheel;
+    if (dx || dy || wheel || hwheel) this.later();
+  }
+
+  get guestIds(): number[] {
+    return [...this.guests.keys()];
+  }
+
   /** Mouse movement (movementX/Y), sent within MOVE_BATCH_MS. */
   move(dx: number, dy: number): void {
     this.dx += dx;
@@ -348,6 +417,7 @@ export class KbmSender {
   flush(): void {
     if (this.moveTimer !== null) this.d.clearTimer(this.moveTimer);
     this.moveTimer = null;
+    const held = this.guests.size ? mergeHeld([this.st, ...this.guests.values()]) : this.st;
     do {
       const dx = clamp(this.dx, -32768, 32767);
       const dy = clamp(this.dy, -32768, 32767);
@@ -357,11 +427,12 @@ export class KbmSender {
       this.dy -= dy;
       this.wheel -= w;
       this.hwheel -= hw;
-      this.d.send(encodeReport(this.st, dx, dy, w, hw));
+      this.d.send(encodeReport(held, dx, dy, w, hw));
     } while (this.dx || this.dy || this.wheel || this.hwheel);
   }
 
-  /** Lets go of every key and button (motion not yet sent is dropped). */
+  /** Lets go of every key and button of this page (motion not yet sent is dropped). What a phone
+   *  holds stays held: it lets go on its own. */
   releaseAll(): void {
     this.dx = this.dy = this.wheel = this.hwheel = 0;
     this.wheelCarry = this.hwheelCarry = 0;
@@ -369,11 +440,12 @@ export class KbmSender {
     this.st = { buttons: 0, mods: 0, keys: [] };
     if (this.moveTimer !== null) this.d.clearTimer(this.moveTimer);
     this.moveTimer = null;
-    if (was) this.d.send(encodeReport(this.st));
+    if (was) this.d.send(encodeReport(this.guests.size ? mergeHeld(this.guests.values()) : this.st));
   }
 
-  /** Lets go of everything, turns it off and stops the heartbeat. */
+  /** Lets go of everything (phones' too), turns it off and stops the heartbeat. */
   dispose(): void {
+    this.guests.clear();
     this.releaseAll();
     this.setWant({ mouse: false, keyboard: false });
   }
@@ -450,4 +522,47 @@ export interface KbmButtonView {
 export function kbmButtonView(mode: KbmMode, caps: KbmCapsInfo | null, status: KbmStatus | null): KbmButtonView {
   const blocked = kbmBlocked(caps);
   return { mode, icon: kbmStarting(caps, status) ? "spinner" : mode, blocked };
+}
+
+// ── Phones' touchpad & keyboard (the phone link), forwarded by the engine ───────────────────────
+
+/** `{"pad_kbm": …}` from the engine: a phone's devices wanted, a report (hex), or it left. */
+export interface PadKbmMsg {
+  id: number;
+  on?: boolean;
+  mouse?: boolean;
+  keyboard?: boolean;
+  r?: string;
+  left?: boolean;
+}
+
+export function readPadKbm(v: unknown): PadKbmMsg | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.id !== "number" || !Number.isFinite(o.id)) return null;
+  return {
+    id: o.id,
+    on: typeof o.on === "boolean" ? o.on : undefined,
+    mouse: o.mouse === true,
+    keyboard: o.keyboard === true,
+    r: typeof o.r === "string" ? o.r : undefined,
+    left: o.left === true,
+  };
+}
+
+const padKbmSubs = new Set<(m: PadKbmMsg) => void>();
+
+/** Hears phones' keyboard & mouse messages (the stream screen's sender merges them). */
+export function onPadKbm(fn: (m: PadKbmMsg) => void): () => void {
+  padKbmSubs.add(fn);
+  return () => {
+    padKbmSubs.delete(fn);
+  };
+}
+
+/** The stream got a `{"pad_kbm": …}` message. */
+export function emitPadKbm(v: unknown): void {
+  const m = readPadKbm(v);
+  if (!m) return;
+  for (const fn of [...padKbmSubs]) fn(m);
 }

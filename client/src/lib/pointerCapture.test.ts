@@ -10,6 +10,7 @@ import {
   releaseCapture,
   requestCapture,
   subscribeCapture,
+  isEngaged,
 } from "./pointerCapture";
 
 // vitest runs in node: a document with Pointer Lock, enough for the module.
@@ -216,7 +217,21 @@ describe("pointer capture", () => {
     vi.advanceTimersByTime(LOCK_WAIT_MS);
     releaseCapture();
     off();
-    expect(seen).toEqual(["grab", "none"]);
+    // The click engages first (the keys are the PS5's at once), then the grab comes.
+    expect(seen).toEqual(["none", "grab", "none"]);
+  });
+
+  it("engaged: from the click until the release, also when nothing can capture", () => {
+    setup(false);
+    const el = stage("never");
+    expect(isEngaged()).toBe(false);
+    requestCapture(el);
+    expect(isEngaged(el)).toBe(true);
+    vi.advanceTimersByTime(LOCK_WAIT_MS);
+    // A browser that refuses the lock: not captured, still engaged (the keys go to the PS5).
+    expect(captureState()).toMatchObject({ kind: "none", failed: true, engaged: el });
+    releaseCapture();
+    expect(isEngaged()).toBe(false);
   });
 });
 

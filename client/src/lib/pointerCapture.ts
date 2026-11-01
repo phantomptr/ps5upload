@@ -26,6 +26,10 @@ export interface CaptureState {
   el: Element | null;
   /** The last ask got neither a lock nor a grab (a browser that refuses the lock). */
   failed: boolean;
+  /** The element the user gave the keyboard and mouse to (clicked), until they are released:
+   *  set by requestCapture whatever the answer (a refused lock still gives the keys), cleared by
+   *  releaseCapture and by a lock the browser ends itself (its Esc). */
+  engaged: Element | null;
 }
 
 /** How long a lock may take to arrive before the desktop app grabs instead. */
@@ -54,7 +58,7 @@ let grabImpl: NativeGrab = tauriGrab;
  *  stays refused there, as in Chrome. */
 const grabHere = () => isTauriEnv() && isMacOrLinuxDesktop();
 let desktopFn: () => boolean = grabHere;
-let state: CaptureState = { kind: "none", el: null, failed: false };
+let state: CaptureState = { kind: "none", el: null, failed: false, engaged: null };
 const subs = new Set<() => void>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 /** The element a capture was asked for and not yet given. */
@@ -68,7 +72,7 @@ let listening = false;
 
 function set(next: Partial<CaptureState>): void {
   const s = { ...state, ...next };
-  if (s.kind === state.kind && s.el === state.el && s.failed === state.failed) return;
+  if (s.kind === state.kind && s.el === state.el && s.failed === state.failed && s.engaged === state.engaged) return;
   state = s;
   for (const fn of [...subs]) fn();
 }
@@ -125,7 +129,7 @@ function onLockChange(): void {
   }
   if (!locked && state.kind === "lock") {
     lastScreen = null;
-    set({ kind: "none", el: null });
+    set({ kind: "none", el: null, engaged: null });
   }
 }
 
@@ -160,6 +164,7 @@ export function requestCapture(el: HTMLElement): void {
   if (isCaptured(el) || pending === el) return;
   if (state.kind !== "none") releaseCapture();
   pending = el;
+  set({ engaged: el });
   lastScreen = null;
   let refused = false;
   try {
@@ -187,6 +192,13 @@ export function requestCapture(el: HTMLElement): void {
   else timer = setTimeout(fallBack, LOCK_WAIT_MS);
 }
 
+/** Gives `el` the keyboard only, with no pointer to capture (a finger's tap on a tablet with a
+ *  keyboard attached). Released like a capture. */
+export function engage(el: HTMLElement): void {
+  listen();
+  set({ engaged: el });
+}
+
 /** Gives the mouse back: the lock left, the grab off and the cursor shown. Safe to call any time. */
 export function releaseCapture(): void {
   clearTimer();
@@ -200,7 +212,13 @@ export function releaseCapture(): void {
   hideCursor(null);
   // Off whenever a grab may be on: also after a failed or half-done one.
   if (grabOn || state.kind === "grab") runGrab(false);
-  set({ kind: "none", el: null });
+  set({ kind: "none", el: null, engaged: null });
+}
+
+/** The keyboard and mouse are the PS5's (given to `el`, when given). */
+export function isEngaged(el?: Element | null): boolean {
+  if (!state.engaged) return false;
+  return el === undefined || (el !== null && state.engaged === el);
 }
 
 /** The mouse's movement in a mousemove: movementX/Y, or (where those are 0 and the cursor moves,
@@ -220,7 +238,7 @@ export function _resetCaptureForTest(opts: { grab?: NativeGrab; desktop?: boolea
   hideCursor(null);
   grabImpl = opts.grab ?? tauriGrab;
   desktopFn = opts.desktop === undefined ? grabHere : () => !!opts.desktop;
-  state = { kind: "none", el: null, failed: false };
+  state = { kind: "none", el: null, failed: false, engaged: null };
   pending = null;
   grabOn = false;
   grabChain = Promise.resolve();

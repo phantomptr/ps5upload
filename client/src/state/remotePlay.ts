@@ -34,7 +34,7 @@ import { pushNotification } from "./notifications";
 import { trStatic } from "../lib/trStatic";
 import { currentControls, rpControls } from "./gameControls";
 import { useKbmStore } from "./kbm";
-import { readKbmStatus } from "../lib/kbmInput";
+import { emitPadKbm, readKbmStatus } from "../lib/kbmInput";
 
 /** How Remote Play looks and behaves on this device. */
 export interface RpPrefs {
@@ -87,6 +87,14 @@ export interface RpPrefs {
   codec: CodecPref;
   /** What each controller button sends (lib/rpButtonMap.ts); empty = each sends itself. */
   buttonMap: ButtonMap;
+  /** While the PS5 has the keyboard and mouse, a small "⌃ ⌥ to release" over the picture. */
+  kbmChip: boolean;
+  /** Holding Esc gives the keyboard and mouse back too (besides the release shortcut). */
+  escHoldRelease: boolean;
+  /** On a touch screen: the on-screen controller, or the screen as the PS5 mouse's touchpad. */
+  touchMode: "controller" | "touchpad";
+  /** How far the PS5's pointer moves for a finger's movement on the touchpad. */
+  touchpadSpeed: number;
 }
 
 export const DEFAULT_RP_PREFS: RpPrefs = {
@@ -114,6 +122,10 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   decoding: "auto",
   codec: "auto",
   buttonMap: DEFAULT_BUTTON_MAP,
+  kbmChip: true,
+  escHoldRelease: true,
+  touchMode: "controller",
+  touchpadSpeed: 1.5,
 };
 
 /** The smallest sound buffer the Sound buffer setting offers. */
@@ -131,7 +143,16 @@ export function loadRpPrefs(): RpPrefs {
     const raw = safeGetItem(PREFS_KEY);
     const p = { ...DEFAULT_RP_PREFS, ...(raw ? (JSON.parse(raw) as Partial<RpPrefs>) : {}) };
     const codec: CodecPref = p.codec === "h264" || p.codec === "hdr" ? p.codec : "auto";
-    return { ...p, codec, picture: readPicture(p.picture), buttonMap: readButtonMap(p.buttonMap) };
+    const touchMode = p.touchMode === "touchpad" ? "touchpad" : "controller";
+    const touchpadSpeed = Number.isFinite(p.touchpadSpeed) ? Math.min(4, Math.max(0.5, p.touchpadSpeed)) : 1.5;
+    return {
+      ...p,
+      codec,
+      touchMode,
+      touchpadSpeed,
+      picture: readPicture(p.picture),
+      buttonMap: readButtonMap(p.buttonMap),
+    };
   } catch {
     return DEFAULT_RP_PREFS;
   }
@@ -332,6 +353,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       onError: (e) => get().stream === stream && set({ error: e }),
       onLight: (rgb) => get().stream === stream && set({ light: rgb }),
       onKbm: (v) => get().stream === stream && useKbmStore.getState().setStatus(readKbmStatus(v)),
+      onPadKbm: (v) => get().stream === stream && emitPadKbm(v),
       onKeyboard: (m) => get().stream === stream && set({ keyboard: nextKeyboard(get().keyboard, m) }),
       readPad,
       gamepads: rpGamepads,
