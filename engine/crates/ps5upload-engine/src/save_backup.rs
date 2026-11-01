@@ -1270,20 +1270,24 @@ pub(crate) fn open_save(host: &str, image: &str) -> Result<String, String> {
     }
 }
 
-/// Closes the open save (written back when it changed).
+/// Closes the open save (written back when it changed); whether one was open.
 pub(crate) fn close_save(host: &str) -> Result<bool, String> {
     let v = post("/api/ps5/saves/close", json!({ "addr": host }))?;
-    Ok(v.get("written_back")
+    // An older helper does not say: assume it was.
+    Ok(v.get("was_open").and_then(Value::as_bool).unwrap_or(true))
+}
+
+/// Whether a save is open on the console (one at a time); Err when it could not be asked.
+pub(crate) fn save_open_state(host: &str) -> Result<bool, String> {
+    let v = post("/api/ps5/saves/open", json!({ "addr": host, "image": "" }))?;
+    v.get("mounted")
         .and_then(Value::as_bool)
-        .unwrap_or(false))
+        .ok_or_else(|| "the PS5 did not say whether a save is open".to_string())
 }
 
 /// A save is already open on the console (one at a time).
 pub(crate) fn a_save_is_open(host: &str) -> bool {
-    post("/api/ps5/saves/open", json!({ "addr": host, "image": "" }))
-        .ok()
-        .and_then(|v| v.get("mounted").and_then(Value::as_bool))
-        .unwrap_or(false)
+    save_open_state(host).unwrap_or(false)
 }
 
 /// What a shared save holds, checked before anything on the console changes: the folder of
