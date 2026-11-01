@@ -39,6 +39,7 @@
 #define VWIRE_TOKEN_PATH VWIRE_DIR "/vinput.token"
 #define VWIRE_PID_PATH VWIRE_DIR "/vinput.pid"
 #define VWIRE_LOG_PATH VWIRE_DIR "/vinput.log"
+#define VWIRE_HANDLES_PATH VWIRE_DIR "/vinput.handles" /* the open devices (src/vinput_dev.c) */
 #define VWIRE_TOKEN_LEN 32
 #define VWIRE_TOKEN_HEX (2 * VWIRE_TOKEN_LEN)
 

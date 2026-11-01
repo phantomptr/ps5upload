@@ -20,8 +20,10 @@
  * NOT proven yet: that a game (rather than PS5Term's reader) takes the events. */
 #include "vinput_dev.h"
 
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -52,6 +54,7 @@ static insert_fn m_insert, k_insert;
 static int g_m_ok, g_k_ok; /* Init worked and the symbols are there */
 static int g_mh = -1, g_kh = -1;
 static int g_user = -1; /* whom the open devices belong to */
+static const char *g_handles_path;
 
 #define LOG(...)                          \
     do {                                  \
@@ -81,12 +84,42 @@ static int load(const char *name) {
     return h;
 }
 
-void vinput_dev_init(void (*log)(const char *fmt, ...)) {
+/* The open handles, kept for the next run (see vinput_dev_init). */
+static void save_handles(void) {
+    char s[48];
+    int fd, k;
+    if (!g_handles_path) return;
+    fd = open(g_handles_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return;
+    k = snprintf(s, sizeof s, "%d %d\n", g_mh, g_kh);
+    if (write(fd, s, (size_t)k) == k) (void)fsync(fd);
+    close(fd);
+}
+
+/* Deletes the devices a previous run left behind. */
+static void delete_left_behind(void) {
+    char s[48] = {0};
+    int fd, m = -1, k = -1;
+    ssize_t n;
+    if (!g_handles_path) return;
+    fd = open(g_handles_path, O_RDONLY);
+    if (fd < 0) return;
+    n = read(fd, s, sizeof s - 1);
+    close(fd);
+    if (n > 0 && sscanf(s, "%d %d", &m, &k) == 2) {
+        if (m >= 0 && m_del) LOG("left-behind mouse %d: DeleteDevice 0x%x", m, (unsigned)m_del(m));
+        if (k >= 0 && k_del) LOG("left-behind keyboard %d: DeleteDevice 0x%x", k, (unsigned)k_del(k));
+    }
+    save_handles();
+}
+
+void vinput_dev_init(void (*log)(const char *fmt, ...), const char *handles_path) {
     int hm, hk, rc, user = -1;
     init_fn m_init, k_init;
     if (g_inited) return;
     g_inited = 1;
     g_log = log;
+    g_handles_path = handles_path;
     rc = sceUserServiceInitialize(NULL);
     LOG("sceUserServiceInitialize 0x%x", (unsigned)rc);
     hm = load("libSceMouse.sprx");
@@ -113,6 +146,7 @@ void vinput_dev_init(void (*log)(const char *fmt, ...)) {
     }
     rc = sceUserServiceGetForegroundUser(&user);
     LOG("foreground user 0x%x (0x%x)", (unsigned)user, (unsigned)rc);
+    if (g_m_ok || g_k_ok) delete_left_behind();
 }
 
 static int foreground_user(void) {
@@ -151,6 +185,7 @@ static int dev_mouse_open(void) {
     if (!g_m_ok) return VINPUT_E_UNSUPPORTED;
     if (g_mh >= 0) return VINPUT_OK;
     g_mh = add_device(m_add, "mouse");
+    save_handles();
     return g_mh >= 0 ? VINPUT_OK : VINPUT_E_FAILED;
 }
 
@@ -158,6 +193,7 @@ static void dev_mouse_close(void) {
     if (g_mh < 0) return;
     LOG("mouse DeleteDevice 0x%x", (unsigned)m_del(g_mh));
     g_mh = -1;
+    save_handles();
 }
 
 static int dev_mouse_send(uint8_t buttons, int dx, int dy, int wheel, int hwheel) {
@@ -182,6 +218,7 @@ static int dev_keyboard_open(void) {
     if (!g_k_ok) return VINPUT_E_UNSUPPORTED;
     if (g_kh >= 0) return VINPUT_OK;
     g_kh = add_device(k_add, "keyboard");
+    save_handles();
     return g_kh >= 0 ? VINPUT_OK : VINPUT_E_FAILED;
 }
 
@@ -189,6 +226,7 @@ static void dev_keyboard_close(void) {
     if (g_kh < 0) return;
     LOG("keyboard DeleteDevice 0x%x", (unsigned)k_del(g_kh));
     g_kh = -1;
+    save_handles();
 }
 
 static int dev_keyboard_send(uint8_t mods, const uint8_t keys[VINPUT_KEYS]) {

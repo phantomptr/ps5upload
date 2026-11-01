@@ -9,8 +9,13 @@
 #include "vinput.h"
 
 /* Once, before anything else: sceUserServiceInitialize, the input modules loaded, their symbols
- * resolved, sceMouseInit / sceKeyboardInit. Logs through `log` (may be NULL). */
-void vinput_dev_init(void (*log)(const char *fmt, ...));
+ * resolved, sceMouseInit / sceKeyboardInit. Logs through `log` (may be NULL).
+ *
+ * `handles_path` (may be NULL): where the open devices' handles are kept. A process that ends
+ * without DeleteDevice (SIGKILL) leaves its devices behind (measured on 13.60: they keep slot 0 of
+ * the user, every later device lands on slot 1, and a reader of slot 0 sees nothing), so the
+ * handles a previous run left there are deleted first. */
+void vinput_dev_init(void (*log)(const char *fmt, ...), const char *handles_path);
 /* The backend ("ps5"). Its caps say what Init made possible. */
 const vinput_backend_t *vinput_dev_backend(void);
 /* About once a second: when the foreground user changed while a device is open, the devices are

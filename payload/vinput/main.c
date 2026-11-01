@@ -32,7 +32,7 @@ static void vlog(const char *fmt, ...) {
 }
 
 static void dev_init(void) {
-    vinput_dev_init(vlog);
+    vinput_dev_init(vlog, VWIRE_HANDLES_PATH);
 }
 
 int main(void) {
