@@ -251,6 +251,12 @@ such as `/data/save-backups`, or a NAS share you mount into the container. To re
 game, open its page in PS5Upload, go to Saves and press Restore on the version you want. The save
 on the PS5 is backed up first, so you can go back.
 
+The saves of ProsperoEden, the Switch emulator (PPSA99008), are backed up too, locally and to a
+server, and "after a game closes" means after ProsperoEden closes. Each game's save of each
+profile is its own backup, in a folder named after the game's 16-character title ID. They are not
+listed under Saves yet: to put one back, close ProsperoEden and copy the folder inside the zip to
+`/data/prosperoeden/user/nand/user/save/0000000000000000/<profile>/` on the PS5.
+
 **Q: How do I make room for a big game?**
 Open Clean up and press Make room, or follow "Plan space" when an install says there isn't enough
 room. Enter the size and pick the drive. The plan only suggests safe steps: removing leftovers,

@@ -88,9 +88,9 @@ pub(crate) fn done_key(host: &str, path: &str) -> String {
     format!("{host}|{path}")
 }
 
-/// The saves that need a backup: a game's (not the console's own `sce_backup*` folders, which it
-/// lists among the saves, empty), changed since the last one, and not written to in the last few
-/// minutes. A save never backed up counts as changed.
+/// The saves that need a backup: a game's (a PS5 game's or one in the Switch emulator, not the
+/// console's own `sce_backup*` folders, which it lists among the saves, empty), changed since the
+/// last one, and not written to in the last few minutes. A save never backed up counts as changed.
 pub fn needing_backup<'a>(
     host: &str,
     saves: &'a [SaveEntry],
@@ -100,7 +100,7 @@ pub fn needing_backup<'a>(
     saves
         .iter()
         .filter(|e| {
-            crate::looks_like_title_id(&e.title_id)
+            crate::emulator_saves::backs_up(e)
                 && e.mtime > 0
                 && now_secs - e.mtime >= SETTLE_SECS
                 && e.mtime > done.get(&done_key(host, &e.path)).copied().unwrap_or(0)
@@ -306,10 +306,15 @@ pub fn mentions_host(text: &str, host: &str) -> bool {
         })
 }
 
+/// The console's saves, and the Switch emulator's (files of its own, which the console's list
+/// leaves out).
 pub(crate) fn list_saves(host: &str) -> Result<Vec<SaveEntry>, String> {
     let v = get(&format!("/api/ps5/saves/list?addr={}", enc(host)))?;
-    serde_json::from_value(v.get("saves").cloned().unwrap_or(Value::Array(vec![])))
-        .map_err(|e| format!("saves list: {e}"))
+    let mut saves: Vec<SaveEntry> =
+        serde_json::from_value(v.get("saves").cloned().unwrap_or(Value::Array(vec![])))
+            .map_err(|e| format!("saves list: {e}"))?;
+    saves.extend(crate::emulator_saves::list(host));
+    Ok(saves)
 }
 
 // ── backup ──────────────────────────────────────────────────────────────
@@ -365,7 +370,10 @@ pub(crate) fn download_save(
         .ok_or("download did not start")?;
     wait_job(job)?;
     verify()?;
-    backup_finalize(&tmp.join(&entry.title_id)).map_err(|e| format!("{e:#}"))?;
+    // The emulator's saves are plain files: kept as they are.
+    if !crate::emulator_saves::is_emulator_save(entry) {
+        backup_finalize(&tmp.join(&entry.title_id)).map_err(|e| format!("{e:#}"))?;
+    }
     Ok(())
 }
 
@@ -665,11 +673,18 @@ pub(crate) fn restore_zip(
     if !save_path.ends_with(&format!("/{title_id}")) {
         return Err(format!("{save_path} is not the save folder of {title_id}"));
     }
+    // A save of the Switch emulator is written by the emulator, and its files go back as they are.
+    let emulator = crate::emulator_saves::is_save_path(save_path);
+    let app = if emulator {
+        crate::emulator_saves::APP
+    } else {
+        title_id
+    };
     // The game writes its save while it runs: one put back underneath it is overwritten, or
     // worse, mixed with what the game writes next.
-    if title_running(host, title_id)? {
+    if title_running(host, app)? {
         return Err(format!(
-            "{title_id} is running on the PS5. Close the game, then restore."
+            "{app} is running on the PS5. Close the game, then restore."
         ));
     }
     let tmp = make_temp_dir(title_id)?;
@@ -677,7 +692,9 @@ pub(crate) fn restore_zip(
     let result = (|| {
         // Check and unpack the backup before anything on the console changes.
         unzip_strict(zip, &tmp, title_id).map_err(|e| format!("unzip: {e:#}"))?;
-        restore_prepare(&tmp.join(title_id)).map_err(|e| format!("prepare: {e:#}"))?;
+        if !emulator {
+            restore_prepare(&tmp.join(title_id)).map_err(|e| format!("prepare: {e:#}"))?;
+        }
         put_in_place(
             host,
             title_id,
@@ -713,7 +730,11 @@ fn put_in_place(
         path: save_path.to_string(),
         size: 0,
         mtime: 0,
-        kind: String::new(),
+        kind: if crate::emulator_saves::is_save_path(save_path) {
+            crate::emulator_saves::KIND.into()
+        } else {
+            String::new()
+        },
     };
     if !s.dir.trim().is_empty() {
         back_up_one(host, &current, &s.dir, s.keep, tag, &|| Ok(()))
@@ -1543,6 +1564,28 @@ mod tests {
         let due = needing_backup("h", &saves, &Done::new(), 2000);
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].title_id, "PPSA01234");
+    }
+
+    #[test]
+    fn the_switch_emulators_saves_are_backed_up_too() {
+        let mut sw = save(
+            "/data/prosperoeden/user/nand/user/save/0000000000000000/P/0100F2C0115B6000",
+            1000,
+        );
+        sw.title_id = "0100F2C0115B6000".into();
+        sw.kind = crate::emulator_saves::KIND.into();
+        let due = needing_backup("h", std::slice::from_ref(&sw), &Done::new(), 2000);
+        assert_eq!(due.len(), 1);
+        // Its backup is named, kept and listed as a PS5 save's is.
+        let name = format!(
+            "{}{}.zip",
+            auto_backup_stem(&sw.title_id, sw.user_id as u32),
+            stamp(0)
+        );
+        assert_eq!(
+            parse_backup_name(&sw.title_id, &name),
+            Some((sw.user_id as u32, "1970-01-01_000000".to_string()))
+        );
     }
 
     #[test]
