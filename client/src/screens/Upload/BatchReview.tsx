@@ -10,6 +10,7 @@ import type { BatchCheck } from "../../lib/uploadBatch";
 import type { BatchRow } from "../../state/uploadBatch";
 import { convertFirstState, type WorkshopHandOver } from "../../lib/convertFirst";
 import { useTr } from "../../state/lang";
+import { STICKY_ACTIONS } from "./stickyActions";
 
 export interface BatchReviewProps {
   rows: BatchRow[];
@@ -78,7 +79,7 @@ export function BatchReview(p: BatchReviewProps) {
       .map((r) => ({ path: r.path, isDir: r.isDir, kind: r.source?.kind })),
   );
   return (
-    <section className="mb-6 grid gap-4">
+    <section className="mb-4 grid gap-3">
       <div className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)]">
         <header className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] px-4 py-2.5">
           <div className="text-sm font-semibold">
@@ -213,7 +214,7 @@ export function BatchReview(p: BatchReviewProps) {
           {tr("batch_stream_rest", undefined, "Packages stream straight from this computer; everything else uploads as usual, in the same click.")}
         </p>
       )}
-      <div className="flex flex-wrap gap-2">
+      <div className={STICKY_ACTIONS} data-testid="batch-actions">
         {streams && (
           <Button variant="primary" disabled={!p.canStream} onClick={p.onStream} data-testid="batch-stream-install">
             {tr("batch_stream_now", { count: p.streamCount ?? 0 }, "Stream & install {count}")}

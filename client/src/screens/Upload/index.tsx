@@ -112,6 +112,7 @@ import {
   type BatchRow,
 } from "../../state/uploadBatch";
 import { BatchReview } from "./BatchReview";
+import { STICKY_ACTIONS } from "./stickyActions";
 import { inStreamOrder } from "../../lib/streamSelection";
 import { resolveUploadDest } from "../../lib/uploadDest";
 import { QueuePanel } from "./QueuePanel";
@@ -833,6 +834,7 @@ export default function UploadScreen({
 
       <Step1Picker
         active={!source}
+        compact={!!source || batchRows.length > 0}
         dropActive={dropActive}
         onFiles={(paths) => void handlePickedPaths(paths, false)}
         onFolders={(paths) => void handlePickedPaths(paths, true)}
@@ -977,6 +979,7 @@ export default function UploadScreen({
 
 function Step1Picker({
   active,
+  compact = false,
   dropActive,
   onFiles,
   onFolders,
@@ -985,6 +988,9 @@ function Step1Picker({
   otherWays,
 }: {
   active: boolean;
+  /** Something is chosen already: one slim row (still a drop target, still adds more), so
+   *  what was chosen and its buttons sit near the top of the window. */
+  compact?: boolean;
   dropActive: boolean;
   onFiles: (paths: string[]) => void;
   onFolders: (paths: string[]) => void;
@@ -995,97 +1001,130 @@ function Step1Picker({
   otherWays?: boolean;
 }) {
   const tr = useTr();
+  const title = isMobile()
+    ? tr(
+        "upload_pick_here_mobile3",
+        undefined,
+        "Choose packages, games, disk images, archives or any file",
+      )
+    : tr(
+        "upload_drop_here3",
+        undefined,
+        "Drop or choose packages, games, disk images, archives or any file",
+      );
+  const otherWaysRow = otherWays && (
+    <div
+      className={clsx(
+        "relative flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--color-muted)]",
+        compact ? "" : "mt-2 justify-center",
+      )}
+    >
+      <span>{tr("upload_other_ways", undefined, "Or install a package:")}</span>
+      <Button
+        size="sm"
+        variant="ghost"
+        leftIcon={<Link2 size={12} />}
+        onClick={() => window.dispatchEvent(new CustomEvent(OPEN_FOLD, { detail: "send-more" }))}
+      >
+        {tr("send_choice_link_btn", undefined, "From a link")}
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        leftIcon={<HardDrive size={12} />}
+        onClick={() => window.dispatchEvent(new CustomEvent(OPEN_FOLD, { detail: "send-on-ps5" }))}
+      >
+        {tr("send_choice_drive_btn", undefined, "On the PS5 or USB")}
+      </Button>
+    </div>
+  );
   return (
     <section
       data-testid="send-drop"
+      data-compact={compact ? "true" : undefined}
       className={clsx(
-        // A soft dashed glass well: the drop target reads as a place, not a form field.
-        "relative mb-6 overflow-hidden rounded-[var(--radius-panel)] border-2 border-dashed px-5 py-10 text-center transition-colors sm:px-8",
+        // A soft dashed glass well: the drop target reads as a place, not a form field. Kept
+        // modest (users found the tall well pushed the buttons below the fold), and a slim row
+        // once something is chosen.
+        "relative mb-4 overflow-hidden rounded-[var(--radius-panel)] border-2 border-dashed transition-colors",
+        compact ? "px-3 py-2" : "px-4 py-5 text-center sm:px-6",
         dropActive
           ? "border-[var(--color-accent-bright)] bg-[var(--color-accent-soft)]"
           : "border-[var(--color-border-strong)] bg-[var(--color-surface)]",
-        !active && "opacity-70",
+        !active && !dropActive && "opacity-80",
       )}
     >
       <div
         aria-hidden
         className="dot-texture pointer-events-none absolute inset-0 opacity-60"
       />
-      <div className="relative mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] text-[var(--color-accent-bright)] shadow-[var(--edge-highlight),var(--shadow-1)]">
-        <UploadIcon size={24} aria-hidden />
-      </div>
-      <div className="relative text-base font-semibold tracking-[-0.01em]">
-        {isMobile()
-          ? tr(
-              "upload_pick_here_mobile3",
-              undefined,
-              "Choose packages, games, disk images, archives or any file",
-            )
-          : tr(
-              "upload_drop_here3",
-              undefined,
-              "Drop or choose packages, games, disk images, archives or any file",
-            )}
-      </div>
-      {/* Drag-drop needs no choice at all (it stats the path and works out what it is); the
-          buttons are the Workshop's too. The ▾ on each picks from a saved server instead. */}
-      <AddSources
-        className="relative mt-5"
-        onFiles={onFiles}
-        onFolders={onFolders}
-        onRemote={onRemote}
-        onScanFolder={onScanFolder}
-      />
-      {/* What each kind becomes: the drop zone is the page's one way in, so it says it all. */}
-      <ul
-        className="relative mx-auto mt-5 flex max-w-lg flex-col gap-1 text-start text-xs leading-relaxed text-[var(--color-muted)]"
-        data-testid="send-drop-kinds"
-      >
-        {(
-          [
-            ["upload_drop_kind_pkg", "Packages (.pkg, .fpkg): installed as a game, update or DLC, streamed from here or uploaded first."],
-            ["upload_drop_kind_game", "Game folders and game dumps: copied to the PS5; they can go on the home screen."],
-            ["upload_drop_kind_image", "Disk images (.exfat, .ffpkg, .ffpfs, .ffpfsc): copied to the PS5; they can be mounted."],
-            ["upload_drop_kind_archive", "Archives (.zip, .7z, .rar): extracted onto the PS5."],
-            ["upload_drop_kind_other", "Any other file or folder: copied as it is."],
-          ] as const
-        ).map(([key, text]) => (
-          <li key={key} className="flex gap-2">
-            <span aria-hidden className="text-[var(--color-accent-bright)]">
-              •
-            </span>
-            <span className="min-w-0">{tr(key, undefined, text)}</span>
-          </li>
-        ))}
-      </ul>
-      {otherWays && (
-        <div className="relative mt-4 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-[var(--color-muted)]">
-          <span>{tr("upload_other_ways", undefined, "Or install a package:")}</span>
-          <Button
-            size="sm"
-            variant="ghost"
-            leftIcon={<Link2 size={12} />}
-            onClick={() => window.dispatchEvent(new CustomEvent(OPEN_FOLD, { detail: "send-more" }))}
-          >
-            {tr("send_choice_link_btn", undefined, "From a link")}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            leftIcon={<HardDrive size={12} />}
-            onClick={() => window.dispatchEvent(new CustomEvent(OPEN_FOLD, { detail: "send-on-ps5" }))}
-          >
-            {tr("send_choice_drive_btn", undefined, "On the PS5 or USB")}
-          </Button>
+      {compact ? (
+        <div className="relative flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+            <UploadIcon size={16} aria-hidden className="shrink-0 text-[var(--color-accent-bright)]" />
+            <span className="min-w-0">{title}</span>
+          </div>
+          {/* Drag-drop needs no choice at all (it stats the path and works out what it is);
+              the ▾ on each button picks from a saved server instead. */}
+          <AddSources
+            className="justify-start!"
+            onFiles={onFiles}
+            onFolders={onFolders}
+            onRemote={onRemote}
+            onScanFolder={onScanFolder}
+          />
+          {otherWaysRow}
         </div>
+      ) : (
+        <>
+          <div className="relative flex items-center justify-center gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] text-[var(--color-accent-bright)] shadow-[var(--edge-highlight),var(--shadow-1)]">
+              <UploadIcon size={18} aria-hidden />
+            </div>
+            <div className="text-start text-sm font-semibold tracking-[-0.01em] sm:text-base">
+              {title}
+            </div>
+          </div>
+          <AddSources
+            className="relative mt-3"
+            onFiles={onFiles}
+            onFolders={onFolders}
+            onRemote={onRemote}
+            onScanFolder={onScanFolder}
+          />
+          {/* What each kind becomes: the drop zone is the page's one way in, so it says it
+              all — in two columns where there is room, to keep the well short. */}
+          <ul
+            className="relative mx-auto mt-3 grid max-w-3xl gap-x-6 gap-y-0.5 text-start text-xs leading-snug text-[var(--color-muted)] sm:grid-cols-2"
+            data-testid="send-drop-kinds"
+          >
+            {(
+              [
+                ["upload_drop_kind_pkg", "Packages (.pkg, .fpkg): installed as a game, update or DLC, streamed from here or uploaded first."],
+                ["upload_drop_kind_game", "Game folders and game dumps: copied to the PS5; they can go on the home screen."],
+                ["upload_drop_kind_image", "Disk images (.exfat, .ffpkg, .ffpfs, .ffpfsc): copied to the PS5; they can be mounted."],
+                ["upload_drop_kind_archive", "Archives (.zip, .7z, .rar): extracted onto the PS5."],
+                ["upload_drop_kind_other", "Any other file or folder: copied as it is."],
+              ] as const
+            ).map(([key, text]) => (
+              <li key={key} className="flex gap-2">
+                <span aria-hidden className="text-[var(--color-accent-bright)]">
+                  •
+                </span>
+                <span className="min-w-0">{tr(key, undefined, text)}</span>
+              </li>
+            ))}
+          </ul>
+          {otherWaysRow}
+          <p className="relative mx-auto mt-2 max-w-xl text-xs leading-snug text-[var(--color-muted)]">
+            {tr(
+              "upload_picker_from_ps5_hint",
+              undefined,
+              "Copying from another PS5? Select the files in File System and choose Send to another console.",
+            )}
+          </p>
+        </>
       )}
-      <p className="relative mx-auto mt-3 max-w-md text-xs leading-relaxed text-[var(--color-muted)]">
-        {tr(
-          "upload_picker_from_ps5_hint",
-          undefined,
-          "Copying from another PS5? Select the files in File System and choose Send to another console.",
-        )}
-      </p>
     </section>
   );
 }
@@ -1309,7 +1348,7 @@ function Step2Options(props: {
 
   return (
     <>
-      <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
+      <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
         <div className="flex items-start gap-3">
           <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-field)] bg-[var(--color-surface-3)]">
             <KindIcon size={18} />
@@ -1604,7 +1643,7 @@ function Step2Options(props: {
       )}
 
       {source.kind === "game-folder" && (
-        <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
+        <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
           <Toggle
             checked={registerAfterUpload}
             onChange={(c) => onSetRegisterAfterUpload(c)}
@@ -1724,7 +1763,12 @@ function Step2Options(props: {
 
       <TransferStatus onRetry={onUpload} />
 
-      <div className="flex flex-wrap items-center justify-end gap-2">
+      {/* The actions stay in view at the bottom of the window however long the options above
+          are (a game folder with every fold open is taller than a laptop screen). */}
+      <div
+        className={STICKY_ACTIONS + " justify-end"}
+        data-testid="upload-actions"
+      >
         {/* Which PS5 this upload targets — a chip instead of baking a
             (possibly long) console name into the button label. Auto-hides for
             single-console users. Pushed to the left; actions stay right. */}
@@ -2821,7 +2865,7 @@ function GameMetaCard({
   const [coverFailed, setCoverFailed] = useState(false);
 
   return (
-    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
       <div className="flex items-start gap-4">
         <div className="h-20 w-20 shrink-0 overflow-hidden rounded-[var(--radius-field)] bg-[var(--color-surface-3)]">
           {coverSrc && !coverFailed ? (
@@ -3178,7 +3222,7 @@ function PkgFinisherCard({
   );
   const label = pkgInfo?.title?.trim() || pkgInfo?.contentId || null;
   return (
-    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
       <div className="mb-2 flex items-center gap-2 text-sm font-medium">
         <Package size={16} className="text-[var(--color-muted)]" />
         <span className="flex-1">
@@ -3259,7 +3303,7 @@ function ZipArchiveCard({ info }: { info: ZipInspect }) {
       : 0;
   const isGame = !!(info.title || info.title_id);
   return (
-    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
       <div className="flex items-start gap-3">
         <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[var(--radius-field)] bg-[var(--color-surface-3)] text-[var(--color-muted)]">
           {isGame ? <Gamepad2 size={22} /> : <FileArchive size={22} />}
@@ -3391,7 +3435,7 @@ function ArchiveExtractModeCard({
   ];
 
   return (
-    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
       <div className="mb-3 flex items-center gap-2 text-sm font-medium">
         <FileArchive size={16} className="text-[var(--color-muted)]" />
         {tr(
@@ -3496,7 +3540,7 @@ function BandwidthCard() {
   const cap = useUploadSettingsStore((s) => s.bandwidthCapMbps);
   const setCap = useUploadSettingsStore((s) => s.setBandwidthCapMbps);
   return (
-    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-4">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
       <div className="flex items-center gap-2">
         <label className="text-sm font-medium">
           {tr("bandwidth_cap_label", undefined, "Upload speed limit")}
@@ -3558,7 +3602,7 @@ function MountAfterUploadCard({
 }) {
   const tr = useTr();
   return (
-    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
       <Toggle
         checked={checked}
         onChange={(c) => onChange(c)}
@@ -3705,7 +3749,7 @@ function DestinationCard({
   const formatUsable = (bytes: number) => `${formatBytes(bytes)} usable`;
 
   return (
-    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
       <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
         <HardDrive size={14} />
         {tr("upload_dest_card_title", "Destination")}
@@ -3811,7 +3855,7 @@ function ExcludesCard({
   const tr = useTr();
   const [draft, setDraft] = useState("");
   return (
-    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-6 p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
       <h2 className="mb-3 text-sm font-semibold">
         {tr("upload_files_to_upload", "Files to upload")}
       </h2>

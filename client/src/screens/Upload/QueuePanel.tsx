@@ -309,7 +309,7 @@ export const QueuePanel = memo(function QueuePanel({
   };
 
   return (
-    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-3 p-4">
       {clearDialog}
       {!isLeader && (
         <div

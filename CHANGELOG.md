@@ -18,6 +18,11 @@ What's new in ps5upload, written for humans.
   folder stays, so a retry works, and the message says where it is.
 - **Leftovers from earlier runs can be removed.** The card shows "N leftover unpacked folder(s)"
   with their size and a Remove button; folders a queued install still reads are never touched.
+- **A more compact Upload & Install.** The drop area is shorter (a small icon beside its title,
+  what each kind becomes in two columns), so Choose file and Choose folder are on screen without
+  scrolling. Once something is chosen it shrinks to one slim row that still takes drops and adds
+  more. Cards are tighter, and the Upload / Stream & install buttons stay at the bottom of the
+  window however long the options above them are.
 
 ---
 
