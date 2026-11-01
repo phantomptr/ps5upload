@@ -14,6 +14,7 @@
 // pass would undo the point of HDR). Crop to 21:9 and Sharp pixels still apply.
 
 import { cropRect } from "./rpPicture";
+import { withDecoderStart } from "./videoDecoderGuard";
 
 /** What the console is asked for. */
 export type StreamCodec = "h264" | "h265" | "h265_hdr";
@@ -30,16 +31,18 @@ const MAIN10_CANDIDATES = ["hev1.2.4.L153.B0", "hvc1.2.4.L153.B0", "hev1.2.4.L15
 /** The first HEVC Main10 codec string this device decodes, or null. */
 export async function supportedHevcMain10(width: number, height: number): Promise<string | null> {
   if (typeof VideoDecoder === "undefined") return null;
-  for (const codec of MAIN10_CANDIDATES) {
-    try {
-      if ((await VideoDecoder.isConfigSupported({ codec, codedWidth: width, codedHeight: height })).supported) {
-        return codec;
+  return withDecoderStart(async () => {
+    for (const codec of MAIN10_CANDIDATES) {
+      try {
+        if ((await VideoDecoder.isConfigSupported({ codec, codedWidth: width, codedHeight: height })).supported) {
+          return codec;
+        }
+      } catch {
+        // Not this one.
       }
-    } catch {
-      // Not this one.
     }
-  }
-  return null;
+    return null;
+  });
 }
 
 /** The screen says it can show HDR (it may still be switched off in the system's settings). */

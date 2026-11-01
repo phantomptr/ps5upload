@@ -640,6 +640,8 @@ pub fn run() {
             // Linux: Safe graphics mode (WebKitGTK's rescues), read at the next launch.
             linux_gpu::linux_graphics_get,
             linux_gpu::linux_graphics_safe_mode_set,
+            linux_gpu::linux_video_software_set,
+            linux_gpu::linux_video_starting,
             // ── Title metadata fetch (cover art + display title) ────
             // Server-side fetch (Rust/reqwest) of the public PS5
             // title-info site, bypassing renderer CSP/CORS. Hostname

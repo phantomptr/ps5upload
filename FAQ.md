@@ -786,6 +786,43 @@ new bug. If you have already done it:
 sudo chown -R "$USER:$USER" ~/.ps5upload
 ```
 
+**Q: Pressing Play crashes the whole app on Linux (#610).**
+
+A: Fixed in 10.5.1. On WebKitGTK 2.54 (Fedora 44 and other current
+distros) the app's window died the moment Play checked which video
+formats it can decode, whenever WebKit's DMA-BUF renderer was off — which
+the app does on most AMD and Intel machines, and `PS5Upload.sh` does for
+everyone. The app now prepares what WebKit needs first. Update the app.
+
+If Play still crashes while the picture starts, the app notices at the
+next launch, decodes the picture without the graphics card from then on,
+and says so once. You can switch that yourself: **Settings › Window ›
+Graphics › Hardware video decoding** (off = software; applies after a
+restart; Safe graphics mode turns it off too). For one launch:
+
+```sh
+PS5UPLOAD_SOFTWARE_VIDEO=1 ./PS5Upload.sh         # .zip / AppImage
+PS5UPLOAD_SOFTWARE_VIDEO=1 ps5upload-desktop      # .deb / .rpm
+```
+
+(`=0` uses the graphics card for one launch even with the setting off.)
+The setting is the file `~/.config/com.phantomptr.ps5upload/software-video`.
+Software decoding ranks GStreamer's graphics-card decoders out
+(`GST_PLUGIN_FEATURE_RANK=vah264dec:NONE,vah265dec:NONE,…`, added after
+any value you set), so it needs a software decoder in GStreamer: on
+Fedora `gstreamer1-plugin-openh264` for H.264, or RPM Fusion's
+`gstreamer1-plugin-libav` for HEVC too. The startup log says which is
+used: `[linux] video decoding: …`.
+
+On 10.4.x, before updating, starting the app with the DMA-BUF renderer
+on avoids the crash, if the window then shows (it is what the app uses
+on NVIDIA 555+ with Wayland):
+
+```sh
+WEBKIT_DISABLE_DMABUF_RENDERER=0 ./PS5Upload.sh         # .zip / AppImage
+WEBKIT_DISABLE_DMABUF_RENDERER=0 ps5upload-desktop      # .deb / .rpm
+```
+
 ---
 
 ## Android

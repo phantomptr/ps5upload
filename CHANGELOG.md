@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.5.1
+
+- **Pressing Play no longer crashes the Linux app (#610).** On WebKitGTK 2.54 (Fedora 44 and other
+  current distros) the whole window died the moment Play checked which video formats it can
+  decode, whenever WebKit's DMA-BUF renderer was off, which the app does on most AMD and Intel
+  machines. WebKit wanted a graphics display the page had not made yet; the app now makes it
+  first.
+- **If Play ever crashes while the picture starts, the next launch recovers (Linux).** The app
+  notices, decodes the picture without the graphics card from then on, and says so once.
+- **Settings › Window › Graphics › Hardware video decoding (Linux).** Off decodes Remote Play's
+  picture in software (GStreamer's graphics-card decoders are ranked out; applies after a
+  restart). Safe graphics mode turns it off too, and `PS5UPLOAD_SOFTWARE_VIDEO=1` does for one
+  launch. The startup log says which is used (`[linux] video decoding: …`).
+
 ## 10.5.0
 
 - **Home's Recent games shows more games, at a sensible size.** The covers keep about the size of

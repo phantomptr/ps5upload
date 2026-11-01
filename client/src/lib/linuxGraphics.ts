@@ -16,12 +16,19 @@ export interface LaunchGraphics {
   currentStack: boolean;
   /** The app set a variable itself (otherwise they came from the user's environment). */
   setByApp: boolean;
+  /** Video is decoded without the graphics card this launch (GStreamer's hardware decoders
+   *  ranked out; the setting, Safe graphics mode, PS5UPLOAD_SOFTWARE_VIDEO or a crash). */
+  softwareVideo?: boolean;
+  /** ...switched on because Play crashed while starting the picture last time. */
+  videoRecovered?: boolean;
 }
 
 export interface GraphicsStatus {
   linux: boolean;
   /** Safe graphics mode is saved on: applies from the next launch. */
   saved: boolean;
+  /** Software video decoding is saved on: applies from the next launch. */
+  softwareVideoSaved?: boolean;
   launch: LaunchGraphics;
 }
 
@@ -48,4 +55,9 @@ export function linuxGraphicsGet(): Promise<GraphicsStatus> {
 
 export function linuxGraphicsSafeModeSet(on: boolean): Promise<GraphicsStatus> {
   return invoke<GraphicsStatus>("linux_graphics_safe_mode_set", { on });
+}
+
+/** Save software video decoding on or off (Linux; applies from the next launch). */
+export function linuxVideoSoftwareSet(on: boolean): Promise<GraphicsStatus> {
+  return invoke<GraphicsStatus>("linux_video_software_set", { on });
 }

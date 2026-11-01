@@ -26,7 +26,8 @@
 //!   (CachyOS, a 2026 NVIDIA driver, the AppImage) still needed the switches.
 //! - Safe graphics mode (Settings, `--safe-graphics` or
 //!   `PS5UPLOAD_SAFE_GRAPHICS=1` for a window too white to reach Settings):
-//!   both switches on any stack.
+//!   both switches on any stack, and video decoded in software (see "Video
+//!   decoding" below).
 //!
 //! Everything here is only applied when the variable is unset, so a user can
 //! always override in either direction.
@@ -150,11 +151,173 @@ pub const APP_IDENTIFIER: &str = "com.phantomptr.ps5upload";
 /// (Tauri's app_config_dir on Linux: `$XDG_CONFIG_HOME` or `~/.config`, then
 /// the identifier), read before the webview exists, so plain path rules.
 pub fn safe_mode_path(xdg_config_home: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
+    config_file(xdg_config_home, home, "safe-graphics")
+}
+
+/// A file in the app's config folder (see `safe_mode_path`).
+pub fn config_file(
+    xdg_config_home: Option<&str>,
+    home: Option<&str>,
+    name: &str,
+) -> Option<PathBuf> {
     let base = match xdg_config_home {
         Some(d) if d.starts_with('/') => PathBuf::from(d),
         _ => PathBuf::from(home.filter(|h| !h.is_empty())?).join(".config"),
     };
-    Some(base.join(APP_IDENTIFIER).join("safe-graphics"))
+    Some(base.join(APP_IDENTIFIER).join(name))
+}
+
+// ── Video decoding (issue #610) ─────────────────────────────────────────────
+//
+// WebKitGTK decodes Remote Play's picture (WebCodecs) with GStreamer, which
+// prefers the graphics card's decoders: GStreamer's VA elements rank above
+// the software ones (PRIMARY + 1), and WebKit's own "prefer-software" still
+// takes the highest-ranked decoder it finds. So the one switch that really
+// keeps the graphics card out is GStreamer's rank override,
+// GST_PLUGIN_FEATURE_RANK, read when the web process starts: the hardware
+// decoders at NONE are never picked.
+//
+// Two files in the config folder drive it, read before the webview exists:
+// `software-video` (present: software decoding, Settings › Window ›
+// Graphics), and `video-starting`, which the page writes just before it asks
+// WebKit for a decoder and removes once a picture came (or the stream ended).
+// Found at startup, the last run died while a decoder was being made: this
+// launch decodes in software, saves that, and the page says so once.
+
+/// Software decoding saved on.
+pub const SOFTWARE_VIDEO_FILE: &str = "software-video";
+/// A decoder was being made when the app last ran.
+pub const VIDEO_STARTING_FILE: &str = "video-starting";
+/// Forces the choice for one launch: "1" software, "0" the graphics card.
+pub const SOFTWARE_VIDEO_ENV: &str = "PS5UPLOAD_SOFTWARE_VIDEO";
+/// GStreamer's per-element rank override.
+pub const GST_RANK_ENV: &str = "GST_PLUGIN_FEATURE_RANK";
+
+/// Why this launch decodes video the way it does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoWhy {
+    /// The default: the graphics card when GStreamer has a decoder for it.
+    Default,
+    /// PS5UPLOAD_SOFTWARE_VIDEO set.
+    Variable,
+    /// The saved setting.
+    Setting,
+    /// Safe graphics mode.
+    SafeMode,
+    /// The last run crashed while a decoder was being made.
+    Recovered,
+}
+
+impl VideoWhy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VideoWhy::Default => "default",
+            VideoWhy::Variable => "PS5UPLOAD_SOFTWARE_VIDEO",
+            VideoWhy::Setting => "the setting",
+            VideoWhy::SafeMode => "safe graphics mode",
+            VideoWhy::Recovered => "the last Play crashed while starting the picture",
+        }
+    }
+}
+
+/// The decision for this launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoDecision {
+    pub software: bool,
+    pub why: VideoWhy,
+    /// Software decoding is to be saved on (the crash recovery), and the page
+    /// tells the user once.
+    pub recovered: bool,
+}
+
+/// Software or hardware decoding for this launch. `env`: PS5UPLOAD_SOFTWARE_VIDEO
+/// (empty says nothing); `saved`: the setting; `safe`: Safe graphics mode;
+/// `crashed`: the start marker was left behind. The variable wins; a crash
+/// switches to software only when the card was in use, since otherwise there
+/// is nothing left to switch.
+pub fn video_decision(env: Option<&str>, saved: bool, safe: bool, crashed: bool) -> VideoDecision {
+    let d = |software, why| VideoDecision {
+        software,
+        why,
+        recovered: false,
+    };
+    match env {
+        Some(v) if !v.is_empty() => return d(v != "0", VideoWhy::Variable),
+        _ => {}
+    }
+    if saved {
+        return d(true, VideoWhy::Setting);
+    }
+    if safe {
+        return d(true, VideoWhy::SafeMode);
+    }
+    if crashed {
+        return VideoDecision {
+            software: true,
+            why: VideoWhy::Recovered,
+            recovered: true,
+        };
+    }
+    d(false, VideoWhy::Default)
+}
+
+/// The codecs GStreamer's hardware decoders are named after.
+const HW_CODECS: [&str; 6] = ["h264", "h265", "vp8", "vp9", "av1", "mpeg2"];
+
+/// The graphics card's video decoders, by GStreamer element name: VA (`va`,
+/// gst-plugins-bad; a second card's elements carry its render node, as in
+/// `varenderD129h264dec`), the older VA-API plugin (`vaapi`), NVIDIA's
+/// (`nv`) and the V4L2 stateless ones of ARM boards (`v4l2sl`). `render_nodes`:
+/// the names in /dev/dri ("renderD128", ...).
+pub fn hardware_decoders(render_nodes: &[String]) -> Vec<String> {
+    let mut names = Vec::new();
+    for prefix in ["va", "vaapi", "nv", "v4l2sl"] {
+        for codec in HW_CODECS {
+            names.push(format!("{prefix}{codec}dec"));
+        }
+    }
+    names.push("vaapidecodebin".into());
+    for node in render_nodes {
+        for codec in HW_CODECS {
+            names.push(format!("va{node}{codec}dec"));
+        }
+    }
+    names
+}
+
+/// GST_PLUGIN_FEATURE_RANK with `names` at NONE added after what is set
+/// already. An element the user ranked themselves keeps their rank; None when
+/// there is nothing to add.
+pub fn gst_rank_value(existing: Option<&str>, names: &[String]) -> Option<String> {
+    let existing = existing.unwrap_or("").trim().trim_end_matches(',');
+    let theirs: Vec<&str> = existing
+        .split(',')
+        .filter_map(|e| e.split(':').next())
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .collect();
+    let ours: Vec<String> = names
+        .iter()
+        .filter(|n| !theirs.contains(&n.as_str()))
+        .map(|n| format!("{n}:NONE"))
+        .collect();
+    if ours.is_empty() {
+        return None;
+    }
+    let ours = ours.join(",");
+    Some(if existing.is_empty() {
+        ours
+    } else {
+        format!("{existing},{ours}")
+    })
+}
+
+/// What a start marker found at startup means: a crash during a picture start,
+/// unless it is older than a day (a run that was killed long after, say by a
+/// shutdown with the marker never cleared, is not evidence of anything).
+pub fn marker_means_crash(age_secs: Option<u64>) -> bool {
+    age_secs.is_some_and(|a| a < 24 * 60 * 60)
 }
 
 /// What this launch ended up with, for the page and Settings.
@@ -170,6 +333,10 @@ pub struct LaunchGraphics {
     pub current_stack: bool,
     /// The app set at least one of the variables itself.
     pub set_by_app: bool,
+    /// Video is decoded without the graphics card this launch.
+    pub software_video: bool,
+    /// ...because the last run crashed while starting a picture (say so once).
+    pub video_recovered: bool,
 }
 
 static LAUNCH: OnceLock<LaunchGraphics> = OnceLock::new();
@@ -180,7 +347,11 @@ pub fn page_flag_script() -> String {
     let l = LAUNCH.get().copied().unwrap_or_default();
     format!(
         "window.__PS5UPLOAD_LINUX_GRAPHICS__={};",
-        serde_json::json!({ "compositingOff": l.compositing_off })
+        serde_json::json!({
+            "compositingOff": l.compositing_off,
+            "softwareVideo": l.software_video,
+            "videoRecovered": l.video_recovered,
+        })
     )
 }
 
@@ -207,6 +378,7 @@ pub fn apply() {
             done.push(format!("{key} left as set"));
         }
     }
+    let (software_video, video_recovered) = apply_video(safe);
     let env = |k: &str| std::env::var(k).ok();
     let launch = LaunchGraphics {
         compositing_off: var_disables(env("WEBKIT_DISABLE_COMPOSITING_MODE").as_deref()),
@@ -214,6 +386,8 @@ pub fn apply() {
         safe_mode: safe,
         current_stack: current_stack(session),
         set_by_app,
+        software_video,
+        video_recovered,
     };
     // In every log and bug report: what was read and what was decided.
     eprintln!(
@@ -242,6 +416,67 @@ pub fn apply() {
     let _ = LAUNCH.set(launch);
 }
 
+/// Decide software or hardware video decoding (before the webview exists) and
+/// set GST_PLUGIN_FEATURE_RANK for software. Returns (software, recovered).
+/// Called on Linux only; compiled everywhere so every CI runner checks it.
+fn apply_video(safe: bool) -> (bool, bool) {
+    let path = user_config_file;
+    let saved = path(SOFTWARE_VIDEO_FILE).is_some_and(|p| p.exists());
+    let marker = path(VIDEO_STARTING_FILE);
+    let age = marker
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok())
+        .map(|t| t.elapsed().map_or(0, |d| d.as_secs()));
+    let crashed = marker_means_crash(age);
+    if let Some(m) = marker.as_ref().filter(|_| age.is_some()) {
+        let _ = std::fs::remove_file(m);
+    }
+    let decision = video_decision(
+        std::env::var(SOFTWARE_VIDEO_ENV).ok().as_deref(),
+        saved,
+        safe,
+        crashed,
+    );
+    if decision.recovered {
+        // Saved, so the next launches keep it until the user turns it back on.
+        if let Err(e) = set_flag_file(path(SOFTWARE_VIDEO_FILE), true) {
+            eprintln!("[linux] could not save software decoding: {e}");
+        }
+    }
+    let mut detail = String::new();
+    if decision.software {
+        let nodes: Vec<String> = std::fs::read_dir("/dev/dri")
+            .map(|d| {
+                d.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| n.starts_with("renderD"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let existing = std::env::var(GST_RANK_ENV).ok();
+        if let Some(v) = gst_rank_value(existing.as_deref(), &hardware_decoders(&nodes)) {
+            std::env::set_var(GST_RANK_ENV, v);
+        }
+        if existing.is_some() {
+            detail = format!("; added to your {GST_RANK_ENV}");
+        }
+    }
+    if crashed && !decision.recovered {
+        detail.push_str("; the last Play crashed while starting the picture");
+    }
+    eprintln!(
+        "[linux] video decoding: {} ({}){detail}",
+        if decision.software {
+            "software"
+        } else {
+            "hardware"
+        },
+        decision.why.as_str(),
+    );
+    (decision.software, decision.recovered)
+}
+
 /// Settings › Graphics: what this launch uses, and the saved switch.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -250,6 +485,8 @@ pub struct GraphicsStatus {
     pub linux: bool,
     /// Safe graphics mode is saved on (takes effect at the next launch).
     pub saved: bool,
+    /// Software video decoding is saved on (takes effect at the next launch).
+    pub software_video_saved: bool,
     pub launch: LaunchGraphics,
 }
 
@@ -261,23 +498,18 @@ fn saved_path() -> Option<PathBuf> {
     )
 }
 
-#[tauri::command]
-pub fn linux_graphics_get() -> GraphicsStatus {
-    GraphicsStatus {
-        linux: cfg!(target_os = "linux"),
-        saved: saved_path().is_some_and(|p| p.exists()),
-        launch: LAUNCH.get().copied().unwrap_or_default(),
-    }
+/// A file in this user's config folder.
+fn user_config_file(name: &str) -> Option<PathBuf> {
+    config_file(
+        std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+        name,
+    )
 }
 
-/// Save Safe graphics mode on or off. Read at the next launch: the variables
-/// must be set before the webview starts.
-#[tauri::command]
-pub fn linux_graphics_safe_mode_set(on: bool) -> Result<GraphicsStatus, String> {
-    if !cfg!(target_os = "linux") {
-        return Err("Safe graphics mode is for the Linux app".into());
-    }
-    let path = saved_path().ok_or("no home folder")?;
+/// Create (`on`) or remove a flag file.
+fn set_flag_file(path: Option<PathBuf>, on: bool) -> Result<(), String> {
+    let path = path.ok_or("no home folder")?;
     if on {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -288,6 +520,49 @@ pub fn linux_graphics_safe_mode_set(on: bool) -> Result<GraphicsStatus, String> 
             return Err(format!("{}: {e}", path.display()));
         }
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn linux_graphics_get() -> GraphicsStatus {
+    GraphicsStatus {
+        linux: cfg!(target_os = "linux"),
+        saved: saved_path().is_some_and(|p| p.exists()),
+        software_video_saved: user_config_file(SOFTWARE_VIDEO_FILE).is_some_and(|p| p.exists()),
+        launch: LAUNCH.get().copied().unwrap_or_default(),
+    }
+}
+
+/// Save software video decoding on or off. Read at the next launch: GStreamer
+/// reads its rank override when the web process starts.
+#[tauri::command]
+pub fn linux_video_software_set(on: bool) -> Result<GraphicsStatus, String> {
+    if !cfg!(target_os = "linux") {
+        return Err("Software video decoding is set here for the Linux app only".into());
+    }
+    set_flag_file(user_config_file(SOFTWARE_VIDEO_FILE), on)?;
+    Ok(linux_graphics_get())
+}
+
+/// The page is about to ask WebKit for a video decoder (`on`), or has its
+/// picture / stopped (`!on`). Left behind by a crash, the next launch decodes
+/// in software. Nothing outside Linux.
+#[tauri::command]
+pub fn linux_video_starting(on: bool) -> Result<(), String> {
+    if !cfg!(target_os = "linux") {
+        return Ok(());
+    }
+    set_flag_file(user_config_file(VIDEO_STARTING_FILE), on)
+}
+
+/// Save Safe graphics mode on or off. Read at the next launch: the variables
+/// must be set before the webview starts.
+#[tauri::command]
+pub fn linux_graphics_safe_mode_set(on: bool) -> Result<GraphicsStatus, String> {
+    if !cfg!(target_os = "linux") {
+        return Err("Safe graphics mode is for the Linux app".into());
+    }
+    set_flag_file(saved_path(), on)?;
     Ok(linux_graphics_get())
 }
 
@@ -769,5 +1044,132 @@ mod tests {
         // The folder is named after the app's identifier.
         assert!(include_str!("../tauri.conf.json")
             .contains(&format!("\"identifier\": \"{APP_IDENTIFIER}\"")));
+    }
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn video_decoding_defaults_to_the_graphics_card() {
+        let d = video_decision(None, false, false, false);
+        assert!(!d.software);
+        assert_eq!(d.why, VideoWhy::Default);
+        assert!(!d.recovered);
+        // An empty variable says nothing.
+        assert!(!video_decision(Some(""), false, false, false).software);
+    }
+
+    #[test]
+    fn software_video_from_the_setting_or_safe_mode() {
+        let d = video_decision(None, true, false, false);
+        assert!(d.software && d.why == VideoWhy::Setting && !d.recovered);
+        let d = video_decision(None, false, true, false);
+        assert!(d.software && d.why == VideoWhy::SafeMode && !d.recovered);
+    }
+
+    #[test]
+    fn a_crash_while_starting_the_picture_switches_to_software_once() {
+        let d = video_decision(None, false, false, true);
+        assert!(d.software && d.recovered);
+        assert_eq!(d.why, VideoWhy::Recovered);
+        // Already in software: nothing to switch, nothing to announce.
+        assert!(!video_decision(None, true, false, true).recovered);
+        assert!(!video_decision(None, false, true, true).recovered);
+    }
+
+    #[test]
+    fn the_variable_wins_both_ways() {
+        let d = video_decision(Some("1"), false, false, false);
+        assert!(d.software && d.why == VideoWhy::Variable);
+        // "0": the graphics card, over the setting, safe mode and a crash.
+        let d = video_decision(Some("0"), true, true, true);
+        assert!(!d.software && !d.recovered && d.why == VideoWhy::Variable);
+    }
+
+    #[test]
+    fn only_a_fresh_marker_counts_as_a_crash() {
+        assert!(!marker_means_crash(None));
+        assert!(marker_means_crash(Some(0)));
+        assert!(marker_means_crash(Some(3600)));
+        assert!(!marker_means_crash(Some(2 * 24 * 3600)));
+    }
+
+    #[test]
+    fn the_hardware_decoders_cover_va_vaapi_and_every_card() {
+        let n = hardware_decoders(&names(&["renderD128", "renderD129"]));
+        for want in [
+            "vah264dec",
+            "vah265dec",
+            "vaav1dec",
+            "vavp9dec",
+            "vaapih264dec",
+            "vaapih265dec",
+            "vaapidecodebin",
+            "nvh264dec",
+            "nvh265dec",
+            "v4l2slh264dec",
+            "varenderD129h264dec",
+            "varenderD129h265dec",
+        ] {
+            assert!(n.iter().any(|x| x == want), "{want}");
+        }
+        // The software decoders are never touched.
+        assert!(!n
+            .iter()
+            .any(|x| x.starts_with("avdec") || x.contains("openh264")));
+    }
+
+    #[test]
+    fn the_rank_override_keeps_the_users_own_value() {
+        let ours = names(&["vah264dec", "vah265dec"]);
+        assert_eq!(
+            gst_rank_value(None, &ours).as_deref(),
+            Some("vah264dec:NONE,vah265dec:NONE")
+        );
+        assert_eq!(
+            gst_rank_value(Some(""), &ours).as_deref(),
+            Some("vah264dec:NONE,vah265dec:NONE")
+        );
+        // Appended after theirs, never instead of it.
+        assert_eq!(
+            gst_rank_value(Some("avdec_h264:MAX"), &ours).as_deref(),
+            Some("avdec_h264:MAX,vah264dec:NONE,vah265dec:NONE")
+        );
+        assert_eq!(
+            gst_rank_value(Some("avdec_h264:MAX,"), &ours).as_deref(),
+            Some("avdec_h264:MAX,vah264dec:NONE,vah265dec:NONE")
+        );
+        // An element they ranked keeps their rank.
+        assert_eq!(
+            gst_rank_value(Some("vah264dec:PRIMARY"), &ours).as_deref(),
+            Some("vah264dec:PRIMARY,vah265dec:NONE")
+        );
+        // All theirs already: nothing to set.
+        assert_eq!(
+            gst_rank_value(Some("vah264dec:NONE,vah265dec:256"), &ours),
+            None
+        );
+    }
+
+    #[test]
+    fn the_video_files_live_beside_safe_graphics() {
+        assert_eq!(
+            config_file(None, Some("/home/u"), SOFTWARE_VIDEO_FILE),
+            Some(PathBuf::from(
+                "/home/u/.config/com.phantomptr.ps5upload/software-video"
+            ))
+        );
+        assert_eq!(
+            config_file(Some("/x"), None, VIDEO_STARTING_FILE),
+            Some(PathBuf::from("/x/com.phantomptr.ps5upload/video-starting"))
+        );
+    }
+
+    #[test]
+    fn the_page_flag_carries_the_video_decision() {
+        let s = page_flag_script();
+        assert!(s.contains("\"softwareVideo\""), "{s}");
+        assert!(s.contains("\"videoRecovered\""), "{s}");
     }
 }
