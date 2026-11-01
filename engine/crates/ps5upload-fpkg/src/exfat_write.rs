@@ -23,8 +23,9 @@
 //! the spare and the plan/stream split, are PS5 Dump Forge's.)
 //!
 //! What is deliberately not done: no timestamps from the source (a fixed one, so the same
-//! folder always gives the same image), no volume label, no `ampr_emu.index` generation (the
-//! image is the folder as it is).
+//! folder always gives the same image), no volume label, no `ampr_emu.index` generation here
+//! (the image is the tree it is given; the engine's image build hands it a libSceAmpr game with
+//! a regenerated index, `AmprIndexed`).
 
 use std::collections::BTreeMap;
 use std::io::Write;

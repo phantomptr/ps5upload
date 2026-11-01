@@ -1946,6 +1946,31 @@ ShadowMount+ 1.7, a game image made by the app in each of `.exfat`, `.ffpkg`, `.
 compressed `.ffpfsc` mounted, registered and ran its game. A folder that is on the console or on
 a saved server cannot be made into an image from here; copy it to this computer first.
 
+**Q: Can I add games to Workshop's queue while one is converting?**
+Yes. While a game is being made, pick or drop more under **① Game** (also **On the PS5…**, or
+**Convert first** from elsewhere): they go into **⑤ Queue** and are made one at a time after it,
+in order. With **Start the queue when you add something** on (Settings › Uploads, the default)
+nothing else is needed; off, they wait until you press **Convert N queued**. A game set to
+install still goes on to **Upload & Install**'s queue once it is made.
+
+**Q: What does "Rebuild AMPR index" do?**
+A backported game whose `eboot.bin` reads its files through libSceAmpr is served by `ampr_emu`,
+which looks every file up in `ampr_emu.index` and trusts the sizes there. If the folder changed
+since the index was made (trimmed, patched, dumped again), the game can crash or stop at start.
+Packages and images Workshop builds always carry a fresh index; **Rebuild AMPR index** (under
+① once the game is checked) makes one for a game you play as it is:
+
+- **A folder on this computer or on the PS5**: the index is written again at the game's root,
+  from its files. The game's own index is kept once as `ampr_emu.index.bak`. It says how many
+  files it lists and whether the old one was different.
+- **An `.exfat`, `.ffpkg` or `.ffpfs` image on this computer**: an edited copy
+  (`<name>-edited`) with the new index; the image itself is not changed. An image on the PS5 has
+  to be copied here first.
+- **A `.ffpfsc`**: compressed and read-only, so it is not edited. **Convert again** makes a fresh
+  `.ffpfsc` with a new index.
+
+It is only offered for a game that uses libSceAmpr, and says so otherwise.
+
 **Q: Can I install a package that is already on a USB drive?**
 Yes. Plug the drive into the PS5; packages on it show in **Upload & Install → Already on the PS5**
 (or **On the PS5 or USB** under the drop zone) with an **Install** button. The app first copies the package to internal storage on the console
