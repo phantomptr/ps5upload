@@ -7009,6 +7009,19 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "rp_settings_close": "Beállítások bezárása",
   "rp_settings_paused": "Amíg a Beállítások nyitva vannak, a játék nem kap billentyűt és kontrollergombot.",
   "rp_picture_tools": "Képeszközök",
+  "saves_switch_title": "Switch-játékok (ProsperoEden)",
+  "saves_switch_running": "A ProsperoEden fut. Zárd be visszaállítás előtt.",
+  "saves_switch_close_note": "Zárd be a ProsperoEdent visszaállítás előtt.",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "Konzol",
+  "saves_switch_profile": "{id} profil",
+  "saves_switch_changed": "Utolsó módosítás: {when}",
+  "saves_switch_backed_up": "{title} mentve",
+  "saves_switch_backup_failed": "Nem sikerült menteni: {title}",
+  "saves_switch_backup_hint": "A játék mentésének biztonsági mentése most, az automatikus mentések mappájába.",
+  "saves_switch_need_dir": "Előbb válassz mappát az automatikus mentésekhez.",
+  "saves_switch_backup_now": "Mentés most",
+  "saves_switch_no_backups": "Még nincs biztonsági mentés.",
 };
 
 export default hu;

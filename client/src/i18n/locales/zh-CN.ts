@@ -6662,6 +6662,19 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "rp_settings_close": "关闭设置",
   "rp_settings_paused": "设置打开时，游戏不会收到任何按键或手柄输入。",
   "rp_picture_tools": "画面工具",
+  "saves_switch_title": "Switch 游戏（ProsperoEden）",
+  "saves_switch_running": "ProsperoEden 正在运行。恢复前请先关闭它。",
+  "saves_switch_close_note": "恢复前请先关闭 ProsperoEden。",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "主机",
+  "saves_switch_profile": "配置文件 {id}",
+  "saves_switch_changed": "最后更改 {when}",
+  "saves_switch_backed_up": "已备份 {title}",
+  "saves_switch_backup_failed": "无法备份 {title}",
+  "saves_switch_backup_hint": "立即将此游戏的存档备份到自动备份文件夹。",
+  "saves_switch_need_dir": "请先选择自动备份的文件夹。",
+  "saves_switch_backup_now": "立即备份",
+  "saves_switch_no_backups": "还没有备份。",
 };
 
 export default zh_CN;

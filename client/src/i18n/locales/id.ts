@@ -6712,6 +6712,19 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "rp_settings_close": "Tutup pengaturan",
   "rp_settings_paused": "Game tidak menerima tombol keyboard atau kontroler selama Pengaturan terbuka.",
   "rp_picture_tools": "Alat gambar",
+  "saves_switch_title": "Game Switch (ProsperoEden)",
+  "saves_switch_running": "ProsperoEden sedang berjalan. Tutup sebelum memulihkan.",
+  "saves_switch_close_note": "Tutup ProsperoEden sebelum memulihkan.",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "Konsol",
+  "saves_switch_profile": "Profil {id}",
+  "saves_switch_changed": "Terakhir diubah {when}",
+  "saves_switch_backed_up": "{title} dicadangkan",
+  "saves_switch_backup_failed": "Tidak dapat mencadangkan {title}",
+  "saves_switch_backup_hint": "Cadangkan simpanan game ini sekarang, ke folder cadangan otomatis.",
+  "saves_switch_need_dir": "Pilih folder untuk cadangan otomatis dulu.",
+  "saves_switch_backup_now": "Cadangkan sekarang",
+  "saves_switch_no_backups": "Belum ada cadangan.",
 };
 
 export default id;

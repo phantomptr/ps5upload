@@ -87,6 +87,7 @@ import { isTauriEnv } from "../../lib/tauriEnv";
 import AutoBackupCard from "./AutoBackupCard";
 import ServerBackupCard from "./ServerBackupCard";
 import MoveFromPs4 from "./MoveFromPs4";
+import SwitchSaves from "./SwitchSaves";
 import { formatDate } from "../../lib/formatDate";
 
 /**
@@ -258,6 +259,8 @@ export default function SavesScreen() {
   const ownerName = useCallback((e: SaveEntry) => userName(e.user_id, users), [users]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bumped by each refresh, so the Switch emulator's saves are looked at again too.
+  const [refreshCount, setRefreshCount] = useState(0);
   // Opened from a game's page: that game's saves are scrolled to and marked.
   const location = useLocation();
   const focusTitle =
@@ -299,6 +302,7 @@ export default function SavesScreen() {
     const probe = guard.capture();
     setLoading(true);
     setError(null);
+    setRefreshCount((n) => n + 1);
     try {
       const [r, profile] = await Promise.all([
         savesList(mgmtAddr(probe.host)),
@@ -1357,6 +1361,9 @@ export default function SavesScreen() {
             </section>
           ))}
           </div>
+          {payloadStatus === "up" && host?.trim() && (
+            <SwitchSaves host={host} refreshKey={refreshCount} />
+          )}
         </div>
 
         {loading && saves === null && (

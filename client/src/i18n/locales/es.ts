@@ -6656,6 +6656,19 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
   "rp_settings_close": "Cerrar ajustes",
   "rp_settings_paused": "El juego no recibe teclas ni pulsaciones del mando mientras los ajustes están abiertos.",
   "rp_picture_tools": "Herramientas de imagen",
+  "saves_switch_title": "Juegos de Switch (ProsperoEden)",
+  "saves_switch_running": "ProsperoEden está abierto. Ciérralo antes de restaurar.",
+  "saves_switch_close_note": "Cierra ProsperoEden antes de restaurar.",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "Consola",
+  "saves_switch_profile": "Perfil {id}",
+  "saves_switch_changed": "Último cambio {when}",
+  "saves_switch_backed_up": "{title} respaldado",
+  "saves_switch_backup_failed": "No se pudo respaldar {title}",
+  "saves_switch_backup_hint": "Respaldar ahora la partida de este juego, en la carpeta de copias automáticas.",
+  "saves_switch_need_dir": "Elige primero una carpeta para las copias automáticas.",
+  "saves_switch_backup_now": "Respaldar ahora",
+  "saves_switch_no_backups": "Aún no hay copias.",
 };
 
 export default es;

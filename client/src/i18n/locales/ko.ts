@@ -6720,6 +6720,19 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "rp_settings_close": "설정 닫기",
   "rp_settings_paused": "설정이 열려 있는 동안에는 키와 컨트롤러 입력이 게임에 전달되지 않습니다.",
   "rp_picture_tools": "화면 도구",
+  "saves_switch_title": "Switch 게임 (ProsperoEden)",
+  "saves_switch_running": "ProsperoEden이 실행 중입니다. 복원하기 전에 닫으세요.",
+  "saves_switch_close_note": "복원하기 전에 ProsperoEden을 닫으세요.",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "본체",
+  "saves_switch_profile": "프로필 {id}",
+  "saves_switch_changed": "마지막 변경 {when}",
+  "saves_switch_backed_up": "{title} 백업 완료",
+  "saves_switch_backup_failed": "{title}을(를) 백업하지 못했습니다",
+  "saves_switch_backup_hint": "이 게임의 세이브를 지금 자동 백업 폴더에 백업합니다.",
+  "saves_switch_need_dir": "먼저 자동 백업 폴더를 선택하세요.",
+  "saves_switch_backup_now": "지금 백업",
+  "saves_switch_no_backups": "아직 백업이 없습니다.",
 };
 
 export default ko;

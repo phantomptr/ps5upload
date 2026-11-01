@@ -6656,6 +6656,19 @@ helper_mismatch_boot_copy: "PS5 запустила старую копию по�
   "rp_settings_close": "Закрыть настройки",
   "rp_settings_paused": "Пока открыты настройки, игра не получает нажатий клавиш и контроллера.",
   "rp_picture_tools": "Инструменты изображения",
+  "saves_switch_title": "Игры Switch (ProsperoEden)",
+  "saves_switch_running": "ProsperoEden запущен. Закройте его перед восстановлением.",
+  "saves_switch_close_note": "Закройте ProsperoEden перед восстановлением.",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "Консоль",
+  "saves_switch_profile": "Профиль {id}",
+  "saves_switch_changed": "Изменено {when}",
+  "saves_switch_backed_up": "{title}: копия сделана",
+  "saves_switch_backup_failed": "Не удалось сделать копию {title}",
+  "saves_switch_backup_hint": "Сделать копию сохранения этой игры сейчас, в папку автоматических копий.",
+  "saves_switch_need_dir": "Сначала выберите папку для автоматических копий.",
+  "saves_switch_backup_now": "Сделать копию",
+  "saves_switch_no_backups": "Копий пока нет.",
 };
 
 export default ru;

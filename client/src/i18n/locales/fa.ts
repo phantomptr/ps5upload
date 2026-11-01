@@ -6995,6 +6995,19 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
   "rp_settings_close": "بستن تنظیمات",
   "rp_settings_paused": "تا وقتی تنظیمات باز است، بازی هیچ کلید یا فشار دسته‌ای دریافت نمی‌کند.",
   "rp_picture_tools": "ابزارهای تصویر",
+  "saves_switch_title": "بازی‌های Switch (ProsperoEden)",
+  "saves_switch_running": "ProsperoEden در حال اجراست. پیش از بازیابی آن را ببندید.",
+  "saves_switch_close_note": "پیش از بازیابی ProsperoEden را ببندید.",
+  "saves_switch_badge": "Switch",
+  "saves_switch_console": "کنسول",
+  "saves_switch_profile": "پروفایل {id}",
+  "saves_switch_changed": "آخرین تغییر {when}",
+  "saves_switch_backed_up": "از {title} پشتیبان گرفته شد",
+  "saves_switch_backup_failed": "پشتیبان‌گیری از {title} ممکن نشد",
+  "saves_switch_backup_hint": "همین حالا از ذخیرهٔ این بازی در پوشهٔ پشتیبان‌های خودکار پشتیبان بگیر.",
+  "saves_switch_need_dir": "اول پوشه‌ای برای پشتیبان‌های خودکار انتخاب کنید.",
+  "saves_switch_backup_now": "پشتیبان‌گیری اکنون",
+  "saves_switch_no_backups": "هنوز پشتیبانی نیست.",
 };
 
 export default fa;
