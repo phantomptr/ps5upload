@@ -6710,6 +6710,10 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "play_setup_blockers_body": "Beberapa payload mematikan encoder video konsol, yang dibutuhkan Remote Play: Hush salah satunya. Langkah ini tercentang saat tidak ada yang menyala.",
   "rp_set_applies_next": "Berlaku saat kamu mulai lagi",
   "rp_settings_close": "Tutup pengaturan",
+  "rp_keyboard_title": "Ketik untuk PS5",
+  "rp_keyboard_done": "Selesai",
+  "rp_keyboard_cancel": "Batal",
+  "rp_keyboard_hint": "Enter: selesai. Esc: batal. Selama Anda mengetik di sini, game tidak menerima tombol keyboard atau kontroler.",
   "rp_settings_paused": "Game tidak menerima tombol keyboard atau kontroler selama Pengaturan terbuka.",
   "rp_picture_tools": "Alat gambar",
 };

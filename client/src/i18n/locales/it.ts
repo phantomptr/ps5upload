@@ -6654,6 +6654,10 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
   "play_setup_blockers_body": "Alcuni payload disattivano l'encoder video della console, che serve a Remote Play: Hush lo fa. Questo passaggio si spunta quando nessuno è attivo.",
   "rp_set_applies_next": "Si applica al prossimo avvio",
   "rp_settings_close": "Chiudi le impostazioni",
+  "rp_keyboard_title": "Scrivi per la PS5",
+  "rp_keyboard_done": "Fatto",
+  "rp_keyboard_cancel": "Annulla",
+  "rp_keyboard_hint": "Invio: fatto. Esc: annulla. Mentre scrivi qui, il gioco non riceve tasti né pressioni del controller.",
   "rp_settings_paused": "Mentre le Impostazioni sono aperte il gioco non riceve tasti né pressioni del controller.",
   "rp_picture_tools": "Strumenti immagine",
 };

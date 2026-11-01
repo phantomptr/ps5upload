@@ -6993,6 +6993,10 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
   "play_setup_blockers_body": "بعضی پی‌لودها رمزگذار ویدیوی کنسول را که Remote Play لازم دارد خاموش می‌کنند: Hush چنین می‌کند. این مرحله وقتی هیچ‌کدام روشن نباشند تیک می‌خورد.",
   "rp_set_applies_next": "از شروع بعدی اعمال می‌شود",
   "rp_settings_close": "بستن تنظیمات",
+  "rp_keyboard_title": "تایپ برای PS5",
+  "rp_keyboard_done": "تمام",
+  "rp_keyboard_cancel": "لغو",
+  "rp_keyboard_hint": "Enter: تمام. Esc: لغو. تا وقتی اینجا تایپ می‌کنید، بازی هیچ کلید یا فشار دسته‌ای دریافت نمی‌کند.",
   "rp_settings_paused": "تا وقتی تنظیمات باز است، بازی هیچ کلید یا فشار دسته‌ای دریافت نمی‌کند.",
   "rp_picture_tools": "ابزارهای تصویر",
 };

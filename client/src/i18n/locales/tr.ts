@@ -6708,6 +6708,10 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "play_setup_blockers_body": "Bazı payload'lar, Remote Play'in ihtiyaç duyduğu konsol video kodlayıcısını kapatır: Hush bunu yapar. Hiçbiri açık değilken bu adım işaretlenir.",
   "rp_set_applies_next": "Yeniden başlatınca geçerli olur",
   "rp_settings_close": "Ayarları kapat",
+  "rp_keyboard_title": "PS5 için yaz",
+  "rp_keyboard_done": "Bitti",
+  "rp_keyboard_cancel": "İptal",
+  "rp_keyboard_hint": "Enter: bitti. Esc: iptal. Burada yazarken oyun tuş veya kumanda basışı almaz.",
   "rp_settings_paused": "Ayarlar açıkken oyun hiçbir tuş ya da kumanda basışı almaz.",
   "rp_picture_tools": "Görüntü araçları",
 };

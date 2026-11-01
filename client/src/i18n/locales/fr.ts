@@ -6717,6 +6717,10 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "play_setup_blockers_body": "Certains payloads désactivent l'encodeur vidéo de la console, dont la Lecture à distance a besoin : c'est le cas de Hush. Cette étape se coche quand aucun n'est activé.",
   "rp_set_applies_next": "S'applique au prochain démarrage",
   "rp_settings_close": "Fermer les réglages",
+  "rp_keyboard_title": "Saisir pour la PS5",
+  "rp_keyboard_done": "Terminé",
+  "rp_keyboard_cancel": "Annuler",
+  "rp_keyboard_hint": "Entrée : terminé. Échap : annuler. Pendant la saisie ici, le jeu ne reçoit ni touches ni appuis de manette.",
   "rp_settings_paused": "Le jeu ne reçoit ni touches ni appuis de manette tant que les réglages sont ouverts.",
   "rp_picture_tools": "Outils d'image",
 };
