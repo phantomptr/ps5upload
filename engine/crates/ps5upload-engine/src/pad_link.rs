@@ -408,7 +408,7 @@ fn kbm_left(id: u64) -> serde_json::Value {
 fn kbm_caps(c: anyhow::Result<Option<ps5upload_core::vinput::Caps>>) -> serde_json::Value {
     let (mouse, keyboard, reason) = match c {
         Ok(Some(c)) => (c.mouse, c.keyboard, c.reason),
-        Ok(None) => (false, false, Some("helper_old".to_string())),
+        Ok(None) => (false, false, Some("vinput_helper_old".to_string())),
         Err(_) => (false, false, Some("unreachable".to_string())),
     };
     serde_json::json!({"kbm_caps": {"mouse": mouse, "keyboard": keyboard, "reason": reason}})
@@ -834,7 +834,7 @@ mod tests {
         );
         assert_eq!(
             kbm_caps(Ok(None)),
-            serde_json::json!({"kbm_caps": {"mouse": false, "keyboard": false, "reason": "helper_old"}})
+            serde_json::json!({"kbm_caps": {"mouse": false, "keyboard": false, "reason": "vinput_helper_old"}})
         );
         assert_eq!(
             kbm_caps(Err(anyhow::anyhow!("down"))),
