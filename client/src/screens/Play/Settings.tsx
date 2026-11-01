@@ -17,6 +17,10 @@ import { ControllerSetup } from "./ControllerSetup";
 import { ButtonRemap } from "./ButtonRemap";
 import { RpNetworkSettings } from "./NetworkExtras";
 import { RpBlockerSetting } from "./RpBlockers";
+import { KbmModeSection } from "./KbmModeSection";
+import { KbmShortcutsSection } from "./KbmShortcutsSection";
+import { useKbmStore } from "../../state/kbm";
+import { shortcutLabel } from "../../lib/kbmShortcuts";
 
 /** Remote Play's settings, one tab at a time (in the settings drawer, SettingsDrawer.tsx). */
 export type SettingsTab = "picture" | "sound" | "controls" | "session";
@@ -268,6 +272,7 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
   const keymap = useRemotePlayStore((s) => s.keymap);
   const setKeymap = useRemotePlayStore((s) => s.setKeymap);
   const num = (v: string) => Number(v);
+  const releaseKey = useKbmStore((s) => shortcutLabel(s.shortcuts.release));
   const later = running ? tr("rp_set_applies_next", undefined, "Applies when you start again") : undefined;
 
   if (tab === "picture") {
@@ -471,12 +476,14 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
 
   return (
     <div className="space-y-6">
+      <KbmModeSection running={running} />
+      <KbmShortcutsSection />
       <Section>
         <Toggle
           checked={prefs.capturePointer}
           onChange={(v) => setPrefs({ capturePointer: v })}
           label={tr("rp_capture_pointer", undefined, "Clicking the picture hides the pointer")}
-          hint={tr("rp_capture_pointer_hint", undefined, "Esc shows it again.")}
+          hint={tr("rp_capture_pointer_hint2", { key: releaseKey }, `${releaseKey} shows it again.`)}
         />
         <Toggle
           checked={prefs.rumble}
@@ -520,6 +527,21 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
             { value: "off", label: tr("rp_touch_off", undefined, "Never") },
           ]}
         />
+        {prefs.touchControls !== "off" && (
+          <label className="flex flex-col gap-1 text-xs font-medium">
+            {tr("rp_tp_speed", undefined, "Touchpad speed")}
+            <input
+              type="range"
+              min={0.5}
+              max={4}
+              step={0.25}
+              value={prefs.touchpadSpeed}
+              onChange={(e) => setPrefs({ touchpadSpeed: num(e.target.value) })}
+              className="h-9 accent-[var(--color-accent)]"
+              data-testid="rp-touchpad-speed"
+            />
+          </label>
+        )}
         {prefs.touchControls !== "off" && (
           <div className="grid grid-cols-2 items-end gap-3">
             <Select

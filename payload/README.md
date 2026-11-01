@@ -11,8 +11,9 @@ travel over one encrypted session with up to 8 data lanes. It also serves
 PS5Upload Minion, the console's own web page, on **9180** (`WEBUI_PORT` in
 `include/config.h`; off when `webui.json` says `enabled:false`), and starts
 companion daemons on demand through the console's `:9021` loader: the
-installer on **9115**, the SMB daemon (`smb/`, loopback-only on 9183) and
-the short-lived archive extractor (`extractor/`, no socket).
+installer on **9115**, the SMB daemon (`smb/`, loopback-only on 9183), the
+keyboard & mouse companion (`vinput/`, `ps5u-vinput`, loopback-only on 9184)
+and the short-lived archive extractor (`extractor/`, no socket).
 
 ## Layout
 

@@ -6,14 +6,14 @@
  * - English only: state/lang is swapped for src/pad/langStub.ts and lib/trStatic for
  *   src/pad/trStaticStub.ts (all locales inlined would be
  *   megabytes). The phone app's own controller screen (PadRemote) is translated.
- * - Budget: the build fails over 600 KiB raw.
+ * - Budget: the build fails over 640 KiB raw (600 before the Touchpad & keyboard tab).
  */
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-const RAW_BUDGET = 600 * 1024;
+const RAW_BUDGET = 640 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/pad_page.html", import.meta.url));
 const LANG = fileURLToPath(new URL("./src/state/lang.ts", import.meta.url));
 const STUB = fileURLToPath(new URL("./src/pad/langStub.ts", import.meta.url));

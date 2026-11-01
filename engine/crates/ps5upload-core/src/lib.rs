@@ -57,5 +57,6 @@ pub mod system_control;
 pub mod transfer;
 pub mod units;
 pub mod users;
+pub mod vinput;
 pub mod volumes;
 pub mod zip_cd;

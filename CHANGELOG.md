@@ -4,6 +4,37 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Groundwork: your computer's keyboard and mouse as the PS5's own.** Remote Play's Settings ›
+  Controls now has three modes, kept per game (the home screen has its own): **Controller** (the
+  keys and mouse act as a controller, exactly as before, and the default), **Keyboard & mouse**
+  (the PS5 gets a real keyboard and mouse, for games and apps that support them) and **Mixed** (a
+  real mouse; the keys act as a controller, WASD moves). Ctrl+Alt+M switches. A line says what the
+  PS5 sees: "PS5 sees: mouse ✓/– keyboard ✓/–".
+- **Still off by default.** The console side now runs as a small companion process the helper
+  starts through the PS5's payload loader (port 9021) when you pick Keyboard & mouse or Mixed, so
+  a hang or crash there no longer takes the helper down. On a FW 13.60 console it has been tested end to end:
+  every move, click, scroll and key arrived, and the PS5 let go of everything when the stream
+  ended, the computer went quiet, or the companion or helper was restarted. Whether a game takes
+  the input is still untested, so it only turns on for testers (FW 13.60 with
+  `/data/ps5upload/vinput.enable`); everywhere else Settings says "Native keyboard & mouse isn't
+  available on this console yet" and Controller works exactly as before.
+- **A mode button on the stream bar**, next to Game: it shows the mode (controller, keyboard &
+  mouse, or both for Mixed) and a click switches like Ctrl+Alt+M. It spins while the PS5 starts its
+  keyboard & mouse side, and is greyed out with the reason when the console can't do it (for
+  example "Needs a payload loader on port 9021").
+- How it works once on: the mouse goes to the PS5 only while it is captured on the picture;
+  keys are sent by their place on the keyboard, whatever its layout; everything held is let go
+  when the window loses focus, Settings opens, the mode changes or the stream stops, and the
+  console lets go by itself if the computer goes quiet for 2 seconds.
+- **Type into the PS5's on-screen keyboard during Remote Play (experimental).** When a game or
+  the PS5 opens its keyboard, a text box shows over the stream (in full screen too) with the
+  console's text in it, ready to type, and a phone opens its own keyboard. What you type reaches
+  the PS5 as you go; Enter or Done keeps it, Esc or Cancel drops it, and the box closes when the
+  PS5 closes its keyboard. The game gets no keys or controller presses while you type. Needs the
+  engine from this version; not yet tried on a console.
+
 ## 10.3.0
 
 - **Remote Play's Settings open over the stream.** Every Settings button (on the picture's bar,

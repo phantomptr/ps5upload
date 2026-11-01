@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Expand, RotateCw, Volume2 } from "lucide-react";
 
 import { askMotion, motionAvailable, startMotion } from "../lib/motion";
 import { PadClient, type PadLinkStage } from "../lib/padClient";
 import { TouchControls } from "../screens/Play/TouchControls";
+import { PhoneKeyboardButton, TouchModeToggle, TouchpadSurface } from "../screens/Play/TouchpadOverlay";
+import { KbmSender } from "../lib/kbmInput";
 import { useTr } from "../state/lang";
 import { rpInput } from "../state/remotePlay";
 import { makeWatchPlayer, type MsePlayer, type WatchPlayer, type WatchProblem } from "./watchPlayer";
@@ -43,6 +45,50 @@ async function fillScreen(): Promise<void> {
   }
 }
 
+type KbmCapsMsg = { mouse: boolean; keyboard: boolean; reason: string | null };
+
+/** Why the touchpad can't be used with this console, in words (null: it can). */
+function touchpadBlocked(tr: Tr, caps: KbmCapsMsg | null): string | null {
+  if (caps?.mouse) return null;
+  if (caps?.reason === "vinput_helper_old" || caps?.reason === "helper_old") return tr("rp_kbm_helper_old", undefined, "Update the PS5 helper to use a keyboard and mouse.");
+  if (caps?.reason === "vinput_needs_loader") return tr("rp_kbm_needs_loader", undefined, "Needs a payload loader on port 9021");
+  return tr("rp_kbm_unavailable", undefined, "Native keyboard & mouse isn't available on this console yet.");
+}
+
+/** The Touchpad & keyboard tab: the screen is the PS5 mouse's touchpad and ⌨ types on its
+ *  keyboard, sent through the link to the computer's page (which owns the PS5's devices). */
+function PadTouchpad({ client, caps }: { client: PadClient; caps: KbmCapsMsg }) {
+  const tr = useTr();
+  const sender = useMemo(() => new KbmSender({ send: (m) => client.sendKbm(m) }), [client]);
+  useEffect(() => {
+    sender.setWant({ mouse: true, keyboard: caps.keyboard });
+  }, [sender, caps.keyboard]);
+  useEffect(() => () => sender.dispose(), [sender]);
+  const input = useMemo(
+    () => ({
+      move: (dx: number, dy: number) => sender.move(dx, dy),
+      button: (b: number, d: boolean) => sender.button(b, d),
+      scroll: (dy: number, dx: number) => sender.scroll(dy, dx, 0),
+      key: (code: string, d: boolean) => sender.key(code, d),
+    }),
+    [sender],
+  );
+  return (
+    <TouchpadSurface sink={input} speed={1.5} className="absolute inset-0 z-10" testId="pad-touchpad">
+      <p className="pointer-events-none absolute inset-x-6 top-1/2 -translate-y-1/2 text-center text-xs leading-5 text-white/50">
+        {tr(
+          "rp_tp_tips",
+          undefined,
+          "Drag to move. Tap to click. Two fingers: tap to right-click, drag to scroll. Tap, then touch and drag to select.",
+        )}
+      </p>
+      <div className="absolute" style={{ right: "max(12px, env(safe-area-inset-right))", bottom: "max(12px, env(safe-area-inset-bottom))" }}>
+        <PhoneKeyboardButton sink={caps.keyboard ? input : null} />
+      </div>
+    </TouchpadSurface>
+  );
+}
+
 /**
  * A phone as a controller for the Remote Play session another device runs: the on-screen
  * controller full screen and sideways, as when the phone plays itself, and any controller
@@ -73,6 +119,9 @@ export function PadApp({
   const [control, setControl] = useState(!watch);
   const [problem, setProblem] = useState<WatchProblem | null>(null);
   const [sound, setSound] = useState(false);
+  // Touchpad & keyboard: offered when the console has a native mouse (the engine says).
+  const [kbmCaps, setKbmCaps] = useState<KbmCapsMsg | null>(null);
+  const [tab, setTab] = useState<"controller" | "touchpad">("controller");
 
   useEffect(() => {
     if (!motionOn) return;
@@ -96,6 +145,7 @@ export function PadApp({
       onStage: setStage,
       touchPad: () => rpInput.touchPad,
       onLight: setLight,
+      onKbmCaps: setKbmCaps,
       motion: () => rpInput.motion,
       watch: p
         ? { onFrame: (d) => p.onMessage(d), onCodec: (h) => p.setHevc(h), onControl: setControl }
@@ -204,7 +254,20 @@ export function PadApp({
         </p>
       )}
 
-      {live && control && <TouchControls stream={client} layout="overlay" />}
+      {live && control && (tab === "touchpad" && kbmCaps?.mouse && client ? (
+        <PadTouchpad client={client} caps={kbmCaps} />
+      ) : (
+        <TouchControls stream={client} layout="overlay" />
+      ))}
+      {live && control && (
+        <TouchModeToggle
+          mode={tab === "touchpad" && kbmCaps?.mouse ? "touchpad" : "controller"}
+          onChange={setTab}
+          blocked={touchpadBlocked(tr, kbmCaps)}
+          touchpadLabel={tr("pad_touchpad_tab", undefined, "Touchpad & keyboard")}
+          style={{ top: "calc(max(6px, env(safe-area-inset-top)) + 2rem)" }}
+        />
+      )}
 
       {live && portrait && (
         <div className="pointer-events-none absolute inset-x-0 bottom-6 z-20 flex justify-center">
