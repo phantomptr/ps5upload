@@ -1227,12 +1227,16 @@ export default function SavesScreen() {
                 {entries.map((e) => (
                   <li
                     key={e.path}
-                    className="flex items-center gap-3 rounded-[var(--radius-field)] bg-[var(--color-surface)] px-2 py-1.5 text-xs"
+                    className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-field)] bg-[var(--color-surface)] px-2 py-1.5 text-xs"
                   >
-                    <span className="rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-xs uppercase">
+                    {/* A PS5 save has up to six actions. Without flex-wrap and a basis
+                        for the details, the buttons (shrink-0) squeezed the badge and
+                        the details to one letter per line and pushed the USB menu out
+                        of the card; now the buttons that don't fit move to a new line. */}
+                    <span className="shrink-0 rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-xs uppercase">
                       {e.kind}
                     </span>
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 basis-[12rem]">
                       <code className="block truncate text-xs text-[var(--color-muted)]">
                         {e.path}
                       </code>
