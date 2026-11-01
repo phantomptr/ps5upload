@@ -222,7 +222,7 @@ function Ps2SaveRow({
       data-testid="ps2-save"
     >
       <div className="flex flex-wrap items-center gap-3">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-[12rem]">
           <div className="font-medium">{label}</div>
           <div className="text-[var(--color-muted)]">
             {tr(
