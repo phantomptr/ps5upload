@@ -11359,6 +11359,13 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/rp/ws", get(rp_stream_api::ws))
         .route("/api/ps5/rp/session", get(rp_stream_api::current))
         .route("/api/ps5/rp/replay", get(rp_stream_api::replay))
+        // Remote Play for a local script or agent (#615), this computer only.
+        .route("/api/ps5/rp/frame", get(rp_stream_api::automation::frame))
+        .route("/api/ps5/rp/input", post(rp_stream_api::automation::input))
+        .route(
+            "/api/ps5/rp/input/release",
+            post(rp_stream_api::automation::release),
+        )
         .route("/api/ps5/vinput/caps", get(vinput_api::caps))
         .route("/api/ps5/vinput/ws", get(vinput_api::ws))
         .route("/rp-player", get(rp_stream_api::player))
@@ -12059,6 +12066,9 @@ mod loopback_guard_tests {
             "/api/ps5/rp/pad-link/decide",
             "/api/ps5/rp/pad-relay",
             "/api/ps5/rp/ws",
+            "/api/ps5/rp/frame",
+            "/api/ps5/rp/input",
+            "/api/ps5/rp/input/release",
             "/pad/../api/jobs",
             "/padx",
             "/api/pad/ws/x",
