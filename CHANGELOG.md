@@ -12,11 +12,19 @@ What's new in ps5upload, written for humans.
   (the PS5 gets a real keyboard and mouse, for games and apps that support them) and **Mixed** (a
   real mouse; the keys act as a controller, WASD moves). Ctrl+Alt+M switches. A line says what the
   PS5 sees: "PS5 sees: mouse ✓/– keyboard ✓/–".
-- **Not available on consoles yet.** The helper's side is built and tested, but the console's
-  virtual keyboard and mouse stay off until they are confirmed working on real hardware, so for
-  now Settings says "Native keyboard & mouse isn't available on this console yet" and the two new
-  modes can't be picked. Controller emulation works exactly as before.
-- How it will work once on: the mouse goes to the PS5 only while it is captured on the picture;
+- **Still off by default.** The console side now runs as a small companion process the helper
+  starts through the PS5's payload loader (port 9021) when you pick Keyboard & mouse or Mixed, so
+  a hang or crash there no longer takes the helper down. On a FW 13.60 console it has been tested end to end:
+  every move, click, scroll and key arrived, and the PS5 let go of everything when the stream
+  ended, the computer went quiet, or the companion or helper was restarted. Whether a game takes
+  the input is still untested, so it only turns on for testers (FW 13.60 with
+  `/data/ps5upload/vinput.enable`); everywhere else Settings says "Native keyboard & mouse isn't
+  available on this console yet" and Controller works exactly as before.
+- **A mode button on the stream bar**, next to Game: it shows the mode (controller, keyboard &
+  mouse, or both for Mixed) and a click switches like Ctrl+Alt+M. It spins while the PS5 starts its
+  keyboard & mouse side, and is greyed out with the reason when the console can't do it (for
+  example "Needs a payload loader on port 9021").
+- How it works once on: the mouse goes to the PS5 only while it is captured on the picture;
   keys are sent by their place on the keyboard, whatever its layout; everything held is let go
   when the window loses focus, Settings opens, the mode changes or the stream stops, and the
   console lets go by itself if the computer goes quiet for 2 seconds.
