@@ -78,7 +78,9 @@ function KeyboardBox({ initial }: { initial: string }) {
   useEffect(() => {
     // The focus, so typing goes here at once; a phone shows its keyboard.
     input.current?.focus({ preventScroll: true });
-    input.current?.select();
+    // The caret after the console's text, to add to it.
+    const el = input.current;
+    el?.setSelectionRange(el.value.length, el.value.length);
     // Esc while the box is open cancels it, focused or not: before the picture's own key
     // handling (Circle, leave full screen), on the document, capturing.
     const onEsc = (e: KeyboardEvent) => {
