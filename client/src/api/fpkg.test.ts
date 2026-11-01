@@ -17,3 +17,16 @@ describe("fpkg.estimate", () => {
     expect(invoke).toHaveBeenCalledWith("fpkg_estimate", { source: "/games/a" });
   });
 });
+
+describe("fpkg.rebuildImageAmprIndex", () => {
+  // A second Rebuild of the same image found `<name>-edited` taken and failed (409).
+  it("numbers the edited copy when an earlier rebuild already made one", async () => {
+    await fpkg.rebuildImageAmprIndex("/games/G.exfat");
+    expect(invoke).toHaveBeenCalledWith("exfat_build", {
+      source: "/games/G.exfat",
+      edits: [],
+      rebuildAmprIndex: true,
+      keepBoth: true,
+    });
+  });
+});

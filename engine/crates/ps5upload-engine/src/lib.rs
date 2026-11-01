@@ -35,6 +35,7 @@
 //!   GET  /api/ps5/console-shares      → the console's own saved network shares (see `console_shares_api`)
 
 mod activity;
+mod ampr_index_api;
 mod ampr_trace;
 mod app_dump_api;
 mod ava1_api;
@@ -11054,6 +11055,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/fpkg/inspect", post(fpkg_api::fpkg_inspect_handler))
         .route("/api/fpkg/build", post(fpkg_api::fpkg_build_handler))
         .route("/api/fpkg/delete", post(fpkg_api::fpkg_delete_handler))
+        .route(
+            "/api/fpkg/ampr-index",
+            post(ampr_index_api::ampr_index_handler),
+        )
         .route("/api/fpkg/estimate", post(fpkg_api::fpkg_estimate_handler))
         .route("/api/fpkg/extract", post(fpkg_api::fpkg_extract_handler))
         .route(

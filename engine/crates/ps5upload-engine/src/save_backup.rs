@@ -105,7 +105,9 @@ pub fn needing_backup<'a>(
     saves
         .iter()
         .filter(|e| {
-            !running.contains(&crate::emulator_saves::app_of(e).to_ascii_uppercase())
+            !crate::emulator_saves::titles_of(crate::emulator_saves::app_of(e))
+                .iter()
+                .any(|a| running.contains(&a.to_ascii_uppercase()))
                 && crate::emulator_saves::backs_up(e)
                 && e.mtime > 0
                 && now_secs - e.mtime >= SETTLE_SECS
@@ -563,12 +565,18 @@ pub fn run_pass() -> Result<(), String> {
 
 /// Whether `title_id` runs on `host` (an app process carrying it).
 pub(crate) fn title_running(host: &str, title_id: &str) -> Result<bool, String> {
+    Ok(running_of(host, &[title_id])?.is_some())
+}
+
+/// Which of `titles` runs on `host` (an app process carrying it), if one does.
+pub(crate) fn running_of<'a>(host: &str, titles: &[&'a str]) -> Result<Option<&'a str>, String> {
     let list = ps5upload_core::process_mgr::process_list(host)
         .map_err(|e| format!("could not check the running game: {e:#}"))?;
-    Ok(list
-        .processes
-        .iter()
-        .any(|p| p.kind == "app" && p.title_id.eq_ignore_ascii_case(title_id)))
+    Ok(titles.iter().copied().find(|t| {
+        list.processes
+            .iter()
+            .any(|p| p.kind == "app" && p.title_id.eq_ignore_ascii_case(t))
+    }))
 }
 
 /// Every file of a save folder with its size and time, sorted: two equal fingerprints mean
@@ -707,7 +715,9 @@ pub fn back_up_now(host: &str, title_id: &str, user_id: u32) -> Result<PathBuf, 
         .into_iter()
         .find(|e| e.title_id.eq_ignore_ascii_case(title_id) && e.user_id as u32 == user_id)
         .ok_or_else(|| format!("{title_id} has no save of this user on the PS5."))?;
-    let made = if title_running(host, &entry.title_id)? {
+    // A Switch game's save is written by the emulator, whichever of its titles runs.
+    let app = crate::emulator_saves::app_of(&entry);
+    let made = if running_of(host, &crate::emulator_saves::titles_of(app))?.is_some() {
         snapshot_one(host, &entry, &s)?
     } else {
         back_up_one(host, &entry, &s.dir, s.keep, None, &|| Ok(()))?
@@ -969,7 +979,7 @@ pub(crate) fn restore_zip_with(
     let (app, emulator) = (writer.app, writer.emulator.is_some());
     // The game writes its save while it runs: one put back underneath it is overwritten, or
     // worse, mixed with what the game writes next.
-    if title_running(host, app)? {
+    if let Some(app) = running_of(host, &crate::emulator_saves::titles_of(app))? {
         return Err(match writer.emulator {
             Some(name) => format!("{name} ({app}) is running on the PS5. Close it, then restore."),
             None => format!("{app} is running on the PS5. Close the game, then restore."),
@@ -1884,6 +1894,12 @@ mod tests {
             &BTreeSet::new(),
         );
         assert_eq!(due.len(), 1);
+        // It waits while the emulator runs, under either of its titles.
+        for app in [crate::emulator_saves::APP, crate::emulator_saves::MIRROR] {
+            let running: BTreeSet<String> = [app.to_string()].into();
+            let due = needing_backup("h", std::slice::from_ref(&sw), &Done::new(), 2000, &running);
+            assert!(due.is_empty(), "{app}");
+        }
         // Its backup is named, kept and listed as a PS5 save's is.
         let name = format!(
             "{}{}.zip",

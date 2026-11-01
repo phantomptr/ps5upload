@@ -214,15 +214,19 @@ pub fn due_saves<'a>(
     saves
         .iter()
         .filter(|e| {
-            let app = emulator_saves::app_of(e);
+            let apps = emulator_saves::titles_of(emulator_saves::app_of(e));
             emulator_saves::backs_up(e)
                 && e.mtime > 0
                 && e.mtime > done.get(&done_key(host, &e.path)).copied().unwrap_or(0)
                 && (pick.users.is_empty()
                     || emulator_saves::is_emulator_save(e)
                     || pick.users.contains(&(e.user_id as u32)))
-                && pick.title.is_none_or(|t| app.eq_ignore_ascii_case(t))
-                && !pick.running.contains(&app.to_ascii_uppercase())
+                && pick
+                    .title
+                    .is_none_or(|t| apps.iter().any(|a| a.eq_ignore_ascii_case(t)))
+                && !apps
+                    .iter()
+                    .any(|a| pick.running.contains(&a.to_ascii_uppercase()))
                 && (!pick.settle || now_secs - e.mtime >= SETTLE_SECS)
         })
         .collect()
@@ -1212,6 +1216,24 @@ mod tests {
         };
         assert_eq!(
             ids(due_saves("h", &saves, &Done::new(), 2000, &busy)),
+            ["PPSA00001"]
+        );
+        // Its mirror is the same emulator: closing it makes them due, and they wait while it runs.
+        let mirror_closed = Pick {
+            title: Some(emulator_saves::MIRROR),
+            ..all
+        };
+        assert_eq!(
+            ids(due_saves("h", &saves, &Done::new(), 2000, &mirror_closed)),
+            ["0100F2C0115B6000"]
+        );
+        let mirror: BTreeSet<String> = [emulator_saves::MIRROR.to_string()].into();
+        let mirror_busy = Pick {
+            running: &mirror,
+            ..all
+        };
+        assert_eq!(
+            ids(due_saves("h", &saves, &Done::new(), 2000, &mirror_busy)),
             ["PPSA00001"]
         );
         // A Switch title ID on a save that is not the emulator's is not a game.

@@ -36,6 +36,7 @@ import {
   useFpkgConversion,
 } from "../../state/fpkgConversion";
 import { useUploadStore } from "../../state/upload";
+import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { DEFAULT_IMAGE_SUBPATH } from "../../lib/imageUpload";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { useTr } from "../../state/lang";
@@ -52,8 +53,17 @@ import { RunCard, idleRun, lz4Active, type Lz4Choice, type RunCardProps } from "
 import { outputFor } from "../../lib/outputPlace";
 import { SwapJournals } from "./SwapJournals";
 import { QueueCard } from "./QueueCard";
-import { buildExtension, thenFor, useConvertQueue, type ConvertBuild, type ConvertThen } from "../../state/convertQueue";
+import { AmprIndexTool, amprIndexPlan } from "./AmprIndexTool";
+import {
+  buildExtension,
+  startAfterBuild,
+  thenFor,
+  useConvertQueue,
+  type ConvertBuild,
+  type ConvertThen,
+} from "../../state/convertQueue";
 import { gameFoldersAmong, gamesInFolder } from "../../lib/folderScan";
+import { sourcesForPath, withoutBuilding } from "../../lib/convertQueueSources";
 import { usePackageViewer } from "../../state/packageViewer";
 import { consoleSwapDeps } from "../../lib/dumpSwapConsole";
 import { amprTrace, titleIdOf } from "../../api/amprTrace";
@@ -130,6 +140,7 @@ export default function WorkshopScreen() {
   const finishReplace = useFpkgConversion((s) => s.finishReplace);
   const queueItems = useConvertQueue((s) => s.items);
   const queueRunning = useConvertQueue((s) => s.running);
+  const queueAutoStart = useUploadSettingsStore((s) => s.queueAutoStart);
   // ③'s one choice of what happens after converting, for Convert and the queue alike.
   const [thenChoice, setThen] = useState<ConvertThen>("keep");
   const [deleteAfter, setDeleteAfter] = useState(false);
@@ -195,8 +206,12 @@ export default function WorkshopScreen() {
   };
   /** Queue what was picked or found, then say what was left out. */
   const queueAll = (sources: { path: string; isDir: boolean }[], notGames: number) => {
-    const results = sources.map((x) => queueAdd(x.path, x.isDir));
+    // The game being made right now is not queued again.
+    const now = useFpkgConversion.getState().pipeline;
+    const { take, building } = withoutBuilding(sources, now.phase === "running" ? now.source : null);
+    const results = take.map((x) => queueAdd(x.path, x.isDir));
     const notes: string[] = [];
+    if (building) notes.push(tr("cq_building_now", undefined, "This game is being made now."));
     if (notGames)
       notes.push(
         tr("cq_not_games", { count: notGames }, "{count} folder(s) were not games and were skipped."),
@@ -207,6 +222,8 @@ export default function WorkshopScreen() {
     }
     if (results.some((r) => r === false)) notes.push(tr("cq_already", undefined, "This game is already in the queue."));
     setError(notes.length ? notes.join(" ") : null);
+    // Added while a game is being made (#621): made after it, without pressing Start.
+    if (results.some((r) => r === true)) startAfterBuild(useFpkgConversion.getState().pipeline.phase === "running");
   };
   /** Why a source was left out of the queue, said for a person. */
   const skippedText = (why: QueueSkip, n: number) =>
@@ -284,6 +301,18 @@ export default function WorkshopScreen() {
     [outputDir, outputPlace],
   );
 
+  /** The same game checked again in place (its index was just rebuilt): what is shown stays
+   *  until the new check lands, so nothing under ① blinks away. */
+  const recheckQuietly = async (path: string) => {
+    const token = latest.current.begin();
+    try {
+      const found = await fpkg.inspect(path.trim(), outputFor(path.trim(), outputPlace, outputDir).outputDir);
+      if (latest.current.isCurrent(token)) setInspection(found);
+    } catch {
+      // The earlier check stands.
+    }
+  };
+
   /** A new source: the previous result and its buttons go; ignored while a run is going. */
   const chooseSource = useCallback(
     (path: string) => {
@@ -301,7 +330,22 @@ export default function WorkshopScreen() {
     [check, reset, setSource, setPassword],
   );
 
-  const dropActive = useWebviewDrop(chooseSource, !locked);
+  /** One game picked, dropped or handed over: checked under ①, or, while a game is being made
+   *  (① cannot change then), into the queue to be made after it (#621). */
+  const chooseOrQueue = (path: string) => {
+    if (useFpkgConversion.getState().pipeline.phase !== "running") {
+      chooseSource(path);
+      return;
+    }
+    // A dropped or handed path does not say whether it is a folder: an image, package or
+    // archive is a file; a folder is scanned as "Add games from a folder…" scans one (one item
+    // per game in it).
+    sourcesForPath(path)
+      .then((found) => queueAll(found.sources, found.skipped))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  };
+
+  const dropActive = useWebviewDrop(chooseOrQueue, true);
 
   // A game handed over from elsewhere (the viewer's Convert… on a drop).
   const location = useLocation();
@@ -311,7 +355,7 @@ export default function WorkshopScreen() {
   } | null;
   const handed = handedState?.source;
   useEffect(() => {
-    if (handed) chooseSource(handed);
+    if (handed) chooseOrQueue(handed);
     // Once per hand-over.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handed]);
@@ -371,15 +415,15 @@ export default function WorkshopScreen() {
   };
 
   /** A dump on the console, read in place over its FTP server. */
-  const browseConsole = useCallback(async () => {
+  const browseConsole = async () => {
     const picked = await pickPath({
       mode: "any",
       title: tr("fpkg.pickConsole", undefined, "Choose a game folder or image on the PS5"),
       filters: [{ name: "Game image or package", extensions: ["exfat", "ffpkg", "ffpfs", "ffpfsc", "pkg"] }],
       source: { console: host },
     });
-    if (picked) chooseSource(picked);
-  }, [chooseSource, host, tr]);
+    if (picked) chooseOrQueue(picked);
+  };
 
   const browseOutput = useCallback(async () => {
     try {
@@ -588,8 +632,20 @@ export default function WorkshopScreen() {
   const lookable = !locked && canLookInside(source);
   const folderable = !locked && canFolder;
   const mountable = drives.canMount && !locked && isDriveImage(source) && !source.startsWith("ps5://") && !isRemotePath(source);
+  // #621: a libSceAmpr game's ampr_emu.index made again from its files, without converting.
+  const indexable = !inside && amprIndexPlan(source, inspection) !== "hidden";
+  /** A .ffpfsc's index is renewed by making a fresh .ffpfsc of it. */
+  const convertAgain = () => {
+    if (!src || locked) return;
+    setError(null);
+    const out = outFor(src);
+    showMake("image");
+    setThen("keep");
+    void buildImage(src, out.outputDir, true, imageFormat, undefined, undefined, undefined, true);
+    setTimeout(showRun, 50);
+  };
   const tools =
-    lookable || mountable || folderable ? (
+    lookable || mountable || folderable || indexable ? (
       <div className="flex flex-wrap gap-2 border-t border-[var(--color-border)] pt-2.5">
         {lookable && !inside && (
           <Button size="sm" variant="secondary" leftIcon={<FolderSearch size={14} />} onClick={() => setInside(true)}>
@@ -622,6 +678,15 @@ export default function WorkshopScreen() {
           >
             {tr("workshop_open_as_drive", undefined, "Open as a Drive")}
           </Button>
+        )}
+        {indexable && (
+          <AmprIndexTool
+            source={source}
+            inspection={inspection}
+            locked={locked}
+            onConvertAgain={convertAgain}
+            onRebuilt={() => void recheckQuietly(source)}
+          />
         )}
       </div>
     ) : undefined;
@@ -659,6 +724,7 @@ export default function WorkshopScreen() {
       inspection={inspection}
       checking={checking}
       locked={locked}
+      queueStarts={queueAutoStart}
       dropActive={dropActive}
       password={password}
       onPassword={setPassword}

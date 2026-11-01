@@ -392,6 +392,7 @@ pub fn run() {
             commands::game_inspect_files,
             commands::fpkg_build,
             commands::fpkg_delete,
+            commands::fpkg_ampr_index,
             commands::fpkg_estimate,
             commands::ps5_elfldr_health,
             commands::ps5_elfldr_ensure,

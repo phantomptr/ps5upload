@@ -2,7 +2,7 @@
 // running item shows its stages there), and a finished package is handed to the console queue.
 
 import { fpkg } from "../api/fpkg";
-import { setConvertRunner, type ConvertItem } from "../state/convertQueue";
+import { pipelinePhaseChanged, setConvertRunner, type ConvertItem } from "../state/convertQueue";
 import { useFpkgConversion } from "../state/fpkgConversion";
 import { pkgLibraryStore } from "../state/pkgLibrary";
 
@@ -93,5 +93,9 @@ let installed = false;
 export function installConvertRunner() {
   if (installed) return;
   installed = true;
-  setConvertRunner({ build, handOff });
+  setConvertRunner({ build, handOff, ready: whenIdle });
+  // A queue armed during a hand-started build starts once its result is put away (#621).
+  useFpkgConversion.subscribe((s, prev) => {
+    if (s.pipeline.phase !== prev.pipeline.phase) pipelinePhaseChanged(s.pipeline.phase);
+  });
 }

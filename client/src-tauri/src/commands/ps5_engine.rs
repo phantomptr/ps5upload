@@ -2510,6 +2510,15 @@ pub async fn fpkg_delete(path: String) -> Result<JsonValue, String> {
     post_json(&url, &serde_json::json!({ "path": path })).await
 }
 
+/// Rebuild a libSceAmpr game folder's `ampr_emu.index` where it is (this computer or a
+/// `ps5://` folder); runs as an engine job. POST /api/fpkg/ampr-index.
+#[tauri::command]
+pub async fn fpkg_ampr_index(source: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/ampr-index");
+    post_json(&url, &serde_json::json!({ "source": source })).await
+}
+
 /// Unpack a game archive into the output folder; runs as an engine job whose `dest` is the
 /// game found inside. POST /api/fpkg/extract.
 #[tauri::command]
@@ -2582,6 +2591,8 @@ pub async fn exfat_build(
     edits: Option<JsonValue>,
     // A name already taken in the output folder is numbered instead of refused.
     keep_both: Option<bool>,
+    // An edited copy whose one change is a regenerated ampr_emu.index (#621).
+    rebuild_ampr_index: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2599,6 +2610,7 @@ pub async fn exfat_build(
             "ffpfsc_level": ffpfsc_level,
             "edits": edits.unwrap_or_else(|| serde_json::json!([])),
             "keep_both": keep_both.unwrap_or(false),
+            "rebuild_ampr_index": rebuild_ampr_index.unwrap_or(false),
         }),
     )
     .await

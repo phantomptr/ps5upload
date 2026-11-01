@@ -92,4 +92,14 @@ describe("the Convert queue's runner (bug: a queued image came out as a .pkg)", 
     await flush();
     expect(calls[0].kind).toBe("pkg");
   });
+
+  it("leaves the next game Waiting while a build started by hand runs", async () => {
+    pipeline = { phase: "running" };
+    useConvertQueue.getState().add({ source: "/games/Next-app", compression: "balanced", then: "keep", host: null });
+    void useConvertQueue.getState().start();
+    await flush();
+    expect(calls).toHaveLength(0);
+    expect(useConvertQueue.getState().items[0].status).toBe("pending");
+    useConvertQueue.getState().stop();
+  });
 });

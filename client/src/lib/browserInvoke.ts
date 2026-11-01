@@ -823,6 +823,9 @@ export async function browserInvoke<T>(
     case "fpkg_delete": {
       return postJson<T>("/api/fpkg/delete", { path: args["path"] });
     }
+    case "fpkg_ampr_index": {
+      return postJson<T>("/api/fpkg/ampr-index", { source: args["source"] });
+    }
     case "fpkg_extract": {
       return postJson<T>("/api/fpkg/extract", {
         source: args["source"],
@@ -854,6 +857,7 @@ export async function browserInvoke<T>(
         ffpfsc_level: args["ffpfscLevel"],
         edits: args["edits"] ?? [],
         keep_both: args["keepBoth"] ?? false,
+        rebuild_ampr_index: args["rebuildAmprIndex"] ?? false,
       });
     }
     case "folder_build": {

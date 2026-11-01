@@ -575,6 +575,17 @@ impl<'a> AmprIndexed<'a> {
     /// `None` when the game does not read through libSceAmpr and ships no index: nothing to
     /// regenerate, the folder goes in as it is.
     pub(crate) fn wrap(inner: &'a mut dyn SourceTree) -> Result<Option<Self>, String> {
+        let mtime = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        Self::wrap_at(inner, mtime)
+    }
+
+    /// [`Self::wrap`] with every file stamped `mtime`.
+    pub(crate) fn wrap_at(
+        inner: &'a mut dyn SourceTree,
+        mtime: i64,
+    ) -> Result<Option<Self>, String> {
         let name = ps5upload_fpkg::ampr_index::NAME;
         let had = inner
             .files()
@@ -589,10 +600,7 @@ impl<'a> AmprIndexed<'a> {
             .filter(|f| !f.path.eq_ignore_ascii_case(name))
             .cloned()
             .collect();
-        let listed: Vec<(String, u64)> = files.iter().map(|f| (f.path.clone(), f.size)).collect();
-        let mtime = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs() as i64);
+        let listed = ps5upload_fpkg::ampr_index::listing(&files);
         let index = ps5upload_fpkg::ampr_index::build(&listed, mtime)?;
         files.push(SourceFile {
             path: name.to_string(),
@@ -604,6 +612,14 @@ impl<'a> AmprIndexed<'a> {
             files,
             index,
         }))
+    }
+}
+
+impl AmprIndexed<'_> {
+    /// The index this image carries.
+    #[cfg(test)]
+    pub(crate) fn index(&self) -> &[u8] {
+        &self.index
     }
 }
 
