@@ -92,6 +92,7 @@ export function GameIcon({
   rounded = "rounded-md",
   className = "",
   fill = false,
+  label,
 }: {
   host: string;
   titleId?: string | null;
@@ -114,6 +115,9 @@ export function GameIcon({
   className?: string;
   /** Fill the parent (a CoverFrame) instead of a fixed `size` square. */
   fill?: boolean;
+  /** The game's name, when known: with no art its initials stand in for the controller glyph,
+   *  the same tile the Collection shows for a game without a cover. */
+  label?: string | null;
 }) {
   // A scaled copy from the engine: a full icon0.png is 300-700 KiB (#450).
   const px = fill ? GRID_ICON_SIZE : iconSizeFor(size);
@@ -145,17 +149,43 @@ export function GameIcon({
   useEffect(() => {
     if (failed) advance();
   }, [failed, advance]);
+  // The art shows only once it has loaded: while a source is retried or fails, the tile shows
+  // the glyph (or the game's initials), never the browser's broken-image icon.
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const loaded = !!src && loadedSrc === src;
+  // An image the browser already had can finish before React's onLoad is attached.
+  const imgRef = useCallback(
+    (el: HTMLImageElement | null) => {
+      if (el && src && el.complete && el.naturalWidth > 0) setLoadedSrc(src);
+    },
+    [src],
+  );
+  const initials = iconInitials(label);
   return (
     <div
-      className={`flex shrink-0 items-center justify-center overflow-hidden bg-[var(--color-surface-3)] ${fill ? "h-full w-full" : ""} ${rounded} ${className}`}
+      className={`relative flex shrink-0 items-center justify-center overflow-hidden bg-[var(--color-surface-3)] ${fill ? "h-full w-full" : ""} ${rounded} ${className}`}
       style={fill ? undefined : { width: size, height: size }}
     >
-      {src ? (
+      {!loaded &&
+        (initials ? (
+          <span
+            className="select-none font-semibold leading-none text-[var(--color-muted)]"
+            style={{ fontSize: Math.max(10, Math.round(size * 0.36)) }}
+            aria-hidden
+          >
+            {initials}
+          </span>
+        ) : (
+          <Gamepad2 size={Math.round(size * 0.36)} className="text-[var(--color-muted)]" />
+        ))}
+      {src && (
         <img
+          ref={imgRef}
           src={src}
           crossOrigin={engineImageCors(src)}
           alt={alt}
-          className="h-full w-full object-cover"
+          onLoad={() => setLoadedSrc(src)}
+          className={`absolute inset-0 h-full w-full object-cover ${loaded ? "" : "opacity-0"}`}
           // Safe here: none of this component's call sites sit inside a
           // `content-visibility: auto` row. If you ever place a <GameIcon>
           // inside one of index.css's *-contain classes, drop this — the
@@ -166,12 +196,17 @@ export function GameIcon({
           // effect above then steps to the next source.
           onError={onError}
         />
-      ) : (
-        <Gamepad2
-          size={Math.round(size * 0.36)}
-          className="text-[var(--color-muted)]"
-        />
       )}
     </div>
   );
+}
+
+/** Up to two initials of a game's name ("Quiet Ocean" → "QO"), or "" for none. */
+export function iconInitials(label: string | null | undefined): string {
+  return (label ?? "")
+    .split(/\s+/)
+    .filter((w) => /^[\p{L}\p{N}]/u.test(w))
+    .slice(0, 2)
+    .map((w) => [...w][0]!.toUpperCase())
+    .join("");
 }

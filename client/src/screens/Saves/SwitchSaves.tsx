@@ -138,12 +138,17 @@ function SwitchSaveRow({ host, save }: { host: string; save: SwitchSave }) {
         <div className="min-w-0 flex-1 basis-[12rem]">
           <div className="font-medium">{profile}</div>
           <div className="text-[var(--color-muted)]">
-            {tr(
-              "saves_switch_changed",
-              { when: formatDate(save.mtime * 1000, "datetime") },
-              "Last changed {when}",
-            )}{" "}
-            · {formatBytes(save.size)}
+            {save.mtime > 0 && (
+              <>
+                {tr(
+                  "saves_switch_changed",
+                  { when: formatDate(save.mtime * 1000, "datetime") },
+                  "Last changed {when}",
+                )}{" "}
+                ·{" "}
+              </>
+            )}
+            {formatBytes(save.size)}
           </div>
         </div>
         <Button

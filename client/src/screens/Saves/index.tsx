@@ -94,7 +94,8 @@ import { useTr } from "../../state/lang";
 import { startTransferDownload } from "../../api/ps5";
 import { formatBytes } from "../../lib/format";
 import { iconTitleId } from "../../lib/titleId";
-import { useTitleInfo } from "../../lib/useTitleInfo";
+import { useInstalledTitles } from "../../state/installedTitles";
+import { ConsoleNamesContext, consoleNames, saveGameName, useSaveGameName } from "./gameNames";
 import { fetchTitleInfo } from "../../lib/titleDetails";
 import { mgmtAddr } from "../../lib/addr";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
@@ -131,6 +132,9 @@ export default function SavesScreen() {
   const navigate = useNavigate();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
+  // The names the console gives its games (app.db, as Games shows them), ahead of the online ones.
+  const installedTitles = useInstalledTitles(payloadStatus === "up" && host?.trim() ? host : undefined);
+  const names = useMemo(() => consoleNames(installedTitles), [installedTitles]);
   // A save opened decrypted on the console (one at a time), and the picker for a folder
   // holding more than one save image (Open save only: Share, Load and Copy take every image).
   const [openSave, setOpenSave] = useState<OpenSave | null>(null);
@@ -205,14 +209,17 @@ export default function SavesScreen() {
       setOpenBusy(false);
     }
   };
-  // The game's name for messages (usually cached by the group header); never waits long.
+  // The game's name for messages: the console's own name, else the online one (usually cached
+  // by the group header); never waits long.
   const gameNameOf = async (titleId: string) =>
+    saveGameName(titleId, names) ??
     (await Promise.race([
       fetchTitleInfo(iconTitleId(titleId) ?? titleId)
         .then((i) => i?.title ?? null)
         .catch(() => null),
       new Promise<null>((r) => setTimeout(() => r(null), 1500)),
-    ])) ?? titleId;
+    ])) ??
+    titleId;
   const whoseName = (e: SaveEntry) =>
     ownerName(e) ?? tr("saves_user_other", { id: userHex(e.user_id) }, "Other user ({id})");
   /** The engine's refusal in plain words: the parts the target's save is missing. */
@@ -1123,6 +1130,7 @@ export default function SavesScreen() {
   }
 
   return (
+    <ConsoleNamesContext.Provider value={names}>
     <div className="app-page">
       {confirmDialogNode}
       <PageHeader
@@ -1415,7 +1423,10 @@ export default function SavesScreen() {
                     <div className="min-w-0 flex-1 basis-[12rem]">
                       <div className="text-sm font-medium">{whoseName(e)}</div>
                       <div className="text-xs text-[var(--color-muted)]" title={e.path}>
-                        {formatBytes(e.size)} · {tr("saves_changed", { when: formatDate(e.mtime * 1000, "date") }, "changed {when}")}
+                        {formatBytes(e.size)}
+                        {/* No date when the console gave none (0): never "Dec 31, 1969". */}
+                        {e.mtime > 0 &&
+                          ` · ${tr("saves_changed", { when: formatDate(e.mtime * 1000, "date") }, "changed {when}")}`}
                       </div>
                       <BackupStatus stamp={latest.get(backupKey(e.title_id, e.user_id)) ?? null} now={latestAt} />
                     </div>
@@ -1593,6 +1604,7 @@ export default function SavesScreen() {
         )}
       </ConnectionGate>
     </div>
+    </ConsoleNamesContext.Provider>
   );
 }
 
@@ -1600,7 +1612,7 @@ export default function SavesScreen() {
  * One save group's header: cover + game name + folder count + "Open folder".
  *
  * Extracted into its own component so it can resolve the title id to a display
- * name and a cover via {@link useTitleInfo} — a hook can't run inside the
+ * name and a cover via {@link useSaveGameName} — a hook can't run inside the
  * parent's `.map()`. The name shows as "Saros (PPSA07631)" so the id stays
  * visible (it's what the save folder is actually named) while the human title
  * leads. The resolved cover URL is also handed to GameIcon as a last-resort
@@ -1620,12 +1632,14 @@ function SaveGroupHeader({
 }) {
   const tr = useTr();
   const navigate = useNavigate();
-  // A backup folder (`PPSA17221.bak`) is named after its game: show that game's name.
-  const info = useTitleInfo(iconTitleId(titleId) ?? titleId);
+  // A backup folder (`PPSA17221.bak`) is named after its game: show that game's name, the
+  // console's own first (as Games shows it), then the online one.
+  const { name, coverUrl } = useSaveGameName(titleId);
   // The game's page, when the folder names a game (a backup's `.bak` names one too).
   const gameId = (iconTitleId(titleId) ?? titleId).toUpperCase();
   return (
-    <header className="mb-2 flex items-center gap-2">
+    // Wraps on a phone: the game's name keeps the line, the folder count and Open folder go under.
+    <header className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
       {/* Game cover from /user/appmeta/<id>/icon0.png (readable), not the
           save's own icon0.png — that lives inside an unmounted PFS container,
           so reading it failed for every save and only spammed warnings. Falls
@@ -1634,19 +1648,20 @@ function SaveGroupHeader({
       <GameIcon
         host={host}
         titleId={titleId}
-        fallbackSrc={info?.coverImageUrl}
+        fallbackSrc={coverUrl}
+        label={name}
         size={32}
         rounded="rounded"
       />
       {/* Human title leads, region id kept in parentheses so the user can
           still tie it to the on-disk save folder name. */}
-      <h3 className="min-w-0 truncate text-sm font-semibold" title={titleId}>
+      <h3 className="min-w-0 max-w-[calc(100%-2.5rem)] truncate text-sm font-semibold" title={titleId}>
         {hasTitleId(gameId) ? (
           <Link to={gamePath(gameId)} className="hover:underline">
-            {info?.title ? `${info.title} (${titleId})` : titleId}
+            {name ? `${name} (${titleId})` : titleId}
           </Link>
-        ) : info?.title ? (
-          `${info.title} (${titleId})`
+        ) : name ? (
+          `${name} (${titleId})`
         ) : (
           titleId
         )}
@@ -1686,8 +1701,7 @@ function SaveGroupHeader({
 
 /** The game's name, or its title ID until (unless) it is known. */
 function useGameName(titleId: string): string {
-  const info = useTitleInfo(iconTitleId(titleId) ?? titleId);
-  return info?.title ?? titleId;
+  return useSaveGameName(titleId).name ?? titleId;
 }
 
 /** Open save on a save with several images: which one, by a readable name. */
