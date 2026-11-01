@@ -10,7 +10,7 @@
 //! differences: its files go as they are (`backup_finalize` and `restore_prepare` shape PS5 save
 //! images), and the app that writes it is the emulator, not the game.
 
-use ps5upload_core::fs_ops::{list_dir, DirEntry, ListDirOptions};
+use ps5upload_core::fs_ops::{list_dir, DirEntry, DirListing, ListDirOptions};
 use ps5upload_core::saves::SaveEntry;
 
 /// The emulator's title.
@@ -20,7 +20,7 @@ pub const KIND: &str = "switch";
 /// Where it keeps every profile's saves.
 pub const ROOT: &str = "/data/prosperoeden/user/nand/user/save/0000000000000000";
 /// How many folders down a game's save is looked into for its newest file.
-const DEPTH: u32 = 4;
+pub const DEPTH: u32 = 4;
 
 fn hex_digits(name: &str, len: usize) -> bool {
     name.len() == len && name.bytes().all(|b| b.is_ascii_hexdigit())
@@ -73,10 +73,33 @@ fn user_of(profile: &str) -> i32 {
 /// The emulator's saves on `host`: none when it is not there or has no save yet.
 pub fn list(host: &str) -> Vec<SaveEntry> {
     saves_in(&|path: &str| {
-        list_dir(host, path, ListDirOptions::default())
-            .map(|l| l.entries)
+        all_pages(&|offset| {
+            list_dir(
+                host,
+                path,
+                ListDirOptions {
+                    offset,
+                    ..Default::default()
+                },
+            )
             .map_err(|e| format!("{e:#}"))
+        })
     })
+}
+
+/// Every entry of a folder, page by page (`page(offset)`): a full page, or one cut short
+/// because its buffer filled, means there may be more.
+fn all_pages(page: &dyn Fn(u64) -> Result<DirListing, String>) -> Result<Vec<DirEntry>, String> {
+    let limit = ListDirOptions::default().limit;
+    let mut out = Vec::new();
+    loop {
+        let l = page(out.len() as u64)?;
+        let n = l.entries.len() as u64;
+        out.extend(l.entries);
+        if n == 0 || (!l.truncated && n < limit) {
+            return Ok(out);
+        }
+    }
 }
 
 /// [`list`], with `ls` giving the entries of a folder on the console.
@@ -254,6 +277,31 @@ mod tests {
         let saves = saves_in(&ls_of(&fs));
         assert_eq!(saves.len(), 1);
         assert_eq!(saves[0].path, format!("{ROOT}/{P1}/{GAME}"));
+    }
+
+    #[test]
+    fn a_big_folder_is_read_page_by_page() {
+        let all: Vec<DirEntry> = (0..300)
+            .map(|i| entry(&format!("f{i}"), "file", 1, i))
+            .collect();
+        let got = all_pages(&|offset| {
+            let entries: Vec<DirEntry> = all
+                .iter()
+                .skip(offset as usize)
+                .take(256)
+                .cloned()
+                .collect();
+            Ok(DirListing {
+                path: ROOT.into(),
+                returned: entries.len() as u64,
+                entries,
+                truncated: false,
+                total_scanned: 300,
+            })
+        })
+        .unwrap();
+        assert_eq!(got.len(), 300);
+        assert_eq!(got[299].name, "f299");
     }
 
     #[test]

@@ -451,11 +451,11 @@ pub(crate) fn title_running(host: &str, title_id: &str) -> Result<bool, String> 
         .any(|p| p.kind == "app" && p.title_id.eq_ignore_ascii_case(title_id)))
 }
 
-/// Every file of a save folder (two levels, as the saves list measures it) with its size and
-/// time, sorted: two equal fingerprints mean nothing was written between them. The console's
-/// own times, compared with each other only, so the two machines' clocks never matter.
-fn fingerprint(host: &str, path: &str) -> Result<Vec<(String, u64, i64)>, String> {
-    let mut out = Vec::new();
+/// Every file of a save folder with its size and time, sorted: two equal fingerprints mean
+/// nothing was written between them. The console's own times, compared with each other only, so
+/// the two machines' clocks never matter. A PS5 save is looked at two levels deep, as the saves
+/// list measures it; one of the Switch emulator as deep as its saves are measured.
+fn fingerprint(host: &str, entry: &SaveEntry) -> Result<Vec<(String, u64, i64)>, String> {
     let list = |p: &str| -> Result<Vec<Value>, String> {
         let v = get(&format!(
             "/api/ps5/list-dir?addr={}&path={}&offset=0&limit=512",
@@ -467,35 +467,48 @@ fn fingerprint(host: &str, path: &str) -> Result<Vec<(String, u64, i64)>, String
             .cloned()
             .unwrap_or_default())
     };
+    let depth = if crate::emulator_saves::is_emulator_save(entry) {
+        crate::emulator_saves::DEPTH
+    } else {
+        1
+    };
+    let mut out = Vec::new();
+    fingerprint_in(&list, &entry.path, "", depth, &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+/// [`fingerprint`] of the folder `path` (`rel` its place in the save), `depth` folders further.
+fn fingerprint_in(
+    list: &dyn Fn(&str) -> Result<Vec<Value>, String>,
+    path: &str,
+    rel: &str,
+    depth: u32,
+    out: &mut Vec<(String, u64, i64)>,
+) -> Result<(), String> {
     for e in list(path)? {
-        let name = e
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+        let name = e.get("name").and_then(Value::as_str).unwrap_or_default();
         if name.is_empty() || name == "." || name == ".." {
             continue;
         }
-        let size = e.get("size").and_then(Value::as_u64).unwrap_or(0);
-        let mtime = e.get("mtime").and_then(Value::as_i64).unwrap_or(0);
-        if e.get("kind").and_then(Value::as_str) == Some("dir") {
-            for c in list(&format!("{path}/{name}"))? {
-                let cn = c.get("name").and_then(Value::as_str).unwrap_or_default();
-                if cn.is_empty() || cn == "." || cn == ".." {
-                    continue;
-                }
-                out.push((
-                    format!("{name}/{cn}"),
-                    c.get("size").and_then(Value::as_u64).unwrap_or(0),
-                    c.get("mtime").and_then(Value::as_i64).unwrap_or(0),
-                ));
-            }
+        let here = format!("{rel}{name}");
+        if depth > 0 && e.get("kind").and_then(Value::as_str) == Some("dir") {
+            fingerprint_in(
+                list,
+                &format!("{path}/{name}"),
+                &format!("{here}/"),
+                depth - 1,
+                out,
+            )?;
         } else {
-            out.push((name, size, mtime));
+            out.push((
+                here,
+                e.get("size").and_then(Value::as_u64).unwrap_or(0),
+                e.get("mtime").and_then(Value::as_i64).unwrap_or(0),
+            ));
         }
     }
-    out.sort();
-    Ok(out)
+    Ok(())
 }
 
 /// How long a save must stay unwritten before a snapshot copies it, and how often to try.
@@ -523,13 +536,13 @@ pub fn snapshot(host: &str, title_id: &str) -> Result<Vec<PathBuf>, String> {
         let mut last = String::new();
         let mut done = false;
         for _ in 0..SNAP_TRIES {
-            let before = fingerprint(host, &entry.path)?;
+            let before = fingerprint(host, entry)?;
             std::thread::sleep(SNAP_QUIET);
-            if fingerprint(host, &entry.path)? != before {
+            if fingerprint(host, entry)? != before {
                 last = "the game was saving".into();
                 continue;
             }
-            let check = || match fingerprint(host, &entry.path) {
+            let check = || match fingerprint(host, entry) {
                 Ok(after) if after == before => Ok(()),
                 Ok(_) => Err("the game saved while it was copied".to_string()),
                 Err(e) => Err(e),
@@ -683,9 +696,11 @@ pub(crate) fn restore_zip(
     // The game writes its save while it runs: one put back underneath it is overwritten, or
     // worse, mixed with what the game writes next.
     if title_running(host, app)? {
-        return Err(format!(
-            "{app} is running on the PS5. Close the game, then restore."
-        ));
+        return Err(if emulator {
+            format!("ProsperoEden ({app}) is running on the PS5. Close it, then restore.")
+        } else {
+            format!("{app} is running on the PS5. Close the game, then restore.")
+        });
     }
     let tmp = make_temp_dir(title_id)?;
     let tmp_s = tmp.to_string_lossy().into_owned();
@@ -1626,6 +1641,31 @@ mod tests {
         assert_eq!(pager(names(10), Some(4)), (10, vec![0, 4, 8]));
         // A failing page fails the whole listing.
         assert!(all_entries(&|_| Err("gone".to_string())).is_err());
+    }
+
+    /// A PS5 save's fingerprint looks two levels down, as before; a Switch save's further, so a
+    /// file the emulator writes deep in it still counts as a change.
+    #[test]
+    fn a_fingerprint_looks_as_deep_as_asked() {
+        let fs: BTreeMap<&str, Value> = [
+            ("/s", json!([{"name": "a", "kind": "file", "size": 1, "mtime": 1}, {"name": "d", "kind": "dir"}])),
+            ("/s/d", json!([{"name": "b", "kind": "file", "size": 2, "mtime": 2}, {"name": "e", "kind": "dir", "size": 0, "mtime": 3}])),
+            ("/s/d/e", json!([{"name": "c", "kind": "file", "size": 4, "mtime": 4}])),
+        ]
+        .into();
+        let list = |p: &str| -> Result<Vec<Value>, String> {
+            fs.get(p)
+                .and_then(Value::as_array)
+                .cloned()
+                .ok_or_else(|| p.to_string())
+        };
+        let names = |depth| {
+            let mut out = Vec::new();
+            fingerprint_in(&list, "/s", "", depth, &mut out).unwrap();
+            out.into_iter().map(|(n, _, _)| n).collect::<Vec<_>>()
+        };
+        assert_eq!(names(1), ["a", "d/b", "d/e"]);
+        assert_eq!(names(4), ["a", "d/b", "d/e/c"]);
     }
 
     #[test]
