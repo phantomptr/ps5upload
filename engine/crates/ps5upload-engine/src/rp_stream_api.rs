@@ -35,6 +35,12 @@
 //!   effect strengths (`{"ds_intensity": [haptics, triggers]}`, 0 off 1 strong 2 medium 3 weak).
 //!   For a session started with `"keyboard": true`, the console's keyboard
 //!   (`{"keyboard": {"open": …, "text": …}}`, rp_keyboard.rs).
+//!   A phone's touchpad & keyboard (pad_link.rs) reaches the page as text, for the page to merge
+//!   into its own keyboard & mouse (it stays the only owner of the console's devices):
+//!   `{"pad_kbm": {"id", "on", "mouse", "keyboard"}}` (the phone's heartbeat, every 500 ms while
+//!   on), `{"pad_kbm": {"id", "r": "<32 hex chars: one 16-byte report>"}}`, and
+//!   `{"pad_kbm": {"id", "left": true}}` when the phone leaves or loses the controller (let go
+//!   of whatever it held).
 //!
 //! The session belongs to the engine, not to the socket. The console serves
 //! one session at a time and holds its slot for 12-30 s after one ends, so a
@@ -255,6 +261,15 @@ fn live() -> Option<Arc<Live>> {
 pub(crate) fn push_pad(source: u64, state: Option<ControllerState>) {
     if let Some(l) = live() {
         l.push_pad(source, state);
+    }
+}
+
+/// A phone's touchpad & keyboard input for the page (pad_link.rs): `{"pad_kbm": v}` on the
+/// viewer's socket, for the page to merge into its own keyboard & mouse. Dropped when no page
+/// shows the session.
+pub(crate) fn push_pad_kbm(v: serde_json::Value) {
+    if let Some(l) = live() {
+        l.send_ctl(text(serde_json::json!({ "pad_kbm": v })));
     }
 }
 

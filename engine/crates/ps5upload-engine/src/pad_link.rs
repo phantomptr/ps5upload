@@ -16,7 +16,13 @@
 //!
 //! `/pad` and `/api/pad/` are the only routes a LAN peer reaches besides `/pkg-host/`
 //! (`loopback_allows` in lib.rs), and the socket checks the key or the computer's yes itself.
-//! A phone only ever sends pad states; it receives the session's state, rumble and light bar.
+//! A phone sends pad states and, for its touchpad & keyboard, native keyboard & mouse input
+//! (`{"kbm": {"on", "mouse", "keyboard"}}` repeated every 500 ms as a heartbeat, and binary
+//! `[8][16-byte report]`). That input is only forwarded to the computer's page as `{"pad_kbm":
+//! ..}` (rp_stream_api.rs `push_pad_kbm`): the page stays the one owner of the console's keyboard
+//! and mouse and merges a phone's into its own. A phone receives the session's state, rumble,
+//! light bar, and `{"kbm_caps": {"mouse", "keyboard", "reason"}}` (what the console being played
+//! can make, asked again when that console changes).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -319,6 +325,7 @@ pub async fn control(Json(r): Json<ControlReq>) -> Json<serde_json::Value> {
     if ok && !r.on {
         // Let go of whatever it held.
         crate::rp_stream_api::push_pad(r.id, None);
+        crate::rp_stream_api::push_pad_kbm(kbm_left(r.id));
     }
     Json(serde_json::json!({ "ok": ok }))
 }
@@ -374,6 +381,55 @@ pub async fn ws(upgrade: WebSocketUpgrade, Query(q): Query<PadQuery>) -> Respons
 
 fn say(v: serde_json::Value) -> Message {
     Message::Text(v.to_string().into())
+}
+
+/// A phone's `{"kbm": ..}` for the page.
+fn kbm_control(id: u64, m: &crate::vinput_api::KbmMsg) -> serde_json::Value {
+    serde_json::json!({"id": id, "on": m.on, "mouse": m.mouse, "keyboard": m.keyboard})
+}
+
+/// A phone's binary `[8][16-byte report]` for the page; None for any other frame.
+fn kbm_report(id: u64, frame: &[u8]) -> Option<serde_json::Value> {
+    use ps5upload_core::vinput::REPORT_LEN;
+    let report = frame.strip_prefix(&[crate::vinput_api::KIND_KBM])?;
+    if report.len() != REPORT_LEN {
+        return None;
+    }
+    let hex: String = report.iter().map(|b| format!("{b:02x}")).collect();
+    Some(serde_json::json!({"id": id, "r": hex}))
+}
+
+/// The phone left (or lost the controller): the page lets go of whatever it held.
+fn kbm_left(id: u64) -> serde_json::Value {
+    serde_json::json!({"id": id, "left": true})
+}
+
+/// What the phone is told about the console's keyboard & mouse (as vinput_api `caps` reads it).
+fn kbm_caps(c: anyhow::Result<Option<ps5upload_core::vinput::Caps>>) -> serde_json::Value {
+    let (mouse, keyboard, reason) = match c {
+        Ok(Some(c)) => (c.mouse, c.keyboard, c.reason),
+        Ok(None) => (false, false, Some("helper_old".to_string())),
+        Err(_) => (false, false, Some("unreachable".to_string())),
+    };
+    serde_json::json!({"kbm_caps": {"mouse": mouse, "keyboard": keyboard, "reason": reason}})
+}
+
+/// Ask the console `host` what keyboard & mouse it can make, off the socket loop, and tell the
+/// phone through its queue (nothing once it left).
+fn ask_kbm_caps(host: String, tx: mpsc::WeakSender<Message>) {
+    tokio::spawn(async move {
+        let c = tokio::task::spawn_blocking(move || ps5upload_core::vinput::caps(&host))
+            .await
+            .unwrap_or_else(|e| Err(anyhow::anyhow!(e.to_string())));
+        if let Some(tx) = tx.upgrade() {
+            let _ = tx.try_send(say(kbm_caps(c)));
+        }
+    });
+}
+
+/// A watcher plays only while it holds the controller.
+fn plays(id: u64) -> bool {
+    with_link(|l| l.pads.iter().any(|x| x.id == id && (!x.watch || x.control)))
 }
 
 async fn pad_session(mut socket: WebSocket, q: PadQuery) {
@@ -446,6 +502,10 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
         None
     };
     let (tx, mut rx) = mpsc::channel::<Message>(64);
+    // Weak: the session still ends when the link drops the phone's sender.
+    let caps_tx = tx.downgrade();
+    // The console the phone was last told kbm_caps for.
+    let mut caps_host: Option<String> = None;
     let joined = with_link(|l| {
         let (cap, count) = if watch {
             (MAX_WATCHERS, l.pads.iter().filter(|p| p.watch).count())
@@ -501,6 +561,11 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
             },
             _ = tick.tick() => {
                 let s = crate::rp_stream_api::live_state();
+                let host = crate::rp_stream_api::live_host();
+                if host.is_some() && host != caps_host {
+                    caps_host = host.clone();
+                    ask_kbm_caps(host.unwrap_or_default(), caps_tx.clone());
+                }
                 if socket.send(say(serde_json::json!({"stage": "joined", "session": s}))).await.is_err() {
                     break;
                 }
@@ -508,12 +573,27 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
             inc = socket.recv() => match inc {
                 Some(Ok(Message::Text(t))) => {
                     #[derive(serde::Deserialize)]
-                    struct In { #[serde(default)] pad: Option<ControllerState> }
-                    if let Ok(In { pad: Some(p) }) = serde_json::from_str::<In>(t.as_str()) {
-                        // A watcher plays only while it holds the controller.
-                        let plays = with_link(|l| l.pads.iter().any(|x| x.id == id && (!x.watch || x.control)));
-                        if plays {
-                            crate::rp_stream_api::push_pad(id, Some(p));
+                    struct In {
+                        #[serde(default)] pad: Option<ControllerState>,
+                        #[serde(default)] kbm: Option<crate::vinput_api::KbmMsg>,
+                    }
+                    if let Ok(m) = serde_json::from_str::<In>(t.as_str()) {
+                        if let Some(p) = m.pad {
+                            if plays(id) {
+                                crate::rp_stream_api::push_pad(id, Some(p));
+                            }
+                        }
+                        if let Some(k) = m.kbm {
+                            if plays(id) {
+                                crate::rp_stream_api::push_pad_kbm(kbm_control(id, &k));
+                            }
+                        }
+                    }
+                }
+                Some(Ok(Message::Binary(b))) => {
+                    if let Some(v) = kbm_report(id, &b) {
+                        if plays(id) {
+                            crate::rp_stream_api::push_pad_kbm(v);
                         }
                     }
                 }
@@ -523,6 +603,7 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
         }
     }
     crate::rp_stream_api::push_pad(id, None);
+    crate::rp_stream_api::push_pad_kbm(kbm_left(id));
     if watch {
         crate::rp_stream_api::remove_spectator(id);
     }
@@ -610,11 +691,15 @@ async fn relay_session(mut socket: WebSocket, q: RelayQuery) {
         tokio::select! {
             m = far_rx.next() => match m {
                 Some(Ok(TMsg::Text(t))) => if socket.send(Message::Text(t.as_str().into())).await.is_err() { break },
+                // A watcher's picture and sound.
+                Some(Ok(TMsg::Binary(b))) => if socket.send(Message::Binary(b)).await.is_err() { break },
                 Some(Ok(TMsg::Close(_))) | None | Some(Err(_)) => break,
                 _ => {}
             },
             m = socket.recv() => match m {
                 Some(Ok(Message::Text(t))) => if far_tx.send(TMsg::Text(t.as_str().into())).await.is_err() { break },
+                // The phone's keyboard & mouse reports.
+                Some(Ok(Message::Binary(b))) => if far_tx.send(TMsg::Binary(b)).await.is_err() { break },
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 _ => {}
             },
@@ -707,6 +792,54 @@ mod tests {
         assert_eq!(relay_target("ws://8.8.8.8:19113/api/pad/ws"), None);
         assert_eq!(relay_target("wss://192.168.1.20/api/pad/ws"), None);
         assert_eq!(relay_target("ws://example.com/api/pad/ws"), None);
+    }
+
+    #[test]
+    fn a_phone_kbm_report_reaches_the_page_as_hex() {
+        let mut f = vec![crate::vinput_api::KIND_KBM];
+        f.extend(0u8..16);
+        assert_eq!(
+            kbm_report(3, &f),
+            Some(serde_json::json!({"id": 3, "r": "000102030405060708090a0b0c0d0e0f"}))
+        );
+        // Wrong length or kind: dropped.
+        assert_eq!(kbm_report(3, &f[..16]), None);
+        let mut long = f.clone();
+        long.push(0);
+        assert_eq!(kbm_report(3, &long), None);
+        f[0] = 5;
+        assert_eq!(kbm_report(3, &f), None);
+        assert_eq!(kbm_report(3, &[]), None);
+    }
+
+    #[test]
+    fn kbm_messages_for_the_page() {
+        let m: crate::vinput_api::KbmMsg =
+            serde_json::from_str(r#"{"on":true,"mouse":true}"#).unwrap();
+        assert_eq!(
+            kbm_control(2, &m),
+            serde_json::json!({"id": 2, "on": true, "mouse": true, "keyboard": false})
+        );
+        assert_eq!(kbm_left(2), serde_json::json!({"id": 2, "left": true}));
+    }
+
+    #[test]
+    fn kbm_caps_read_like_vinput_caps() {
+        let c: ps5upload_core::vinput::Caps =
+            serde_json::from_str(r#"{"mouse":true,"keyboard":false,"open":false,"backend":"x"}"#)
+                .unwrap();
+        assert_eq!(
+            kbm_caps(Ok(Some(c))),
+            serde_json::json!({"kbm_caps": {"mouse": true, "keyboard": false, "reason": null}})
+        );
+        assert_eq!(
+            kbm_caps(Ok(None)),
+            serde_json::json!({"kbm_caps": {"mouse": false, "keyboard": false, "reason": "helper_old"}})
+        );
+        assert_eq!(
+            kbm_caps(Err(anyhow::anyhow!("down"))),
+            serde_json::json!({"kbm_caps": {"mouse": false, "keyboard": false, "reason": "unreachable"}})
+        );
     }
 
     #[test]
