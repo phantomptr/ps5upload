@@ -10,30 +10,20 @@
 #include "proc_identity.h"
 #include "webui_codec.h"
 
-/* ── The built-in backend: a stub until the firmware's calls are confirmed ──────────────────────
+/* ── The built-in backend: a stub ─────────────────────────────────────────────────────────────
  *
- * TODO(vinput-fw): the real devices. A separate probe (PS5Term, FW 13.60) is looking for the
- * virtual-device exports of libSceMouse / libSceKeyboard (sceMouseVirtualDevice* and the keyboard's
- * counterpart). When they are confirmed, resolve them here (the way remoteplay.c resolves its
- * Remote Play symbols), and:
- *   - caps:            report 1 for each device whose create symbol resolved (and works on this FW);
- *   - mouse_open:      create the virtual mouse for the foreground user; VINPUT_E_UNSUPPORTED when
- *                      the symbol is missing, VINPUT_E_FAILED when the call fails;
- *   - mouse_send:      one relative report (buttons, dx, dy, wheel, hwheel);
- *   - mouse_close:     remove the device (after the module has sent an all-released report);
- *   - keyboard_*:      the same for the keyboard (modifier byte and up to 8 HID usage IDs).
- * If any of them goes through sceUserService (the foreground user's id) or sceRegMgr, take
- * sony_api_lock around that call (CE-108262-9; scripts/check-sony-api-lock.sh enforces it). The
- * module's own lock is held during every backend call, so the backend need not lock for itself. */
+ * The console's own devices are src/vinput_ps5.c (libSceMouse / libSceKeyboard virtual devices,
+ * probed on FW 13.60), which runtime.c puts in place of this stub only when it is switched on
+ * (vinput_ps5.h: off by default). This stub is what every other helper answers: no devices,
+ * "vinput_unsupported". */
 static void stub_caps(int *mouse, int *keyboard) {
     *mouse = 0;
     *keyboard = 0;
 }
 static int stub_mouse_open(void) {
-    return VINPUT_E_UNSUPPORTED; /* TODO(vinput-fw): create the virtual mouse */
+    return VINPUT_E_UNSUPPORTED;
 }
 static void stub_mouse_close(void) {
-    /* TODO(vinput-fw): remove the virtual mouse */
 }
 static int stub_mouse_send(uint8_t buttons, int dx, int dy, int wheel, int hwheel) {
     (void)buttons;
@@ -41,18 +31,17 @@ static int stub_mouse_send(uint8_t buttons, int dx, int dy, int wheel, int hwhee
     (void)dy;
     (void)wheel;
     (void)hwheel;
-    return VINPUT_E_UNSUPPORTED; /* TODO(vinput-fw): one mouse report */
+    return VINPUT_E_UNSUPPORTED;
 }
 static int stub_keyboard_open(void) {
-    return VINPUT_E_UNSUPPORTED; /* TODO(vinput-fw): create the virtual keyboard */
+    return VINPUT_E_UNSUPPORTED;
 }
 static void stub_keyboard_close(void) {
-    /* TODO(vinput-fw): remove the virtual keyboard */
 }
 static int stub_keyboard_send(uint8_t mods, const uint8_t keys[VINPUT_KEYS]) {
     (void)mods;
     (void)keys;
-    return VINPUT_E_UNSUPPORTED; /* TODO(vinput-fw): the keyboard's state */
+    return VINPUT_E_UNSUPPORTED;
 }
 
 static const vinput_backend_t STUB = {

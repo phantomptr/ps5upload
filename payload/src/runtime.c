@@ -63,6 +63,7 @@
 #include "net_ports.h"
 #include "files_handoff.h"
 #include "vinput.h"
+#include "vinput_ps5.h"
 #include "focus_probe.h"
 #include "proc_list.h"
 #include "proc_identity.h"
@@ -8197,12 +8198,22 @@ static int handle_files_handoff_take(runtime_state_t *state, const char *body, u
 
 /* ── The PC's keyboard and mouse (vinput.c) ─────────────────────────────
  * The answers are the bodies vinput.c writes; a refusal ({"ok":false,"err":..}) is kept as the answer
- * (mgmt_call_text_keep), so the engine reads which device is missing and why. No Sony call yet: the
- * firmware backend is a stub (TODO(vinput-fw) in vinput.c). */
+ * (mgmt_call_text_keep), so the engine reads which device is missing and why. The console's own
+ * devices (vinput_ps5.c, libSceMouse / libSceKeyboard) are off by default; then vinput.c's stub
+ * answers "vinput_unsupported". */
+/* The console's devices replace the stub on first use, when vinput_ps5.c allows them (off by
+ * default). */
+static pthread_once_t g_vinput_backend_once = PTHREAD_ONCE_INIT;
+static void vinput_backend_pick(void) {
+    const vinput_backend_t *b = vinput_ps5_backend();
+    if (b) vinput_set_backend(b);
+}
+
 static int handle_vinput_caps(runtime_state_t *state) {
     char out[VINPUT_OUT_MAX];
     int n;
     if (!state) return -1;
+    pthread_once(&g_vinput_backend_once, vinput_backend_pick);
     n = vinput_caps_json(out, sizeof out);
     if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
     return mgmt_reply(MGMT_FRAME_VINPUT_CAPS_ACK, out, (uint64_t)n);
@@ -8212,6 +8223,7 @@ static int handle_vinput_session(runtime_state_t *state, const char *body, uint6
     char out[VINPUT_OUT_MAX];
     int n;
     if (!state || body_len > VINPUT_REQ_MAX) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    pthread_once(&g_vinput_backend_once, vinput_backend_pick);
     n = vinput_session_json(body ? body : "", (size_t)body_len, vinput_now_ms(), out, sizeof out);
     if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
     return mgmt_reply(MGMT_FRAME_VINPUT_SESSION_ACK, out, (uint64_t)n);
@@ -8221,6 +8233,7 @@ static int handle_vinput_report(runtime_state_t *state, const char *body, uint64
     char out[VINPUT_OUT_MAX];
     int n;
     if (!state || body_len > VINPUT_REQ_MAX) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    pthread_once(&g_vinput_backend_once, vinput_backend_pick);
     n = vinput_report_json(body ? body : "", (size_t)body_len, vinput_now_ms(), out, sizeof out);
     if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
     return mgmt_reply(MGMT_FRAME_VINPUT_REPORT_ACK, out, (uint64_t)n);

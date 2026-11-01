@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "vinput.h"
+#include "vinput_ps5.h"
 
 static int failures = 0;
 
@@ -293,7 +294,18 @@ static void test_bounds(void) {
     vinput_stop();
 }
 
+/* The console's own devices are allowed only on the firmware they were probed on. */
+static void test_firmware_allow_list(void) {
+    CHECK(vinput_ps5_firmware_allowed("13.60"));
+    CHECK(!vinput_ps5_firmware_allowed("13.40"));
+    CHECK(!vinput_ps5_firmware_allowed("9.60"));
+    CHECK(!vinput_ps5_firmware_allowed("unknown"));
+    CHECK(!vinput_ps5_firmware_allowed(""));
+    CHECK(!vinput_ps5_firmware_allowed(NULL));
+}
+
 int main(void) {
+    test_firmware_allow_list();
     /* fake clocks everywhere but test_watchdog_thread: no thread may compare them with the real one */
     vinput_test_no_watchdog(1);
     test_stub();

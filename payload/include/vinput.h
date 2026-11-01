@@ -30,10 +30,10 @@
  * so is one whose owner closes it, and every session when the helper stops (vinput_stop).
  *
  * The firmware side is a backend behind vinput_backend_t. The built-in one is a stub: it reports no
- * devices and refuses to open any ("vinput_unsupported"), until the virtual-device calls of
- * libSceMouse / libSceKeyboard are confirmed on the console (see the TODO(vinput-fw) hooks in
- * src/vinput.c). Everything else here (the methods, ownership, heartbeat and release) is real and
- * host-tested (payload/tests/vinput_selftest.c). */
+ * devices and refuses to open any ("vinput_unsupported"). The console's own devices
+ * (src/vinput_ps5.c, libSceMouse / libSceKeyboard) replace it only when switched on (vinput_ps5.h:
+ * off by default, FW 13.60 only). Everything here (the methods, ownership, heartbeat and release) is
+ * real and host-tested (payload/tests/vinput_selftest.c). */
 #ifndef PS5UPLOAD_VINPUT_H
 #define PS5UPLOAD_VINPUT_H
 
@@ -89,7 +89,7 @@ typedef struct {
 } vinput_backend_t;
 
 /* The backend in use: NULL restores the built-in one (the stub). Lets go of an open session first
- * and clears a vinput_stop (a test seam: runtime.c never swaps it). */
+ * and clears a vinput_stop. runtime.c sets it once, before first use (vinput_ps5.c); tests swap it. */
 void vinput_set_backend(const vinput_backend_t *b);
 const vinput_backend_t *vinput_backend(void);
 
