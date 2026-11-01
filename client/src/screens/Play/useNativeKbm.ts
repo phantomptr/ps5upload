@@ -167,8 +167,16 @@ export function useNativeKbm({
   }, [err, owner, host, setCaps]);
   useEffect(() => {
     if (!owner || !host || !starting) return;
-    const id = window.setInterval(() => void fetchKbmCaps(host).then(setCaps), CAPS_STARTING_POLL_MS);
-    return () => window.clearInterval(id);
+    // A reply that lands after the console changed is the old console's: dropped.
+    let live = true;
+    const id = window.setInterval(
+      () => void fetchKbmCaps(host).then((c) => live && setCaps(c)),
+      CAPS_STARTING_POLL_MS,
+    );
+    return () => {
+      live = false;
+      window.clearInterval(id);
+    };
   }, [owner, host, starting, setCaps]);
 
   // One sender per stream: its socket is the stream's.
@@ -494,6 +502,7 @@ export function useNativeKbm({
             button: (b: number, d: boolean) => sender.button(b, d),
             scroll: (dy: number, dx: number) => sender.scroll(dy, dx, 0),
             key: (code: string, d: boolean) => sender.key(code, d),
+            shiftHeld: () => sender.shiftHeld(),
           }
         : null,
     [sender, owner],

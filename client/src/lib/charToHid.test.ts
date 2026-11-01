@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { charToKey, namedKey, textDiff, typeText } from "./charToHid";
+import { KbmSender, MODIFIER_BITS } from "./kbmInput";
 import { HID_USAGE } from "./kbmInput";
 
 describe("charToKey (US layout)", () => {
@@ -54,6 +55,32 @@ describe("typeText", () => {
       "ShiftLeft↑",
     ]);
     expect(skipped).toBe("é");
+  });
+
+  it("leaves a Shift the sender already holds alone", () => {
+    const log: string[] = [];
+    let shift = true;
+    const sender = {
+      key: (c: string, d: boolean) => {
+        if (c === "ShiftLeft") shift = d;
+        log.push(`${c}${d ? "↓" : "↑"}`);
+      },
+      shiftHeld: () => shift,
+    };
+    typeText(sender, "A!");
+    expect(log).toEqual(["KeyA↓", "KeyA↑", "Digit1↓", "Digit1↑"]);
+    expect(shift).toBe(true);
+  });
+
+  it("works with KbmSender: the person's Shift stays down", () => {
+    const sender = new KbmSender({ send: () => true, setTimer: () => 0, clearTimer: () => {} });
+    sender.key("ShiftRight", true);
+    typeText(sender, "Q");
+    expect(sender.shiftHeld()).toBe(true);
+    expect(sender.state.mods).toBe(MODIFIER_BITS.ShiftRight);
+    sender.key("ShiftRight", false);
+    typeText(sender, "Q");
+    expect(sender.state.mods).toBe(0);
   });
 });
 

@@ -6,6 +6,8 @@
 /** Where the presses go (KbmSender.key, or the phone link's sender). */
 export interface KeyTarget {
   key(code: string, down: boolean): unknown;
+  /** Shift already held by this sender (the person's own Shift): typing leaves it alone. */
+  shiftHeld?(): boolean;
 }
 
 export interface KeyPress {
@@ -103,12 +105,14 @@ export function typeText(sender: KeyTarget, text: string): string {
   return skipped;
 }
 
-/** One press and release of `code`, with Shift around it when asked. */
+/** One press and release of `code`, with Shift around it when asked. A Shift the sender already
+ *  holds already shifts the key, and letting go of it would let go of the person's own Shift. */
 export function pressKey(sender: KeyTarget, code: string, shift = false): void {
-  if (shift) sender.key("ShiftLeft", true);
+  const wrap = shift && !sender.shiftHeld?.();
+  if (wrap) sender.key("ShiftLeft", true);
   sender.key(code, true);
   sender.key(code, false);
-  if (shift) sender.key("ShiftLeft", false);
+  if (wrap) sender.key("ShiftLeft", false);
 }
 
 /**

@@ -1074,9 +1074,11 @@ export function StreamPanel() {
           tabIndex={0}
           onKeyDown={(e) => onKey(e, true)}
           onKeyUp={(e) => onKey(e, false)}
-          onBlur={() => {
+          onBlur={(e) => {
             rpInput.held.clear();
             stream?.sendPad();
+            // Focus gone from the picture: keys and buttons held on the PS5 are let go too.
+            if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) kbm.releaseAll();
           }}
           // A press that only closed Settings is not play.
           onClick={running ? (e) => !e.shiftKey && !pressClosedSettings() && capture() : undefined}

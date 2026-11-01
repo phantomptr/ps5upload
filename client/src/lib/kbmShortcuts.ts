@@ -326,6 +326,9 @@ export function shortcutProblem(kind: ShortcutKind, s: Shortcut, ctx: ShortcutCo
     if (s.code === "Escape") return "esc";
     if (!LONE_OK.test(s.code)) return "lone_key";
   }
+  // Esc with any modifier stays the app's and the system's: held, it leaves full screen (Shift+Esc
+  // too), and Ctrl/Alt/⌘ with Esc are the system's.
+  if (s.code === "Escape" && mods > 0) return "app";
   if (s.code !== null && APP_SHORTCUTS.some((a) => sameShortcut(a, s))) return "app";
   if (s.code !== null && mods === 0 && ctx.keymap[s.code] !== undefined) return "keymap";
   if (sameShortcut(s, ctx.other)) return "same";
