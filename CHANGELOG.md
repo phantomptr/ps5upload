@@ -73,6 +73,23 @@ What's new in ps5upload, written for humans.
   window however long the options above them are.
 
 ---
+- **Fixed: "Install and restart" did nothing in the Linux AppImage on some systems.** The update
+  script inherited the AppImage's own library paths, so on Arch the system shell loaded the
+  bundled, older readline and quit at once: the app closed and the update was never installed.
+  The script now starts with the system's own libraries. Thanks to aypro (#604).
+- **PS2 saves are backed up.** The memory cards and saved states of the PS2 emulators Crux2
+  (PPSA99249) and PS5SX2 (PPSA99203) are backed up with the PS5 saves, locally and to a server,
+  each as one save under the emulator's title; "after a game closes" means after the emulator
+  closes. Where PS5SX2 keeps them loose in `/data/PCSX2`, only its `.ps2` and `.p2s` files are
+  taken, never its BIOS, games or caches. Thanks to EnriqueWood (#602).
+- **PS2 saves in Saves.** "PS2 emulators (Crux2, PS5SX2)" lists each emulator's memory cards and
+  saved states with Back up now and their backups, so you can restore them in the app. Close the
+  emulator first: a restore is refused while it runs, and a restore into `/data/PCSX2` is refused
+  if the backup holds anything other than that save's own files.
+- **Short guides** in the FAQ and on the website: using PS5Upload from a phone (the app, a
+  browser, the console's own page) and getting started on iPhone, playing away from home over a
+  VPN such as Tailscale (and what doesn't work that way), waking the PS5 without the TV turning on
+  (HDMI-CEC), and reading Play's delay stats (net · queue · decode · screen).
 
 ## 10.3.0
 

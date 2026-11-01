@@ -6815,6 +6815,12 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "arcpkg.leftovers.confirmTitle": "PS5 から展開済みフォルダー {count} 個を削除しますか？",
   "arcpkg.leftovers.confirmBody": "これらのファイルからの失敗したインストールは、あとで再試行できなくなります。",
   "arcpkg.leftovers.failed": "削除できませんでした: {error}",
+  "saves_ps2_title": "PS2 エミュレーター（Crux2、PS5SX2）",
+  "saves_ps2_running": "{name} が実行中です。復元する前に閉じてください。",
+  "saves_ps2_close_note": "復元する前に {name} を閉じてください。",
+  "saves_ps2_cards": "メモリーカード",
+  "saves_ps2_states": "ステートセーブ",
+  "saves_ps2_backup_hint": "このエミュレーターのメモリーカードとステートセーブを、自動バックアップのフォルダーに今すぐバックアップします。",
 };
 
 export default ja;

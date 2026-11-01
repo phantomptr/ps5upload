@@ -7044,6 +7044,12 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "arcpkg.leftovers.confirmTitle": "Usunąć rozpakowane foldery z PS5 ({count})?",
   "arcpkg.leftovers.confirmBody": "Nieudanych instalacji z tych plików nie będzie można potem ponowić.",
   "arcpkg.leftovers.failed": "Nie udało się usunąć: {error}",
+  "saves_ps2_title": "Emulatory PS2 (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name} jest uruchomiony. Zamknij go przed przywróceniem.",
+  "saves_ps2_close_note": "Zamknij {name} przed przywróceniem.",
+  "saves_ps2_cards": "Karty pamięci",
+  "saves_ps2_states": "Zapisane stany",
+  "saves_ps2_backup_hint": "Utwórz teraz kopię kart pamięci i zapisanych stanów tego emulatora w folderze automatycznych kopii.",
 };
 
 export default pl;

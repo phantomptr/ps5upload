@@ -6798,6 +6798,12 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "arcpkg.leftovers.confirmTitle": "Xóa {count} thư mục giải nén khỏi PS5?",
   "arcpkg.leftovers.confirmBody": "Các lần cài đặt thất bại từ những tệp này sẽ không thể thử lại sau đó.",
   "arcpkg.leftovers.failed": "Không xóa được: {error}",
+  "saves_ps2_title": "Trình giả lập PS2 (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name} đang chạy. Hãy đóng nó trước khi khôi phục.",
+  "saves_ps2_close_note": "Hãy đóng {name} trước khi khôi phục.",
+  "saves_ps2_cards": "Thẻ nhớ",
+  "saves_ps2_states": "Trạng thái đã lưu",
+  "saves_ps2_backup_hint": "Sao lưu ngay thẻ nhớ và trạng thái đã lưu của trình giả lập này vào thư mục sao lưu tự động.",
 };
 
 export default vi;

@@ -6811,6 +6811,12 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
   "arcpkg.leftovers.confirmTitle": "Excluir {count} pasta(s) extraída(s) do PS5?",
   "arcpkg.leftovers.confirmBody": "Instalações que falharam a partir desses arquivos não poderão ser repetidas depois.",
   "arcpkg.leftovers.failed": "Não foi possível excluir: {error}",
+  "saves_ps2_title": "Emuladores de PS2 (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name} está em execução. Feche-o antes de restaurar.",
+  "saves_ps2_close_note": "Feche o {name} antes de restaurar.",
+  "saves_ps2_cards": "Cartões de memória",
+  "saves_ps2_states": "Estados salvos",
+  "saves_ps2_backup_hint": "Fazer backup agora dos cartões de memória e estados salvos deste emulador na pasta de backups automáticos.",
 };
 
 export default pt_BR;

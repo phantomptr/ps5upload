@@ -90,6 +90,7 @@ mod pkg_install;
 mod pkg_sidecar;
 mod pldmgr_api;
 mod profile_image;
+mod ps2_saves;
 mod remote;
 mod remote_download;
 mod remote_pkg;
@@ -11103,6 +11104,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         )
         .route("/api/save-backup/list", get(save_backup::get_list))
         .route("/api/save-backup/switch", get(emulator_saves::get_switch))
+        .route("/api/save-backup/ps2", get(ps2_saves::get_ps2))
         .route("/api/save-backup/restore", post(save_backup::post_restore))
         .route(
             "/api/save-backup/snapshot",

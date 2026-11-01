@@ -88,6 +88,7 @@ import AutoBackupCard from "./AutoBackupCard";
 import ServerBackupCard from "./ServerBackupCard";
 import MoveFromPs4 from "./MoveFromPs4";
 import SwitchSaves from "./SwitchSaves";
+import Ps2Saves from "./Ps2Saves";
 import { formatDate } from "../../lib/formatDate";
 
 /**
@@ -1362,7 +1363,10 @@ export default function SavesScreen() {
           ))}
           </div>
           {payloadStatus === "up" && host?.trim() && (
-            <SwitchSaves host={host} refreshKey={refreshCount} />
+            <>
+              <SwitchSaves host={host} refreshKey={refreshCount} />
+              <Ps2Saves host={host} refreshKey={refreshCount} />
+            </>
           )}
         </div>
 

@@ -6810,6 +6810,12 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
   "arcpkg.leftovers.confirmTitle": "PS5 से {count} अनपैक फ़ोल्डर हटाएँ?",
   "arcpkg.leftovers.confirmBody": "इन फ़ाइलों से विफल इंस्टॉल बाद में दोबारा नहीं आज़माए जा सकेंगे।",
   "arcpkg.leftovers.failed": "हटाया नहीं जा सका: {error}",
+  "saves_ps2_title": "PS2 एमुलेटर (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name} चल रहा है। रीस्टोर करने से पहले इसे बंद करें।",
+  "saves_ps2_close_note": "रीस्टोर करने से पहले {name} बंद करें।",
+  "saves_ps2_cards": "मेमोरी कार्ड",
+  "saves_ps2_states": "सेव की गई स्टेट",
+  "saves_ps2_backup_hint": "इस एमुलेटर के मेमोरी कार्ड और सेव की गई स्टेट का अभी स्वचालित बैकअप वाले फ़ोल्डर में बैकअप लें।",
 };
 
 export default hi;

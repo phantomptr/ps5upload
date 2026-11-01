@@ -433,6 +433,49 @@
             </div>
           </details>
           <details class="guide">
+            <summary data-i18n="howto.phone.title">Use it from a phone</summary>
+            <div>
+              <ol>
+                <li data-i18n="howto.phone.s1">Install the app: the Android or iPhone download below. The iPhone app is sideloaded with AltStore or Sideloadly and an Apple ID; a free one works.</li>
+                <li data-i18n="howto.phone.s2">Open <b>Connection</b>, enter the PS5's address and send the helper. The app talks to the PS5 directly, Play included.</li>
+                <li data-i18n="howto.phone.s3">Rather use a browser? Open port 19113 of a computer at home that runs the Docker image, or port 9180 of the PS5 for its own page (first turn on <b>Allow other devices on the network</b> in that page's Settings).</li>
+              </ol>
+              <p class="muted" data-i18n="howto.phone.note">Play in a phone's browser needs an https:// page. Over a plain http:// address, play with the app.</p>
+            </div>
+          </details>
+          <details class="guide">
+            <summary data-i18n="howto.away.title">Play away from home</summary>
+            <div>
+              <ol>
+                <li data-i18n="howto.away.s1">PS5Upload works on your home network. Never open its ports to the internet: it has no password.</li>
+                <li data-i18n="howto.away.s2">Join your home network with a VPN such as Tailscale: on your phone or laptop, plus a computer at home set up as a subnet router, or the ps5-tailscale payload on the PS5.</li>
+                <li data-i18n="howto.away.s3">Connect to the PS5 at its usual address and play. How smooth it is depends on your home connection's upload speed.</li>
+              </ol>
+              <p class="muted" data-i18n="howto.away.note">Through a VPN, Stream &amp; install and installs from a link don't work (use Upload &amp; install), and waking from rest mode may not: leave the PS5 on.</p>
+            </div>
+          </details>
+          <details class="guide">
+            <summary data-i18n="howto.tv.title">Wake the PS5 without the TV</summary>
+            <div>
+              <ol>
+                <li data-i18n="howto.tv.s1">The TV turns on with the PS5 because of HDMI-CEC.</li>
+                <li data-i18n="howto.tv.s2">On the PS5, turn off <b>Settings › System › HDMI › Enable HDMI Device Link</b>, or turn off CEC on the TV (Anynet+, SIMPLINK, BRAVIA Sync…).</li>
+                <li data-i18n="howto.tv.s3">Wake and Play now leave the TV off. The controller won't turn the TV on any more either.</li>
+              </ol>
+            </div>
+          </details>
+          <details class="guide">
+            <summary data-i18n="howto.lag.title">See where Play's delay comes from</summary>
+            <div>
+              <ol>
+                <li data-i18n="howto.lag.s1">Press <b>Stats</b> on the picture's bar (on a phone, in the ⋯ menu).</li>
+                <li data-i18n="howto.lag.s2">The line <i>net · queue · decode · screen</i> shows each stage in ms: the network to this device, the wait for the decoder, decoding, and showing the picture.</li>
+                <li data-i18n="howto.lag.s3">A big net: a cable for the PS5 and 5 GHz Wi-Fi help most. A big decode: try 720p. <b>Low latency</b> in Play's settings shortens the queue.</li>
+              </ol>
+              <p class="muted" data-i18n="howto.lag.note">The PS5's own part and your TV's delay aren't in these numbers; use the TV's game mode.</p>
+            </div>
+          </details>
+          <details class="guide">
             <summary data-i18n="howto.help.title">Something isn't working</summary>
             <div>
               <ol>

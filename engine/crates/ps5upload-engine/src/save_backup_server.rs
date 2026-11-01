@@ -200,9 +200,10 @@ pub struct Pick<'a> {
 }
 
 /// The saves of `host` that need a backup on the server: a game's, changed since its last one
-/// there, of a chosen user, and (see [`Pick`]) not still being written. A save of the Switch
-/// emulator belongs to none of the console's users, and goes with the emulator: it is due when
-/// the emulator was closed, and waits while it runs.
+/// there, of a chosen user, and (see [`Pick`]) not still being written. An emulator's save (the
+/// Switch emulator's, a PlayStation 2 emulator's cards or states) belongs to none of the console's
+/// users, and goes with the emulator: it is due when the emulator was closed, and waits while it
+/// runs.
 pub fn due_saves<'a>(
     host: &str,
     saves: &'a [SaveEntry],
@@ -1202,6 +1203,49 @@ mod tests {
         let mut odd = saves[1].clone();
         odd.kind = "ps5".into();
         assert!(due_saves("h", &[odd], &Done::new(), 2000, &all).is_empty());
+    }
+
+    #[test]
+    fn ps2_saves_go_with_their_emulator() {
+        let ps2 = |path: &str, user| SaveEntry {
+            kind: crate::ps2_saves::KIND.into(),
+            ..save(path, crate::ps2_saves::CRUX2.app, user, 1000)
+        };
+        let saves = [
+            save("/u1/A", "PPSA00001", 1, 1000),
+            ps2("/data/crux2/memcards", 0),
+            ps2("/data/crux2/sstates", 1),
+        ];
+        let none = BTreeSet::new();
+        let ids = |v: Vec<&SaveEntry>| v.iter().map(|e| e.title_id.clone()).collect::<Vec<_>>();
+        let all = Pick {
+            users: &[],
+            title: None,
+            settle: false,
+            running: &none,
+        };
+        // Crux2 was closed: its cards and its saved states are due.
+        let closed = Pick {
+            title: Some(crate::ps2_saves::CRUX2.app),
+            ..all
+        };
+        assert_eq!(
+            ids(due_saves("h", &saves, &Done::new(), 2000, &closed)),
+            [crate::ps2_saves::CRUX2.app; 2]
+        );
+        // They belong to no user of the console (their user number only tells them apart).
+        let user = Pick { users: &[1], ..all };
+        assert_eq!(due_saves("h", &saves, &Done::new(), 2000, &user).len(), 3);
+        // While it runs, they wait.
+        let running: BTreeSet<String> = [crate::ps2_saves::CRUX2.app.to_string()].into();
+        let busy = Pick {
+            running: &running,
+            ..all
+        };
+        assert_eq!(
+            ids(due_saves("h", &saves, &Done::new(), 2000, &busy)),
+            ["PPSA00001"]
+        );
     }
 
     fn scratch(name: &str) -> PathBuf {

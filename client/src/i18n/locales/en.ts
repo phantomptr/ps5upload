@@ -7110,6 +7110,12 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
   "arcpkg.leftovers.confirmTitle": "Delete {count} unpacked folder(s) from the PS5?",
   "arcpkg.leftovers.confirmBody": "Failed installs from these files cannot be retried afterwards.",
   "arcpkg.leftovers.failed": "Could not delete {error}",
+  "saves_ps2_title": "PS2 emulators (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name} is running. Close it before restoring.",
+  "saves_ps2_close_note": "Close {name} before restoring.",
+  "saves_ps2_cards": "Memory cards",
+  "saves_ps2_states": "Saved states",
+  "saves_ps2_backup_hint": "Back up this emulator's memory cards and saved states now, into the folder for automatic backups.",
 };
 
 export default en;

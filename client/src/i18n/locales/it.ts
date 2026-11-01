@@ -6749,6 +6749,12 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
   "arcpkg.leftovers.confirmTitle": "Eliminare {count} cartella/e estratta/e dalla PS5?",
   "arcpkg.leftovers.confirmBody": "Le installazioni non riuscite da questi file non potranno più essere ritentate.",
   "arcpkg.leftovers.failed": "Impossibile eliminare: {error}",
+  "saves_ps2_title": "Emulatori PS2 (Crux2, PS5SX2)",
+  "saves_ps2_running": "{name} è in esecuzione. Chiudilo prima di ripristinare.",
+  "saves_ps2_close_note": "Chiudi {name} prima di ripristinare.",
+  "saves_ps2_cards": "Memory card",
+  "saves_ps2_states": "Stati salvati",
+  "saves_ps2_backup_hint": "Esegui ora il backup delle memory card e degli stati salvati di questo emulatore nella cartella dei backup automatici.",
 };
 
 export default it;

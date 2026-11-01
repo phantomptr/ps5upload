@@ -6755,6 +6755,12 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "arcpkg.leftovers.confirmTitle": "要从 PS5 删除 {count} 个解压文件夹吗？",
   "arcpkg.leftovers.confirmBody": "之后将无法重试这些文件中失败的安装。",
   "arcpkg.leftovers.failed": "无法删除：{error}",
+  "saves_ps2_title": "PS2 模拟器（Crux2、PS5SX2）",
+  "saves_ps2_running": "{name} 正在运行。恢复前请先关闭它。",
+  "saves_ps2_close_note": "恢复前请先关闭 {name}。",
+  "saves_ps2_cards": "记忆卡",
+  "saves_ps2_states": "即时存档",
+  "saves_ps2_backup_hint": "立即将此模拟器的记忆卡和即时存档备份到自动备份文件夹。",
 };
 
 export default zh_CN;

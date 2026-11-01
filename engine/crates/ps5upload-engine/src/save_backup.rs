@@ -88,8 +88,9 @@ pub(crate) fn done_key(host: &str, path: &str) -> String {
     format!("{host}|{path}")
 }
 
-/// The saves that need a backup: a game's (a PS5 game's or one in the Switch emulator, not the
-/// console's own `sce_backup*` folders, which it lists among the saves, empty), changed since the
+/// The saves that need a backup: a game's (a PS5 game's, one in the Switch emulator, or a
+/// PlayStation 2 emulator's cards or saved states; not the console's own `sce_backup*` folders,
+/// which it lists among the saves, empty), changed since the
 /// last one, and not written to in the last few minutes. A save never backed up counts as changed.
 pub fn needing_backup<'a>(
     host: &str,
@@ -306,14 +307,15 @@ pub fn mentions_host(text: &str, host: &str) -> bool {
         })
 }
 
-/// The console's saves, and the Switch emulator's (files of its own, which the console's list
-/// leaves out).
+/// The console's saves, and the emulators' (files of their own, which the console's list leaves
+/// out): the Switch emulator's, and the PlayStation 2 emulators' cards and saved states.
 pub(crate) fn list_saves(host: &str) -> Result<Vec<SaveEntry>, String> {
     let v = get(&format!("/api/ps5/saves/list?addr={}", enc(host)))?;
     let mut saves: Vec<SaveEntry> =
         serde_json::from_value(v.get("saves").cloned().unwrap_or(Value::Array(vec![])))
             .map_err(|e| format!("saves list: {e}"))?;
     saves.extend(crate::emulator_saves::list(host));
+    saves.extend(crate::ps2_saves::list(host));
     Ok(saves)
 }
 
@@ -360,21 +362,66 @@ pub(crate) fn download_save(
     tmp: &Path,
     verify: &dyn Fn() -> Result<(), String>,
 ) -> Result<(), String> {
+    let want = tmp.join(&entry.title_id);
+    match crate::ps2_saves::place_of(&entry.path).filter(|p| p.loose) {
+        // Only some of a folder's entries are the save: each is copied on its own.
+        Some(place) => {
+            std::fs::create_dir_all(&want).map_err(|e| format!("{}: {e}", want.display()))?;
+            for e in folder_entries(host, place.folder)? {
+                let Some(name) = e.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                if name == "." || name == ".." || !place.holds(name) {
+                    continue;
+                }
+                let kind = if e.get("kind").and_then(Value::as_str) == Some("dir") {
+                    "folder"
+                } else {
+                    "file"
+                };
+                download(host, &format!("{}/{name}", place.folder), &want, kind)?;
+            }
+        }
+        None => {
+            download(host, &entry.path, tmp, "folder")?;
+            // The copy is named after the folder, and the backup after the title: a PlayStation
+            // 2 emulator's save is its `memcards` or saved states folder.
+            let got = tmp.join(entry.path.rsplit('/').next().unwrap_or_default());
+            if got != want {
+                std::fs::rename(&got, &want).map_err(|e| format!("{}: {e}", got.display()))?;
+            }
+        }
+    }
+    verify()?;
+    // The emulators' saves are plain files: kept as they are.
+    if !crate::emulator_saves::is_emulator_save(entry) {
+        backup_finalize(&tmp.join(&entry.title_id)).map_err(|e| format!("{e:#}"))?;
+    }
+    Ok(())
+}
+
+/// Copies `src` on `host` (a file, or a folder: `kind`) into the local folder `dest`.
+fn download(host: &str, src: &str, dest: &Path, kind: &str) -> Result<(), String> {
     let start = post(
         "/api/transfer/download",
-        json!({ "addr": host, "src_path": entry.path, "dest_dir": tmp.to_string_lossy(), "kind": "folder" }),
+        json!({ "addr": host, "src_path": src, "dest_dir": dest.to_string_lossy(), "kind": kind }),
     )?;
     let job = start
         .get("job_id")
         .and_then(Value::as_str)
         .ok_or("download did not start")?;
-    wait_job(job)?;
-    verify()?;
-    // The emulator's saves are plain files: kept as they are.
-    if !crate::emulator_saves::is_emulator_save(entry) {
-        backup_finalize(&tmp.join(&entry.title_id)).map_err(|e| format!("{e:#}"))?;
-    }
-    Ok(())
+    wait_job(job)
+}
+
+/// Every entry of the folder `path` on `host`.
+fn folder_entries(host: &str, path: &str) -> Result<Vec<Value>, String> {
+    all_entries(&|offset| {
+        get(&format!(
+            "/api/ps5/list-dir?addr={}&path={}&offset={offset}&limit={LIST_PAGE}",
+            enc(host),
+            enc(path)
+        ))
+    })
 }
 
 fn set_status(f: impl FnOnce(&mut Status)) {
@@ -454,7 +501,8 @@ pub(crate) fn title_running(host: &str, title_id: &str) -> Result<bool, String> 
 /// Every file of a save folder with its size and time, sorted: two equal fingerprints mean
 /// nothing was written between them. The console's own times, compared with each other only, so
 /// the two machines' clocks never matter. A PS5 save is looked at two levels deep, as the saves
-/// list measures it; one of the Switch emulator as deep as its saves are measured.
+/// list measures it; one of an emulator as deep as its saves are measured (and one loose in a
+/// folder, as only its own entries there).
 fn fingerprint(host: &str, entry: &SaveEntry) -> Result<Vec<(String, u64, i64)>, String> {
     let list = |p: &str| -> Result<Vec<Value>, String> {
         let v = get(&format!(
@@ -472,23 +520,28 @@ fn fingerprint(host: &str, entry: &SaveEntry) -> Result<Vec<(String, u64, i64)>,
     } else {
         1
     };
+    let place = crate::ps2_saves::place_of(&entry.path);
+    let folder = place.as_ref().map_or(entry.path.as_str(), |p| p.folder);
+    let keep = |name: &str| place.as_ref().is_none_or(|p| p.holds(name));
     let mut out = Vec::new();
-    fingerprint_in(&list, &entry.path, "", depth, &mut out)?;
+    fingerprint_in(&list, folder, "", depth, &keep, &mut out)?;
     out.sort();
     Ok(out)
 }
 
 /// [`fingerprint`] of the folder `path` (`rel` its place in the save), `depth` folders further.
+/// Of the save's own folder (`rel` empty), only the entries `keep` takes.
 fn fingerprint_in(
     list: &dyn Fn(&str) -> Result<Vec<Value>, String>,
     path: &str,
     rel: &str,
     depth: u32,
+    keep: &dyn Fn(&str) -> bool,
     out: &mut Vec<(String, u64, i64)>,
 ) -> Result<(), String> {
     for e in list(path)? {
         let name = e.get("name").and_then(Value::as_str).unwrap_or_default();
-        if name.is_empty() || name == "." || name == ".." {
+        if name.is_empty() || name == "." || name == ".." || (rel.is_empty() && !keep(name)) {
             continue;
         }
         let here = format!("{rel}{name}");
@@ -498,6 +551,7 @@ fn fingerprint_in(
                 &format!("{path}/{name}"),
                 &format!("{here}/"),
                 depth - 1,
+                keep,
                 out,
             )?;
         } else {
@@ -672,6 +726,49 @@ fn restore(
     restore_zip(host, title_id, &zip, save_path, user_id)
 }
 
+/// The app that writes a save folder, which must be closed while it is restored.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Writer<'a> {
+    pub app: &'a str,
+    /// The emulator's name, for an emulator's save (its files go back as they are).
+    pub emulator: Option<&'static str>,
+}
+
+/// Who writes `save_path`, when it is the save folder of `title_id` and `user_id`: the game, for a
+/// PS5 save (`…/<title_id>`) or one of the Switch emulator (`…/<profile>/<game>`); the emulator,
+/// for a PlayStation 2 emulator's cards or saved states (saved under its own title, the user
+/// number telling which, so neither is ever put back into the other's folder).
+pub(crate) fn save_writer<'a>(
+    save_path: &str,
+    title_id: &'a str,
+    user_id: u32,
+) -> Result<Writer<'a>, String> {
+    let ps2 = crate::ps2_saves::place_of(save_path);
+    let fits = match &ps2 {
+        Some(p) => p.emulator.app == title_id && p.user as u32 == user_id,
+        None => save_path.ends_with(&format!("/{title_id}")),
+    };
+    if !fits {
+        return Err(format!("{save_path} is not the save folder of {title_id}"));
+    }
+    Ok(if let Some(p) = ps2 {
+        Writer {
+            app: p.emulator.app,
+            emulator: Some(p.emulator.name),
+        }
+    } else if crate::emulator_saves::is_save_path(save_path) {
+        Writer {
+            app: crate::emulator_saves::APP,
+            emulator: Some("ProsperoEden"),
+        }
+    } else {
+        Writer {
+            app: title_id,
+            emulator: None,
+        }
+    })
+}
+
 /// Puts the backup zip `zip` (on this computer) of `title_id` back into the save folder
 /// `save_path` on `host`: checked and unpacked first, the save there now backed up, then
 /// replaced (see `put_in_place`).
@@ -683,23 +780,14 @@ pub(crate) fn restore_zip(
     user_id: u32,
 ) -> Result<(), String> {
     let s = settings();
-    if !save_path.ends_with(&format!("/{title_id}")) {
-        return Err(format!("{save_path} is not the save folder of {title_id}"));
-    }
-    // A save of the Switch emulator is written by the emulator, and its files go back as they are.
-    let emulator = crate::emulator_saves::is_save_path(save_path);
-    let app = if emulator {
-        crate::emulator_saves::APP
-    } else {
-        title_id
-    };
+    let writer = save_writer(save_path, title_id, user_id)?;
+    let (app, emulator) = (writer.app, writer.emulator.is_some());
     // The game writes its save while it runs: one put back underneath it is overwritten, or
     // worse, mixed with what the game writes next.
     if title_running(host, app)? {
-        return Err(if emulator {
-            format!("ProsperoEden ({app}) is running on the PS5. Close it, then restore.")
-        } else {
-            format!("{app} is running on the PS5. Close the game, then restore.")
+        return Err(match writer.emulator {
+            Some(name) => format!("{name} ({app}) is running on the PS5. Close it, then restore."),
+            None => format!("{app} is running on the PS5. Close the game, then restore."),
         });
     }
     let tmp = make_temp_dir(title_id)?;
@@ -709,6 +797,9 @@ pub(crate) fn restore_zip(
         unzip_strict(zip, &tmp, title_id).map_err(|e| format!("unzip: {e:#}"))?;
         if !emulator {
             restore_prepare(&tmp.join(title_id)).map_err(|e| format!("prepare: {e:#}"))?;
+        }
+        if let Some(place) = crate::ps2_saves::place_of(save_path).filter(|p| p.loose) {
+            only_the_saves_own(&tmp.join(title_id), &place)?;
         }
         put_in_place(
             host,
@@ -722,6 +813,29 @@ pub(crate) fn restore_zip(
     })();
     let _ = cleanup_temp_dir(&tmp_s);
     result
+}
+
+/// A save loose in a folder (a PlayStation 2 emulator's, beside its BIOS and games) goes back
+/// into that folder as it is: a backup holding anything that is not part of that save (a `bios`
+/// folder, a card among the saved states) would overwrite the emulator's own files, so it is
+/// refused before anything on the console changes.
+fn only_the_saves_own(src: &Path, place: &crate::ps2_saves::Place) -> Result<(), String> {
+    let rd = std::fs::read_dir(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let mut foreign: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| !place.holds(name))
+        .collect();
+    if foreign.is_empty() {
+        return Ok(());
+    }
+    foreign.sort();
+    Err(format!(
+        "this backup holds more than {}'s save ({}): not put into {}",
+        place.emulator.name,
+        foreign.join(", "),
+        place.folder
+    ))
 }
 
 /// The most entries one `list-dir` page carries (the payload's own ceiling).
@@ -771,11 +885,9 @@ fn put_in_place(
         path: save_path.to_string(),
         size: 0,
         mtime: 0,
-        kind: if crate::emulator_saves::is_save_path(save_path) {
-            crate::emulator_saves::KIND.into()
-        } else {
-            String::new()
-        },
+        kind: crate::emulator_saves::kind_of_path(save_path)
+            .unwrap_or_default()
+            .into(),
     };
     if !s.dir.trim().is_empty() {
         back_up_one(host, &current, &s.dir, s.keep, tag, &|| Ok(()))
@@ -784,24 +896,22 @@ fn put_in_place(
         crate::save_backup_server::back_up_before_restore(host, &current)
             .map_err(|e| format!("could not back up the current save first: {e}"))?;
     }
+    // A save loose in a folder (a PlayStation 2 emulator's, beside its BIOS and games) is only
+    // its own entries there: only those go.
+    let place = crate::ps2_saves::place_of(save_path);
+    let folder = place.as_ref().map_or(save_path, |p| p.folder);
     // Every name first, then the deletes: a page asked for after a delete would skip some.
-    let names = all_entries(&|offset| {
-        get(&format!(
-            "/api/ps5/list-dir?addr={}&path={}&offset={offset}&limit={LIST_PAGE}",
-            enc(host),
-            enc(save_path)
-        ))
-    })?;
+    let names = folder_entries(host, folder)?;
     for e in names {
         let Some(name) = e.get("name").and_then(Value::as_str) else {
             continue;
         };
-        if name == "." || name == ".." {
+        if name == "." || name == ".." || place.as_ref().is_some_and(|p| !p.holds(name)) {
             continue;
         }
         post(
             "/api/ps5/fs/delete",
-            json!({ "addr": host, "path": format!("{save_path}/{name}") }),
+            json!({ "addr": host, "path": format!("{folder}/{name}") }),
         )?;
     }
     let start = post(
@@ -809,7 +919,7 @@ fn put_in_place(
         json!({
             "addr": host,
             "src_dir": src.to_string_lossy(),
-            "dest_root": save_path,
+            "dest_root": folder,
             "excludes": [],
         }),
     )?;
@@ -1661,11 +1771,16 @@ mod tests {
         };
         let names = |depth| {
             let mut out = Vec::new();
-            fingerprint_in(&list, "/s", "", depth, &mut out).unwrap();
+            fingerprint_in(&list, "/s", "", depth, &|_| true, &mut out).unwrap();
             out.into_iter().map(|(n, _, _)| n).collect::<Vec<_>>()
         };
         assert_eq!(names(1), ["a", "d/b", "d/e"]);
         assert_eq!(names(4), ["a", "d/b", "d/e/c"]);
+        // A save loose in a folder: only its own entries of that folder, and all inside them.
+        let mut out = Vec::new();
+        fingerprint_in(&list, "/s", "", 4, &|n| n == "d", &mut out).unwrap();
+        let names: Vec<_> = out.into_iter().map(|(n, _, _)| n).collect();
+        assert_eq!(names, ["d/b", "d/e/c"]);
     }
 
     #[test]
@@ -1688,6 +1803,96 @@ mod tests {
             parse_backup_name(&sw.title_id, &name),
             Some((sw.user_id as u32, "1970-01-01_000000".to_string()))
         );
+    }
+
+    #[test]
+    fn the_ps2_emulators_cards_and_states_are_backed_up_too() {
+        use crate::ps2_saves::{CARDS_USER, CRUX2, KIND, STATES_USER};
+        let ps2 = |path: &str, user: i32| SaveEntry {
+            title_id: CRUX2.app.into(),
+            user_id: user,
+            kind: KIND.into(),
+            ..save(path, 1000)
+        };
+        let saves = [
+            ps2("/mnt/ext1/homebrew/PPSA99249/memcards", CARDS_USER),
+            ps2("/mnt/ext1/homebrew/PPSA99249/sstates", STATES_USER),
+        ];
+        assert_eq!(needing_backup("h", &saves, &Done::new(), 2000).len(), 2);
+        // Both under the emulator's title, the user number keeping their backups apart.
+        for user in [CARDS_USER, STATES_USER] {
+            let name = format!(
+                "{}{}.zip",
+                auto_backup_stem(CRUX2.app, user as u32),
+                stamp(0)
+            );
+            assert_eq!(
+                parse_backup_name(CRUX2.app, &name),
+                Some((user as u32, "1970-01-01_000000".to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn a_loose_save_restores_only_its_own_entries() {
+        let dir = std::env::temp_dir().join(format!("ps5u-ps2-loose-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Mcd002.ps2")).unwrap();
+        std::fs::write(dir.join("Mcd001.ps2"), b"card").unwrap();
+        let cards = crate::ps2_saves::place_of("/data/PCSX2/*.ps2").unwrap();
+        let states = crate::ps2_saves::place_of("/data/PCSX2/*.p2s").unwrap();
+        // Cards (a file card and a folder card) into the cards' place: fine.
+        assert!(only_the_saves_own(&dir, &cards).is_ok());
+        // Into the states' place, or with anything of the emulator's own beside them: refused.
+        assert!(only_the_saves_own(&dir, &states).is_err());
+        std::fs::create_dir_all(dir.join("bios")).unwrap();
+        let err = only_the_saves_own(&dir, &cards).unwrap_err();
+        assert!(err.contains("bios"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_restore_is_only_into_the_saves_own_folder() {
+        let ps5 = save_writer("/user/home/1/savedata_prospero/PPSA01234", "PPSA01234", 1).unwrap();
+        assert_eq!((ps5.app, ps5.emulator), ("PPSA01234", None));
+        let switch = save_writer(
+            "/data/prosperoeden/user/nand/user/save/0000000000000000/1F1E1D1C1B1A19181716151413121110/0100F2C0115B6000",
+            "0100F2C0115B6000",
+            0x1F1_E1D1,
+        )
+        .unwrap();
+        assert_eq!(
+            (switch.app, switch.emulator),
+            (crate::emulator_saves::APP, Some("ProsperoEden"))
+        );
+        let crux2 = save_writer("/data/crux2/memcards", "PPSA99249", 0).unwrap();
+        assert_eq!((crux2.app, crux2.emulator), ("PPSA99249", Some("Crux2")));
+        let states = save_writer("/mnt/ext1/homebrew/PPSA99249/sstates", "PPSA99249", 1).unwrap();
+        assert_eq!((states.app, states.emulator), ("PPSA99249", Some("Crux2")));
+        let ps5sx2 = save_writer("/data/PCSX2/savestates", "PPSA99203", 1).unwrap();
+        assert_eq!((ps5sx2.app, ps5sx2.emulator), ("PPSA99203", Some("PS5SX2")));
+        let loose = save_writer("/data/PCSX2/*.ps2", "PPSA99203", 0).unwrap();
+        assert_eq!((loose.app, loose.emulator), ("PPSA99203", Some("PS5SX2")));
+        // Another title's folder, an emulator's folder under another title, the cards' backups
+        // into the states' folder (or the other way), or anything else of the emulator's: refused.
+        for (path, title, user) in [
+            ("/user/home/1/savedata_prospero/PPSA01234", "PPSA05678", 1),
+            ("/data/PCSX2/memcards", "PPSA99249", 0),
+            ("/data/crux2/memcards", "PPSA01234", 0),
+            ("/data/crux2/memcards", "PPSA99249", 1),
+            ("/data/PCSX2/savestates", "PPSA99203", 0),
+            ("/data/PCSX2/sstates", "PPSA99203", 1),
+            ("/data/PCSX2", "PPSA99203", 0),
+            ("/data/PCSX2/*.ps2", "PPSA99203", 1),
+            ("/data/PCSX2/*.p2s", "PPSA99203", 0),
+            ("/data/crux2/*.ps2", "PPSA99249", 0),
+            ("/mnt/ext1/homebrew/PPSA99249/inis", "PPSA99249", 0),
+        ] {
+            assert!(
+                save_writer(path, title, user).is_err(),
+                "{path} {title} {user}"
+            );
+        }
     }
 
     #[test]
