@@ -865,6 +865,22 @@ code {
   margin-top: 48px;
 }
 
+/* Keyboard & mouse (10.4): the "New in" tag over a tour heading, a small note, a sideways phone. */
+.tour-text .tag {
+  margin-bottom: 10px;
+}
+.tour-text p.note {
+  font-size: 14px;
+}
+.kbm-touch {
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+}
+.kbm-touch .device {
+  width: 100%;
+  max-width: 520px;
+  justify-self: center;
+}
+
 /* ── Guide ──────────────────────────────────────────────────────────────── */
 .steps {
   margin: 36px 0 0;
