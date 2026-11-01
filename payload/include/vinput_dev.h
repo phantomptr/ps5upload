@@ -19,7 +19,8 @@ void vinput_dev_init(void (*log)(const char *fmt, ...), const char *handles_path
 /* The backend ("ps5"). Its caps say what Init made possible. */
 const vinput_backend_t *vinput_dev_backend(void);
 /* About once a second: when the foreground user changed while a device is open, the devices are
- * let go, removed and made again for the new user; 1 then (whatever was held is gone). */
+ * let go, removed and made again for the new user; 1 then (whatever was held is gone). One that
+ * could not be made again has no handle: its open makes it (the companion asks again). */
 int vinput_dev_tick(void);
 
 #endif

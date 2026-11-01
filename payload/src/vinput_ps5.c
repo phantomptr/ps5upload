@@ -126,9 +126,21 @@ static int vps5_launch(void *ctx) {
     return 0;
 }
 
+/* SIGTERM first: the companion stops its loop, lets go of what it held and deletes its devices (a
+ * SIGKILLed one leaves them behind until the next one starts). SIGKILL if it is still there after
+ * VPS5_TERM_WAIT_MS (stuck in a call). Runs on the relay's thread without its lock. */
+#define VPS5_TERM_WAIT_MS 300
+
 static void vps5_kill(void *ctx, int pid) {
+    long long until;
     (void)ctx;
     if (pid <= 1 || pid == getpid()) return;
+    fprintf(stderr, "[vinput] SIGTERM companion pid %d: %d\n", pid, kill(pid, SIGTERM));
+    until = vps5_now_ms() + VPS5_TERM_WAIT_MS;
+    while (vps5_now_ms() < until) {
+        if (kill(pid, 0) != 0 && errno == ESRCH) return;
+        usleep(20 * 1000);
+    }
     fprintf(stderr, "[vinput] SIGKILL companion pid %d: %d\n", pid, kill(pid, SIGKILL));
 }
 

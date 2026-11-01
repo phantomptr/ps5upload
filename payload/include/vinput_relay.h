@@ -3,7 +3,7 @@
  *
  * A session that opens while the companion is not running starts it (on its own thread) and answers
  * VINPUT_E_STARTING ("vinput_starting"); the engine asks again until it is up. Every request waits
- * at most call_timeout_ms; a companion silent for silent_ms is killed by pid and started again,
+ * at most call_timeout_ms; a companion silent for silent_ms is ended by pid and started again,
  * with backoff, at most max_fails times in a row, then it is "unavailable"
  * (vinput_companion_failed). No loader on :9021 is "unavailable" with vinput_needs_loader (asked
  * again after loader_retry_ms). Devices the session had open are made again once a restarted
@@ -19,7 +19,8 @@
 typedef struct {
     /* Sends the companion's ELF to the loader. 0, VRELAY_NO_LOADER, or -1. */
     int (*launch)(void *ctx);
-    /* Ends the companion with this pid. */
+    /* Ends the companion with this pid: asked to let go first (SIGTERM), killed if it has not
+     * gone after a short wait. Called without the relay's lock (on its thread). */
     void (*kill)(void *ctx, int pid);
     void *ctx;
     int port;                              /* 0: VWIRE_PORT */

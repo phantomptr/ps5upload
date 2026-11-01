@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -20,9 +21,16 @@
 
 typedef struct {
     const vcomp_cfg_t *cfg;
-    int m_open, k_open;
+    int m_open, k_open; /* the helper has it open */
+    /* Open, but the backend could not make it again (a new foreground user and AddDevice failed):
+     * asked again every tick, and on the next OPEN, until it is back. */
+    int m_lost, k_lost;
     uint8_t buttons, mods, keys[VINPUT_KEYS];
 } vcomp_t;
+
+/* There for input: open and not lost. */
+#define M_UP(c) ((c)->m_open && !(c)->m_lost)
+#define K_UP(c) ((c)->k_open && !(c)->k_lost)
 
 static long long vc_now_ms(void) {
     struct timespec ts;
@@ -45,7 +53,7 @@ static void mouse_release(vcomp_t *c) {
     if (!c->m_open) return;
     (void)c->cfg->dev->mouse_send(0, 0, 0, 0, 0);
     c->cfg->dev->mouse_close();
-    c->m_open = 0;
+    c->m_open = c->m_lost = 0;
     c->buttons = 0;
 }
 
@@ -53,7 +61,7 @@ static void keyboard_release(vcomp_t *c) {
     if (!c->k_open) return;
     (void)c->cfg->dev->keyboard_send(0, NO_KEYS);
     c->cfg->dev->keyboard_close();
-    c->k_open = 0;
+    c->k_open = c->k_lost = 0;
     c->mods = 0;
     memset(c->keys, 0, sizeof c->keys);
 }
@@ -66,16 +74,28 @@ static void release_all(vcomp_t *c, const char *why) {
 }
 
 /* Makes or lets go of one device. The rc. */
-static int device(int want, int *is_open, int (*open_fn)(void), void (*release)(vcomp_t *), vcomp_t *c) {
+static int device(int want, int *is_open, int *lost, int (*open_fn)(void), void (*release)(vcomp_t *),
+                  vcomp_t *c) {
     int rc;
     if (!want) {
         release(c);
         return VWIRE_RC_OK;
     }
-    if (*is_open) return VWIRE_RC_OK;
+    if (*is_open && !*lost) return VWIRE_RC_OK;
     rc = open_fn();
-    if (rc == VINPUT_OK) *is_open = 1;
+    if (rc == VINPUT_OK) {
+        *is_open = 1;
+        *lost = 0;
+    }
     return rc == VINPUT_OK ? VWIRE_RC_OK : rc == VINPUT_E_UNSUPPORTED ? VWIRE_RC_UNSUPPORTED : VWIRE_RC_FAILED;
+}
+
+/* After the backend made its devices again (or failed to): an open device it could not make is
+ * lost, and asked for again on each tick until it is back. */
+static void remake(vcomp_t *c, int *is_open, int *lost, int (*open_fn)(void), const char *what) {
+    if (!*is_open) return;
+    *lost = open_fn() != VINPUT_OK;
+    if (*lost) vc_log(c, what, 0, 0);
 }
 
 static int apply(vcomp_t *c, const uint8_t raw[VINPUT_REPORT_LEN]) {
@@ -84,14 +104,14 @@ static int apply(vcomp_t *c, const uint8_t raw[VINPUT_REPORT_LEN]) {
     int dx = (int16_t)vwire_get16(raw + 2), dy = (int16_t)vwire_get16(raw + 4);
     int wheel = (int8_t)raw[6], hwheel = (int8_t)raw[7];
     const uint8_t *keys = raw + 8;
-    if (!c->m_open && !c->k_open) return VWIRE_RC_FAILED;
-    if (c->m_open && (buttons != c->buttons || dx || dy || wheel || hwheel)) {
+    if (!M_UP(c) && !K_UP(c)) return VWIRE_RC_FAILED;
+    if (M_UP(c) && (buttons != c->buttons || dx || dy || wheel || hwheel)) {
         if (c->cfg->dev->mouse_send(buttons, dx, dy, wheel, hwheel) == VINPUT_OK)
             c->buttons = buttons;
         else
             err = VWIRE_RC_FAILED;
     }
-    if (c->k_open && (mods != c->mods || memcmp(keys, c->keys, VINPUT_KEYS) != 0)) {
+    if (K_UP(c) && (mods != c->mods || memcmp(keys, c->keys, VINPUT_KEYS) != 0)) {
         if (c->cfg->dev->keyboard_send(mods, keys) == VINPUT_OK) {
             c->mods = mods;
             memcpy(c->keys, keys, VINPUT_KEYS);
@@ -134,6 +154,24 @@ static int read_token(const char *path, uint8_t tok[VWIRE_TOKEN_LEN]) {
     n = vwire_token_from_hex(buf, (size_t)n, tok);
     memset(buf, 0, sizeof buf);
     return (int)n;
+}
+
+/* The pid in the file, or 0. */
+static long pid_in(const char *path) {
+    char s[24];
+    ssize_t n;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    n = read(fd, s, sizeof s - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    s[n] = '\0';
+    return strtol(s, NULL, 10);
+}
+
+/* Removes the pid file if it is still ours (a later companion may have written its own). */
+static void unlink_pid(const char *path) {
+    if (path[0] && pid_in(path) == (long)getpid()) unlink(path);
 }
 
 static void write_pid(const char *path) {
@@ -180,17 +218,17 @@ static int handle(vcomp_t *c, int fd, const vwire_frame_t *f) {
         c->cfg->dev->caps(&mouse, &keyboard);
         x[0] = (uint8_t)!!mouse;
         x[1] = (uint8_t)!!keyboard;
-        x[2] = (uint8_t)c->m_open;
-        x[3] = (uint8_t)c->k_open;
+        x[2] = (uint8_t)M_UP(c);
+        x[3] = (uint8_t)K_UP(c);
         return reply(fd, f, VWIRE_RC_OK, x, 4);
     case VWIRE_OPEN: {
         int rm, rk;
         if (f->len < 2) return reply(fd, f, VWIRE_RC_BAD_REQUEST, NULL, 0);
-        rm = device(f->payload[0], &c->m_open, c->cfg->dev->mouse_open, mouse_release, c);
-        rk = device(f->payload[1], &c->k_open, c->cfg->dev->keyboard_open, keyboard_release, c);
-        x[0] = (uint8_t)c->m_open;
-        x[1] = (uint8_t)c->k_open;
-        vc_log(c, "open", c->m_open, c->k_open);
+        rm = device(f->payload[0], &c->m_open, &c->m_lost, c->cfg->dev->mouse_open, mouse_release, c);
+        rk = device(f->payload[1], &c->k_open, &c->k_lost, c->cfg->dev->keyboard_open, keyboard_release, c);
+        x[0] = (uint8_t)M_UP(c);
+        x[1] = (uint8_t)K_UP(c);
+        vc_log(c, "open", x[0], x[1]);
         return reply(fd, f, rm ? rm : rk, x, 2);
     }
     case VWIRE_REPORT:
@@ -229,10 +267,13 @@ int vcomp_run(const vcomp_cfg_t *cfg) {
         vc_log(&c, "port busy", port, errno);
         return VCOMP_EXIT_BUSY;
     }
+    /* Written once the port is ours (bound) and before Init, so a helper can end an Init that
+     * hangs; not left behind when listen fails. */
     write_pid(pid_path);
     if (cfg->dev_init) cfg->dev_init();
     if (listen(lfd, 4) != 0) {
         close(lfd);
+        unlink_pid(pid_path);
         return VCOMP_EXIT_BUSY;
     }
     start = idle_since = vc_now_ms();
@@ -337,14 +378,19 @@ int vcomp_run(const vcomp_cfg_t *cfg) {
         }
         if (now >= next_tick) {
             next_tick = now + TICK_MS;
-            if (cfg->dev_tick && cfg->dev_tick() == 1) forget_held(&c);
+            if (cfg->dev_tick && cfg->dev_tick() == 1) {
+                forget_held(&c);
+                c.m_lost = c.k_lost = 1; /* checked below: made again, or not */
+            }
+            if (c.m_lost) remake(&c, &c.m_open, &c.m_lost, cfg->dev->mouse_open, "mouse not made again");
+            if (c.k_lost) remake(&c, &c.k_open, &c.k_lost, cfg->dev->keyboard_open, "keyboard not made again");
         }
     }
 out:
     release_all(&c, "exit");
     if (cfd >= 0) close(cfd);
     close(lfd);
-    if (pid_path[0]) unlink(pid_path);
+    unlink_pid(pid_path);
     memset(tok, 0, sizeof tok);
     return code;
 }
