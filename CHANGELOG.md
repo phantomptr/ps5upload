@@ -4,6 +4,23 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Drag to reorder the queue.** Hold the grip at the left of a waiting row and drop it where it
+  should go, with a mouse, pen or finger. The same rules as the arrow buttons apply: a row moves
+  only among the waiting rows of its own console and kind (base game, update, DLC). The arrows
+  stay for the keyboard; Esc cancels a drag.
+- **Archive installs say where they unpack, and check the space first.** Before you start, the
+  card shows the PS5 folder the packages go to, how much they need and how much is free on that
+  drive. When they certainly cannot fit, Install is refused with a clear message; when they may
+  not fit, it warns.
+- **The unpacked packages are deleted after a fully successful run.** When any install fails the
+  folder stays, so a retry works, and the message says where it is.
+- **Leftovers from earlier runs can be removed.** The card shows "N leftover unpacked folder(s)"
+  with their size and a Remove button; folders a queued install still reads are never touched.
+
+---
+
 ## 10.3.0
 
 - **Remote Play's Settings open over the stream.** Every Settings button (on the picture's bar,

@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
+  GripVertical,
   CheckCircle2,
   XCircle,
   CircleDashed,
@@ -45,6 +46,7 @@ import {
   type SourceArt,
 } from "../../lib/queueArt";
 import { useOnScreen } from "../../lib/useOnScreen";
+import { DRAG_ROW_ATTR, useRowDrag } from "./useRowDrag";
 import { usePkgStorageStore } from "../../lib/pkgStorage";
 import { usePackageViewer } from "../../state/packageViewer";
 import { GameIcon } from "../../components/GameIcon";
@@ -67,6 +69,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { useConsoleLabel } from "../../state/roster";
 import {
   installOrderPriority,
+  moveGroupOf,
   useUploadQueueStore,
   type QueueItem,
   type QueueItemStatus,
@@ -226,6 +229,7 @@ export const QueuePanel = memo(function QueuePanel({
   );
   const moveUp = useUploadQueueStore((s) => s.moveUp);
   const moveDown = useUploadQueueStore((s) => s.moveDown);
+  const moveTo = useUploadQueueStore((s) => s.moveTo);
   const retryFailed = useUploadQueueStore((s) => s.retryFailed);
   const setContinueOnFailure = useUploadQueueStore(
     (s) => s.setContinueOnFailure,
@@ -487,6 +491,7 @@ export const QueuePanel = memo(function QueuePanel({
             onStopHost={() => stopHost(g.host)}
             onMoveUp={moveUp}
             onMoveDown={moveDown}
+            onMoveTo={moveTo}
             onRemove={remove}
             onCancel={cancelItem}
             onRetry={(id) => void retryInstall(id)}
@@ -570,6 +575,7 @@ function ConsoleGroup({
   onStopHost,
   onMoveUp,
   onMoveDown,
+  onMoveTo,
   onRemove,
   onCancel,
   onRetry,
@@ -587,6 +593,7 @@ function ConsoleGroup({
   onStopHost: () => void;
   onMoveUp: (id: string) => void;
   onMoveDown: (id: string) => void;
+  onMoveTo: (id: string, targetId: string) => void;
   onRemove: (id: string) => void;
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
@@ -643,6 +650,25 @@ function ConsoleGroup({
     });
     return m;
   }, [sections]);
+  // Drag to reorder: the same rule as the arrows — a waiting row takes the place of another
+  // waiting row of the same install tier on this console (moveGroupOf in the store).
+  const nextIds = useMemo(
+    () =>
+      (sections.find((sec) => sec.key === "next")?.items ?? []).map(
+        (it) => it.id,
+      ),
+    [sections],
+  );
+  const byId = useMemo(() => new Map(items.map((it) => [it.id, it])), [items]);
+  const rowDrag = useRowDrag({
+    order: nextIds,
+    canDrop: (id, target) => {
+      const a = byId.get(id);
+      const b = byId.get(target);
+      return !!a && !!b && moveGroupOf(a) === moveGroupOf(b);
+    },
+    onDrop: onMoveTo,
+  });
   // Headings only earn their space once the list mixes states; a queue that
   // is all waiting (or all finished) reads fine without one.
   const labelled = sections.length > 1;
@@ -676,6 +702,13 @@ function ConsoleGroup({
                   canMoveDown={movable.get(item.id)?.down ?? false}
                   onMoveUp={() => onMoveUp(item.id)}
                   onMoveDown={() => onMoveDown(item.id)}
+                  dragHandle={
+                    (movable.get(item.id)?.up || movable.get(item.id)?.down)
+                      ? rowDrag.handleProps(item.id)
+                      : undefined
+                  }
+                  dragging={rowDrag.dragId === item.id}
+                  dropSide={rowDrag.sideOf(item.id)}
                   onRemove={() => onRemove(item.id)}
                   onCancel={() => onCancel(item.id)}
                   onRetry={() => onRetry(item.id)}
@@ -820,6 +853,9 @@ export function QueueRow({
   canMoveDown = true,
   onMoveUp,
   onMoveDown,
+  dragHandle,
+  dragging = false,
+  dropSide = null,
   onRemove,
   onCancel,
   onRetry,
@@ -834,6 +870,12 @@ export function QueueRow({
   canMoveDown?: boolean;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  /** Pointer handlers for the drag handle; absent = the row cannot be dragged. */
+  dragHandle?: ReturnType<ReturnType<typeof useRowDrag>["handleProps"]>;
+  /** This row is the one being dragged. */
+  dragging?: boolean;
+  /** Another row is held over this one: where it would land. */
+  dropSide?: "before" | "after" | null;
   onRemove: () => void;
   onCancel: () => void;
   onRetry: () => void;
@@ -946,9 +988,10 @@ export function QueueRow({
     <li
       ref={rowRef}
       data-testid="queue-row"
-      className={`rounded-[var(--radius-card)] border text-sm shadow-[var(--edge-highlight),var(--shadow-1)] transition-colors ${
+      {...{ [DRAG_ROW_ATTR]: item.id }}
+      className={`relative rounded-[var(--radius-card)] border text-sm shadow-[var(--edge-highlight),var(--shadow-1)] transition-colors ${
         isActive ? "px-4 py-3.5" : "px-4 py-3"
-      } ${
+      } ${dragging ? "opacity-50" : ""} ${
         item.status === "failed"
           ? "border-[color-mix(in_srgb,var(--color-bad)_35%,transparent)] bg-[var(--color-surface-raised)]"
           : isActive
@@ -957,7 +1000,28 @@ export function QueueRow({
       }`}
     >
       {confirmNode}
+      {dropSide && (
+        <span
+          aria-hidden
+          data-testid="queue-drop-line"
+          className={`pointer-events-none absolute inset-x-2 h-0.5 rounded-full bg-[var(--color-accent)] ${
+            dropSide === "before" ? "-top-1" : "-bottom-1"
+          }`}
+        />
+      )}
       <div className="flex items-center gap-3">
+        {dragHandle && (
+          // Mouse, pen and touch; keyboard users have the up/down buttons on the right.
+          <span
+            {...dragHandle}
+            aria-hidden
+            data-testid="queue-drag-handle"
+            title={tr("queue_drag", undefined, "Drag to reorder")}
+            className="-ml-2 -mr-1 flex shrink-0 cursor-grab touch-none items-center self-stretch px-0.5 text-[var(--color-muted)] hover:text-[var(--color-text)] active:cursor-grabbing"
+          >
+            <GripVertical size={14} />
+          </span>
+        )}
         {isPending && position != null ? (
           <span
             className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-3)] px-1 text-[10px] font-semibold tabular-nums text-[var(--color-muted)]"

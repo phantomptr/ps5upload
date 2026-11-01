@@ -6724,6 +6724,18 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "saves_switch_need_dir": "Wähle zuerst einen Ordner für automatische Sicherungen.",
   "saves_switch_backup_now": "Jetzt sichern",
   "saves_switch_no_backups": "Noch keine Sicherungen.",
+  "queue_drag": "Zum Sortieren ziehen",
+  "arcpkg.target": "Wird entpackt nach:",
+  "arcpkg.space.fits": "Benötigt {need}; {room} frei auf {drive}.",
+  "arcpkg.space.tight": "Benötigt {need}; {room} frei auf {drive}. Es passt eventuell nicht.",
+  "arcpkg.space.noRoom": "Nicht genug Platz: benötigt {need}, nur {room} frei auf {drive}. Gib Speicher frei oder wähle unter Laufwerke ein anderes Laufwerk für Pakete.",
+  "arcpkg.space.unknown": "Benötigt {need}. Der freie Speicher der PS5 konnte nicht gelesen werden.",
+  "arcpkg.leftovers.line": "{count} übrig gebliebene entpackte Ordner auf der PS5, {size}",
+  "arcpkg.leftovers.remove": "Entfernen",
+  "arcpkg.leftovers.removing": "Wird entfernt…",
+  "arcpkg.leftovers.confirmTitle": "{count} entpackte Ordner von der PS5 löschen?",
+  "arcpkg.leftovers.confirmBody": "Fehlgeschlagene Installationen aus diesen Dateien lassen sich danach nicht wiederholen.",
+  "arcpkg.leftovers.failed": "Konnte nicht gelöscht werden: {error}",
 };
 
 export default de;

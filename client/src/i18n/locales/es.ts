@@ -6669,6 +6669,18 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
   "saves_switch_need_dir": "Elige primero una carpeta para las copias automáticas.",
   "saves_switch_backup_now": "Respaldar ahora",
   "saves_switch_no_backups": "Aún no hay copias.",
+  "queue_drag": "Arrastra para reordenar",
+  "arcpkg.target": "Se descomprime en:",
+  "arcpkg.space.fits": "Necesita {need}; {room} libres en {drive}.",
+  "arcpkg.space.tight": "Necesita {need}; {room} libres en {drive}. Puede que no quepa.",
+  "arcpkg.space.noRoom": "No hay espacio suficiente: necesita {need} y solo hay {room} libres en {drive}. Libera espacio o elige otra unidad para paquetes en Volúmenes.",
+  "arcpkg.space.unknown": "Necesita {need}. No se pudo leer el espacio libre de la PS5.",
+  "arcpkg.leftovers.line": "{count} carpeta(s) descomprimida(s) sobrante(s) en la PS5, {size}",
+  "arcpkg.leftovers.remove": "Eliminar",
+  "arcpkg.leftovers.removing": "Eliminando…",
+  "arcpkg.leftovers.confirmTitle": "¿Eliminar {count} carpeta(s) descomprimida(s) de la PS5?",
+  "arcpkg.leftovers.confirmBody": "Después no se podrán reintentar las instalaciones fallidas de estos archivos.",
+  "arcpkg.leftovers.failed": "No se pudo eliminar: {error}",
 };
 
 export default es;

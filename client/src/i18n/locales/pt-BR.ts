@@ -6731,6 +6731,18 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
   "saves_switch_need_dir": "Escolha primeiro uma pasta para backups automáticos.",
   "saves_switch_backup_now": "Fazer backup agora",
   "saves_switch_no_backups": "Ainda sem backups.",
+  "queue_drag": "Arraste para reordenar",
+  "arcpkg.target": "Será extraído em:",
+  "arcpkg.space.fits": "Precisa de {need}; {room} livres em {drive}.",
+  "arcpkg.space.tight": "Precisa de {need}; {room} livres em {drive}. Pode não caber.",
+  "arcpkg.space.noRoom": "Espaço insuficiente: precisa de {need}, apenas {room} livres em {drive}. Libere espaço ou escolha outra unidade para pacotes em Volumes.",
+  "arcpkg.space.unknown": "Precisa de {need}. Não foi possível ler o espaço livre do PS5.",
+  "arcpkg.leftovers.line": "{count} pasta(s) extraída(s) restante(s) no PS5, {size}",
+  "arcpkg.leftovers.remove": "Remover",
+  "arcpkg.leftovers.removing": "Removendo…",
+  "arcpkg.leftovers.confirmTitle": "Excluir {count} pasta(s) extraída(s) do PS5?",
+  "arcpkg.leftovers.confirmBody": "Instalações que falharam a partir desses arquivos não poderão ser repetidas depois.",
+  "arcpkg.leftovers.failed": "Não foi possível excluir: {error}",
 };
 
 export default pt_BR;

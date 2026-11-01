@@ -6716,6 +6716,18 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "saves_switch_need_dir": "اختر مجلدًا للنسخ الاحتياطية التلقائية أولًا.",
   "saves_switch_backup_now": "انسخ الآن",
   "saves_switch_no_backups": "لا توجد نسخ احتياطية بعد.",
+  "queue_drag": "اسحب لإعادة الترتيب",
+  "arcpkg.target": "يُفك الضغط إلى:",
+  "arcpkg.space.fits": "يحتاج {need}؛ المساحة الحرة على {drive}: {room}.",
+  "arcpkg.space.tight": "يحتاج {need}؛ المساحة الحرة على {drive}: {room}. قد لا تكفي.",
+  "arcpkg.space.noRoom": "المساحة غير كافية: يحتاج {need}، والمتاح على {drive} فقط {room}. حرّر مساحة، أو اختر محركًا آخر للحزم في وحدات التخزين.",
+  "arcpkg.space.unknown": "يحتاج {need}. تعذّرت قراءة المساحة الحرة على PS5.",
+  "arcpkg.leftovers.line": "{count} مجلد مفكوك متبقٍ على PS5، {size}",
+  "arcpkg.leftovers.remove": "إزالة",
+  "arcpkg.leftovers.removing": "جارٍ الإزالة…",
+  "arcpkg.leftovers.confirmTitle": "حذف {count} مجلد مفكوك من PS5؟",
+  "arcpkg.leftovers.confirmBody": "لن يمكن بعد ذلك إعادة محاولة التثبيتات الفاشلة من هذه الملفات.",
+  "arcpkg.leftovers.failed": "تعذّر الحذف: {error}",
 };
 
 export default ar;

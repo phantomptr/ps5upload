@@ -7030,6 +7030,18 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
   "saves_switch_need_dir": "Choose a folder for automatic backups first.",
   "saves_switch_backup_now": "Back up now",
   "saves_switch_no_backups": "No backups yet.",
+  "queue_drag": "Drag to reorder",
+  "arcpkg.target": "Unpacks to:",
+  "arcpkg.space.fits": "Needs {need}; {room} free on {drive}.",
+  "arcpkg.space.tight": "Needs {need}; {room} free on {drive}. It may not fit.",
+  "arcpkg.space.noRoom": "Not enough space: needs {need}, only {room} free on {drive}. Free up space, or pick another drive for packages in Volumes.",
+  "arcpkg.space.unknown": "Needs {need}. Free space on the PS5 could not be read.",
+  "arcpkg.leftovers.line": "{count} leftover unpacked folder(s) on the PS5, {size}",
+  "arcpkg.leftovers.remove": "Remove",
+  "arcpkg.leftovers.removing": "Removing…",
+  "arcpkg.leftovers.confirmTitle": "Delete {count} unpacked folder(s) from the PS5?",
+  "arcpkg.leftovers.confirmBody": "Failed installs from these files cannot be retried afterwards.",
+  "arcpkg.leftovers.failed": "Could not delete {error}",
 };
 
 export default en;

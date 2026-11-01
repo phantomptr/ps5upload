@@ -6716,6 +6716,18 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
   "saves_switch_need_dir": "আগে স্বয়ংক্রিয় ব্যাকআপের জন্য একটি ফোল্ডার বেছে নিন।",
   "saves_switch_backup_now": "এখনই ব্যাকআপ",
   "saves_switch_no_backups": "এখনও কোনো ব্যাকআপ নেই।",
+  "queue_drag": "ক্রম বদলাতে টেনে আনুন",
+  "arcpkg.target": "এখানে আনপ্যাক হবে:",
+  "arcpkg.space.fits": "{need} দরকার; {drive}-এ {room} খালি।",
+  "arcpkg.space.tight": "{need} দরকার; {drive}-এ {room} খালি। জায়গা না-ও হতে পারে।",
+  "arcpkg.space.noRoom": "যথেষ্ট জায়গা নেই: {need} দরকার, {drive}-এ মাত্র {room} খালি। জায়গা খালি করুন, অথবা Volumes-এ প্যাকেজের জন্য অন্য ড্রাইভ বেছে নিন।",
+  "arcpkg.space.unknown": "{need} দরকার। PS5-এর খালি জায়গা পড়া যায়নি।",
+  "arcpkg.leftovers.line": "PS5-এ {count}টি রয়ে যাওয়া আনপ্যাক ফোল্ডার, {size}",
+  "arcpkg.leftovers.remove": "সরান",
+  "arcpkg.leftovers.removing": "সরানো হচ্ছে…",
+  "arcpkg.leftovers.confirmTitle": "PS5 থেকে {count}টি আনপ্যাক ফোল্ডার মুছবেন?",
+  "arcpkg.leftovers.confirmBody": "এই ফাইলগুলো থেকে ব্যর্থ ইনস্টল পরে আর আবার চেষ্টা করা যাবে না।",
+  "arcpkg.leftovers.failed": "মোছা যায়নি: {error}",
 };
 
 export default bn;

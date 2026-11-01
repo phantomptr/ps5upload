@@ -6735,6 +6735,18 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "saves_switch_need_dir": "先に自動バックアップのフォルダーを選んでください。",
   "saves_switch_backup_now": "今すぐバックアップ",
   "saves_switch_no_backups": "バックアップはまだありません。",
+  "queue_drag": "ドラッグして並べ替え",
+  "arcpkg.target": "展開先:",
+  "arcpkg.space.fits": "必要: {need}、{drive} の空き: {room}。",
+  "arcpkg.space.tight": "必要: {need}、{drive} の空き: {room}。入りきらない可能性があります。",
+  "arcpkg.space.noRoom": "空き容量が足りません: {need} 必要ですが、{drive} の空きは {room} のみです。空き容量を増やすか、「ボリューム」でパッケージ用の別のドライブを選んでください。",
+  "arcpkg.space.unknown": "必要: {need}。PS5 の空き容量を読み取れませんでした。",
+  "arcpkg.leftovers.line": "PS5 に残っている展開済みフォルダー: {count} 個、{size}",
+  "arcpkg.leftovers.remove": "削除",
+  "arcpkg.leftovers.removing": "削除中…",
+  "arcpkg.leftovers.confirmTitle": "PS5 から展開済みフォルダー {count} 個を削除しますか？",
+  "arcpkg.leftovers.confirmBody": "これらのファイルからの失敗したインストールは、あとで再試行できなくなります。",
+  "arcpkg.leftovers.failed": "削除できませんでした: {error}",
 };
 
 export default ja;

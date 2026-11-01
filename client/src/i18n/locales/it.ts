@@ -6669,6 +6669,18 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
   "saves_switch_need_dir": "Scegli prima una cartella per i backup automatici.",
   "saves_switch_backup_now": "Backup ora",
   "saves_switch_no_backups": "Ancora nessun backup.",
+  "queue_drag": "Trascina per riordinare",
+  "arcpkg.target": "Viene estratto in:",
+  "arcpkg.space.fits": "Servono {need}; {room} liberi su {drive}.",
+  "arcpkg.space.tight": "Servono {need}; {room} liberi su {drive}. Potrebbe non entrarci.",
+  "arcpkg.space.noRoom": "Spazio insufficiente: servono {need}, solo {room} liberi su {drive}. Libera spazio o scegli un'altra unità per i pacchetti in Volumi.",
+  "arcpkg.space.unknown": "Servono {need}. Impossibile leggere lo spazio libero della PS5.",
+  "arcpkg.leftovers.line": "{count} cartella/e estratta/e rimasta/e sulla PS5, {size}",
+  "arcpkg.leftovers.remove": "Rimuovi",
+  "arcpkg.leftovers.removing": "Rimozione…",
+  "arcpkg.leftovers.confirmTitle": "Eliminare {count} cartella/e estratta/e dalla PS5?",
+  "arcpkg.leftovers.confirmBody": "Le installazioni non riuscite da questi file non potranno più essere ritentate.",
+  "arcpkg.leftovers.failed": "Impossibile eliminare: {error}",
 };
 
 export default it;

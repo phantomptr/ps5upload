@@ -6723,6 +6723,18 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
   "saves_switch_need_dir": "เลือกโฟลเดอร์สำหรับการสำรองอัตโนมัติก่อน",
   "saves_switch_backup_now": "สำรองตอนนี้",
   "saves_switch_no_backups": "ยังไม่มีข้อมูลสำรอง",
+  "queue_drag": "ลากเพื่อจัดลำดับ",
+  "arcpkg.target": "แตกไฟล์ไปที่:",
+  "arcpkg.space.fits": "ต้องใช้ {need}; {drive} ว่าง {room}",
+  "arcpkg.space.tight": "ต้องใช้ {need}; {drive} ว่าง {room} อาจไม่พอ",
+  "arcpkg.space.noRoom": "พื้นที่ไม่พอ: ต้องใช้ {need} แต่ {drive} ว่างเพียง {room} โปรดเพิ่มพื้นที่ว่าง หรือเลือกไดรฟ์อื่นสำหรับแพ็กเกจในหน้าไดรฟ์",
+  "arcpkg.space.unknown": "ต้องใช้ {need} อ่านพื้นที่ว่างบน PS5 ไม่ได้",
+  "arcpkg.leftovers.line": "โฟลเดอร์ที่แตกไฟล์ค้างอยู่บน PS5 {count} โฟลเดอร์, {size}",
+  "arcpkg.leftovers.remove": "ลบ",
+  "arcpkg.leftovers.removing": "กำลังลบ…",
+  "arcpkg.leftovers.confirmTitle": "ลบโฟลเดอร์ที่แตกไฟล์ {count} โฟลเดอร์ออกจาก PS5 ไหม",
+  "arcpkg.leftovers.confirmBody": "การติดตั้งที่ล้มเหลวจากไฟล์เหล่านี้จะลองใหม่ไม่ได้อีก",
+  "arcpkg.leftovers.failed": "ลบไม่ได้: {error}",
 };
 
 export default th;

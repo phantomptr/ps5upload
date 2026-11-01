@@ -6725,6 +6725,18 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "saves_switch_need_dir": "Pilih folder untuk cadangan otomatis dulu.",
   "saves_switch_backup_now": "Cadangkan sekarang",
   "saves_switch_no_backups": "Belum ada cadangan.",
+  "queue_drag": "Seret untuk mengubah urutan",
+  "arcpkg.target": "Diekstrak ke:",
+  "arcpkg.space.fits": "Butuh {need}; {room} kosong di {drive}.",
+  "arcpkg.space.tight": "Butuh {need}; {room} kosong di {drive}. Mungkin tidak muat.",
+  "arcpkg.space.noRoom": "Ruang tidak cukup: butuh {need}, hanya {room} kosong di {drive}. Kosongkan ruang, atau pilih drive lain untuk paket di Volume.",
+  "arcpkg.space.unknown": "Butuh {need}. Ruang kosong di PS5 tidak dapat dibaca.",
+  "arcpkg.leftovers.line": "{count} folder hasil ekstrak tersisa di PS5, {size}",
+  "arcpkg.leftovers.remove": "Hapus",
+  "arcpkg.leftovers.removing": "Menghapus…",
+  "arcpkg.leftovers.confirmTitle": "Hapus {count} folder hasil ekstrak dari PS5?",
+  "arcpkg.leftovers.confirmBody": "Instalasi yang gagal dari file ini tidak bisa dicoba lagi setelahnya.",
+  "arcpkg.leftovers.failed": "Tidak dapat menghapus: {error}",
 };
 
 export default id;
