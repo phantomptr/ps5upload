@@ -288,6 +288,13 @@ static void record_exit(const char *title_id) {
     pthread_mutex_unlock(&g_lock);
 }
 
+/* A kinfo_proc record's accumulated CPU time and stopped state. Overridable so the host selftest
+ * compiles this file: macOS's kinfo_proc has neither field. */
+#ifndef ACTIVITY_KINFO_RUNTIME_US
+#define ACTIVITY_KINFO_RUNTIME_US(ki) ((uint64_t)(ki)->ki_runtime)
+#define ACTIVITY_KINFO_STOPPED(ki) ((ki)->ki_stat == SSTOP)
+#endif
+
 /* Every title process now, for play_pick(). Returns how many, or -1 when
  * the process list cannot be read (so a failed read is not "nothing runs"). */
 static int list_title_procs(play_proc_t *out, int cap) {
@@ -322,8 +329,8 @@ static int list_title_procs(play_proc_t *out, int cap) {
             strncmp(tid, "NPXS", 4) != 0) {
             out[n].pid = (int)pid;
             snprintf(out[n].title_id, sizeof(out[n].title_id), "%s", tid);
-            out[n].runtime_us = (uint64_t)ki->ki_runtime;
-            out[n].stopped = ki->ki_stat == SSTOP;
+            out[n].runtime_us = ACTIVITY_KINFO_RUNTIME_US(ki);
+            out[n].stopped = ACTIVITY_KINFO_STOPPED(ki);
             n++;
         }
         ptr += ki_structsize;
