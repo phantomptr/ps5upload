@@ -4,6 +4,12 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.2.1
+
+- **Fixed: Play crashed on a Mac with a DualSense connected.** The app quit while starting or
+  stopping Remote Play, often several times in a row (10.1.0 and 10.2.0). The controller is now
+  read from one place for the whole session, so starting and stopping streams is safe again.
+
 ## 10.2.0
 
 - **Updates are checked before they install.** Each release now publishes the SHA-256 of every
