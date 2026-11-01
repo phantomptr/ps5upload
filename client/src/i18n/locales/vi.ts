@@ -6701,6 +6701,10 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "play_setup_blockers_title": "Không có payload nào chặn Remote Play",
   "play_setup_blockers_body_on": "{name} đang bật và chặn hình ảnh của Remote Play. Chơi sẽ đề nghị tạm dừng nó mỗi lần bạn bắt đầu, hoặc hãy tắt nó trên thẻ trong Payload. Bước này tự đánh dấu khi nó đã tắt.",
   "play_setup_blockers_body": "Một số payload tắt bộ mã hóa video của máy mà Remote Play cần: Hush là một ví dụ. Bước này được đánh dấu khi không có cái nào bật.",
+  "rp_set_applies_next": "Áp dụng khi bạn bắt đầu lại",
+  "rp_settings_close": "Đóng cài đặt",
+  "rp_settings_paused": "Khi Cài đặt đang mở, trò chơi không nhận phím hay nút tay cầm nào.",
+  "rp_picture_tools": "Công cụ hình ảnh",
 };
 
 export default vi;

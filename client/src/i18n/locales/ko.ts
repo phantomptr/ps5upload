@@ -6716,6 +6716,10 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "play_setup_blockers_title": "리모트 플레이를 막는 페이로드 없음",
   "play_setup_blockers_body_on": "{name}이(가) 켜져 있어 리모트 플레이 화면을 막습니다. 플레이는 시작할 때마다 일시 정지를 제안하며, 페이로드에 있는 카드에서 끌 수도 있습니다. 꺼지면 이 단계는 자동으로 체크됩니다.",
   "play_setup_blockers_body": "일부 페이로드는 리모트 플레이에 필요한 콘솔의 비디오 인코더를 끕니다. Hush가 그렇습니다. 아무것도 켜져 있지 않으면 이 단계가 체크됩니다.",
+  "rp_set_applies_next": "다시 시작할 때 적용됩니다",
+  "rp_settings_close": "설정 닫기",
+  "rp_settings_paused": "설정이 열려 있는 동안에는 키와 컨트롤러 입력이 게임에 전달되지 않습니다.",
+  "rp_picture_tools": "화면 도구",
 };
 
 export default ko;

@@ -201,7 +201,7 @@ export function PlayMenu({
       </div>
       {!inFull && <CaptureRow onDone={onClose} />}
       {inFull && (
-        // Picture size where it shows: Settings would leave full screen to change it.
+        // Picture size where it shows: in full screen.
         <div className="flex items-center gap-1 rounded-xl bg-white/10 p-1" role="group" data-testid="rp-menu-fit">
           <Scaling size={16} className="mx-1.5 shrink-0 text-white/70" aria-hidden />
           <span className="sr-only">{tr("rp_fit", undefined, "Picture size")}</span>

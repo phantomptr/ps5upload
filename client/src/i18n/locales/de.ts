@@ -6707,6 +6707,10 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "play_setup_blockers_title": "Kein Payload blockiert Remote Play",
   "play_setup_blockers_body_on": "{name} ist an und blockiert das Bild von Remote Play. Spielen bietet bei jedem Start an, es zu pausieren, oder schalte es auf seiner Karte in Payloads aus. Dieser Schritt hakt sich von selbst ab, wenn es aus ist.",
   "play_setup_blockers_body": "Manche Payloads schalten den Video-Encoder der Konsole ab, den Remote Play braucht: Hush tut das. Dieser Schritt hakt sich ab, wenn keiner davon an ist.",
+  "rp_set_applies_next": "Gilt beim nächsten Start",
+  "rp_settings_close": "Einstellungen schließen",
+  "rp_settings_paused": "Solange die Einstellungen offen sind, bekommt das Spiel keine Tasten und keine Controller-Eingaben.",
+  "rp_picture_tools": "Bildwerkzeuge",
 };
 
 export default de;

@@ -7005,6 +7005,10 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "play_setup_blockers_title": "Egy payload sem blokkolja a Remote Playt",
   "play_setup_blockers_body_on": "A(z) {name} be van kapcsolva, és blokkolja a Remote Play képét. A Játék minden indításkor felajánlja a szüneteltetését, vagy kapcsold ki a kártyáján a Payloadok oldalon. Ez a lépés magától kipipálódik, ha ki van kapcsolva.",
   "play_setup_blockers_body": "Egyes payloadok kikapcsolják a konzol videókódolóját, amelyre a Remote Playnek szüksége van: a Hush ilyen. Ez a lépés kipipálódik, ha egyik sincs bekapcsolva.",
+  "rp_set_applies_next": "Az újraindításkor lép életbe",
+  "rp_settings_close": "Beállítások bezárása",
+  "rp_settings_paused": "Amíg a Beállítások nyitva vannak, a játék nem kap billentyűt és kontrollergombot.",
+  "rp_picture_tools": "Képeszközök",
 };
 
 export default hu;

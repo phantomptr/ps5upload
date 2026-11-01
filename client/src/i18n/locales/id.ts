@@ -6708,6 +6708,10 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "play_setup_blockers_title": "Tidak ada payload yang memblokir Remote Play",
   "play_setup_blockers_body_on": "{name} menyala dan memblokir gambar Remote Play. Main menawarkan untuk menjedanya setiap kali Anda memulai, atau matikan di kartunya di Payload. Langkah ini tercentang sendiri saat ia mati.",
   "play_setup_blockers_body": "Beberapa payload mematikan encoder video konsol, yang dibutuhkan Remote Play: Hush salah satunya. Langkah ini tercentang saat tidak ada yang menyala.",
+  "rp_set_applies_next": "Berlaku saat kamu mulai lagi",
+  "rp_settings_close": "Tutup pengaturan",
+  "rp_settings_paused": "Game tidak menerima tombol keyboard atau kontroler selama Pengaturan terbuka.",
+  "rp_picture_tools": "Alat gambar",
 };
 
 export default id;

@@ -6652,6 +6652,10 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
   "play_setup_blockers_title": "Ningún payload bloquea Remote Play",
   "play_setup_blockers_body_on": "{name} está activado y bloquea la imagen de Remote Play. Jugar ofrece pausarlo cada vez que inicias, o desactívalo en su tarjeta en Payloads. Este paso se marca solo cuando está desactivado.",
   "play_setup_blockers_body": "Algunos payloads desactivan el codificador de vídeo de la consola, que Remote Play necesita: Hush lo hace. Este paso se marca cuando ninguno está activado.",
+  "rp_set_applies_next": "Se aplica al volver a empezar",
+  "rp_settings_close": "Cerrar ajustes",
+  "rp_settings_paused": "El juego no recibe teclas ni pulsaciones del mando mientras los ajustes están abiertos.",
+  "rp_picture_tools": "Herramientas de imagen",
 };
 
 export default es;

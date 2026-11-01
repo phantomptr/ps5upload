@@ -6714,6 +6714,10 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
   "play_setup_blockers_title": "Nenhum payload bloqueia a Reprodução Remota",
   "play_setup_blockers_body_on": "{name} está ligado e bloqueia a imagem da Reprodução Remota. Jogar oferece pausá-lo sempre que você inicia, ou desligue-o no cartão dele em Payloads. Esta etapa é marcada sozinha quando ele estiver desligado.",
   "play_setup_blockers_body": "Alguns payloads desligam o codificador de vídeo do console, de que a Reprodução Remota precisa: o Hush faz isso. Esta etapa é marcada quando nenhum deles está ligado.",
+  "rp_set_applies_next": "Vale ao iniciar de novo",
+  "rp_settings_close": "Fechar configurações",
+  "rp_settings_paused": "O jogo não recebe teclas nem botões do controle enquanto as Configurações estão abertas.",
+  "rp_picture_tools": "Ferramentas de imagem",
 };
 
 export default pt_BR;
