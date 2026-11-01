@@ -6,10 +6,14 @@ import {
   Check,
   ChevronDown,
   Expand,
+  Gamepad,
   Gamepad2,
+  Keyboard,
+  Loader2,
   Minimize,
   MonitorPlay,
   MoreHorizontal,
+  Mouse,
   PictureInPicture2,
   Play,
   Scaling,
@@ -70,7 +74,9 @@ import { DropChoice, DropZone, useStreamDropZone } from "./game/DropToInstall";
 import { useStreamLaunchRunner } from "./game/streamLaunch";
 import { rpControls, useGameControlsStore } from "../../state/gameControls";
 import { mouseMoved } from "../../lib/gameControls";
-import { useNativeKbm } from "./useNativeKbm";
+import { kbmBlockText, kbmModeLabel, useNativeKbm } from "./useNativeKbm";
+import { kbmButtonView, type KbmMode } from "../../lib/kbmInput";
+import { useKbmStore } from "../../state/kbm";
 import { useRunningTitleIds } from "../../state/runningApps";
 import { useGameLaunch } from "../../lib/useGameLaunch";
 import { hostOf } from "../../lib/addr";
@@ -256,6 +262,7 @@ function BarButton({
   children,
   testId,
   expands,
+  disabled,
 }: {
   label: string;
   onClick: () => void;
@@ -264,6 +271,8 @@ function BarButton({
   testId?: string;
   /** Opens and closes a panel (Settings): aria-expanded instead of aria-pressed. */
   expands?: boolean;
+  /** Shown but not clickable (the label says why). */
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -272,17 +281,56 @@ function BarButton({
       title={label}
       aria-pressed={expands ? undefined : active}
       aria-expanded={expands ? !!active : undefined}
+      aria-disabled={disabled || undefined}
       data-testid={testId}
       {...(expands ? SETTINGS_OPENER : {})}
       onClick={(e) => {
         e.stopPropagation();
-        onClick();
+        if (!disabled) onClick();
       }}
       onDoubleClick={(e) => e.stopPropagation()}
-      className={`flex h-9 w-9 items-center justify-center rounded-full text-white transition-colors hover:bg-white/20 ${active ? "bg-white/25" : "bg-black/40"}`}
+      className={`flex h-9 w-9 items-center justify-center rounded-full text-white transition-colors ${
+        disabled ? "cursor-not-allowed bg-black/40 opacity-50" : `hover:bg-white/20 ${active ? "bg-white/25" : "bg-black/40"}`
+      }`}
     >
       {children}
     </button>
+  );
+}
+
+/** The stream bar's keyboard & mouse button: the running game's mode (Controller, Keyboard &
+ *  mouse, Mixed), the next one on a click (as Ctrl+Alt+M), a spinner while the console's helper
+ *  starts, and off with the reason when this console takes no keyboard & mouse. */
+function KbmBarButton({ mode, title, onCycle }: { mode: KbmMode; title: string | null; onCycle: () => void }) {
+  const tr = useTr();
+  const caps = useKbmStore((s) => s.caps);
+  const status = useKbmStore((s) => s.status);
+  const view = kbmButtonView(mode, caps, status);
+  const name = kbmModeLabel(tr, mode);
+  const label = view.blocked
+    ? kbmBlockText(tr, view.blocked)
+    : view.icon === "spinner"
+      ? tr("rp_kbm_starting", undefined, "Starting keyboard & mouse on the PS5…")
+      : title
+        ? tr("rp_kbm_button_game", { mode: name }, `${name} — applies to this game`)
+        : tr("rp_kbm_button_home", { mode: name }, `${name} — applies to the home screen`);
+  return (
+    <BarButton label={label} onClick={onCycle} disabled={!!view.blocked} testId="rp-kbm-button">
+      <span className="flex items-center" data-kbm-icon={view.icon} data-testid="rp-kbm-button-icon">
+        {view.icon === "spinner" ? (
+          <Loader2 size={16} className="animate-spin" aria-hidden />
+        ) : view.icon === "native" ? (
+          <Keyboard size={16} aria-hidden />
+        ) : view.icon === "mixed" ? (
+          <>
+            <Gamepad size={12} aria-hidden />
+            <Mouse size={10} aria-hidden />
+          </>
+        ) : (
+          <Gamepad size={16} aria-hidden />
+        )}
+      </span>
+    </BarButton>
   );
 }
 
@@ -1122,6 +1170,7 @@ export function StreamPanel() {
                   <Smartphone size={16} />
                 </BarButton>
               )}
+              {playing && <KbmBarButton mode={kbm.mode} title={controlsTitle} onCycle={kbm.cycle} />}
               <BarButton
                 label={tr("rp_game_button", undefined, "Game")}
                 active={gameOpen}

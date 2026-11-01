@@ -19,10 +19,18 @@ interface Engine {
   pads: number[];
   kbm: Array<{ on: boolean; mouse?: boolean; keyboard?: boolean }>;
   reports: number[][];
+  /** Times the page asked GET /api/ps5/vinput/caps. */
+  capsAsked: number;
+  /** The `err` the engine's {"kbm"} answer carries while on (the console's helper starting…). */
+  err: string | null;
 }
 
-async function mockConsole(page: Page, caps: { mouse: boolean; keyboard: boolean }): Promise<Engine> {
-  const engine: Engine = { pads: [], kbm: [], reports: [] };
+async function mockConsole(
+  page: Page,
+  caps: { mouse: boolean; keyboard: boolean },
+  extra: Record<string, unknown> = {},
+): Promise<Engine> {
+  const engine: Engine = { pads: [], kbm: [], reports: [], capsAsked: 0, err: null };
   await page.addInitScript(() => {
     window.localStorage.setItem("ps5upload.host", "192.168.1.100");
     window.localStorage.setItem(
@@ -43,14 +51,17 @@ async function mockConsole(page: Page, caps: { mouse: boolean; keyboard: boolean
       if (path === "/api/version") body = { version: "10.2.1", caps: {} };
       if (path === "/api/ps5/status") body = status;
       if (path === "/api/ps5/rp/session") body = { host: null };
-      if (path === "/api/ps5/vinput/caps")
+      if (path === "/api/ps5/vinput/caps") {
+        engine.capsAsked++;
         body = {
           supported: true,
           ...caps,
           open: false,
           backend: caps.mouse ? "ps5" : "stub",
           ...(caps.mouse || caps.keyboard ? {} : { reason: "vinput_unsupported" }),
+          ...extra,
         };
+      }
       await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
     },
   );
@@ -78,7 +89,7 @@ async function mockConsole(page: Page, caps: { mouse: boolean; keyboard: boolean
               on,
               mouse: on && !!msg.kbm.mouse && caps.mouse,
               keyboard: on && !!msg.kbm.keyboard && caps.keyboard,
-              err: null,
+              err: on ? engine.err : null,
               reason: on ? null : "off",
             },
           }),
@@ -190,4 +201,83 @@ test("Keyboard & mouse sends raw keys, Mixed sends the pad, the hotkey cycles an
   // Once more: Controller, and the devices are let go.
   await page.keyboard.press("Control+Alt+KeyM");
   await expect.poll(() => engine.kbm[engine.kbm.length - 1]).toEqual({ on: false });
+});
+
+// The stream bar's keyboard & mouse button (KbmBarButton in StreamPanel.tsx), before Game.
+async function barButton(page: Page) {
+  await page.getByTestId("rp-toolbar").hover();
+  const b = page.getByTestId("rp-kbm-button");
+  await expect(b).toBeVisible();
+  return b;
+}
+const iconOf = (page: Page) => page.getByTestId("rp-kbm-button-icon");
+
+test("the bar button shows the mode and cycles it like Ctrl+Alt+M", async ({ page }) => {
+  const engine = await mockConsole(page, { mouse: true, keyboard: true }, { companion: "idle" });
+  await start(page);
+  const b = await barButton(page);
+  // Right before Game on the toolbar.
+  const order = await page
+    .getByTestId("rp-toolbar")
+    .evaluate((bar) => [...bar.querySelectorAll("[data-testid]")].map((e) => e.getAttribute("data-testid")));
+  expect(order.indexOf("rp-game") - order.indexOf("rp-kbm-button")).toBe(2); // the button, its icon, Game
+  await expect(b).toHaveAttribute("aria-label", "Controller — applies to the home screen");
+  await expect(b).not.toHaveAttribute("aria-disabled", "true");
+  await expect(iconOf(page)).toHaveAttribute("data-kbm-icon", "controller");
+
+  await b.click();
+  await expect(b).toHaveAttribute("aria-label", "Keyboard & mouse — applies to the home screen");
+  await expect(iconOf(page)).toHaveAttribute("data-kbm-icon", "native");
+  await expect.poll(() => engine.kbm[engine.kbm.length - 1]).toEqual({ on: true, mouse: true, keyboard: true });
+
+  await b.click();
+  await expect(b).toHaveAttribute("aria-label", "Mixed — applies to the home screen");
+  await expect(iconOf(page)).toHaveAttribute("data-kbm-icon", "mixed");
+  await expect.poll(() => engine.kbm[engine.kbm.length - 1]).toEqual({ on: true, mouse: true, keyboard: false });
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("ps5upload.rp_kbm.v1") ?? "{}"));
+  expect(saved.modes.home).toBe("mixed");
+
+  await b.click();
+  await expect(b).toHaveAttribute("aria-label", "Controller — applies to the home screen");
+  await expect.poll(() => engine.kbm[engine.kbm.length - 1]).toEqual({ on: false });
+});
+
+test("the bar button is off, with the reason, when the console has no payload loader", async ({ page }) => {
+  const engine = await mockConsole(
+    page,
+    { mouse: false, keyboard: false },
+    { reason: "vinput_needs_loader", companion: "unavailable" },
+  );
+  await start(page);
+  const b = await barButton(page);
+  await expect(b).toHaveAttribute("aria-disabled", "true");
+  await expect(b).toHaveAttribute("aria-label", "Needs a payload loader on port 9021");
+  await expect(b).toHaveAttribute("title", "Needs a payload loader on port 9021");
+  await expect(b).toBeDisabled(); // aria-disabled: still focusable, so the reason can be read
+  await b.click({ force: true });
+  await page.waitForTimeout(600);
+  expect(engine.kbm).toEqual([]);
+  await expect(iconOf(page)).toHaveAttribute("data-kbm-icon", "controller");
+  // Settings › Controls says the same.
+  const kbm = await openControls(page);
+  await expect(kbm.getByTestId("rp-kbm-unavailable")).toHaveText("Needs a payload loader on port 9021");
+});
+
+test("the bar button spins while the console's keyboard & mouse helper starts", async ({ page }) => {
+  const engine = await mockConsole(page, { mouse: true, keyboard: true }, { companion: "idle" });
+  engine.err = "vinput_starting";
+  await start(page);
+  const b = await barButton(page);
+  await expect.poll(() => engine.capsAsked).toBeGreaterThanOrEqual(1);
+  const asked = engine.capsAsked;
+  await b.click();
+  await expect(iconOf(page)).toHaveAttribute("data-kbm-icon", "spinner");
+  await expect(iconOf(page).locator(".animate-spin")).toHaveCount(1);
+  await expect(b).toHaveAttribute("aria-label", "Starting keyboard & mouse on the PS5…");
+  // The error changed: the console is asked again.
+  await expect.poll(() => engine.capsAsked).toBeGreaterThan(asked);
+  // Up: the mode's icon is back.
+  engine.err = null;
+  await expect(iconOf(page)).toHaveAttribute("data-kbm-icon", "native", { timeout: 5_000 });
+  await expect(b).toHaveAttribute("aria-label", "Keyboard & mouse — applies to the home screen");
 });
