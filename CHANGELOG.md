@@ -4,6 +4,13 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.5.0
+
+- **Home's Recent games shows more games, at a sensible size.** The covers keep about the size of
+  a console's home screen instead of three filling the whole width, so a wide window shows six or
+  seven; up to twelve of your newest games are there, the row scrolls sideways, and with a mouse
+  the arrow buttons beside it page through.
+
 ## 10.4.1
 
 - **Keyboard & mouse in Remote Play now works on every firmware**, not only FW 13.60 (still the
