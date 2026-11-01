@@ -171,6 +171,94 @@ pub fn parse(d: &[u8]) -> Option<Vec<Entry>> {
     Some(out)
 }
 
+/// Where a rebuild keeps the index it replaced, once: a second rebuild leaves it alone, so it is
+/// always the game's own (#621).
+pub const BACKUP: &str = "ampr_emu.index.bak";
+
+/// What an index lists for a game's `files`: every file at its size, but the index itself. A
+/// game image's build (the engine's `AmprIndexed`) and [`rebuild`] both list this, so an index
+/// rebuilt in place is the one the game's image would carry.
+pub fn listing(files: &[crate::source::SourceFile]) -> Vec<(String, u64)> {
+    files
+        .iter()
+        .filter(|f| !f.path.eq_ignore_ascii_case(NAME))
+        .map(|f| (f.path.clone(), f.size))
+        .collect()
+}
+
+/// Why an index is not rebuilt for a game that does not read through AMPR.
+pub const NOT_AMPR: &str = "this game's eboot.bin does not import libSceAmpr, so ampr_emu \
+                            never reads an ampr_emu.index for it";
+
+/// An index regenerated for a game as it stands (Workshop's "Rebuild AMPR index", #621).
+#[derive(Debug)]
+pub struct Rebuilt {
+    /// The new `ampr_emu.index`.
+    pub index: Vec<u8>,
+    /// How many files it lists.
+    pub files: usize,
+    /// The index the game had, and its path in the game (its own spelling), when it had one.
+    pub old: Option<(String, Vec<u8>)>,
+    /// Keep the old index as [`BACKUP`]: it had one and there is no backup yet. The new index
+    /// lists the backup, which is in the folder once it is written.
+    pub save_backup: bool,
+    /// The new index lists other files or sizes than the old one did (mtimes and the backup
+    /// aside: every rebuild stamps its own); true when there was none or it was unreadable.
+    pub differs: bool,
+}
+
+/// Regenerates the index of the game in `tree`, every file stamped `mtime`, without writing
+/// anything: the caller puts [`Rebuilt::index`] at the game's root (and the backup beside it).
+/// Refused ([`NOT_AMPR`]) unless `eboot.bin` imports libSceAmpr, the same test a build uses.
+pub fn rebuild(tree: &mut dyn crate::source::SourceTree, mtime: i64) -> Result<Rebuilt, String> {
+    if !crate::source::imports_ampr(tree, "eboot.bin") {
+        return Err(NOT_AMPR.to_string());
+    }
+    let old_path = tree
+        .files()
+        .iter()
+        .find(|f| f.path.eq_ignore_ascii_case(NAME))
+        .map(|f| f.path.clone());
+    let old = match old_path {
+        Some(p) => Some((p.clone(), tree.read(&p).map_err(|e| format!("{p}: {e}"))?)),
+        None => None,
+    };
+    let has_backup = tree
+        .files()
+        .iter()
+        .any(|f| f.path.eq_ignore_ascii_case(BACKUP));
+    let save_backup = old.is_some() && !has_backup;
+    let mut listed = listing(tree.files());
+    if save_backup {
+        let len = old.as_ref().map_or(0, |(_, d)| d.len() as u64);
+        listed.push((BACKUP.to_string(), len));
+    }
+    let index = build(&listed, mtime)?;
+    // The game's files, the backup aside: keeping the old index is not a difference in it.
+    let shape = |rows: &mut dyn Iterator<Item = (String, u64)>| {
+        let mut v: Vec<(String, u64)> = rows
+            .filter(|(p, _)| !p.eq_ignore_ascii_case(BACKUP))
+            .map(|(p, s)| (p.to_ascii_lowercase(), s))
+            .collect();
+        v.sort();
+        v
+    };
+    let differs = match old.as_ref().and_then(|(_, d)| parse(d)) {
+        None => true,
+        Some(before) => {
+            shape(&mut before.into_iter().map(|e| (e.path, e.size)))
+                != shape(&mut listed.iter().cloned())
+        }
+    };
+    Ok(Rebuilt {
+        files: listed.len(),
+        index,
+        old,
+        save_backup,
+        differs,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

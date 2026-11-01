@@ -863,6 +863,11 @@ pub(crate) struct ExfatBuildReq {
     /// refusing (see `BuildReq::keep_both`).
     #[serde(default)]
     keep_both: bool,
+    /// An edited copy of the image `source` whose one change is a regenerated
+    /// `ampr_emu.index` (Workshop's "Rebuild AMPR index", #621): written like an edited copy,
+    /// refused for a compressed image or a game that does not read through libSceAmpr.
+    #[serde(default)]
+    rebuild_ampr_index: bool,
 }
 
 /// One change for an edited copy of an image: `{"op":"delete","path":…}` removes a file or
@@ -997,7 +1002,7 @@ pub(crate) async fn exfat_build_handler(
     }
     // An edited copy (#479): the image on this computer, opened with the changes applied, is
     // written out again as the same kind of image.
-    let edited = if req.edits.is_empty() {
+    let edited = if req.edits.is_empty() && !req.rebuild_ampr_index {
         None
     } else {
         if remote || !image_file {
@@ -1015,7 +1020,16 @@ pub(crate) async fn exfat_build_handler(
             .into_response();
         }
         let (edit_source, edits) = (source.clone(), std::mem::take(&mut req.edits));
-        match tokio::task::spawn_blocking(move || open_edited(&edit_source, &edits)).await {
+        let index_only = req.rebuild_ampr_index && edits.is_empty();
+        match tokio::task::spawn_blocking(move || {
+            if index_only {
+                crate::ampr_index_api::open_for_index(&edit_source)
+            } else {
+                open_edited(&edit_source, &edits)
+            }
+        })
+        .await
+        {
             Ok(Ok(e)) => Some(e),
             Ok(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
             Err(e) => {

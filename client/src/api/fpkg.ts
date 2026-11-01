@@ -190,7 +190,27 @@ export const fpkg = {
    *  itself is only read. One job, like an image build. */
   editImage: (source: string, edits: ImageEdit[], outputDir?: string, name?: string, fullVerify = false) =>
     invoke<{ job_id: string }>("exfat_build", { source, outputDir, name, fullVerify, edits }),
+  /** Rebuild a libSceAmpr game folder's `ampr_emu.index` where it is, on this computer or the
+   *  PS5 (`ps5://`), the game's own kept once as `ampr_emu.index.bak` (#621). A job: its stage
+   *  is `list`, `check` or `write`; done, `dest` is the index and `commit_ack` the
+   *  {@link AmprIndexOutcome}. */
+  rebuildAmprIndex: (source: string) => invoke<{ job_id: string }>("fpkg_ampr_index", { source }),
+  /** An edited copy of a game image whose one change is a regenerated `ampr_emu.index` (#621),
+   *  named `<name>-edited` next to it. The image itself is only read; a .ffpfsc is refused. */
+  rebuildImageAmprIndex: (source: string) =>
+    invoke<{ job_id: string }>("exfat_build", { source, edits: [], rebuildAmprIndex: true }),
 };
+
+/** What a folder's index rebuild did. */
+export interface AmprIndexOutcome {
+  /** Files the new index lists. */
+  files: number;
+  /** It lists other files or sizes than the game's own did (or there was none). */
+  differed: boolean;
+  had_index: boolean;
+  /** Where the game's own index was kept, when this rebuild kept it. */
+  backup?: string | null;
+}
 
 /** One change for an edited copy: delete a file or folder, or put a file (or a folder's
  *  contents) from this computer at `path`, replacing what is there. */

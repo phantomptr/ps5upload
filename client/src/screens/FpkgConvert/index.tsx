@@ -53,6 +53,7 @@ import { RunCard, idleRun, lz4Active, type Lz4Choice, type RunCardProps } from "
 import { outputFor } from "../../lib/outputPlace";
 import { SwapJournals } from "./SwapJournals";
 import { QueueCard } from "./QueueCard";
+import { AmprIndexTool, amprIndexPlan } from "./AmprIndexTool";
 import {
   buildExtension,
   startAfterBuild,
@@ -294,6 +295,18 @@ export default function WorkshopScreen() {
     },
     [outputDir, outputPlace],
   );
+
+  /** The same game checked again in place (its index was just rebuilt): what is shown stays
+   *  until the new check lands, so nothing under ① blinks away. */
+  const recheckQuietly = async (path: string) => {
+    const token = latest.current.begin();
+    try {
+      const found = await fpkg.inspect(path.trim(), outputFor(path.trim(), outputPlace, outputDir).outputDir);
+      if (latest.current.isCurrent(token)) setInspection(found);
+    } catch {
+      // The earlier check stands.
+    }
+  };
 
   /** A new source: the previous result and its buttons go; ignored while a run is going. */
   const chooseSource = useCallback(
@@ -611,8 +624,20 @@ export default function WorkshopScreen() {
   const lookable = !locked && canLookInside(source);
   const folderable = !locked && canFolder;
   const mountable = drives.canMount && !locked && isDriveImage(source) && !source.startsWith("ps5://") && !isRemotePath(source);
+  // #621: a libSceAmpr game's ampr_emu.index made again from its files, without converting.
+  const indexable = !inside && amprIndexPlan(source, inspection) !== "hidden";
+  /** A .ffpfsc's index is renewed by making a fresh .ffpfsc of it. */
+  const convertAgain = () => {
+    if (!src || locked) return;
+    setError(null);
+    const out = outFor(src);
+    showMake("image");
+    setThen("keep");
+    void buildImage(src, out.outputDir, true, imageFormat, undefined, undefined, undefined, true);
+    setTimeout(showRun, 50);
+  };
   const tools =
-    lookable || mountable || folderable ? (
+    lookable || mountable || folderable || indexable ? (
       <div className="flex flex-wrap gap-2 border-t border-[var(--color-border)] pt-2.5">
         {lookable && !inside && (
           <Button size="sm" variant="secondary" leftIcon={<FolderSearch size={14} />} onClick={() => setInside(true)}>
@@ -645,6 +670,15 @@ export default function WorkshopScreen() {
           >
             {tr("workshop_open_as_drive", undefined, "Open as a Drive")}
           </Button>
+        )}
+        {indexable && (
+          <AmprIndexTool
+            source={source}
+            inspection={inspection}
+            locked={locked}
+            onConvertAgain={convertAgain}
+            onRebuilt={() => void recheckQuietly(source)}
+          />
         )}
       </div>
     ) : undefined;

@@ -41,7 +41,7 @@ fn connection_of(url: &str) -> &str {
 
 /// `ps5://192.168.1.5/mnt/ext0/games/X.exfat` → ("192.168.1.5", "/mnt/ext0/games/X.exfat").
 /// An installed game is refused: its files are encrypted, so only a dump converts.
-fn console_target(url: &str) -> Result<(String, String), String> {
+pub(crate) fn console_target(url: &str) -> Result<(String, String), String> {
     let rest = url
         .strip_prefix("ps5://")
         .ok_or_else(|| format!("{url} is not a ps5:// path"))?;
