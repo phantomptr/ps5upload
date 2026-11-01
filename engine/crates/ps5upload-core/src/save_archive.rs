@@ -48,7 +48,10 @@ pub fn make_temp_dir(prefix: &str) -> std::result::Result<PathBuf, String> {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let n = TEMP_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("ps5upload-save-{safe}-{ts}-{n}"));
+    // The process id too: test runners start each test in its own process, where the counter
+    // starts at 0 again and two may read the same clock tick.
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("ps5upload-save-{safe}-{ts}-{pid}-{n}"));
     // `create_dir` (not `create_dir_all`) so the rare case where our path *does* somehow already
     // exist surfaces as an error instead of a silent shared-state hazard. Parent (the OS temp
     // root) is always present, so the recursive variant isn't needed.
