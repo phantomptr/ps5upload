@@ -34,6 +34,11 @@ export interface OverflowMenuItem {
   loading?: boolean;
   destructive?: boolean;
   title?: string;
+  /** A short line under the label saying what the item does. */
+  description?: string;
+  testId?: string;
+  /** A line before this item. */
+  separator?: boolean;
 }
 
 /**
@@ -108,8 +113,10 @@ export function OverflowMenu({
     }
     const menu = wrapperRef.current?.lastElementChild as HTMLElement | null;
     if (!menu || menu === wrapperRef.current?.firstElementChild) return;
+    // Measured with any shift already applied (it runs again once the placement is known), so
+    // the shift adds up: setting it outright put a shifted menu straight back off screen.
     const { dx } = fitOnScreen(menu.getBoundingClientRect(), visibleArea(menu));
-    setShiftX(dx);
+    if (dx) setShiftX((x) => x + dx);
   }, [open, placement]);
 
   useEffect(() => {

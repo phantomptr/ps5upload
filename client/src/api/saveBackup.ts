@@ -153,6 +153,12 @@ export const saveBackupApi = {
    *  still, kept apart from the automatic backups. */
   snapshot: (req: { addr: string; title_id: string }) =>
     call<{ ok: boolean; files: string[] }>("/snapshot", { method: "POST", body: JSON.stringify(req) }),
+  /** Back up one user's save of a game now, every part of it (a snapshot while it runs). */
+  now: (req: { addr: string; title_id: string; user_id: number }) =>
+    call<{ ok: boolean; file: string }>("/now", { method: "POST", body: JSON.stringify(req) }),
+  /** The newest backup of each game and user in the backup folder. */
+  latest: async () =>
+    (await call<{ latest: Array<{ title_id: string; user_id: number; stamp: string }> }>("/latest")).latest,
   /** ProsperoEden's saves on a console (bare IP): none when it is not installed. */
   switchSaves: (addr: string) =>
     call<{ saves: SwitchSave[]; running: boolean | null }>(`/switch?addr=${encodeURIComponent(addr)}`),

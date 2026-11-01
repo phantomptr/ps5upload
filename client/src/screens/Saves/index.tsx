@@ -16,8 +16,27 @@ import {
   Lock,
   Share2,
   FileDown,
+  Users,
+  X as XIcon,
+  History,
+  CheckCircle2,
+  AlertTriangle,
+  Info,
 } from "lucide-react";
-import { putSharedSave, shareSave } from "../../api/saveShare";
+import { saveBackupApi } from "../../api/saveBackup";
+import { SaveBackupsList } from "../GameHub/SaveBackupsList";
+import { backupAgo, backupKey } from "./backupStatus";
+import { useLangStore } from "../../state/lang";
+import {
+  copySaveToUser,
+  partLabel,
+  putSharedSave,
+  SaveCopyError,
+  shareSave,
+} from "../../api/saveShare";
+import CopyToUserDialog from "./CopyToUserDialog";
+import { canCopyToOtherUser, copyTargets, localUserCount } from "./copyTargets";
+import { saveImagesOf } from "./saveImages";
 import { saveFile } from "../../lib/rpCapture";
 import { openInFileSystem } from "../../state/fsNavigation";
 import {
@@ -104,24 +123,58 @@ import { formatDate } from "../../lib/formatDate";
  * user to identify their save. The Library tab handles game-name
  * resolution separately.
  */
+const COPY_TIP_KEY = "ps5upload.saves.copyTipHidden";
+const HOW_KEY = "ps5upload.saves.howHidden";
+
 export default function SavesScreen() {
   const tr = useTr();
   const navigate = useNavigate();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   // A save opened decrypted on the console (one at a time), and the picker for a folder
-  // holding more than one save image.
+  // holding more than one save image (Open save only: Share, Load and Copy take every image).
   const [openSave, setOpenSave] = useState<OpenSave | null>(null);
   const [openBusy, setOpenBusy] = useState(false);
-  const [picker, setPicker] = useState<{
-    entry: SaveEntry;
-    images: string[];
-    /** What to do with the image picked: open it, share it, or put a shared save into it. */
-    then: "open" | "share" | "use";
-  } | null>(null);
-  // Using a shared save: the save image it goes into, while the file is being picked.
+  const [picker, setPicker] = useState<{ entry: SaveEntry; images: string[] } | null>(null);
+  // Loading a shared save file: the save it goes into, while the file is being picked.
   const shareInput = useRef<HTMLInputElement>(null);
-  const [useTarget, setUseTarget] = useState<{ entry: SaveEntry; image: string } | null>(null);
+  const [useTarget, setUseTarget] = useState<SaveEntry | null>(null);
+  // Copy to another user: the save being copied.
+  const [copyFrom, setCopyFrom] = useState<SaveEntry | null>(null);
+  // Restore…: the save whose backups are shown.
+  const [restoreOf, setRestoreOf] = useState<SaveEntry | null>(null);
+  // The newest backup of each game and user ("Backed up 2 h ago"), and Back up now in flight.
+  const [latest, setLatest] = useState<Map<string, string>>(() => new Map());
+  const [backingUp, setBackingUp] = useState<Set<string>>(() => new Set());
+  // When the list was read: "2 hours ago" is counted from it.
+  const [latestAt, setLatestAt] = useState(() => Date.now());
+  const loadLatest = useCallback(async () => {
+    try {
+      const list = await saveBackupApi.latest();
+      setLatest(new Map(list.map((b) => [backupKey(b.title_id, b.user_id), b.stamp])));
+      setLatestAt(Date.now());
+    } catch {
+      // An older engine, or no backup folder: every save reads "Not backed up yet".
+    }
+  }, []);
+  useEffect(() => {
+    void loadLatest();
+  }, [loadLatest]);
+  const [howHidden, setHowHidden] = useState(() => {
+    try {
+      return window.localStorage.getItem(HOW_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const hideHow = () => {
+    setHowHidden(true);
+    try {
+      window.localStorage.setItem(HOW_KEY, "1");
+    } catch {
+      // Only a convenience.
+    }
+  };
   useEffect(() => {
     if (!host?.trim() || payloadStatus !== "up") {
       setOpenSave(null);
@@ -135,6 +188,7 @@ export default function SavesScreen() {
       live = false;
     };
   }, [host, payloadStatus]);
+  const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
   const doOpenSave = async (image: string) => {
     if (!host?.trim()) return;
     setOpenBusy(true);
@@ -146,83 +200,135 @@ export default function SavesScreen() {
       });
       openInFileSystem(navigate, r.mount_point);
     } catch (e) {
-      pushNotification("error", tr("saves_open_failed", { error: e instanceof Error ? e.message : String(e) }, "Could not open the save: {error}"));
+      pushNotification("error", tr("saves_open_failed", { error: errorText(e) }, "Could not open the save: {error}"));
     } finally {
       setOpenBusy(false);
     }
   };
-  // Sharing a save with another account (PS5 saves): its files out as a zip, or a shared
-  // save's files into your own save of the same game.
-  const doShare = async (image: string) => {
-    if (!host?.trim()) return;
+  // The game's name for messages (usually cached by the group header); never waits long.
+  const gameNameOf = async (titleId: string) =>
+    (await Promise.race([
+      fetchTitleInfo(iconTitleId(titleId) ?? titleId)
+        .then((i) => i?.title ?? null)
+        .catch(() => null),
+      new Promise<null>((r) => setTimeout(() => r(null), 1500)),
+    ])) ?? titleId;
+  const whoseName = (e: SaveEntry) =>
+    ownerName(e) ?? tr("saves_user_other", { id: userHex(e.user_id) }, "Other user ({id})");
+  /** The engine's refusal in plain words: the parts the target's save is missing. */
+  const missingText = (e: unknown, game: string, user: string) => {
+    if (!(e instanceof SaveCopyError) || e.missing.length === 0) return errorText(e);
+    const main = tr("saves_part_main", undefined, "main save");
+    const part = e.missing.map((m) => partLabel(m, main)).join(", ");
+    return tr(
+      "saves_part_missing",
+      { game, part, user },
+      "{game}'s {part} isn't on {user} yet: start the game once as {user} and save, then try again.",
+    );
+  };
+  // A file for a friend or another PS5: every part of this save in one .zip.
+  const doShare = async (entry: SaveEntry) => {
+    if (!host?.trim() || openBusy) return;
     setOpenBusy(true);
+    markBusy(entry.path, true);
     try {
-      const { blob, name } = await shareSave(consoleAddr(host.trim()), image);
+      const game = await gameNameOf(entry.title_id);
+      pushNotification("info", tr("saves_share_working", { game }, "Saving {game}'s save as a file…"));
+      const { blob, name } = await shareSave(consoleAddr(host.trim()), entry.path);
       const where = await saveFile(blob, name);
       pushNotification("success", tr("saves_shared", undefined, "Save shared"), {
         body: tr(
-          "saves_shared_body",
-          { where: where ?? name },
-          "Saved as {where}. Send it to your friend: on their PS5, Save Data › Use a shared save puts it into their own save of the game.",
+          "saves_shared_body_v2",
+          { where: where ?? name, game },
+          "Saved as {where}. Send it to your friend, or take it to your other PS5: there, in Save Data, pick Copy to… › Load a save file on {game}.",
         ),
       });
     } catch (e) {
-      pushNotification("error", tr("saves_share_failed", { error: e instanceof Error ? e.message : String(e) }, "Could not share the save: {error}"));
+      pushNotification("error", tr("saves_share_failed", { error: errorText(e) }, "Could not share the save: {error}"));
     } finally {
       setOpenBusy(false);
+      markBusy(entry.path, false);
     }
+  };
+  // Back up now: this user's save of the game, every part of it, into the backup folder.
+  const handleBackUpNow = async (entry: SaveEntry) => {
+    if (!host?.trim()) return;
+    setBackingUp((p) => new Set(p).add(entry.path));
+    try {
+      await saveBackupApi.now({ addr: consoleAddr(host.trim()), title_id: entry.title_id, user_id: entry.user_id >>> 0 });
+      const game = await gameNameOf(entry.title_id);
+      pushNotification("success", tr("saves_backed_up", { game }, "{game} is backed up"), {
+        body: tr(
+          "saves_backed_up_body",
+          undefined,
+          "To put it back later, press Restore… on the save and pick this backup.",
+        ),
+      });
+      void loadLatest();
+    } catch (e) {
+      pushNotification("error", tr("saves_back_up_failed", { error: errorText(e) }, "Could not back up the save: {error}"));
+    } finally {
+      setBackingUp((p) => {
+        const n = new Set(p);
+        n.delete(entry.path);
+        return n;
+      });
+    }
+  };
+  // Load a save file: the file chooser opens straight from the menu click (a browser only
+  // allows it then), and the file goes into every matching part of this save.
+  const pickSharedFile = (entry: SaveEntry) => {
+    setUseTarget(entry);
+    shareInput.current?.click();
   };
   const doUseShared = async (file: File) => {
     const target = useTarget;
     setUseTarget(null);
     if (!host?.trim() || !target) return;
+    const game = await gameNameOf(target.title_id);
+    const user = whoseName(target);
     const ok = await confirmDialog({
-      title: tr("saves_use_shared_confirm_title", { title: target.entry.title_id }, `Use this shared save for ${target.entry.title_id}?`),
+      title: tr("saves_use_shared_confirm_title_v2", { game, user }, "Load this save file into {user}'s save of {game}?"),
       message: tr(
-        "saves_use_shared_confirm_body",
-        undefined,
-        "Your save's files are replaced with the shared save's, and the PS5 keeps it as yours. Your own save is backed up first (Save Data backups) and put back if anything fails. Close the game first.",
+        "saves_use_shared_confirm_body_v2",
+        { user },
+        "{user}'s save is replaced with the one in the file, and the PS5 keeps it as {user}'s. {user}'s current save is backed up first and put back if anything fails. Close the game first.",
       ),
       destructive: true,
       confirmLabel: tr("saves_use_shared_confirm_label", undefined, "Use it"),
     });
     if (!ok) return;
     setOpenBusy(true);
+    markBusy(target.path, true);
     try {
-      await putSharedSave(consoleAddr(host.trim()), target.image, target.entry.user_id, file);
-      pushNotification("success", tr("saves_use_shared_done", { title: target.entry.title_id }, "{title} now has the shared save"), {
-        body: tr("saves_use_shared_done_body", undefined, "Start the game to load it. Your own save was backed up first."),
+      await putSharedSave(consoleAddr(host.trim()), target.path, target.user_id, file);
+      pushNotification("success", tr("saves_use_shared_done_v2", { game, user }, "{game} for {user} now has the save from the file"), {
+        body: tr("saves_use_shared_done_body_v2", { user }, "Start the game as {user} to load it. The save there before was backed up first."),
       });
       void refresh();
     } catch (e) {
-      pushNotification("error", tr("saves_use_shared_failed", { error: e instanceof Error ? e.message : String(e) }, "Could not use the shared save: {error}"));
+      pushNotification("error", tr("saves_use_shared_failed", { error: missingText(e, game, user) }, "Could not use the shared save: {error}"));
     } finally {
       setOpenBusy(false);
+      markBusy(target.path, false);
     }
   };
-  const runOn = (entry: SaveEntry, image: string, then: "open" | "share" | "use") => {
-    if (then === "open") return doOpenSave(image);
-    if (then === "share") return doShare(image);
-    setUseTarget({ entry, image });
-    shareInput.current?.click();
-  };
-  const handleOpenSave = async (entry: SaveEntry, then: "open" | "share" | "use" = "open") => {
+  // Open save works on one image: the picker shows only when the save has several.
+  const handleOpenSave = async (entry: SaveEntry) => {
     if (!host?.trim() || openBusy) return;
     setOpenBusy(true);
     try {
       const children = await fsListDir(consoleAddr(host.trim()), entry.path, { limit: 4096 });
-      const images = children
-        .filter((c) => c.kind === "file" && !/\.bin$/i.test(c.name) && (entry.kind !== "ps4" || c.name.startsWith("sdimg_")))
-        .map((c) => (entry.path.endsWith("/") ? `${entry.path}${c.name}` : `${entry.path}/${c.name}`));
+      const images = saveImagesOf(entry, children);
       if (images.length === 0) {
         pushNotification("info", tr("saves_open_none", undefined, "No save image in this folder."));
         return;
       }
       setOpenBusy(false);
-      if (images.length === 1) await runOn(entry, images[0], then);
-      else setPicker({ entry, images, then });
+      if (images.length === 1) await doOpenSave(images[0]);
+      else setPicker({ entry, images });
     } catch (e) {
-      pushNotification("error", tr("saves_open_failed", { error: e instanceof Error ? e.message : String(e) }, "Could not open the save: {error}"));
+      pushNotification("error", tr("saves_open_failed", { error: errorText(e) }, "Could not open the save: {error}"));
     } finally {
       setOpenBusy(false);
     }
@@ -258,6 +364,23 @@ export default function SavesScreen() {
   );
   const owners = useMemo(() => saveOwners(allSaves ?? [], users), [allSaves, users]);
   const ownerName = useCallback((e: SaveEntry) => userName(e.user_id, users), [users]);
+  // A console with two or more users: point at Copy to another user, once (dismissible).
+  const multiUser = useMemo(() => localUserCount(users, allSaves ?? []) >= 2, [users, allSaves]);
+  const [tipHidden, setTipHidden] = useState(() => {
+    try {
+      return window.localStorage.getItem(COPY_TIP_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const hideTip = () => {
+    setTipHidden(true);
+    try {
+      window.localStorage.setItem(COPY_TIP_KEY, "1");
+    } catch {
+      // Only a convenience.
+    }
+  };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Bumped by each refresh, so the Switch emulator's saves are looked at again too.
@@ -1164,30 +1287,83 @@ export default function SavesScreen() {
               else setUseTarget(null);
             }}
           />
+          {!howHidden && (
+            <HowSavesWork onDismiss={hideHow} />
+          )}
+          {restoreOf && (
+            <RestorePicker
+              host={host}
+              save={restoreOf}
+              users={users}
+              saves={allSaves ?? []}
+              who={whoseName(restoreOf)}
+              onClose={() => {
+                setRestoreOf(null);
+                void loadLatest();
+                void refresh();
+              }}
+            />
+          )}
           {picker && (
-            <Modal
-              open
+            <ImagePicker
+              titleId={picker.entry.title_id}
+              images={picker.images}
               onClose={() => setPicker(null)}
-              title={tr("saves_open_pick_title", { title: picker.entry.title_id }, "Which save of {title}?")}
-              size="md"
+              onPick={(img) => {
+                setPicker(null);
+                void doOpenSave(img);
+              }}
+            />
+          )}
+          {copyFrom && (
+            <CopyFor
+              entry={copyFrom}
+              targets={copyTargets(users, allSaves ?? [], copyFrom.title_id, copyFrom.user_id)}
+              source={whoseName(copyFrom)}
+              onClose={() => setCopyFrom(null)}
+              onDone={() => void refresh()}
+              run={async (t) => {
+                if (!host?.trim()) return;
+                try {
+                  await copySaveToUser(consoleAddr(host.trim()), {
+                    title_id: copyFrom.title_id,
+                    from_user: copyFrom.user_id,
+                    to_user: t.uid,
+                  });
+                } catch (e) {
+                  const game = await gameNameOf(copyFrom.title_id);
+                  // The same error, said plainly (the parts the target is missing).
+                  if (e instanceof Error) {
+                    e.message = missingText(e, game, t.name ?? tr("saves_user_other", { id: userHex(t.uid) }, "Other user ({id})"));
+                  }
+                  throw e;
+                }
+              }}
+            />
+          )}
+          {multiUser && !tipHidden && (
+            <div
+              className="flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs"
+              data-testid="saves-copy-tip"
             >
-              <ul className="flex flex-col gap-1" data-testid="save-open-picker">
-                {picker.images.map((img) => (
-                  <li key={img}>
-                    <button
-                      type="button"
-                      className="w-full rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-left font-mono text-xs hover:bg-[var(--color-surface-raised)]"
-                      onClick={() => {
-                        setPicker(null);
-                        void runOn(picker.entry, img, picker.then);
-                      }}
-                    >
-                      {img.split("/").pop()}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </Modal>
+              <Users size={14} className="mt-0.5 shrink-0 text-[var(--color-accent-bright)]" aria-hidden />
+              <span className="min-w-0 flex-1">
+                {tr(
+                  "saves_copy_tip",
+                  undefined,
+                  "Move a save to another account on this PS5: on the save, pick Copy to… › Another user on this PS5.",
+                )}
+              </span>
+              <button
+                type="button"
+                className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                aria-label={tr("saves_copy_tip_dismiss", undefined, "Dismiss")}
+                title={tr("saves_copy_tip_dismiss", undefined, "Dismiss")}
+                onClick={hideTip}
+              >
+                <XIcon size={14} />
+              </button>
+            </div>
           )}
           {owners.length > 1 && (
             <div className="max-w-xs" data-testid="saves-user-filter">
@@ -1227,117 +1403,152 @@ export default function SavesScreen() {
                 {entries.map((e) => (
                   <li
                     key={e.path}
+                    data-testid="save-row"
                     className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-field)] bg-[var(--color-surface)] px-2 py-1.5 text-xs"
                   >
-                    {/* A PS5 save has up to six actions. Without flex-wrap and a basis
-                        for the details, the buttons (shrink-0) squeezed the badge and
-                        the details to one letter per line and pushed the USB menu out
-                        of the card; now the buttons that don't fit move to a new line. */}
+                    {/* One row per user's save of the game (every part of it), with the actions
+                        named by what people do. flex-wrap with a basis for the details keeps
+                        the buttons from squeezing them (#619): what doesn't fit moves down. */}
                     <span className="shrink-0 rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-xs uppercase">
                       {e.kind}
                     </span>
                     <div className="min-w-0 flex-1 basis-[12rem]">
-                      <code className="block truncate text-xs text-[var(--color-muted)]">
-                        {e.path}
-                      </code>
-                      <div className="text-xs text-[var(--color-muted)]">
-                        {ownerName(e) ??
-                          tr("saves_user_other", { id: userHex(e.user_id) }, "Other user ({id})")}{" "}
-                        ·{" "}
-                        {formatBytes(e.size)} ·{" "}
-                        {formatDate(e.mtime * 1000, "date")}
+                      <div className="text-sm font-medium">{whoseName(e)}</div>
+                      <div className="text-xs text-[var(--color-muted)]" title={e.path}>
+                        {formatBytes(e.size)} · {tr("saves_changed", { when: formatDate(e.mtime * 1000, "date") }, "changed {when}")}
                       </div>
+                      <BackupStatus stamp={latest.get(backupKey(e.title_id, e.user_id)) ?? null} now={latestAt} />
                     </div>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      leftIcon={<LockOpen size={11} />}
-                      onClick={() => void handleOpenSave(e)}
-                      disabled={isBusy(e.path) || openBusy}
-                      title={tr(
-                        "saves_open_hint",
-                        undefined,
-                        "Mount this save decrypted on the PS5 and browse its files in Files. Changes are written back when you close it.",
-                      )}
-                    >
-                      {tr("saves_open", undefined, "Open save")}
-                    </Button>
-                    {e.kind === "ps5" && (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          leftIcon={<Share2 size={11} />}
-                          onClick={() => void handleOpenSave(e, "share")}
-                          disabled={isBusy(e.path) || openBusy}
-                          title={tr(
-                            "saves_share_hint",
-                            undefined,
-                            "Save this save's files as a .zip to give to a friend: it loads on their PS5 under their own account (Use a shared save).",
-                          )}
-                          data-testid="save-share"
-                        >
-                          {tr("saves_share", undefined, "Share")}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          leftIcon={<FileDown size={11} />}
-                          onClick={() => void handleOpenSave(e, "use")}
-                          disabled={isBusy(e.path) || openBusy}
-                          title={tr(
-                            "saves_use_shared_hint",
-                            undefined,
-                            "Put a friend's shared save (.zip) into your save of this game. It becomes yours: no account ID change needed.",
-                          )}
-                          data-testid="save-use-shared"
-                        >
-                          {tr("saves_use_shared", undefined, "Use a shared save")}
-                        </Button>
-                      </>
-                    )}
-                    {isTauriEnv() && (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          leftIcon={<Download size={11} />}
-                          onClick={() => handleDownload(e)}
-                          disabled={isBusy(e.path)}
-                        >
-                          {tr("saves_download", undefined, "Backup")}
-                        </Button>
-                        {/* danger (red-bordered), NOT ghost like Backup: Restore
-                            overwrites — wipes — the live PS5 save. It sat visually
-                            identical to the harmless Backup button next to it,
-                            giving no at-a-glance signal which of the two is
-                            destructive. The confirm dialog still guards the click. */}
-                        <Button
-                          variant="danger"
-                          size="sm"
-                          leftIcon={<UploadIcon size={11} />}
-                          onClick={() => handleRestore(e)}
-                          disabled={isBusy(e.path)}
-                          title={tr(
-                            "saves_restore_tooltip",
-                            undefined,
-                            "Pick a .zip backup and upload its contents back to this save's PS5 path. Overwrites the live save.",
-                          )}
-                        >
-                          {tr("saves_restore", undefined, "Restore")}
-                        </Button>
-                        {/* Both USB actions in one menu: four buttons a row was too many. */}
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        leftIcon={<Save size={11} />}
+                        onClick={() => void handleBackUpNow(e)}
+                        loading={backingUp.has(e.path)}
+                        disabled={isBusy(e.path) || backingUp.has(e.path)}
+                        title={tr(
+                          "saves_back_up_now_hint",
+                          undefined,
+                          "Back up this save now, every part of it, to the backup folder (Automatic backups).",
+                        )}
+                        data-testid="save-back-up-now"
+                      >
+                        {tr("saves_back_up_now", undefined, "Back up now")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        leftIcon={<History size={11} />}
+                        onClick={() => setRestoreOf(e)}
+                        disabled={isBusy(e.path)}
+                        title={tr(
+                          "saves_restore_pick_hint",
+                          undefined,
+                          "Pick a backup and put it back, every part of the save. The save there now is backed up first.",
+                        )}
+                        data-testid="save-restore-pick"
+                      >
+                        {tr("saves_restore_pick", undefined, "Restore…")}
+                      </Button>
+                      {e.kind === "ps5" && (
                         <OverflowMenu
-                          triggerLabel={tr("saves_usb_menu", undefined, "USB")}
-                          triggerIcon={<HardDrive size={11} />}
-                          ariaLabel={tr("saves_usb_menu_aria", undefined, "USB backup actions")}
-                          buttonTitle={tr("saves_usb_menu_aria", undefined, "USB backup actions")}
+                          triggerLabel={tr("saves_copy_to_menu", undefined, "Copy to…")}
+                          triggerIcon={<Share2 size={11} />}
+                          triggerVariant="ghost"
+                          ariaLabel={tr("saves_move_share_aria", undefined, "Move or share this save")}
+                          buttonTitle={tr("saves_move_share_aria", undefined, "Move or share this save")}
                           items={[
+                            ...(canCopyToOtherUser(e, users, allSaves ?? [])
+                              ? [
+                                  {
+                                    label: tr("saves_copy_to_user", undefined, "Another user on this PS5"),
+                                    description: tr(
+                                      "saves_copy_to_user_desc",
+                                      undefined,
+                                      "Put this save into another user's save of the game.",
+                                    ),
+                                    icon: <Users size={12} />,
+                                    onSelect: () => setCopyFrom(e),
+                                    disabled: isBusy(e.path) || openBusy,
+                                    testId: "save-copy-to-user",
+                                  },
+                                ]
+                              : []),
+                            {
+                              label: tr("saves_share_file", undefined, "Save as a file for a friend or another PS5"),
+                              description: tr(
+                                "saves_share_file_desc",
+                                undefined,
+                                "One .zip with the whole save. It loads on their PS5 under their own account.",
+                              ),
+                              icon: <Share2 size={12} />,
+                              onSelect: () => void doShare(e),
+                              disabled: isBusy(e.path) || openBusy,
+                              testId: "save-share",
+                            },
+                            {
+                              label: tr("saves_load_file", undefined, "Load a save file"),
+                              description: tr(
+                                "saves_load_file_desc",
+                                undefined,
+                                "Replace this save with one from a .zip (a friend's, or one you downloaded). This save is backed up first.",
+                              ),
+                              icon: <FileDown size={12} />,
+                              onSelect: () => pickSharedFile(e),
+                              disabled: isBusy(e.path) || openBusy,
+                              testId: "save-use-shared",
+                            },
+                          ]}
+                        />
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        leftIcon={<LockOpen size={11} />}
+                        onClick={() => void handleOpenSave(e)}
+                        disabled={isBusy(e.path) || openBusy}
+                        title={tr(
+                          "saves_open_hint_v2",
+                          undefined,
+                          "For save editors: open the save on the PS5 and look inside it in Files. Close it here to write it back.",
+                        )}
+                        data-testid="save-open"
+                      >
+                        {tr("saves_open_v2", undefined, "Open")}
+                      </Button>
+                      {isTauriEnv() && (
+                        <OverflowMenu
+                          triggerLabel={tr("saves_more_menu", undefined, "More")}
+                          triggerIcon={<HardDrive size={11} />}
+                          triggerVariant="ghost"
+                          ariaLabel={tr("saves_more_menu_aria", undefined, "More backup actions")}
+                          buttonTitle={tr("saves_more_menu_aria", undefined, "More backup actions")}
+                          items={[
+                            {
+                              label: tr("saves_download_zip", undefined, "Back up to a .zip on this computer"),
+                              icon: <Download size={12} />,
+                              onSelect: () => void handleDownload(e),
+                              disabled: isBusy(e.path),
+                            },
+                            {
+                              label: tr("saves_restore_zip", undefined, "Restore from a .zip"),
+                              icon: <UploadIcon size={12} />,
+                              onSelect: () => void handleRestore(e),
+                              disabled: isBusy(e.path),
+                              destructive: true,
+                              title: tr(
+                                "saves_restore_tooltip",
+                                undefined,
+                                "Pick a .zip backup and upload its contents back to this save's PS5 path. Overwrites the live save.",
+                              ),
+                            },
                             {
                               label: tr("saves_backup_usb", undefined, "Save to USB"),
                               icon: <HardDrive size={12} />,
                               onSelect: () => handleBackupToUsb(e),
                               disabled: isBusy(e.path) || bulkBackupBusy,
+                              separator: true,
                               title: tr(
                                 "saves_backup_usb_tooltip_v2",
                                 undefined,
@@ -1358,8 +1569,8 @@ export default function SavesScreen() {
                             },
                           ]}
                         />
-                      </>
-                    )}
+                      )}
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -1472,3 +1683,213 @@ function SaveGroupHeader({
 // inside an unmounted PFS container — so the read failed for every save and
 // only produced warnings. The save rows now use the shared <GameIcon> (the
 // game's appmeta cover), which is readable and actually shows art.
+
+/** The game's name, or its title ID until (unless) it is known. */
+function useGameName(titleId: string): string {
+  const info = useTitleInfo(iconTitleId(titleId) ?? titleId);
+  return info?.title ?? titleId;
+}
+
+/** Open save on a save with several images: which one, by a readable name. */
+function ImagePicker({
+  titleId,
+  images,
+  onPick,
+  onClose,
+}: {
+  titleId: string;
+  images: string[];
+  onPick: (image: string) => void;
+  onClose: () => void;
+}) {
+  const tr = useTr();
+  const game = useGameName(titleId);
+  const main = tr("saves_part_main", undefined, "main save");
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={tr("saves_open_pick_title_v2", { game }, "Which part of {game}'s save?")}
+      size="md"
+      bodyClassName="p-4 sm:p-5"
+    >
+      <ul className="flex flex-col gap-1" data-testid="save-open-picker">
+        {images.map((img) => {
+          const file = img.split("/").pop() ?? img;
+          return (
+            <li key={img}>
+              <button
+                type="button"
+                className="w-full rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-raised)]"
+                onClick={() => onPick(img)}
+              >
+                <span className="block">{partLabel(file, main)}</span>
+                <span className="block font-mono text-[11px] text-[var(--color-muted)]">{file}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </Modal>
+  );
+}
+
+/** Copy to another user, for one save: the dialog with the game's name. */
+function CopyFor({
+  entry,
+  targets,
+  source,
+  run,
+  onClose,
+  onDone,
+}: {
+  entry: SaveEntry;
+  targets: ReturnType<typeof copyTargets>;
+  source: string;
+  run: Parameters<typeof CopyToUserDialog>[0]["run"];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const game = useGameName(entry.title_id);
+  return (
+    <CopyToUserDialog
+      game={game}
+      source={{ kind: "save", owner: source }}
+      targets={targets}
+      run={run}
+      onClose={onClose}
+      onDone={onDone}
+    />
+  );
+}
+
+/** "Backed up 2 h ago" (good), or "Not backed up yet" (warning). */
+function BackupStatus({ stamp, now }: { stamp: string | null; now: number }) {
+  const tr = useTr();
+  const lang = useLangStore((s) => s.lang);
+  const ago = stamp ? backupAgo(stamp, now, lang) : null;
+  if (!ago) {
+    return (
+      <div className="mt-0.5 flex items-center gap-1 text-xs text-[var(--color-warn)]" data-testid="save-backup-status" data-backed-up="false">
+        <AlertTriangle size={11} aria-hidden />
+        {tr("saves_not_backed_up", undefined, "Not backed up yet")}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-0.5 flex items-center gap-1 text-xs text-[var(--color-good)]" data-testid="save-backup-status" data-backed-up="true">
+      <CheckCircle2 size={11} aria-hidden />
+      {tr("saves_backed_up_ago", { when: ago }, "Backed up {when}")}
+    </div>
+  );
+}
+
+/** Restore…: this save's backups, newest first, each with Restore (and Restore to another user). */
+function RestorePicker({
+  host,
+  save,
+  users,
+  saves,
+  who,
+  onClose,
+}: {
+  host: string;
+  save: SaveEntry;
+  users: ProfileUser[];
+  saves: SaveEntry[];
+  who: string;
+  onClose: () => void;
+}) {
+  const tr = useTr();
+  const game = useGameName(save.title_id);
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={tr("saves_restore_pick_title", { game, user: who }, "Restore {game} for {user}")}
+      size="lg"
+      bodyClassName="p-4 sm:p-5"
+    >
+      <div className="flex flex-col gap-2 text-sm" data-testid="save-restore-dialog">
+        <p className="text-xs text-[var(--color-muted)]">
+          {tr(
+            "saves_restore_pick_body",
+            undefined,
+            "Close the game first. A restore puts back every part of the save; the save there now is backed up first, so you can go back.",
+          )}
+        </p>
+        <SaveBackupsList
+          host={host}
+          save={save}
+          users={users}
+          saves={saves}
+          game={game}
+          empty={
+            <p className="text-xs text-[var(--color-muted)]" data-testid="save-restore-none">
+              {tr(
+                "saves_restore_none",
+                undefined,
+                "No backups of this save yet. Press Back up now, or turn on Automatic backups above.",
+              )}
+            </p>
+          }
+        />
+      </div>
+    </Modal>
+  );
+}
+
+/** For first-timers: what this screen is for, in four lines. */
+function HowSavesWork({ onDismiss }: { onDismiss: () => void }) {
+  const tr = useTr();
+  return (
+    <div
+      className="flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs"
+      data-testid="saves-how"
+    >
+      <Info size={14} className="mt-0.5 shrink-0 text-[var(--color-accent-bright)]" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <div className="mb-1 text-sm font-semibold">{tr("saves_how_title", undefined, "How saves work here")}</div>
+        <ul className="list-disc space-y-0.5 ps-4">
+          <li>
+            {tr(
+              "saves_how_backups",
+              undefined,
+              "Automatic backups copy each game's save to a folder on this computer (set it in Automatic backups). Back up now makes one at once.",
+            )}
+          </li>
+          <li>
+            {tr(
+              "saves_how_restore",
+              undefined,
+              "Lost progress? Restore… puts a backup back, every part of the save. The save there now is backed up first.",
+            )}
+          </li>
+          <li>
+            {tr(
+              "saves_how_copy",
+              undefined,
+              "Copy to… moves a save to another user on this PS5, or saves it as a file for a friend or another PS5. Load a save file puts one in.",
+            )}
+          </li>
+          <li>
+            {tr(
+              "saves_how_open",
+              undefined,
+              "Open is for save editors: look inside a save in Files, then close it here to write it back.",
+            )}
+          </li>
+        </ul>
+      </div>
+      <button
+        type="button"
+        className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+        aria-label={tr("saves_copy_tip_dismiss", undefined, "Dismiss")}
+        title={tr("saves_copy_tip_dismiss", undefined, "Dismiss")}
+        onClick={onDismiss}
+      >
+        <XIcon size={14} />
+      </button>
+    </div>
+  );
+}
