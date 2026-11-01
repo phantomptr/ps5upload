@@ -22,4 +22,13 @@ describe("streamErrorMessage", () => {
     const m = streamErrorMessage(tr, { code: "refused", detail: "session init refused (HTTP 403): 80108b26" });
     expect(m).toContain("refused to start Remote Play");
   });
+
+  it("says a passcode start was cancelled or timed out, not that it cannot be done", () => {
+    const cancelled = streamErrorMessage(tr, { code: "passcode_cancelled", detail: "" });
+    const timeout = streamErrorMessage(tr, { code: "passcode_timeout", detail: "" });
+    expect(cancelled).toContain("passcode");
+    expect(timeout).toContain("Press Start");
+    expect(cancelled).not.toBe(timeout);
+    expect(`${cancelled} ${timeout}`).not.toContain("cannot enter it");
+  });
 });

@@ -700,6 +700,16 @@ int remoteplay_pin_snapshot(char *out, size_t out_size) {
                     pin_esc, acct_esc);
 }
 
+int remoteplay_last_error_json(char *out, size_t out_size) {
+    if (!out || out_size == 0) return -1;
+    out[0] = 0;
+    pthread_once(&g_pair_once, rp_pair_once);
+    rp_pair_view_t v;
+    rp_pair_view(&g_pair, rp_mono_ms(), &v);
+    rp_json_escape(v.err, out, out_size);
+    return 0;
+}
+
 int remoteplay_request(const char *manual_account_id) {
     pthread_once(&g_pair_once, rp_pair_once);
     pthread_mutex_lock(&sony_api_lock);

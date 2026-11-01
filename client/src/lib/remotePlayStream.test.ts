@@ -13,6 +13,7 @@ import {
   IDLE_PAD,
   rebind,
   nextRtt,
+  isPasscode,
 } from "./remotePlayStream";
 
 describe("rebind", () => {
@@ -136,5 +137,15 @@ describe("nextRtt", () => {
 
   it("never goes below zero", () => {
     expect(nextRtt(null, 150, 100)).toBe(0);
+  });
+});
+
+describe("isPasscode", () => {
+  it("is four digits, nothing else", () => {
+    expect(isPasscode("0042")).toBe(true);
+    expect(isPasscode("123")).toBe(false);
+    expect(isPasscode("12345")).toBe(false);
+    expect(isPasscode("12a4")).toBe(false);
+    expect(isPasscode(" 1234")).toBe(false);
   });
 });

@@ -91,6 +91,7 @@ import { CaptureBarButtons, CaptureOverlay } from "./CaptureControls";
 import { LatencyLine, QualityNotice } from "./NetworkExtras";
 import { RpBlockerNotice, RpBlockerPhase } from "./RpBlockers";
 import { RpKeyboardBox } from "./RpKeyboardBox";
+import { RpPasscodeBox } from "./RpPasscodeBox";
 import { pressClosedSettings, SETTINGS_OPENER, SettingsDrawer } from "./SettingsDrawer";
 import { beforeRemotePlay } from "../../state/rpBlockers";
 import { useRpQualityStore } from "../../state/rpQuality";
@@ -148,11 +149,13 @@ export function streamErrorMessage(tr: Tr, e: StreamError): string {
         undefined,
         "Remote Play is switched off on the PS5. On the console, open Settings › System › Remote Play and turn on Enable Remote Play (if it already shows on, turn it off and on again), then press Start.",
       );
-    case "passcode":
+    case "passcode_cancelled":
+      return tr("rp_err_passcode_cancelled", undefined, "Start cancelled: the PS5 needs this user's passcode to start Remote Play.");
+    case "passcode_timeout":
       return tr(
-        "rp_err_passcode",
+        "rp_err_passcode_timeout",
         undefined,
-        "This PS5 user has a sign-in passcode. Remote Play from here cannot enter it; remove the passcode or sign in on the console first.",
+        "The PS5 stopped waiting for the passcode. Press Start and enter it again.",
       );
     case "video_refused":
       return tr("rp_err_video", undefined, "The PS5 refused that picture size. Try 720p.");
@@ -1166,6 +1169,7 @@ export function StreamPanel() {
           {playing && kbm.toast && !pip && <KbmToast key={kbm.toast.n} mode={kbm.toast.mode} captured={kbm.toast.captured} />}
           {running && <PadAsks pending={padLink.pending} />}
           {running && <RpKeyboardBox />}
+          {running && <RpPasscodeBox />}
           {running && pip && (
             <div
               className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/80 px-6 text-center text-sm text-white/85"

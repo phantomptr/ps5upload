@@ -416,12 +416,24 @@ export type StreamPhase =
 
 export interface StreamError {
   /** Stable, from the engine: busy, busy_other, asleep, unreachable, keys, wake_failed,
-   *  passcode, video_refused, lost (dropped mid-stream), other — or client-side: decode, no_decoder, socket. */
+   *  passcode_cancelled, passcode_timeout, video_refused, lost (dropped mid-stream), other — or
+   *  client-side: decode, no_decoder, socket. */
   code: string;
   retryS?: number;
   /** busy_other: the console that is streaming. */
   host?: string;
   detail: string;
+}
+
+/** The console waits for the user's sign-in passcode. */
+export interface PasscodeAsk {
+  retry: boolean;
+  waitS: number;
+}
+
+/** A PS5 user passcode: four digits. */
+export function isPasscode(s: string): boolean {
+  return /^[0-9]{4}$/.test(s);
 }
 
 export interface StreamOptions {
@@ -474,6 +486,10 @@ export interface StreamOptions {
   onPadKbm?: (m: unknown) => void;
   /** The console's on-screen keyboard opened, changed or closed (lib/rpKeyboard.ts). */
   onKeyboard?: (m: RpKeyboardMsg) => void;
+  /** The console asks for the user's sign-in passcode before it starts (`retry`: the last one
+   *  was wrong; `waitS`: how long the engine waits), or null once it no longer does. Answer with
+   *  `sendPasscode` or `cancelPasscode`. */
+  onPasscode?: (ask: PasscodeAsk | null) => void;
   /** The pad state to send; polled every animation frame and on key events. */
   readPad: () => PadState;
   /** The controllers rumble is played on (default: this page's). A picture-in-picture window
@@ -640,6 +656,8 @@ export class RemotePlayStream {
   private ended = false;
   private stopping = false;
   private engineEnded = false;
+  /** The console asked for the passcode and has not moved on yet. */
+  private passcodeAsked = false;
   private moved = false;
   private reconnectSince = 0;
   private reconnectTry = 0;
@@ -1306,6 +1324,20 @@ export class RemotePlayStream {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
   }
 
+  /** The user's sign-in passcode, for the console that asked for it. Sent, never kept. */
+  sendPasscode(digits: string): boolean {
+    const ws = this.ws;
+    if (!isPasscode(digits) || !ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify({ passcode: digits }));
+    return true;
+  }
+
+  /** The user would rather not enter the passcode: the start ends. */
+  cancelPasscode(): void {
+    const ws = this.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ passcode_cancel: true }));
+  }
+
   /** This session was started with the mic set up (Settings › Microphone). */
   get micEnabled(): boolean {
     return !!this.o.mic;
@@ -1408,6 +1440,8 @@ export class RemotePlayStream {
       kbm?: unknown;
       pad_kbm?: unknown;
       keyboard?: RpKeyboardMsg;
+      retry?: boolean;
+      wait_s?: number;
     };
     try {
       s = JSON.parse(text);
@@ -1449,9 +1483,21 @@ export class RemotePlayStream {
       this.o.onKeyboard?.(s.keyboard);
       return;
     }
+    // Any later step means the console took the passcode (or the start ended): the prompt goes.
+    if (this.passcodeAsked && s.stage && s.stage !== "passcode" && s.stage !== "stats") {
+      this.passcodeAsked = false;
+      this.o.onPasscode?.(null);
+    }
     switch (s.stage) {
       case "waking":
         this.setPhase("waking");
+        break;
+      case "passcode":
+        this.passcodeAsked = true;
+        this.o.onPasscode?.({
+          retry: s.retry === true,
+          waitS: typeof s.wait_s === "number" && s.wait_s > 0 ? s.wait_s : 180,
+        });
         break;
       case "nonce":
       case "session":

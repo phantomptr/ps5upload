@@ -5270,10 +5270,16 @@ static int handle_remoteplay_request(runtime_state_t *state, const char *body) {
      * refused. Returning it here removes the need to poll at all. */
     char snap[192] = "";
     if (rc == 0) (void)remoteplay_pin_snapshot(snap, sizeof(snap));
-    char resp[256];
+    char resp[512];
     int len;
     if (rc == 0 && snap[0]) {
         len = snprintf(resp, sizeof(resp), "{\"ok\":true,\"snapshot\":%s}", snap);
+    } else if (rc != 0) {
+        /* The reason travels with the refusal (#609: the user saw only
+         * "failed on-console" while this knew the Sony call and its code). */
+        char err[288] = "";
+        (void)remoteplay_last_error_json(err, sizeof(err));
+        len = snprintf(resp, sizeof(resp), "{\"ok\":false,\"err\":\"%s\"}", err);
     } else {
         len = snprintf(resp, sizeof(resp), "{\"ok\":%s}",
                        rc == 0 ? "true" : "false");
