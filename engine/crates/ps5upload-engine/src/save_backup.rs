@@ -709,6 +709,32 @@ pub(crate) fn restore_zip(
     result
 }
 
+/// The most entries one `list-dir` page carries (the payload's own ceiling).
+const LIST_PAGE: u64 = 256;
+
+/// Every entry of a folder, page by page: `page(offset)` is one `list-dir` answer. A full page
+/// (or one cut short because its buffer filled) means there may be more; a short or empty one is
+/// the end.
+pub(crate) fn all_entries(
+    page: &dyn Fn(u64) -> Result<Value, String>,
+) -> Result<Vec<Value>, String> {
+    let mut out = Vec::new();
+    loop {
+        let v = page(out.len() as u64)?;
+        let entries = v
+            .get("entries")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let truncated = v.get("truncated").and_then(Value::as_bool).unwrap_or(false);
+        let n = entries.len() as u64;
+        out.extend(entries);
+        if n == 0 || (!truncated && n < LIST_PAGE) {
+            return Ok(out);
+        }
+    }
+}
+
 /// Replace what is in the console's save folder `save_path` with the files of the local folder
 /// `src`: the save there now is backed up first (tagged `tag`, so it can be put back), then the
 /// folder is emptied (kept itself: the console refuses a fresh mkdir under its save root) and
@@ -743,17 +769,15 @@ fn put_in_place(
         crate::save_backup_server::back_up_before_restore(host, &current)
             .map_err(|e| format!("could not back up the current save first: {e}"))?;
     }
-    let listing = get(&format!(
-        "/api/ps5/list-dir?addr={}&path={}&offset=0&limit=256",
-        enc(host),
-        enc(save_path)
-    ))?;
-    for e in listing
-        .get("entries")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-    {
+    // Every name first, then the deletes: a page asked for after a delete would skip some.
+    let names = all_entries(&|offset| {
+        get(&format!(
+            "/api/ps5/list-dir?addr={}&path={}&offset={offset}&limit={LIST_PAGE}",
+            enc(host),
+            enc(save_path)
+        ))
+    })?;
+    for e in names {
         let Some(name) = e.get("name").and_then(Value::as_str) else {
             continue;
         };
@@ -1564,6 +1588,44 @@ mod tests {
         let due = needing_backup("h", &saves, &Done::new(), 2000);
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].title_id, "PPSA01234");
+    }
+
+    /// A save folder with more entries than one page holds is listed whole, so a restore
+    /// empties all of it, not only the first page.
+    #[test]
+    fn a_folder_is_listed_page_by_page() {
+        let names = |n: usize| -> Vec<Value> {
+            (0..n)
+                .map(|i| json!({ "name": format!("f{i}"), "kind": "file" }))
+                .collect()
+        };
+        let pager = |all: Vec<Value>, cut: Option<u64>| {
+            let asked = std::cell::RefCell::new(Vec::new());
+            let got = all_entries(&|offset| {
+                asked.borrow_mut().push(offset);
+                let size = cut.unwrap_or(LIST_PAGE);
+                let page: Vec<Value> = all
+                    .iter()
+                    .skip(offset as usize)
+                    .take(size as usize)
+                    .cloned()
+                    .collect();
+                let truncated = cut.is_some() && (offset as usize + page.len()) < all.len();
+                Ok(json!({ "entries": page, "truncated": truncated }))
+            })
+            .unwrap();
+            (got.len(), asked.into_inner())
+        };
+        // Fewer than a page: one look, as before.
+        assert_eq!(pager(names(3), None), (3, vec![0]));
+        // More than a page.
+        assert_eq!(pager(names(300), None), (300, vec![0, 256]));
+        // Exactly a page: the empty one after it ends the listing.
+        assert_eq!(pager(names(256), None), (256, vec![0, 256]));
+        // A page cut short by its buffer still asks for the rest.
+        assert_eq!(pager(names(10), Some(4)), (10, vec![0, 4, 8]));
+        // A failing page fails the whole listing.
+        assert!(all_entries(&|_| Err("gone".to_string())).is_err());
     }
 
     #[test]
