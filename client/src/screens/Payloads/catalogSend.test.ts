@@ -5,10 +5,10 @@ import { describe, expect, it } from "vitest";
 import { sentViaPayloadManager } from "../../api/ps5";
 
 const probesRs: string = readFileSync(
-  new URL("../../../src-tauri/src/commands/probes.rs", import.meta.url).pathname,
+  new URL("../../../src-tauri/src/commands/probes.rs", import.meta.url),
   "utf8",
 );
-const catalog: string = readFileSync(new URL("./CatalogPanel.tsx", import.meta.url).pathname, "utf8");
+const catalog: string = readFileSync(new URL("./CatalogPanel.tsx", import.meta.url), "utf8");
 
 // The catalogue's "Sent" notification said ":9021" even when :9021 was dead
 // and payload_send had launched the file through Payload Manager.

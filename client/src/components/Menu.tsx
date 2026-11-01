@@ -38,8 +38,12 @@ export interface MenuItem {
   loading?: boolean;
   destructive?: boolean;
   title?: string;
+  /** A short line under the label saying what the item does. */
+  description?: string;
   /** Render a separator line before this item. */
   separator?: boolean;
+  /** For tests and e2e. */
+  testId?: string;
 }
 
 export function MenuList({
@@ -169,8 +173,11 @@ export function MenuList({
               onClose();
               item.onSelect();
             }}
+            data-testid={item.testId}
             className={[
-              "flex w-full items-center gap-2 whitespace-nowrap rounded-full px-3 py-2 text-left text-xs transition-colors",
+              item.description
+                ? "flex w-full items-start gap-2 rounded-[var(--radius-field)] px-3 py-2 text-left text-xs transition-colors"
+                : "flex w-full items-center gap-2 whitespace-nowrap rounded-full px-3 py-2 text-left text-xs transition-colors",
               "disabled:cursor-not-allowed disabled:opacity-50",
               activeIdx === i
                 ? "bg-[var(--color-surface-3)]"
@@ -185,7 +192,16 @@ export function MenuList({
                 {item.icon}
               </span>
             )}
-            <span className="flex-1">{item.label}</span>
+            {item.description ? (
+              <span className="w-64 max-w-[75vw] flex-1">
+                <span className="block font-medium">{item.label}</span>
+                <span className="mt-0.5 block text-[11px] leading-snug text-[var(--color-muted)]">
+                  {item.description}
+                </span>
+              </span>
+            ) : (
+              <span className="flex-1">{item.label}</span>
+            )}
             {item.loading && (
               <span className="ml-2 text-xs text-[var(--color-muted)]">…</span>
             )}

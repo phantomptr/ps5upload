@@ -27,7 +27,9 @@
   archives (unpacked on the way, nothing extracted to your disk). Everything runs over
   **AVA1**, one encrypted connection on port 9120. Every file is verified, and an upload
   continues after a dropped connection, a helper restart or rest mode. A job that will not
-  fit is refused up front, counting what is already on the console. Queue, live speed and ETA.
+  fit is refused up front, counting what is already on the console. Queue, live speed and ETA;
+  pause an upload and resume it later where it stopped, or **Send now** to let another item go
+  first.
 - **Upload & Install.** One drop zone takes packages, game folders and dumps, disk images,
   archives and any other file, and works out what each is. PS4 `.pkg` and PS5 fake packages
   (base, update, DLC) install from your computer (**Stream & install** or **Upload & install**),
@@ -44,22 +46,31 @@
   image, or write a game folder as a game image (`.exfat`, `.ffpkg`, `.ffpfs`, or the smaller
   `.ffpfsc`) that ShadowMount+ mounts. A queue makes games one after another and hands each to
   Upload & Install to install or upload.
-- **Browse and manage.** Files, games, disk images (mount, edit in place), saves, screenshots
-  and video clips; share a save with a friend (it loads on their PS5 as their own); register, launch, stop and uninstall games; copy, move (Move to…),
-  delete, set permissions.
+- **Browse and manage.** Files, games, disk images (mount, edit in place), screenshots and
+  video clips; register, launch, stop and uninstall games; copy, move (Move to…), delete, set
+  permissions.
+- **Save Data.** Automatic backups to a folder (or a server), **Back up now** and **Restore…**;
+  **Copy to…** another user on the same PS5, or a file for a friend or another PS5 that loads
+  under their own account; open a save for save editors. PS1 (PSSwanStation), PS2 (Crux2,
+  PS5SX2) and Switch (ProsperoEden) emulator saves are backed up and restored too.
 - **Remote Play.** Play the PS5 from your computer, phone or browser, no PS Remote Play app
   needed:
   - Start wakes a console in rest mode and signs your user in; the stream keeps playing while
     you use other screens, and a dropped connection rejoins by itself.
   - Play with a controller connected to this device, the keyboard (keys you can remap) or an
     on-screen controller on phones and tablets; the controller vibrates with the game.
+  - Or give the PS5 your computer's keyboard and mouse as its own (any firmware), and use a
+    phone as its touchpad and keyboard.
+  - If the user has a PS5 passcode, the app asks for it (never saved).
   - Picture in picture: a small always-on-top window while you do something else (desktop app,
     Chrome and Edge; picture only in Safari).
   - 1080p or 720p at 60 or 30 fps, full screen, volume, stats on the picture, and low-delay
     sound.
-  - A step-by-step setup in Accounts that checks each requirement on the console and fixes what
-    it can (sign-in, account ID, Remote Play switches, pairing), plus a PIN for Sony's PS Remote
-    Play app or chiaki-ng if you prefer those.
+  - A step-by-step setup (Play › Set up) that checks each requirement on the console and fixes
+    what it can (sign-in, account ID, Remote Play switches, pairing, or pairing with the PIN the
+    PS5 shows), plus a PIN for Sony's PS Remote Play app or chiaki-ng if you prefer those.
+  - A local automation API lets a script or AI agent on the engine's computer watch and play a
+    running session ([AUTOMATION.md](AUTOMATION.md)).
 - **Cheats, fan curve, hardware view,** payload sender with a catalogue and playlists, and
   backport tools.
 - **Power.** Rest mode, reboot, shut down, and wake over the network (optionally straight
@@ -352,6 +363,8 @@ with **Settings → Engine URL**.
   proxy authentication, Docker bridge networking, and sub-path hosting.
 - **Scripting it:** [ps5upctl](https://github.com/yuanzhengze/ps5upctl) is a community
   command-line client for the engine API (unofficial; the API can change between versions).
+  A script or AI agent on the engine's computer can also watch and play a running Remote Play
+  session without taking it over: see [Remote Play automation](AUTOMATION.md).
 
 ## FAQ
 
@@ -477,7 +490,7 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 * [UnRAR](https://www.rarlab.com/) (Alexander Roshal) — `.rar` extraction on **desktop**, compiled from the source the `unrar_sys` crate bundles into its own program, `ps5upload-unrar`, which holds only ps5upload's own code and UnRAR and which the engine runs over pipes (UnRAR is never linked into the engine); used to *extract only*, never to compress.
 
 **Fetched at runtime:**
-* The Payloads catalogue — kstuff-lite (EchoStretch, drakmor), [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus) and nanoDNS (drakmor), etaHEN and Itemzflow (LightningMods), ftpsrv, websrv, shsrv and klogsrv (ps5-payload-dev), ps5-app-dumper, CheatRunner, BackPork, itsPLK's Payload Manager and WebKit Autoloader, earthonion's tools, Ghostpad, HearBridge, Hush (disco-trooper), ps5debug-NG and more — each downloaded from its own releases when you choose it
+* The Payloads catalogue — kstuff-lite (EchoStretch, drakmor), [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus) and nanoDNS (drakmor), etaHEN and Itemzflow (LightningMods), ftpsrv, websrv, shsrv and klogsrv (ps5-payload-dev), ps5-app-dumper, CheatRunner, BackPork, itsPLK's Payload Manager and WebKit Autoloader, earthonion's tools (np-fake-signin, Remote Play Unlock and more), Ghostpad, HearBridge, Hush (disco-trooper), ps5debug-NG and more — each downloaded from its own releases when you choose it
 * ampr_emu's debug build (drakmor) — downloaded for "Measure how it plays"
 * [etaHEN PS5_Cheats](https://github.com/etaHEN/PS5_Cheats), [GoldHEN Cheat Repository](https://github.com/GoldHEN/GoldHEN_Cheat_Repository) and [HEN-Cheats-Collection](https://github.com/TeeKay87/HEN-Cheats-Collection) (TeeKay87) — cheat files
 * [PROSPEROPatches](https://prosperopatches.com/) and [ORBISPatches](https://orbispatches.com/) — game details and artwork

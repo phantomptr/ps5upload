@@ -15,9 +15,10 @@ import { useAutoSaveBackupStore } from "../../state/autoSaveBackup";
 import { useTr } from "../../state/lang";
 import { SaveBackupsList } from "../GameHub/SaveBackupsList";
 
-/** The PlayStation 2 emulators' memory cards and saved states (Crux2, PS5SX2), with their
- *  backups: shown only when the console has one. Each emulator's two saves are kept under its own
- *  title ID, the user number telling them apart (0 the cards, 1 the saved states). */
+/** The PlayStation 2 emulators' memory cards and saved states (Crux2, PS5SX2), and the PlayStation
+ *  emulator PSSwanStation's, with their backups: a group for each kind, shown only when the console
+ *  has one. Each emulator's two saves are kept under its own title ID, the user number telling them
+ *  apart (0 the cards, 1 the saved states). */
 export default function Ps2Saves({
   host,
   refreshKey,
@@ -48,15 +49,59 @@ export default function Ps2Saves({
   }, [host, refreshKey]);
 
   if (saves.length === 0) return null;
+  const ps1 = saves.filter((s) => s.kind === "ps1");
+  const ps2 = saves.filter((s) => s.kind !== "ps1");
+
+  return (
+    <>
+      {ps2.length > 0 && (
+        <EmulatorGroup
+          host={host}
+          saves={ps2}
+          title={tr("saves_ps2_title", undefined, "PS2 emulators (Crux2, PS5SX2)")}
+          testId="ps2-saves"
+          reloads={reloads}
+          onBackedUp={backedUp}
+        />
+      )}
+      {ps1.length > 0 && (
+        <EmulatorGroup
+          host={host}
+          saves={ps1}
+          title={tr("saves_ps1_title", undefined, "PS1 emulator (PSSwanStation)")}
+          testId="ps1-saves"
+          reloads={reloads}
+          onBackedUp={backedUp}
+        />
+      )}
+    </>
+  );
+}
+
+/** One kind of emulator's saves: each emulator's memory cards and saved states. */
+function EmulatorGroup({
+  host,
+  saves,
+  title,
+  testId,
+  reloads,
+  onBackedUp,
+}: {
+  host: string;
+  saves: Ps2Save[];
+  title: string;
+  testId: string;
+  reloads: Record<string, number>;
+  onBackedUp: (app: string) => void;
+}) {
+  const tr = useTr();
   const apps = [...new Set(saves.map((s) => s.title_id))].sort();
 
   return (
-    <section className="surface-panel mt-3 p-5" data-testid="ps2-saves">
+    <section className="surface-panel mt-3 p-5" data-testid={testId}>
       <header className="mb-3 flex items-center gap-2">
         <Gamepad2 size={16} aria-hidden />
-        <h3 className="text-sm font-semibold">
-          {tr("saves_ps2_title", undefined, "PS2 emulators (Crux2, PS5SX2)")}
-        </h3>
+        <h3 className="text-sm font-semibold">{title}</h3>
       </header>
       <div className="space-y-3">
         {apps.map((app) => {
@@ -99,7 +144,7 @@ export default function Ps2Saves({
                     host={host}
                     save={s}
                     reload={reloads[app] ?? 0}
-                    onBackedUp={backedUp}
+                    onBackedUp={onBackedUp}
                   />
                 ))}
               </ul>
@@ -177,15 +222,20 @@ function Ps2SaveRow({
       data-testid="ps2-save"
     >
       <div className="flex flex-wrap items-center gap-3">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-[12rem]">
           <div className="font-medium">{label}</div>
           <div className="text-[var(--color-muted)]">
-            {tr(
-              "saves_switch_changed",
-              { when: formatDate(save.mtime * 1000, "datetime") },
-              "Last changed {when}",
-            )}{" "}
-            · {formatBytes(save.size)}
+            {save.mtime > 0 && (
+              <>
+                {tr(
+                  "saves_switch_changed",
+                  { when: formatDate(save.mtime * 1000, "datetime") },
+                  "Last changed {when}",
+                )}{" "}
+                ·{" "}
+              </>
+            )}
+            {formatBytes(save.size)}
           </div>
         </div>
         <Button

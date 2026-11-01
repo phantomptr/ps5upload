@@ -6,7 +6,7 @@ import { SNAPSHOT_MAX_DEPTH, SNAPSHOTS_KEPT_PER_NAME } from "./snapshotLimits";
 
 // The screen states these limits as facts, so they must be the payload's.
 const backupC: string = readFileSync(
-  new URL("../../../../payload/src/backup.c", import.meta.url).pathname,
+  new URL("../../../../payload/src/backup.c", import.meta.url),
   "utf8",
 );
 

@@ -29,7 +29,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::save_archive::{
     auto_backup_stem, backup_tag, cleanup_temp_dir, make_temp_dir, tagged_backups_to_prune,
-    zip_folder,
+    zip_folder_noted,
 };
 use ps5upload_core::saves::SaveEntry;
 use serde::{Deserialize, Serialize};
@@ -201,9 +201,9 @@ pub struct Pick<'a> {
 
 /// The saves of `host` that need a backup on the server: a game's, changed since its last one
 /// there, of a chosen user, and (see [`Pick`]) not still being written. An emulator's save (the
-/// Switch emulator's, a PlayStation 2 emulator's cards or states) belongs to none of the console's
-/// users, and goes with the emulator: it is due when the emulator was closed, and waits while it
-/// runs.
+/// Switch emulator's, a PlayStation or PlayStation 2 emulator's cards or states) belongs to none of
+/// the console's users, and goes with the emulator: it is due when the emulator was closed, and
+/// waits while it runs.
 pub fn due_saves<'a>(
     host: &str,
     saves: &'a [SaveEntry],
@@ -576,7 +576,8 @@ fn back_up_one(
     let result = (|| {
         local::download_save(host, entry, &tmp, &|| Ok(()))?;
         let zip = tmp.join("backup.zip");
-        zip_folder(&tmp, &entry.title_id, &zip).map_err(|e| format!("zip: {e:#}"))?;
+        let note = local::backup_note(local::console_identity(host).as_deref());
+        zip_folder_noted(&tmp, &entry.title_id, &zip, &note).map_err(|e| format!("zip: {e:#}"))?;
         let user = entry.user_id as u32;
         let st = match tag {
             Some(t) => format!("{}_{t}", stamp(now_ms())),
@@ -612,7 +613,7 @@ pub fn back_up_before_restore(host: &str, entry: &SaveEntry) -> Result<(), Strin
 }
 
 /// The titles running on `host`, upper-case; Err when the console does not answer.
-fn running_titles(host: &str) -> Result<BTreeSet<String>, String> {
+pub(crate) fn running_titles(host: &str) -> Result<BTreeSet<String>, String> {
     let list = ps5upload_core::process_mgr::process_list(host).map_err(|e| format!("{e:#}"))?;
     Ok(list
         .processes
@@ -847,6 +848,19 @@ fn restore(
     result
 }
 
+/// Copies the backup `file` of `title_id` off the server into the local file `dest` (restoring
+/// one to another user, `save_copy`).
+pub(crate) fn fetch_to(title_id: &str, file: &str, dest: &Path) -> Result<(), String> {
+    let s = settings();
+    if s.target.trim().is_empty() {
+        return Err("no server is set for save backups".into());
+    }
+    rt().block_on(async {
+        let (fs, folder) = open_target(&s.target).await?;
+        fetch_backup(fs.as_ref(), &folder, title_id, file, dest).await
+    })
+}
+
 // ── HTTP ────────────────────────────────────────────────────────────────
 
 fn view() -> Value {
@@ -1042,6 +1056,7 @@ pub async fn post_restore(Json(b): Json<local::RestoreBody>) -> Response {
 mod tests {
     use super::*;
     use crate::remote::MemFs;
+    use ps5upload_core::save_archive::zip_folder;
 
     fn save(path: &str, title: &str, user: u32, mtime: i64) -> SaveEntry {
         SaveEntry {

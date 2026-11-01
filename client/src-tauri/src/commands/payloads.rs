@@ -656,6 +656,33 @@ const CATALOGUE: &[CatalogueEntry] = &[
         homepage: "https://github.com/disco-trooper/hush",
     },
     CatalogueEntry {
+        // earthonion/remoteplay_unlock (GPL-3) — patches SceRemotePlay
+        // (NPXS40102) in memory so a game's Remote Play prohibition (the
+        // initial RP-Prohibit answer, prohibition notices mid-stream, the
+        // audio/video protection state that blacks out the picture) stops
+        // blocking a stream. One-shot: it checks the original bytes before
+        // every write (refusing unknown firmware itself), patches, shows a
+        // notification and exits — no process, port or marker, so the hub
+        // never shows it as running. Releases are a rolling PRE-release
+        // tagged `latest` (CI on every push): payloads_release falls back to
+        // the newest list entry when /releases/latest 404s. It needs the
+        // console's Remote Play service up, so it goes late in autoload.
+        id: "remoteplay-unlock",
+        display_name: "Remote Play Unlock",
+        role: "Let Remote Play stream games that block it",
+        description: "Patches the PS5's Remote Play service so games and apps that prohibit Remote Play (\"can't be streamed\", a prohibition notice during a stream, or a black picture) stream normally. Firmware 3.20, 10.01, 12.00, 12.70 and 13.60; it checks the console's code before changing it and refuses other firmware. One-shot: it applies the patch, shows a notification and exits. In memory: load it again after every reboot, or add it to your autoloader (Payload Manager: Load at boot). By earthonion.",
+        repo_host: "github.com",
+        repo_owner: "earthonion",
+        repo_name: "remoteplay_unlock",
+        asset_name_hint: "remoteplay_unlock.elf",
+        on_console_marker_path: None,
+        process_name_hint: None,
+        ports: &[],
+        autoload_priority: 6,
+        autoload_delay_ms: 500,
+        homepage: "https://github.com/earthonion/remoteplay_unlock",
+    },
+    CatalogueEntry {
         // Pharaoh2k/ps5debug-NG — a debugger for jailbroken PS5s (GPL-3). The
         // payload is an installer: it loads the debugger into the console's own
         // SceShellCore process and exits, so there is no process of its own to
@@ -1406,6 +1433,24 @@ pub async fn payloads_release(
             return fallback_to_stale(format!("fetch {url}: {e}"));
         }
     };
+    // A repo that publishes only pre-releases (e.g. a rolling `latest`
+    // pre-release built by CI, like remoteplay_unlock) has no
+    // `/releases/latest` — GitHub answers 404 there. Take the newest
+    // entry of the releases list instead, which includes pre-releases.
+    let resp = if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        let list_url = url.replace("/releases/latest", "/releases?per_page=1");
+        match client
+            .get(&list_url)
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return fallback_to_stale(format!("fetch {list_url}: {e}")),
+        }
+    } else {
+        resp
+    };
     if !resp.status().is_success() {
         let status = resp.status();
         // GitHub returns 403 with `X-RateLimit-Remaining: 0` when the
@@ -1428,7 +1473,7 @@ pub async fn payloads_release(
         Ok(b) => b,
         Err(e) => return fallback_to_stale(format!("read body: {e}")),
     };
-    let release: GithubRelease = match serde_json::from_str(&body) {
+    let (release, body) = match parse_release_or_newest(&body) {
         Ok(r) => r,
         Err(e) => return fallback_to_stale(format!("parse release JSON: {e}")),
     };
@@ -1440,6 +1485,26 @@ pub async fn payloads_release(
     super::replace_file(&tmp, &cache_path).map_err(|e| format!("rename cache: {e}"))?;
 
     Ok(release_to_info(&entry, &release, 0))
+}
+
+/// Parse a `/releases/latest` body (one release object) or a releases-list
+/// body (an array, newest first — the pre-release-only fallback). Returns
+/// the release and the single-object JSON to cache, so the cache file keeps
+/// one shape whichever endpoint answered.
+fn parse_release_or_newest(body: &str) -> Result<(GithubRelease, String), String> {
+    if body.trim_start().starts_with('[') {
+        let mut list: Vec<serde_json::Value> =
+            serde_json::from_str(body).map_err(|e| e.to_string())?;
+        if list.is_empty() {
+            return Err("the repository has no releases".into());
+        }
+        let first = list.swap_remove(0);
+        let release: GithubRelease =
+            serde_json::from_value(first.clone()).map_err(|e| e.to_string())?;
+        return Ok((release, first.to_string()));
+    }
+    let release: GithubRelease = serde_json::from_str(body).map_err(|e| e.to_string())?;
+    Ok((release, body.to_string()))
 }
 
 /// Cache file for a payload's FULL release list — distinct from the
@@ -2520,6 +2585,31 @@ mod tests {
         };
         let (n, _, _) = pick_asset(&r, e.asset_name_hint);
         assert_eq!(n, "ps5debug-NG_v1.3.2.elf");
+    }
+
+    #[test]
+    fn remoteplay_unlock_takes_the_rolling_prerelease() {
+        // One-shot patcher: nothing to detect, so the hub never calls it running.
+        let e = find_entry("remoteplay-unlock").expect("Remote Play Unlock is in the catalogue");
+        assert!(e.process_name_hint.is_none() && e.on_console_marker_path.is_none());
+        assert!(e.ports.is_empty());
+        // Its only release is a pre-release tagged `latest`, so /releases/latest 404s and
+        // the list fallback answers with an array; the newest entry is used and cached
+        // as a single release object.
+        let body = r#"[{"tag_name":"latest","name":"latest","body":null,"published_at":"2026-10-30T00:00:00Z",
+            "html_url":"https://github.com/earthonion/remoteplay_unlock/releases/tag/latest","prerelease":true,
+            "assets":[{"name":"remoteplay_unlock.elf","browser_download_url":"https://example/rp","size":9}]}]"#;
+        let (r, cached) = parse_release_or_newest(body).expect("list parses");
+        assert_eq!(r.tag_name, "latest");
+        assert!(r.prerelease);
+        assert!(cached.trim_start().starts_with('{'));
+        assert_eq!(
+            parse_release_or_newest(&cached).unwrap().0.tag_name,
+            "latest"
+        );
+        let (n, _, _) = pick_asset(&r, e.asset_name_hint);
+        assert_eq!(n, "remoteplay_unlock.elf");
+        assert!(parse_release_or_newest("[]").is_err());
     }
 
     #[test]

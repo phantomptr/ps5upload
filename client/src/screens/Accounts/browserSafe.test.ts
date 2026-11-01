@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const read = (name: string): string =>
-  readFileSync(new URL(name, import.meta.url).pathname, "utf8");
+  readFileSync(new URL(name, import.meta.url), "utf8");
 
 // plugin-dialog's confirm throws in the browser build, which turned every
 // Profile confirm (avatar, delete user, account id) into an error there.

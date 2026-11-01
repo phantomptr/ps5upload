@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import en from "../../i18n/locales/en";
 
-const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url).pathname, "utf8");
+const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url), "utf8");
 
 // Three different things were all called "autoloader": the playlist run when a
 // console connects, the USB stick the wizard writes, and the browser-menu

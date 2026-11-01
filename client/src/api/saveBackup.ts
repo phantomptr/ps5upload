@@ -122,17 +122,18 @@ export interface SwitchSave {
   running: boolean | null;
 }
 
-/** A PlayStation 2 emulator's save (Crux2 PPSA99249, PS5SX2 PPSA99203): `title_id` is the
- *  emulator's, and `user_id` tells the two apart (0 its memory cards, 1 its saved states). A save
- *  loose in the emulator's data folder has a `path` such as `/data/PCSX2/*.ps2`; `folder` is where
- *  its files are. */
+/** A PlayStation 2 emulator's save (Crux2 PPSA99249, PS5SX2 PPSA99203; `kind` "ps2") or the
+ *  PlayStation emulator PSSwanStation's (PPSA99248; `kind` "ps1"): `title_id` is the emulator's,
+ *  and `user_id` tells the two apart (0 its memory cards, 1 its saved states). A save loose in the
+ *  emulator's data folder has a `path` such as `/data/PCSX2/*.ps2`; `folder` is where its files
+ *  are. */
 export interface Ps2Save {
   title_id: string;
   user_id: number;
   path: string;
   size: number;
   mtime: number;
-  kind: "ps2";
+  kind: "ps2" | "ps1";
   emulator: string;
   folder: string;
   /** The emulator runs now; null when the console did not say. */
@@ -152,9 +153,16 @@ export const saveBackupApi = {
    *  still, kept apart from the automatic backups. */
   snapshot: (req: { addr: string; title_id: string }) =>
     call<{ ok: boolean; files: string[] }>("/snapshot", { method: "POST", body: JSON.stringify(req) }),
+  /** Back up one user's save of a game now, every part of it (a snapshot while it runs). */
+  now: (req: { addr: string; title_id: string; user_id: number }) =>
+    call<{ ok: boolean; file: string }>("/now", { method: "POST", body: JSON.stringify(req) }),
+  /** The newest backup of each game and user in the backup folder. */
+  latest: async () =>
+    (await call<{ latest: Array<{ title_id: string; user_id: number; stamp: string }> }>("/latest")).latest,
   /** ProsperoEden's saves on a console (bare IP): none when it is not installed. */
   switchSaves: (addr: string) =>
     call<{ saves: SwitchSave[]; running: boolean | null }>(`/switch?addr=${encodeURIComponent(addr)}`),
-  /** The PlayStation 2 emulators' cards and saved states on a console (bare IP). */
+  /** The PlayStation 2 emulators' and PSSwanStation's cards and saved states on a console (bare
+   *  IP). */
   ps2Saves: (addr: string) => call<{ saves: Ps2Save[] }>(`/ps2?addr=${encodeURIComponent(addr)}`),
 };

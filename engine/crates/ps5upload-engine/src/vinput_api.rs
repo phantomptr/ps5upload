@@ -603,13 +603,58 @@ pub(crate) fn local_allowed(peer: std::net::IpAddr) -> bool {
     peer.is_loopback()
 }
 
+/// The request addresses this computer by a loopback name (`localhost`, `127.0.0.1`, `[::1]`,
+/// any port), as the app and a local script do (the app fetches `http://127.0.0.1:<port>`).
+/// The peer being loopback is not enough on its own: a page whose own name was re-pointed at
+/// 127.0.0.1 (DNS rebinding) reaches the engine from this computer as its own origin, but its
+/// requests still carry its own name. Only for the routes that answer to this computer alone;
+/// the web UI elsewhere is reached by any name (a NAS hostname, a reverse proxy).
+pub(crate) fn host_is_local(headers: &axum::http::HeaderMap) -> bool {
+    let Some(host) = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    let host = host.trim();
+    let (name, port) = match host.strip_prefix('[') {
+        Some(rest) => match rest.split_once(']') {
+            Some((name, "")) => (name, None),
+            Some((name, port)) => match port.strip_prefix(':') {
+                Some(p) => (name, Some(p)),
+                None => return false,
+            },
+            None => return false,
+        },
+        None => match host.split_once(':') {
+            Some((name, p)) => (name, Some(p)),
+            None => (host, None),
+        },
+    };
+    let port_ok = port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    port_ok && (name.eq_ignore_ascii_case("localhost") || name == "127.0.0.1" || name == "::1")
+}
+
+/// The refusal of a request that does not address this computer by a loopback name.
+pub(crate) fn host_not_local() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        axum::Json(serde_json::json!({"error": "host_not_local"})),
+    )
+        .into_response()
+}
+
 /// `GET /api/ps5/vinput/ws?host=`: this computer as the console's keyboard and mouse with no
-/// stream. Loopback peers only.
+/// stream. Loopback peers only, addressing it as localhost.
 pub async fn ws(
     upgrade: WebSocketUpgrade,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<WsQuery>,
 ) -> Response {
+    if !host_is_local(&headers) {
+        return host_not_local();
+    }
     if !local_allowed(peer.ip()) {
         return (
             StatusCode::FORBIDDEN,
@@ -671,6 +716,50 @@ async fn local_session(mut socket: WebSocket, host: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_host(h: Option<&str>) -> axum::http::HeaderMap {
+        let mut m = axum::http::HeaderMap::new();
+        if let Some(h) = h {
+            m.insert(axum::http::header::HOST, h.parse().unwrap());
+        }
+        m
+    }
+
+    /// Loopback names at any port only: a rebound name (DNS rebinding), a LAN address or
+    /// none at all is refused.
+    #[test]
+    fn only_a_loopback_host_is_local() {
+        for h in [
+            "localhost",
+            "LOCALHOST:19113",
+            "127.0.0.1",
+            "127.0.0.1:19114",
+            "[::1]",
+            "[::1]:19113",
+        ] {
+            assert!(host_is_local(&with_host(Some(h))), "{h}");
+        }
+        for h in [
+            "evil.example:19113",
+            "evil.example",
+            "localhost.evil.example",
+            "127.0.0.1.nip.io:19113",
+            "192.168.1.10:19113",
+            "nas.local:19113",
+            "tauri.localhost",
+            "127.0.0.2:19113",
+            "[::2]:19113",
+            "[::1]x",
+            "::1",
+            "localhost:",
+            "localhost:80x",
+            "",
+        ] {
+            assert!(!host_is_local(&with_host(Some(h))), "{h}");
+        }
+        assert!(!host_is_local(&with_host(None)));
+        assert_eq!(host_not_local().status(), StatusCode::FORBIDDEN);
+    }
 
     #[derive(Default)]
     struct Fake {

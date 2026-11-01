@@ -32,8 +32,9 @@ the app over **AVA1**, one encrypted connection on port 9120.
 
 **Q: What does it actually do?**
 - **Upload** files, folders, disk images and `.zip` / `.7z` / `.rar` archives, verified end to
-  end. Uploads resume after a dropped connection or a helper restart. RAR handles multi-part and
-  password-protected archives (desktop only).
+  end. Uploads resume after a dropped connection or a helper restart, and can be paused, resumed
+  or overtaken with **Send now**. RAR handles multi-part and password-protected archives
+  (desktop only).
 - **Install packages**: PS4 `.pkg` and PS5 fake packages (base, update, DLC) through ps5upload's
   own on-console installer, from your computer (**Stream & install** or **Upload & install**),
   a NAS, a USB drive or a link.
@@ -46,7 +47,10 @@ the app over **AVA1**, one encrypted connection on port 9120.
   each game's page mounts images, adds games to the home screen, plays, closes and uninstalls
   them. Browse and manage files.
 - **Remote Play**: stream the PS5 into the app and play it with a controller, the keyboard or
-  touch.
+  touch, or give the PS5 your keyboard and mouse as its own. It asks for a user's PS5 passcode
+  when the console wants one. Local scripts can watch and play too ([AUTOMATION.md](https://github.com/phantomptr/ps5upload/blob/main/AUTOMATION.md)).
+- **Save Data**: automatic and on-demand backups, restore, copy a save to another user on the
+  same PS5, or as a file for a friend or another PS5; PS1, PS2 and Switch emulator saves too.
 - **Cheats, fan curve, hardware view, power and wake, payload sender and backport tools.**
 
 **Q: What does it NOT do?**
@@ -320,8 +324,12 @@ ten minutes the engine copies each console's saves that changed since their last
 written in the last few minutes waits for the next round). In the desktop app this runs while the
 app runs; in Docker it runs all the time, with no browser open. Use a folder the container keeps,
 such as `/data/save-backups`, or a NAS share you mount into the container. To restore, close the
-game, open its page in PS5Upload, go to Saves and press Restore on the version you want. The save
-on the PS5 is backed up first, so you can go back.
+game, then in Save Data press **Restore…** on the game's save (or open its page in PS5Upload and
+go to Saves) and press Restore on the version you want. The save on the PS5 is backed up first,
+so you can go back. A backup holds every part of the game's save, and a restore puts them all
+back. **Restore to another user…** puts a backup into another account's save of the game on the
+same PS5 instead (that account must have a save of the game; its current save is backed up
+first).
 
 The saves of ProsperoEden, the Switch emulator (PPSA99008), are backed up too, locally and to a
 server, and "after a game closes" means after ProsperoEden closes. Each game's save of each
@@ -344,6 +352,13 @@ backups, **Back up now** and **Restore**. A restore puts back all the emulator's
 saved states, and is refused while the emulator runs. A restore into `/data/PCSX2` itself is
 refused if the backup holds anything other than that save's own files, so it never overwrites the
 emulator's BIOS, games or settings.
+
+The PS1 emulator PSSwanStation (PPSA99248) is backed up the same way: its memory cards
+(`data/saves`, with the copies of each card it keeps in `data/saves/backups`) as user 0 and its
+saved states (`data/states`) as user 1, under its own title ID. They are in the folder its files
+are kept in: its own folder, wherever it is installed, or `/data/psswanstation` or
+`PSSwanStation` at the top of a USB drive when "Where my files are kept" says so. **Saves** lists
+them under **PS1 emulator (PSSwanStation)**, with the same **Back up now** and **Restore**.
 
 **Q: How do I make room for a big game?**
 Open Clean up and press Make room, or follow "Plan space" when an install says there isn't enough
@@ -1353,6 +1368,15 @@ from the top, in order, not only what you just added; off, they only add to the 
 runs until you press **Start queue**. Something added while the queue runs waits its turn at the
 end. **Add to queue** never starts anything.
 
+**Q: Can I pause an upload, or send something else first?**
+Yes, from 10.5.0. A running upload has **Pause** (on the Upload & Install queue and in Files): it
+stops, keeping what already reached the PS5, shows **Paused**, and the next item goes. **Resume**
+puts it back in line where it was and it carries on from where it stopped (nothing is sent twice);
+with nothing else running it starts at once. Paused stays paused when you leave the screen or
+restart the app. A waiting item has **Send now**: the upload running on that console pauses, this
+one goes, and the paused upload carries on by itself when it is done (or fails). An upload you
+paused yourself is never resumed for you. It is still one transfer at a time per console.
+
 **Q: How do I jump between volumes in the File System screen?**
 The **Volume** dropdown above the breadcrumb lists every writable volume with its free space.
 Pick one to jump to its root.
@@ -2008,30 +2032,73 @@ The PS4 is never written to, and no users, system files or trophies are changed.
 on a PS5 have mixed reports: try one game first. Moving trophies is not offered: it needs
 renaming system folders and rebuilding the database, which can leave a user unusable.
 
+**Q: Saves: what can I do in Save Data?**
+Save Data shows one row per game and user, with a line saying when it was last backed up. What
+people do there, most common first:
+
+- **Don't lose progress** (a crash that damages a save, a reinstall, a firmware update or a new
+  jailbreak): turn on **Automatic backups** (a folder on this computer) and the engine keeps
+  copies of every game's save. **Back up now** makes one at once (while the game runs it waits
+  for the save to sit still). **Restore…** lists the game's backups; Restore puts one back.
+- **Put a save on another account on this PS5**: **Copy to… › Another user on this PS5** (see
+  below).
+- **Take a save to another PS5, or give it to a friend**: **Copy to… › Save as a file for a
+  friend or another PS5**, then on the other PS5 **Copy to… › Load a save file**.
+- **Use a save you downloaded** (a 100% save, say): **Copy to… › Load a save file**, if it was
+  shared from PS5Upload. A save folder copied off another console as it is can't be used this way.
+- **Look inside or edit a save** (save editors): **Open** mounts it on the PS5 and shows it in
+  Files; **Close & write back** puts your changes into the save.
+
+A game's save is often several parts (files such as `sdimg_STARBOARD` and `sdimg_sce_sdmemory`
+in its folder, which the app names "STARBOARD" and "main save"). Back up, Restore, Copy, Save as
+a file and Load a save file always take every part together. The console also keeps its own
+backup copy of each part (`sdimg_sce_bu_…`); those are never offered as saves. Open works on one
+part at a time and asks which when there are several.
+
+After a save is loaded, copied or restored, the console's own backup copy (`sce_bu`) still holds the
+old save until the game saves again, so the PS5's own "restore from backup" (offered when it finds
+a save damaged) could bring the old one back. Start the game and save once to bring it up to date.
+
+**Q: Move a save to another account on the same PS5**
+From 10.6.0, PS5 saves only. On the save, **Copy to… › Another user on this PS5** lists the
+console's other users. Those with a save of the game can be picked; for the others it says what to
+do first: start the game once as that user and save, then come back (the PS5 has to make that
+account's own save; PS5Upload only puts files into one). Confirm, and every part of the save is
+put into theirs, which the PS5 then keeps as theirs. Their current save is backed up first (set a
+folder in Automatic backups) and put back if anything fails. Close the game first. If the other
+user's save lacks a part this one has (the game hasn't made it for them yet), nothing is changed
+and the message names the part: play on as that user until the game saves it, then try again.
+To take a save to another PS5 instead, use **Save as a file for a friend or another PS5**.
+
 **Q: Can a friend's save work on my PS5 under my account?**
-Experimental, from 10.0.1, PS5 saves only. A save is tied to the account that made it, so copying
-your friend's save files over, or switching to their account ID, doesn't work. Instead your
-friend opens the save in PS5Upload and presses **Share** (Saves, on the game): the app saves the
-save's contents, decrypted, as a `.zip` without the owner's account details. On your PS5, start the
-game once and save so you have a save of your own, close it, then press **Use a shared save** on
-that game and pick the `.zip`. The contents go into your own save, and the PS5 encrypts it again
-as yours: no account ID change needed. Your save is backed up first (set a folder in Saves ›
-Automatic backups) and put back if anything fails. Both consoles need PS5Upload, and the game
-must be the same title ID (same region). Some games check more inside the save itself; if one
-won't load it, restore your backup from the game's save backups.
+Experimental, from 10.0.1, PS5 saves only. A save is encrypted for the PS5 that made it and records
+the account it belongs to, so copying your friend's save files over, or switching to their account
+ID, doesn't work. Instead your
+friend picks **Copy to… › Save as a file for a friend or another PS5** on the save in Save Data:
+the app saves every part of the save, decrypted, as one `.zip` without the owner's account
+details. On your PS5, start the game once and save so you have a save of your own, close it, then
+pick **Copy to… › Load a save file** on that game and choose the `.zip`. Each part goes into your
+save's part of the same name, and the PS5 encrypts it again as yours: no account ID change needed.
+Your save is backed up first (set a folder in Saves › Automatic backups) and put back if anything
+fails. Both consoles need PS5Upload, and the game must be the same title ID (same region). Some
+games check more inside the save itself; if one won't load it, restore your backup with
+**Restore…**. A file saved by 10.6.0 or later needs 10.6.0 or later to load; files from earlier
+versions still load.
 
 **Q: Can I move a save between consoles, profiles or game regions?**
 
 Saves backup and restore copies the existing encrypted save files (to give a save to another
-account, see **Share** above). It does **not**
+account, see **Copy to…** above). It does **not**
 re-sign saves, change their owning account, or convert title IDs/regions. A backup
-must match the target title and account, and the target environment must accept
-its encryption. Renaming a GTA V (or other game's) title folder does not convert it.
-Cross-console compatibility is not guaranteed, even with matching title IDs.
+must match the target title and account. Renaming a GTA V (or other game's) title folder does not
+convert it. A PS5 save's encryption key is sealed for the console that made it, so an encrypted
+backup only opens on that PS5. From 10.6.0 a backup notes the PS5 it was made on (when Remote Play
+is on), and restoring one made on another PS5 is refused before anything changes; to take a save
+to another PS5, use **Copy to… › Save as a file for a friend or another PS5** on the PS5 that has it.
 
 Download a backup of the target save before trying a restore. The target must
-already list a save for that title: launch the game once to create it. Restore
-wipes the current save first, with no automatic rollback if an upload is interrupted.
+already list a save for that title: launch the game once to create it. From 10.6.0 a restore
+from the backup folder puts the save back as it was if the upload fails part way.
 
 PS4-format restore has unresolved reliability reports. Closing the game or
 restarting the console may help some cases, but is not a verified fix. If a restore
@@ -2235,6 +2302,9 @@ full screen or stop the stream. Back leaves full screen and keeps playing; **Sto
 menu. The screen stays awake while you play, and Settings has the controller's size and opacity.
 In the Android app, full screen hides the status and navigation bars (swipe from an edge to see them) and holds the phone in landscape.
 
+**Q: A game says Remote Play isn't available, or the picture goes black.**
+Some games and apps forbid Remote Play: the stream is refused when they start, a "can't be streamed" notice appears during the stream, or the picture turns black. That is the game's own setting, not a fault in the app. **Remote Play Unlock** (by earthonion) patches the PS5's Remote Play service so those games stream: open **Payloads**, find Remote Play Unlock and load it; the PS5 shows "Remote Play prohibition patch applied". It works on firmware 3.20, 10.01, 12.00, 12.70 and 13.60 and refuses others by itself. The patch lives in memory only, so load it again after every reboot (it is not needed per game); to have it loaded each boot, add it to your autoloader (in Payload Manager, **Load at boot**). It runs once and exits, so it never shows as running. A black picture with every game is something else: see Hush, which turns off the encoder Remote Play needs.
+
 **Q: Part of the Remote Play picture is cut off, or it looks stretched.**
 **Picture size** decides how the picture fits the screen: **Fit** shows the whole picture with black bars where the shapes differ (the default), **Fill** fills the screen and crops the edges, **Stretch** stretches the picture to the whole screen. It shows in full screen: on the page the picture's box is the picture's own shape, so all three look the same there. **Fit** never cuts anything off: like a video player, the whole picture always shows, with black bars at the sides or top and bottom when the shapes differ. On a 16:9 screen (the picture's own shape) all three look the same. Change it in full screen without leaving it: the **Picture size** menu on the bar (desktop), or the Fit / Fill / Stretch row in the **⋯** menu (phones). It's also in Play › Settings, and it applies at once. Before 9.2.0, the Windows app could show the picture enlarged with its right and bottom cut off (#538); update to fix it.
 
@@ -2267,6 +2337,15 @@ panel's **Play something else** starts another of the console's games (the runni
 first, after you say so). If the helper does not come back after a wake, send it from
 Connection and press Play again.
 
+**Q: Can a script or AI agent see and control Remote Play?**
+Yes, from 10.6.0, on the computer the engine runs on. While Remote Play plays in the app, a local
+script can ask for the picture the app shows (PNG or JPEG), hold controller buttons, sticks and
+triggers for a moment, and ask for a newer picture to see what happened. You keep watching and
+playing: nothing on screen changes and the script is one more controller next to yours. It never
+starts a stream, and nothing is reachable from other machines. The endpoints, with curl and
+Python examples, are in [Remote Play automation](https://github.com/phantomptr/ps5upload/blob/main/AUTOMATION.md).
+They are not a stable API yet and can change between versions.
+
 **Q: Can I install a package while I play?**
 Drop the .pkg or .fpkg on the Remote Play picture. By default it installs when you stop playing,
 because an install shares the network with the stream and can make it stutter; **Install now**
@@ -2296,6 +2375,18 @@ Yes, from 9.11.0, per game: open the **Game** panel on the stream bar › **Cont
 game runs. Turbo repeats chosen buttons while you hold them; Mouse aim moves the right stick with
 the mouse once you click the picture (Esc lets the pointer go); a macro plays a few presses from
 one key. Each game keeps its own, on this device. The PS5 sees an ordinary controller.
+
+**Q: Can the PS5 get my computer's keyboard and mouse as a real keyboard and mouse?**
+Yes, from 10.4.0, on every firmware since 10.4.1 (tested on 13.60). **Settings › Controls** has
+three modes, kept per game: **Controller** (keys and mouse act as a controller, the default),
+**Keyboard & mouse** (the PS5 gets a real keyboard and mouse, for games and apps that support
+them) and **Mixed** (a real mouse; the keys act as a controller). The button on the stream bar, or
+Ctrl+Option+M (Ctrl+Alt+M on Windows and Linux), switches it. Click the picture to give the PS5
+your keyboard and mouse; press and let go of Ctrl+Option (Ctrl+Alt) to get them back. Both
+shortcuts can be changed in Settings › Controls › Shortcuts. If your console can't do it, the app
+says it isn't available and keeps Controller; turn the mode on again to retry, and tell us your
+firmware. On a phone or tablet, the **Controller / Touchpad** switch over the picture makes it the
+PS5's touchpad, and ⌨ types on the PS5.
 
 **Q: Can I sharpen the Remote Play picture or crop an ultrawide game?**
 Play › Settings › **Picture**: Sharpen, Brightness, Contrast, Colour, Crop to 21:9 and
@@ -2376,7 +2467,10 @@ can (see "How do I set Play up?"):
    Stay Connected to the Internet and Enable Turning On PS5 from Network.
 6. **Pair the app**: the Pair button in Play › Set up (or Connection › Wake & sign in › Set up).
    One click; the keys stay on this computer. Do it again after resetting the console or
-   changing the user.
+   changing the user. If it fails, the message gives the console's reason, and **Pair with the
+   PIN shown on the PS5** pairs the way PS Remote Play does: on the PS5 open Settings › System ›
+   Remote Play › Link Device and type the 8-digit number it shows. That needs no helper, so it
+   works on any firmware.
 7. **Play**: Play › Start.
 
 If the picture stays black or stutters, use a wired connection or 5 GHz Wi-Fi, try 720p or 30 fps,
@@ -2399,8 +2493,8 @@ leaves full screen (so backing out of a game menu never drops you out of full sc
 and Firefox the browser itself leaves full screen on any Esc; use Backspace for Circle there.
 
 On a phone or tablet the Remote Play page is view only: the picture shows, but taps never reach
-the console. **Full screen** is where the on-screen controller is. A controller or keyboard
-connected to the phone or tablet plays on the page too.
+the console. **Full screen** is where the on-screen controller is (and the Controller / Touchpad
+switch). A controller or keyboard connected to the phone or tablet plays on the page too.
 
 **Picture in picture** puts the stream in a small window that stays on top while you use other
 apps. The desktop app opens its own small always-on-top window; Chrome and Edge use the
@@ -2825,13 +2919,23 @@ single vendor's flag is a false positive; please report it to that vendor (and t
 
 **Q: How do updates work?**
 The app checks GitHub once per launch and shows a dot on the Settings entry when a newer version
-exists. **Settings → Updates → Download** saves it to your Downloads folder. Where the app can
-replace itself (Windows, macOS when the app's folder is writable, a Linux AppImage) the button
-becomes **Install and restart**: the app quits, the new version takes its place and opens. On
-Windows the setup itself starts (9.1.0): it shows a progress bar, closes the app, installs over
-it and starts the new version, and if something goes wrong it says so. A `.deb` / `.rpm` shows
-the command to run instead. Then press **Send helper** in the banner if
-the app says the helper is older.
+exists. Where the app can replace itself (Windows, macOS when the app's folder is writable, a
+Linux AppImage) **Settings → Updates** offers **Install and restart**: the app downloads the
+update into its own folder (not Downloads), quits, the new version takes its place and opens, and
+the download is deleted once it starts. On Windows the installed app runs the setup itself (9.1.0):
+it shows a progress bar, closes the app, installs over it and starts the new version. The Windows
+`.zip` copy puts the new PS5Upload.exe in place itself before it closes (10.5.1). If anything
+goes wrong the app stays on the old version and says why; a failed update is said once at the
+next launch, with **Try again** and **Download page**, and is not retried in a loop. Elsewhere
+**Download** saves it to your Downloads folder, and a `.deb` / `.rpm` shows the command to run.
+Then press **Send helper** in the banner if the app says the helper is older.
+
+**Q: On Windows (the .zip copy), "Install and restart" closed the app and nothing was installed (#611).**
+Fixed in 10.5.1. The update ran in a hidden PowerShell script after the app had quit, which
+security software and policies can block, and every launch downloaded the same update again.
+Install 10.5.1 by hand once (unzip it over the old copy); from then on the app updates itself.
+Update downloads earlier versions left in Downloads are listed in Settings → Updates with
+**Remove**; nothing is deleted without asking.
 
 **Q: On Windows, "Install and restart" closed the app and nothing was installed.**
 Fixed in 9.1.0 (#533). From 8.6.1 to 9.0.1 the update ran the setup through a hidden PowerShell

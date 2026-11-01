@@ -60,12 +60,15 @@ import {
   appsInstalled,
   cheatsGet,
   cheatsToggle,
+  profileInfo,
   savesList,
   type InstalledTitle,
   type CheatMod,
+  type ProfileUser,
   type SaveEntry,
 } from "../../api/ps5";
-import { transferAddr, hostOf } from "../../lib/addr";
+import { transferAddr, hostOf, mgmtAddr } from "../../lib/addr";
+import { useTitleInfo } from "../../lib/useTitleInfo";
 import {
   driveOffers,
   gamePath,
@@ -910,6 +913,19 @@ function SavesTab({ titleId, host }: { titleId: string; host: string | null }) {
     () => (data?.saves ?? []).filter((s: SaveEntry) => s.title_id === titleId),
     [data, titleId],
   );
+  // The console's users, for Restore to another user (#612). Names are a nicety.
+  const [users, setUsers] = useState<ProfileUser[]>([]);
+  useEffect(() => {
+    if (!connected || !host) return;
+    let live = true;
+    profileInfo(mgmtAddr(host))
+      .then((p) => live && setUsers(p.users ?? []))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [connected, host]);
+  const gameName = useTitleInfo(titleId)?.title ?? null;
 
   return (
     <TabCard
@@ -952,7 +968,15 @@ function SavesTab({ titleId, host }: { titleId: string; host: string | null }) {
                       <span>· {formatDate(new Date(s.mtime * 1000))}</span>
                     )}
                   </div>
-                  {host && <SaveBackupsList host={host} save={s} />}
+                  {host && (
+                    <SaveBackupsList
+                      host={host}
+                      save={s}
+                      users={users}
+                      saves={data?.saves ?? []}
+                      game={gameName ?? undefined}
+                    />
+                  )}
                 </div>
               </li>
             ))}

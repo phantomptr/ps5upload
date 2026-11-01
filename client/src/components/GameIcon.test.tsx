@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../state/engine", () => ({ getEngineUrl: () => "http://engine.test:19113" }));
 
-import { GameIcon, gameIconCandidates } from "./GameIcon";
+import { GameIcon, gameIconCandidates, iconInitials } from "./GameIcon";
 
 describe("GameIcon", () => {
   it("shows a suffixed save folder's icon by its title id", () => {
@@ -54,5 +54,21 @@ describe("GameIcon", () => {
       <GameIcon host="10.0.0.2" titleId="PPSA00001" sourceSrc="data:image/png;base64,AA==" />,
     );
     expect(out).toContain('src="data:image/png;base64,AA=="');
+  });
+});
+
+describe("GameIcon without art yet", () => {
+  it("keeps the image hidden until it loads, so a failing cover never shows a broken image", () => {
+    const out = renderToStaticMarkup(<GameIcon host="10.0.0.2" titleId="PPSA00001" />);
+    expect(out).toMatch(/<img[^>]*opacity-0/);
+  });
+
+  it("shows the game's initials in place of the glyph when the name is known", () => {
+    const name = "Quiet Ocean";
+    const out = renderToStaticMarkup(<GameIcon host="" titleId="PPSA00001" label={name} />);
+    expect(out).toContain(">QO<");
+    expect(out).not.toContain("<img");
+    expect(iconInitials("  saros ")).toBe("S");
+    expect(iconInitials(null)).toBe("");
   });
 });

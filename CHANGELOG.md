@@ -4,6 +4,77 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.6.0
+
+- **Remote Play Unlock (earthonion) in the payload catalogue.** Lets Remote Play stream games
+  and apps that forbid it (refused at start, a "can't be streamed" notice, or a black picture) by
+  patching the PS5's Remote Play service in memory. Firmware 3.20, 10.01, 12.00, 12.70 and 13.60;
+  load it again after every reboot, or add it to your autoloader. Payloads whose only release is a
+  pre-release (like its rolling `latest`) now download too.
+- **Save Data is laid out around what you do with a save.** Each game shows one row per user
+  with when it was last backed up ("Backed up 2 hours ago", or "Not backed up yet" in amber) and
+  four actions: **Back up now**, **Restore…** (the game's backups, newest first), **Copy to…**
+  and **Open**. A short "How saves work here" card explains them once; dismiss it when you know.
+  Backing up to a `.zip` on this computer and the USB actions are under **More** (desktop app).
+- **Copy a save to another user on the same PS5 (For #612).** **Copy to… › Another user on this
+  PS5** lists the console's other users: those with a save of the game can be picked, the others
+  say what to do first (start the game once as them and save). The engine shares the save and
+  puts it into theirs in one go, so no file lands in your Downloads; their save is backed up
+  first and put back if anything fails, and it is refused while the game runs. A console with
+  two or more users shows a tip pointing to it.
+- **Restore a backup to another user (For #612).** **Restore… › Restore to another user…** puts a
+  backup of one account's save into another account's save of the game on the same PS5, with the
+  same rules.
+- **A game's save is one thing.** Many games keep several parts (`sdimg_STARBOARD`,
+  `sdimg_sce_sdmemory`, …). Share (now **Copy to… › Save as a file for a friend or another
+  PS5**) puts every part in one `.zip`, and **Load a save file** puts each part into the part of
+  the same name, all backed up first and all put back on failure. If the target lacks a part,
+  nothing changes and the message names it ("…'s STARBOARD isn't on Ben yet: start the game once
+  as Ben and save"). No more picking a raw image name. Files shared by earlier versions still
+  load; a file saved by 10.6.0 needs 10.6.0 or later.
+- **Fixed: picking a save in "Which save of PPSA…?" did nothing**, and it listed the console's own
+  backup copies (`sdimg_sce_bu_…`). The picker is gone from sharing and loading; Open, the only
+  place a single part is still chosen, names the parts ("STARBOARD", "main save") and never
+  offers the console's backup copies.
+- **A restore that fails part way puts the save back** as it was, from the backup taken just
+  before it.
+- **A failed save copy never leaves the old save under one still open.** Closing the save is
+  tried again a few times (a dropped connection included); if the PS5 still holds it open, the
+  save there before is not put back over it, and the message names the backup to restore with
+  **Restore…** once the PS5 can be reached.
+- **A save too big for the other user's save is refused before anything changes.** A PS5 save
+  has a fixed size; the message gives both sizes and what to do.
+- **Backups made on another PS5 are refused.** An encrypted save only opens on the PS5 that made
+  it, so new backups note their console and **Restore…** refuses one from another PS5 up front
+  (use **Save as a file** on that PS5). Older backups are not checked.
+- **Automatic backups wait for the game to close.** A running game's save is skipped and backed
+  up on the next pass after it closes, never copied while the game may be writing it.
+- **PS1 emulator saves.** PSSwanStation's (PPSA99248) memory cards and saved states are listed,
+  backed up and restored in Save Data like the PS2 emulators'. Thanks to EnriqueWood (#618).
+- **Save Data rows wrap instead of squeezing.** A save's buttons move to a new line when they
+  don't fit, instead of crushing its details to one letter per line. Thanks to EnriqueWood
+  (#619).
+- **Scripts and AI agents can see and play Remote Play without taking it over (#615).** On the
+  engine's computer, `GET /api/ps5/rp/frame` returns the picture the app shows now (PNG or JPEG,
+  with its size and age), `POST /api/ps5/rp/input` holds buttons, sticks and triggers for up to
+  5 seconds as one more controller next to yours, and `/api/ps5/rp/input/release` lets go.
+  `GET /api/ps5/rp/session` now gives the session's id, and a request naming an old session is
+  refused. Nothing on screen changes, no second stream starts, and none of it is reachable from
+  other machines. See [AUTOMATION.md](https://github.com/phantomptr/ps5upload/blob/main/AUTOMATION.md); not a
+  stable API yet (#430).
+- **Local-only endpoints refuse requests that don't address localhost.** The automation routes
+  and the keyboard & mouse socket answer only requests to `localhost`, `127.0.0.1` or `[::1]`, so
+  a web page can't reach them by pointing its own name at this computer.
+- **The Remote Play microphone no longer switches off when a button is pressed.** Any controller
+  change (yours, a phone's) turned the experimental mic off; now only leaving the stream does.
+- **Save Data shows the games' names and covers.** A game is named the way Games names it (the
+  console's own name, then the online one), in the list and in every dialog and message. A cover
+  that can't load shows the game's initials (or a controller) instead of a broken image, and the
+  name no longer shrinks to a few letters on a phone.
+- **No more "changed Dec 31, 1969".** A save the console gives no date for shows none, in Save
+  Data and in the PS1, PS2 and Switch emulator saves.
+- Contributors' tests now also run on Windows (#620). Thanks to EnriqueWood.
+
 ## 10.5.1
 
 - **Pressing Play no longer crashes the Linux app (#610).** On WebKitGTK 2.54 (Fedora 44 and other

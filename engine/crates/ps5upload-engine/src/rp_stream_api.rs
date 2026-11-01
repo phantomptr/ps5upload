@@ -55,7 +55,14 @@
 //! page it was showing on is told `{"stage": "moved"}`. Only `stop`, the wait
 //! running out, or the console ends it; the page then gets `{"stage":
 //! "ended"}` and a Close frame. `GET /api/ps5/rp/session` says what is
-//! running. `GET /rp-player` is a test page.
+//! running (with its `session` id). `GET /rp-player` is a test page.
+//!
+//! Automation (rp_automation.rs, #615): a local script or agent can ask for the picture the page
+//! shows (`GET /api/ps5/rp/frame`) and hold controller input as one more controller
+//! (`POST /api/ps5/rp/input`), without taking the stream over. The engine never decodes video:
+//! the attached page is sent `{"snapshot": {"id", "format", "max_width", "after_seq"?}}` and
+//! answers with binary `[9][u32 BE meta length][meta JSON][image]` (see
+//! `rp_automation::KIND_SNAPSHOT`). Watchers and phones are never asked.
 //!
 //! Latency: video goes through a queue a few frames deep (two for a page that
 //! asked for `low_latency`); a page that falls behind loses frames (and the
@@ -97,6 +104,13 @@ const KIND_VIDEO_TIMED: u8 = 7;
 /// Mic frames waiting for the stream thread (10 ms each): a stalled thread
 /// drops voice rather than playing it late.
 const MIC_QUEUE: usize = 50;
+
+#[path = "rp_automation.rs"]
+pub(crate) mod automation;
+
+/// Session ids: each session the engine starts gets the next one, so a client naming an old
+/// session is refused rather than steered into its replacement.
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, serde::Deserialize)]
 struct StartReq {
@@ -226,6 +240,8 @@ struct Viewer {
 /// The one running session.
 struct Live {
     host: String,
+    /// This session's id (NEXT_SESSION), shown by `GET /api/ps5/rp/session`.
+    session: u64,
     hevc: bool,
     keep_alive: Duration,
     /// Every pad state the page sent, in order: a quick tap is a press and a
@@ -260,6 +276,8 @@ struct Live {
     passcode_ask: Mutex<Option<bool>>,
     /// The page's answer, until the stream thread takes it.
     passcode_answer: Mutex<Option<Passcode>>,
+    /// A local automation client's frame requests and held input (rp_automation.rs).
+    auto: automation::AutoState,
 }
 
 /// A watcher's queue. `need_key`: it cannot use a frame until the next keyframe (it just
@@ -453,6 +471,7 @@ impl Live {
     fn new(host: String, hevc: bool, keep_alive: Duration) -> Self {
         Live {
             host,
+            session: NEXT_SESSION.fetch_add(1, Ordering::Relaxed),
             hevc,
             keep_alive,
             pad: Default::default(),
@@ -475,6 +494,7 @@ impl Live {
             keyboard: Default::default(),
             passcode_ask: Mutex::new(None),
             passcode_answer: Mutex::new(None),
+            auto: Default::default(),
         }
     }
 
@@ -631,6 +651,8 @@ impl Live {
             })
         });
         if let Some(old) = old {
+            // A picture asked of the page that just lost the stream will not come.
+            self.auto.viewer_gone(old.id);
             let _ = old
                 .ctl
                 .try_send(text(serde_json::json!({"stage": "moved"})));
@@ -650,10 +672,13 @@ impl Live {
         };
         if g.as_ref().is_some_and(|v| v.id == id) {
             *g = None;
+            drop(g);
             if let Ok(mut a) = self.alone_since.lock() {
                 *a = Some(Instant::now());
             }
+            self.auto.viewer_gone(id);
             self.push_pad(PAGE_SOURCE, None);
+            self.mic_switch(false);
         }
     }
 
@@ -664,8 +689,6 @@ impl Live {
             if g.len() < 256 {
                 g.push_back(merged);
             }
-            drop(g);
-            self.mic_switch(false);
         }
     }
 
@@ -680,6 +703,7 @@ impl Live {
             .unwrap_or(false);
         serde_json::json!({
             "host": self.host,
+            "session": self.session,
             "playing": self.playing.load(Ordering::Relaxed),
             "attached": attached,
             "passcode": passcode,
@@ -885,12 +909,25 @@ pub async fn ws(upgrade: WebSocketUpgrade) -> Response {
 }
 
 /// What is streaming now, for a page that wants to show or rejoin it.
-pub async fn current() -> Json<serde_json::Value> {
+pub async fn current(headers: axum::http::HeaderMap) -> Json<serde_json::Value> {
     let live = LIVE.lock().ok().and_then(|g| g.clone());
-    Json(match live {
-        Some(l) => l.snapshot(),
-        None => serde_json::json!({"host": null}),
-    })
+    Json(current_for(
+        live.map(|l| l.snapshot()),
+        crate::vinput_api::host_is_local(&headers),
+    ))
+}
+
+/// The session's state for `current`. Its id is only for a local script driving it (#615,
+/// AUTOMATION.md; the app's pages read only `host`): left out for a request that does not
+/// address this computer as localhost.
+fn current_for(snapshot: Option<serde_json::Value>, local: bool) -> serde_json::Value {
+    let mut v = snapshot.unwrap_or_else(|| serde_json::json!({"host": null, "session": null}));
+    if !local {
+        if let Some(o) = v.as_object_mut() {
+            o.remove("session");
+        }
+    }
+    v
 }
 
 /// `GET /api/ps5/rp/replay`: the instant replay's frames (rp_replay.rs), for the page to save as
@@ -1189,6 +1226,10 @@ async fn session(mut socket: WebSocket) {
                 Some(Ok(Message::Binary(b))) if b.first() == Some(&KIND_MIC) => {
                     live.mic_frame(id, &b[1..]);
                 }
+                // The picture a local automation client asked for (rp_automation.rs).
+                Some(Ok(Message::Binary(b))) if b.first() == Some(&automation::KIND_SNAPSHOT) => {
+                    live.auto.page_answered(id, b.slice(1..));
+                }
                 // A native keyboard & mouse report: only from the page the session is shown on.
                 Some(Ok(Message::Binary(b))) if b.first() == Some(&crate::vinput_api::KIND_KBM) => {
                     if live.is_viewer(id) {
@@ -1218,6 +1259,19 @@ pub async fn player() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The session id (for a local script) is left out for a request not addressed to
+    /// localhost; the rest, which the app reads, stays.
+    #[test]
+    fn the_session_id_goes_only_to_localhost() {
+        let snap = || Some(serde_json::json!({"host": "10.0.0.9", "session": 3, "playing": true}));
+        assert_eq!(current_for(snap(), true)["session"], 3);
+        let v = current_for(snap(), false);
+        assert!(v.get("session").is_none());
+        assert_eq!(v["host"], "10.0.0.9");
+        assert_eq!(v["playing"], true);
+        assert_eq!(current_for(None, false), serde_json::json!({"host": null}));
+    }
 
     #[test]
     fn the_console_asking_for_the_passcode_reaches_the_page_and_back() {
@@ -1588,6 +1642,36 @@ mod tests {
         // Leaving turns it off.
         live.detach(second);
         assert_eq!(sink.mic(), Some(MicInput::Off));
+    }
+
+    #[test]
+    fn a_pad_press_leaves_the_mic_on() {
+        // A merge once put the "mic off" of a page leaving into every pad change: talking and
+        // pressing a button (or a phone's, or an automation client's) cut the mic.
+        let live = Arc::new(Live::new("h".into(), false, DEFAULT_KEEP_ALIVE));
+        live.mic_enabled.store(true, Ordering::Relaxed);
+        let mut sink = Sink {
+            live: live.clone(),
+            t0: Instant::now(),
+        };
+        let (vt, _vr, ct, _cr) = page();
+        let id = live.attach(vt, ct, false);
+        live.set_mic(id, true);
+        assert_eq!(sink.mic(), Some(MicInput::On));
+        live.push_pad(PAGE_SOURCE, Some(ControllerState::default()));
+        live.push_pad(3, Some(ControllerState::default()));
+        assert_eq!(sink.mic(), None);
+        assert!(live.mic_on.load(Ordering::Relaxed));
+        live.detach(id);
+        assert_eq!(sink.mic(), Some(MicInput::Off));
+    }
+
+    #[test]
+    fn each_session_has_its_own_id_and_says_it() {
+        let a = Live::new("h".into(), false, DEFAULT_KEEP_ALIVE);
+        let b = Live::new("h".into(), false, DEFAULT_KEEP_ALIVE);
+        assert!(b.session > a.session);
+        assert_eq!(a.snapshot()["session"], a.session);
     }
 
     #[test]

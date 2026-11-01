@@ -2651,8 +2651,9 @@ export interface SaveEntry {
   mtime: number;
   /** "ps5" for native, "ps4" for legacy savedata, "switch" for a save of the Switch emulator
    *  ProsperoEden (never in the console's saves list; see `saveBackupApi.switchSaves`), "ps2" for
-   *  a PS2 emulator's cards or saved states (see `saveBackupApi.ps2Saves`). */
-  kind: "ps5" | "ps4" | "switch" | "ps2";
+   *  a PS2 emulator's cards or saved states, "ps1" for the PS1 emulator PSSwanStation's (see
+   *  `saveBackupApi.ps2Saves`). */
+  kind: "ps5" | "ps4" | "switch" | "ps2" | "ps1";
 }
 
 export interface SaveList {

@@ -10,8 +10,9 @@
 //! differences: its files go as they are (`backup_finalize` and `restore_prepare` shape PS5 save
 //! images), and the app that writes it is the emulator, not the game.
 //!
-//! The PlayStation 2 emulators' memory cards and saved states (`kind` "ps2") are emulators' saves
-//! too: see `ps2_saves`. What tells them all apart from a PS5 save is here.
+//! The PlayStation 2 emulators' memory cards and saved states (`kind` "ps2"), and the PlayStation
+//! emulator PSSwanStation's (`kind` "ps1"), are emulators' saves too: see `ps2_saves`. What tells
+//! them all apart from a PS5 save is here.
 
 use axum::extract::Query;
 use axum::http::StatusCode;
@@ -45,10 +46,10 @@ fn is_profile(name: &str) -> bool {
     hex_digits(name, 32)
 }
 
-/// The save is an emulator's: a Switch game's in ProsperoEden, or a PlayStation 2 emulator's cards
-/// or saved states.
+/// The save is an emulator's: a Switch game's in ProsperoEden, or a PlayStation or PlayStation 2
+/// emulator's cards or saved states.
 pub fn is_emulator_save(e: &SaveEntry) -> bool {
-    e.kind == KIND || e.kind == crate::ps2_saves::KIND
+    e.kind == KIND || crate::ps2_saves::is_kind(&e.kind)
 }
 
 /// `path` is a save folder of the emulator, `ROOT/<profile>/<game>`, and nothing past it.
@@ -63,15 +64,13 @@ pub fn is_save_path(path: &str) -> bool {
 pub fn kind_of_path(path: &str) -> Option<&'static str> {
     if is_save_path(path) {
         Some(KIND)
-    } else if crate::ps2_saves::place_of(path).is_some() {
-        Some(crate::ps2_saves::KIND)
     } else {
-        None
+        crate::ps2_saves::place_of(path).map(|p| p.emulator.kind)
     }
 }
 
 /// The app that writes the save: ProsperoEden for its saves, the game itself for a PS5 one. (A
-/// PlayStation 2 emulator's saves are under its own title already.)
+/// PlayStation or PlayStation 2 emulator's saves are under its own title already.)
 pub fn app_of(e: &SaveEntry) -> &str {
     if e.kind == KIND {
         APP
@@ -80,8 +79,8 @@ pub fn app_of(e: &SaveEntry) -> &str {
     }
 }
 
-/// A save the automatic backups take: a PS5 game's (a PlayStation 2 emulator's saves carry its
-/// title), or a game's in ProsperoEden.
+/// A save the automatic backups take: a PS5 game's (a PlayStation or PlayStation 2 emulator's
+/// saves carry its title), or a game's in ProsperoEden.
 pub fn backs_up(e: &SaveEntry) -> bool {
     crate::looks_like_title_id(&e.title_id) || (e.kind == KIND && is_game(&e.title_id))
 }
