@@ -82,6 +82,18 @@ pub fn cleanup_temp_dir(path: &str) -> std::result::Result<(), String> {
 // ── zip a downloaded save folder ────────────────────────────────────────
 
 pub fn zip_folder(src_dir: &Path, inner_root: &str, dest_zip: &Path) -> Result<()> {
+    zip_folder_noted(src_dir, inner_root, dest_zip, "")
+}
+
+/// [`zip_folder`] with `comment` as the archive's comment (empty: none). Notes about the zip
+/// that must not be a file in it (a file beside the folder is refused by `unzip_strict`, and
+/// one inside it would be put on the console); readers that don't know them ignore them.
+pub fn zip_folder_noted(
+    src_dir: &Path,
+    inner_root: &str,
+    dest_zip: &Path,
+    comment: &str,
+) -> Result<()> {
     let src_root = src_dir.join(inner_root);
     if !src_root.is_dir() {
         return Err(anyhow!(
@@ -110,8 +122,18 @@ pub fn zip_folder(src_dir: &Path, inner_root: &str, dest_zip: &Path) -> Result<(
     add_dir_recursive(
         &mut zip, &src_root, inner_root, &file_opts, &dir_opts, &mut buf,
     )?;
+    if !comment.is_empty() {
+        zip.set_comment(comment).context("zip comment")?;
+    }
     zip.finish().context("finish zip")?;
     Ok(())
+}
+
+/// The archive comment of the zip at `zip_path` ("" when it has none).
+pub fn zip_comment(zip_path: &Path) -> Result<String> {
+    let f = File::open(zip_path).with_context(|| format!("open {}", zip_path.display()))?;
+    let archive = ZipArchive::new(BufReader::new(f)).context("read zip header")?;
+    Ok(String::from_utf8_lossy(archive.comment()).into_owned())
 }
 
 fn add_dir_recursive<W: Write + std::io::Seek>(
@@ -1113,6 +1135,22 @@ mod tests {
     /// Restore prep is the inverse of finalize for PS4-style: a bare
     /// image filename gets `sdimg_` re-added, sealed key + PS5-native
     /// `sdimg_*` + `sce_sys/*` pass through unchanged.
+    /// A zip's comment survives the round trip and leaves the files as they are.
+    #[test]
+    fn a_zip_keeps_its_comment() {
+        let scratch = fresh_tmp("zip-note");
+        touch(&scratch.join("PPSA01234").join("sdimg_x"), b"img");
+        let zip = scratch.join("a.zip");
+        zip_folder_noted(&scratch, "PPSA01234", &zip, r#"{"console":"AA"}"#).unwrap();
+        assert_eq!(zip_comment(&zip).unwrap(), r#"{"console":"AA"}"#);
+        let out = scratch.join("out");
+        unzip_strict(&zip, &out, "PPSA01234").unwrap();
+        assert!(out.join("PPSA01234").join("sdimg_x").is_file());
+        let plain = scratch.join("b.zip");
+        zip_folder(&scratch, "PPSA01234", &plain).unwrap();
+        assert_eq!(zip_comment(&plain).unwrap(), "");
+    }
+
     #[test]
     fn restore_prepare_re_adds_sdimg_prefix_to_bare_images() {
         let scratch = fresh_tmp("rp-ps4");

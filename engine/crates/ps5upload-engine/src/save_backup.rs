@@ -25,7 +25,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::save_archive::{
     auto_backup_slot, backup_finalize, cleanup_temp_dir, make_temp_dir, restore_prepare,
-    unzip_strict, zip_folder,
+    unzip_strict, zip_comment, zip_folder_noted,
 };
 use ps5upload_core::saves::SaveEntry;
 use serde::{Deserialize, Serialize};
@@ -348,7 +348,8 @@ pub(crate) fn back_up_one(
             None => stamp(now_ms()),
         };
         let dest = auto_backup_slot(dir, &entry.title_id, user, &st, keep, false)?;
-        if let Err(e) = zip_folder(&tmp, &entry.title_id, &dest) {
+        let note = backup_note(console_identity(host).as_deref());
+        if let Err(e) = zip_folder_noted(&tmp, &entry.title_id, &dest, &note) {
             let _ = std::fs::remove_file(&dest);
             return Err(format!("zip: {e:#}"));
         }
@@ -358,6 +359,68 @@ pub(crate) fn back_up_one(
     })();
     let _ = cleanup_temp_dir(&tmp_s);
     result
+}
+
+// ── which PS5 a backup was made on ──────────────────────────────────────
+//
+// A PS5 save image is encrypted with a key sealed for the console that made it (the console
+// unseals it, no account involved); the account it belongs to is data inside it (param.sfo, the
+// console's save database), which is why a save moves between users of one console. So an
+// encrypted backup made on another PS5 does not open here. From 10.6.0 a backup notes the PS5 it
+// was made on (its Remote Play host-id, the console's MAC) in the zip's comment, and a restore of
+// one made on another is refused before anything changes. Older backups, and consoles that don't
+// say (Remote Play off), are unknown and never refused.
+
+/// The message for a backup made on another PS5.
+pub(crate) const OTHER_CONSOLE_ERROR: &str = "This backup was made on another PS5; encrypted backups only open on the PS5 that made them. Use Save as a file on that PS5 instead.";
+
+/// The PS5 at `host` (its host-id): None when it does not say. Kept for a while per address.
+pub(crate) fn console_identity(host: &str) -> Option<String> {
+    static SEEN: OnceLock<Mutex<BTreeMap<String, (String, std::time::Instant)>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(Mutex::default);
+    if let Some((id, at)) = seen.lock().ok()?.get(host) {
+        if at.elapsed() < Duration::from_secs(600) {
+            return Some(id.clone());
+        }
+    }
+    let id = ps5upload_core::ddp::probe(host, Duration::from_millis(1500))
+        .ok()
+        .map(|st| st.host_id.trim().to_ascii_uppercase())
+        .filter(|id| !id.is_empty())?;
+    if let Ok(mut g) = seen.lock() {
+        g.insert(host.to_string(), (id.clone(), std::time::Instant::now()));
+    }
+    Some(id)
+}
+
+/// A backup zip's comment naming the PS5 it was made on ("" when that is not known).
+pub(crate) fn backup_note(console: Option<&str>) -> String {
+    match console {
+        Some(c) => json!({ "ps5upload": "save-backup", "console": c }).to_string(),
+        None => String::new(),
+    }
+}
+
+/// The PS5 the backup `zip` was made on, from its comment; None for an older backup.
+pub(crate) fn backup_console(zip: &Path) -> Option<String> {
+    let note: Value = serde_json::from_str(&zip_comment(zip).ok()?).ok()?;
+    if note.get("ps5upload").and_then(Value::as_str) != Some("save-backup") {
+        return None;
+    }
+    note.get("console")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|c| !c.is_empty())
+}
+
+/// Err when the backup `zip` was made on a PS5 other than `here`; unknown either side is fine.
+pub(crate) fn same_console(zip: &Path, here: Option<&str>) -> Result<(), String> {
+    match (backup_console(zip), here) {
+        (Some(made), Some(here)) if !made.eq_ignore_ascii_case(here) => {
+            Err(OTHER_CONSOLE_ERROR.into())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Copies the save folder `entry` off `host` into `tmp/<title_id>` and tidies it for a backup
@@ -881,6 +944,13 @@ pub(crate) fn restore_zip(
     save_path: &str,
     user_id: u32,
 ) -> Result<(), String> {
+    // An encrypted save made on another PS5 does not open here (an emulator's is plain files).
+    if save_writer(save_path, title_id, user_id)?
+        .emulator
+        .is_none()
+    {
+        same_console(zip, console_identity(host).as_deref())?;
+    }
     restore_zip_with(host, title_id, zip, save_path, user_id, true)
 }
 
@@ -1218,8 +1288,9 @@ pub async fn post_import_ps4(Json(b): Json<ImportPs4Body>) -> Response {
 
 // ── Sharing a save with another account ─────────────────────────────────
 //
-// A PS5 save is encrypted for the account and console that made it, so a friend's save copied
-// over as it is (even with the account ID changed to theirs) does not load. What does carry over
+// A PS5 save is encrypted for the console that made it and records the account it belongs to
+// (see "which PS5 a backup was made on"), so a friend's save copied over as it is (even with the
+// account ID changed to theirs) does not load. What does carry over
 // is what is inside it: the game's own files. So a save is shared as those files (opened
 // decrypted on the friend's console, its sce_sys left out: that is the owner's account
 // information), and used by opening your own save of the same game, putting those files in it
@@ -1466,6 +1537,31 @@ pub async fn post_restore(Json(b): Json<RestoreBody>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A backup notes the PS5 it was made on; one from another is refused, unknown never.
+    #[test]
+    fn a_backup_names_the_ps5_it_was_made_on() {
+        let tmp = make_temp_dir("notetest").unwrap();
+        std::fs::create_dir_all(tmp.join("PPSA01234")).unwrap();
+        std::fs::write(tmp.join("PPSA01234").join("sdimg_x"), b"x").unwrap();
+        let made = |name: &str, console: Option<&str>| {
+            let z = tmp.join(name);
+            zip_folder_noted(&tmp, "PPSA01234", &z, &backup_note(console)).unwrap();
+            z
+        };
+        let here = made("a.zip", Some("D4F7D5D36123"));
+        assert_eq!(backup_console(&here).as_deref(), Some("D4F7D5D36123"));
+        assert!(same_console(&here, Some("d4f7d5d36123")).is_ok());
+        assert!(same_console(&here, None).is_ok());
+        assert_eq!(
+            same_console(&here, Some("5C843CA8AE72")).unwrap_err(),
+            OTHER_CONSOLE_ERROR
+        );
+        let old = made("b.zip", None);
+        assert_eq!(backup_console(&old), None);
+        assert!(same_console(&old, Some("5C843CA8AE72")).is_ok());
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
 
     /// Save Data's "Backed up …" line: the newest of each game and user, tags left off.
     #[test]

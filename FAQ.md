@@ -2067,8 +2067,9 @@ and the message names the part: play on as that user until the game saves it, th
 To take a save to another PS5 instead, use **Save as a file for a friend or another PS5**.
 
 **Q: Can a friend's save work on my PS5 under my account?**
-Experimental, from 10.0.1, PS5 saves only. A save is tied to the account that made it, so copying
-your friend's save files over, or switching to their account ID, doesn't work. Instead your
+Experimental, from 10.0.1, PS5 saves only. A save is encrypted for the PS5 that made it and records
+the account it belongs to, so copying your friend's save files over, or switching to their account
+ID, doesn't work. Instead your
 friend picks **Copy to… › Save as a file for a friend or another PS5** on the save in Save Data:
 the app saves every part of the save, decrypted, as one `.zip` without the owner's account
 details. On your PS5, start the game once and save so you have a save of your own, close it, then
@@ -2085,9 +2086,11 @@ versions still load.
 Saves backup and restore copies the existing encrypted save files (to give a save to another
 account, see **Copy to…** above). It does **not**
 re-sign saves, change their owning account, or convert title IDs/regions. A backup
-must match the target title and account, and the target environment must accept
-its encryption. Renaming a GTA V (or other game's) title folder does not convert it.
-Cross-console compatibility is not guaranteed, even with matching title IDs.
+must match the target title and account. Renaming a GTA V (or other game's) title folder does not
+convert it. A PS5 save's encryption key is sealed for the console that made it, so an encrypted
+backup only opens on that PS5. From 10.6.0 a backup notes the PS5 it was made on (when Remote Play
+is on), and restoring one made on another PS5 is refused before anything changes; to take a save
+to another PS5, use **Copy to… › Save as a file for a friend or another PS5** on the PS5 that has it.
 
 Download a backup of the target save before trying a restore. The target must
 already list a save for that title: launch the game once to create it. From 10.6.0 a restore

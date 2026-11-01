@@ -1,9 +1,12 @@
 //! Sharing a PS5 save with another account, and moving one to another account on the same
 //! console (#612).
 //!
-//! A PS5 save is encrypted for the account and console that made it, so a save copied over as it
-//! is (even with the account ID changed) does not load. What does carry over is what is inside
-//! it: the game's own files. So a save is shared as those files, opened decrypted on the console
+//! A PS5 save image is encrypted with a key sealed for the console that made it: the console
+//! unseals it itself, no account involved. The account it belongs to is data: its param.sfo
+//! (ACCOUNT_ID), the image's own parameters (user id, HMAC) and the console's save database. So a
+//! save copied into another user's folder as it is (even with the account ID changed) does not
+//! load as theirs, and an encrypted backup from another PS5 does not open at all. What does carry
+//! over is what is inside it: the game's own files. So a save is shared as those files, opened decrypted on the console
 //! with its sce_sys left out (that is the owner's account information), and used by opening the
 //! other account's own save of the same game, putting those files in it and closing it, which the
 //! console encrypts again as theirs.
@@ -100,6 +103,8 @@ pub trait Console {
     fn save_open(&self) -> bool;
     /// The save image names in a PS5 save folder, without the console's backup copies.
     fn images(&self, folder: &str) -> Result<Vec<String>, String>;
+    /// The PS5's own identity (see `save_backup::console_identity`); None when it does not say.
+    fn identity(&self) -> Option<String>;
     /// Err when the save there now can't be kept before it is replaced.
     fn can_back_up(&self) -> Result<(), String>;
     /// Backs up the save folder `entry`, every image of it (tagged `tag`); the backup zip.
@@ -634,6 +639,8 @@ pub fn restore_to_user(
     if from_user == to_user {
         return Err("This backup is already this user's: use Restore.".into());
     }
+    // Encrypted for the PS5 that made it: one from another can't be opened here.
+    local::same_console(zip, c.identity().as_deref())?;
     c.can_back_up()?;
     let saves = c.saves()?;
     let to = target_save(&saves, &title_id, to_user)?.clone();
@@ -716,6 +723,9 @@ impl Console for Live<'_> {
     }
     fn images(&self, folder: &str) -> Result<Vec<String>, String> {
         Ok(image_names(&local::folder_entries(self.host, folder)?))
+    }
+    fn identity(&self) -> Option<String> {
+        local::console_identity(self.host)
     }
     fn can_back_up(&self) -> Result<(), String> {
         if local::settings().dir.trim().is_empty() {
@@ -1065,6 +1075,11 @@ mod tests {
 
     /// A backup zip of `T`: encrypted images, keys and the console's backup copies.
     fn backup_zip(dir: &Path, images: &[&str]) -> PathBuf {
+        backup_zip_from(dir, images, None)
+    }
+
+    /// `backup_zip`, noting the PS5 it was made on.
+    fn backup_zip_from(dir: &Path, images: &[&str], console: Option<&str>) -> PathBuf {
         let src = dir.join("b");
         std::fs::create_dir_all(src.join(T)).unwrap();
         for i in images {
@@ -1072,7 +1087,8 @@ mod tests {
         }
         std::fs::write(src.join(T).join("sdimg_sce_bu_STARBOARD"), b"sealed").unwrap();
         let zip = dir.join(format!("{T}_user{A:08x}_2026-11-01_101500.zip"));
-        zip_folder(&src, T, &zip).unwrap();
+        ps5upload_core::save_archive::zip_folder_noted(&src, T, &zip, &local::backup_note(console))
+            .unwrap();
         zip
     }
 
@@ -1098,6 +1114,8 @@ mod tests {
         probe_fails: bool,
         /// Tries at closing.
         closes: Cell<usize>,
+        /// The PS5's identity.
+        identity: Option<String>,
         calls: RefCell<Vec<String>>,
         /// Image → the game file put in it.
         replaced: RefCell<BTreeMap<String, Vec<u8>>>,
@@ -1119,6 +1137,7 @@ mod tests {
                 close_stuck: false,
                 probe_fails: false,
                 closes: Cell::default(),
+                identity: None,
                 calls: RefCell::default(),
                 replaced: RefCell::default(),
             }
@@ -1152,6 +1171,9 @@ mod tests {
         }
         fn images(&self, folder: &str) -> Result<Vec<String>, String> {
             Ok(self.images.get(folder).cloned().unwrap_or_default())
+        }
+        fn identity(&self) -> Option<String> {
+            self.identity.clone()
         }
         fn can_back_up(&self) -> Result<(), String> {
             if self.no_backup_dir {
@@ -1708,6 +1730,36 @@ mod tests {
         };
         assert!(restore_to_user(&c, T, &file, &zip, B).is_err());
         assert!(c.calls().last().unwrap().starts_with("put_back"));
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// A backup made on another PS5 is refused before anything changes; one made here, or one
+    /// that does not say (older, or a console with Remote Play off), goes ahead.
+    #[test]
+    fn a_backup_from_another_ps5_is_refused() {
+        let tmp = make_temp_dir("restoretest").unwrap();
+        let zip = backup_zip_from(&tmp, &[MAIN, STAR], Some("D4F7D5D36123"));
+        let file = zip.file_name().unwrap().to_string_lossy().into_owned();
+        let c = Fake {
+            identity: Some("5C843CA8AE72".into()),
+            ..Fake::both(&[MAIN, STAR])
+        };
+        let e = restore_to_user(&c, T, &file, &zip, B).unwrap_err().msg;
+        assert_eq!(e, local::OTHER_CONSOLE_ERROR);
+        assert!(c.calls().is_empty());
+        for here in [Some("d4f7d5d36123"), None] {
+            let c = Fake {
+                identity: here.map(String::from),
+                ..Fake::both(&[MAIN, STAR])
+            };
+            assert!(restore_to_user(&c, T, &file, &zip, B).is_ok());
+        }
+        let old = backup_zip(&tmp.join("old"), &[MAIN, STAR]);
+        let c = Fake {
+            identity: Some("5C843CA8AE72".into()),
+            ..Fake::both(&[MAIN, STAR])
+        };
+        assert!(restore_to_user(&c, T, &file, &old, B).is_ok());
         let _ = cleanup_temp_dir(&tmp.to_string_lossy());
     }
 

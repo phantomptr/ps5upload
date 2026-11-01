@@ -29,7 +29,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::save_archive::{
     auto_backup_stem, backup_tag, cleanup_temp_dir, make_temp_dir, tagged_backups_to_prune,
-    zip_folder,
+    zip_folder_noted,
 };
 use ps5upload_core::saves::SaveEntry;
 use serde::{Deserialize, Serialize};
@@ -576,7 +576,8 @@ fn back_up_one(
     let result = (|| {
         local::download_save(host, entry, &tmp, &|| Ok(()))?;
         let zip = tmp.join("backup.zip");
-        zip_folder(&tmp, &entry.title_id, &zip).map_err(|e| format!("zip: {e:#}"))?;
+        let note = local::backup_note(local::console_identity(host).as_deref());
+        zip_folder_noted(&tmp, &entry.title_id, &zip, &note).map_err(|e| format!("zip: {e:#}"))?;
         let user = entry.user_id as u32;
         let st = match tag {
             Some(t) => format!("{}_{t}", stamp(now_ms())),
@@ -1055,6 +1056,7 @@ pub async fn post_restore(Json(b): Json<local::RestoreBody>) -> Response {
 mod tests {
     use super::*;
     use crate::remote::MemFs;
+    use ps5upload_core::save_archive::zip_folder;
 
     fn save(path: &str, title: &str, user: u32, mtime: i64) -> SaveEntry {
         SaveEntry {
