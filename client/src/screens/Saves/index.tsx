@@ -243,7 +243,7 @@ export default function SavesScreen() {
       pushNotification("info", tr("saves_share_working", { game }, "Saving {game}'s save as a file…"));
       const { blob, name } = await shareSave(consoleAddr(host.trim()), entry.path);
       const where = await saveFile(blob, name);
-      pushNotification("success", tr("saves_shared", undefined, "Save shared"), {
+      pushNotification("success", tr("saves_shared_v2", undefined, "Save file ready"), {
         body: tr(
           "saves_shared_body_v2",
           { where: where ?? name, game },
@@ -251,7 +251,7 @@ export default function SavesScreen() {
         ),
       });
     } catch (e) {
-      pushNotification("error", tr("saves_share_failed", { error: errorText(e) }, "Could not share the save: {error}"));
+      pushNotification("error", tr("saves_share_failed_v2", { error: errorText(e) }, "Could not save it as a file: {error}"));
     } finally {
       setOpenBusy(false);
       markBusy(entry.path, false);
@@ -314,7 +314,7 @@ export default function SavesScreen() {
       });
       void refresh();
     } catch (e) {
-      pushNotification("error", tr("saves_use_shared_failed", { error: missingText(e, game, user) }, "Could not use the shared save: {error}"));
+      pushNotification("error", tr("saves_use_shared_failed_v2", { error: missingText(e, game, user) }, "Could not load the save file: {error}"));
     } finally {
       setOpenBusy(false);
       markBusy(target.path, false);

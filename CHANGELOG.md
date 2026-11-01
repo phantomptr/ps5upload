@@ -48,6 +48,13 @@ What's new in ps5upload, written for humans.
   stable API yet (#430).
 - **The Remote Play microphone no longer switches off when a button is pressed.** Any controller
   change (yours, a phone's) turned the experimental mic off; now only leaving the stream does.
+- **Save Data shows the games' names and covers.** A game is named the way Games names it (the
+  console's own name, then the online one), in the list and in every dialog and message. A cover
+  that can't load shows the game's initials (or a controller) instead of a broken image, and the
+  name no longer shrinks to a few letters on a phone.
+- **No more "changed Dec 31, 1969".** A save the console gives no date for shows none, in Save
+  Data and in the PS1, PS2 and Switch emulator saves.
+- Contributors' tests now also run on Windows (#620). Thanks to EnriqueWood.
 
 ## 10.5.1
 

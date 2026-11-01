@@ -32,8 +32,9 @@ the app over **AVA1**, one encrypted connection on port 9120.
 
 **Q: What does it actually do?**
 - **Upload** files, folders, disk images and `.zip` / `.7z` / `.rar` archives, verified end to
-  end. Uploads resume after a dropped connection or a helper restart. RAR handles multi-part and
-  password-protected archives (desktop only).
+  end. Uploads resume after a dropped connection or a helper restart, and can be paused, resumed
+  or overtaken with **Send now**. RAR handles multi-part and password-protected archives
+  (desktop only).
 - **Install packages**: PS4 `.pkg` and PS5 fake packages (base, update, DLC) through ps5upload's
   own on-console installer, from your computer (**Stream & install** or **Upload & install**),
   a NAS, a USB drive or a link.
@@ -46,7 +47,10 @@ the app over **AVA1**, one encrypted connection on port 9120.
   each game's page mounts images, adds games to the home screen, plays, closes and uninstalls
   them. Browse and manage files.
 - **Remote Play**: stream the PS5 into the app and play it with a controller, the keyboard or
-  touch.
+  touch, or give the PS5 your keyboard and mouse as its own. It asks for a user's PS5 passcode
+  when the console wants one. Local scripts can watch and play too ([AUTOMATION.md](https://github.com/phantomptr/ps5upload/blob/main/AUTOMATION.md)).
+- **Save Data**: automatic and on-demand backups, restore, copy a save to another user on the
+  same PS5, or as a file for a friend or another PS5; PS1, PS2 and Switch emulator saves too.
 - **Cheats, fan curve, hardware view, power and wake, payload sender and backport tools.**
 
 **Q: What does it NOT do?**
@@ -1364,6 +1368,15 @@ from the top, in order, not only what you just added; off, they only add to the 
 runs until you press **Start queue**. Something added while the queue runs waits its turn at the
 end. **Add to queue** never starts anything.
 
+**Q: Can I pause an upload, or send something else first?**
+Yes, from 10.5.0. A running upload has **Pause** (on the Upload & Install queue and in Files): it
+stops, keeping what already reached the PS5, shows **Paused**, and the next item goes. **Resume**
+puts it back in line where it was and it carries on from where it stopped (nothing is sent twice);
+with nothing else running it starts at once. Paused stays paused when you leave the screen or
+restart the app. A waiting item has **Send now**: the upload running on that console pauses, this
+one goes, and the paused upload carries on by itself when it is done (or fails). An upload you
+paused yourself is never resumed for you. It is still one transfer at a time per console.
+
 **Q: How do I jump between volumes in the File System screen?**
 The **Volume** dropdown above the breadcrumb lists every writable volume with its free space.
 Pick one to jump to its root.
@@ -2353,6 +2366,18 @@ game runs. Turbo repeats chosen buttons while you hold them; Mouse aim moves the
 the mouse once you click the picture (Esc lets the pointer go); a macro plays a few presses from
 one key. Each game keeps its own, on this device. The PS5 sees an ordinary controller.
 
+**Q: Can the PS5 get my computer's keyboard and mouse as a real keyboard and mouse?**
+Yes, from 10.4.0, on every firmware since 10.4.1 (tested on 13.60). **Settings › Controls** has
+three modes, kept per game: **Controller** (keys and mouse act as a controller, the default),
+**Keyboard & mouse** (the PS5 gets a real keyboard and mouse, for games and apps that support
+them) and **Mixed** (a real mouse; the keys act as a controller). The button on the stream bar, or
+Ctrl+Option+M (Ctrl+Alt+M on Windows and Linux), switches it. Click the picture to give the PS5
+your keyboard and mouse; press and let go of Ctrl+Option (Ctrl+Alt) to get them back. Both
+shortcuts can be changed in Settings › Controls › Shortcuts. If your console can't do it, the app
+says it isn't available and keeps Controller; turn the mode on again to retry, and tell us your
+firmware. On a phone or tablet, the **Controller / Touchpad** switch over the picture makes it the
+PS5's touchpad, and ⌨ types on the PS5.
+
 **Q: Can I sharpen the Remote Play picture or crop an ultrawide game?**
 Play › Settings › **Picture**: Sharpen, Brightness, Contrast, Colour, Crop to 21:9 and
 Sharp pixels, applied at once. If the device cannot keep up (or has no WebGL 2) they turn off by
@@ -2432,7 +2457,10 @@ can (see "How do I set Play up?"):
    Stay Connected to the Internet and Enable Turning On PS5 from Network.
 6. **Pair the app**: the Pair button in Play › Set up (or Connection › Wake & sign in › Set up).
    One click; the keys stay on this computer. Do it again after resetting the console or
-   changing the user.
+   changing the user. If it fails, the message gives the console's reason, and **Pair with the
+   PIN shown on the PS5** pairs the way PS Remote Play does: on the PS5 open Settings › System ›
+   Remote Play › Link Device and type the 8-digit number it shows. That needs no helper, so it
+   works on any firmware.
 7. **Play**: Play › Start.
 
 If the picture stays black or stutters, use a wired connection or 5 GHz Wi-Fi, try 720p or 30 fps,
@@ -2455,8 +2483,8 @@ leaves full screen (so backing out of a game menu never drops you out of full sc
 and Firefox the browser itself leaves full screen on any Esc; use Backspace for Circle there.
 
 On a phone or tablet the Remote Play page is view only: the picture shows, but taps never reach
-the console. **Full screen** is where the on-screen controller is. A controller or keyboard
-connected to the phone or tablet plays on the page too.
+the console. **Full screen** is where the on-screen controller is (and the Controller / Touchpad
+switch). A controller or keyboard connected to the phone or tablet plays on the page too.
 
 **Picture in picture** puts the stream in a small window that stays on top while you use other
 apps. The desktop app opens its own small always-on-top window; Chrome and Edge use the
@@ -2881,13 +2909,23 @@ single vendor's flag is a false positive; please report it to that vendor (and t
 
 **Q: How do updates work?**
 The app checks GitHub once per launch and shows a dot on the Settings entry when a newer version
-exists. **Settings → Updates → Download** saves it to your Downloads folder. Where the app can
-replace itself (Windows, macOS when the app's folder is writable, a Linux AppImage) the button
-becomes **Install and restart**: the app quits, the new version takes its place and opens. On
-Windows the setup itself starts (9.1.0): it shows a progress bar, closes the app, installs over
-it and starts the new version, and if something goes wrong it says so. A `.deb` / `.rpm` shows
-the command to run instead. Then press **Send helper** in the banner if
-the app says the helper is older.
+exists. Where the app can replace itself (Windows, macOS when the app's folder is writable, a
+Linux AppImage) **Settings → Updates** offers **Install and restart**: the app downloads the
+update into its own folder (not Downloads), quits, the new version takes its place and opens, and
+the download is deleted once it starts. On Windows the installed app runs the setup itself (9.1.0):
+it shows a progress bar, closes the app, installs over it and starts the new version. The Windows
+`.zip` copy puts the new PS5Upload.exe in place itself before it closes (10.5.1). If anything
+goes wrong the app stays on the old version and says why; a failed update is said once at the
+next launch, with **Try again** and **Download page**, and is not retried in a loop. Elsewhere
+**Download** saves it to your Downloads folder, and a `.deb` / `.rpm` shows the command to run.
+Then press **Send helper** in the banner if the app says the helper is older.
+
+**Q: On Windows (the .zip copy), "Install and restart" closed the app and nothing was installed (#611).**
+Fixed in 10.5.1. The update ran in a hidden PowerShell script after the app had quit, which
+security software and policies can block, and every launch downloaded the same update again.
+Install 10.5.1 by hand once (unzip it over the old copy); from then on the app updates itself.
+Update downloads earlier versions left in Downloads are listed in Settings → Updates with
+**Remove**; nothing is deleted without asking.
 
 **Q: On Windows, "Install and restart" closed the app and nothing was installed.**
 Fixed in 9.1.0 (#533). From 8.6.1 to 9.0.1 the update ran the setup through a hidden PowerShell

@@ -27,7 +27,9 @@
   archives (unpacked on the way, nothing extracted to your disk). Everything runs over
   **AVA1**, one encrypted connection on port 9120. Every file is verified, and an upload
   continues after a dropped connection, a helper restart or rest mode. A job that will not
-  fit is refused up front, counting what is already on the console. Queue, live speed and ETA.
+  fit is refused up front, counting what is already on the console. Queue, live speed and ETA;
+  pause an upload and resume it later where it stopped, or **Send now** to let another item go
+  first.
 - **Upload & Install.** One drop zone takes packages, game folders and dumps, disk images,
   archives and any other file, and works out what each is. PS4 `.pkg` and PS5 fake packages
   (base, update, DLC) install from your computer (**Stream & install** or **Upload & install**),
@@ -44,22 +46,31 @@
   image, or write a game folder as a game image (`.exfat`, `.ffpkg`, `.ffpfs`, or the smaller
   `.ffpfsc`) that ShadowMount+ mounts. A queue makes games one after another and hands each to
   Upload & Install to install or upload.
-- **Browse and manage.** Files, games, disk images (mount, edit in place), saves, screenshots
-  and video clips; share a save with a friend (it loads on their PS5 as their own); register, launch, stop and uninstall games; copy, move (Move to…),
-  delete, set permissions.
+- **Browse and manage.** Files, games, disk images (mount, edit in place), screenshots and
+  video clips; register, launch, stop and uninstall games; copy, move (Move to…), delete, set
+  permissions.
+- **Save Data.** Automatic backups to a folder (or a server), **Back up now** and **Restore…**;
+  **Copy to…** another user on the same PS5, or a file for a friend or another PS5 that loads
+  under their own account; open a save for save editors. PS1 (PSSwanStation), PS2 (Crux2,
+  PS5SX2) and Switch (ProsperoEden) emulator saves are backed up and restored too.
 - **Remote Play.** Play the PS5 from your computer, phone or browser, no PS Remote Play app
   needed:
   - Start wakes a console in rest mode and signs your user in; the stream keeps playing while
     you use other screens, and a dropped connection rejoins by itself.
   - Play with a controller connected to this device, the keyboard (keys you can remap) or an
     on-screen controller on phones and tablets; the controller vibrates with the game.
+  - Or give the PS5 your computer's keyboard and mouse as its own (any firmware), and use a
+    phone as its touchpad and keyboard.
+  - If the user has a PS5 passcode, the app asks for it (never saved).
   - Picture in picture: a small always-on-top window while you do something else (desktop app,
     Chrome and Edge; picture only in Safari).
   - 1080p or 720p at 60 or 30 fps, full screen, volume, stats on the picture, and low-delay
     sound.
-  - A step-by-step setup in Accounts that checks each requirement on the console and fixes what
-    it can (sign-in, account ID, Remote Play switches, pairing), plus a PIN for Sony's PS Remote
-    Play app or chiaki-ng if you prefer those.
+  - A step-by-step setup (Play › Set up) that checks each requirement on the console and fixes
+    what it can (sign-in, account ID, Remote Play switches, pairing, or pairing with the PIN the
+    PS5 shows), plus a PIN for Sony's PS Remote Play app or chiaki-ng if you prefer those.
+  - A local automation API lets a script or AI agent on the engine's computer watch and play a
+    running session ([AUTOMATION.md](AUTOMATION.md)).
 - **Cheats, fan curve, hardware view,** payload sender with a catalogue and playlists, and
   backport tools.
 - **Power.** Rest mode, reboot, shut down, and wake over the network (optionally straight
