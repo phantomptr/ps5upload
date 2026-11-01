@@ -20,6 +20,12 @@ What's new in ps5upload, written for humans.
   keys are sent by their place on the keyboard, whatever its layout; everything held is let go
   when the window loses focus, Settings opens, the mode changes or the stream stops, and the
   console lets go by itself if the computer goes quiet for 2 seconds.
+- **Type into the PS5's on-screen keyboard during Remote Play (experimental).** When a game or
+  the PS5 opens its keyboard, a text box shows over the stream (in full screen too) with the
+  console's text in it, ready to type, and a phone opens its own keyboard. What you type reaches
+  the PS5 as you go; Enter or Done keeps it, Esc or Cancel drops it, and the box closes when the
+  PS5 closes its keyboard. The game gets no keys or controller presses while you type. Needs the
+  engine from this version; not yet tried on a console.
 
 ## 10.3.0
 

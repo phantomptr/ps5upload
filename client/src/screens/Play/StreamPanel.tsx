@@ -79,6 +79,7 @@ import { closePip, openPip, pipPadsInBackground, pipSupport } from "./pip";
 import { CaptureBarButtons, CaptureOverlay } from "./CaptureControls";
 import { LatencyLine, QualityNotice } from "./NetworkExtras";
 import { RpBlockerNotice, RpBlockerPhase } from "./RpBlockers";
+import { RpKeyboardBox } from "./RpKeyboardBox";
 import { pressClosedSettings, SETTINGS_OPENER, SettingsDrawer } from "./SettingsDrawer";
 import { beforeRemotePlay } from "../../state/rpBlockers";
 import { useRpQualityStore } from "../../state/rpQuality";
@@ -1005,6 +1006,7 @@ export function StreamPanel() {
             </div>
           )}
           {running && <PadAsks pending={padLink.pending} />}
+          {running && <RpKeyboardBox />}
           {running && pip && (
             <div
               className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/80 px-6 text-center text-sm text-white/85"

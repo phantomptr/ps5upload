@@ -20,6 +20,7 @@ import { hevcCodecString, spsVisibleRect, visibleFix, type VisibleRect } from ".
 import { safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
 import { ClockSync, LatencyStages, stagesLogText, type StageSummary } from "./rpLatency";
 import { decoderVerdict, FED_RECENT_MS, MAX_REBUILDS } from "./rpDecoderWatch";
+import type { RpKeyboardMsg, RpKeyboardSend } from "./rpKeyboard";
 
 /** Button bits, as the console (and chiaki) number them. */
 export const PadButton = {
@@ -466,6 +467,8 @@ export interface StreamOptions {
   onLight?: (rgb: [number, number, number]) => void;
   /** The engine's answer about native keyboard & mouse (`{"kbm": …}`, lib/kbmInput.ts). */
   onKbm?: (s: unknown) => void;
+  /** The console's on-screen keyboard opened, changed or closed (lib/rpKeyboard.ts). */
+  onKeyboard?: (m: RpKeyboardMsg) => void;
   /** The pad state to send; polled every animation frame and on key events. */
   readPad: () => PadState;
   /** The controllers rumble is played on (default: this page's). A picture-in-picture window
@@ -1082,6 +1085,8 @@ export class RemotePlayStream {
           ...(this.replayS ? { replay_s: this.replayS } : {}),
           // Video as kind 7, each frame with the engine's time (an older engine ignores this).
           timing: true,
+          // Typing into the console's keyboard (lib/rpKeyboard.ts; an older engine ignores this).
+          keyboard: true,
         }),
       );
       // Attaching turns the console's mic off in the engine: a page that has it on says so.
@@ -1274,6 +1279,12 @@ export class RemotePlayStream {
     return true;
   }
 
+  /** Text for the console's on-screen keyboard, or done / cancel (lib/rpKeyboard.ts). */
+  sendKeyboard(m: RpKeyboardSend): void {
+    const ws = this.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
+  }
+
   /** This session was started with the mic set up (Settings › Microphone). */
   get micEnabled(): boolean {
     return !!this.o.mic;
@@ -1374,6 +1385,7 @@ export class RemotePlayStream {
       triggers?: { left: number[]; right: number[] };
       ds_intensity?: [number, number];
       kbm?: unknown;
+      keyboard?: RpKeyboardMsg;
     };
     try {
       s = JSON.parse(text);
@@ -1405,6 +1417,10 @@ export class RemotePlayStream {
     }
     if (s.ds_intensity) {
       this.o.dualSense?.intensity(s.ds_intensity[0], s.ds_intensity[1]);
+      return;
+    }
+    if (s.keyboard) {
+      this.o.onKeyboard?.(s.keyboard);
       return;
     }
     switch (s.stage) {

@@ -93,6 +93,7 @@ mod profile_image;
 mod remote;
 mod remote_download;
 mod remote_pkg;
+mod rp_keyboard;
 mod rp_replay;
 mod rp_stream_api;
 mod save_backup;

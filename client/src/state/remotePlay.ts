@@ -29,6 +29,7 @@ import { applyControls } from "../lib/gameControls";
 import { DEFAULT_PICTURE, readPicture, type PictureTools } from "../lib/rpPicture";
 import { DEFAULT_BUTTON_MAP, readButtonMap, remapPad, type ButtonMap } from "../lib/rpButtonMap";
 import type { CodecPref } from "../lib/rpHdr";
+import { nextKeyboard, type RpKeyboardState } from "../lib/rpKeyboard";
 import { pushNotification } from "./notifications";
 import { trStatic } from "../lib/trStatic";
 import { currentControls, rpControls } from "./gameControls";
@@ -151,6 +152,10 @@ interface RpState {
   error: StreamError | null;
   stats: StreamStats | null;
   light: [number, number, number] | null;
+  /** The console's on-screen keyboard is open (lib/rpKeyboard.ts); the stream shows a text box. */
+  keyboard: RpKeyboardState | null;
+  /** The text box is closed here (done or cancelled) before the console says so. */
+  closeKeyboard: () => void;
   prefs: RpPrefs;
   keymap: Record<string, KeyAction>;
   /** The Remote Play screen is on show: only then do controllers drive the console. */
@@ -244,6 +249,8 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
   error: null,
   stats: null,
   light: null,
+  keyboard: null,
+  closeKeyboard: () => set({ keyboard: null }),
   prefs: loadRpPrefs(),
   keymap: loadKeymap(),
   onScreen: false,
@@ -318,18 +325,19 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
         if (p === "ended") {
           dualSense?.stop();
           rpInput.held.clear();
-          set({ stream: null, light: null });
+          set({ stream: null, light: null, keyboard: null });
         }
       },
       onStats: (st) => get().stream === stream && set({ stats: st }),
       onError: (e) => get().stream === stream && set({ error: e }),
       onLight: (rgb) => get().stream === stream && set({ light: rgb }),
       onKbm: (v) => get().stream === stream && useKbmStore.getState().setStatus(readKbmStatus(v)),
+      onKeyboard: (m) => get().stream === stream && set({ keyboard: nextKeyboard(get().keyboard, m) }),
       readPad,
       gamepads: rpGamepads,
     });
     stream.setVolume(prefs.muted ? 0 : prefs.volume);
-    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null });
+    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null });
     await stream.start();
   },
 
