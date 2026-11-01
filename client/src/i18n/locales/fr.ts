@@ -6715,6 +6715,10 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "play_setup_blockers_title": "Aucun payload ne bloque la Lecture à distance",
   "play_setup_blockers_body_on": "{name} est activé et bloque l'image de la Lecture à distance. Jouer propose de le mettre en pause à chaque démarrage, ou désactivez-le sur sa carte dans Payloads. Cette étape se coche d'elle-même quand il est désactivé.",
   "play_setup_blockers_body": "Certains payloads désactivent l'encodeur vidéo de la console, dont la Lecture à distance a besoin : c'est le cas de Hush. Cette étape se coche quand aucun n'est activé.",
+  "rp_set_applies_next": "S'applique au prochain démarrage",
+  "rp_settings_close": "Fermer les réglages",
+  "rp_settings_paused": "Le jeu ne reçoit ni touches ni appuis de manette tant que les réglages sont ouverts.",
+  "rp_picture_tools": "Outils d'image",
 };
 
 export default fr;

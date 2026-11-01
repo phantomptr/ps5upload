@@ -765,6 +765,17 @@ body {
   }
 }
 
+@keyframes ps-side-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
 @keyframes ps-shimmer {
   from {
     background-position: 200% 0;
@@ -820,6 +831,11 @@ body {
 /* Mobile bottom sheet. */
 .anim-sheet {
   animation: ps-sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* A panel at the right edge (Remote Play's settings over the stream). */
+.anim-side {
+  animation: ps-side-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
 /* Bottom-sheet-up: variant used by Modal variant="sheet" for its panel
@@ -914,6 +930,7 @@ body {
   .anim-drawer,
   .anim-sheet,
   .anim-sheet-up,
+  .anim-side,
   .anim-skeleton,
   .anim-status-pulse {
     animation: none;
@@ -950,6 +967,7 @@ body {
 :root[data-motion="none"] .anim-drawer,
 :root[data-motion="none"] .anim-sheet,
 :root[data-motion="none"] .anim-sheet-up,
+:root[data-motion="none"] .anim-side,
 :root[data-motion="none"] .anim-skeleton,
 :root[data-motion="none"] .anim-status-pulse {
   animation: none;

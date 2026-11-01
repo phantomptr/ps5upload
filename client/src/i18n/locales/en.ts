@@ -7013,6 +7013,10 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
   "play_setup_blockers_title": "No payload blocks Remote Play",
   "play_setup_blockers_body_on": "{name} is on, and it blocks Remote Play's picture. Play offers to pause it each time you start, or turn it off on its card in Payloads. This step ticks by itself when it is off.",
   "play_setup_blockers_body": "Some payloads turn off the console's video encoder, which Remote Play needs: Hush does. This step ticks when none of them is on.",
+  "rp_set_applies_next": "Applies when you start again",
+  "rp_settings_close": "Close settings",
+  "rp_settings_paused": "The game gets no keys or controller presses while Settings is open.",
+  "rp_picture_tools": "Picture tools",
 };
 
 export default en;

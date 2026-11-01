@@ -6658,6 +6658,10 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "play_setup_blockers_title": "没有载荷阻挡远程游玩",
   "play_setup_blockers_body_on": "{name} 已开启，会阻挡远程游玩的画面。每次开始时畅玩都会提出暂停它，你也可以在载荷中它的卡片上将其关闭。关闭后这一步会自动打勾。",
   "play_setup_blockers_body": "有些载荷会关闭远程游玩所需的主机视频编码器，Hush 就是其中之一。没有任何此类载荷开启时，这一步会打勾。",
+  "rp_set_applies_next": "下次开始时生效",
+  "rp_settings_close": "关闭设置",
+  "rp_settings_paused": "设置打开时，游戏不会收到任何按键或手柄输入。",
+  "rp_picture_tools": "画面工具",
 };
 
 export default zh_CN;

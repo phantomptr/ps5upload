@@ -6706,6 +6706,10 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
   "play_setup_blockers_title": "ไม่มีเพย์โหลดที่บล็อก Remote Play",
   "play_setup_blockers_body_on": "{name} เปิดอยู่และบล็อกภาพของ Remote Play เล่นจะเสนอให้หยุดชั่วคราวทุกครั้งที่เริ่ม หรือปิดได้ที่การ์ดในเพย์โหลด ขั้นนี้จะติ๊กเองเมื่อปิดแล้ว",
   "play_setup_blockers_body": "เพย์โหลดบางตัวปิดตัวเข้ารหัสวิดีโอของเครื่องที่ Remote Play ต้องใช้ เช่น Hush ขั้นนี้จะติ๊กเมื่อไม่มีตัวใดเปิดอยู่",
+  "rp_set_applies_next": "มีผลเมื่อเริ่มใหม่",
+  "rp_settings_close": "ปิดการตั้งค่า",
+  "rp_settings_paused": "ขณะเปิดการตั้งค่า เกมจะไม่ได้รับการกดปุ่มคีย์บอร์ดหรือคอนโทรลเลอร์",
+  "rp_picture_tools": "เครื่องมือภาพ",
 };
 
 export default th;

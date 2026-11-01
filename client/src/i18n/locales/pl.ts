@@ -6947,6 +6947,10 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "play_setup_blockers_title": "Żaden payload nie blokuje Remote Play",
   "play_setup_blockers_body_on": "{name} jest włączony i blokuje obraz Remote Play. Graj proponuje wstrzymanie go przy każdym starcie; możesz też wyłączyć go na jego karcie w Payloadach. Ten krok zaznaczy się sam, gdy będzie wyłączony.",
   "play_setup_blockers_body": "Niektóre payloady wyłączają koder wideo konsoli, którego potrzebuje Remote Play: Hush tak robi. Ten krok zaznacza się, gdy żaden z nich nie jest włączony.",
+  "rp_set_applies_next": "Zadziała przy następnym starcie",
+  "rp_settings_close": "Zamknij ustawienia",
+  "rp_settings_paused": "Gdy Ustawienia są otwarte, gra nie dostaje klawiszy ani przycisków kontrolera.",
+  "rp_picture_tools": "Narzędzia obrazu",
 };
 
 export default pl;

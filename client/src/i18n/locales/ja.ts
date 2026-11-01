@@ -6718,6 +6718,10 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "play_setup_blockers_title": "リモートプレイを妨げるペイロードなし",
   "play_setup_blockers_body_on": "{name} がオンで、リモートプレイの映像を妨げます。プレイは開始のたびに一時停止を提案します。ペイロードのカードでオフにすることもできます。オフになるとこの手順は自動でチェックされます。",
   "play_setup_blockers_body": "一部のペイロードは、リモートプレイに必要な本体のビデオエンコーダーをオフにします（Hush など）。どれもオンでなければこの手順はチェックされます。",
+  "rp_set_applies_next": "次に開始したときに反映されます",
+  "rp_settings_close": "設定を閉じる",
+  "rp_settings_paused": "設定を開いている間、キーやコントローラーの入力はゲームに送られません。",
+  "rp_picture_tools": "映像ツール",
 };
 
 export default ja;

@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DEFAULT_PICTURE, type Enhance, type PictureTools } from "../../lib/rpPicture";
-import { hdrScreen, hdrSupport, type HdrSupport } from "../../lib/rpHdr";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router";
 import {
@@ -22,25 +20,19 @@ import {
   VolumeX,
 } from "lucide-react";
 
-import { Button, Callout, Select, Spinner, Toggle } from "../../components";
+import { Button, Callout, Select, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
 import { useRosterStore } from "../../state/roster";
 import { deviceName, meshFor, othersRemotePlaying, remotePlayPads, useMeshStore } from "../../state/mesh";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { isLinuxDesktop, isMobile } from "../../lib/platform";
-import { appSavesToPhotos } from "../../lib/rpCapture";
 import { setScreenWakeReason } from "../../lib/androidScreenWake";
-import { gameModeKind } from "../../lib/gameMode";
 import {
   canStream,
-  keysFor,
-  rebind,
   stopEngineSession,
   touchAt,
-  PAD_ACTIONS,
   FIT_ORDER,
   type PictureFit,
-  type KeyAction,
   type StreamError,
   type StreamPhase,
   type StreamStats,
@@ -67,14 +59,10 @@ import {
   unlockOrientation,
   useMedia,
 } from "./immersive";
-import { MicBarButton, MicSetting } from "./MicControl";
+import { MicBarButton } from "./MicControl";
 import { fitName, PlayMenu, VolumeSlider } from "./PlayMenu";
 import { rpBrowserAdvice } from "./browserAdvice";
-import { askMotion, motionAvailable, startMotion } from "../../lib/motion";
-import { dualSenseCapable } from "../../lib/dualSense";
-import { ControllerSetup } from "./ControllerSetup";
-import { ButtonRemap } from "./ButtonRemap";
-import { connectWebHidTouchpad, webHidTouchpadAvailable, webHidTouchpadConnected } from "../../lib/padTouchpad";
+import { motionAvailable, startMotion } from "../../lib/motion";
 import { PadAsks, PhonePadsPanel, usePadLink } from "./PhonePads";
 import { GamePanel } from "./game/GamePanel";
 import { LaunchStatus } from "./game/LaunchStatus";
@@ -88,8 +76,9 @@ import { hostOf } from "../../lib/addr";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { closePip, openPip, pipPadsInBackground, pipSupport } from "./pip";
 import { CaptureBarButtons, CaptureOverlay } from "./CaptureControls";
-import { LatencyLine, QualityNotice, RpNetworkSettings } from "./NetworkExtras";
-import { RpBlockerNotice, RpBlockerPhase, RpBlockerSetting } from "./RpBlockers";
+import { LatencyLine, QualityNotice } from "./NetworkExtras";
+import { RpBlockerNotice, RpBlockerPhase } from "./RpBlockers";
+import { pressClosedSettings, SETTINGS_OPENER, SettingsDrawer } from "./SettingsDrawer";
 import { beforeRemotePlay } from "../../state/rpBlockers";
 import { useRpQualityStore } from "../../state/rpQuality";
 
@@ -213,62 +202,6 @@ export function phaseText(tr: Tr, p: StreamPhase): string {
   }
 }
 
-/** A key code as people say it: KeyQ → Q, Digit1 → 1, ArrowUp → ↑. */
-export function keyLabel(code: string): string {
-  const arrows: Record<string, string> = { ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→" };
-  return arrows[code] ?? code.replace(/^Key/, "").replace(/^Digit/, "").replace("Backquote", "`");
-}
-
-/** Change which key does what, saved on this device. */
-function KeyRemap({
-  keymap,
-  onChange,
-}: {
-  keymap: Record<string, KeyAction>;
-  onChange: (k: Record<string, KeyAction> | null) => void;
-}) {
-  const tr = useTr();
-  const [listening, setListening] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!listening) return;
-    const action = PAD_ACTIONS.find((a) => a.id === listening)?.action;
-    const onKey = (e: KeyboardEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setListening(null);
-      // Esc only cancels: the browser keeps it for leaving pointer lock and full screen.
-      if (e.code === "Escape" || !action) return;
-      onChange(rebind(keymap, action, e.code));
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [listening, keymap, onChange]);
-
-  return (
-    <div className="space-y-2">
-      <div className="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
-        {PAD_ACTIONS.map((a) => (
-          <div key={a.id} className="flex items-center justify-between gap-2">
-            <span>{/[a-z]/.test(a.label) ? tr(`rp_action_${a.id}`, undefined, a.label) : a.label}</span>
-            <span className="flex items-center gap-2">
-              <span className="font-mono text-[var(--color-text)]">
-                {keysFor(keymap, a.action).map(keyLabel).join(", ") || "—"}
-              </span>
-              <Button size="sm" variant="ghost" onClick={() => setListening(a.id)}>
-                {listening === a.id ? tr("rp_press_a_key", undefined, "Press a key…") : tr("rp_set_key", undefined, "Set key")}
-              </Button>
-            </span>
-          </div>
-        ))}
-      </div>
-      <Button size="sm" onClick={() => onChange(null)}>
-        {tr("rp_keys_reset", undefined, "Reset to defaults")}
-      </Button>
-    </div>
-  );
-}
-
 function StatsLine({
   stats,
   light,
@@ -320,20 +253,25 @@ function BarButton({
   active,
   children,
   testId,
+  expands,
 }: {
   label: string;
   onClick: () => void;
   active?: boolean;
   children: React.ReactNode;
   testId?: string;
+  /** Opens and closes a panel (Settings): aria-expanded instead of aria-pressed. */
+  expands?: boolean;
 }) {
   return (
     <button
       type="button"
       aria-label={label}
       title={label}
-      aria-pressed={active}
+      aria-pressed={expands ? undefined : active}
+      aria-expanded={expands ? !!active : undefined}
       data-testid={testId}
+      {...(expands ? SETTINGS_OPENER : {})}
       onClick={(e) => {
         e.stopPropagation();
         onClick();
@@ -428,502 +366,6 @@ function FitMenu({
   );
 }
 
-/** Settings › Picture: sharpening and upscaling, colour, a 21:9 crop and sharp pixels
- *  (lib/rpPicture.ts). They apply at once; with all of them off the picture is drawn exactly as
- *  the console sends it. */
-function PictureToolsSetting() {
-  const tr = useTr();
-  const pic = useRemotePlayStore((s) => s.prefs.picture);
-  const hdr = useRemotePlayStore((s) => s.prefs.codec === "hdr");
-  const setPrefs = useRemotePlayStore((s) => s.setPrefs);
-  const set = (p: Partial<PictureTools>) => setPrefs({ picture: { ...pic, ...p } });
-  const slider = (key: "sharpen" | "brightness" | "contrast" | "saturation", label: string, min: number) => (
-    <label className="flex items-center gap-3 text-sm">
-      <span className="w-28 shrink-0">{label}</span>
-      <input
-        type="range"
-        min={min}
-        max={min === 0 ? 100 : 50}
-        value={pic[key]}
-        onChange={(e) => set({ [key]: Number(e.target.value) })}
-        className="w-40 accent-[var(--color-accent)]"
-        aria-label={label}
-        data-testid={`rp-picture-${key}`}
-      />
-      <span className="w-8 text-xs tabular-nums text-[var(--color-muted)]">{pic[key]}</span>
-    </label>
-  );
-  return (
-    <fieldset className="space-y-2" data-testid="rp-picture">
-      <legend className="mb-1 text-sm font-medium">{tr("rp_picture_title", undefined, "Picture")}</legend>
-      <div className="space-y-1">
-        <Select
-          label={tr("rp_picture_enhance", undefined, "Sharpening and upscaling")}
-          block={false}
-          className="w-64"
-          value={pic.enhance}
-          onChange={(e) => set({ enhance: e.target.value as Enhance })}
-          data-testid="rp-picture-enhance"
-          options={[
-            { value: "off", label: tr("rp_picture_enhance_off", undefined, "Off") },
-            { value: "sharpen", label: tr("rp_picture_enhance_sharpen", undefined, "Sharpen (AMD FidelityFX RCAS)") },
-            { value: "fsr", label: tr("rp_picture_enhance_fsr", undefined, "Upscale to the screen (AMD FSR 1)") },
-          ]}
-        />
-        <p className="text-xs text-[var(--color-muted)]">
-          {tr(
-            "rp_picture_enhance_hint",
-            undefined,
-            "Done on the graphics card, on any GPU. Sharpen makes the picture crisper. Upscale also brings it up to your screen's own resolution: best on a big or 4K screen. Off with Sharp pixels.",
-          )}
-        </p>
-      </div>
-      {pic.enhance !== "off" && slider("sharpen", tr("rp_picture_sharpen", undefined, "Sharpen"), 0)}
-      {slider("brightness", tr("rp_picture_brightness", undefined, "Brightness"), -50)}
-      {slider("contrast", tr("rp_picture_contrast", undefined, "Contrast"), -50)}
-      {slider("saturation", tr("rp_picture_saturation", undefined, "Colour"), -50)}
-      <Toggle
-        checked={pic.crop219}
-        onChange={(v) => set({ crop219: v })}
-        label={tr("rp_picture_crop", undefined, "Crop to 21:9")}
-        hint={tr(
-          "rp_picture_crop_hint",
-          undefined,
-          "Cuts the black bars off a game made for ultrawide screens, so it fills an ultrawide screen.",
-        )}
-      />
-      <Toggle
-        checked={pic.pixelated}
-        onChange={(v) => set({ pixelated: v })}
-        label={tr("rp_picture_pixelated", undefined, "Sharp pixels")}
-        hint={tr("rp_picture_pixelated_hint", undefined, "Scales with hard edges instead of smoothing: for retro games.")}
-      />
-      {hdr && (
-        <p className="text-xs text-[var(--color-muted)]">
-          {tr(
-            "rp_picture_hdr_note",
-            undefined,
-            "In HDR only Crop to 21:9 and Sharp pixels apply: the other tools work on SDR pictures.",
-          )}
-        </p>
-      )}
-      <button
-        type="button"
-        onClick={() => setPrefs({ picture: DEFAULT_PICTURE })}
-        className="text-xs text-[var(--color-muted)] underline-offset-2 hover:underline"
-        data-testid="rp-picture-reset"
-      >
-        {tr("rp_picture_reset", undefined, "Reset the picture")}
-      </button>
-    </fieldset>
-  );
-}
-
-/** What the app asks of this device's OS while a stream plays (only the app can ask). */
-function GameModeNote() {
-  const tr = useTr();
-  const kind = gameModeKind();
-  if (!kind) return null;
-  const text = {
-    mac: tr(
-      "rp_game_mode_mac",
-      undefined,
-      "While you play, the computer and screen stay awake. Full screen also turns on Game Mode (macOS 14 and later).",
-    ),
-    ios: tr(
-      "rp_game_mode_ios",
-      undefined,
-      "Game Mode turns on while the app fills the screen (iOS and iPadOS 18 and later).",
-    ),
-    windows: tr(
-      "rp_game_mode_windows",
-      undefined,
-      "While you play, the computer and screen stay awake. Windows does not let an app turn on Game Mode; see the FAQ.",
-    ),
-    linux: tr(
-      "rp_game_mode_linux",
-      undefined,
-      "While you play, the computer and screen stay awake, and GameMode (gamemoded) turns on if it is installed.",
-    ),
-    android: tr(
-      "rp_game_mode_android",
-      undefined,
-      "While you play, the screen stays on, the device keeps a steady speed where it can, and a TV on HDMI is asked for its game mode.",
-    ),
-  }[kind];
-  return (
-    <p className="text-xs text-[var(--color-muted)]" data-testid="rp-game-mode">
-      {text}
-    </p>
-  );
-}
-
-/** Whether HDR can be offered here (lib/rpHdr.ts), once checked; null until then. */
-function useHdrSupport(): HdrSupport | null {
-  const [v, setV] = useState<HdrSupport | null>(null);
-  useEffect(() => {
-    let live = true;
-    void hdrSupport().then((r) => live && setV(r));
-    return () => {
-      live = false;
-    };
-  }, []);
-  return v;
-}
-
-/** What HDR does here, or why it is not offered (said only to someone who chose it, or who
- *  has an HDR screen and so might look for it). */
-function HdrNote({ support, chosen }: { support: HdrSupport | null; chosen: boolean }) {
-  const tr = useTr();
-  if (!support) return null;
-  let text: string | null = null;
-  if (support.ok) {
-    if (chosen)
-      text = tr(
-        "rp_codec_hdr_hint",
-        undefined,
-        "The PS5 sends HDR; it shows in HDR on this screen. Experimental: if the picture looks dull or too bright, go back to Auto.",
-      );
-  } else if (chosen || hdrScreen()) {
-    text =
-      support.why === "decoder"
-        ? tr("rp_codec_hdr_no_decoder", undefined, "HDR is not offered: this device cannot decode the PS5's HDR video (HEVC Main10).")
-        : support.why === "screen"
-          ? tr("rp_codec_hdr_no_screen", undefined, "HDR is not offered: this screen is not an HDR screen, or HDR is off in the system's settings.")
-          : tr("rp_codec_hdr_no_display", undefined, "HDR is not offered: this browser cannot draw HDR (it needs WebGPU with HDR, as in Chrome or Edge).");
-  }
-  return text ? <p className="text-xs text-[var(--color-muted)]" data-testid="rp-hdr-note">{text}</p> : null;
-}
-
-/** Everything that can be set, in one place: picture, sound, session, controls, keys. */
-function SettingsPanel({ running }: { running: boolean }) {
-  const tr = useTr();
-  const prefs = useRemotePlayStore((s) => s.prefs);
-  const hdr = useHdrSupport();
-  const setPrefs = useRemotePlayStore((s) => s.setPrefs);
-  const keymap = useRemotePlayStore((s) => s.keymap);
-  const setKeymap = useRemotePlayStore((s) => s.setKeymap);
-  const num = (v: string) => Number(v);
-  return (
-    <div
-      className="space-y-5 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-4"
-      data-testid="rp-settings"
-    >
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">{tr("rp_set_picture", undefined, "Picture")}</h3>
-        <div className="flex flex-wrap gap-3">
-          <Select
-            label={tr("rp_quality", undefined, "Picture")}
-            block={false}
-            className="w-36"
-            value={prefs.res}
-            disabled={running}
-            onChange={(e) => setPrefs({ res: e.target.value as RpPrefs["res"] })}
-            options={[
-              { value: "1920x1080", label: "1080p" },
-              { value: "1280x720", label: "720p" },
-            ]}
-          />
-          <Select
-            label={tr("rp_fps", undefined, "Frame rate")}
-            block={false}
-            className="w-36"
-            value={String(prefs.fps)}
-            disabled={running}
-            onChange={(e) => setPrefs({ fps: num(e.target.value) as RpPrefs["fps"] })}
-            options={[
-              { value: "60", label: tr("rp_fps_60", undefined, "60 fps (smooth)") },
-              { value: "30", label: tr("rp_fps_30", undefined, "30 fps (light network)") },
-            ]}
-          />
-          <Select
-            label={tr("rp_fit", undefined, "Picture size")}
-            block={false}
-            className="w-48"
-            value={prefs.fit}
-            onChange={(e) => setPrefs({ fit: e.target.value as RpPrefs["fit"] })}
-            data-testid="rp-fit"
-            options={[
-              { value: "fit", label: tr("rp_fit_fit", undefined, "Fit (whole picture)") },
-              { value: "fill", label: tr("rp_fit_fill", undefined, "Fill (crop the edges)") },
-              { value: "stretch", label: tr("rp_fit_stretch", undefined, "Stretch") },
-            ]}
-          />
-          <Select
-            label={tr("rp_decoding", undefined, "Video decoding")}
-            block={false}
-            className="w-48"
-            value={prefs.decoding}
-            disabled={running}
-            onChange={(e) => setPrefs({ decoding: e.target.value as RpPrefs["decoding"] })}
-            data-testid="rp-decoding"
-            options={[
-              { value: "auto", label: tr("rp_decoding_auto", undefined, "Graphics card (auto)") },
-              { value: "software", label: tr("rp_decoding_software", undefined, "Software") },
-            ]}
-          />
-          <Select
-            label={tr("rp_codec", undefined, "Video format")}
-            block={false}
-            className="w-48"
-            value={prefs.codec}
-            disabled={running}
-            onChange={(e) => setPrefs({ codec: e.target.value as RpPrefs["codec"] })}
-            data-testid="rp-codec"
-            options={[
-              { value: "auto", label: tr("rp_codec_auto", undefined, "Auto (HEVC where it works)") },
-              { value: "h264", label: "H.264" },
-              // Only where it can be shown in HDR (or already chosen, to show what is set).
-              ...(hdr?.ok || prefs.codec === "hdr"
-                ? [{ value: "hdr", label: tr("rp_codec_hdr", undefined, "HDR (HEVC, experimental)") }]
-                : []),
-            ]}
-          />
-        </div>
-        <HdrNote support={hdr} chosen={prefs.codec === "hdr"} />
-        <p className="text-xs text-[var(--color-muted)]">
-          {tr(
-            "rp_decoding_hint",
-            undefined,
-            "If the picture shows cut off or wrong on this device, try Software or H.264. They apply the next time you start.",
-          )}
-        </p>
-        {running && (
-          <p className="text-xs text-[var(--color-muted)]">
-            {tr(
-              "rp_set_next_start_v2",
-              undefined,
-              "Resolution and frame rate apply the next time you start. Picture size applies at once; it shows in full screen, where the screen's shape can differ from the picture's.",
-            )}
-          </p>
-        )}
-        <Toggle
-          checked={prefs.showStats}
-          onChange={(v) => setPrefs({ showStats: v })}
-          label={tr("rp_show_stats", undefined, "Show stats on the picture")}
-          hint={tr("rp_show_stats_hint", undefined, "Frame rate, bitrate, decode time, loss and sound delay.")}
-        />
-        <RpNetworkSettings />
-        <RpBlockerSetting />
-      </section>
-
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">{tr("rp_set_sound", undefined, "Sound")}</h3>
-        <div className="flex flex-wrap items-end gap-3">
-          <Select
-            label={tr("rp_audio_buffer", undefined, "Sound buffer")}
-            block={false}
-            className="w-56"
-            value={String(prefs.audioBufferMs)}
-            onChange={(e) => setPrefs({ audioBufferMs: num(e.target.value) })}
-            options={[
-              { value: "40", label: tr("rp_audio_low", undefined, "Lowest delay (40 ms)") },
-              { value: "60", label: tr("rp_audio_normal", undefined, "Balanced (60 ms)") },
-              { value: "120", label: tr("rp_audio_stable", undefined, "Steady on Wi-Fi (120 ms)") },
-            ]}
-          />
-          <label className="flex min-w-48 flex-col gap-1 text-xs text-[var(--color-muted)]">
-            {tr("rp_volume", undefined, "Volume")}
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round(prefs.volume * 100)}
-              onChange={(e) => setPrefs({ volume: num(e.target.value) / 100, muted: false })}
-              className="accent-[var(--color-accent)]"
-            />
-          </label>
-        </div>
-        <p className="text-xs text-[var(--color-muted)]">
-          {tr(
-            "rp_audio_hint",
-            undefined,
-            "Crackles or gaps on a busy network: choose Steady. On a wired network Lowest delay is best.",
-          )}
-        </p>
-      </section>
-
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">{tr("rp_set_session", undefined, "Session")}</h3>
-        <Select
-          label={tr("rp_keep_alive", undefined, "Keep playing after you leave this screen or the app")}
-          block={false}
-          className="w-full sm:w-96"
-          value={String(prefs.keepAliveS)}
-          onChange={(e) => setPrefs({ keepAliveS: num(e.target.value) })}
-          disabled={running}
-          options={[
-            { value: "30", label: tr("rp_keep_30s", undefined, "30 seconds") },
-            { value: "60", label: tr("rp_keep_1m", undefined, "1 minute") },
-            { value: "300", label: tr("rp_keep_5m", undefined, "5 minutes") },
-            { value: "600", label: tr("rp_keep_10m", undefined, "10 minutes") },
-          ]}
-        />
-        <p className="text-xs text-[var(--color-muted)]">
-          {tr(
-            "rp_keep_hint",
-            undefined,
-            "Other screens keep the stream running; this is how long it waits when no window shows it (closed or reloaded) before it ends.",
-          )}
-        </p>
-        <GameModeNote />
-      </section>
-
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">{tr("rp_set_controls", undefined, "Controls")}</h3>
-        <Toggle
-          checked={prefs.capturePointer}
-          onChange={(v) => setPrefs({ capturePointer: v })}
-          label={tr("rp_capture_pointer", undefined, "Clicking the picture hides the pointer")}
-          hint={tr("rp_capture_pointer_hint", undefined, "Esc shows it again.")}
-        />
-        <Toggle
-          checked={prefs.rumble}
-          onChange={(v) => setPrefs({ rumble: v })}
-          label={tr("rp_rumble", undefined, "Controller vibration")}
-        />
-        {dualSenseCapable() && (
-          <Toggle
-            checked={prefs.dualSense}
-            onChange={(v) => setPrefs({ dualSense: v })}
-            label={tr("rp_dualsense", undefined, "DualSense effects")}
-            hint={tr(
-              "rp_dualsense_hint",
-              undefined,
-              "With a DualSense connected to this computer: adaptive triggers, and haptics when it is plugged in with USB. Applies from the next start.",
-            )}
-          />
-        )}
-        {motionAvailable() && typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches && (
-          <Toggle
-            checked={prefs.motion}
-            onChange={(v) => {
-              if (!v) setPrefs({ motion: false });
-              else void askMotion().then((ok) => ok && setPrefs({ motion: true }));
-            }}
-            label={tr("rp_motion", undefined, "Motion controls (experimental)")}
-            hint={tr(
-              "rp_motion_hint",
-              undefined,
-              "Tilting and turning the phone moves the controller's motion sensors, for games with gyro aiming.",
-            )}
-          />
-        )}
-        <MicSetting />
-        <PictureToolsSetting />
-        <div className="space-y-1">
-          <Select
-            label={tr("rp_replay_setting", undefined, "Instant replay")}
-            block={false}
-            className="w-56"
-            value={String(prefs.replayS)}
-            onChange={(e) => setPrefs({ replayS: Number(e.target.value) })}
-            data-testid="rp-replay-setting"
-            options={[
-              { value: "0", label: tr("rp_replay_off", undefined, "Off") },
-              ...[15, 30, 60].map((n) => ({
-                value: String(n),
-                label: tr("rp_replay_last", { n }, `Keep the last ${n} seconds`),
-              })),
-            ]}
-          />
-          <p className="text-xs text-[var(--color-muted)]">
-            {tr(
-              "rp_replay_hint",
-              undefined,
-              "While you play, the last seconds are kept on this computer; Save replay (on the bar) saves them as a video. Nothing is saved until you press it.",
-            )}
-          </p>
-        </div>
-        {isMobile() && (
-          <Toggle
-            checked={prefs.toPhotos}
-            onChange={(v) => setPrefs({ toPhotos: v })}
-            label={tr("rp_to_photos", undefined, "Save screenshots and clips to Photos")}
-            hint={
-              appSavesToPhotos()
-                ? tr(
-                    "rp_to_photos_hint_app",
-                    undefined,
-                    "Straight into Photos (on Android, the gallery's PS5Upload album). Off, they go to Downloads.",
-                  )
-                : tr(
-                    "rp_to_photos_hint_web",
-                    undefined,
-                    "After each one, tap Save to Photos and choose Save Image or Save Video. Off, they download.",
-                  )
-            }
-          />
-        )}
-        <Select
-          label={tr("rp_touch_controls", undefined, "On-screen controller")}
-          block={false}
-          className="w-56"
-          value={prefs.touchControls}
-          onChange={(e) => setPrefs({ touchControls: e.target.value as RpPrefs["touchControls"] })}
-          options={[
-            { value: "auto", label: tr("rp_touch_auto", undefined, "On touch screens") },
-            { value: "on", label: tr("rp_touch_on", undefined, "Always") },
-            { value: "off", label: tr("rp_touch_off", undefined, "Never") },
-          ]}
-        />
-        {prefs.touchControls !== "off" && (
-          <div className="flex flex-wrap items-end gap-3">
-            <Select
-              label={tr("rp_touch_size", undefined, "Controller size")}
-              block={false}
-              className="w-40"
-              value={prefs.touchSize}
-              onChange={(e) => setPrefs({ touchSize: e.target.value as RpPrefs["touchSize"] })}
-              options={[
-                { value: "s", label: tr("rp_touch_size_s", undefined, "Small") },
-                { value: "m", label: tr("rp_touch_size_m", undefined, "Medium") },
-                { value: "l", label: tr("rp_touch_size_l", undefined, "Large") },
-              ]}
-            />
-            <label className="flex min-w-48 flex-col gap-1 text-xs text-[var(--color-muted)]">
-              {tr("rp_touch_opacity", undefined, "Controller opacity")}
-              <input
-                type="range"
-                min={25}
-                max={100}
-                step={5}
-                value={Math.round(prefs.touchOpacity * 100)}
-                onChange={(e) => setPrefs({ touchOpacity: num(e.target.value) / 100 })}
-                className="accent-[var(--color-accent)]"
-                data-testid="rp-touch-opacity"
-              />
-            </label>
-          </div>
-        )}
-        <p className="text-xs text-[var(--color-muted)]">
-          {tr(
-            "rp_controls_hint",
-            undefined,
-            "A controller works too: plug it in or pair it with this device. Shift + drag on the picture is a finger on the touchpad.",
-          )}
-        </p>
-      </section>
-
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">{tr("rp_pads_title", undefined, "Controllers")}</h3>
-        <ControllerSetup />
-        <WebHidTouchpad />
-      </section>
-
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">{tr("rp_buttons_title", undefined, "Controller buttons")}</h3>
-        <ButtonRemap />
-      </section>
-
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">{tr("rp_keys_title", undefined, "Keyboard controls")}</h3>
-        <KeyRemap keymap={keymap} onChange={setKeymap} />
-      </section>
-    </div>
-  );
-}
-
 /**
  * Remote Play: stream a console's screen into the app and play it with a controller, the
  * keyboard or touch. The session belongs to the app (state/remotePlay), not to this screen:
@@ -955,9 +397,6 @@ export function StreamPanel() {
   /** The Game panel over the picture (or under it, on a phone's page). */
   const [gameOpen, setGameOpen] = useState(false);
   const [phonesOpen, setPhonesOpen] = useState(false);
-  useEffect(() => {
-    if (settingsOpen) settingsBox.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
-  }, [settingsOpen]);
   const [full, setFull] = useState(false);
   const [chrome, setChrome] = useState(true);
   const [fitOpen, setFitOpen] = useState(false);
@@ -971,6 +410,8 @@ export function StreamPanel() {
   const coarse = useMedia(COARSE_QUERY);
   const portrait = useMedia("(orientation: portrait)");
   const phoneLandscape = useMedia(PHONE_LANDSCAPE_QUERY);
+  // Settings as a sheet from the bottom on a phone (either way up), at the right edge elsewhere.
+  const settingsSheet = useMedia("(max-width: 639px)") || phoneLandscape;
   const [menuOpen, setMenuOpen] = useState(false);
   // Full screen that came from turning the phone sideways (turning it back leaves it).
   const autoFull = useRef(false);
@@ -982,7 +423,6 @@ export function StreamPanel() {
   const lastPointer = useRef("mouse");
   const [elsewhere, setElsewhere] = useState<string | null>(null);
   const stage = useRef<HTMLDivElement>(null);
-  const settingsBox = useRef<HTMLDivElement>(null);
   const canvasHost = useRef<HTMLDivElement>(null);
   const hideTimer = useRef(0);
   const touchFirst = useTouchFirst(prefs.touchControls);
@@ -1423,14 +863,30 @@ export function StreamPanel() {
   const touchOverPicture = touchHere && touchLayout !== "deck";
   // Sideways in full screen the controller has the menu button (bottom middle), not the handle.
   const touchMenu = compact && full && touchHere && touchLayout === "overlay";
+  // One Settings everywhere (the stream bar, the menu, beside Start): the drawer over the
+  // stream, in full screen too, so opening it never leaves full screen.
   const openSettings = () => {
-    if (full) exitFull();
     setMenuOpen(false);
+    setGameOpen(false);
+    setFitOpen(false);
     setSettingsOpen(true);
-    window.requestAnimationFrame(() =>
-      document.querySelector('[data-testid="rp-settings"]')?.scrollIntoView?.({ block: "start", behavior: "smooth" }),
-    );
   };
+  const toggleSettings = () => (settingsOpen ? setSettingsOpen(false) : openSettings());
+  const settingsDrawer = (
+    <SettingsDrawer
+      open={settingsOpen}
+      onClose={() => setSettingsOpen(false)}
+      running={running}
+      layout={settingsSheet ? "sheet" : "side"}
+      contained={full}
+      underBar={full && !compact && running}
+      // Over the picture (full screen, a phone) a press beside it is the drawer's, never play.
+      backdrop={full || settingsSheet}
+      onFocusBack={() => {
+        if (running) stage.current?.focus({ preventScroll: true });
+      }}
+    />
+  );
   const stopHere = () => {
     if (full) exitFull();
     setMenuOpen(false);
@@ -1448,6 +904,7 @@ export function StreamPanel() {
     onStop: stopHere,
     onGame: () => {
       setMenuOpen(false);
+      setSettingsOpen(false);
       setGameOpen(true);
     },
   };
@@ -1462,7 +919,8 @@ export function StreamPanel() {
             rpInput.held.clear();
             stream?.sendPad();
           }}
-          onClick={running ? (e) => !e.shiftKey && capture() : undefined}
+          // A press that only closed Settings is not play.
+          onClick={running ? (e) => !e.shiftKey && !pressClosedSettings() && capture() : undefined}
           onDoubleClick={
             running
               ? (e) => {
@@ -1622,7 +1080,7 @@ export function StreamPanel() {
               <MicBarButton />
               {full && (
                 // Picture size where it shows: in full screen (on the page the box is the
-                // picture's own shape, so every size looks the same). Settings would leave it.
+                // picture's own shape, so every size looks the same).
                 <FitMenu
                   fit={prefs.fit}
                   open={fitOpen}
@@ -1649,7 +1107,10 @@ export function StreamPanel() {
               <BarButton
                 label={tr("rp_game_button", undefined, "Game")}
                 active={gameOpen}
-                onClick={() => setGameOpen((v) => !v)}
+                onClick={() => {
+                  setSettingsOpen(false);
+                  setGameOpen((v) => !v);
+                }}
                 testId="rp-game"
               >
                 <Gamepad2 size={16} />
@@ -1657,10 +1118,9 @@ export function StreamPanel() {
               <BarButton
                 label={tr("rp_settings", undefined, "Settings")}
                 active={settingsOpen}
-                onClick={() => {
-                  if (full) exitFull();
-                  setSettingsOpen((v) => !v);
-                }}
+                expands
+                onClick={toggleSettings}
+                testId="rp-settings-button"
               >
                 <Settings2 size={16} />
               </BarButton>
@@ -1769,6 +1229,7 @@ export function StreamPanel() {
             </>
           )}
           {launcher.dialogs}
+          {full && settingsDrawer}
           {/* Over the picture: in full screen, and on a computer's page. */}
           {(full || !compact) && (
             <GamePanel
@@ -1823,8 +1284,10 @@ export function StreamPanel() {
           <Button
             variant="ghost"
             size="md"
-            onClick={() => setSettingsOpen((v) => !v)}
+            onClick={toggleSettings}
             aria-expanded={settingsOpen}
+            data-testid="rp-settings-button"
+            {...SETTINGS_OPENER}
           >
             <Settings2 size={14} />
             {tr("rp_settings", undefined, "Settings")}
@@ -1999,7 +1462,6 @@ export function StreamPanel() {
         </Callout>
       )}
 
-      {/* Settings open above the picture: below it, a wide window put them out of sight. */}
       {phonesOpen && running && (
         <PhonePadsPanel
           consoleHost={target?.host ?? null}
@@ -2009,11 +1471,7 @@ export function StreamPanel() {
         />
       )}
 
-      {settingsOpen && (
-        <div ref={settingsBox} className="scroll-mt-4">
-          <SettingsPanel running={running} />
-        </div>
-      )}
+      {!full && settingsDrawer}
 
       {full ? createPortal(stageView, document.body) : stageView}
 
@@ -2087,7 +1545,7 @@ export function StreamPanel() {
       )}
 
 
-      {!settingsOpen && compact && !running && (
+      {compact && !running && (
         <p className="text-xs text-[var(--color-muted)]">
           {tr(
             "rp_touch_hint",
@@ -2096,7 +1554,7 @@ export function StreamPanel() {
           )}
         </p>
       )}
-      {!settingsOpen && !compact && (
+      {!compact && (
         <p className="text-xs text-[var(--color-muted)]">
           {tr(
             "rp_keys_body3",
@@ -2105,32 +1563,6 @@ export function StreamPanel() {
           )}
         </p>
       )}
-    </div>
-  );
-}
-
-/** In a browser with WebHID (Chrome, Edge): let it read a DualSense's touchpad, which the
- *  Gamepad API never gives. The browser asks which controller first, so this needs a click.
- *  The app reads the touchpad by itself and shows nothing here. */
-function WebHidTouchpad() {
-  const tr = useTr();
-  const [on, setOn] = useState(webHidTouchpadConnected);
-  if (!webHidTouchpadAvailable()) return null;
-  if (on) {
-    return (
-      <p className="text-xs text-[var(--color-muted)]" data-testid="rp-hid-touchpad-on">
-        {tr("rp_hid_touchpad_on", undefined, "The DualSense touchpad is read in this browser.")}
-      </p>
-    );
-  }
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button size="sm" onClick={() => void connectWebHidTouchpad().then(setOn)} data-testid="rp-hid-touchpad">
-        {tr("rp_hid_touchpad", undefined, "Use the DualSense touchpad")}
-      </Button>
-      <span className="text-xs text-[var(--color-muted)]">
-        {tr("rp_hid_touchpad_hint", undefined, "The browser asks which controller: pick the DualSense.")}
-      </span>
     </div>
   );
 }

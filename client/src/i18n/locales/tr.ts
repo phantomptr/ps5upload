@@ -6706,6 +6706,10 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "play_setup_blockers_title": "Remote Play'i engelleyen payload yok",
   "play_setup_blockers_body_on": "{name} açık ve Remote Play görüntüsünü engelliyor. Oyna her başlattığında onu duraklatmayı önerir; ya da Payload'lar içindeki kartından kapat. Kapandığında bu adım kendiliğinden işaretlenir.",
   "play_setup_blockers_body": "Bazı payload'lar, Remote Play'in ihtiyaç duyduğu konsol video kodlayıcısını kapatır: Hush bunu yapar. Hiçbiri açık değilken bu adım işaretlenir.",
+  "rp_set_applies_next": "Yeniden başlatınca geçerli olur",
+  "rp_settings_close": "Ayarları kapat",
+  "rp_settings_paused": "Ayarlar açıkken oyun hiçbir tuş ya da kumanda basışı almaz.",
+  "rp_picture_tools": "Görüntü araçları",
 };
 
 export default tr;
