@@ -2,10 +2,14 @@
  *
  * Three management methods (protocol/ps5upload-ava1/MGMT_METHODS.md, app.toml 185-187):
  *
- *   vinput.caps     {} -> {"mouse":B,"keyboard":B,"open":B,"backend":"<name>"[,"reason":"<token>"]}
- *                   what this console can create (B = true/false), and whether a session is open.
+ *   vinput.caps     {} -> {"mouse":B,"keyboard":B,"open":B,"backend":"<name>"[,"companion":"<status>"]
+ *                          [,"reason":"<token>"]}
+ *                   what this console can create (B = true/false), and whether a session is open;
+ *                   "companion" is the device process's state (vinput_backend_t.status).
  *   vinput.session  {"op":"open","id":N,"mouse":B,"keyboard":B} | {"op":"hb","id":N} | {"op":"close","id":N}
  *                   -> {"ok":B,"open":B,"mouse":B,"keyboard":B[,"err":"<token>"]}
+ *                   err "vinput_starting": the device process is starting (open again shortly); on
+ *                   an hb that is still ok, it is being started again (input waits until it is up).
  *                   open makes the devices asked for (keeping one already open, removing one no longer
  *                   asked for), hb keeps them, close lets everything go and removes them. `id` is the
  *                   owner's token: while a session is open only that owner's hb, report and close count
@@ -30,9 +34,10 @@
  * so is one whose owner closes it, and every session when the helper stops (vinput_stop).
  *
  * The firmware side is a backend behind vinput_backend_t. The built-in one is a stub: it reports no
- * devices and refuses to open any ("vinput_unsupported"). The console's own devices
- * (src/vinput_ps5.c, libSceMouse / libSceKeyboard) replace it only when switched on (vinput_ps5.h:
- * off by default, FW 13.60 only). Everything here (the methods, ownership, heartbeat and release) is
+ * devices and refuses to open any ("vinput_unsupported"). The console's own devices replace it only
+ * when switched on (vinput_ps5.h: off by default, FW 13.60 only): src/vinput_relay.c relays to the
+ * companion process payload/vinput/ (ps5u-vinput), which drives libSceMouse / libSceKeyboard
+ * (src/vinput_dev.c); the helper never calls them itself. Everything here (the methods, ownership, heartbeat and release) is
  * real and host-tested (payload/tests/vinput_selftest.c). */
 #ifndef PS5UPLOAD_VINPUT_H
 #define PS5UPLOAD_VINPUT_H
@@ -62,6 +67,7 @@
 #define VINPUT_OK 0
 #define VINPUT_E_UNSUPPORTED (-1) /* this firmware cannot (or we do not yet know how to) */
 #define VINPUT_E_FAILED (-2)      /* it can, but this call failed */
+#define VINPUT_E_STARTING (-3)    /* the backend's process is starting: ask again shortly */
 
 typedef struct {
     uint8_t buttons;
@@ -86,10 +92,16 @@ typedef struct {
     void (*keyboard_close)(void);
     /* The keyboard's whole state: modifiers and the keys held. */
     int (*keyboard_send)(uint8_t mods, const uint8_t keys[VINPUT_KEYS]);
+    /* Optional (NULL: always there). A backend living in another process (src/vinput_relay.c)
+     * says how that process is: "idle" (not running, started when a session opens), "starting",
+     * "running", "stopped" (it ended unexpectedly and is being started again) or "unavailable";
+     * and *reason a token for why it cannot (vinput_needs_loader, vinput_companion_failed) or
+     * NULL. */
+    const char *(*status)(const char **reason);
 } vinput_backend_t;
 
 /* The backend in use: NULL restores the built-in one (the stub). Lets go of an open session first
- * and clears a vinput_stop. runtime.c sets it once, before first use (vinput_ps5.c); tests swap it. */
+ * and clears a vinput_stop. runtime.c sets it once, before first use (vinput_relay.c); tests swap it. */
 void vinput_set_backend(const vinput_backend_t *b);
 const vinput_backend_t *vinput_backend(void);
 

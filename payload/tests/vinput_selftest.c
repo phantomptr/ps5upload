@@ -68,7 +68,7 @@ static int f_kbd_send(uint8_t mods, const uint8_t keys[VINPUT_KEYS]) {
     return VINPUT_OK;
 }
 static const vinput_backend_t FAKE = {
-    "fake", f_caps, f_mouse_open, f_mouse_close, f_mouse_send, f_kbd_open, f_kbd_close, f_kbd_send,
+    "fake", f_caps, f_mouse_open, f_mouse_close, f_mouse_send, f_kbd_open, f_kbd_close, f_kbd_send, NULL,
 };
 
 static void reset(void) {

@@ -12,9 +12,8 @@
 
 /* ── The built-in backend: a stub ─────────────────────────────────────────────────────────────
  *
- * The console's own devices are src/vinput_ps5.c (libSceMouse / libSceKeyboard virtual devices,
- * probed on FW 13.60), which runtime.c puts in place of this stub only when it is switched on
- * (vinput_ps5.h: off by default). This stub is what every other helper answers: no devices,
+ * The console's own devices are relayed to the companion process (src/vinput_relay.c), which
+ * runtime.c puts in place of this stub only when it is switched on (vinput_ps5.h: off by default). This stub is what every other helper answers: no devices,
  * "vinput_unsupported". */
 static void stub_caps(int *mouse, int *keyboard) {
     *mouse = 0;
@@ -46,7 +45,7 @@ static int stub_keyboard_send(uint8_t mods, const uint8_t keys[VINPUT_KEYS]) {
 
 static const vinput_backend_t STUB = {
     "stub", stub_caps, stub_mouse_open, stub_mouse_close, stub_mouse_send, stub_keyboard_open, stub_keyboard_close,
-    stub_keyboard_send,
+    stub_keyboard_send, NULL,
 };
 
 /* ── The session ──────────────────────────────────────────────────────────────────────────────── */
@@ -207,12 +206,16 @@ static void expire_locked(long long now_ms) {
 
 int vinput_caps_json(char *out, size_t cap) {
     int mouse = 0, keyboard = 0, n;
+    const char *status = NULL, *reason = NULL;
     pthread_mutex_lock(&g_lock);
     expire_locked(vinput_now_ms());
     g_be->caps(&mouse, &keyboard);
-    n = snprintf(out, cap, "{\"mouse\":%s,\"keyboard\":%s,\"open\":%s,\"backend\":\"%s\"%s}",
+    if (g_be->status) status = g_be->status(&reason);
+    if (!reason && !mouse && !keyboard) reason = "vinput_unsupported";
+    n = snprintf(out, cap, "{\"mouse\":%s,\"keyboard\":%s,\"open\":%s,\"backend\":\"%s\"%s%s%s%s%s%s}",
                  mouse ? "true" : "false", keyboard ? "true" : "false", g_owner ? "true" : "false", g_be->name,
-                 !mouse && !keyboard ? ",\"reason\":\"vinput_unsupported\"" : "");
+                 status ? ",\"companion\":\"" : "", status ? status : "", status ? "\"" : "",
+                 reason ? ",\"reason\":\"" : "", reason ? reason : "", reason ? "\"" : "");
     pthread_mutex_unlock(&g_lock);
     return answer(cap, n);
 }
@@ -231,7 +234,20 @@ static const char *device_locked(int want, int can, int *is_open, int (*open_fn)
         *is_open = 1;
         return NULL;
     }
-    return rc == VINPUT_E_UNSUPPORTED ? "vinput_unsupported" : "vinput_failed";
+    return rc == VINPUT_E_UNSUPPORTED ? "vinput_unsupported"
+           : rc == VINPUT_E_STARTING  ? "vinput_starting"
+                                      : "vinput_failed";
+}
+
+/* While a session is open: why its input waits, when the backend's process is not up (NULL when it
+ * is). Lock held. */
+static const char *backend_wait_locked(void) {
+    const char *reason = NULL, *st;
+    if (!g_be->status) return NULL;
+    st = g_be->status(&reason);
+    if (strcmp(st, "starting") == 0 || strcmp(st, "stopped") == 0) return "vinput_starting";
+    if (strcmp(st, "unavailable") == 0) return reason ? reason : "vinput_unsupported";
+    return NULL;
 }
 
 int vinput_session_json(const char *body, size_t n, long long now_ms, char *out, size_t cap) {
@@ -268,6 +284,16 @@ int vinput_session_json(const char *body, size_t n, long long now_ms, char *out,
         } else {
             g_owner = 0;
         }
+        /* Starting outranks the other refusal: the open is asked again once it is up. */
+        if ((em && strcmp(em, "vinput_starting") == 0) || (ek && strcmp(ek, "vinput_starting") == 0))
+            em = "vinput_starting";
+        /* A backend that says why it cannot (no loader for its process, ...) is more use than
+         * "unsupported". */
+        if (g_be->status && ((em && strcmp(em, "vinput_unsupported") == 0) || (!em && ek && strcmp(ek, "vinput_unsupported") == 0))) {
+            const char *why = NULL;
+            (void)g_be->status(&why);
+            if (why) em = why;
+        }
         rc = session_answer(out, cap, !em && !ek, em ? em : ek);
     } else if (strcmp(op, "hb") == 0) {
         if (!g_owner)
@@ -276,7 +302,7 @@ int vinput_session_json(const char *body, size_t n, long long now_ms, char *out,
             rc = session_answer(out, cap, 0, "vinput_not_owner");
         else {
             g_last_hb = now_ms;
-            rc = session_answer(out, cap, 1, NULL);
+            rc = session_answer(out, cap, 1, backend_wait_locked());
         }
     } else if (strcmp(op, "close") == 0) {
         if (g_owner && g_owner != id)
@@ -347,6 +373,7 @@ int vinput_report_json(const char *body, size_t n, long long now_ms, char *out, 
     pthread_mutex_unlock(&g_lock);
     rc = snprintf(out, cap, "{\"ok\":%s,\"applied\":%d%s}", err ? "false" : "true", applied,
                   err == VINPUT_E_UNSUPPORTED ? ",\"err\":\"vinput_unsupported\""
+                  : err == VINPUT_E_STARTING  ? ",\"err\":\"vinput_starting\""
                   : err                       ? ",\"err\":\"vinput_failed\""
                                               : "");
     return answer(cap, rc);
