@@ -32,6 +32,8 @@ import type { CodecPref } from "../lib/rpHdr";
 import { pushNotification } from "./notifications";
 import { trStatic } from "../lib/trStatic";
 import { currentControls, rpControls } from "./gameControls";
+import { useKbmStore } from "./kbm";
+import { readKbmStatus } from "../lib/kbmInput";
 
 /** How Remote Play looks and behaves on this device. */
 export interface RpPrefs {
@@ -322,6 +324,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       onStats: (st) => get().stream === stream && set({ stats: st }),
       onError: (e) => get().stream === stream && set({ error: e }),
       onLight: (rgb) => get().stream === stream && set({ light: rgb }),
+      onKbm: (v) => get().stream === stream && useKbmStore.getState().setStatus(readKbmStatus(v)),
       readPad,
       gamepads: rpGamepads,
     });

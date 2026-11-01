@@ -119,7 +119,7 @@ fn new_token() -> u64 {
 
 /// What the owner's page is told: `on` (input is wanted), what the PS5 sees (`mouse`, `keyboard`:
 /// its virtual devices are open), and why not (`err`: `vinput_unsupported` (this console cannot
-/// make them yet), `helper_old`, `unreachable`, `vinput_failed`, `rp_session_owns_input`), or why
+/// make them yet), `vinput_helper_old`, `unreachable`, `vinput_failed`, `rp_session_owns_input`), or why
 /// it ended (`reason`: `off`, `timeout`, `taken`, `left`).
 fn status_json(
     on: bool,
@@ -235,7 +235,7 @@ impl<P: Port> LinkState<P> {
             }
             Ok(None) => {
                 self.helper = SessionState::default();
-                self.err = Some("helper_old".into());
+                self.err = Some("vinput_helper_old".into());
             }
             Err(e) => {
                 crate::log_info!("vinput: open on {} failed: {e:#}", self.host);
@@ -374,7 +374,7 @@ impl<P: Port> LinkState<P> {
                         self.helper_hb = now;
                     }
                 }
-                Ok(None) => self.lost(Some("helper_old".into())),
+                Ok(None) => self.lost(Some("vinput_helper_old".into())),
                 Err(_) => self.lost(Some("unreachable".into())),
             }
             self.tell(None);
@@ -387,7 +387,7 @@ impl<P: Port> LinkState<P> {
             {
                 Ok(Some(s)) if s.ok => self.helper_hb = now,
                 Ok(Some(s)) => self.lost_session(s.err),
-                Ok(None) => self.lost(Some("helper_old".into())),
+                Ok(None) => self.lost(Some("vinput_helper_old".into())),
                 Err(_) => self.lost(Some("unreachable".into())),
             }
             self.tell(None);
@@ -958,7 +958,7 @@ mod tests {
         let mut l = LinkState::new("h", port.clone(), t0);
         let (st, seen) = sink();
         l.on_cmd(want_cmd(P1, true, true, &st), t0);
-        assert_eq!(seen.lock().unwrap().last().unwrap()["err"], "helper_old");
+        assert_eq!(seen.lock().unwrap().last().unwrap()["err"], "vinput_helper_old");
 
         let port = Arc::new(Fake::default());
         *port.unreachable.lock().unwrap() = true;
