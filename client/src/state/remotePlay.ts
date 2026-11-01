@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import { askToSignIn } from "../lib/signInNeeded";
 import { getEngineUrl } from "./engine";
 import {
   DEFAULT_KEYMAP,
@@ -367,7 +368,14 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       onStats: (st) => get().stream === stream && set({ stats: st }),
       onError: (e) => get().stream === stream && set({ error: e }),
       onLight: (rgb) => get().stream === stream && set({ light: rgb }),
-      onKbm: (v) => get().stream === stream && useKbmStore.getState().setStatus(readKbmStatus(v)),
+      onKbm: (v) => {
+        if (get().stream !== stream) return;
+        const kbm = useKbmStore.getState();
+        const next = readKbmStatus(v);
+        // Nobody signed in: the PS5 has no user to give a keyboard to. Said once per change.
+        if (next?.err === "vinput_no_user" && kbm.status?.err !== "vinput_no_user") askToSignIn(t.host);
+        kbm.setStatus(next);
+      },
       onPadKbm: (v) => get().stream === stream && emitPadKbm(v),
       onKeyboard: (m) => get().stream === stream && set({ keyboard: nextKeyboard(get().keyboard, m) }),
       onPasscode: (ask) => {

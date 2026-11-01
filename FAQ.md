@@ -1197,8 +1197,16 @@ screen turns on Remote Play, reads your account from the console and registers, 
 awake. After that the button is **Wake & sign in** and brings the console up straight on your
 user's home screen — the same thing the official Remote Play app does. Only if a console refuses
 to pair, **Enter keys manually** takes a **wake code** (wakes to the user-select screen) and the
-two Remote Play **session keys** (also signs your user in). (If your user has a login passcode,
-the console will stop to ask for it, so sign-in needs a passcode-free user.)
+two Remote Play **session keys** (also signs your user in). If your user has a login passcode,
+the app asks for it (see "My PS5 profile has a passcode").
+
+**Q: My PS5 profile has a passcode.**
+The app asks for it when the PS5 does: after **Wake & sign in**, after **Start** in Remote Play,
+and after **Sign in** on "The PS5 is waiting at sign-in". Type the four digits; a wrong one asks
+again, and after five wrong ones you enter it on the PS5 itself. **Cancel** leaves the PS5 at its
+sign-in screen. The box shows on the device that started it; phones used as controllers and
+watchers only see that the PS5 is waiting. The passcode goes straight to the console and is never
+saved or logged. Waking the PS5 for an upload never asks: uploads work at the sign-in screen.
 
 **Q: Do I still have to "Register" a game after uploading it?**
 Not anymore. When you upload a game folder, **"Add to PS5 home screen
@@ -2319,8 +2327,8 @@ signs your user in on its own, and keeps playing while you use other screens. On
 at a time. **Play › Set up** has the same steps as a checklist that ticks itself and does what it
 can (see "How do I set Play up?"):
 
-1. **Sign in to a user on the PS5.** Use a user without a login passcode; a passcode stops the
-   automatic sign-in after a wake.
+1. **Sign in to a user on the PS5.** If the user has a login passcode, the app asks for it when
+   the PS5 does (see "My PS5 profile has a passcode").
 2. **Give that user an account ID.** A PSN-linked user has one; an offline user gets one in
    Accounts › Users (write it down: saves made afterwards are tied to it).
 3. **Sign the account in to PlayStation Network (offline)** if the console's own Remote Play

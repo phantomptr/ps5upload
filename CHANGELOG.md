@@ -26,6 +26,12 @@ What's new in ps5upload, written for humans.
   never saved. Cancel ends the start. Wake & sign in asks the same way (Cancel leaves the PS5 at
   its sign-in screen); automatic wakes for uploads don't ask and just wake the console. After five
   wrong passcodes the app stops asking and says to enter it on the PS5.
+- **"The PS5 is waiting at sign-in" (#608).** Playing a game, the native keyboard & mouse or a new
+  avatar with nobody signed in now says so once, with a **Sign in** button (Wake & sign in, and
+  the passcode box if the user has one). Nothing changes while a user is signed in.
+- **The passcode stays on the device that started the stream (#608).** A phone used as a
+  controller or watching shows "Waiting for the passcode on <computer>" instead; watchers never
+  get the box or the code. The FAQ has a short "My PS5 profile has a passcode" answer.
 - **Pair with the PIN shown on the PS5 (#609).** Play › Set up's pairing step (and Wake & sign in,
   when pairing fails) can now pair the way PS Remote Play and chiaki-ng do: open Settings › System
   › Remote Play › Link Device on the PS5 and type the 8-digit number it shows. It needs no helper,

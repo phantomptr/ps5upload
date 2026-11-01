@@ -671,10 +671,18 @@ impl Live {
 
     fn snapshot(&self) -> serde_json::Value {
         let attached = self.viewer.lock().map(|g| g.is_some()).unwrap_or(false);
+        // The console waits for the user's passcode: phones and watchers are told only that (the
+        // prompt itself goes to the page that runs the session, see ask_passcode).
+        let passcode = self
+            .passcode_ask
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false);
         serde_json::json!({
             "host": self.host,
             "playing": self.playing.load(Ordering::Relaxed),
             "attached": attached,
+            "passcode": passcode,
         })
     }
 }
@@ -1228,15 +1236,30 @@ mod tests {
         };
         // Nothing is taken before the console asks.
         assert!(!live.answer_passcode(id, Passcode::Digits("1234".into())));
+        // A watcher (watch party): it never gets the prompt.
+        let (stx, mut srx) = mpsc::channel(8);
+        live.spectators.lock().unwrap().push(Spectator {
+            id: 77,
+            tx: stx,
+            need_key: true,
+        });
         let mut sink = Sink {
             live: Arc::new(live),
             t0: Instant::now(),
         };
+        assert_eq!(sink.live.snapshot()["passcode"], false);
         sink.passcode_needed(false);
+        // Phones and watchers see only that the console waits (pad_link sends the snapshot).
+        assert_eq!(sink.live.snapshot()["passcode"], true);
         let v = next_text(&mut crx);
         assert_eq!(v["stage"], "passcode");
         assert_eq!(v["retry"], false);
         assert_eq!(v["wait_s"], PASSCODE_WAIT.as_secs());
+        assert!(srx.try_recv().is_err(), "a watcher was asked");
+        // Nor can it answer.
+        assert!(!sink
+            .live
+            .answer_passcode(77, Passcode::Digits("1234".into())));
         assert!(sink.passcode().is_none());
         // Not four digits, or from another page: ignored.
         assert!(!sink.live.answer_passcode(id, Passcode::Digits("12".into())));

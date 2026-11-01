@@ -66,6 +66,7 @@ enum {
 #define VWIRE_RC_FAILED (-2)      /* = VINPUT_E_FAILED */
 #define VWIRE_RC_BAD_TOKEN (-4)
 #define VWIRE_RC_BAD_REQUEST (-5)
+#define VWIRE_RC_NO_USER (-6) /* = VINPUT_E_NO_USER */
 
 typedef struct {
     uint8_t type;

@@ -13,8 +13,9 @@ export type PadLinkStage =
   | { kind: "connecting" }
   /** Waiting for the computer to allow this phone. */
   | { kind: "asking" }
-  /** Joined: `playing` once the computer's session shows a picture; null host = no session. */
-  | { kind: "joined"; host: string | null; playing: boolean }
+  /** Joined: `playing` once the computer's session shows a picture; null host = no session.
+   *  `passcode`: the PS5 waits for its user's passcode, asked on the computer (never here). */
+  | { kind: "joined"; host: string | null; playing: boolean; passcode?: boolean }
   | { kind: "refused"; why: string }
   | { kind: "lost" };
 
@@ -40,7 +41,7 @@ export interface PadClientOptions {
 
 /** The message a stage status from the engine is. */
 export function readStatus(text: string): PadLinkStage | { rumble: [number, number] } | { light: [number, number, number] } | null {
-  let v: { stage?: string; why?: string; session?: { host?: string; playing?: boolean } | null; rumble?: [number, number]; light?: [number, number, number] };
+  let v: { stage?: string; why?: string; session?: { host?: string; playing?: boolean; passcode?: boolean } | null; rumble?: [number, number]; light?: [number, number, number] };
   try {
     v = JSON.parse(text);
   } catch {
@@ -51,7 +52,12 @@ export function readStatus(text: string): PadLinkStage | { rumble: [number, numb
   if (v.stage === "asking") return { kind: "asking" };
   if (v.stage === "refused") return { kind: "refused", why: String(v.why ?? "") };
   if (v.stage === "joined") {
-    return { kind: "joined", host: v.session?.host ?? null, playing: !!v.session?.playing };
+    return {
+      kind: "joined",
+      host: v.session?.host ?? null,
+      playing: !!v.session?.playing,
+      passcode: !!v.session?.passcode,
+    };
   }
   return null;
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { askToSignIn, isSignInNeeded } from "../../lib/signInNeeded";
 import {
   CircleUserRound,
   Crop,
@@ -294,7 +295,9 @@ function AvatarEditor({
       );
       onApplied();
     } catch (e) {
-      setApplyError(`${e}`);
+      // Nobody signed in for "the current user": offer Sign in instead of the raw error.
+      if (isSignInNeeded(`${e}`)) askToSignIn(addr);
+      else setApplyError(`${e}`);
     } finally {
       setApplying(false);
     }

@@ -92,6 +92,7 @@ import { ShortcutsOverlay } from "../components/ShortcutsOverlay";
 import { LocalPathPicker } from "../components/LocalPathPicker";
 import { Toaster } from "../components/Toaster";
 import { WakePasscodeHost } from "../components/WakePasscodeHost";
+import { SignInNeededHost } from "../components/SignInNeededHost";
 import { LiveRegion } from "../components/LiveRegion";
 import { SkipNav } from "../components/SkipNav";
 import { TabBottomNav } from "./TabNav";
@@ -1751,6 +1752,7 @@ export default function AppShell() {
       {/* v5 Toaster — critical-toast overlay. Mounted last so it
           sits above all other chrome in DOM order. */}
       <Toaster />
+      <SignInNeededHost />
       <WakePasscodeHost />
       <PairingDialog />
     </div>

@@ -87,7 +87,10 @@ static int device(int want, int *is_open, int *lost, int (*open_fn)(void), void 
         *is_open = 1;
         *lost = 0;
     }
-    return rc == VINPUT_OK ? VWIRE_RC_OK : rc == VINPUT_E_UNSUPPORTED ? VWIRE_RC_UNSUPPORTED : VWIRE_RC_FAILED;
+    return rc == VINPUT_OK               ? VWIRE_RC_OK
+           : rc == VINPUT_E_UNSUPPORTED ? VWIRE_RC_UNSUPPORTED
+           : rc == VINPUT_E_NO_USER     ? VWIRE_RC_NO_USER
+                                        : VWIRE_RC_FAILED;
 }
 
 /* After the backend made its devices again (or failed to): an open device it could not make is
