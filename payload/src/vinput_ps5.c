@@ -4,10 +4,11 @@
  * libSceMouse / libSceKeyboard: sceMouseInit / sceKeyboardInit hung the whole helper when it did
  * (payload/vinput/README.md).
  *
- * OFF by default. vinput_ps5_backend() hands the relay out only when BOTH hold:
+ * vinput_ps5_backend() hands the relay out when BOTH hold:
  *   - the firmware is on vinput_ps5_firmware_allowed's list (only "13.60": the one the calls were
- *     probed on), and
- *   - it is switched on: built with -DVINPUT_PS5=1, or the file VINPUT_PS5_ENABLE_FILE exists.
+ *     probed and tested end to end on), and
+ *   - it is not switched off: built with -DVINPUT_PS5=0, or the file VINPUT_PS5_DISABLE_FILE
+ *     exists (a way out for a console where the companion misbehaves, without a new helper).
  * Otherwise the helper keeps vinput.c's stub (no devices, "vinput_unsupported"). */
 #include "vinput_ps5.h"
 
@@ -30,7 +31,7 @@
 #include "vinput_relay.h"
 
 #ifndef VINPUT_PS5
-#define VINPUT_PS5 0
+#define VINPUT_PS5 1
 #endif
 
 #define LOADER_PORT 9021
@@ -136,7 +137,7 @@ const vinput_backend_t *vinput_ps5_backend(void) {
     size_t len = sizeof kv;
     struct stat st;
     vrelay_cfg_t cfg;
-    int on = VINPUT_PS5 || stat(VINPUT_PS5_ENABLE_FILE, &st) == 0;
+    int on = VINPUT_PS5 && stat(VINPUT_PS5_DISABLE_FILE, &st) != 0;
     if (sysctlbyname("kern.version", kv, &len, NULL, 0) != 0) kv[0] = '\0';
     kv[sizeof kv - 1] = '\0';
     ps5_firmware_from_kernel(kv, fw, sizeof fw);
