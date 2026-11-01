@@ -290,6 +290,14 @@ export interface QueueItem {
   /** It was running when it was stopped or the app closed: it is waiting with its console-side
    *  progress kept, and starting it continues from there. Cleared when it runs again. */
   interrupted?: boolean;
+  /** Paused: the row waits (status stays "pending") and the runner skips it until it is
+   *  resumed. `user`: the person pressed Pause, and only they resume it. `sendNow`: a Send now
+   *  paused it, and it resumes by itself once the sent-now rows on its console have finished.
+   *  Its tx id is kept, so a resume continues from what the console already has. */
+  paused?: "user" | "sendNow" | null;
+  /** Send now: the row runs ahead of everything else waiting on its console. Rows sent now
+   *  run in the order they were clicked (this value). Cleared once the row finishes. */
+  sendNowAt?: number | null;
   /** Parked because the console went into rest mode: the row waits (pending) for the PS5 to
    *  wake and resumes by itself on the helper-up edge after it (resumeFailedRecoverable). Not
    *  a failure and not a spent recovery attempt. Cleared when it runs again. */
@@ -474,6 +482,15 @@ interface QueueState {
   restartItem: (id: string) => void;
   /** Retry one failed row. Returns false when the row is missing/not failed. */
   retryItem: (id: string) => boolean;
+  /** Pauses the running upload: its transfer stops with what the console has kept, the row
+   *  waits as Paused, and the console's queue goes on with the next row. Not for installs. */
+  pauseItem: (id: string) => void;
+  /** Puts a paused row back in line at its place. With nothing running on its console it
+   *  starts at once (continuing from what the console has); otherwise it waits its turn. */
+  resumeItem: (id: string) => void;
+  /** Runs this waiting row next: the upload running on its console is paused, and resumes by
+   *  itself once this row (and any other row sent now after it) has finished. */
+  sendNow: (id: string) => void;
   /** Retry one archive row that failed for a missing or wrong password, with the password
    *  the person just typed. The password lives on the in-memory item only (the save redacts
    *  it) and is never logged. False when the password is empty or the row is not a failed one. */
@@ -562,7 +579,7 @@ export function distinctPendingHosts(
   const seen = new Set<string>();
   const out: string[] = [];
   for (const it of items) {
-    if (it.status !== "pending") continue;
+    if (it.status !== "pending" || it.paused) continue;
     // A row parked for a sleeping console waits for the wake, not for the next Start-all pass.
     if (it.waitingForWake && opts.includeWaitingForWake === false) continue;
     const h = hostOf(it.addr);
@@ -683,15 +700,23 @@ class InstallItemError extends Error {
 /** The next pending item to run for `host` (port-stripped match), or null.
  *  Picks the lowest install-order priority (base → update → DLC), breaking ties
  *  by add-order (the first such pending item wins, so a user's manual reorder
- *  within a category is preserved). Pure — exported for tests. */
+ *  within a category is preserved). A row sent now beats all of that; a paused row is never
+ *  picked. Pure — exported for tests. */
 export function nextPendingForHost(
   items: QueueItem[],
   host: string,
 ): QueueItem | null {
   let best: QueueItem | null = null;
   let bestPrio = Number.POSITIVE_INFINITY;
+  // A row sent now goes first (the earliest click first); a paused row never runs.
+  let sent: QueueItem | null = null;
   for (const it of items) {
-    if (it.status !== "pending" || hostOf(it.addr) !== host) continue;
+    if (it.status !== "pending" || it.paused || hostOf(it.addr) !== host || !it.sendNowAt) continue;
+    if (!sent || it.sendNowAt < (sent.sendNowAt ?? 0)) sent = it;
+  }
+  if (sent) return sent;
+  for (const it of items) {
+    if (it.status !== "pending" || it.paused || hostOf(it.addr) !== host) continue;
     const prio = installOrderPriority(it);
     // Strict `<` keeps the FIRST item at a given priority (add-order stable).
     if (prio < bestPrio) {
@@ -1996,6 +2021,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           if (next.deleteSourceAfterUpload) {
             void deleteSourceAfterUpload(next.sourcePath, next.addr);
           }
+          // The last row sent now finished: the upload it paused goes on next.
+          settleSendNow(nh);
           if (!isLive()) return;
           break; // success → next item
         } catch (e) {
@@ -2075,10 +2102,17 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
                 e instanceof InstallItemError ? e.result : { ok: false, message },
               );
             }
+            // A row sent now that failed still hands the console back to the upload it paused.
+            settleSendNow(nh);
             if (!isLive()) return;
             // One failed install never holds up the installs queued after it
-            // (Install all used to carry on past a failure too).
-            if (!isInstall && !shouldContinueAfterFailure(get().continueOnFailure)) {
+            // (Install all used to carry on past a failure too). Nor does a failed row sent
+            // now hold up the upload it paused.
+            if (
+              !isInstall &&
+              !next.sendNowAt &&
+              !shouldContinueAfterFailure(get().continueOnFailure)
+            ) {
               break drain; // hard stop: tear down this console's loop
             }
             break; // continueOnFailure → move to the next item
@@ -2158,6 +2192,91 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
         }
       }
     }
+  };
+
+  /** Ends a Send now on `h` once no row sent now is still waiting or running there: the rows
+   *  it paused go back in line (and into a limited run's scope, so the loop takes them next).
+   *  A finished row's mark is cleared, so a later retry waits its turn. Starts nothing itself:
+   *  a live loop picks them up, and a stopped console waits for Start like before. */
+  const settleSendNow = (h: string): string[] => {
+    const mine = (it: QueueItem) => hostOf(it.addr) === h;
+    const items = get().items;
+    const live = items.some(
+      (it) =>
+        mine(it) &&
+        !!it.sendNowAt &&
+        !it.paused &&
+        (it.status === "pending" || it.status === "running"),
+    );
+    const resumed: string[] = [];
+    let changed = false;
+    const next = items.map((it) => {
+      if (!mine(it)) return it;
+      if (it.sendNowAt && (it.status === "done" || it.status === "failed")) {
+        changed = true;
+        return { ...it, sendNowAt: null };
+      }
+      if (!live && it.paused === "sendNow" && it.status === "pending") {
+        changed = true;
+        resumed.push(it.id);
+        return { ...it, paused: null };
+      }
+      return it;
+    });
+    if (!changed) return resumed;
+    set({ items: next });
+    scheduleSave();
+    const scope = runScope.get(h);
+    if (scope) for (const id of resumed) scope.ids.add(id);
+    return resumed;
+  };
+
+  /** After a console's loop was stopped to take one row out of it (Cancel, Pause, Send now):
+   *  waits for the engine to let go of the stopped job (it ends at its next shard boundary),
+   *  then runs the console again. Starting at once put a second transfer on the console beside
+   *  the one still ending. A Stop, Start or Clear meanwhile has the last word. */
+  const restartAfterStop = (
+    h: string,
+    addr: string,
+    stoppedJob: string | null,
+    again?: { installsOnly?: boolean; onlyIds?: string[] },
+  ) => {
+    const stoppedGen = hostGen.get(h);
+    void (async () => {
+      if (stoppedJob) {
+        for (let i = 0; i < CANCEL_SETTLE_TRIES; i++) {
+          let status: string;
+          try {
+            status = (await jobStatus(stoppedJob, addr)).status;
+          } catch {
+            break; // the engine no longer knows it
+          }
+          if (status !== "running") break;
+          await sleep(CANCEL_SETTLE_MS);
+        }
+      }
+      if (hostGen.get(h) !== stoppedGen) return;
+      if (nextPendingForHost(get().items, h)) void get().startHost(h, again);
+    })();
+  };
+
+  /** Stops the running upload `item` and marks it paused (`why`). The console then runs again
+   *  in the same scope as before, plus `alsoIds` (a row sent now). */
+  const pauseRunning = (item: QueueItem, why: "user" | "sendNow", alsoIds: string[] = []) => {
+    const h = hostOf(item.addr);
+    const stoppedJob = runningJobByHost.get(h) ?? null;
+    const scope = runScope.get(h);
+    const scopeIds = scope ? [...scope.ids] : [];
+    const scopeInstalls = scope?.installs ?? false;
+    get().stopHost(h);
+    set((s) => ({ items: patchItem(s.items, item.id, { paused: why }) }));
+    scheduleSave();
+    // Pausing a row sent now ends that Send now: the row it paused goes back in line.
+    const resumed = why === "user" ? settleSendNow(h) : [];
+    const again = scope
+      ? { installsOnly: scopeInstalls, onlyIds: [...scopeIds, ...alsoIds, ...resumed] }
+      : undefined;
+    restartAfterStop(h, item.addr, stoppedJob, again);
   };
 
   const actions: QueueState = {
@@ -2450,6 +2569,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       releaseArchiveCopy(id);
       set((s) => ({ items: removeItem(s.items, id) }));
       scheduleSave();
+      if (removed) settleSendNow(hostOf(removed.addr));
     },
 
     cancelItem(id) {
@@ -2495,6 +2615,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       if (item.status !== "running") {
         set((s) => ({ items: removeItem(s.items, id) }));
         scheduleSave();
+        settleSendNow(h);
         return;
       }
       // The actively-uploading item. The transfer port is single-client, so
@@ -2506,31 +2627,52 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       const wasRunning = !!get().runningHosts[h];
       const cancelledJob = runningJobByHost.get(h) ?? null;
       get().stopHost(h);
-      const stoppedGen = hostGen.get(h);
       set((s) => ({ items: removeItem(s.items, id) }));
       scheduleSave();
+      // Cancelling a row sent now ends that Send now: the row it paused goes back in line.
+      settleSendNow(h);
       if (wasRunning && nextPendingForHost(get().items, h)) {
-        // Let the engine let go of the cancelled job first (it ends at its next
-        // shard boundary), as restartItem does: starting the next item at once
-        // put a second transfer on the console beside the one still ending.
-        void (async () => {
-          if (cancelledJob) {
-            for (let i = 0; i < CANCEL_SETTLE_TRIES; i++) {
-              let status: string;
-              try {
-                status = (await jobStatus(cancelledJob, item.addr)).status;
-              } catch {
-                break; // the engine no longer knows it
-              }
-              if (status !== "running") break;
-              await sleep(CANCEL_SETTLE_MS);
-            }
-          }
-          // A Stop, Start or Clear on this console meanwhile has the last word.
-          if (hostGen.get(h) !== stoppedGen) return;
-          if (nextPendingForHost(get().items, h)) void get().startHost(h);
-        })();
+        restartAfterStop(h, item.addr, cancelledJob);
       }
+    },
+
+    pauseItem(id) {
+      const item = get().items.find((it) => it.id === id);
+      if (!item || item.status !== "running" || item.sourceKind === "install") return;
+      pauseRunning(item, "user");
+    },
+
+    resumeItem(id) {
+      const item = get().items.find((it) => it.id === id);
+      if (!item || item.status !== "pending" || !item.paused) return;
+      set((s) => ({ items: patchItem(s.items, id, { paused: null }) }));
+      scheduleSave();
+      // A run going takes it in its turn (a limited run is widened to it); an idle console
+      // runs it now.
+      void get().startHost(hostOf(item.addr), { onlyIds: [id] });
+    },
+
+    sendNow(id) {
+      const item = get().items.find((it) => it.id === id);
+      if (!item || item.status !== "pending" || item.paused) return;
+      const h = hostOf(item.addr);
+      // Clicks keep their order even within one millisecond.
+      const at = Math.max(
+        Date.now(),
+        ...get().items.map((it) => (it.sendNowAt ?? 0) + 1),
+      );
+      set((s) => ({ items: patchItem(s.items, id, { sendNowAt: at }) }));
+      scheduleSave();
+      const running = get().items.find(
+        (it) => it.status === "running" && hostOf(it.addr) === h,
+      );
+      // Pause the upload going now, unless it was sent now itself (they run in click order)
+      // or is an install (Sony's install cannot be stopped; this row runs right after it).
+      if (running && running.sourceKind !== "install" && !running.sendNowAt) {
+        pauseRunning(running, "sendNow", [id]);
+        return;
+      }
+      void get().startHost(h, { onlyIds: [id] });
     },
 
     noteSourceSize(id, bytes) {
@@ -2965,6 +3107,9 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
     retryFailed: () => undefined,
     restartItem: () => undefined,
     retryItem: () => false,
+    pauseItem: () => undefined,
+    resumeItem: () => undefined,
+    sendNow: () => undefined,
     retryWithPassword: () => false,
     discardPartial: () => Promise.resolve(),
     resumeFailedRecoverable: () => Promise.resolve(0),

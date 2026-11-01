@@ -267,3 +267,111 @@ test("a stopped or interrupted Add files upload can be resumed", async ({
   });
   await expect(stopped).toHaveCount(0);
 });
+
+// Asked for by a donor: pause a huge copy to put a small file on the console, then carry on.
+test("Pause, Resume and Send now on Files uploads", async ({ page }) => {
+  await page.addInitScript((host) => {
+    window.localStorage.setItem("ps5upload.host", host);
+  }, HOST);
+  const SMALL = `${PC_DIR}/small.txt`;
+  // The fake engine: every start is a new job, named after its file, running until the test
+  // finishes it or it is cancelled.
+  const jobs: { id: string; name: string; state: "running" | "done" | "cancelled" }[] = [];
+  const startedNames = () => jobs.map((j) => j.name);
+  const finish = (name: string) => {
+    for (const j of jobs) if (j.name === name && j.state === "running") j.state = "done";
+  };
+  const json = (route: Route, body: unknown) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  await page.route(
+    (u) => u.pathname.startsWith("/api/"),
+    async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      const p = url.pathname;
+      if (p === "/api/version") return json(route, { caps: { rar: true }, version: "6.2.3" });
+      if (p === "/api/ps5/status")
+        return json(route, { instance_id: 1, prior_instance: "clean", ucred_elevated: true, version: "6.2.3" });
+      if (p === "/api/ps5/volumes") return json(route, { volumes: [] });
+      if (p === "/api/ps5/list-dir")
+        return json(route, { path: url.searchParams.get("path") ?? "/data", entries: [], truncated: false, total_scanned: 0, returned: 0 });
+      if (p === "/api/local/storage-roots") return json(route, [PC_DIR]);
+      if (p === "/api/local/list-dir")
+        return json(route, [
+          { name: "big.exfat", path: PC_FILE, is_dir: false, size: TOTAL },
+          { name: "small.txt", path: SMALL, is_dir: false, size: 5 },
+        ]);
+      if (p === "/api/local/path-kind") return json(route, { kind: "file" });
+      if (p === "/api/transfer/file" && req.method() === "POST") {
+        const src = String((req.postDataJSON() as { src: string }).src);
+        const id = `job-${jobs.length + 1}`;
+        jobs.push({ id, name: src.split("/").pop() ?? "", state: "running" });
+        return json(route, { job_id: id });
+      }
+      const m = /^\/api\/jobs\/(job-\d+)(\/cancel)?$/.exec(p);
+      if (m) {
+        const job = jobs.find((j) => j.id === m[1]);
+        if (m[2]) {
+          if (job && job.state === "running") job.state = "cancelled";
+          return json(route, {});
+        }
+        if (job?.state === "done") return json(route, { status: "done", bytes_sent: 5, total_bytes: 5 });
+        if (job?.state === "running")
+          return json(route, { status: "running", bytes_sent: 2_500_000_000, total_bytes: TOTAL });
+        return json(route, { status: "failed", error: "transfer_cancelled" });
+      }
+      if (p === "/api/jobs") return json(route, []);
+      return json(route, {});
+    },
+  );
+
+  await page.goto("/files", { waitUntil: "domcontentloaded" });
+  const main = page.getByRole("main");
+  const addFile = async (name: string) => {
+    await main.getByRole("button", { name: "Add files" }).click({ timeout: 30_000 });
+    await page.getByRole("dialog").getByText(name).first().click();
+    await page.getByRole("button", { name: "Add 1" }).click();
+  };
+  const progress = page.getByTestId("fs-upload-progress");
+  const queue = page.getByTestId("fs-upload-queue");
+
+  // Pause the big copy: it waits as Paused, nothing is lost, the line is free.
+  await addFile("big.exfat");
+  await expect(progress).toBeVisible({ timeout: 15_000 });
+  await progress.getByTestId("fs-upload-pause").click();
+  await expect(queue.getByTestId("fs-upload-paused")).toBeVisible();
+  await expect(queue).toContainText("big.exfat");
+  await expect(progress).toHaveCount(0);
+  await expect(page.getByTestId("fs-upload-stopped")).toHaveCount(0);
+
+  // A small file dropped now goes at once and finishes.
+  await addFile("small.txt");
+  await expect.poll(startedNames).toEqual(["big.exfat", "small.txt"]);
+  finish("small.txt");
+  await expect(progress).toHaveCount(0, { timeout: 15_000 });
+  await expect(queue).not.toContainText("small.txt");
+
+  // Resume: the big copy carries on.
+  await queue.getByTestId("fs-upload-resume-item").click();
+  await expect(progress).toBeVisible({ timeout: 15_000 });
+  await expect.poll(startedNames).toEqual(["big.exfat", "small.txt", "big.exfat"]);
+  // The running pick stays listed while it runs, no longer paused.
+  await expect(queue.getByTestId("fs-upload-paused")).toHaveCount(0);
+
+  // Send now: a small file queued behind the big copy goes first; the big copy pauses and
+  // carries on by itself once it is done.
+  await addFile("small.txt");
+  await expect(queue).toContainText("small.txt");
+  await queue.getByTestId("fs-upload-send-now").click();
+  await expect.poll(startedNames).toEqual(["big.exfat", "small.txt", "big.exfat", "small.txt"]);
+  await expect(queue).toContainText("Paused for a Send now");
+  finish("small.txt");
+  await expect.poll(startedNames, { timeout: 15_000 }).toEqual([
+    "big.exfat", "small.txt", "big.exfat", "small.txt", "big.exfat",
+  ]);
+  await expect(progress).toBeVisible();
+  await expect(queue.getByTestId("fs-upload-paused")).toHaveCount(0);
+  await expect(queue).not.toContainText("small.txt");
+  // Never two at once: each earlier job had ended (cancelled or done) before the next began.
+  expect(jobs.filter((j) => j.state === "running")).toHaveLength(1);
+});
