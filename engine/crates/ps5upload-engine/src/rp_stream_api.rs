@@ -17,6 +17,9 @@
 //!   on or off, and binary `[5][one Opus packet]` is one mic frame (48 kHz
 //!   stereo, 10 ms, 40 bytes; see `rp_stream::mic`). Only the attached page's
 //!   mic counts, and the mic goes off whenever the page changes.
+//!   The console's on-screen keyboard, only for a session started with `"keyboard": true`:
+//!   `{"keyboard_text": "…"}`, `{"keyboard_accept": true}`, `{"keyboard_reject": true}`
+//!   (see rp_keyboard.rs).
 //! * engine → client, binary `[u8 kind][payload]`: 0 = video codec header
 //!   (Annex-B parameter sets), 1 = video access unit, 3 = audio header,
 //!   4 = audio frame (Opus), 6 = DualSense haptics frame (10 ms of 3 kHz stereo s16le PCM),
@@ -27,6 +30,8 @@
 //!   (`{"light": [r, g, b]}`) and, for a session started with `"dualsense": true`, adaptive
 //!   triggers (`{"triggers": {"left": [mode, 10 bytes…], "right": […]}}`) and the console's
 //!   effect strengths (`{"ds_intensity": [haptics, triggers]}`, 0 off 1 strong 2 medium 3 weak).
+//!   For a session started with `"keyboard": true`, the console's keyboard
+//!   (`{"keyboard": {"open": …, "text": …}}`, rp_keyboard.rs).
 //!
 //! The session belongs to the engine, not to the socket. The console serves
 //! one session at a time and holds its slot for 12-30 s after one ends, so a
@@ -53,7 +58,8 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::rp_stream::{
-    run_stream, Codec, ControllerState, MicInput, Progress, StreamConfig, StreamSink,
+    run_stream, Codec, ControllerState, KeyboardEvent, KeyboardInput, MicInput, Progress,
+    StreamConfig, StreamSink,
 };
 use tokio::sync::mpsc;
 
@@ -116,6 +122,10 @@ struct StartReq {
     /// Video as kind 7 (each access unit with the engine's time), for the page's latency stages.
     #[serde(default)]
     timing: bool,
+    /// Typing into the console's on-screen keyboard (rp_keyboard.rs). Without it the session
+    /// is as before.
+    #[serde(default)]
+    keyboard: bool,
 }
 
 impl StartReq {
@@ -144,6 +154,9 @@ struct ClientMsg {
     /// The page's clock, echoed back as `{"pong": …}`.
     #[serde(default)]
     ping: Option<serde_json::Value>,
+    /// Typing into the console's keyboard (rp_keyboard.rs).
+    #[serde(flatten)]
+    keyboard: crate::rp_keyboard::PageKeyboard,
 }
 
 /// The answer to a ping: the page's own value back, untouched, and the engine's clock now.
@@ -207,6 +220,8 @@ struct Live {
     replay: Mutex<Option<crate::rp_replay::Replay>>,
     /// Watchers (pad_link.rs, watch party): each gets its own copy of the picture and sound.
     spectators: Mutex<Vec<Spectator>>,
+    /// The console's on-screen keyboard (rp_keyboard.rs).
+    keyboard: crate::rp_keyboard::KeyboardLink,
 }
 
 /// A watcher's queue. `need_key`: it cannot use a frame until the next keyframe (it just
@@ -400,6 +415,7 @@ impl Live {
             mic_on: AtomicBool::new(false),
             replay: Mutex::new(None),
             spectators: Mutex::new(Vec::new()),
+            keyboard: Default::default(),
         }
     }
 
@@ -482,6 +498,9 @@ impl Live {
             let _ = ctl.try_send(text(
                 serde_json::json!({"stage": "first_frame", "attached": true}),
             ));
+        }
+        if let Some(k) = self.keyboard.on_attach() {
+            let _ = ctl.try_send(text(k));
         }
         self.need_key.store(true, Ordering::Relaxed);
         self.want_key.store(true, Ordering::Relaxed);
@@ -687,6 +706,13 @@ impl StreamSink for Sink {
     fn mic(&mut self) -> Option<MicInput> {
         self.live.mic.lock().ok()?.pop_front()
     }
+    fn keyboard(&mut self, ev: KeyboardEvent) {
+        let v = self.live.keyboard.event(ev);
+        self.live.send_ctl(text(v));
+    }
+    fn keyboard_input(&mut self) -> Option<KeyboardInput> {
+        self.live.keyboard.next()
+    }
 }
 
 /// An error as the player shows it: a stable `code` to pick the plain-English
@@ -781,6 +807,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
     }
     cfg.mic = start.mic;
     cfg.dualsense = start.dualsense;
+    cfg.keyboard = start.keyboard;
     let live = Arc::new(Live::new(
         start.host.clone(),
         cfg.codec.is_hevc(),
@@ -791,6 +818,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             .min(MAX_KEEP_ALIVE),
     ));
     live.mic_enabled.store(cfg.mic, Ordering::Relaxed);
+    live.keyboard.enabled.store(cfg.keyboard, Ordering::Relaxed);
     live.set_replay(start.replay_s);
     let l = live.clone();
     tokio::task::spawn_blocking(move || {
@@ -999,6 +1027,9 @@ async fn session(mut socket: WebSocket) {
                         }
                         if m.replay_s.is_some() {
                             live.set_replay(m.replay_s);
+                        }
+                        if live.is_viewer(id) {
+                            live.keyboard.page_typed(&m.keyboard);
                         }
                     }
                 }
@@ -1335,6 +1366,42 @@ mod tests {
         let s: StartReq =
             serde_json::from_str(r#"{"host":"h","regist_key":"","rp_key":""}"#).unwrap();
         assert!(!s.mic);
+    }
+
+    #[test]
+    fn the_keyboard_is_only_on_when_asked_and_only_for_the_attached_page() {
+        let s: StartReq =
+            serde_json::from_str(r#"{"host":"h","regist_key":"","rp_key":""}"#).unwrap();
+        assert!(!s.keyboard, "an older page gets no keyboard");
+        let live = Arc::new(Live::new("h".into(), false, DEFAULT_KEEP_ALIVE));
+        live.keyboard.enabled.store(true, Ordering::Relaxed);
+        let mut sink = Sink {
+            live: live.clone(),
+            t0: Instant::now(),
+        };
+        let (vt, _vr, ct, mut cr) = page();
+        live.attach(vt, ct, false);
+        sink.keyboard(KeyboardEvent::Open("ü".into()));
+        assert_eq!(
+            kinds(&mut cr),
+            vec![r#"{"keyboard":{"open":true,"text":"ü"}}"#]
+        );
+        // A page that attaches now is told the keyboard is open.
+        let (vt2, _vr2, ct2, mut cr2) = page();
+        live.attach(vt2, ct2, false);
+        assert!(kinds(&mut cr2)
+            .iter()
+            .any(|m| m == r#"{"keyboard":{"open":true,"text":"ü"}}"#));
+        let m: ClientMsg = serde_json::from_str(r#"{"keyboard_text": "üx"}"#).unwrap();
+        live.keyboard.page_typed(&m.keyboard);
+        let m: ClientMsg = serde_json::from_str(r#"{"keyboard_accept": true}"#).unwrap();
+        live.keyboard.page_typed(&m.keyboard);
+        assert_eq!(
+            sink.keyboard_input(),
+            Some(KeyboardInput::Text("üx".into()))
+        );
+        assert_eq!(sink.keyboard_input(), Some(KeyboardInput::Accept));
+        assert_eq!(sink.keyboard_input(), None);
     }
 
     #[test]
