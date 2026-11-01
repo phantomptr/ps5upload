@@ -108,6 +108,78 @@ running.
    page). A `.pkg` goes in the same drop zone: choose **Stream & install** or **Upload &
    install** on its card. If it will not launch, see "My uploaded game won't launch".
 
+## Short guides: phone, away from home, TV, delay
+
+**Q: How do I use PS5Upload from my phone?**
+Three ways, easiest first:
+
+- **The app on the phone.** Android: the `.apk` from Releases. iPhone: the `.ipa`, sideloaded with
+  AltStore or Sideloadly and an Apple ID (a free one works); "How do I install it with AltStore?"
+  under iPhone has the steps. The app has its own engine and talks to the PS5 directly: open
+  **Connection**, enter the PS5's IP, press **Check**, and send the helper. This is also the way
+  to **Play** on a phone.
+- **A browser, with a computer at home running the web UI.** Run the
+  `ps5upload-engine-webui` Docker image on a computer or NAS and open `http://<its IP>:19113/` on
+  the same Wi-Fi ("How do I use PS5Upload from my phone or another computer?" walks through it).
+  The desktop app can't be used this way: its engine refuses other devices. Play in a browser
+  needs a secure page (`https://`, or the computer itself): over plain `http://<IP>:19113/` a
+  phone's browser says it cannot play a stream, so play with the app.
+- **The console's own page (PS5Upload Minion).** No computer needed: with the helper running,
+  turn on **Settings → Allow other devices on the network** on the console's page, then open
+  `http://<PS5's IP>:9180/` on the phone. It has no password while that is on, so turn it off
+  when you're done.
+
+**Q: Can I play, or use the app, away from home?**
+Not over the internet by itself. PS5Upload talks to the PS5 on your home network, and the engine
+has no password, so never forward its ports on your router. Away from home, join your home network
+with a VPN; Tailscale is the easy one.
+
+- **The phone or laptop app:** install Tailscale on that device, and on a computer at home that
+  stays on, set Tailscale up as a *subnet router* for your home network (and approve the route in
+  Tailscale's admin page). The app then reaches the PS5 at its usual home address. Or run the
+  [ps5-tailscale](https://github.com/holdmysocks/ps5-tailscale) payload, so the PS5 joins your
+  Tailscale network itself, and connect to its Tailscale address.
+- **The web UI:** if a computer at home runs it, open `http://<its Tailscale address>:19113/`
+  with Tailscale on (add `100.64.0.0/10`, Tailscale's addresses, to `PS5UPLOAD_ALLOW_IP` if the
+  page refuses you). The engine is at home, so waking the console and Stream & install work as
+  usual; Play in the browser still needs an `https://` page.
+
+Through a VPN from the app, these don't work: **Stream & install and installs from a link** (the
+PS5 downloads from your device, which it can't reach; use Upload & install), and **waking the PS5
+from rest mode** may not (it drops off Tailscale in rest mode with ps5-tailscale, and we haven't
+tested it through a subnet router), so leave it on or wake it before you go. Play runs only as
+well as your home connection's upload speed allows; if it keeps dropping frames, take 720p. We
+haven't tested Play over Tailscale ourselves.
+
+**Q: Can the app wake the PS5 without turning on the TV?**
+Yes. The TV comes on because of HDMI-CEC: a PS5 that wakes up tells the TV to turn on and switch
+to it. Turn that off on either side:
+
+- **On the PS5:** Settings › System › HDMI › **Enable HDMI Device Link** off (or only **Enable
+  One-Touch Play** under it, where your firmware shows it).
+- **On the TV:** its CEC setting off (Samsung **Anynet+**, LG **SIMPLINK**, Sony **BRAVIA Sync**,
+  Philips **EasyLink**, or simply **HDMI-CEC**).
+
+Wake and Play then bring the console up with the TV left off; Play doesn't need the TV. The other
+side of it: picking up the controller won't turn the TV on any more either.
+
+**Q: Play feels delayed. Where does the delay come from?**
+Turn on **Stats** (on the picture's bar, or in the **⋯** menu on a phone). Under the Latency line,
+`net · queue · decode · screen` shows each stage of a frame, in ms (the median of the last two
+seconds):
+
+- **net**: the engine had the frame from the PS5 → this device got it. Near zero in the desktop
+  app (the engine is on the same computer); on a phone or in the web UI it's your Wi-Fi.
+- **queue**: waiting to be handed to the video decoder.
+- **decode**: the device's video decoder.
+- **screen**: from decoded to shown by the browser, about one refresh of the screen.
+
+Not counted: the PS5 itself and its leg to the engine (the two share no clock, so it can't be
+measured honestly), and your TV or monitor's own delay (use its game mode). A big **net** means
+the network: a cable for the PS5 and 5 GHz Wi-Fi help most. A big **decode** means the device is
+slow to decode; 720p eases it. **Play › Settings › Low latency** trims the queue and the sound
+buffer (see "How much delay does Remote Play have, and what does Low latency do?").
+
 ---
 
 ## Getting started
@@ -266,8 +338,12 @@ them in `memcards` and `sstates` of `/data/crux2` when you made that folder, of 
 the top of a USB drive, or of Crux2's own folder; PS5SX2 in `/data/PCSX2/memcards` and
 `/data/PCSX2/savestates` when those folders are there, else loose in `/data/PCSX2` (as installed
 from the Prospero Store), where only its `.ps2` and `.p2s` files are taken, never its BIOS, games
-or caches. The backups are in the backup folder under the emulator's title ID. A restore puts back
-all the emulator's cards, or all its saved states, and is refused while the emulator runs.
+or caches. The backups are in the backup folder under the emulator's title ID. **Saves** lists
+them under **PS2 emulators (Crux2, PS5SX2)**, each emulator's cards and saved states with their
+backups, **Back up now** and **Restore**. A restore puts back all the emulator's cards, or all its
+saved states, and is refused while the emulator runs. A restore into `/data/PCSX2` itself is
+refused if the backup holds anything other than that save's own files, so it never overwrites the
+emulator's BIOS, games or settings.
 
 **Q: How do I make room for a big game?**
 Open Clean up and press Make room, or follow "Plan space" when an install says there isn't enough
@@ -2213,7 +2289,7 @@ macOS: System Settings › Privacy & Security › Microphone; on Android and iPh
 permission prompt). If you said no once, allow it there and press the button again.
 
 **Q: Which browser should I use for Remote Play in the web UI?**
-Chrome or Edge (on Android, Chrome). Remote Play is made and tested for them. In Firefox and Safari, Esc always leaves full screen, so it can't be the controller's ○ there; Firefox has no picture in picture, and Safari's shows the picture only. The web UI says so on the Remote Play page in those browsers. On iPhone and iPad every browser is Safari underneath, and Remote Play works there. The desktop and Android apps don't depend on your browser.
+Chrome or Edge (on Android, Chrome). Remote Play is made and tested for them. In Firefox and Safari, Esc always leaves full screen, so it can't be the controller's ○ there; Firefox has no picture in picture, and Safari's shows the picture only. The web UI says so on the Remote Play page in those browsers. On iPhone and iPad every browser is Safari underneath, and Remote Play works there on a secure page (`https://`, or the computer itself): browsers keep the video decoder Play uses for secure pages, so over a plain `http://<IP>:19113/` address a phone's browser says it cannot play a stream; use the Android or iPhone app to play on a phone. The desktop and Android apps don't depend on your browser.
 
 **Q: Does Remote Play turn on Game Mode?**
 Where the system lets an app ask for it, yes, and only while the picture plays:
