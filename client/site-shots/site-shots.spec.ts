@@ -298,6 +298,11 @@ async function fakeStream(page: Page, frames: { header: Buffer; au: Buffer }) {
       if (typeof m !== "string") return;
       const msg = JSON.parse(m) as Record<string, unknown>;
       if ("ping" in msg) ws.send(JSON.stringify({ pong: msg.ping }));
+      // The console's keyboard and mouse, made as asked.
+      if ("kbm" in msg) {
+        const k = msg.kbm as { on: boolean; mouse?: boolean; keyboard?: boolean };
+        ws.send(JSON.stringify({ kbm: { on: k.on, mouse: k.on && !!k.mouse, keyboard: k.on && !!k.keyboard, err: null, reason: null } }));
+      }
       if (!("host" in msg)) return;
       ws.send(JSON.stringify({ stage: "first_frame" }));
       ws.send(rec(0, frames.header));
@@ -305,6 +310,30 @@ async function fakeStream(page: Page, frames: { header: Buffer; au: Buffer }) {
       timer = setInterval(() => ws.send(rec(1, frames.au)), 100);
     });
   });
+}
+
+const MAC_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+/** A console that can make a keyboard and a mouse (FW 13.60), in the given mode for every game. */
+async function fakeKbm(page: Page, mode: "native" | "mixed" | "controller" | null) {
+  const json = (body: unknown) => ({ contentType: "application/json", body: JSON.stringify(body) });
+  await page.route("**/api/version", (route) => route.fulfill(json({ version: "10.4.0", caps: {} })));
+  await page.route("**/api/ps5/status*", (route) =>
+    route.fulfill(json({ ok: true, command_count: 1, instance_id: 1, ps5_kernel: "releases/13.60", ucred_elevated: true })),
+  );
+  await page.route("**/api/ps5/vinput/caps*", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ supported: true, mouse: true, keyboard: true, open: false, backend: "ps5", companion: "running" }),
+    }),
+  );
+  if (mode) {
+    await page.addInitScript((mode) => {
+      const modes = { home: mode, PPSA90001: mode };
+      window.localStorage.setItem("ps5upload.rp_kbm.v1", JSON.stringify({ modes, hinted: true }));
+    }, mode);
+  }
 }
 
 for (const lang of LANGS) {
@@ -373,6 +402,88 @@ for (const lang of LANGS) {
       });
     });
 
+    test.describe(`${lang} keyboard & mouse ${theme}`, () => {
+      test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1.5, userAgent: MAC_UA });
+
+      test(`kbm: the first capture and the release chip (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang });
+        await fakeKbm(page, "native");
+        await page.goto("/home", { waitUntil: "domcontentloaded" });
+        const frames = await streamOf(page, { w: 1920, h: 1080 });
+        await fakeStream(page, frames);
+        await page.getByRole("navigation").first().locator('a[href="/play"]').first().click();
+        await page.getByTestId("rp-start").click();
+        const stage = page.getByTestId("rp-stage").filter({ visible: true });
+        const canvas = stage.getByTestId("rp-canvas");
+        await expect.poll(() => canvas.evaluate((c: HTMLCanvasElement) => c.width), { timeout: 20_000 }).toBe(1920);
+        // Captured with a click on the picture: the first card, with the bar showing the mode.
+        const box = (await stage.boundingBox())!;
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height - 60);
+        await expect(page.getByTestId("rp-kbm-card")).toBeVisible();
+        await page.getByTestId("rp-toolbar").hover({ position: { x: 12, y: 12 } });
+        await page.waitForTimeout(500);
+        await shot(page, "kbm", theme);
+        // The card goes by itself; the faint chip stays while captured.
+        await expect(page.getByTestId("rp-kbm-card")).toHaveCount(0, { timeout: 10_000 });
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await expect(page.getByTestId("rp-kbm-chip")).toBeVisible();
+        // Only for social posts (SOCIAL_DIR=…): the site has no place for it.
+        if (process.env.SOCIAL_DIR && lang === "en") {
+          await page.waitForTimeout(4000); // the bar hides
+          await page.screenshot({ path: `${process.env.SOCIAL_DIR}/kbm-chip-${theme}.png`, animations: "disabled", caret: "hide" });
+        }
+      });
+
+      test(`kbm settings (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang });
+        await fakeKbm(page, "native");
+        await page.goto("/home", { waitUntil: "domcontentloaded" });
+        const frames = await streamOf(page, { w: 1920, h: 1080 });
+        await fakeStream(page, frames);
+        await page.getByRole("navigation").first().locator('a[href="/play"]').first().click();
+        await page.getByTestId("rp-start").click();
+        const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
+        await expect.poll(() => canvas.evaluate((c: HTMLCanvasElement) => c.width), { timeout: 20_000 }).toBe(1920);
+        await page.getByTestId("rp-toolbar").hover();
+        await page.getByTestId("rp-settings-button").click();
+        await page.getByTestId("rp-settings-tab-controls").click();
+        await expect(page.getByTestId("rp-kbm").getByTestId("rp-kbm-mode-native")).toHaveAttribute("aria-checked", "true");
+        await page.getByTestId("rp-sc-release").getByTestId("rp-sc-release-change").click();
+        await expect(page.getByTestId("rp-sc-release-listening")).toBeVisible();
+        // The mode section at the top of Settings' own scroll (the page itself stays put).
+        await page.getByTestId("rp-kbm").evaluate((el) => {
+          let box = el.parentElement;
+          while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+          if (box) box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+          document.scrollingElement?.scrollTo(0, 0);
+          document.querySelectorAll("main").forEach((m) => m.scrollTo(0, 0));
+        });
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(600);
+        await shot(page, "kbm-settings", theme);
+      });
+    });
+
+    test.describe(`${lang} phone sideways ${theme}`, () => {
+      test.use({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+
+      test(`phone touchpad (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang });
+        await fakeKbm(page, null);
+        await page.goto("/home", { waitUntil: "domcontentloaded" });
+        const frames = await streamOf(page, { w: 1280, h: 720 });
+        await fakeStream(page, frames);
+        await page.goto("/play", { waitUntil: "domcontentloaded" });
+        await page.getByTestId("rp-start").tap();
+        const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
+        await expect.poll(() => canvas.evaluate((c: HTMLCanvasElement) => c.width), { timeout: 20_000 }).toBe(1280);
+        await page.getByTestId("rp-touch-mode").getByTestId("rp-touch-mode-touchpad").tap();
+        await expect(page.getByTestId("rp-touchpad")).toBeVisible();
+        await page.waitForTimeout(800);
+        await shot(page, "m-touchpad", theme);
+      });
+    });
+
     test.describe(`${lang} phone ${theme}`, () => {
       test.use({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
 
@@ -402,6 +513,7 @@ for (const lang of LANGS) {
         await page.waitForTimeout(800);
         await shot(page, "m-play", theme);
       });
+
     });
   }
 }

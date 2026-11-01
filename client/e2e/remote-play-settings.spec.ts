@@ -291,8 +291,12 @@ test.describe("phone sideways", () => {
     await expect(drawer).toHaveCount(0);
     await expect(stage).toHaveAttribute("data-full", "immersive");
 
-    // A tap beside it closes it too, and nothing else.
-    await page.getByTestId("rp-menu-handle").tap();
+    // A tap beside it closes it too, and nothing else. Chromium swallows the first tap after a
+    // swipe (it stops a possible scroll fling), so the handle is tapped until the menu opens.
+    await expect(async () => {
+      await page.getByTestId("rp-menu-handle").tap();
+      await expect(page.getByTestId("rp-open-settings")).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 10_000 });
     await page.getByTestId("rp-open-settings").tap();
     await expect(drawer).toBeVisible();
     await page.getByTestId("rp-settings-backdrop").tap({ position: { x: 20, y: 20 } });

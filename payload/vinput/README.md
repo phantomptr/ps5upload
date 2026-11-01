@@ -29,6 +29,8 @@ the helper has no inflater, and linking zlib into the helper crashed it before.
 - **Start:** a session open while the companion is not running starts it on a relay thread and answers `vinput_starting`. The engine asks again every 300 ms.
 - **Timeouts:** each request waits at most 200 ms. A companion silent for 1 s is SIGKILLed by pid.
 - **Restarts:** after a SIGKILL it is started again with backoff (1, 2, 4 s). After 3 failures in a row it is `unavailable` (`vinput_companion_failed`), retried after 30 s. The devices the session had are made again.
+- **Init never finishes** (launched, but it never answers within 8 s: an Init that hangs or a crash in it, which an untested firmware might do): ended by pid and **not started again on its own**. `unavailable` (`vinput_companion_failed`) until a fresh open: one that comes at least 2 s after the previous ask (the user turning the mode on again, not the engine's 300 ms re-asks). Even then, not while that companion is still alive (stuck in Init, unkillable): never two in Init. A stuck one also keeps `:9184` bound, so a companion started by a later helper exits at its bind, before Init.
+- **Firmware:** every firmware (tested on 13.60). One without the virtual-device symbols gets a companion whose caps say no mouse and no keyboard (`vinput_unsupported`).
 - **No loader on :9021:** `unavailable` (`vinput_needs_loader`), asked again after 10 s.
 - **Status for the app:** caps carries `companion` (idle / starting / running / stopped / unavailable).
 - **Liveness:** the relay sends a heartbeat every 300 ms.

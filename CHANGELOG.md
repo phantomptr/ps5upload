@@ -4,6 +4,13 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.4.1
+
+- **Keyboard & mouse in Remote Play now works on every firmware**, not only FW 13.60 (still the
+  one it's tested on). A firmware without the PS5's virtual keyboard and mouse says it isn't
+  available and keeps Controller. If it doesn't start on your console, it isn't tried again on its
+  own: turn Keyboard & mouse (or Mixed) on again to retry, and tell us your firmware.
+
 ## 10.4.0
 
 - **Your computer's keyboard and mouse as the PS5's own, in Remote Play (FW 13.60).** Settings ›
