@@ -10,8 +10,14 @@
 //! differences: its files go as they are (`backup_finalize` and `restore_prepare` shape PS5 save
 //! images), and the app that writes it is the emulator, not the game.
 
+use axum::extract::Query;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
 use ps5upload_core::fs_ops::{list_dir, DirEntry, DirListing, ListDirOptions};
 use ps5upload_core::saves::SaveEntry;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 /// The emulator's title.
 pub const APP: &str = "PPSA99008";
@@ -171,6 +177,56 @@ fn measure(
     Ok((size, newest, files))
 }
 
+// ── HTTP ────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct SwitchQuery {
+    /// The console (bare IP).
+    pub addr: String,
+}
+
+/// One of the emulator's saves, as the app lists it.
+#[derive(Serialize)]
+pub struct SwitchSave {
+    #[serde(flatten)]
+    pub save: SaveEntry,
+    /// The emulator runs now (its saves cannot be restored meanwhile); None when the console did
+    /// not say.
+    pub running: Option<bool>,
+}
+
+/// `GET /api/save-backup/switch?addr=` — the emulator's saves on that console, each with whether
+/// the emulator runs now: `{saves, running}`. None (and `running` null) when it is not installed
+/// or has saved nothing.
+pub async fn get_switch(Query(q): Query<SwitchQuery>) -> Response {
+    let host = q.addr.trim().to_string();
+    if host.is_empty() {
+        return crate::save_backup::json_error(StatusCode::BAD_REQUEST, "addr is required");
+    }
+    let r = tokio::task::spawn_blocking(move || {
+        let saves = list(&host);
+        // Only asked when there is something to restore.
+        let running = if saves.is_empty() {
+            None
+        } else {
+            crate::save_backup::title_running(&host, APP).ok()
+        };
+        (saves, running)
+    })
+    .await;
+    match r {
+        Ok((saves, running)) => Json(json!({
+            "running": running,
+            "saves": saves
+                .into_iter()
+                .map(|save| SwitchSave { save, running })
+                .collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(e) => crate::save_backup::json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,6 +333,22 @@ mod tests {
         let saves = saves_in(&ls_of(&fs));
         assert_eq!(saves.len(), 1);
         assert_eq!(saves[0].path, format!("{ROOT}/{P1}/{GAME}"));
+    }
+
+    /// The app reads a listed save as the console's saves list gives one, plus `running`.
+    #[test]
+    fn a_listed_save_carries_whether_the_emulator_runs() {
+        let fs = console();
+        let save = saves_in(&ls_of(&fs)).remove(0);
+        let v = serde_json::to_value(SwitchSave {
+            save,
+            running: Some(true),
+        })
+        .unwrap();
+        assert_eq!(v["title_id"], GAME);
+        assert_eq!(v["kind"], KIND);
+        assert_eq!(v["user_id"], 0x1F1_E1D1);
+        assert_eq!(v["running"], true);
     }
 
     #[test]
