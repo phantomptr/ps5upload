@@ -6,6 +6,11 @@ What's new in ps5upload, written for humans.
 
 ## 10.6.0
 
+- **Remote Play Unlock (earthonion) in the payload catalogue.** Lets Remote Play stream games
+  and apps that forbid it (refused at start, a "can't be streamed" notice, or a black picture) by
+  patching the PS5's Remote Play service in memory. Firmware 3.20, 10.01, 12.00, 12.70 and 13.60;
+  load it again after every reboot, or add it to your autoloader. Payloads whose only release is a
+  pre-release (like its rolling `latest`) now download too.
 - **Save Data is laid out around what you do with a save.** Each game shows one row per user
   with when it was last backed up ("Backed up 2 hours ago", or "Not backed up yet" in amber) and
   four actions: **Back up now**, **Restore…** (the game's backups, newest first), **Copy to…**
