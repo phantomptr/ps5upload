@@ -52,6 +52,9 @@ interface ConvertPrefs {
   /** How hard a compressed image (.ffpfsc) is compressed. */
   imageLevel: FfpfscLevel;
   setMake: (m: MakeKind) => void;
+  /** Shows `m` as what is being made without remembering it: a one-off run (the Workshop's
+   *  Convert to folder) or the build that is running, never the user's own choice. */
+  showMake: (m: MakeKind) => void;
   setImageLevel: (level: FfpfscLevel) => void;
   setImageChoice: (format: ImageFormat, compress: boolean) => void;
   setOutputDir: (dir: string) => void;
@@ -110,6 +113,7 @@ export const useConvertPrefs = create<ConvertPrefs>((set) => ({
     safeSetItem(KEY_MAKE, m);
     set({ make: m });
   },
+  showMake: (m) => set({ make: m }),
   setImageChoice: (format, compress) => {
     safeSetItem(KEY_IMAGE_FORMAT, format);
     safeSetItem(KEY_IMAGE_COMPRESS, compress ? "1" : "0");
