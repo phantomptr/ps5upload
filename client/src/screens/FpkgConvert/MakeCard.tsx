@@ -65,11 +65,14 @@ export function MakeCard({
       ),
     },
   ];
+  // Compact (the user asked for a denser Workshop): the tiles are one line each, and only the
+  // chosen one's explanation is shown under them; each tile's own is its tooltip.
+  const chosen = tiles.find((t) => t.id === make) ?? tiles[0];
   return (
-    <Card>
-      <div className="flex flex-col gap-3 text-sm">
+    <Card padded={false} className="p-3.5 sm:p-4">
+      <div className="flex flex-col gap-2 text-sm">
         <div className="font-medium">{tr("fpkg.card.make", undefined, "② What to make")}</div>
-        <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" data-testid="make-choice">
+        <div className="grid grid-cols-3 gap-1.5 sm:gap-2" role="radiogroup" data-testid="make-choice">
           {tiles.map((t) => {
             const on = make === t.id;
             const Icon = t.icon;
@@ -81,15 +84,16 @@ export function MakeCard({
                 aria-checked={on}
                 disabled={locked}
                 onClick={() => onMake(t.id)}
-                className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] px-3.5 py-3 text-left disabled:opacity-60 ${
+                title={t.body}
+                className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] px-2.5 py-2 text-left disabled:opacity-60 sm:px-3 ${
                   on
                     ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
                     : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
                 }`}
               >
-                <div className="flex flex-wrap items-center gap-2">
-                  <Icon size={15} className="shrink-0 text-[var(--color-muted)]" aria-hidden />
-                  <span className="font-semibold text-[var(--color-text)]">{t.title}</span>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <Icon size={15} className="hidden shrink-0 text-[var(--color-muted)] sm:block" aria-hidden />
+                  <span className="text-xs font-semibold text-[var(--color-text)] sm:text-sm">{t.title}</span>
                   {recommended === t.id && (
                     <Badge tone="accent" size="sm">
                       {t.id === "image" && unplayableOn
@@ -98,10 +102,12 @@ export function MakeCard({
                     </Badge>
                   )}
                 </div>
-                <div className="mt-1 text-xs leading-relaxed text-[var(--color-muted)]">{t.body}</div>
               </button>
             );
           })}
+        </div>
+        <div className="text-xs leading-relaxed text-[var(--color-muted)]" data-testid="make-body">
+          {chosen.body}
         </div>
         <div className="text-xs text-[var(--color-muted)]">
           {!checked

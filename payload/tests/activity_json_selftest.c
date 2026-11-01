@@ -29,6 +29,9 @@
 
 #include "sqlite3.h"
 
+/* The host's kinfo_proc (macOS, Linux) has no ki_runtime / ki_stat; the watcher never runs here. */
+#define ACTIVITY_KINFO_RUNTIME_US(ki) ((void)(ki), (uint64_t)0)
+#define ACTIVITY_KINFO_STOPPED(ki) ((void)(ki), 0)
 #include "../src/activity.c"
 
 /* content_db.c refuses to edit a running title and asks this. No PS5

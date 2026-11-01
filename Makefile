@@ -975,6 +975,11 @@ test-payload: payload
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-activity-selftest \
 		$(PAYLOAD_DIR)/tests/activity_launch_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-activity-selftest
+	@echo "Running play-time title pick self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-play-pick-selftest \
+		$(PAYLOAD_DIR)/tests/play_pick_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-play-pick-selftest
 	@echo "Running app-info layout self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-app-info-selftest \
 		$(PAYLOAD_DIR)/tests/app_info_selftest.c
@@ -1106,6 +1111,21 @@ test-payload: payload
 		$(PAYLOAD_DIR)/src/webui_codec.c $(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) /tmp/ps5upload-files-handoff-selftest
 	@echo "✓ a handoff opens once, expires after two minutes, and the PC reads the same prefs as the console"
+	@echo "Running the PC keyboard and mouse (vinput) self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o /tmp/ps5upload-vinput-selftest \
+		$(PAYLOAD_DIR)/tests/vinput_selftest.c $(PAYLOAD_DIR)/src/vinput.c \
+		$(PAYLOAD_DIR)/src/webui_codec.c $(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) /tmp/ps5upload-vinput-selftest
+	@echo "✓ the stub says not supported; sessions open, hand over and close; a missed heartbeat or a stop lets go of every key"
+	@echo "Running the keyboard & mouse companion + relay self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -DVWIRE_DIR='"/tmp"' -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o /tmp/ps5upload-vinput-relay-selftest \
+		$(PAYLOAD_DIR)/tests/vinput_relay_selftest.c $(PAYLOAD_DIR)/src/vinput_relay.c $(PAYLOAD_DIR)/src/vinput_companion.c \
+		$(PAYLOAD_DIR)/src/vinput_wire.c $(PAYLOAD_DIR)/src/vinput.c \
+		$(PAYLOAD_DIR)/src/webui_codec.c $(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) /tmp/ps5upload-vinput-relay-selftest
+	@echo "✓ the companion takes only its token and one helper; the relay starts it, kills a silent one, starts it again with the devices, and gives up after three"
 	@echo "Running webui settings + tile self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -DWEBUI_TILE_HOST_TEST -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
 		-o /tmp/ps5upload-webui-settings-selftest \

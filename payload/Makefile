@@ -218,6 +218,16 @@ EXTRACTOR_DIR := extractor
 EXTRACTOR_ELF := $(EXTRACTOR_DIR)/ps5upload-extractor.elf
 EXTRACTOR_ELF_C := build/extractor_elf.c
 
+# The keyboard & mouse companion (vinput/, include/vinput_wire.h): built by its own Makefile, stripped
+# and embedded by xxd as vinput_elf[] + vinput_elf_len, which src/vinput_ps5.c sends to the console's
+# ELF loader when a keyboard & mouse session opens. The helper never calls libSceMouse /
+# libSceKeyboard itself (vinput/README.md).
+VINPUT_DIR := vinput
+VINPUT_ELF := $(VINPUT_DIR)/ps5u-vinput.elf
+VINPUT_ELF_C := build/vinput_elf.c
+VINPUT_DEPS := $(VINPUT_DIR)/main.c $(VINPUT_DIR)/Makefile src/vinput_companion.c src/vinput_wire.c src/vinput_dev.c \
+        include/vinput.h include/vinput_wire.h include/vinput_companion.h include/vinput_dev.h
+
 SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover_flag.c src/ownership_record.c src/ava1_stop.c src/register.c src/hw_info.c \
         src/drive_sensors.c \
         src/proc_list.c src/ptrace_remote.c src/shellui_rpc.c \
@@ -228,7 +238,7 @@ SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover
         src/tmdb.c src/fw_spoof.c src/focus_probe.c \
         src/content_db.c src/mgmt_rpc.c src/fs_jobs.c src/net_probe.c src/net_ports.c src/mgmt_fs.c src/path_policy.c \
         src/webui_http.c src/webui_auth.c src/webui_server.c src/webui_codec.c src/webui_api.c \
-        src/webui_settings.c src/webui_inputlog.c src/webui_files.c src/webui_cheats_store.c src/webui_tile.c src/webui_strings.c src/webui_offline.c src/files_prefs.c src/files_handoff.c src/mesh.c src/storage_cleanup.c src/cleanup_rules.c src/archive_extract.c \
+        src/webui_settings.c src/webui_inputlog.c src/webui_files.c src/webui_cheats_store.c src/webui_tile.c src/webui_strings.c src/webui_offline.c src/files_prefs.c src/files_handoff.c src/vinput.c src/vinput_ps5.c src/vinput_relay.c src/vinput_wire.c $(VINPUT_ELF_C) src/mesh.c src/storage_cleanup.c src/cleanup_rules.c src/archive_extract.c \
         src/app_dump.c src/app_dump_core.c src/app_dump_pkg.c src/app_dump_fself.c src/app_dump_self.c src/app_dump_sha256.c $(WEBUI_TILE_ICON_C) $(EXTRACTOR_ELF_C) \
         src/pkg_info.c src/webui_pkg.c $(WEBUI_INSTALLER_C) \
         src/webui_smb.c src/smb_shares.c src/smb_client.c smb/smbd_json.c smb/smbd_path.c $(SMBD_ELF_C) \
@@ -327,6 +337,14 @@ $(SMBD_ELF_C): $(SMBD_ELF) Makefile
 	$(PS5_PAYLOAD_SDK)/bin/prospero-strip -o build/smbd.elf $(SMBD_ELF)
 	(cd build && xxd -i smbd.elf) > $@.tmp && mv $@.tmp $@
 
+$(VINPUT_ELF): $(VINPUT_DEPS)
+	$(MAKE) -C $(VINPUT_DIR)
+
+$(VINPUT_ELF_C): $(VINPUT_ELF) Makefile
+	@mkdir -p $(dir $@)
+	$(PS5_PAYLOAD_SDK)/bin/prospero-strip -o build/vinput.elf $(VINPUT_ELF)
+	(cd build && xxd -i vinput.elf) > $@.tmp && mv $@.tmp $@
+
 # Written from the dist-console/strings the page rule's build just produced.
 $(WEBUI_STRINGS_C): $(WEBUI_PAGE_C) ../scripts/embed-console-strings.mjs Makefile
 	@mkdir -p $(dir $@)
@@ -356,8 +374,10 @@ clean:
 	$(MAKE) -C $(EXTRACTOR_DIR) clean
 	rm -f $(EXTRACTOR_ELF_C)
 	rm -f $(WEBUI_TILE_ICON_C) $(WEBUI_PAGE_C) $(WEBUI_STRINGS_C) $(WEBUI_OFFLINE_C) build/webui_page.gz \
-		build/webui_sw.js build/webui_cache.appcache $(WEBUI_INSTALLER_C) build/webui_installer.elf $(SMBD_ELF_C) build/smbd.elf
+		build/webui_sw.js build/webui_cache.appcache $(WEBUI_INSTALLER_C) build/webui_installer.elf $(SMBD_ELF_C) build/smbd.elf \
+		$(VINPUT_ELF_C) build/vinput.elf
 	$(MAKE) -C $(SMBD_DIR) clean
+	$(MAKE) -C $(VINPUT_DIR) clean
 
 send: $(ELF)
 	@echo "Sending $(ELF) to $(PS5_HOST):$(PS5_PORT) ..."

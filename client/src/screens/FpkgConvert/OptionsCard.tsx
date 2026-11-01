@@ -5,6 +5,7 @@ import type { FpkgCompression, FpkgEstimate, ImageFormat } from "../../api/fpkg"
 import { Button, Card } from "../../components";
 import { PLAYGO_LANGUAGES } from "../../lib/playgoLanguages";
 import type { MakeKind } from "../../state/convertPrefs";
+import type { OutputPlace } from "../../lib/outputPlace";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
 import { FullVerifyOption, ImageChoice, type Lz4Choice } from "./ImageOptions";
@@ -20,6 +21,9 @@ export interface OptionsCardProps {
   outputDir: string;
   onChangeOutput: () => void;
   onOutputTyped: (value: string) => void;
+  /** In the Output folder, or next to each game's source; absent hides the choice. */
+  outputPlace?: OutputPlace;
+  onOutputPlace?: (place: OutputPlace) => void;
   canBrowse: boolean;
   compression: FpkgCompression;
   onCompression: (c: FpkgCompression) => void;
@@ -46,9 +50,10 @@ export interface OptionsCardProps {
 
 export function OptionsCard(props: OptionsCardProps) {
   const tr = useTr();
+  const beside = props.outputPlace === "beside";
   return (
-    <Card>
-      <div className="flex flex-col gap-3 text-sm">
+    <Card padded={false} className="p-3.5 sm:p-4">
+      <div className="flex flex-col gap-2.5 text-sm">
         <div className="font-medium">{tr("fpkg.card.options_v2", undefined, "③ Options")}</div>
         <div className="flex flex-col gap-1">
           <label htmlFor="fpkg-output" className="text-[var(--color-muted)]">
@@ -69,6 +74,27 @@ export function OptionsCard(props: OptionsCardProps) {
               </Button>
             )}
           </div>
+          {props.onOutputPlace && (
+            <label className="mt-1 flex items-center gap-2">
+              <input
+                type="checkbox"
+                data-testid="output-beside"
+                checked={beside}
+                disabled={props.locked}
+                onChange={(e) => props.onOutputPlace?.(e.target.checked ? "beside" : "folder")}
+              />
+              <span>{tr("fpkg.beside", undefined, "Save each next to its source")}</span>
+            </label>
+          )}
+          {props.onOutputPlace && beside && (
+            <div className="text-xs text-[var(--color-muted)]" data-testid="output-beside-hint">
+              {tr(
+                "fpkg.besideHint",
+                undefined,
+                "Each one goes in the folder that holds its game or image, not inside a game folder. If the name is taken there, (2) is added. Games on a server or the PS5 still go to the Output folder.",
+              )}
+            </div>
+          )}
         </div>
         {props.outputFree != null && (
           <div className="text-xs text-[var(--color-muted)]">
@@ -131,6 +157,7 @@ export function OptionsCard(props: OptionsCardProps) {
         )}
         {props.onLanguage && props.make !== "image" && props.make !== "folder" && (
           <div className="flex flex-col gap-1">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <label htmlFor="fpkg-language" className="text-[var(--color-muted)]">
               {tr("fpkg.language", undefined, "Game language")}
             </label>
@@ -148,6 +175,7 @@ export function OptionsCard(props: OptionsCardProps) {
                 </option>
               ))}
             </select>
+            </div>
             <div className="text-xs text-[var(--color-muted)]">
               {tr(
                 "fpkg.languageHint",

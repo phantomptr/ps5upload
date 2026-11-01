@@ -15,6 +15,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
+#include <sys/types.h>
+#include <sys/user.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -41,6 +43,7 @@
  * title_id at offset 64, so play-time tracking never saw a game. */
 #include "app_info.h"
 
+#include "play_pick.h"
 #include "proc_identity.h"
 typedef struct {
     char     title_id[TITLE_ID_LEN];
@@ -273,31 +276,47 @@ static void record_exit(const char *title_id) {
         pthread_mutex_unlock(&g_lock);
         return;
     }
-    int64_t now = now_ts();
-    e->total_seconds += (uint64_t)(now - e->session_started_ts);
+    /* Ended at most one poll after it was last seen being played: a game
+     * closed in rest mode or after a stall did not play through the gap. */
+    int64_t end = now_ts();
+    if (end > e->last_seen_ts + POLL_INTERVAL_SEC)
+        end = e->last_seen_ts + POLL_INTERVAL_SEC;
+    if (end > e->session_started_ts)
+        e->total_seconds += (uint64_t)(end - e->session_started_ts);
     e->session_started_ts = 0;
-    e->last_seen_ts = now;
+    e->last_seen_ts = end;
     pthread_mutex_unlock(&g_lock);
 }
 
-static int find_running_title(char *title_out, size_t cap) {
+/* A kinfo_proc record's accumulated CPU time and stopped state. Overridable so the host selftest
+ * compiles this file: macOS's kinfo_proc has neither field. */
+#ifndef ACTIVITY_KINFO_RUNTIME_US
+#define ACTIVITY_KINFO_RUNTIME_US(ki) ((uint64_t)(ki)->ki_runtime)
+#define ACTIVITY_KINFO_STOPPED(ki) ((ki)->ki_stat == SSTOP)
+#endif
+
+/* Every title process now, for play_pick(). Returns how many, or -1 when
+ * the process list cannot be read (so a failed read is not "nothing runs"). */
+static int list_title_procs(play_proc_t *out, int cap) {
     int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
     size_t buf_size = 0;
     if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) != 0 || buf_size == 0)
-        return 0;
+        return -1;
+    buf_size += buf_size / 4;
 
     uint8_t *buf = malloc(buf_size);
-    if (!buf) return 0;
+    if (!buf) return -1;
     if (sysctl(mib, 4, buf, &buf_size, NULL, 0) != 0) {
         free(buf);
-        return 0;
+        return -1;
     }
 
-    int found = 0;
-    for (uint8_t *ptr = buf; ptr < buf + buf_size && !found; ) {
+    int n = 0;
+    for (uint8_t *ptr = buf; ptr < buf + buf_size && n < cap; ) {
         int ki_structsize = *(int *)ptr;
         if (ki_structsize < KINFO_STRUCT_MINSIZE ||
             (size_t)(ptr - buf) + (size_t)ki_structsize > buf_size) break;
+        const struct kinfo_proc *ki = (const struct kinfo_proc *)ptr;
         pid_t pid = *(pid_t *)&ptr[KINFO_PID_OFFSET];
         app_info_t info;
         memset(&info, 0, sizeof(info));
@@ -308,13 +327,16 @@ static int find_running_title(char *title_out, size_t cap) {
         if (sceKernelGetAppInfo(pid, &info) == 0 &&
             app_info_title_id(&info, tid, sizeof(tid)) &&
             strncmp(tid, "NPXS", 4) != 0) {
-            snprintf(title_out, cap, "%s", tid);
-            found = 1;
+            out[n].pid = (int)pid;
+            snprintf(out[n].title_id, sizeof(out[n].title_id), "%s", tid);
+            out[n].runtime_us = ACTIVITY_KINFO_RUNTIME_US(ki);
+            out[n].stopped = ACTIVITY_KINFO_STOPPED(ki);
+            n++;
         }
         ptr += ki_structsize;
     }
     free(buf);
-    return found;
+    return n;
 }
 
 static char g_current_title[TITLE_ID_LEN];
@@ -324,21 +346,60 @@ static pid_t g_current_pid;
  * game that just launched from one that was already playing. */
 static int g_first_poll = 1;
 
-static void detect_and_track(void) {
-    char title[TITLE_ID_LEN] = "";
+static play_proc_t g_prev[PLAY_PICK_MAX];
+static int g_nprev;
+static int64_t g_prev_mono_us;
+static int64_t g_prev_wall;
 
-    if (!find_running_title(title, sizeof(title))) {
-        /* No game running */
-        if (g_current_pid > 0) {
+static int64_t mono_us(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
+static void detect_and_track(void) {
+    play_proc_t now_procs[PLAY_PICK_MAX];
+    int n = list_title_procs(now_procs, PLAY_PICK_MAX);
+    if (n < 0) return; /* unreadable: change nothing */
+
+    int64_t mono = mono_us();
+    int64_t interval = g_prev_mono_us > 0 ? mono - g_prev_mono_us : 0;
+    int pick = interval > 0
+        ? play_pick(now_procs, n, g_prev, g_nprev, (uint64_t)interval)
+        : (n == 1 && !now_procs[0].stopped ? 0 : -1);
+    /* A poll far later than scheduled means the console slept (or the
+     * helper stalled): that gap was not play. Both clocks, because which
+     * of them runs on through rest mode is not something to bet on. */
+    int64_t wall = now_ts();
+    int gap = interval > (int64_t)POLL_INTERVAL_SEC * 3 * 1000000 ||
+              (g_prev_wall > 0 && wall - g_prev_wall > POLL_INTERVAL_SEC * 3);
+    g_prev_wall = wall;
+    int returning = pick >= 0 && play_seen_before(g_prev, g_nprev, &now_procs[pick]);
+
+    memcpy(g_prev, now_procs, sizeof(now_procs[0]) * (size_t)n);
+    g_nprev = n;
+    g_prev_mono_us = mono;
+
+    if (pick < 0) {
+        /* Nothing on screen being played (dashboard, suspended, rest). */
+        if (g_current_title[0]) {
             record_exit(g_current_title);
             g_current_pid = 0;
             g_current_title[0] = '\0';
         }
         return;
     }
+    const char *title = now_procs[pick].title_id;
 
-    if (g_current_title[0] && strcmp(title, g_current_title) == 0) {
-        /* Same game still running — update last_seen */
+    if (g_current_title[0] && strcmp(title, g_current_title) == 0 &&
+        g_current_pid == now_procs[pick].pid) {
+        if (gap) {
+            /* Bank up to the last poll, start again from now. */
+            record_exit(g_current_title);
+            record_resume(title);
+            return;
+        }
+        /* Same game still being played — update last_seen */
         pthread_mutex_lock(&g_lock);
         entry_t *e = find_entry(g_current_title);
         if (e) e->last_seen_ts = now_ts();
@@ -346,17 +407,18 @@ static void detect_and_track(void) {
         return;
     }
 
-    /* Different game started */
-    if (g_current_pid > 0 && g_current_title[0]) {
+    /* Another title is being played now */
+    if (g_current_title[0]) {
         record_exit(g_current_title);
     }
 
     strncpy(g_current_title, title, TITLE_ID_LEN - 1);
     g_current_title[TITLE_ID_LEN - 1] = '\0';
-    g_current_pid = 1; /* marker: a game is running */
+    g_current_pid = now_procs[pick].pid;
 
-    if (g_first_poll) {
-        /* Already running when we arrived: resume, do not count it. */
+    if (g_first_poll || returning) {
+        /* Already running when we arrived, or back from the background:
+         * the time counts, the launch does not. */
         record_resume(title);
     } else {
         record_launch(title);

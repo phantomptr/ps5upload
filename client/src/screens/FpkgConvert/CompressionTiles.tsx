@@ -61,7 +61,7 @@ export function CompressionTiles({
       <div
         role="radiogroup"
         aria-label={tr("fpkg.compression", undefined, "Compression")}
-        className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2 2xl:grid-cols-4"
+        className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2 lg:grid-cols-4"
       >
         {TILES.map((t) => {
           const checked = t.value === value;
@@ -77,7 +77,7 @@ export function CompressionTiles({
               aria-checked={checked ? "true" : "false"}
               disabled={disabled}
               onClick={() => onChange(t.value)}
-              className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] flex flex-col items-start gap-1 px-3.5 py-3 text-left text-sm disabled:opacity-60 ${
+              className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] flex flex-col items-start gap-0.5 px-3 py-2 text-left text-sm disabled:opacity-60 ${
                 checked
                   ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
                   : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"

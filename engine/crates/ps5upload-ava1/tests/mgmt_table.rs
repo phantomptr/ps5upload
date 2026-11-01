@@ -82,6 +82,9 @@ fn the_ids_the_gate_and_the_converters_key_on_are_the_schema_numbers() {
     assert_eq!(m::FILES_HANDOFF_PUT.id, gen::METHOD_FILES_HANDOFF_PUT);
     assert_eq!(m::FILES_HANDOFF_TAKE.id, gen::METHOD_FILES_HANDOFF_TAKE);
     assert_eq!(m::MINION_TILE.id, gen::METHOD_MINION_TILE);
+    assert_eq!(m::VINPUT_CAPS.id, gen::METHOD_VINPUT_CAPS);
+    assert_eq!(m::VINPUT_SESSION.id, gen::METHOD_VINPUT_SESSION);
+    assert_eq!(m::VINPUT_REPORT.id, gen::METHOD_VINPUT_REPORT);
     assert_eq!(m::CLEANUP_SCAN.id, gen::METHOD_CLEANUP_SCAN);
     assert_eq!(m::CLEANUP_STATUS.id, gen::METHOD_CLEANUP_STATUS);
     assert_eq!(m::CLEANUP_APPLY.id, gen::METHOD_CLEANUP_APPLY);

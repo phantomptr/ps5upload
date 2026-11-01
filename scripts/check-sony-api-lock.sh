@@ -22,6 +22,8 @@ allow_reason() {
         echo "the wrapper layer callers lock around; locking here too would deadlock (mutex is not recursive)" ;;
     shellui_rpc.c)
         echo "ptrace symbol resolution inside SceShellUI, serialized by its own g_rpc_mtx" ;;
+    vinput_dev.c)
+        echo "runs only in the single-threaded ps5u-vinput companion (payload/vinput/), never in the helper" ;;
     *)  echo "" ;;
     esac
 }

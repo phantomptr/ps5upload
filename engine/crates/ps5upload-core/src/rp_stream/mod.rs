@@ -28,6 +28,7 @@ pub mod crypto;
 pub mod fec;
 pub mod feedback;
 pub mod guard;
+pub mod keyboard;
 pub mod mic;
 pub mod orientation;
 pub mod proto;
@@ -58,6 +59,7 @@ use self::takion::{
 
 pub use self::audio::{AudioAssembler, AudioHeader, HapticsAssembler};
 pub use self::feedback::{button, ControllerState, FeedbackSender};
+pub use self::keyboard::{KeyboardEvent, KeyboardInput};
 pub use self::mic::MicInput;
 pub use self::proto::Resolution;
 pub use self::video::{FrameAssembler, VideoStats};
@@ -118,6 +120,9 @@ pub struct StreamConfig {
     /// Say the pad is a DualSense (a real one is attached), so the console sends adaptive
     /// triggers and haptics. Off, the session sends exactly what it did before.
     pub dualsense: bool,
+    /// Switch on typing into the console's on-screen keyboard (see keyboard.rs). Off, the
+    /// session sends exactly what it did before.
+    pub keyboard: bool,
 }
 
 impl Default for StreamConfig {
@@ -132,6 +137,7 @@ impl Default for StreamConfig {
             wake: true,
             mic: false,
             dualsense: false,
+            keyboard: false,
         }
     }
 }
@@ -160,6 +166,13 @@ pub struct LiveStats {
     pub video_bytes: u64,
     pub units: u64,
     pub units_lost: u64,
+    /// The engine's round trip to the console and back, ms (Takion DATA out, its ack in;
+    /// see `Takion::rtt`). Absent until measured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub console_rtt_ms: Option<f64>,
+    /// The console's last connection-quality report, raw (see `proto::ConnectionQuality`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<proto::ConnectionQuality>,
 }
 
 /// Ctrl: our auth, the console's SESSION_ID, then heartbeats until stopped.
@@ -175,6 +188,10 @@ struct Ctrl {
     counter_local: u64,
     brt: [u8; 16],
     amb: [u8; 16],
+    /// The console's keyboard opening, changing and closing (sessions with `keyboard`).
+    keyboard: Option<std::sync::mpsc::Receiver<KeyboardEvent>>,
+    /// The number of our last keyboard text message (chiaki `keyboard_text_counter`).
+    keyboard_counter: u32,
 }
 
 impl Ctrl {
@@ -184,7 +201,7 @@ impl Ctrl {
         let msg = ctrl_message(kind, payload, &self.brt, &self.amb, self.counter_local);
         self.counter_local += 1;
         let Some(writer) = self.writer.as_ref() else {
-            bail!("ctrl messages are for a session with the mic or DualSense set up");
+            bail!("ctrl messages are for a session with the mic, DualSense or keyboard set up");
         };
         let mut w = writer.lock().map_err(|_| anyhow!("ctrl writer poisoned"))?;
         w.write_all(&msg)?;
@@ -224,6 +241,7 @@ fn ctrl_open(
     nonce: &[u8; KEY_SIZE],
     codec: Codec,
     shared_writer: bool,
+    keyboard: bool,
 ) -> Result<(Ctrl, String, [u8; 16], [u8; 16])> {
     let amb = ambassador(nonce);
     let brt = bright(nonce, &creds.morning);
@@ -360,6 +378,14 @@ fn ctrl_open(
     };
     let tw = writer.clone();
     let stop_t = stop.clone();
+    // With the keyboard on, the console's messages are read, not only its heartbeats: each
+    // payload is decrypted on its counter, which carries on from the session id's.
+    let (kb_tx, kb_rx) = if keyboard {
+        let (tx, rx) = std::sync::mpsc::channel();
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
     let thread = std::thread::Builder::new()
         .name("rp-ctrl".into())
         .spawn(move || {
@@ -376,6 +402,16 @@ fn ctrl_open(
                         break;
                     }
                     let kind = u16::from_be_bytes([pending[4], pending[5]]);
+                    if let Some(tx) = kb_tx.as_ref() {
+                        let mut p = Vec::new();
+                        if size > 0 {
+                            p = auth_decrypt(&brt, &amb, remote_counter, &pending[8..8 + size]);
+                            remote_counter += 1;
+                        }
+                        if let Some(ev) = keyboard::parse(kind, &p) {
+                            let _ = tx.send(ev);
+                        }
+                    }
                     pending.drain(..8 + size);
                     if kind == CTRL_HEARTBEAT_REQ && !heartbeat_reply(&mut ts, tw.as_deref()) {
                         return;
@@ -402,6 +438,8 @@ fn ctrl_open(
             counter_local,
             brt,
             amb,
+            keyboard: kb_rx,
+            keyboard_counter: 0,
         },
         session_id,
         brt,
@@ -443,9 +481,9 @@ const CTRL_ENABLE_DUALSENSE: u16 = 0x13;
 const CTRL_DUALSENSE_CONNECT: u16 = 0x11;
 
 /// What a session sends on ctrl right after the session id (chiaki `ctrl_enable_features`):
-/// with a DualSense, its features switched on; with the mic set up, the mic muted twice.
-/// Without either, nothing, as before both existed.
-fn start_ctrl_messages(mic: bool, dualsense: bool) -> Vec<(u16, Vec<u8>)> {
+/// with a DualSense, its features switched on; then the keyboard's, when asked for; with the
+/// mic set up, the mic muted twice. Without any, nothing, as before they existed.
+fn start_ctrl_messages(mic: bool, dualsense: bool, keyboard: bool) -> Vec<(u16, Vec<u8>)> {
     let mut v = Vec::new();
     if dualsense {
         v.push((CTRL_ENABLE_DUALSENSE, vec![0x00, 0x40, 0x00]));
@@ -456,6 +494,9 @@ fn start_ctrl_messages(mic: bool, dualsense: bool) -> Vec<(u16, Vec<u8>)> {
                 0x00, 0x00,
             ],
         ));
+    }
+    if keyboard {
+        v.extend(keyboard::enable_messages());
     }
     if mic {
         v.push((mic::CTRL_MIC_TOGGLE, mic::toggle_payload(false).to_vec()));
@@ -594,6 +635,13 @@ pub trait StreamSink {
     /// The page's microphone, oldest first (see mic.rs); None when nothing
     /// is waiting.
     fn mic(&mut self) -> Option<MicInput> {
+        None
+    }
+    /// The console's on-screen keyboard opened, changed or closed (sessions with `keyboard`).
+    fn keyboard(&mut self, _ev: KeyboardEvent) {}
+    /// What the page typed into the console's keyboard, oldest first; None when nothing is
+    /// waiting.
+    fn keyboard_input(&mut self) -> Option<KeyboardInput> {
         None
     }
 }
@@ -736,7 +784,14 @@ pub fn run_stream(
     let mut attempt = 0;
     let opened = loop {
         attempt += 1;
-        match ctrl_open(host, creds, &nonce, cfg.codec, cfg.mic || cfg.dualsense) {
+        match ctrl_open(
+            host,
+            creds,
+            &nonce,
+            cfg.codec,
+            cfg.mic || cfg.dualsense || cfg.keyboard,
+            cfg.keyboard,
+        ) {
             Err(e)
                 if attempt < CTRL_ATTEMPTS
                     && (format!("{e:#}").contains("ctrl reply")
@@ -764,9 +819,9 @@ pub fn run_stream(
         Err(e) => return Err(e),
     };
     sink.progress(Progress::SessionId);
-    // DualSense features on, the mic muted twice (chiaki `ctrl_enable_features`);
-    // like chiaki, a failed send is not fatal.
-    for (kind, payload) in start_ctrl_messages(cfg.mic, cfg.dualsense) {
+    // DualSense features and the keyboard on, the mic muted twice (chiaki
+    // `ctrl_enable_features`); like chiaki, a failed send is not fatal.
+    for (kind, payload) in start_ctrl_messages(cfg.mic, cfg.dualsense, cfg.keyboard) {
         let _ = ctrl.send(kind, &payload);
     }
 
@@ -875,6 +930,7 @@ pub fn run_stream(
     let mut last_idr: Option<Instant> = None;
     let (mut state_seq, mut history_seq) = (0u16, 0u16);
     let mut ctrl_gone: Option<Instant> = None;
+    let mut quality: Option<proto::ConnectionQuality> = None;
     let result = loop {
         if started.elapsed() > max || sink.stopped() {
             break Ok(());
@@ -946,6 +1002,32 @@ pub fn run_stream(
                 _ => {}
             }
         }
+        // The console's on-screen keyboard: what it did to the page, what the page typed back.
+        if cfg.keyboard {
+            while let Some(ev) = ctrl.keyboard.as_ref().and_then(|r| r.try_recv().ok()) {
+                sink.keyboard(ev);
+            }
+            while let Some(k) = sink.keyboard_input() {
+                let (kind, payload) = match k {
+                    KeyboardInput::Text(t) => {
+                        ctrl.keyboard_counter = ctrl.keyboard_counter.wrapping_add(1);
+                        (
+                            keyboard::CTRL_KEYBOARD_TEXT_CHANGE_REQ,
+                            keyboard::set_text_payload(ctrl.keyboard_counter, &t),
+                        )
+                    }
+                    KeyboardInput::Accept => (
+                        keyboard::CTRL_KEYBOARD_CLOSE_REQ,
+                        keyboard::close_payload(true).to_vec(),
+                    ),
+                    KeyboardInput::Reject => (
+                        keyboard::CTRL_KEYBOARD_CLOSE_REQ,
+                        keyboard::close_payload(false).to_vec(),
+                    ),
+                };
+                let _ = ctrl.send(kind, &payload);
+            }
+        }
         for pkt in feedback.tick(Instant::now()) {
             match pkt {
                 feedback::Packet::State(p) => {
@@ -971,6 +1053,8 @@ pub fn run_stream(
                 video_bytes: now.bytes - stats_prev.bytes,
                 units: std::mem::take(&mut second_units),
                 units_lost: std::mem::take(&mut second_units_lost),
+                console_rtt_ms: takion.rtt().map(|d| d.as_secs_f64() * 1000.0),
+                quality,
             }));
             stats_prev = now;
         }
@@ -1039,12 +1123,14 @@ pub fn run_stream(
             Err(e) => break Err(e),
         };
         match ev {
-            Event::Data(DATA_TYPE_PROTOBUF, buf) => {
-                if let Ok(Message::Disconnect(r)) = proto::decode(&buf) {
+            Event::Data(DATA_TYPE_PROTOBUF, buf) => match proto::decode(&buf) {
+                Ok(Message::Disconnect(r)) => {
                     report.disconnect_reason = Some(r);
                     break Ok(());
                 }
-            }
+                Ok(Message::ConnectionQuality(q)) => quality = Some(q),
+                _ => {}
+            },
             // Rumble: [?, left (strong), right (weak)] (chiaki
             // stream_connection_takion_data_rumble).
             Event::Data(DATA_TYPE_RUMBLE, b) if b.len() >= 3 => sink.rumble(b[1], b[2]),
@@ -1162,7 +1248,7 @@ mod tests {
     /// STREAMINFOACK on channel 9 and the controller on channel 1, then nothing.
     #[test]
     fn without_the_mic_the_setup_is_unchanged() {
-        assert!(start_ctrl_messages(false, false).is_empty());
+        assert!(start_ctrl_messages(false, false, false).is_empty());
         assert_eq!(
             after_streaminfo_messages(false, false),
             vec![
@@ -1184,21 +1270,43 @@ mod tests {
         );
         assert!(!StreamConfig::default().mic);
         assert!(!StreamConfig::default().dualsense);
+        assert!(!StreamConfig::default().keyboard);
+    }
+
+    /// The keyboard, asked for: chiaki's two enable messages, after the DualSense's and
+    /// before the mic's mutes, as chiaki's `ctrl_enable_features` orders them.
+    #[test]
+    fn with_the_keyboard_it_is_switched_on_in_chiakis_order() {
+        let kb = start_ctrl_messages(false, false, true);
+        assert_eq!(kb, keyboard::enable_messages());
+        assert_eq!(kb.iter().map(|m| m.0).collect::<Vec<_>>(), vec![0x0d, 0x20]);
+        let all = start_ctrl_messages(true, true, true);
+        let kinds: Vec<u16> = all.iter().map(|m| m.0).collect();
+        assert_eq!(kinds, vec![0x13, 0x11, 0x0d, 0x20, 0x36, 0x36]);
+        // The launch spec does not depend on it.
+        let on = StreamConfig {
+            keyboard: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            launch_spec(&on, &[0u8; 16]),
+            launch_spec(&StreamConfig::default(), &[0u8; 16])
+        );
     }
 
     /// With a DualSense: chiaki's two ctrl messages first, and the controller is type 6.
     #[test]
     fn with_a_dualsense_the_console_is_told_so() {
-        let ctrl = start_ctrl_messages(false, true);
+        let ctrl = start_ctrl_messages(false, true, false);
         assert_eq!(ctrl[0], (0x13, vec![0x00, 0x40, 0x00]));
         assert_eq!(ctrl[1].0, 0x11);
         assert_eq!(ctrl[1].1.len(), 0x10);
         assert_eq!(&ctrl[1].1[..6], &[0xa0, 0xab, 0x51, 0xbd, 0xd1, 0x7e]);
         assert_eq!(ctrl.len(), 2);
         // With the mic as well: the mic's mutes come after.
-        let both = start_ctrl_messages(true, true);
+        let both = start_ctrl_messages(true, true, false);
         assert_eq!(&both[..2], &ctrl[..]);
-        assert_eq!(&both[2..], &start_ctrl_messages(true, false)[..]);
+        assert_eq!(&both[2..], &start_ctrl_messages(true, false, false)[..]);
         let tk = after_streaminfo_messages(false, true);
         assert_eq!(
             tk[1],
@@ -1235,7 +1343,7 @@ mod tests {
 
     #[test]
     fn with_the_mic_setup_adds_chiaki_mutes_and_audio_header() {
-        let ctrl = start_ctrl_messages(true, false);
+        let ctrl = start_ctrl_messages(true, false, false);
         assert_eq!(
             ctrl,
             vec![(0x36, vec![0, 1, 1, 89]), (0x36, vec![0, 1, 1, 89])]

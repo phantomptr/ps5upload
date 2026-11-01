@@ -84,23 +84,27 @@ export function GameCard(props: GameCardProps) {
   const passed = inspection?.checks.filter((c) => c.ok) ?? [];
   const fw = inspection ? firmwareLine(inspection, tr) : null;
   return (
-    <Card>
+    <Card padded={false} className="p-3.5 sm:p-4">
       <div className="flex flex-col gap-2">
         <div className="text-sm font-medium">{tr("fpkg.card.game", undefined, "① Game")}</div>
+        {/* A modest drop area (the user found the tall one wasteful): one row of what to do and
+            the pick buttons, wrapping on a phone. The whole card's window takes the drop. */}
         <div
-          className={`flex flex-col items-center gap-2 rounded-lg border-2 border-dashed p-4 text-center text-sm ${
+          data-testid="game-drop"
+          className={`flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-dashed px-3 py-2 text-sm ${
             props.dropActive
               ? "border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-accent-soft,transparent)]"
               : "border-[var(--color-border)]"
           } ${props.locked ? "opacity-60" : ""}`}
         >
-          <FolderInput size={20} aria-hidden className="text-[var(--color-muted)]" />
-          <div>
-            {tr("fpkg.dropHere", undefined, "Drop a game folder, image or archive here")}
+          <div className="flex min-w-0 items-center gap-2 text-[var(--color-muted)]">
+            <FolderInput size={16} aria-hidden className="shrink-0" />
+            <span>{tr("fpkg.dropHere", undefined, "Drop a game folder, image or archive here")}</span>
           </div>
           {props.canBrowse && (
             <>
               <AddSources
+                className="justify-start!"
                 fileFilters={GAME_FILE_FILTERS}
                 disabled={props.checking}
                 onFiles={(paths) => props.onAdd(paths.map((path) => ({ path, isDir: false })))}
@@ -121,7 +125,7 @@ export function GameCard(props: GameCardProps) {
                   </Button>
                 )}
               </AddSources>
-              <div className="text-xs text-[var(--color-muted)]" data-testid="add-sources-hint">
+              <div className="w-full text-xs text-[var(--color-muted)]" data-testid="add-sources-hint">
                 {props.locked
                   ? tr(
                       "workshop_add_locked",

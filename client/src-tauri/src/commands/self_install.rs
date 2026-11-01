@@ -240,8 +240,15 @@ xattr -dr com.apple.quarantine "$app" 2>/dev/null
         Plan::LinuxAppImage { zip, appimage } => {
             let zip = sh_quote(&zip.to_string_lossy());
             let target = sh_quote(&appimage.to_string_lossy());
+            // Through the launcher beside it when it starts this AppImage, so its FUSE and
+            // WebKit rescues apply to the new version too.
             let start = if relaunch {
-                r#"nohup "$target" >/dev/null 2>&1 &"#
+                r#"launcher="$(dirname "$target")/PS5Upload.sh"
+if [ "$(basename "$target")" = PS5Upload.AppImage ] && [ -x "$launcher" ]; then
+  nohup "$launcher" >/dev/null 2>&1 &
+else
+  nohup "$target" >/dev/null 2>&1 &
+fi"#
             } else {
                 ""
             };
@@ -388,6 +395,44 @@ pub fn plan(download: &Path) -> Option<Plan> {
     plain
 }
 
+/// What the AppImage's `AppRun` (linuxdeploy, plus its GTK and GStreamer hooks) points into the
+/// bundle. A system program started with these loads the bundle's libraries instead of its own:
+/// bash on Arch (readline 8.3) dies at once on the bundled older `libreadline.so.8`
+/// ("undefined symbol: rl_print_keybinding", exit 127), so the update script never ran (#603).
+const APPIMAGE_BUNDLE_ENV: &[&str] = &[
+    "LD_LIBRARY_PATH",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PERLLIB",
+    "QT_PLUGIN_PATH",
+    "GST_PLUGIN_SYSTEM_PATH",
+    "GST_PLUGIN_SYSTEM_PATH_1_0",
+    "GST_PLUGIN_PATH_1_0",
+    "GST_PLUGIN_SCANNER_1_0",
+    "GST_PTP_HELPER_1_0",
+    "GST_REGISTRY_REUSE_PLUGIN_SCANNER",
+    "GTK_PATH",
+    "GTK_EXE_PREFIX",
+    "GTK_DATA_PREFIX",
+    "GTK_THEME",
+    "GTK_IM_MODULE_FILE",
+    "GDK_PIXBUF_MODULE_FILE",
+    "GIO_MODULE_DIR",
+    "GI_TYPELIB_PATH",
+    "GSETTINGS_SCHEMA_DIR",
+];
+
+/// Starts `cmd` (the update script) with the system's own libraries when this copy runs as an
+/// AppImage. `LD_PRELOAD`, `APPIMAGE_EXTRACT_AND_RUN` and the `WEBKIT_*` switches stay: the
+/// launcher (PS5Upload.sh) set them, and the app the script starts again needs them too.
+fn without_appimage_env(cmd: &mut std::process::Command, appimage: bool) {
+    if appimage {
+        for var in APPIMAGE_BUNDLE_ENV {
+            cmd.env_remove(var);
+        }
+    }
+}
+
 /// Start `script` detached from this process, so it outlives the app.
 fn spawn_detached(plan: &Plan, script: &str) -> Result<(), String> {
     let dir = std::env::temp_dir();
@@ -422,6 +467,7 @@ fn spawn_detached(plan: &Plan, script: &str) -> Result<(), String> {
     } else {
         cmd = std::process::Command::new("/bin/sh");
         cmd.arg(&path);
+        without_appimage_env(&mut cmd, std::env::var_os("APPIMAGE").is_some());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -615,6 +661,34 @@ mod tests {
     const NO: &dyn Fn(&Path) -> bool = &|_: &Path| false;
 
     #[test]
+    fn the_update_script_does_not_inherit_the_appimage_loader_env() {
+        let removed = |appimage: bool| {
+            let mut cmd = std::process::Command::new("/bin/sh");
+            without_appimage_env(&mut cmd, appimage);
+            cmd.get_envs()
+                .map(|(k, v)| {
+                    assert!(v.is_none(), "{k:?} is set, not removed");
+                    k.to_string_lossy().into_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+        // An AppImage: every bundle path goes, LD_LIBRARY_PATH first of all (#603); what the
+        // launcher set for the app (LD_PRELOAD and the rest) stays.
+        let gone = removed(true);
+        assert!(gone.iter().any(|k| k == "LD_LIBRARY_PATH"));
+        assert_eq!(gone.len(), APPIMAGE_BUNDLE_ENV.len());
+        for kept in [
+            "LD_PRELOAD",
+            "APPIMAGE_EXTRACT_AND_RUN",
+            "WEBKIT_DISABLE_DMABUF_RENDERER",
+        ] {
+            assert!(!gone.iter().any(|k| k == kept), "{kept} must be kept");
+        }
+        // Not an AppImage (a .deb / .rpm install, macOS): the environment is left alone.
+        assert!(removed(false).is_empty());
+    }
+
+    #[test]
     fn each_platform_gets_its_own_plan_or_none() {
         let mac_exe = Path::new("/Applications/PS5Upload.app/Contents/MacOS/PS5Upload");
         assert_eq!(
@@ -759,7 +833,7 @@ mod tests {
         assert!(script_for(&plan, 9, true)
             .unwrap()
             .trim_end()
-            .ends_with(r#"nohup "$target" >/dev/null 2>&1 &"#));
+            .ends_with("nohup \"$target\" >/dev/null 2>&1 &\nfi"));
     }
 
     #[test]

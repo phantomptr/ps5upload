@@ -17,6 +17,12 @@
 //!   on or off, and binary `[5][one Opus packet]` is one mic frame (48 kHz
 //!   stereo, 10 ms, 40 bytes; see `rp_stream::mic`). Only the attached page's
 //!   mic counts, and the mic goes off whenever the page changes.
+//!   Native keyboard & mouse (vinput_api.rs): `{"kbm": {"on", "mouse", "keyboard"}}` (repeated as
+//!   its heartbeat) and binary `[8][16-byte report]`, from the attached page only; answered with
+//!   `{"kbm": {"on", "mouse", "keyboard", "err", "reason"}}`.
+//!   The console's on-screen keyboard, only for a session started with `"keyboard": true`:
+//!   `{"keyboard_text": "…"}`, `{"keyboard_accept": true}`, `{"keyboard_reject": true}`
+//!   (see rp_keyboard.rs).
 //! * engine → client, binary `[u8 kind][payload]`: 0 = video codec header
 //!   (Annex-B parameter sets), 1 = video access unit, 3 = audio header,
 //!   4 = audio frame (Opus), 6 = DualSense haptics frame (10 ms of 3 kHz stereo s16le PCM),
@@ -27,6 +33,14 @@
 //!   (`{"light": [r, g, b]}`) and, for a session started with `"dualsense": true`, adaptive
 //!   triggers (`{"triggers": {"left": [mode, 10 bytes…], "right": […]}}`) and the console's
 //!   effect strengths (`{"ds_intensity": [haptics, triggers]}`, 0 off 1 strong 2 medium 3 weak).
+//!   For a session started with `"keyboard": true`, the console's keyboard
+//!   (`{"keyboard": {"open": …, "text": …}}`, rp_keyboard.rs).
+//!   A phone's touchpad & keyboard (pad_link.rs) reaches the page as text, for the page to merge
+//!   into its own keyboard & mouse (it stays the only owner of the console's devices):
+//!   `{"pad_kbm": {"id", "on", "mouse", "keyboard"}}` (the phone's heartbeat, every 500 ms while
+//!   on), `{"pad_kbm": {"id", "r": "<32 hex chars: one 16-byte report>"}}`, and
+//!   `{"pad_kbm": {"id", "left": true}}` when the phone leaves or loses the controller (let go
+//!   of whatever it held).
 //!
 //! The session belongs to the engine, not to the socket. The console serves
 //! one session at a time and holds its slot for 12-30 s after one ends, so a
@@ -53,7 +67,8 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::rp_stream::{
-    run_stream, Codec, ControllerState, MicInput, Progress, StreamConfig, StreamSink,
+    run_stream, Codec, ControllerState, KeyboardEvent, KeyboardInput, MicInput, Progress,
+    StreamConfig, StreamSink,
 };
 use tokio::sync::mpsc;
 
@@ -116,6 +131,10 @@ struct StartReq {
     /// Video as kind 7 (each access unit with the engine's time), for the page's latency stages.
     #[serde(default)]
     timing: bool,
+    /// Typing into the console's on-screen keyboard (rp_keyboard.rs). Without it the session
+    /// is as before.
+    #[serde(default)]
+    keyboard: bool,
 }
 
 impl StartReq {
@@ -144,6 +163,12 @@ struct ClientMsg {
     /// The page's clock, echoed back as `{"pong": …}`.
     #[serde(default)]
     ping: Option<serde_json::Value>,
+    /// Native keyboard & mouse on or off, and its heartbeat (vinput_api.rs).
+    #[serde(default)]
+    kbm: Option<crate::vinput_api::KbmMsg>,
+    /// Typing into the console's keyboard (rp_keyboard.rs).
+    #[serde(flatten)]
+    keyboard: crate::rp_keyboard::PageKeyboard,
 }
 
 /// The answer to a ping: the page's own value back, untouched, and the engine's clock now.
@@ -207,6 +232,8 @@ struct Live {
     replay: Mutex<Option<crate::rp_replay::Replay>>,
     /// Watchers (pad_link.rs, watch party): each gets its own copy of the picture and sound.
     spectators: Mutex<Vec<Spectator>>,
+    /// The console's on-screen keyboard (rp_keyboard.rs).
+    keyboard: crate::rp_keyboard::KeyboardLink,
 }
 
 /// A watcher's queue. `need_key`: it cannot use a frame until the next keyframe (it just
@@ -234,6 +261,15 @@ fn live() -> Option<Arc<Live>> {
 pub(crate) fn push_pad(source: u64, state: Option<ControllerState>) {
     if let Some(l) = live() {
         l.push_pad(source, state);
+    }
+}
+
+/// A phone's touchpad & keyboard input for the page (pad_link.rs): `{"pad_kbm": v}` on the
+/// viewer's socket, for the page to merge into its own keyboard & mouse. Dropped when no page
+/// shows the session.
+pub(crate) fn push_pad_kbm(v: serde_json::Value) {
+    if let Some(l) = live() {
+        l.send_ctl(text(serde_json::json!({ "pad_kbm": v })));
     }
 }
 
@@ -267,6 +303,16 @@ pub(crate) fn remove_spectator(id: u64) {
             g.retain(|s| s.id != id);
         }
     }
+}
+
+/// A page shows the Remote Play session of `host` (that page owns the console's keyboard and mouse
+/// input, vinput_api.rs).
+pub(crate) fn page_attached(host: &str) -> bool {
+    let key = crate::vinput_api::host_key(host);
+    live().is_some_and(|l| {
+        crate::vinput_api::host_key(&l.host) == key
+            && l.viewer.lock().map(|g| g.is_some()).unwrap_or(false)
+    })
 }
 
 /// The console being played, if any.
@@ -400,6 +446,7 @@ impl Live {
             mic_on: AtomicBool::new(false),
             replay: Mutex::new(None),
             spectators: Mutex::new(Vec::new()),
+            keyboard: Default::default(),
         }
     }
 
@@ -482,6 +529,9 @@ impl Live {
             let _ = ctl.try_send(text(
                 serde_json::json!({"stage": "first_frame", "attached": true}),
             ));
+        }
+        if let Some(k) = self.keyboard.on_attach() {
+            let _ = ctl.try_send(text(k));
         }
         self.need_key.store(true, Ordering::Relaxed);
         self.want_key.store(true, Ordering::Relaxed);
@@ -687,6 +737,13 @@ impl StreamSink for Sink {
     fn mic(&mut self) -> Option<MicInput> {
         self.live.mic.lock().ok()?.pop_front()
     }
+    fn keyboard(&mut self, ev: KeyboardEvent) {
+        let v = self.live.keyboard.event(ev);
+        self.live.send_ctl(text(v));
+    }
+    fn keyboard_input(&mut self) -> Option<KeyboardInput> {
+        self.live.keyboard.next()
+    }
 }
 
 /// An error as the player shows it: a stable `code` to pick the plain-English
@@ -781,6 +838,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
     }
     cfg.mic = start.mic;
     cfg.dualsense = start.dualsense;
+    cfg.keyboard = start.keyboard;
     let live = Arc::new(Live::new(
         start.host.clone(),
         cfg.codec.is_hevc(),
@@ -791,6 +849,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             .min(MAX_KEEP_ALIVE),
     ));
     live.mic_enabled.store(cfg.mic, Ordering::Relaxed);
+    live.keyboard.enabled.store(cfg.keyboard, Ordering::Relaxed);
     live.set_replay(start.replay_s);
     let l = live.clone();
     tokio::task::spawn_blocking(move || {
@@ -950,6 +1009,7 @@ async fn session(mut socket: WebSocket) {
     // Pongs go on this page's own status queue, behind what is already there,
     // so the time measured is the time the page's messages really take.
     let pong_tx = ctl_tx.clone();
+    let kbm_tx = ctl_tx.clone();
     let id = live.attach(video_tx, ctl_tx, start.timing);
 
     let mut reason = "ended";
@@ -1000,14 +1060,33 @@ async fn session(mut socket: WebSocket) {
                         if m.replay_s.is_some() {
                             live.set_replay(m.replay_s);
                         }
+                        if let Some(k) = &m.kbm {
+                            if live.is_viewer(id) {
+                                let tx = kbm_tx.clone();
+                                let status: crate::vinput_api::StatusFn = Arc::new(move |v| {
+                                    let _ = tx.try_send(text(v));
+                                });
+                                crate::vinput_api::control(&live.host, crate::vinput_api::Owner::Page(id), k, status);
+                            }
+                        }
+                        if live.is_viewer(id) {
+                            live.keyboard.page_typed(&m.keyboard);
+                        }
                     }
                 }
                 Some(Ok(Message::Binary(b))) if b.first() == Some(&KIND_MIC) => {
                     live.mic_frame(id, &b[1..]);
                 }
+                // A native keyboard & mouse report: only from the page the session is shown on.
+                Some(Ok(Message::Binary(b))) if b.first() == Some(&crate::vinput_api::KIND_KBM) => {
+                    if live.is_viewer(id) {
+                        crate::vinput_api::report(&live.host, crate::vinput_api::Owner::Page(id), &b[1..]);
+                    }
+                }
                 // The page left: the session waits for it (or another).
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
                     live.detach(id);
+                    crate::vinput_api::off(&live.host, crate::vinput_api::Owner::Page(id), "left");
                     return;
                 }
                 _ => {}
@@ -1015,6 +1094,8 @@ async fn session(mut socket: WebSocket) {
         }
     }
     live.detach(id);
+    // Whatever ended it (stop, the session over, another page): this page's keys and buttons go.
+    crate::vinput_api::off(&live.host, crate::vinput_api::Owner::Page(id), "left");
     close(&mut socket, reason).await;
 }
 
@@ -1335,6 +1416,42 @@ mod tests {
         let s: StartReq =
             serde_json::from_str(r#"{"host":"h","regist_key":"","rp_key":""}"#).unwrap();
         assert!(!s.mic);
+    }
+
+    #[test]
+    fn the_keyboard_is_only_on_when_asked_and_only_for_the_attached_page() {
+        let s: StartReq =
+            serde_json::from_str(r#"{"host":"h","regist_key":"","rp_key":""}"#).unwrap();
+        assert!(!s.keyboard, "an older page gets no keyboard");
+        let live = Arc::new(Live::new("h".into(), false, DEFAULT_KEEP_ALIVE));
+        live.keyboard.enabled.store(true, Ordering::Relaxed);
+        let mut sink = Sink {
+            live: live.clone(),
+            t0: Instant::now(),
+        };
+        let (vt, _vr, ct, mut cr) = page();
+        live.attach(vt, ct, false);
+        sink.keyboard(KeyboardEvent::Open("ü".into()));
+        assert_eq!(
+            kinds(&mut cr),
+            vec![r#"{"keyboard":{"open":true,"text":"ü"}}"#]
+        );
+        // A page that attaches now is told the keyboard is open.
+        let (vt2, _vr2, ct2, mut cr2) = page();
+        live.attach(vt2, ct2, false);
+        assert!(kinds(&mut cr2)
+            .iter()
+            .any(|m| m == r#"{"keyboard":{"open":true,"text":"ü"}}"#));
+        let m: ClientMsg = serde_json::from_str(r#"{"keyboard_text": "üx"}"#).unwrap();
+        live.keyboard.page_typed(&m.keyboard);
+        let m: ClientMsg = serde_json::from_str(r#"{"keyboard_accept": true}"#).unwrap();
+        live.keyboard.page_typed(&m.keyboard);
+        assert_eq!(
+            sink.keyboard_input(),
+            Some(KeyboardInput::Text("üx".into()))
+        );
+        assert_eq!(sink.keyboard_input(), Some(KeyboardInput::Accept));
+        assert_eq!(sink.keyboard_input(), None);
     }
 
     #[test]

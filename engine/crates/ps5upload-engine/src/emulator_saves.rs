@@ -9,6 +9,9 @@
 //! `title_id` the game's), so it is backed up, kept and restored as a PS5 save is, with two
 //! differences: its files go as they are (`backup_finalize` and `restore_prepare` shape PS5 save
 //! images), and the app that writes it is the emulator, not the game.
+//!
+//! The PlayStation 2 emulators' memory cards and saved states (`kind` "ps2") are emulators' saves
+//! too: see `ps2_saves`. What tells them all apart from a PS5 save is here.
 
 use axum::extract::Query;
 use axum::http::StatusCode;
@@ -42,9 +45,10 @@ fn is_profile(name: &str) -> bool {
     hex_digits(name, 32)
 }
 
-/// The save is one of the emulator's.
+/// The save is an emulator's: a Switch game's in ProsperoEden, or a PlayStation 2 emulator's cards
+/// or saved states.
 pub fn is_emulator_save(e: &SaveEntry) -> bool {
-    e.kind == KIND
+    e.kind == KIND || e.kind == crate::ps2_saves::KIND
 }
 
 /// `path` is a save folder of the emulator, `ROOT/<profile>/<game>`, and nothing past it.
@@ -55,18 +59,31 @@ pub fn is_save_path(path: &str) -> bool {
         .is_some_and(|(profile, game)| is_profile(profile) && is_game(game))
 }
 
-/// The app that writes the save: the emulator for its saves, the game itself for a PS5 one.
+/// The kind of emulator's save `path` is the folder of; None for a PS5 save's.
+pub fn kind_of_path(path: &str) -> Option<&'static str> {
+    if is_save_path(path) {
+        Some(KIND)
+    } else if crate::ps2_saves::place_of(path).is_some() {
+        Some(crate::ps2_saves::KIND)
+    } else {
+        None
+    }
+}
+
+/// The app that writes the save: ProsperoEden for its saves, the game itself for a PS5 one. (A
+/// PlayStation 2 emulator's saves are under its own title already.)
 pub fn app_of(e: &SaveEntry) -> &str {
-    if is_emulator_save(e) {
+    if e.kind == KIND {
         APP
     } else {
         &e.title_id
     }
 }
 
-/// A save the automatic backups take: a PS5 game's, or a game's in the emulator.
+/// A save the automatic backups take: a PS5 game's (a PlayStation 2 emulator's saves carry its
+/// title), or a game's in ProsperoEden.
 pub fn backs_up(e: &SaveEntry) -> bool {
-    crate::looks_like_title_id(&e.title_id) || (is_emulator_save(e) && is_game(&e.title_id))
+    crate::looks_like_title_id(&e.title_id) || (e.kind == KIND && is_game(&e.title_id))
 }
 
 /// The profile as the user number in a backup's name: its first 7 hex digits (0 for the
@@ -78,18 +95,21 @@ fn user_of(profile: &str) -> i32 {
 
 /// The emulator's saves on `host`: none when it is not there or has no save yet.
 pub fn list(host: &str) -> Vec<SaveEntry> {
-    saves_in(&|path: &str| {
-        all_pages(&|offset| {
-            list_dir(
-                host,
-                path,
-                ListDirOptions {
-                    offset,
-                    ..Default::default()
-                },
-            )
-            .map_err(|e| format!("{e:#}"))
-        })
+    saves_in(&|path: &str| ls(host, path))
+}
+
+/// Every entry of the folder `path` on `host`.
+pub(crate) fn ls(host: &str, path: &str) -> Result<Vec<DirEntry>, String> {
+    all_pages(&|offset| {
+        list_dir(
+            host,
+            path,
+            ListDirOptions {
+                offset,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| format!("{e:#}"))
     })
 }
 
@@ -148,7 +168,7 @@ pub fn saves_in(ls: &dyn Fn(&str) -> Result<Vec<DirEntry>, String>) -> Vec<SaveE
 
 /// The size and number of the files under `path`, and the newest time of the folder (`mtime`) and
 /// of everything in it, `depth` folders down.
-fn measure(
+pub(crate) fn measure(
     ls: &dyn Fn(&str) -> Result<Vec<DirEntry>, String>,
     path: &str,
     mtime: i64,

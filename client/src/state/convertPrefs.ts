@@ -3,6 +3,7 @@ import { create } from "zustand";
 import type { FfpfscLevel, FpkgCompression, ImageFormat } from "../api/fpkg";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { registerSettingReload } from "../lib/liveSettings";
+import { parseOutputPlace, type OutputPlace } from "../lib/outputPlace";
 
 /**
  * What Convert remembers between sessions, per viewer: where packages go and how hard to
@@ -10,6 +11,7 @@ import { registerSettingReload } from "../lib/liveSettings";
  * remembered folder is kept as-is even if it has since gone away: the engine's check says so.
  */
 const KEY_DIR = "ps5upload.convert.output_dir";
+const KEY_PLACE = "ps5upload.convert.output_place";
 const KEY_LEVEL = "ps5upload.convert.compression";
 const KEY_VERIFY_CHUNK = "ps5upload.convert.verify_chunk_kib";
 const KEY_FULL_VERIFY = "ps5upload.convert.full_verify";
@@ -33,6 +35,9 @@ export type MakeKind = "pkg" | "image" | "folder";
 
 interface ConvertPrefs {
   outputDir: string;
+  /** In the Output folder (the default), or next to each game's own source. */
+  outputPlace: OutputPlace;
+  setOutputPlace: (place: OutputPlace) => void;
   compression: FpkgCompression;
   /** A game image's read-back check: KiB per read. */
   verifyChunkKib: number;
@@ -47,6 +52,9 @@ interface ConvertPrefs {
   /** How hard a compressed image (.ffpfsc) is compressed. */
   imageLevel: FfpfscLevel;
   setMake: (m: MakeKind) => void;
+  /** Shows `m` as what is being made without remembering it: a one-off run (the Workshop's
+   *  Convert to folder) or the build that is running, never the user's own choice. */
+  showMake: (m: MakeKind) => void;
   setImageLevel: (level: FfpfscLevel) => void;
   setImageChoice: (format: ImageFormat, compress: boolean) => void;
   setOutputDir: (dir: string) => void;
@@ -83,6 +91,12 @@ export function parseImageFormat(v: string | null): ImageFormat {
 
 export const useConvertPrefs = create<ConvertPrefs>((set) => ({
   outputDir: safeGetItem(KEY_DIR) ?? "",
+  outputPlace: parseOutputPlace(safeGetItem(KEY_PLACE)),
+  setOutputPlace: (place) => {
+    const v = parseOutputPlace(place);
+    safeSetItem(KEY_PLACE, v);
+    set({ outputPlace: v });
+  },
   compression: storedLevel(),
   verifyChunkKib: parseVerifyChunkKib(safeGetItem(KEY_VERIFY_CHUNK)),
   fullVerify: parseFullVerify(safeGetItem(KEY_FULL_VERIFY)),
@@ -99,6 +113,7 @@ export const useConvertPrefs = create<ConvertPrefs>((set) => ({
     safeSetItem(KEY_MAKE, m);
     set({ make: m });
   },
+  showMake: (m) => set({ make: m }),
   setImageChoice: (format, compress) => {
     safeSetItem(KEY_IMAGE_FORMAT, format);
     safeSetItem(KEY_IMAGE_COMPRESS, compress ? "1" : "0");
@@ -125,10 +140,11 @@ export const useConvertPrefs = create<ConvertPrefs>((set) => ({
 
 // A change synced from another device shows at once (lib/liveSettings).
 registerSettingReload(
-  [KEY_DIR, KEY_VERIFY_CHUNK, KEY_FULL_VERIFY, KEY_MAKE, KEY_IMAGE_FORMAT, KEY_IMAGE_COMPRESS, KEY_IMAGE_LEVEL, "ps5upload.convert.compression"],
+  [KEY_DIR, KEY_PLACE, KEY_VERIFY_CHUNK, KEY_FULL_VERIFY, KEY_MAKE, KEY_IMAGE_FORMAT, KEY_IMAGE_COMPRESS, KEY_IMAGE_LEVEL, "ps5upload.convert.compression"],
   () =>
     useConvertPrefs.setState({
       outputDir: safeGetItem(KEY_DIR) ?? "",
+      outputPlace: parseOutputPlace(safeGetItem(KEY_PLACE)),
       compression: storedLevel(),
       verifyChunkKib: parseVerifyChunkKib(safeGetItem(KEY_VERIFY_CHUNK)),
       fullVerify: parseFullVerify(safeGetItem(KEY_FULL_VERIFY)),

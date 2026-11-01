@@ -515,6 +515,19 @@ value = 183
 name = "METHOD_PROFILE_NP_RESTORE"
 ty = "u16"
 value = 184
+# The PC's keyboard and mouse as the console's own (payload/include/vinput.h; MGMT_METHODS.md)
+[[const]]
+name = "METHOD_VINPUT_CAPS"
+ty = "u16"
+value = 185
+[[const]]
+name = "METHOD_VINPUT_SESSION"
+ty = "u16"
+value = 186
+[[const]]
+name = "METHOD_VINPUT_REPORT"
+ty = "u16"
+value = 187
 [[const]]
 name = "JOB_OP_DELETE"
 ty = "u8"

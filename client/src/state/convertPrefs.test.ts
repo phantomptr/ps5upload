@@ -35,6 +35,19 @@ describe("convertPrefs", () => {
     expect(second.useConvertPrefs.getState().compression).toBe("smallest");
   });
 
+  it("remembers where outputs go: the Output folder by default, or next to each source", async () => {
+    const first = await import("./convertPrefs");
+    expect(first.useConvertPrefs.getState().outputPlace).toBe("folder");
+    first.useConvertPrefs.getState().setOutputPlace("beside");
+    vi.resetModules();
+    const second = await import("./convertPrefs");
+    expect(second.useConvertPrefs.getState().outputPlace).toBe("beside");
+    stored.set("ps5upload.convert.output_place", "junk");
+    vi.resetModules();
+    const third = await import("./convertPrefs");
+    expect(third.useConvertPrefs.getState().outputPlace).toBe("folder");
+  });
+
   it("remembers the .ffpfsc level, Balanced by default and for a corrupt value", async () => {
     const first = await import("./convertPrefs");
     expect(first.useConvertPrefs.getState().imageLevel).toBe("balanced");
@@ -82,5 +95,16 @@ describe("convertPrefs", () => {
     expect(second.useConvertPrefs.getState().make).toBe("folder");
     expect(second.parseMake("image")).toBe("image");
     for (const v of [null, "", "dir", "pkg"]) expect(second.parseMake(v)).toBe("pkg");
+  });
+
+  it("shows a one-off make without remembering it", async () => {
+    const first = await import("./convertPrefs");
+    first.useConvertPrefs.getState().setMake("image");
+    first.useConvertPrefs.getState().showMake("folder");
+    expect(first.useConvertPrefs.getState().make).toBe("folder");
+    expect(stored.get("ps5upload.convert.make")).toBe("image");
+    vi.resetModules();
+    const second = await import("./convertPrefs");
+    expect(second.useConvertPrefs.getState().make).toBe("image");
   });
 });

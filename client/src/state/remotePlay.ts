@@ -29,9 +29,12 @@ import { applyControls } from "../lib/gameControls";
 import { DEFAULT_PICTURE, readPicture, type PictureTools } from "../lib/rpPicture";
 import { DEFAULT_BUTTON_MAP, readButtonMap, remapPad, type ButtonMap } from "../lib/rpButtonMap";
 import type { CodecPref } from "../lib/rpHdr";
+import { nextKeyboard, type RpKeyboardState } from "../lib/rpKeyboard";
 import { pushNotification } from "./notifications";
 import { trStatic } from "../lib/trStatic";
 import { currentControls, rpControls } from "./gameControls";
+import { useKbmStore } from "./kbm";
+import { emitPadKbm, readKbmStatus } from "../lib/kbmInput";
 
 /** How Remote Play looks and behaves on this device. */
 export interface RpPrefs {
@@ -84,6 +87,14 @@ export interface RpPrefs {
   codec: CodecPref;
   /** What each controller button sends (lib/rpButtonMap.ts); empty = each sends itself. */
   buttonMap: ButtonMap;
+  /** While the PS5 has the keyboard and mouse, a small "⌃ ⌥ to release" over the picture. */
+  kbmChip: boolean;
+  /** Holding Esc gives the keyboard and mouse back too (besides the release shortcut). */
+  escHoldRelease: boolean;
+  /** On a touch screen: the on-screen controller, or the screen as the PS5 mouse's touchpad. */
+  touchMode: "controller" | "touchpad";
+  /** How far the PS5's pointer moves for a finger's movement on the touchpad. */
+  touchpadSpeed: number;
 }
 
 export const DEFAULT_RP_PREFS: RpPrefs = {
@@ -111,6 +122,10 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   decoding: "auto",
   codec: "auto",
   buttonMap: DEFAULT_BUTTON_MAP,
+  kbmChip: true,
+  escHoldRelease: true,
+  touchMode: "controller",
+  touchpadSpeed: 1.5,
 };
 
 /** The smallest sound buffer the Sound buffer setting offers. */
@@ -128,7 +143,16 @@ export function loadRpPrefs(): RpPrefs {
     const raw = safeGetItem(PREFS_KEY);
     const p = { ...DEFAULT_RP_PREFS, ...(raw ? (JSON.parse(raw) as Partial<RpPrefs>) : {}) };
     const codec: CodecPref = p.codec === "h264" || p.codec === "hdr" ? p.codec : "auto";
-    return { ...p, codec, picture: readPicture(p.picture), buttonMap: readButtonMap(p.buttonMap) };
+    const touchMode = p.touchMode === "touchpad" ? "touchpad" : "controller";
+    const touchpadSpeed = Number.isFinite(p.touchpadSpeed) ? Math.min(4, Math.max(0.5, p.touchpadSpeed)) : 1.5;
+    return {
+      ...p,
+      codec,
+      touchMode,
+      touchpadSpeed,
+      picture: readPicture(p.picture),
+      buttonMap: readButtonMap(p.buttonMap),
+    };
   } catch {
     return DEFAULT_RP_PREFS;
   }
@@ -149,6 +173,10 @@ interface RpState {
   error: StreamError | null;
   stats: StreamStats | null;
   light: [number, number, number] | null;
+  /** The console's on-screen keyboard is open (lib/rpKeyboard.ts); the stream shows a text box. */
+  keyboard: RpKeyboardState | null;
+  /** The text box is closed here (done or cancelled) before the console says so. */
+  closeKeyboard: () => void;
   prefs: RpPrefs;
   keymap: Record<string, KeyAction>;
   /** The Remote Play screen is on show: only then do controllers drive the console. */
@@ -242,6 +270,8 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
   error: null,
   stats: null,
   light: null,
+  keyboard: null,
+  closeKeyboard: () => set({ keyboard: null }),
   prefs: loadRpPrefs(),
   keymap: loadKeymap(),
   onScreen: false,
@@ -316,17 +346,20 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
         if (p === "ended") {
           dualSense?.stop();
           rpInput.held.clear();
-          set({ stream: null, light: null });
+          set({ stream: null, light: null, keyboard: null });
         }
       },
       onStats: (st) => get().stream === stream && set({ stats: st }),
       onError: (e) => get().stream === stream && set({ error: e }),
       onLight: (rgb) => get().stream === stream && set({ light: rgb }),
+      onKbm: (v) => get().stream === stream && useKbmStore.getState().setStatus(readKbmStatus(v)),
+      onPadKbm: (v) => get().stream === stream && emitPadKbm(v),
+      onKeyboard: (m) => get().stream === stream && set({ keyboard: nextKeyboard(get().keyboard, m) }),
       readPad,
       gamepads: rpGamepads,
     });
     stream.setVolume(prefs.muted ? 0 : prefs.volume);
-    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null });
+    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null });
     await stream.start();
   },
 

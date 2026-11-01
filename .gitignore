@@ -219,6 +219,7 @@ payload/ps5upload.elf.gz
 # The SMB daemon: built from payload/smb/ and embedded in the helper (never shipped on its own).
 payload/smb/ps5upload-smb.elf
 payload/smb/build/
+payload/vinput/ps5u-vinput.elf
 
 # ─── Personal scratch + notes ───────────────────────────────────────────
 # Anything in /scratch or /notes-local that a dev wants to keep

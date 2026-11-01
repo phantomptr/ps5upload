@@ -32,7 +32,8 @@ describe("source pickers reach saved servers", () => {
   });
 
   it.each([
-    ["screens/Upload/index.tsx", 2],
+    // The drop zone draws its sources once full size and once as the slim row; only one shows.
+    ["screens/Upload/index.tsx", 4],
     ["screens/InstallPackage/index.tsx", 1],
     ["screens/FileSystem/index.tsx", 1],
     ["screens/Payloads/SendPanel.tsx", 1],

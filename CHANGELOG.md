@@ -4,6 +4,103 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.4.0
+
+- **Your computer's keyboard and mouse as the PS5's own, in Remote Play (FW 13.60).** Settings ›
+  Controls has three modes, kept per game: **Controller** (the keys and mouse act as a controller,
+  exactly as before, and the default), **Keyboard & mouse** (the PS5 gets a real keyboard and
+  mouse, for games and apps that support them) and **Mixed** (a real mouse; the keys act as a
+  controller, WASD moves). A button on the stream bar shows the mode and switches it, and
+  Ctrl+Option+M (Ctrl+Alt+M on Windows and Linux) does too. Tested end to end on FW 13.60; other
+  firmwares say it isn't available yet and keep Controller.
+- **Click the picture to give the PS5 your keyboard and mouse; press and let go of Ctrl+Option
+  (Ctrl+Alt) to get them back.** Ctrl+Option with another key still goes to the PS5. They also
+  come back when the window loses focus, Settings or the text box opens, or the stream stops, and
+  everything held on the PS5 is let go first. While they're released, keys work in the app again.
+- **Hard to miss the way out.** The first capture shows a card with the keys to press; a faint
+  "⌃ ⌥ to release" stays at the top while captured, and the card comes back when you seem to be
+  trying to get out (Esc twice, ⌘ or the Windows key, pushing against an edge, clicking where the
+  bar is).
+- **Both shortcuts can be changed** in Settings › Controls › Shortcuts: press the new keys, or
+  Reset. A shortcut the app already uses, a single letter, or Esc alone is refused. Hold Esc to
+  release is an option there too.
+- **Phones and tablets as the PS5's touchpad and keyboard.** A Controller / Touchpad switch over
+  the picture: drag moves the pointer, tap clicks, a two-finger tap right-clicks, a two-finger
+  drag scrolls, tap then drag selects. ⌨ opens the phone's keyboard and types on the PS5. The
+  phone-as-controller page has a Touchpad & keyboard tab as well.
+- How it works: the console side is a small companion process the helper starts through the
+  PS5's payload loader (port 9021), so a problem there never takes the helper down. The PS5 lets
+  go of every key and button by itself if the computer goes quiet for 2 seconds. To turn it off on
+  a console, create `/data/ps5upload/vinput.disable`.
+- **Type into the PS5's on-screen keyboard during Remote Play (experimental).** When a game or
+  the PS5 opens its keyboard, a text box shows over the stream (in full screen too) with the
+  console's text in it, ready to type, and a phone opens its own keyboard. What you type reaches
+  the PS5 as you go; Enter or Done keeps it, Esc or Cancel drops it, and the box closes when the
+  PS5 closes its keyboard. The game gets no keys or controller presses while you type. Needs the
+  engine from this version; not yet tried on a console.
+- **Fixed: play time went to the wrong game.** The helper credited the first game it found
+  running, so a game left in the background collected the hours of the one being played, and
+  the one being played showed minutes. It now counts only the game that is actually running in
+  front, nothing while the console sleeps, and bringing a game back to the front is not a new
+  launch. Times recorded before stay as they were; Reset play time on the Games tab clears them.
+- **After an AppImage update the app starts again through PS5Upload.sh** when it sits beside the
+  AppImage, so its rescues for FUSE and the picture apply to the new version too.
+- **Workshop: save each next to its source.** A new option under Options puts every package,
+  image or folder in the folder that holds its game or image (never inside a game folder),
+  instead of the one Output folder. It is remembered. If the name is taken there, " (2)" is
+  added; nothing is overwritten. Games on a server or the PS5 still go to the Output folder.
+- **Workshop: Convert to folder.** A game image (.exfat, .ffpkg, .ffpfs, .ffpfsc) or a debug
+  package now shows a Convert to folder button under ① Game. Pick where it goes; the run shows
+  its progress and Cancel under ④, and it stops before writing when that drive is short of room.
+- **Workshop is more compact.** Smaller drop area, one-line choices under ② What to make,
+  compression levels in one row on a wide window, and tighter spacing. While ④ is scrolled out
+  of view, a slim bar at the bottom keeps its main button in reach.
+- **Remote Play on Linux: the picture arrives sooner.** The engine held each frame back until
+  the app acknowledged the one before, and Linux delays that while the app is sending your
+  presses: about 10-30 ms more delay, the high "net" figure in the stats on Linux. Frames now go
+  out at once.
+- **Remote Play's stats estimate input delay:** "input ≈ X ms, plus the game's own time", from
+  the round trip to the engine, the engine's round trip to the PS5 and the picture's own delay.
+  Hover it for what is and is not counted.
+- **Fixed: Remote Play reported sound loss that never happened.** A late or repeated sound packet
+  made a whole moment's sound count as lost, which can make the PS5 lower the picture's bitrate, and
+  could bring up the 720p offer on a good network.
+- **Drag to reorder the queue.** Hold the grip at the left of a waiting row and drop it where it
+  should go, with a mouse, pen or finger. The same rules as the arrow buttons apply: a row moves
+  only among the waiting rows of its own console and kind (base game, update, DLC). The arrows
+  stay for the keyboard; Esc cancels a drag.
+- **Archive installs say where they unpack, and check the space first.** Before you start, the
+  card shows the PS5 folder the packages go to, how much they need and how much is free on that
+  drive. When they certainly cannot fit, Install is refused with a clear message; when they may
+  not fit, it warns.
+- **The unpacked packages are deleted after a fully successful run.** When any install fails the
+  folder stays, so a retry works, and the message says where it is.
+- **Leftovers from earlier runs can be removed.** The card shows "N leftover unpacked folder(s)"
+  with their size and a Remove button; folders a queued install still reads are never touched.
+- **A more compact Upload & Install.** The drop area is shorter (a small icon beside its title,
+  what each kind becomes in two columns), so Choose file and Choose folder are on screen without
+  scrolling. Once something is chosen it shrinks to one slim row that still takes drops and adds
+  more. Cards are tighter, and the Upload / Stream & install buttons stay at the bottom of the
+  window however long the options above them are.
+
+- **Fixed: "Install and restart" did nothing in the Linux AppImage on some systems.** The update
+  script inherited the AppImage's own library paths, so on Arch the system shell loaded the
+  bundled, older readline and quit at once: the app closed and the update was never installed.
+  The script now starts with the system's own libraries. Thanks to aypro (#604).
+- **PS2 saves are backed up.** The memory cards and saved states of the PS2 emulators Crux2
+  (PPSA99249) and PS5SX2 (PPSA99203) are backed up with the PS5 saves, locally and to a server,
+  each as one save under the emulator's title; "after a game closes" means after the emulator
+  closes. Where PS5SX2 keeps them loose in `/data/PCSX2`, only its `.ps2` and `.p2s` files are
+  taken, never its BIOS, games or caches. Thanks to EnriqueWood (#602).
+- **PS2 saves in Saves.** "PS2 emulators (Crux2, PS5SX2)" lists each emulator's memory cards and
+  saved states with Back up now and their backups, so you can restore them in the app. Close the
+  emulator first: a restore is refused while it runs, and a restore into `/data/PCSX2` is refused
+  if the backup holds anything other than that save's own files.
+- **Short guides** in the FAQ and on the website: using PS5Upload from a phone (the app, a
+  browser, the console's own page) and getting started on iPhone, playing away from home over a
+  VPN such as Tailscale (and what doesn't work that way), waking the PS5 without the TV turning on
+  (HDMI-CEC), and reading Play's delay stats (net · queue · decode · screen).
+
 ## 10.3.0
 
 - **Remote Play's Settings open over the stream.** Every Settings button (on the picture's bar,

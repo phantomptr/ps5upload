@@ -802,6 +802,7 @@ export async function browserInvoke<T>(
         firmware: args["firmware"],
         language: args["language"],
         full_verify: args["fullVerify"] ?? false,
+        keep_both: args["keepBoth"] ?? false,
       }, true);
     }
     case "ps5_elfldr_health": {
@@ -852,6 +853,7 @@ export async function browserInvoke<T>(
         name: args["name"],
         ffpfsc_level: args["ffpfscLevel"],
         edits: args["edits"] ?? [],
+        keep_both: args["keepBoth"] ?? false,
       });
     }
     case "folder_build": {
@@ -861,6 +863,7 @@ export async function browserInvoke<T>(
         name: args["name"],
         full_verify: args["fullVerify"] ?? false,
         entry: args["entry"],
+        keep_both: args["keepBoth"] ?? false,
       });
     }
     case "image_browse": {

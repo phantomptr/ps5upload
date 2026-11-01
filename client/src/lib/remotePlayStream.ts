@@ -18,8 +18,9 @@ import { getEngineUrl } from "../state/engine";
 import { log } from "../state/logs";
 import { hevcCodecString, spsVisibleRect, visibleFix, type VisibleRect } from "./rpSps";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
-import { ClockSync, LatencyStages, stagesLogText, type StageSummary } from "./rpLatency";
+import { ClockSync, inputEstimate, LatencyStages, stagesLogText, type StageSummary } from "./rpLatency";
 import { decoderVerdict, FED_RECENT_MS, MAX_REBUILDS } from "./rpDecoderWatch";
+import type { RpKeyboardMsg, RpKeyboardSend } from "./rpKeyboard";
 
 /** Button bits, as the console (and chiaki) number them. */
 export const PadButton = {
@@ -384,6 +385,9 @@ export interface StreamStats {
   /** Round trip from this page to the engine and back, ms (null until measured, or an engine
    *  that does not answer pings). The console's leg cannot be measured: no shared clock. */
   rttMs: number | null;
+  /** The engine's round trip to the console and back, ms (null until measured, or an older
+   *  engine): its Takion messages out and their acknowledgements in. */
+  consoleRttMs?: number | null;
   /** Each frame's stages over the last 2 s (rpLatency.ts); null until a frame was timed. */
   stages?: StageSummary | null;
   /** Times the video decoder was rebuilt because it stopped giving pictures (rpDecoderWatch.ts). */
@@ -464,6 +468,12 @@ export interface StreamOptions {
   /** The console's light-bar colour for this pad. Browsers cannot set a controller's light
    *  bar (the Gamepad API has no such control), so the screen shows it. */
   onLight?: (rgb: [number, number, number]) => void;
+  /** The engine's answer about native keyboard & mouse (`{"kbm": …}`, lib/kbmInput.ts). */
+  onKbm?: (s: unknown) => void;
+  /** A phone's touchpad & keyboard, forwarded by the engine (`{"pad_kbm": …}`, lib/kbmInput.ts). */
+  onPadKbm?: (m: unknown) => void;
+  /** The console's on-screen keyboard opened, changed or closed (lib/rpKeyboard.ts). */
+  onKeyboard?: (m: RpKeyboardMsg) => void;
   /** The pad state to send; polled every animation frame and on key events. */
   readPad: () => PadState;
   /** The controllers rumble is played on (default: this page's). A picture-in-picture window
@@ -621,6 +631,9 @@ export class RemotePlayStream {
   private codec = "";
   private statsTimer = 0;
   private lastLoss = { lossPct: 0, rebuilt: 0, lost: 0 };
+  private consoleRttMs: number | null = null;
+  /** The console's last connection-quality report, raw (engine rp_stream proto.rs), for logs. */
+  private quality: unknown = null;
   private rttMs: number | null = null;
   private phase: StreamPhase = "connecting";
   /** The session is over (stopped here, ended by the engine or the console). */
@@ -1014,6 +1027,7 @@ export class RemotePlayStream {
         audioMs: this.audioMs,
         underruns: this.underruns,
         rttMs: this.rttMs,
+        consoleRttMs: this.consoleRttMs,
         stages: this.stages.summary(performance.now()),
         decoderRestarts: this.decoderRestarts,
         ...this.lastLoss,
@@ -1024,7 +1038,7 @@ export class RemotePlayStream {
       this.watchDecoder();
       if (this.decoded && Date.now() - this.lastLatencyLog > LATENCY_LOG_MS) {
         this.lastLatencyLog = Date.now();
-        log.info("remote-play", `latency: ${stagesLogText(this.stages.summary(performance.now()))}`);
+        log.info("remote-play", `latency: ${this.linkLogText()}`);
       }
     }, 1000);
   }
@@ -1080,6 +1094,8 @@ export class RemotePlayStream {
           ...(this.replayS ? { replay_s: this.replayS } : {}),
           // Video as kind 7, each frame with the engine's time (an older engine ignores this).
           timing: true,
+          // Typing into the console's keyboard (lib/rpKeyboard.ts; an older engine ignores this).
+          keyboard: true,
         }),
       );
       // Attaching turns the console's mic off in the engine: a page that has it on says so.
@@ -1207,6 +1223,18 @@ export class RemotePlayStream {
     this.worklet?.port.postMessage({ reset: true });
   }
 
+  /** The latency log line: the stages, the round trips, the input estimate, and the console's
+   *  own connection report (raw: its units are not documented). */
+  private linkLogText(): string {
+    const stages = this.stages.summary(performance.now());
+    const ms = (v: number | null) => (v === null ? "?" : `${Math.round(v)} ms`);
+    const input = inputEstimate({ pageRttMs: this.rttMs, consoleRttMs: this.consoleRttMs, stages });
+    return (
+      `${stagesLogText(stages)}; round trip to the engine ${ms(this.rttMs)}, engine to PS5 ${ms(this.consoleRttMs)}; ` +
+      `input ≈ ${ms(input)} + the game; PS5 report ${this.quality ? JSON.stringify(this.quality) : "none yet"}`
+    );
+  }
+
   /** Time a round trip to the engine (answered with `{"pong": t}`). */
   private ping(): void {
     const ws = this.ws;
@@ -1261,6 +1289,21 @@ export class RemotePlayStream {
     if (s === this.lastPad) return;
     this.lastPad = s;
     ws.send(JSON.stringify({ pad: p }));
+  }
+
+  /** Native keyboard & mouse (lib/kbmInput.ts): `{"kbm": …}` or a binary `[8][report]`. False
+   *  while the socket is down (the heartbeat sends it again). */
+  sendKbm(msg: { kbm: unknown } | Uint8Array<ArrayBuffer>): boolean {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(msg instanceof Uint8Array ? msg : JSON.stringify(msg));
+    return true;
+  }
+
+  /** Text for the console's on-screen keyboard, or done / cancel (lib/rpKeyboard.ts). */
+  sendKeyboard(m: RpKeyboardSend): void {
+    const ws = this.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
   }
 
   /** This session was started with the mic set up (Settings › Microphone). */
@@ -1330,7 +1373,7 @@ export class RemotePlayStream {
     if (this.decoded) {
       log.info(
         "remote-play",
-        `latency at the end: ${stagesLogText(this.stages.summary(performance.now()))}; decoder restarts ${this.decoderRestarts}`,
+        `latency at the end: ${this.linkLogText()}; decoder restarts ${this.decoderRestarts}`,
       );
     }
     this.watchBox(false);
@@ -1354,7 +1397,7 @@ export class RemotePlayStream {
       code?: string;
       retry_s?: number;
       error?: string;
-      stats?: Record<string, number>;
+      stats?: Record<string, unknown>;
       host?: string;
       rumble?: [number, number];
       light?: [number, number, number];
@@ -1362,6 +1405,9 @@ export class RemotePlayStream {
       engine_us?: unknown;
       triggers?: { left: number[]; right: number[] };
       ds_intensity?: [number, number];
+      kbm?: unknown;
+      pad_kbm?: unknown;
+      keyboard?: RpKeyboardMsg;
     };
     try {
       s = JSON.parse(text);
@@ -1372,6 +1418,14 @@ export class RemotePlayStream {
       const now = performance.now();
       this.rttMs = nextRtt(this.rttMs, s.pong, now);
       this.clock.push(s.pong, s.engine_us, now);
+      return;
+    }
+    if (s.kbm !== undefined) {
+      this.o.onKbm?.(s.kbm);
+      return;
+    }
+    if (s.pad_kbm !== undefined) {
+      this.o.onPadKbm?.(s.pad_kbm);
       return;
     }
     if (s.rumble) {
@@ -1391,6 +1445,10 @@ export class RemotePlayStream {
       this.o.dualSense?.intensity(s.ds_intensity[0], s.ds_intensity[1]);
       return;
     }
+    if (s.keyboard) {
+      this.o.onKeyboard?.(s.keyboard);
+      return;
+    }
     switch (s.stage) {
       case "waking":
         this.setPhase("waking");
@@ -1407,12 +1465,15 @@ export class RemotePlayStream {
         break;
       case "stats": {
         const st = s.stats ?? {};
-        const units = st.units ?? 0;
+        const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+        const units = num(st.units);
         this.lastLoss = {
-          lossPct: units ? ((st.units_lost ?? 0) * 100) / units : 0,
-          rebuilt: st.frames_rebuilt ?? 0,
-          lost: st.frames_lost ?? 0,
+          lossPct: units ? (num(st.units_lost) * 100) / units : 0,
+          rebuilt: num(st.frames_rebuilt),
+          lost: num(st.frames_lost),
         };
+        this.consoleRttMs = typeof st.console_rtt_ms === "number" && Number.isFinite(st.console_rtt_ms) ? st.console_rtt_ms : null;
+        if (st.quality && typeof st.quality === "object") this.quality = st.quality;
         break;
       }
       case "moved":

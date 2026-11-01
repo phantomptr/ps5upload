@@ -6,10 +6,15 @@ import {
   Check,
   ChevronDown,
   Expand,
+  Gamepad,
   Gamepad2,
+  Keyboard,
+  Loader2,
+  Lock,
   Minimize,
   MonitorPlay,
   MoreHorizontal,
+  Mouse,
   PictureInPicture2,
   Play,
   Scaling,
@@ -70,6 +75,13 @@ import { DropChoice, DropZone, useStreamDropZone } from "./game/DropToInstall";
 import { useStreamLaunchRunner } from "./game/streamLaunch";
 import { rpControls, useGameControlsStore } from "../../state/gameControls";
 import { mouseMoved } from "../../lib/gameControls";
+import { captureDelta, engage, isCaptured, releaseCapture, requestCapture, subscribeCapture } from "../../lib/pointerCapture";
+import { kbmBlockText, kbmModeLabel, useNativeKbm } from "./useNativeKbm";
+import { kbmBlockReason, kbmButtonView, type KbmMode } from "../../lib/kbmInput";
+import { shortcutLabel } from "../../lib/kbmShortcuts";
+import { KbmCaptureCard, KbmReleaseChip, KbmToast } from "./KbmHints";
+import { TouchModeToggle, TouchpadOverlay } from "./TouchpadOverlay";
+import { useKbmStore } from "../../state/kbm";
 import { useRunningTitleIds } from "../../state/runningApps";
 import { useGameLaunch } from "../../lib/useGameLaunch";
 import { hostOf } from "../../lib/addr";
@@ -78,6 +90,7 @@ import { closePip, openPip, pipPadsInBackground, pipSupport } from "./pip";
 import { CaptureBarButtons, CaptureOverlay } from "./CaptureControls";
 import { LatencyLine, QualityNotice } from "./NetworkExtras";
 import { RpBlockerNotice, RpBlockerPhase } from "./RpBlockers";
+import { RpKeyboardBox } from "./RpKeyboardBox";
 import { pressClosedSettings, SETTINGS_OPENER, SettingsDrawer } from "./SettingsDrawer";
 import { beforeRemotePlay } from "../../state/rpBlockers";
 import { useRpQualityStore } from "../../state/rpQuality";
@@ -254,6 +267,7 @@ function BarButton({
   children,
   testId,
   expands,
+  disabled,
 }: {
   label: string;
   onClick: () => void;
@@ -262,6 +276,8 @@ function BarButton({
   testId?: string;
   /** Opens and closes a panel (Settings): aria-expanded instead of aria-pressed. */
   expands?: boolean;
+  /** Shown but not clickable (the label says why). */
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -270,17 +286,80 @@ function BarButton({
       title={label}
       aria-pressed={expands ? undefined : active}
       aria-expanded={expands ? !!active : undefined}
+      aria-disabled={disabled || undefined}
       data-testid={testId}
       {...(expands ? SETTINGS_OPENER : {})}
       onClick={(e) => {
         e.stopPropagation();
-        onClick();
+        if (!disabled) onClick();
       }}
       onDoubleClick={(e) => e.stopPropagation()}
-      className={`flex h-9 w-9 items-center justify-center rounded-full text-white transition-colors hover:bg-white/20 ${active ? "bg-white/25" : "bg-black/40"}`}
+      className={`flex h-9 w-9 items-center justify-center rounded-full text-white transition-colors ${
+        disabled ? "cursor-not-allowed bg-black/40 opacity-50" : `hover:bg-white/20 ${active ? "bg-white/25" : "bg-black/40"}`
+      }`}
     >
       {children}
     </button>
+  );
+}
+
+/** The stream bar's keyboard & mouse button: the running game's mode (Controller, Keyboard &
+ *  mouse, Mixed), the next one on a click (as Ctrl+Alt+M), a spinner while the console's helper
+ *  starts, and off with the reason when this console takes no keyboard & mouse. */
+function KbmBarButton({
+  mode,
+  title,
+  onCycle,
+  captured,
+}: {
+  mode: KbmMode;
+  title: string | null;
+  onCycle: () => void;
+  /** The PS5 has the keyboard and mouse now: a lock on the button, and the release key. */
+  captured: boolean;
+}) {
+  const tr = useTr();
+  const caps = useKbmStore((s) => s.caps);
+  const status = useKbmStore((s) => s.status);
+  const releaseKey = useKbmStore((s) => shortcutLabel(s.shortcuts.release));
+  const view = kbmButtonView(mode, caps, status);
+  const name = kbmModeLabel(tr, mode);
+  const base = view.blocked
+    ? kbmBlockText(tr, view.blocked)
+    : view.icon === "spinner"
+      ? tr("rp_kbm_starting", undefined, "Starting keyboard & mouse on the PS5…")
+      : title
+        ? tr("rp_kbm_button_game", { mode: name }, `${name} — applies to this game`)
+        : tr("rp_kbm_button_home", { mode: name }, `${name} — applies to the home screen`);
+  const label = captured
+    ? `${base}. ${tr("rp_kbm_release_to", { key: releaseKey }, `Press ${releaseKey} to release the keyboard & mouse`)}`
+    : base;
+  return (
+    <BarButton label={label} onClick={onCycle} disabled={!!view.blocked} testId="rp-kbm-button">
+      <span className="relative flex items-center" data-kbm-icon={view.icon} data-testid="rp-kbm-button-icon">
+        {captured && (
+          <Lock
+            size={9}
+            strokeWidth={3}
+            className="absolute -right-2 -top-2 rounded-full bg-black/80 p-px"
+            aria-hidden
+            data-testid="rp-kbm-lock"
+          />
+        )}
+        {view.icon === "spinner" ? (
+          <Loader2 size={16} className="animate-spin" aria-hidden />
+        ) : view.icon === "native" ? (
+          <Keyboard size={16} aria-hidden />
+        ) : view.icon === "mixed" ? (
+          <>
+            <Gamepad size={12} aria-hidden />
+            <Mouse size={10} aria-hidden />
+          </>
+        ) : (
+          <Gamepad size={16} aria-hidden />
+        )}
+      </span>
+    </BarButton>
   );
 }
 
@@ -468,14 +547,35 @@ export function StreamPanel() {
   useEffect(() => {
     setControlsTitle(running ? ([...runningTitles][0] ?? null) : null);
   }, [running, runningTitles, setControlsTitle]);
-  const mouseAim = useGameControlsStore((s) => (s.title ? !!s.byTitle[s.title]?.mouse : false));
+  // Native keyboard & mouse (useNativeKbm.ts): the running game's mode routes keys and the mouse.
+  const controlsTitle = useGameControlsStore((s) => s.title);
+  const kbm = useNativeKbm({
+    stream,
+    owner: playing,
+    host: running ? (target?.host ?? null) : null,
+    title: controlsTitle,
+    stage,
+    full,
+    settingsOpen,
+    capturePointer: prefs.capturePointer,
+    touchpad: running && touchFirst && prefs.touchMode === "touchpad",
+    // Given back: nothing stays held on the pad either, and the stream bar shows (in full
+    // screen too).
+    onReleased: () => {
+      rpInput.held.clear();
+      stream?.sendPad();
+      showChrome();
+    },
+  });
+  const mouseAim = useGameControlsStore((s) => (s.title ? !!s.byTitle[s.title]?.mouse : false)) && !kbm.mouseNative;
   // Mouse aim: while the pointer is captured on the picture, its movement and buttons are the
   // right stick and the triggers.
   useEffect(() => {
     if (!running || !mouseAim) return;
-    const locked = () => !!stage.current && document.pointerLockElement === stage.current;
+    const locked = () => isCaptured(stage.current);
     const move = (e: MouseEvent) => {
-      if (locked()) mouseMoved(rpControls.mouse, e.movementX, e.movementY);
+      const [dx, dy] = captureDelta(e);
+      if (locked()) mouseMoved(rpControls.mouse, dx, dy);
     };
     const button = (e: MouseEvent, down: boolean) => {
       if (!locked() && down) return;
@@ -490,15 +590,38 @@ export function StreamPanel() {
     document.addEventListener("mousemove", move);
     document.addEventListener("mousedown", down);
     document.addEventListener("mouseup", up);
-    document.addEventListener("pointerlockchange", lost);
+    const unsub = subscribeCapture(lost);
     return () => {
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mousedown", down);
       document.removeEventListener("mouseup", up);
-      document.removeEventListener("pointerlockchange", lost);
+      unsub();
       rpControls.mouse.left = rpControls.mouse.right = false;
     };
   }, [running, mouseAim]);
+
+  // The mouse is the user's again whenever play stops being in front: the window loses the
+  // focus or is hidden, a text box of the app (the on-screen keyboard's) takes the keys, the
+  // stream stops, or this screen is left (a hidden Activity runs this cleanup too). The browser
+  // ends its own lock on most of these; the desktop app's grab only ends here.
+  useEffect(() => {
+    if (!running) return;
+    const onBlur = () => releaseCapture();
+    const onVis = () => document.visibilityState === "hidden" && releaseCapture();
+    const onFocusIn = (e: FocusEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) releaseCapture();
+    };
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onVis);
+    document.addEventListener("focusin", onFocusIn);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVis);
+      document.removeEventListener("focusin", onFocusIn);
+      releaseCapture();
+    };
+  }, [running]);
 
   // A package dropped on the picture is installed on this console (when the stream ends, by
   // default).
@@ -753,9 +876,27 @@ export function StreamPanel() {
     if (!full) dropEscHold();
   }, [full, dropEscHold]);
   useEffect(() => dropEscHold, [dropEscHold]);
+  // Esc held while the picture has the mouse (not in full screen, where holding it leaves full
+  // screen): the mouse is given back. The browser does this for its own lock; the desktop app's
+  // grab has no other way out but switching apps. The key itself still goes to the game.
+  const escRelease = useRef<number | null>(null);
+  const dropEscRelease = useCallback(() => {
+    if (escRelease.current !== null) window.clearTimeout(escRelease.current);
+    escRelease.current = null;
+  }, []);
+  useEffect(() => dropEscRelease, [dropEscRelease]);
   const onKey = useCallback(
     (e: React.KeyboardEvent, down: boolean) => {
-      if (e.code === "Escape" && full) {
+      if (e.code === "Escape" && !full) {
+        if (!down) dropEscRelease();
+        else if (!e.repeat && escRelease.current === null && kbm.captured && prefs.escHoldRelease)
+          escRelease.current = window.setTimeout(() => {
+            escRelease.current = null;
+            kbm.release();
+          }, ESC_HOLD_MS);
+      }
+      if (e.code === "Escape" && full && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        kbm.noteKey(e, down);
         e.preventDefault();
         if (down) {
           if (e.repeat || escHold.current) return;
@@ -763,6 +904,7 @@ export function StreamPanel() {
             left: false,
             timer: window.setTimeout(() => {
               hold.left = true;
+              kbm.release();
               exitFull();
             }, ESC_HOLD_MS),
           };
@@ -772,8 +914,11 @@ export function StreamPanel() {
         const hold = escHold.current;
         dropEscHold();
         if (!hold || hold.left) return;
-        // Not a key for the game: a press leaves full screen, as everywhere else.
-        if (!running || !useRemotePlayStore.getState().keymap.Escape) {
+        // Native keyboard: the PS5 keyboard's Esc.
+        if (kbm.escTap()) return;
+        // Not a key for the game (or the keyboard is this computer's): a press leaves full
+        // screen, as everywhere else.
+        if (!running || kbm.keysToApp || !useRemotePlayStore.getState().keymap.Escape) {
           exitFull();
           return;
         }
@@ -785,13 +930,16 @@ export function StreamPanel() {
         }, ESC_TAP_MS);
         return;
       }
+      if (kbm.onKey(e, down)) return;
+      // Released in Keyboard & mouse or Mixed: the keys are this computer's.
+      if (kbm.keysToApp && down) return;
       if (!running || !useRemotePlayStore.getState().keymap[e.code]) return;
       e.preventDefault();
       if (down) rpInput.held.add(e.code);
       else rpInput.held.delete(e.code);
       stream?.sendPad();
     },
-    [full, exitFull, stream, running, dropEscHold],
+    [full, exitFull, stream, running, dropEscHold, dropEscRelease, kbm, prefs.escHoldRelease],
   );
 
   // Shift + drag on the picture is a finger on the touchpad (for games that use it, like
@@ -799,7 +947,8 @@ export function StreamPanel() {
   const onPointer = useCallback(
     (e: React.PointerEvent, kind: "down" | "move" | "up") => {
       if (kind === "down") lastPointer.current = e.pointerType;
-      if (e.pointerType === "mouse" && kind === "move") showChrome();
+      // The bar stays hidden while the picture has the pointer (a click there is the game's).
+      if (e.pointerType === "mouse" && kind === "move" && !isCaptured(stage.current)) showChrome();
       if (!running) return;
       if (kind === "up") {
         if (!rpInput.touch) return;
@@ -815,8 +964,10 @@ export function StreamPanel() {
     [stream, showChrome, running],
   );
 
-  // Clicking the picture takes the keyboard and (if set) hides the pointer; the browser keeps
-  // Esc for giving it back, so Circle is Backspace too. Only a mouse press locks the pointer:
+  // Clicking the picture takes the keyboard and (if set, or always in a mode that sends the mouse
+  // to the PS5) captures the mouse (lib/pointerCapture.ts: the browser's lock, else the desktop
+  // app's grab); Esc (held, in the app) gives it back, so Circle is Backspace too. Only a mouse
+  // press captures it:
   // a finger has no pointer to hide, and a lock taken from a tap (a touch-screen laptop, Linux
   // Chrome) freezes every later touch's position and makes the touch controller's
   // setPointerCapture throw, so its buttons stop answering.
@@ -824,16 +975,14 @@ export function StreamPanel() {
     const el = stage.current;
     if (!el) return;
     el.focus();
-    if (lastPointer.current !== "mouse") return;
-    if (!prefs.capturePointer || !document.hasFocus() || document.pointerLockElement === el) return;
-    try {
-      // A promise in current browsers: refused (window not focused, too soon after Esc) is fine.
-      const r = el.requestPointerLock?.() as unknown as Promise<void> | undefined;
-      r?.catch?.(() => {});
-    } catch {
-      // Older browsers throw instead.
+    if (lastPointer.current !== "mouse") {
+      // A finger: no pointer to capture; a keyboard attached to the tablet plays the PS5.
+      if (kbm.mouseNative) engage(el);
+      return;
     }
-  }, [prefs.capturePointer]);
+    if (!(prefs.capturePointer || kbm.mouseNative) || !document.hasFocus() || isCaptured(el)) return;
+    requestCapture(el);
+  }, [prefs.capturePointer, kbm.mouseNative]);
 
   if (!canStream()) {
     return (
@@ -848,7 +997,7 @@ export function StreamPanel() {
   }
 
   const elsewhereProfile = elsewhere ? profiles.find((p) => p.host === elsewhere) : null;
-  const showBar = !playing || chrome || settingsOpen || fitOpen || gameOpen;
+  const showBar = !playing || (chrome && !kbm.locked) || settingsOpen || fitOpen || gameOpen;
   const muted = prefs.muted || prefs.volume === 0;
   // Full screen on an upright phone: the picture across the top, the controller below it.
   const portraitFull = compact && full && portrait;
@@ -863,6 +1012,16 @@ export function StreamPanel() {
   const touchOverPicture = touchHere && touchLayout !== "deck";
   // Sideways in full screen the controller has the menu button (bottom middle), not the handle.
   const touchMenu = compact && full && touchHere && touchLayout === "overlay";
+  // The touch screen as the PS5 mouse's touchpad, where the console has a native mouse.
+  const touchpadOn = prefs.touchMode === "touchpad" && !!kbm.hostCaps?.mouse;
+  /** Characters the PS5 keyboard has no key for: into the PS5's text box when it is open. */
+  const typeInPs5Box = (text: string): boolean => {
+    const el = document.querySelector<HTMLInputElement>('[data-testid="rp-keyboard-input"]');
+    if (!el) return false;
+    el.focus({ preventScroll: true });
+    el.setSelectionRange(el.value.length, el.value.length);
+    return document.execCommand("insertText", false, text);
+  };
   // One Settings everywhere (the stream bar, the menu, beside Start): the drawer over the
   // stream, in full screen too, so opening it never leaves full screen.
   const openSettings = () => {
@@ -915,9 +1074,11 @@ export function StreamPanel() {
           tabIndex={0}
           onKeyDown={(e) => onKey(e, true)}
           onKeyUp={(e) => onKey(e, false)}
-          onBlur={() => {
+          onBlur={(e) => {
             rpInput.held.clear();
             stream?.sendPad();
+            // Focus gone from the picture: keys and buttons held on the PS5 are let go too.
+            if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) kbm.releaseAll();
           }}
           // A press that only closed Settings is not play.
           onClick={running ? (e) => !e.shiftKey && !pressClosedSettings() && capture() : undefined}
@@ -988,7 +1149,23 @@ export function StreamPanel() {
               </Button>
             </div>
           )}
+          {playing && kbm.captureHint && !settingsOpen && !pip && (
+            <div
+              className={`pointer-events-none absolute left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-xs text-white/85 ${showBar && !compact ? "top-16" : "top-3"}`}
+              data-testid="rp-capture-hint"
+            >
+              {tr("rp_capture_hint", undefined, "Click the picture to capture the mouse")}
+            </div>
+          )}
+          {playing && kbm.pointerHeld && prefs.kbmChip && !settingsOpen && !pip && !kbm.hint && (
+            <KbmReleaseChip low={showBar && !compact} />
+          )}
+          {playing && kbm.hint && !settingsOpen && !pip && (
+            <KbmCaptureCard key={kbm.hint.n} reason={kbm.hint.reason} onDone={kbm.dismissHint} />
+          )}
+          {playing && kbm.toast && !pip && <KbmToast key={kbm.toast.n} mode={kbm.toast.mode} captured={kbm.toast.captured} />}
           {running && <PadAsks pending={padLink.pending} />}
+          {running && <RpKeyboardBox />}
           {running && pip && (
             <div
               className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/80 px-6 text-center text-sm text-white/85"
@@ -1104,6 +1281,7 @@ export function StreamPanel() {
                   <Smartphone size={16} />
                 </BarButton>
               )}
+              {playing && <KbmBarButton mode={kbm.mode} title={controlsTitle} onCycle={kbm.cycle} captured={kbm.captured} />}
               <BarButton
                 label={tr("rp_game_button", undefined, "Game")}
                 active={gameOpen}
@@ -1163,7 +1341,17 @@ export function StreamPanel() {
           )}
           {running && <CaptureOverlay />}
           <QualityNotice />
-          {touchHere && (
+          {touchHere && touchpadOn && (
+            <TouchpadOverlay
+              input={kbm.touch}
+              speed={prefs.touchpadSpeed}
+              deck={touchLayout === "deck"}
+              deckTop={`calc(${PICTURE_TOP} + 56.25vw)`}
+              onMenu={touchMenu ? () => setMenuOpen(true) : undefined}
+              onUntypeable={typeInPs5Box}
+            />
+          )}
+          {touchHere && !touchpadOn && (
             <TouchControls
               stream={stream}
               layout={touchLayout}
@@ -1171,6 +1359,21 @@ export function StreamPanel() {
               size={prefs.touchSize}
               deckTop={`calc(${PICTURE_TOP} + 56.25vw)`}
               onMenu={touchMenu ? () => setMenuOpen(true) : undefined}
+            />
+          )}
+          {touchHere && playing && (
+            <TouchModeToggle
+              mode={touchpadOn ? "touchpad" : "controller"}
+              onChange={(m) => setPrefs({ touchMode: m })}
+              blocked={kbm.hostCaps?.mouse ? null : kbmBlockText(tr, kbmBlockReason(kbm.hostCaps))}
+              style={{
+                top:
+                  touchLayout === "deck"
+                    ? `calc(${PICTURE_TOP} + 56.25vw + 8px)`
+                    : touchLayout === "overlay-bar"
+                      ? "4rem"
+                      : "max(8px, env(safe-area-inset-top))",
+              }}
             />
           )}
 

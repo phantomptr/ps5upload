@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FileArchive, Square } from "lucide-react";
 
 import { Button, Spinner } from "../../components";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { ProgressBar } from "../../components/ProgressBar";
 import { formatBytes } from "../../lib/format";
 import { invoke } from "../../lib/invokeLogged";
@@ -10,7 +11,11 @@ import { pickPath } from "../../lib/pickPath";
 import { useLinkInstallPrefs } from "../../state/linkInstallPrefs";
 import {
   archiveInstallFor,
+  archiveLeftoversFor,
   chooseArchive,
+  queuedInstallPaths,
+  removeArchiveLeftovers,
+  scanArchiveLeftovers,
   clearArchiveInstall,
   downloadArchiveParts,
   parseArchiveLinks,
@@ -21,6 +26,8 @@ import {
   useArchiveInstallStore,
 } from "../../state/archiveInstall";
 import { useTr } from "../../state/lang";
+import { useUploadQueueStore } from "../../state/uploadQueue";
+import type { ArchiveTarget } from "../../state/rarPackages";
 import { RarPasswordPrompt } from "../Upload/RarPasswordPrompt";
 
 /** Downloads a link to this computer under the file's own name (parts of a set find each
@@ -61,6 +68,41 @@ export function ArchivePackagesCard({ host }: { host: string }) {
   const insecure = useLinkInstallPrefs((s) => s.insecureFor(host));
   const [linksText, setLinksText] = useState("");
   const links = parseArchiveLinks(linksText);
+  const leftovers = useArchiveInstallStore((s) => archiveLeftoversFor(s, host));
+  // Read when asked (not a snapshot): a removal checks each folder again before each try.
+  const queuedPaths = () =>
+    queuedInstallPaths(useUploadQueueStore.getState().items, host);
+  // While leftovers are being deleted, nothing may start that could use one of them.
+  const removing = leftovers?.removing ?? false;
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  // Look for folders earlier runs left behind: when the card opens, and after each run.
+  useEffect(() => {
+    if (!busy)
+      void scanArchiveLeftovers(host, () =>
+        queuedInstallPaths(useUploadQueueStore.getState().items, host),
+      );
+  }, [host, busy]);
+  const leftoverBytes = (leftovers?.items ?? []).reduce((n, l) => n + l.bytes, 0);
+  const noRoom = st?.target?.space.kind === "no_room";
+
+  async function removeLeftovers() {
+    const items = leftovers?.items ?? [];
+    const ok = await confirm({
+      title: tr(
+        "arcpkg.leftovers.confirmTitle",
+        { count: items.length },
+        "Delete {count} unpacked folder(s) from the PS5?",
+      ),
+      message: `${items.map((l) => l.path).join("\n")}\n\n${tr(
+        "arcpkg.leftovers.confirmBody",
+        undefined,
+        "Failed installs from these files cannot be retried afterwards.",
+      )}`,
+      confirmLabel: tr("arcpkg.leftovers.remove", undefined, "Remove"),
+      destructive: true,
+    });
+    if (ok) await removeArchiveLeftovers(host, queuedPaths);
+  }
 
   async function choose() {
     const picked = await pickPath({
@@ -145,7 +187,7 @@ export function ArchivePackagesCard({ host }: { host: string }) {
           variant="secondary"
           size="sm"
           onClick={choose}
-          disabled={busy || !!dl}
+          disabled={busy || !!dl || removing}
         >
           {tr("arcpkg.choose", undefined, "Choose archive…")}
         </Button>
@@ -188,7 +230,7 @@ export function ArchivePackagesCard({ host }: { host: string }) {
           <textarea
             value={linksText}
             onChange={(e) => setLinksText(e.currentTarget.value)}
-            disabled={busy || !!dl}
+            disabled={busy || !!dl || removing}
             rows={3}
             placeholder={LINKS_PLACEHOLDER}
             className="input w-full! font-mono text-xs"
@@ -208,7 +250,7 @@ export function ArchivePackagesCard({ host }: { host: string }) {
               <Button
                 variant="secondary"
                 size="sm"
-                disabled={busy || links.length === 0}
+                disabled={busy || removing || links.length === 0}
                 onClick={() =>
                   void downloadArchiveParts(host, links, insecure, linkDeps)
                 }
@@ -290,11 +332,12 @@ export function ArchivePackagesCard({ host }: { host: string }) {
               </li>
             ))}
           </ul>
+          <TargetLine target={st.target} />
           <Button
             variant="primary"
             size="sm"
             onClick={() => void runArchiveInstall(host)}
-            disabled={busy}
+            disabled={busy || noRoom || removing}
             data-testid="archive-packages-run"
           >
             {tr(
@@ -345,7 +388,17 @@ export function ArchivePackagesCard({ host }: { host: string }) {
                 : "text-[var(--color-warn)]"
             }
           >
-            {st.result.message}
+            {st.result.space
+              ? tr(
+                  "arcpkg.space.noRoom",
+                  {
+                    need: formatBytes(st.result.space.need),
+                    room: formatBytes(st.result.space.room ?? 0),
+                    drive: st.result.space.drive ?? "",
+                  },
+                  "Not enough space: needs {need}, only {room} free on {drive}. Free up space, or pick another drive for packages in Volumes.",
+                )
+              : st.result.message}
           </p>
           <ul className="mt-1 space-y-0.5">
             {st.result.outcomes
@@ -363,6 +416,98 @@ export function ArchivePackagesCard({ host }: { host: string }) {
           {error}
         </p>
       )}
+      {leftovers && leftovers.items.length > 0 && !busy && (
+        <div
+          className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]"
+          data-testid="archive-leftovers"
+        >
+          <span title={leftovers.items.map((l) => l.path).join("\n")}>
+            {tr(
+              "arcpkg.leftovers.line",
+              {
+                count: leftovers.items.length,
+                size: formatBytes(leftoverBytes),
+              },
+              "{count} leftover unpacked folder(s) on the PS5, {size}",
+            )}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void removeLeftovers()}
+            disabled={leftovers.removing}
+            data-testid="archive-leftovers-remove"
+          >
+            {leftovers.removing
+              ? tr("arcpkg.leftovers.removing", undefined, "Removing…")
+              : tr("arcpkg.leftovers.remove", undefined, "Remove")}
+          </Button>
+        </div>
+      )}
+      {leftovers?.error && (
+        <p role="alert" className="mt-1 text-xs text-[var(--color-bad)]">
+          {tr(
+            "arcpkg.leftovers.failed",
+            { error: leftovers.error },
+            "Could not delete {error}",
+          )}
+        </p>
+      )}
+      {confirmDialog}
     </section>
+  );
+}
+
+/** Where the packages go on the PS5, and whether they fit, shown before the run starts. */
+function TargetLine({ target }: { target: ArchiveTarget | null }) {
+  const tr = useTr();
+  if (!target) return null;
+  const { space } = target;
+  const sizes = {
+    need: formatBytes(space.need),
+    room: formatBytes(space.room ?? 0),
+    drive: space.drive ?? "",
+  };
+  return (
+    <div className="mb-2 space-y-0.5 text-xs" data-testid="archive-target">
+      <p className="text-[var(--color-muted)]">
+        {tr("arcpkg.target", undefined, "Unpacks to:")}{" "}
+        <span className="break-all font-mono text-[var(--color-text)]">
+          {target.dest}
+        </span>
+      </p>
+      {space.kind === "fits" && (
+        <p className="text-[var(--color-muted)]">
+          {tr("arcpkg.space.fits", sizes, "Needs {need}; {room} free on {drive}.")}
+        </p>
+      )}
+      {space.kind === "tight" && (
+        <p className="text-[var(--color-warn)]">
+          {tr(
+            "arcpkg.space.tight",
+            sizes,
+            "Needs {need}; {room} free on {drive}. It may not fit.",
+          )}
+        </p>
+      )}
+      {space.kind === "no_room" && (
+        <p role="alert" className="text-[var(--color-bad)]">
+          {tr(
+            "arcpkg.space.noRoom",
+            sizes,
+            "Not enough space: needs {need}, only {room} free on {drive}. Free up space, or pick another drive for packages in Volumes.",
+          )}
+        </p>
+      )}
+      {space.kind === "unknown" && (
+        <p className="text-[var(--color-muted)]">
+          {tr(
+            "arcpkg.space.unknown",
+            { need: sizes.need },
+            "Needs {need}. Free space on the PS5 could not be read.",
+          )}
+        </p>
+      )}
+    </div>
   );
 }

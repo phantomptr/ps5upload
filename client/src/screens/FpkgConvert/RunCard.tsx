@@ -148,6 +148,34 @@ function useNow(live: boolean): number {
   return now;
 }
 
+type Tr = ReturnType<typeof useTr>;
+
+/** The idle card's main button: what it says and whether it can be pressed. Shared with the
+ *  Workshop's bottom bar, which offers the same button while ④ is scrolled out of view. */
+export function idleRun(
+  props: Pick<RunCardProps, "choice" | "canConvert" | "canFolder" | "canImage" | "replaces">,
+  tr: Tr,
+): { label: string; canRun: boolean } {
+  const c = props.choice;
+  const image = c.make === "image";
+  const folder = c.make === "folder";
+  const packing = image && lz4Active(c.imageFormat, c.lz4);
+  const sends = c.then !== "keep";
+  const canRun = props.canConvert !== false && (folder ? !!props.canFolder : !image || !!props.canImage);
+  const label = folder
+    ? tr("fpkg.folder.make", undefined, "Make game folder")
+    : image
+      ? c.imageCompress && !packing
+        ? tr("fpkg.image.make_compressed", undefined, "Make compressed image")
+        : tr("fpkg.image.make", undefined, "Make game image")
+      : !sends
+        ? tr("fpkg.convertOnly", undefined, "Convert only")
+        : props.replaces
+          ? tr("fpkg.convertReplace", undefined, "Convert & replace")
+          : tr("fpkg.convertInstall", undefined, "Convert & install");
+  return { label, canRun };
+}
+
 export function RunCard(props: RunCardProps) {
   const tr = useTr();
   const { pipeline: p, installTask } = props;
@@ -198,24 +226,11 @@ export function RunCard(props: RunCardProps) {
     const c = props.choice;
     const image = c.make === "image";
     const folder = c.make === "folder";
-    const packing = image && lz4Active(c.imageFormat, c.lz4);
     const sends = c.then !== "keep";
-    const canRun =
-      props.canConvert !== false && (folder ? !!props.canFolder : !image || !!props.canImage);
-    const runLabel = folder
-      ? tr("fpkg.folder.make", undefined, "Make game folder")
-      : image
-        ? c.imageCompress && !packing
-        ? tr("fpkg.image.make_compressed", undefined, "Make compressed image")
-          : tr("fpkg.image.make", undefined, "Make game image")
-        : !sends
-        ? tr("fpkg.convertOnly", undefined, "Convert only")
-        : props.replaces
-          ? tr("fpkg.convertReplace", undefined, "Convert & replace")
-          : tr("fpkg.convertInstall", undefined, "Convert & install");
+    const { label: runLabel, canRun } = idleRun(props, tr);
     return (
-      <Card>
-        <div className="flex flex-col gap-3">
+      <Card padded={false} className="p-3.5 sm:p-4">
+        <div className="flex flex-col gap-2.5">
           {title}
           {props.summary && (
             <div className="text-xs text-[var(--color-muted)]" data-testid="run-summary">
@@ -338,7 +353,7 @@ export function RunCard(props: RunCardProps) {
   if (p.phase === "running") {
     const building = !["send", "install"].includes(p.stage);
     return (
-      <Card>
+      <Card padded={false} className="p-3.5 sm:p-4">
         <div className="flex flex-col gap-3">
           {title}
           {p.mode === "convert-install" && props.targetLabel && (
@@ -375,7 +390,7 @@ export function RunCard(props: RunCardProps) {
 
   if (p.phase === "failed") {
     return (
-      <Card>
+      <Card padded={false} className="p-3.5 sm:p-4">
         <div className="flex flex-col gap-3">
           {title}
           {stageList}
@@ -400,7 +415,7 @@ export function RunCard(props: RunCardProps) {
 
   const installed = p.mode === "convert-install" || p.mode === "install";
   return (
-    <Card>
+    <Card padded={false} className="p-3.5 sm:p-4">
       <div className="flex flex-col gap-3">
         {title}
         {stageList}

@@ -11,7 +11,7 @@
 import { useMakeWay } from "../../lib/useMakeWay";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { FolderSearch, HardDrive, Hammer, Send } from "lucide-react";
+import { Folder, FolderSearch, HardDrive, Hammer, Send } from "lucide-react";
 
 import { fpkg, type AmprLz4Options, type FpkgEstimates, type FpkgInspection } from "../../api/fpkg";
 import { appLaunch } from "../../api/ps5";
@@ -48,7 +48,8 @@ import { BROWSE_IMAGE_EXTENSIONS } from "../LocalImage/imageTypes";
 import { isRemotePath } from "../../lib/remotePath";
 import { MakeCard } from "./MakeCard";
 import { OptionsCard } from "./OptionsCard";
-import { RunCard, lz4Active, type Lz4Choice } from "./RunCard";
+import { RunCard, idleRun, lz4Active, type Lz4Choice, type RunCardProps } from "./RunCard";
+import { outputFor } from "../../lib/outputPlace";
 import { SwapJournals } from "./SwapJournals";
 import { QueueCard } from "./QueueCard";
 import { buildExtension, thenFor, useConvertQueue, type ConvertBuild, type ConvertThen } from "../../state/convertQueue";
@@ -108,6 +109,11 @@ export default function WorkshopScreen() {
 
   const outputDir = useConvertPrefs((s) => s.outputDir);
   const setOutputDir = useConvertPrefs((s) => s.setOutputDir);
+  // In the Output folder, or next to each game's own source (remembered).
+  const outputPlace = useConvertPrefs((s) => s.outputPlace);
+  const setOutputPlace = useConvertPrefs((s) => s.setOutputPlace);
+  /** Where `src`'s output goes, as Options has it set. */
+  const outFor = (src: string) => outputFor(src, outputPlace, outputDir);
   const compression = useConvertPrefs((s) => s.compression);
   const setCompression = useConvertPrefs((s) => s.setCompression);
 
@@ -135,13 +141,14 @@ export default function WorkshopScreen() {
   // back to the screen mid-image must not show it as a package build.
   const make = useConvertPrefs((s) => s.make);
   const setMake = useConvertPrefs((s) => s.setMake);
+  const showMake = useConvertPrefs((s) => s.showMake);
   const imageFormat = useConvertPrefs((s) => s.imageFormat);
   const imageCompress = useConvertPrefs((s) => s.imageCompress);
   const setImageChoice = useConvertPrefs((s) => s.setImageChoice);
   useEffect(() => {
     if (pipeline.phase === "running") {
       const building = makesFolder(pipeline.mode) ? "folder" : makesImage(pipeline.mode) ? "image" : "pkg";
-      if (building !== make) setMake(building);
+      if (building !== make) showMake(building);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipeline.phase]);
@@ -169,9 +176,11 @@ export default function WorkshopScreen() {
       return "not-image";
     if (build.kind === "folder" && !isFolderableSource(src)) return "not-folder";
     const u = useUploadStore.getState();
+    const out = outFor(src);
     return useConvertQueue.getState().add({
       source: src,
-      outputDir: outputDir.trim() || undefined,
+      outputDir: out.outputDir,
+      keepBoth: out.keepBoth || undefined,
       compression,
       build: build.kind === "image" && lz4 ? { ...build, lz4 } : build,
       imageDest:
@@ -253,15 +262,17 @@ export default function WorkshopScreen() {
       setError(null);
       setInspection(null);
       setEstimates(null);
+      // The room left is reported for where this game's output goes.
+      const out = outputFor(path.trim(), outputPlace, outputDir).outputDir;
       try {
-        const found = await fpkg.inspect(path.trim(), outputDir.trim() || undefined);
+        const found = await fpkg.inspect(path.trim(), out);
         if (!latest.current.isCurrent(token)) return;
         setInspection(found);
         setChecking(false);
         // The estimate is a separate, slower sample: it never holds up the check.
         setEstimates("pending");
         fpkg
-          .estimate(path.trim(), outputDir.trim() || undefined)
+          .estimate(path.trim(), out)
           .then((e) => latest.current.isCurrent(token) && setEstimates(e))
           .catch(() => latest.current.isCurrent(token) && setEstimates(null));
       } catch (e) {
@@ -270,7 +281,7 @@ export default function WorkshopScreen() {
         setChecking(false);
       }
     },
-    [outputDir],
+    [outputDir, outputPlace],
   );
 
   /** A new source: the previous result and its buttons go; ignored while a run is going. */
@@ -385,15 +396,16 @@ export default function WorkshopScreen() {
   const run = () => {
     if (!source.trim()) return;
     setError(null);
+    const out = outFor(src);
     if (build.kind === "folder") {
-      void buildFolder(src, outputDir.trim() || undefined);
+      void buildFolder(src, out.outputDir, out.keepBoth);
       return;
     }
     if (build.kind === "image") {
       const u = useUploadStore.getState();
       void buildImage(
         src,
-        outputDir.trim() || undefined,
+        out.outputDir,
         build.compress && !lz4Active(build.format, lz4Choice),
         build.format,
         then === "upload"
@@ -408,12 +420,19 @@ export default function WorkshopScreen() {
           ? { profileToml: lz4Profile?.text, installRuntime: lz4InstallRuntime }
           : undefined,
         password || undefined,
+        out.keepBoth,
       );
       return;
     }
     const install = then !== "keep";
     void start(
-      { source: source.trim(), outputDir: outputDir.trim() || undefined, compression, language: language || undefined },
+      {
+        source: source.trim(),
+        outputDir: out.outputDir,
+        compression,
+        language: language || undefined,
+        keepBoth: out.keepBoth,
+      },
       {
         install,
         host: install ? host : null,
@@ -519,15 +538,78 @@ export default function WorkshopScreen() {
       }
     : undefined;
 
-  // What else this source can be, besides converted: looked inside, or opened as a drive.
+  // ④, and whether it is on screen: while it is scrolled away, a slim bar at the bottom of the
+  // window offers its main button (the user asked for the main actions without scrolling).
+  const runRef = useRef<HTMLDivElement>(null);
+  const [runVisible, setRunVisible] = useState(true);
+  useEffect(() => {
+    const el = runRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([e]) => setRunVisible(e.isIntersecting), { threshold: 0.05 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [inside]);
+  const showRun = () => runRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+  /** Convert to folder: the whole image or package written out as a plain folder where the user
+   *  picks (the image browser's Save, for all of it). The run shows under ④ with its progress
+   *  and Cancel; the engine refuses before writing when the destination is short of room, and
+   *  numbers the name when a folder of that name is already there. */
+  const convertToFolder = async () => {
+    if (!src || locked) return;
+    let dest: string | undefined;
+    if (canBrowse) {
+      const title = tr("workshop_to_folder_where", undefined, "Choose where to put the folder");
+      try {
+        const picked = !isTauriEnv()
+          ? await pickLocalPath({ mode: "folder", title })
+          : await pickPath({ mode: "folder", title });
+        if (!picked) return;
+        dest = picked;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return;
+      }
+    } else {
+      dest = outFor(src).outputDir;
+    }
+    setError(null);
+    // This one run, not the user's remembered choice of what to make.
+    showMake("folder");
+    setThen("keep");
+    if (inside) setInside(false);
+    void buildFolder(src, dest, true);
+    // ④ shows the run: bring it into view once it has rendered.
+    setTimeout(showRun, 50);
+  };
+
+  // What else this source can be, besides converted: looked inside, written out as a folder, or
+  // opened as a drive.
   const lookable = !locked && canLookInside(source);
+  const folderable = !locked && canFolder;
   const mountable = drives.canMount && !locked && isDriveImage(source) && !source.startsWith("ps5://") && !isRemotePath(source);
   const tools =
-    lookable || mountable ? (
-      <div className="flex flex-wrap gap-2 border-t border-[var(--color-border)] pt-3">
+    lookable || mountable || folderable ? (
+      <div className="flex flex-wrap gap-2 border-t border-[var(--color-border)] pt-2.5">
         {lookable && !inside && (
           <Button size="sm" variant="secondary" leftIcon={<FolderSearch size={14} />} onClick={() => setInside(true)}>
             {tr("workshop_look_inside", undefined, "Look Inside")}
+          </Button>
+        )}
+        {folderable && (
+          <Button
+            size="sm"
+            variant="secondary"
+            leftIcon={<Folder size={14} />}
+            data-testid="convert-to-folder"
+            title={tr(
+              "workshop_to_folder_hint",
+              undefined,
+              "Write the whole image or package as a plain folder on this computer.",
+            )}
+            onClick={() => void convertToFolder()}
+          >
+            {tr("workshop_to_folder", undefined, "Convert to folder")}
           </Button>
         )}
         {mountable && (
@@ -586,9 +668,10 @@ export default function WorkshopScreen() {
 
   if (inside) {
     return (
-      <div className="app-page flex flex-col gap-4">
+      <div className="app-page flex flex-col gap-3">
         <PageHeader
           icon={Hammer}
+          compact
           title={tr("workshop_title", undefined, "Workshop")}
           description={tr(
             "workshop_inside_description",
@@ -607,16 +690,42 @@ export default function WorkshopScreen() {
     );
   }
 
+  const idle = pipeline.phase === "idle";
+  const runChoice: RunCardProps["choice"] = {
+    make,
+    onMake: setMake,
+    imageFormat,
+    imageCompress,
+    onImageChoice: (f, c) => setImageChoice(f, c),
+    then,
+    onThen: setThen,
+    deleteAfter,
+    onDeleteAfter: setDeleteAfter,
+    canInstall,
+    lz4: lz4Choice,
+  };
+  const barRun = idleRun(
+    {
+      choice: runChoice,
+      canConvert: !noFiles && !checking && src !== "",
+      canFolder,
+      canImage,
+      replaces: src.startsWith("ps5://"),
+    },
+    tr,
+  );
+
   return (
-    <div className="app-page flex flex-col gap-4">
+    <div className="app-page flex flex-col gap-3">
       {makeWayDialog}
       <PageHeader
         icon={Hammer}
         title={tr("workshop_title", undefined, "Workshop")}
+        compact
         description={tr(
-          "workshop_description_v2",
+          "workshop_description_v3",
           { send: tr("send_title_v2", undefined, "Upload & Install") },
-          "Change a game's format before it goes to the PS5: make a package (.pkg), a game image (.exfat, .ffpkg, or the smaller .ffpfsc) or a plain folder, or look inside an image or package and change its files. The work runs on this computer. To send a game as it is, use {send}.",
+          "Make a package, a game image or a folder from a game, or look inside an image. The work runs on this computer. To send a game as it is, use {send}.",
         )}
         right={
           <Button variant="secondary" size="sm" leftIcon={<Send size={14} />} onClick={() => navigate("/send")}>
@@ -633,7 +742,7 @@ export default function WorkshopScreen() {
 
       {/* One column at every width (the user asked for it): the steps read top to bottom,
           ① to ⑤, and each card takes the window's whole width. */}
-      <div className="flex min-w-0 flex-col gap-4">
+      <div className="flex min-w-0 flex-col gap-3">
           {gameCard}
 
           <MakeCard
@@ -653,6 +762,8 @@ export default function WorkshopScreen() {
             outputDir={outputDir}
             onChangeOutput={() => void browseOutput()}
             onOutputTyped={setOutputDir}
+            outputPlace={outputPlace}
+            onOutputPlace={setOutputPlace}
             canBrowse={canBrowse}
             compression={compression}
             make={make}
@@ -683,6 +794,7 @@ export default function WorkshopScreen() {
             </Callout>
           )}
 
+          <div ref={runRef}>
           <RunCard
             pipeline={pipeline}
             installTask={installTask}
@@ -693,19 +805,7 @@ export default function WorkshopScreen() {
             deleteArmed={deleteArmed}
             title={inspection?.title ?? null}
             sourceBytes={inspection?.bytes ?? 0}
-            choice={{
-              make,
-              onMake: setMake,
-              imageFormat,
-              imageCompress,
-              onImageChoice: (f, c) => setImageChoice(f, c),
-              then,
-              onThen: setThen,
-              deleteAfter,
-              onDeleteAfter: setDeleteAfter,
-              canInstall,
-              lz4: lz4Choice,
-            }}
+            choice={runChoice}
             onRun={run}
             canImage={canImage}
             canFolder={canFolder}
@@ -722,7 +822,7 @@ export default function WorkshopScreen() {
                             ? tr("fpkg.run.what_folder", undefined, "a game folder")
                             : tr("fpkg.run.what_pkg", undefined, "a package (.pkg)"),
                       title: inspection.title || inspection.content_id || source.trim(),
-                      dir: outputDir.trim() || "~/Downloads/fpkgs",
+                      dir: outFor(src).outputDir ?? "~/Downloads/fpkgs",
                     },
                     "Makes {what} of {title} in {dir}.",
                   )
@@ -740,7 +840,7 @@ export default function WorkshopScreen() {
               if (r === "not-image" || r === "not-folder") setError(skippedText(r, 1));
               else if (!r) setError(tr("cq_already", undefined, "This game is already in the queue."));
             }}
-            onCompress={() => void compress(source.trim(), outputDir.trim() || undefined)}
+            onCompress={() => void compress(source.trim(), outFor(src).outputDir)}
             onCancel={() => void cancel()}
             onInstall={(method) => void retryInstall(host, method)}
             onLaunch={onLaunch}
@@ -787,7 +887,36 @@ export default function WorkshopScreen() {
               void finishReplace(choice).catch((e) => setError(e instanceof Error ? e.message : String(e)))
             }
           />
+          </div>
       </div>
+
+      {/* ④'s main button while ④ is out of view: idle with a game chosen, or running. */}
+      {!runVisible && ((idle && src !== "") || locked) && (
+        <div
+          data-testid="workshop-bar"
+          className="sticky bottom-2 z-10 flex flex-wrap items-center gap-2 rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-float)] px-3 py-2 text-sm shadow-[var(--shadow-2)] backdrop-blur"
+        >
+          <span className="min-w-0 flex-1 truncate text-[var(--color-muted)]">
+            {locked
+              ? tr("workshop_bar_running", { title: inspection?.title || src }, "Working on {title}…")
+              : inspection?.title || src}
+          </span>
+          {locked ? (
+            <Button size="sm" variant="secondary" onClick={showRun}>
+              {tr("workshop_bar_show", undefined, "Show progress")}
+            </Button>
+          ) : (
+            <>
+              <Button size="sm" variant="secondary" onClick={showRun}>
+                {tr("workshop_bar_review", undefined, "Review")}
+              </Button>
+              <Button size="sm" variant="primary" onClick={run} disabled={!barRun.canRun}>
+                {barRun.label}
+              </Button>
+            </>
+          )}
+        </div>
+      )}
 
       {/* ⑤ Queue: games added under ① wait here; shown once there is one. */}
       <QueueCard

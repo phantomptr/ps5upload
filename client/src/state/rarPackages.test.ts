@@ -4,9 +4,16 @@ vi.mock("../api/links", () => ({
   rarPackages: vi.fn(),
   pkgConsoleProbe: vi.fn(),
 }));
-vi.mock("../api/ps5", () => ({
+vi.mock("../api/ps5", async (orig) => ({
+  volumeAllocatableBytes: (await orig<typeof import("../api/ps5")>()).volumeAllocatableBytes,
+  volumeLikelyFitsBytes: (await orig<typeof import("../api/ps5")>()).volumeLikelyFitsBytes,
+  volumeForPath: (await orig<typeof import("../api/ps5")>()).volumeForPath,
   fetchVolumes: vi.fn(async () => []),
   fsMkdir: vi.fn(async () => {}),
+  fsDelete: vi.fn(async () => {}),
+  fsListDir: vi.fn(async () => {
+    throw new Error("missing");
+  }),
   jobStatus: vi.fn(),
   startTransferRar: vi.fn(async () => "job-1"),
   startTransferZip: vi.fn(async () => "job-z"),
@@ -18,14 +25,31 @@ vi.mock("./pkgLibrary", () => ({
 }));
 
 import { pkgConsoleProbe, rarPackages } from "../api/links";
-import { jobStatus, startTransfer7z, startTransferRar, startTransferZip } from "../api/ps5";
+import {
+  fetchVolumes,
+  fsDelete,
+  fsListDir,
+  jobStatus,
+  startTransfer7z,
+  startTransferRar,
+  startTransferZip,
+  type Volume,
+} from "../api/ps5";
 import {
   archiveFolderName,
   archiveKindOf,
+  archiveNeedBytes,
+  archiveSpaceCheck,
+  findArchiveLeftovers,
+  isArchiveFolderName,
+  leftoverArchiveFolders,
+  shouldRemoveUnpacked,
+  volumeForConsoleDir,
   installRarPackages,
   isArchiveFirstVolume,
   isRarFirstVolume,
   orderForInstall,
+  removeConsoleFolder,
   siblingsOf,
 } from "./rarPackages";
 import { splitPkgBytes } from "../lib/splitPkgSize";
@@ -54,6 +78,18 @@ beforeEach(() => {
   vi.mocked(startTransferRar).mockResolvedValue("job-1");
   vi.mocked(jobStatus).mockResolvedValue({ status: "done" } as never);
   installFromConsolePath.mockResolvedValue({ ok: true });
+  vi.mocked(fetchVolumes).mockResolvedValue([]);
+  vi.mocked(fsDelete).mockResolvedValue(undefined);
+  vi.mocked(fsListDir).mockRejectedValue(new Error("missing"));
+});
+
+const vol = (path: string, free: number, extra: Partial<Volume> = {}): Volume => ({
+  path,
+  fs_type: "ufs",
+  total_bytes: free * 2,
+  free_bytes: free,
+  writable: true,
+  ...extra,
 });
 
 describe("helpers", () => {
@@ -111,6 +147,14 @@ describe("installRarPackages", () => {
     expect(r.outcomes.map((o) => o.status)).toEqual(["installed", "installed"]);
     // Each queue row is sized from the archive listing.
     expect(installFromConsolePath.mock.calls.map((c) => c[2])).toEqual([{ sizeBytes: 20 }, { sizeBytes: 10 }]);
+    // Every package installed: the unpacked folder is deleted, once, after the last install.
+    expect(vi.mocked(fsDelete).mock.calls.map((c) => c[1])).toEqual([
+      "/user/data/ps5upload/pkg_library/rar_Multi",
+    ]);
+    expect(vi.mocked(fsDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
+      Math.max(...installFromConsolePath.mock.invocationCallOrder),
+    );
+    expect(r.removed).toBe(true);
   });
 
   it("sizes a split set's lead with its parts from the same archive folder", () => {
@@ -152,6 +196,7 @@ describe("installRarPackages", () => {
     expect(by["p.pkg"].status).toBe("skipped");
     expect(by["other.pkg"].status).toBe("installed");
     expect(r.message).toContain("still in /user/data/ps5upload/pkg_library/rar_M");
+    expect(fsDelete).not.toHaveBeenCalled();
   });
 
   it("does not install a file that is not a readable package", async () => {
@@ -190,6 +235,120 @@ describe("installRarPackages", () => {
     expect(r.ok).toBe(false);
     expect(r.message).toBe("out of space");
     expect(installFromConsolePath).not.toHaveBeenCalled();
+  });
+});
+
+describe("space and clean-up", () => {
+  it("adds up the packages' sizes", () => {
+    expect(archiveNeedBytes([{ path: "a", size: 5 }, { path: "b", size: 7 }, { path: "c", size: -1 }])).toBe(12);
+  });
+
+  it("finds internal storage as /user or /data, and an external drive by prefix", () => {
+    const d = "/user/data/ps5upload/pkg_library/rar_X";
+    expect(volumeForConsoleDir([vol("/data", 1), vol("/", 9)], d)?.path).toBe("/data");
+    expect(volumeForConsoleDir([vol("/user", 2), vol("/data", 1)], d)?.path).toBe("/user");
+    expect(volumeForConsoleDir([vol("/mnt/ext0", 3)], "/mnt/ext0/ps5upload/pkg_library/zip_Y")?.path).toBe("/mnt/ext0");
+    // Only the root would match: unknown, not a guess.
+    expect(volumeForConsoleDir([vol("/", 9)], "/mnt/usb0/x")).toBeNull();
+  });
+
+  it("refuses only what certainly cannot fit; past the estimate it warns", () => {
+    const d = "/user/data/ps5upload/pkg_library/rar_X";
+    const v = [vol("/user", 100, { allocatable_bytes: 100, likely_fits_bytes: 80 })];
+    expect(archiveSpaceCheck(v, d, 50).kind).toBe("fits");
+    expect(archiveSpaceCheck(v, d, 90).kind).toBe("tight");
+    expect(archiveSpaceCheck(v, d, 100).kind).toBe("tight");
+    expect(archiveSpaceCheck(v, d, 101)).toEqual({ kind: "no_room", need: 101, room: 100, drive: "/user" });
+    // What an earlier run already unpacked there is not counted twice.
+    expect(archiveSpaceCheck(v, d, 150, 60)).toMatchObject({ kind: "tight", need: 90 });
+    // Unknown free space never refuses.
+    expect(archiveSpaceCheck(null, d, 1e15).kind).toBe("unknown");
+    expect(archiveSpaceCheck([], d, 1e15).kind).toBe("unknown");
+  });
+
+  it("refuses a run that cannot fit before unpacking anything", async () => {
+    vi.mocked(rarPackages).mockResolvedValue([{ path: "a.pkg", size: 500 }]);
+    vi.mocked(fetchVolumes).mockResolvedValue([vol("/user", 100)]);
+    const r = await installRarPackages({ host: HOST, archivePath: "/x/M.rar" });
+    expect(r.ok).toBe(false);
+    expect(r.space?.kind).toBe("no_room");
+    expect(r.dest).toBe("/user/data/ps5upload/pkg_library/rar_M");
+    expect(startTransferRar).not.toHaveBeenCalled();
+  });
+
+  it("removes the folder only when every package installed", () => {
+    expect(shouldRemoveUnpacked([])).toBe(false);
+    expect(shouldRemoveUnpacked([{ status: "installed" }, { status: "installed" }])).toBe(true);
+    expect(shouldRemoveUnpacked([{ status: "installed" }, { status: "failed" }])).toBe(false);
+    expect(shouldRemoveUnpacked([{ status: "installed" }, { status: "skipped" }])).toBe(false);
+  });
+
+  it("still reports the installs when deleting the folder fails", async () => {
+    vi.mocked(rarPackages).mockResolvedValue([{ path: "a.pkg", size: 1 }]);
+    probeAs({ "a.pkg": { category: "gd", title_id: "PPSA1" } });
+    vi.mocked(fsDelete).mockRejectedValue(new Error("fs_delete_failed"));
+    vi.useFakeTimers();
+    const p = installRarPackages({ host: HOST, archivePath: "/x/M.rar" });
+    await vi.runAllTimersAsync();
+    const r = await p;
+    vi.useRealTimers();
+    expect(r.ok).toBe(true);
+    expect(r.removed).toBeUndefined();
+    expect(r.removeError).toContain("fs_delete_failed");
+    expect(r.message).toContain("/user/data/ps5upload/pkg_library/rar_M");
+    expect(fsDelete).toHaveBeenCalledTimes(3);
+  });
+
+  it("knows its own folders and skips those in use", () => {
+    expect(isArchiveFolderName(archiveFolderName("/x/Game.part1.rar"))).toBe(true);
+    expect(isArchiveFolderName("zip_A")).toBe(true);
+    expect(isArchiveFolderName("7z_A")).toBe(true);
+    expect(isArchiveFolderName("Game.pkg")).toBe(false);
+    expect(isArchiveFolderName("updates")).toBe(false);
+    const entries = [
+      { name: "rar_A", kind: "dir" },
+      { name: "rar_B", kind: "dir" },
+      { name: "rar_C.pkg", kind: "file" },
+      { name: "dlc", kind: "dir" },
+    ];
+    expect(leftoverArchiveFolders("/L", entries, (p) => p === "/L/rar_B")).toEqual(["/L/rar_A"]);
+  });
+
+  it("finds leftovers on every package library, with their sizes", async () => {
+    vi.mocked(fetchVolumes).mockResolvedValue([vol("/user", 100), vol("/mnt/ext0", 100)]);
+    vi.mocked(fsListDir).mockImplementation(async (_a, path) => {
+      if (path === "/user/data/ps5upload/pkg_library")
+        return [
+          { name: "rar_A", kind: "dir", size: 0 },
+          { name: "x.pkg", kind: "file", size: 9 },
+        ];
+      if (path === "/user/data/ps5upload/pkg_library/rar_A")
+        return [
+          { name: "a.pkg", kind: "file", size: 5 },
+          { name: "sub", kind: "dir", size: 0 },
+        ];
+      if (path === "/user/data/ps5upload/pkg_library/rar_A/sub") return [{ name: "b.pkg", kind: "file", size: 7 }];
+      throw new Error("missing");
+    });
+    expect(await findArchiveLeftovers(HOST, () => false)).toEqual([
+      { path: "/user/data/ps5upload/pkg_library/rar_A", bytes: 12 },
+    ]);
+  });
+
+  it("asks before each try whether the folder may still be deleted", async () => {
+    let free = true;
+    vi.mocked(fsDelete).mockReset();
+    vi.mocked(fsDelete).mockImplementationOnce(async () => {
+      free = false; // something started using it while the first try failed
+      throw new Error("busy");
+    });
+    const waits: number[] = [];
+    const done = await removeConsoleFolder(HOST, "/L/rar_A", async (ms) => void waits.push(ms), () => free);
+    expect(done).toBe(false);
+    expect(fsDelete).toHaveBeenCalledTimes(1);
+    expect(waits).toEqual([1000]);
+    vi.mocked(fsDelete).mockImplementation(async () => ({}) as never);
+    expect(await removeConsoleFolder(HOST, "/L/rar_A", async () => {})).toBe(true);
   });
 });
 

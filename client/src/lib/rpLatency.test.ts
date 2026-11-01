@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ClockSync, LatencyStages, percentile, stagesLogText, stageValues } from "./rpLatency";
+import { ClockSync, inputEstimate, LatencyStages, percentile, stagesLogText, stageValues } from "./rpLatency";
 
 describe("percentile", () => {
   it("takes the nearest rank", () => {
@@ -75,5 +75,27 @@ describe("stage text", () => {
     expect(stageValues(s)).toEqual({ net: "?", queue: "0", decode: "4", draw: "2" });
     expect(stagesLogText(s)).toBe("net ? · queue 0/1 · decode 4/9 · draw 2/8 ms (median/95th)");
     expect(stagesLogText(null)).toBe("no frames timed yet");
+  });
+});
+
+describe("inputEstimate", () => {
+  const t = (p50: number) => ({ p50, p95: p50 * 2 });
+  const stages = { net: t(2), queue: t(1), decode: t(5), draw: t(8) };
+
+  it("adds half the page's round trip, the PS5 round trip and the picture's stages", () => {
+    // 10/2 + 6 + 2 + 1 + 5 + 8
+    expect(inputEstimate({ pageRttMs: 10, consoleRttMs: 6, stages })).toBe(27);
+  });
+
+  it("counts a stage not timed yet (queue, screen) as nothing", () => {
+    expect(inputEstimate({ pageRttMs: 4, consoleRttMs: 3, stages: { ...stages, queue: null, draw: null } })).toBe(12);
+  });
+
+  it("gives nothing until the round trips and the net and decode stages are known", () => {
+    expect(inputEstimate({ pageRttMs: null, consoleRttMs: 6, stages })).toBeNull();
+    expect(inputEstimate({ pageRttMs: 10, consoleRttMs: undefined, stages })).toBeNull();
+    expect(inputEstimate({ pageRttMs: 10, consoleRttMs: 6, stages: { ...stages, net: null } })).toBeNull();
+    expect(inputEstimate({ pageRttMs: 10, consoleRttMs: 6, stages: null })).toBeNull();
+    expect(inputEstimate({ pageRttMs: 10, consoleRttMs: Number.NaN, stages })).toBeNull();
   });
 });
