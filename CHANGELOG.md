@@ -34,6 +34,16 @@ What's new in ps5upload, written for humans.
   the PS5 as you go; Enter or Done keeps it, Esc or Cancel drops it, and the box closes when the
   PS5 closes its keyboard. The game gets no keys or controller presses while you type. Needs the
   engine from this version; not yet tried on a console.
+- **Workshop: save each next to its source.** A new option under Options puts every package,
+  image or folder in the folder that holds its game or image (never inside a game folder),
+  instead of the one Output folder. It is remembered. If the name is taken there, " (2)" is
+  added; nothing is overwritten. Games on a server or the PS5 still go to the Output folder.
+- **Workshop: Convert to folder.** A game image (.exfat, .ffpkg, .ffpfs, .ffpfsc) or a debug
+  package now shows a Convert to folder button under ① Game. Pick where it goes; the run shows
+  its progress and Cancel under ④, and it stops before writing when that drive is short of room.
+- **Workshop is more compact.** Smaller drop area, one-line choices under ② What to make,
+  compression levels in one row on a wide window, and tighter spacing. While ④ is scrolled out
+  of view, a slim bar at the bottom keeps its main button in reach.
 
 ## 10.3.0
 

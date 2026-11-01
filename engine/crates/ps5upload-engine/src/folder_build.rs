@@ -34,6 +34,23 @@ pub(crate) fn partial_of(target: &Path) -> PathBuf {
     PathBuf::from(format!("{}.partial", target.display()))
 }
 
+/// The first of `stem`, `stem (2)`, `stem (3)`, … that `taken` says is free: how a build asked
+/// to keep both (Convert's "Save each next to its source") names its output when the name is
+/// already used, instead of refusing. `None` when every try up to `(999)` is taken.
+pub(crate) fn keep_both_stem(stem: &str, taken: impl Fn(&str) -> bool) -> Option<String> {
+    if !taken(stem) {
+        return Some(stem.to_string());
+    }
+    (2..=999)
+        .map(|n| format!("{stem} ({n})"))
+        .find(|candidate| !taken(candidate))
+}
+
+/// True when `path` or its `.partial` (an unfinished build's) exists: the name is in use.
+pub(crate) fn name_in_use(path: &Path) -> bool {
+    path.exists() || partial_of(path).exists()
+}
+
 /// True when `dir` is an unfinished folder build of ours (it holds [`MARKER`]).
 pub(crate) fn is_our_partial_dir(dir: &Path) -> bool {
     dir.file_name()
@@ -527,6 +544,29 @@ mod tests {
     use super::*;
     use crate::image_build::{self, ImageFormat};
     use ps5upload_fpkg::source::{FolderSource, SourceFile};
+
+    #[test]
+    fn keep_both_numbers_a_taken_name() {
+        assert_eq!(keep_both_stem("Game", |_| false).as_deref(), Some("Game"));
+        let used = ["Game", "Game (2)"];
+        assert_eq!(
+            keep_both_stem("Game", |s| used.contains(&s)).as_deref(),
+            Some("Game (3)")
+        );
+        assert_eq!(keep_both_stem("Game", |_| true), None);
+    }
+
+    #[test]
+    fn a_partial_counts_as_in_use() {
+        let dir = scratch("inuse");
+        let target = dir.join("Game");
+        assert!(!name_in_use(&target));
+        std::fs::create_dir(partial_of(&target)).unwrap();
+        assert!(name_in_use(&target));
+        std::fs::write(dir.join("Other.pkg"), b"x").unwrap();
+        assert!(name_in_use(&dir.join("Other.pkg")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn game(root: &Path) -> PathBuf {
         let game = root.join("PPSA99999-app");

@@ -24,7 +24,7 @@ async function build(item: ConvertItem) {
   const conv = useFpkgConversion.getState();
   if (item.build?.kind === "folder") {
     // A plain folder from an image or package: kept here, nothing to hand on.
-    await conv.buildFolder(item.source, item.outputDir);
+    await conv.buildFolder(item.source, item.outputDir, item.keepBoth);
     await whenIdle();
     const p = useFpkgConversion.getState().pipeline;
     if (p.phase === "done") return { ok: true, packagePath: p.packagePath, installed: true };
@@ -48,6 +48,8 @@ async function build(item: ConvertItem) {
           }
         : undefined,
       item.build.lz4,
+      undefined,
+      item.keepBoth,
     );
     await whenIdle();
     const p = useFpkgConversion.getState().pipeline;
@@ -59,7 +61,14 @@ async function build(item: ConvertItem) {
   // A console dump is swapped for its package inside the build (never installed beside it).
   const swap = item.source.startsWith("ps5://") && item.then !== "keep" && !!item.host;
   await conv.start(
-    { source: item.source, outputDir: item.outputDir, compression: item.compression, firmware: item.firmware, language: item.language },
+    {
+      source: item.source,
+      outputDir: item.outputDir,
+      compression: item.compression,
+      firmware: item.firmware,
+      language: item.language,
+      keepBoth: item.keepBoth,
+    },
     { install: swap, host: swap ? item.host : null, method: item.then === "upload" ? "upload" : "stream" },
   );
   await whenIdle();

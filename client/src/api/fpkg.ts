@@ -89,6 +89,9 @@ export interface FpkgBuildRequest {
   language?: string;
   /** Re-read every byte to check the package; the engine's fast check when false or absent. */
   fullVerify?: boolean;
+  /** When the package's name is taken in the output folder, name it `<name> (2).pkg` instead
+   *  of refusing (Workshop's "Save each next to its source"). */
+  keepBoth?: boolean;
 }
 
 /** `stored` = no compression: the fallback for a console that refuses a compressed package. */
@@ -108,6 +111,7 @@ export const fpkg = {
       firmware: req.firmware,
       language: req.language,
       fullVerify: req.fullVerify ?? false,
+      keepBoth: req.keepBoth ?? false,
     }),
   /** Unpack a .zip / .7z / .rar into an unpack folder in `outputDir`, as a job; the job's
    *  `dest` is the game found inside. A RAR's password goes with it, never stored. */
@@ -147,6 +151,8 @@ export const fpkg = {
     name?: string,
     /** How hard a .ffpfsc is compressed (with `compress`); the engine's Balanced when absent. */
     ffpfscLevel?: FfpfscLevel,
+    /** When the image's name is taken in the output folder, add " (2)" instead of refusing. */
+    keepBoth = false,
   ) =>
     invoke<{ job_id: string }>("exfat_build", {
       source,
@@ -160,6 +166,7 @@ export const fpkg = {
       fullVerify,
       name,
       ffpfscLevel: compress ? ffpfscLevel : undefined,
+      keepBoth,
     }),
   /** Unpack a game image (.exfat, .ffpkg, .ffpfs, .ffpfsc) or a package made with the debug
    *  key into a plain folder in the output folder, named after the source (or `name`). One
@@ -173,8 +180,10 @@ export const fpkg = {
     /** Only this file or folder of the image, by its path inside it (the image browser's
      *  Save): a folder becomes a folder named after it, a file a file. */
     entry?: string,
+    /** When the folder's name is taken in the output folder, add " (2)" instead of refusing. */
+    keepBoth = false,
   ) =>
-    invoke<{ job_id: string }>("folder_build", { source, outputDir, name, fullVerify, entry }),
+    invoke<{ job_id: string }>("folder_build", { source, outputDir, name, fullVerify, entry, keepBoth }),
   /** Write an edited COPY of a game image (#479): the image's files with `edits` applied,
    *  as the same kind of image (.exfat, .ffpkg, .ffpfs or .ffpfsc), read back and checked,
    *  named `<name>-edited` next to it unless `outputDir`/`name` say otherwise. The image

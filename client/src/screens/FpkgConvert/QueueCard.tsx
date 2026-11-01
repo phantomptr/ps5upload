@@ -52,7 +52,7 @@ export function QueueCard(p: QueueCardProps) {
   if (p.items.length === 0) return null;
   const send = tr("send_title_v2", undefined, "Upload & Install");
   return (
-    <Card>
+    <Card padded={false} className="p-3.5 sm:p-4">
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="text-sm font-medium">{tr("cq_title_v2", undefined, "⑤ Queue")}</div>

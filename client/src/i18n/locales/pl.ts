@@ -7021,6 +7021,15 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "rp_tp_tips": "Przeciągnij, aby przesunąć. Stuknij, aby kliknąć. Dwa palce: stuknij dla prawego kliknięcia, przeciągnij, aby przewijać. Stuknij, potem dotknij i przeciągnij, aby zaznaczyć.",
   "rp_tp_speed": "Szybkość touchpada",
   "pad_touchpad_tab": "Touchpad i klawiatura",
+  "fpkg.beside": "Zapisz każdy obok źródła",
+  "fpkg.besideHint": "Każdy trafia do folderu, w którym leży jego gra lub obraz, a nie do folderu gry. Jeśli nazwa jest tam zajęta, dodawane jest (2). Gry z serwera lub z PS5 nadal trafiają do folderu wyjściowego.",
+  "workshop_description_v3": "Zrób z gry pakiet, obraz gry lub folder albo zajrzyj do obrazu. Praca odbywa się na tym komputerze. Aby wysłać grę bez zmian, użyj {send}.",
+  "workshop_to_folder": "Konwertuj na folder",
+  "workshop_to_folder_hint": "Zapisz cały obraz lub pakiet jako zwykły folder na tym komputerze.",
+  "workshop_to_folder_where": "Wybierz, gdzie umieścić folder",
+  "workshop_bar_running": "Praca nad {title}…",
+  "workshop_bar_show": "Pokaż postęp",
+  "workshop_bar_review": "Przejrzyj",
 };
 
 export default pl;

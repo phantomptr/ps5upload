@@ -69,6 +69,11 @@ pub(crate) struct BuildReq {
     /// in full and a seeded sample of the data blocks.
     #[serde(default)]
     full_verify: bool,
+    /// When the package's name is taken in the output folder, name it `<stem> (2).pkg` (and so
+    /// on) instead of refusing: Convert's "Save each next to its source", where the folder is
+    /// the user's own and may hold anything.
+    #[serde(default)]
+    keep_both: bool,
 }
 
 /// The language a build asked for, trimmed; none when blank.
@@ -336,6 +341,16 @@ pub(crate) async fn fpkg_build_handler(
         .filter(|n| !n.trim().is_empty())
         .or_else(|| req.content_id.clone().filter(|c| !c.trim().is_empty()))
         .or_else(|| inspection.content_id.clone());
+    let stem = match stem {
+        Some(s) if req.keep_both => Some(
+            crate::folder_build::keep_both_stem(&s, |c| {
+                crate::folder_build::name_in_use(&out.join(format!("{c}.pkg")))
+            })
+            .unwrap_or(s),
+        ),
+        other => other,
+    };
+    let chosen_name = stem.clone().filter(|_| req.keep_both);
     let partial = match stem.map(|stem| out.join(format!("{stem}.pkg.partial"))) {
         Some(path) => match Writing::claim_off_thread(path.clone()).await {
             Some(w) => Some(w),
@@ -428,7 +443,7 @@ pub(crate) async fn fpkg_build_handler(
         sweep_output_leftovers(&out);
         let mut request = BuildRequest::new(&request_source, &out);
         request.content_id = req.content_id.filter(|id| !id.trim().is_empty());
-        request.file_name = req.name.filter(|name| !name.trim().is_empty());
+        request.file_name = chosen_name.or(req.name.filter(|name| !name.trim().is_empty()));
         if let Some(passcode) = req.passcode.filter(|p| !p.is_empty()) {
             request.passcode = passcode;
         }
@@ -844,6 +859,10 @@ pub(crate) struct ExfatBuildReq {
     /// otherwise. The source image is only read.
     #[serde(default)]
     edits: Vec<ImageEditReq>,
+    /// When the image's name is taken in the output folder, add ` (2)` (and so on) instead of
+    /// refusing (see `BuildReq::keep_both`).
+    #[serde(default)]
+    keep_both: bool,
 }
 
 /// One change for an edited copy of an image: `{"op":"delete","path":…}` removes a file or
@@ -1064,6 +1083,16 @@ pub(crate) async fn exfat_build_handler(
             .parent()
             .map_or_else(default_output_dir, Path::to_path_buf),
         _ => output_dir(req.output_dir.as_deref()),
+    };
+    let named = if req.keep_both {
+        let taken = |stem: &str| {
+            let (name, _) = crate::image_build::output_names(Path::new(stem), format, compress);
+            crate::folder_build::name_in_use(&out_dir.join(name))
+        };
+        crate::folder_build::keep_both_stem(&crate::image_build::stem_of(&named), taken)
+            .map_or(named, PathBuf::from)
+    } else {
+        named
     };
     let (out_name, inner_name) = crate::image_build::output_names(&named, format, compress);
     let output = out_dir.join(out_name);
@@ -1380,6 +1409,10 @@ pub(crate) struct FolderBuildReq {
     /// name is the entry's own unless `name` says otherwise.
     #[serde(default)]
     entry: Option<String>,
+    /// When the folder's name is taken in the output folder, add ` (2)` (and so on) instead of
+    /// refusing (see `BuildReq::keep_both`).
+    #[serde(default)]
+    keep_both: bool,
 }
 
 /// What a folder build reads: the whole image, one folder of it, or one file.
@@ -1471,6 +1504,14 @@ pub(crate) async fn folder_build_handler(
         .into_response();
     }
     let out_dir = output_dir(req.output_dir.as_deref());
+    let name = if req.keep_both {
+        crate::folder_build::keep_both_stem(&name, |c| {
+            crate::folder_build::name_in_use(&out_dir.join(c))
+        })
+        .unwrap_or(name)
+    } else {
+        name
+    };
     let target = out_dir.join(&name);
     if tokio::fs::try_exists(&target).await.unwrap_or(false) {
         return json_err(

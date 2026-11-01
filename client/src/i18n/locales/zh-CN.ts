@@ -6732,6 +6732,15 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "rp_tp_tips": "拖动以移动。轻点以单击。双指：轻点为右键，拖动为滚动。轻点后按住拖动以选择。",
   "rp_tp_speed": "触控板速度",
   "pad_touchpad_tab": "触控板和键盘",
+  "fpkg.beside": "每个都保存在其来源旁边",
+  "fpkg.besideHint": "每个都放在其游戏或镜像所在的文件夹中,而不是游戏文件夹内。如果那里已有同名项,会加上 (2)。服务器或 PS5 上的游戏仍放到输出文件夹。",
+  "workshop_description_v3": "把游戏制作成安装包、游戏镜像或文件夹,或查看镜像内部。处理在这台电脑上进行。要原样发送游戏,请使用{send}。",
+  "workshop_to_folder": "转换为文件夹",
+  "workshop_to_folder_hint": "把整个镜像或安装包写成这台电脑上的普通文件夹。",
+  "workshop_to_folder_where": "选择文件夹的存放位置",
+  "workshop_bar_running": "正在处理 {title}…",
+  "workshop_bar_show": "查看进度",
+  "workshop_bar_review": "查看",
 };
 
 export default zh_CN;

@@ -7079,6 +7079,15 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "rp_tp_tips": "Húzd a mozgatáshoz. Koppints a kattintáshoz. Két ujj: koppintás jobb kattintás, húzás görgetés. Koppints, majd érintsd meg és húzd a kijelöléshez.",
   "rp_tp_speed": "Touchpad sebessége",
   "pad_touchpad_tab": "Touchpad és billentyűzet",
+  "fpkg.beside": "Mindegyik mentése a forrása mellé",
+  "fpkg.besideHint": "Mindegyik abba a mappába kerül, amelyben a játéka vagy képfájlja van, nem egy játékmappába. Ha a név ott már foglalt, (2) kerül mögé. A szerveren vagy a PS5-ön lévő játékok továbbra is a kimeneti mappába kerülnek.",
+  "workshop_description_v3": "Készíts egy játékból csomagot, játékképet vagy mappát, vagy nézz bele egy képfájlba. A munka ezen a számítógépen fut. Egy játék változatlan küldéséhez használd ezt: {send}.",
+  "workshop_to_folder": "Átalakítás mappává",
+  "workshop_to_folder_hint": "A teljes képfájl vagy csomag kiírása sima mappaként erre a számítógépre.",
+  "workshop_to_folder_where": "Válaszd ki, hová kerüljön a mappa",
+  "workshop_bar_running": "Dolgozik ezen: {title}…",
+  "workshop_bar_show": "Folyamat mutatása",
+  "workshop_bar_review": "Áttekintés",
 };
 
 export default hu;

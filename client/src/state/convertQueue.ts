@@ -41,6 +41,9 @@ export interface ConvertItem {
   /** A game folder, image or archive, here or on a server or console. */
   source: string;
   outputDir?: string;
+  /** The output goes next to its source (Workshop's "Save each next to its source"): a name
+   *  already taken there is numbered, never overwritten or refused. */
+  keepBoth?: boolean;
   compression: FpkgCompression;
   /** Absent: a package (items queued before images could be). */
   build?: ConvertBuild;

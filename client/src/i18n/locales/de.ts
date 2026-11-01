@@ -6781,6 +6781,15 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "rp_tp_tips": "Ziehen zum Bewegen. Tippen zum Klicken. Zwei Finger: tippen für Rechtsklick, ziehen zum Scrollen. Tippen, dann berühren und ziehen zum Auswählen.",
   "rp_tp_speed": "Touchpad-Geschwindigkeit",
   "pad_touchpad_tab": "Touchpad & Tastatur",
+  "fpkg.beside": "Jeweils neben der Quelle speichern",
+  "fpkg.besideHint": "Jedes landet im Ordner, der sein Spiel oder Image enthält, nicht in einem Spielordner. Ist der Name dort schon vergeben, wird (2) angehängt. Spiele auf einem Server oder der PS5 kommen weiter in den Ausgabeordner.",
+  "workshop_description_v3": "Mach aus einem Spiel ein Paket, ein Spiel-Image oder einen Ordner, oder sieh in ein Image hinein. Die Arbeit läuft auf diesem Computer. Um ein Spiel unverändert zu senden, nutze {send}.",
+  "workshop_to_folder": "In Ordner umwandeln",
+  "workshop_to_folder_hint": "Das ganze Image oder Paket als einfachen Ordner auf diesem Computer schreiben.",
+  "workshop_to_folder_where": "Wähle, wohin der Ordner soll",
+  "workshop_bar_running": "Arbeite an {title}…",
+  "workshop_bar_show": "Fortschritt zeigen",
+  "workshop_bar_review": "Prüfen",
 };
 
 export default de;
