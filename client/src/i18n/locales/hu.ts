@@ -6430,7 +6430,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_kbm_controller_hint": "A billentyűk és az egér kontrollerként működnek (billentyűlista lent).",
 "rp_kbm_native_hint": "A PS5 valódi billentyűzetet és egeret kap, az ezt támogató játékokhoz.",
 "rp_kbm_mixed_hint": "Valódi egér; a billentyűk kontrollerként működnek (WASD mozgat).",
-"rp_kbm_hotkey": "Ctrl+Alt+K vált.",
+"rp_kbm_hotkey": "Ctrl+Alt+M vált.",
 "rp_kbm_unavailable": "A natív billentyűzet és egér ezen a konzolon még nem érhető el.",
 "rp_kbm_helper_old": "Frissítsd a PS5 segédet a billentyűzet és egér használatához.",
 "rp_kbm_fallback": "Kontrollerrel játszol: a(z) {mode} visszatér, amint a konzol támogatja.",

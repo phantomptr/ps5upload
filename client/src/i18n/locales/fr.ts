@@ -6140,7 +6140,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_kbm_controller_hint": "Les touches et la souris agissent comme une manette (liste des touches ci-dessous).",
 "rp_kbm_native_hint": "La PS5 reçoit un vrai clavier et une vraie souris, pour les jeux qui les prennent en charge.",
 "rp_kbm_mixed_hint": "Une vraie souris ; les touches agissent comme une manette (ZQSD/WASD pour bouger).",
-"rp_kbm_hotkey": "Ctrl+Alt+K pour changer.",
+"rp_kbm_hotkey": "Ctrl+Alt+M pour changer.",
 "rp_kbm_unavailable": "Le clavier et la souris natifs ne sont pas encore disponibles sur cette console.",
 "rp_kbm_helper_old": "Mettez à jour l'assistant PS5 pour utiliser clavier et souris.",
 "rp_kbm_fallback": "Jeu avec Manette : {mode} reviendra quand cette console le prendra en charge.",

@@ -6139,7 +6139,7 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_kbm_controller_hint": "Teclas e mouse funcionam como um controle (lista de teclas abaixo).",
 "rp_kbm_native_hint": "O PS5 recebe um teclado e um mouse de verdade, para jogos que os suportam.",
 "rp_kbm_mixed_hint": "Um mouse de verdade; as teclas funcionam como controle (WASD move).",
-"rp_kbm_hotkey": "Ctrl+Alt+K alterna.",
+"rp_kbm_hotkey": "Ctrl+Alt+M alterna.",
 "rp_kbm_unavailable": "Teclado e mouse nativos ainda não estão disponíveis neste console.",
 "rp_kbm_helper_old": "Atualize o auxiliar do PS5 para usar teclado e mouse.",
 "rp_kbm_fallback": "Jogando com Controle: {mode} volta quando este console tiver suporte.",

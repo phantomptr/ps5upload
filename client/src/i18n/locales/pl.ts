@@ -6372,7 +6372,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_kbm_controller_hint": "Klawisze i mysz działają jak kontroler (lista klawiszy poniżej).",
 "rp_kbm_native_hint": "PS5 dostaje prawdziwą klawiaturę i mysz, dla gier, które je obsługują.",
 "rp_kbm_mixed_hint": "Prawdziwa mysz; klawisze działają jak kontroler (WASD porusza).",
-"rp_kbm_hotkey": "Ctrl+Alt+K przełącza.",
+"rp_kbm_hotkey": "Ctrl+Alt+M przełącza.",
 "rp_kbm_unavailable": "Natywna klawiatura i mysz nie są jeszcze dostępne na tej konsoli.",
 "rp_kbm_helper_old": "Zaktualizuj pomocnika PS5, aby używać klawiatury i myszy.",
 "rp_kbm_fallback": "Gra z kontrolerem: {mode} wróci, gdy ta konsola będzie to obsługiwać.",

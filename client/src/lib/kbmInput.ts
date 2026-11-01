@@ -214,9 +214,10 @@ export function nextMode(cur: KbmMode, caps: KbmCaps | null): KbmMode {
   return "controller";
 }
 
-/** The cycle hotkey: Ctrl+Alt+K (app-reserved, never sent to the game). */
+/** The cycle hotkey: Ctrl+Alt+M (app-reserved, never sent to the game; Ctrl+K is the app's command
+ *  palette, and no key of the stream's key list uses Ctrl or Alt). */
 export function isCycleHotkey(e: Pick<KeyboardEvent, "code" | "ctrlKey" | "altKey" | "metaKey" | "shiftKey">): boolean {
-  return e.code === "KeyK" && e.ctrlKey && e.altKey && !e.metaKey && !e.shiftKey;
+  return e.code === "KeyM" && e.ctrlKey && e.altKey && !e.metaKey && !e.shiftKey;
 }
 
 // ── The sender: what is held, batched motion, release-all and the heartbeat ──────────────────

@@ -115,11 +115,11 @@ describe("routing", () => {
     expect(nextMode("controller", { mouse: true, keyboard: false })).toBe("mixed");
   });
 
-  it("reserves Ctrl+Alt+K", () => {
-    const k = { code: "KeyK", ctrlKey: true, altKey: true, metaKey: false, shiftKey: false };
+  it("reserves Ctrl+Alt+M, and never the command palette's Ctrl+K", () => {
+    const k = { code: "KeyM", ctrlKey: true, altKey: true, metaKey: false, shiftKey: false };
     expect(isCycleHotkey(k)).toBe(true);
     expect(isCycleHotkey({ ...k, altKey: false })).toBe(false);
-    expect(isCycleHotkey({ ...k, code: "KeyJ" })).toBe(false);
+    expect(isCycleHotkey({ ...k, code: "KeyK" })).toBe(false);
   });
 });
 

@@ -6083,7 +6083,7 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_kbm_controller_hint": "按键和鼠标作为手柄使用（按键列表见下方）。",
 "rp_kbm_native_hint": "PS5 获得真正的键盘和鼠标，用于支持它们的游戏。",
 "rp_kbm_mixed_hint": "真正的鼠标；按键作为手柄使用（WASD 移动）。",
-"rp_kbm_hotkey": "Ctrl+Alt+K 切换。",
+"rp_kbm_hotkey": "Ctrl+Alt+M 切换。",
 "rp_kbm_unavailable": "这台主机暂不支持原生键盘和鼠标。",
 "rp_kbm_helper_old": "请更新 PS5 助手以使用键盘和鼠标。",
 "rp_kbm_fallback": "正在用手柄游玩：主机支持后会恢复为{mode}。",

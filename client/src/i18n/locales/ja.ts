@@ -6143,7 +6143,7 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_kbm_controller_hint": "キーとマウスはコントローラーとして動作します（キー一覧は下）。",
 "rp_kbm_native_hint": "PS5 に本物のキーボードとマウスを接続します（対応ゲーム向け）。",
 "rp_kbm_mixed_hint": "本物のマウス、キーはコントローラーとして動作（WASD で移動）。",
-"rp_kbm_hotkey": "Ctrl+Alt+K で切り替え。",
+"rp_kbm_hotkey": "Ctrl+Alt+M で切り替え。",
 "rp_kbm_unavailable": "このコンソールではまだネイティブのキーボードとマウスを使えません。",
 "rp_kbm_helper_old": "キーボードとマウスを使うには PS5 ヘルパーを更新してください。",
 "rp_kbm_fallback": "コントローラーでプレイ中：このコンソールが対応すると {mode} に戻ります。",

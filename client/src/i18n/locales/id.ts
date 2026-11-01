@@ -6133,7 +6133,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_kbm_controller_hint": "Tombol dan mouse berfungsi sebagai controller (daftar tombol di bawah).",
 "rp_kbm_native_hint": "PS5 mendapat keyboard dan mouse sungguhan, untuk game yang mendukungnya.",
 "rp_kbm_mixed_hint": "Mouse sungguhan; tombol berfungsi sebagai controller (WASD untuk bergerak).",
-"rp_kbm_hotkey": "Ctrl+Alt+K untuk berganti.",
+"rp_kbm_hotkey": "Ctrl+Alt+M untuk berganti.",
 "rp_kbm_unavailable": "Keyboard & mouse asli belum tersedia di konsol ini.",
 "rp_kbm_helper_old": "Perbarui helper PS5 untuk memakai keyboard dan mouse.",
 "rp_kbm_fallback": "Bermain dengan Controller: {mode} kembali saat konsol ini mendukungnya.",

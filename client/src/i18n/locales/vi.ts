@@ -6126,7 +6126,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_kbm_controller_hint": "Phím và chuột hoạt động như tay cầm (danh sách phím bên dưới).",
 "rp_kbm_native_hint": "PS5 nhận bàn phím và chuột thật, cho các game hỗ trợ.",
 "rp_kbm_mixed_hint": "Chuột thật; phím hoạt động như tay cầm (WASD để di chuyển).",
-"rp_kbm_hotkey": "Ctrl+Alt+K để chuyển.",
+"rp_kbm_hotkey": "Ctrl+Alt+M để chuyển.",
 "rp_kbm_unavailable": "Bàn phím & chuột gốc chưa có trên máy này.",
 "rp_kbm_helper_old": "Cập nhật trình trợ giúp PS5 để dùng bàn phím và chuột.",
 "rp_kbm_fallback": "Đang chơi bằng Tay cầm: {mode} sẽ trở lại khi máy này hỗ trợ.",

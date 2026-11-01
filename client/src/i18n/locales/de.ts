@@ -6132,7 +6132,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_kbm_controller_hint": "Tasten und Maus wirken wie ein Controller (Tastenliste unten).",
 "rp_kbm_native_hint": "Die PS5 bekommt eine echte Tastatur und Maus, für Spiele, die sie unterstützen.",
 "rp_kbm_mixed_hint": "Eine echte Maus; die Tasten wirken wie ein Controller (WASD bewegt).",
-"rp_kbm_hotkey": "Strg+Alt+K wechselt.",
+"rp_kbm_hotkey": "Strg+Alt+M wechselt.",
 "rp_kbm_unavailable": "Native Tastatur & Maus gibt es auf dieser Konsole noch nicht.",
 "rp_kbm_helper_old": "Aktualisiere den PS5-Helfer, um Tastatur und Maus zu nutzen.",
 "rp_kbm_fallback": "Es wird mit Controller gespielt: {mode} kommt zurück, sobald diese Konsole es unterstützt.",

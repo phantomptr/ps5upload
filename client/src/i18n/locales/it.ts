@@ -6077,7 +6077,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_kbm_controller_hint": "Tasti e mouse agiscono come un controller (elenco tasti sotto).",
 "rp_kbm_native_hint": "La PS5 riceve una vera tastiera e un vero mouse, per i giochi che li supportano.",
 "rp_kbm_mixed_hint": "Un mouse vero; i tasti agiscono come un controller (WASD per muoversi).",
-"rp_kbm_hotkey": "Ctrl+Alt+K per cambiare.",
+"rp_kbm_hotkey": "Ctrl+Alt+M per cambiare.",
 "rp_kbm_unavailable": "Tastiera e mouse nativi non sono ancora disponibili su questa console.",
 "rp_kbm_helper_old": "Aggiorna l'helper della PS5 per usare tastiera e mouse.",
 "rp_kbm_fallback": "Si gioca con Controller: {mode} tornerà quando questa console lo supporterà.",

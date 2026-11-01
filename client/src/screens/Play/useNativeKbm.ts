@@ -176,11 +176,14 @@ export function useNativeKbm({ stream, owner, host, title, stage, full, settings
       if (!owner) return false;
       if (isCycleHotkey(e)) {
         e.preventDefault();
+        e.stopPropagation();
         if (down && !e.repeat) chooseKbmMode(title, nextMode(mode, hostCaps));
         return true;
       }
       if (route().keys !== "native" || !sender) return false;
+      // The game's key, not the app's: no browser default, no app shortcut (Ctrl+K, ?) behind it.
       e.preventDefault();
+      e.stopPropagation();
       sender.key(e.code, down);
       return true;
     },

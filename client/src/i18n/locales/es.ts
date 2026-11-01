@@ -6077,7 +6077,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_kbm_controller_hint": "Las teclas y el ratón actúan como un mando (lista de teclas abajo).",
 "rp_kbm_native_hint": "La PS5 recibe un teclado y un ratón reales, para juegos que los admiten.",
 "rp_kbm_mixed_hint": "Un ratón real; las teclas actúan como un mando (WASD mueve).",
-"rp_kbm_hotkey": "Ctrl+Alt+K cambia.",
+"rp_kbm_hotkey": "Ctrl+Alt+M cambia.",
 "rp_kbm_unavailable": "El teclado y ratón nativos aún no están disponibles en esta consola.",
 "rp_kbm_helper_old": "Actualiza el ayudante de la PS5 para usar teclado y ratón.",
 "rp_kbm_fallback": "Jugando con Mando: {mode} vuelve cuando esta consola lo admita.",

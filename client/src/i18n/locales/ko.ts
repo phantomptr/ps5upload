@@ -6141,7 +6141,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_kbm_controller_hint": "키와 마우스가 컨트롤러처럼 동작합니다(아래 키 목록).",
 "rp_kbm_native_hint": "PS5가 실제 키보드와 마우스를 받습니다(지원하는 게임용).",
 "rp_kbm_mixed_hint": "실제 마우스, 키는 컨트롤러처럼 동작(WASD로 이동).",
-"rp_kbm_hotkey": "Ctrl+Alt+K로 전환.",
+"rp_kbm_hotkey": "Ctrl+Alt+M로 전환.",
 "rp_kbm_unavailable": "이 콘솔에서는 아직 네이티브 키보드 및 마우스를 사용할 수 없습니다.",
 "rp_kbm_helper_old": "키보드와 마우스를 쓰려면 PS5 도우미를 업데이트하세요.",
 "rp_kbm_fallback": "컨트롤러로 플레이 중: 이 콘솔이 지원하면 {mode}(으)로 돌아갑니다.",

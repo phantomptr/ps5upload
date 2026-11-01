@@ -6131,7 +6131,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_kbm_controller_hint": "Tuşlar ve fare kumanda gibi davranır (tuş listesi aşağıda).",
 "rp_kbm_native_hint": "PS5 gerçek bir klavye ve fare alır; bunları destekleyen oyunlar için.",
 "rp_kbm_mixed_hint": "Gerçek bir fare; tuşlar kumanda gibi davranır (WASD hareket ettirir).",
-"rp_kbm_hotkey": "Ctrl+Alt+K değiştirir.",
+"rp_kbm_hotkey": "Ctrl+Alt+M değiştirir.",
 "rp_kbm_unavailable": "Yerel klavye ve fare bu konsolda henüz kullanılamıyor.",
 "rp_kbm_helper_old": "Klavye ve fare kullanmak için PS5 yardımcısını güncelleyin.",
 "rp_kbm_fallback": "Kumanda ile oynanıyor: bu konsol desteklediğinde {mode} geri gelir.",

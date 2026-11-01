@@ -6077,7 +6077,7 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_kbm_controller_hint": "按鍵和滑鼠當作手把使用（按鍵清單見下方）。",
 "rp_kbm_native_hint": "PS5 取得真正的鍵盤和滑鼠，用於支援它們的遊戲。",
 "rp_kbm_mixed_hint": "真正的滑鼠；按鍵當作手把使用（WASD 移動）。",
-"rp_kbm_hotkey": "Ctrl+Alt+K 切換。",
+"rp_kbm_hotkey": "Ctrl+Alt+M 切換。",
 "rp_kbm_unavailable": "這台主機尚不支援原生鍵盤和滑鼠。",
 "rp_kbm_helper_old": "請更新 PS5 助手以使用鍵盤和滑鼠。",
 "rp_kbm_fallback": "正在用手把遊玩：主機支援後會恢復為{mode}。",

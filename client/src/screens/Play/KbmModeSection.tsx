@@ -13,6 +13,7 @@ export function KbmModeSection({ running }: { running: boolean }) {
   const modes = useKbmStore((s) => s.modes);
   const caps = useKbmStore((s) => s.caps);
   const status = useKbmStore((s) => s.status);
+  const hintNow = useKbmStore((s) => s.hintNow);
   const remembered = rememberedMode(modes, title);
   const mode = effectiveMode(remembered, caps);
   const label: Record<KbmMode, string> = {
@@ -56,8 +57,13 @@ export function KbmModeSection({ running }: { running: boolean }) {
       </div>
       <p className="text-xs text-[var(--color-muted)]">
         {what[mode]}{" "}
-        {tr("rp_kbm_hotkey", undefined, "Ctrl+Alt+K switches.")}
+        {tr("rp_kbm_hotkey", undefined, "Ctrl+Alt+M switches.")}
       </p>
+      {hintNow && mode !== "controller" && (
+        <p className="text-xs" data-testid="rp-kbm-hint">
+          {tr("rp_kbm_hint", undefined, "If the game ignores the mouse, switch back to Controller.")}
+        </p>
+      )}
       {unsupported && (
         <p className="text-xs text-[var(--color-muted)]" data-testid="rp-kbm-unavailable">
           {why}

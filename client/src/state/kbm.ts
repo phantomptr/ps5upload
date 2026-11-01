@@ -42,6 +42,8 @@ function load(): Saved {
 interface State extends Saved {
   caps: KbmConsoleCaps | null;
   status: KbmStatus | null;
+  /** The one-time hint was given in this run (Settings shows it under the modes). */
+  hintNow: boolean;
   setMode: (title: string | null, mode: KbmMode) => void;
   markHinted: () => void;
   setCaps: (c: KbmConsoleCaps | null) => void;
@@ -54,12 +56,13 @@ export const useKbmStore = create<State>((set, get) => {
     ...load(),
     caps: null,
     status: null,
+    hintNow: false,
     setMode: (title, mode) => {
       set({ modes: { ...get().modes, [title ?? HOME]: mode } });
       save();
     },
     markHinted: () => {
-      set({ hinted: true });
+      set({ hinted: true, hintNow: true });
       save();
     },
     setCaps: (caps) => set({ caps }),
