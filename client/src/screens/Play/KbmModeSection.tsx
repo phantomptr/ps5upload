@@ -1,9 +1,9 @@
 import { Button } from "../../components";
-import { effectiveMode, KBM_MODES, modeUnavailable, type KbmMode } from "../../lib/kbmInput";
+import { effectiveMode, kbmBlockReason, KBM_MODES, modeUnavailable, type KbmMode } from "../../lib/kbmInput";
 import { useTr } from "../../state/lang";
 import { useGameControlsStore } from "../../state/gameControls";
 import { rememberedMode, useKbmStore } from "../../state/kbm";
-import { chooseKbmMode } from "./useNativeKbm";
+import { chooseKbmMode, kbmBlockText, kbmModeLabel } from "./useNativeKbm";
 
 /** Settings › Controls: how this computer's keyboard and mouse play the running game (or the
  *  home screen), and what the PS5 sees (lib/kbmInput.ts). */
@@ -17,9 +17,9 @@ export function KbmModeSection({ running }: { running: boolean }) {
   const remembered = rememberedMode(modes, title);
   const mode = effectiveMode(remembered, caps);
   const label: Record<KbmMode, string> = {
-    controller: tr("rp_kbm_controller", undefined, "Controller"),
-    native: tr("rp_kbm_native", undefined, "Keyboard & mouse"),
-    mixed: tr("rp_kbm_mixed", undefined, "Mixed"),
+    controller: kbmModeLabel(tr, "controller"),
+    native: kbmModeLabel(tr, "native"),
+    mixed: kbmModeLabel(tr, "mixed"),
   };
   const what: Record<KbmMode, string> = {
     controller: tr("rp_kbm_controller_hint", undefined, "Keys and mouse act as a controller (the key list below)."),
@@ -27,10 +27,7 @@ export function KbmModeSection({ running }: { running: boolean }) {
     mixed: tr("rp_kbm_mixed_hint", undefined, "A real mouse; keys act as a controller (WASD moves)."),
   };
   const unsupported = !caps || (!caps.mouse && !caps.keyboard);
-  const why =
-    caps?.reason === "helper_old"
-      ? tr("rp_kbm_helper_old", undefined, "Update the PS5 helper to use a keyboard and mouse.")
-      : tr("rp_kbm_unavailable", undefined, "Native keyboard & mouse isn't available on this console yet.");
+  const why = kbmBlockText(tr, kbmBlockReason(caps));
   const on = running && mode !== "controller";
   const mark = (v: boolean | undefined) => (v ? "✓" : "–");
   return (

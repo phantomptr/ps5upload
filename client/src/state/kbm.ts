@@ -17,8 +17,12 @@ export interface KbmConsoleCaps extends KbmCaps {
   host: string;
   /** The helper has the methods at all. */
   supported: boolean;
-  /** Why nothing can be made (`vinput_unsupported`), or why it could not be asked. */
+  /** Why nothing can be made (`vinput_unsupported`, `vinput_needs_loader`,
+   *  `vinput_companion_failed`), or why it could not be asked. */
   reason: string | null;
+  /** The console's keyboard & mouse process: idle, starting, running, stopped or unavailable
+   *  (null from an engine that does not say). */
+  companion: string | null;
 }
 
 interface Saved {
@@ -83,6 +87,7 @@ export async function fetchKbmCaps(host: string): Promise<KbmConsoleCaps> {
     keyboard: false,
     supported,
     reason,
+    companion: null,
   });
   try {
     const r = await fetch(`${getEngineUrl()}/api/ps5/vinput/caps?addr=${encodeURIComponent(host)}`);
@@ -95,6 +100,7 @@ export async function fetchKbmCaps(host: string): Promise<KbmConsoleCaps> {
       mouse: v.mouse === true,
       keyboard: v.keyboard === true,
       reason: typeof v.reason === "string" ? v.reason : null,
+      companion: typeof v.companion === "string" ? v.companion : null,
     };
   } catch {
     return none("unreachable");

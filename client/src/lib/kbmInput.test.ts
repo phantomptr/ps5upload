@@ -9,6 +9,10 @@ import {
   effectiveMode,
   encodeReport,
   isCycleHotkey,
+  KBM_BLOCK_TEXT,
+  kbmBlocked,
+  kbmButtonView,
+  kbmStarting,
   modeUnavailable,
   nextMode,
   readKbmStatus,
@@ -220,5 +224,58 @@ describe("KbmSender", () => {
       reason: null,
     });
     expect(readKbmStatus("x")).toBeNull();
+  });
+});
+
+describe("the stream bar's mode button", () => {
+  const st = (on: boolean, err: string | null) => ({ on, mouse: false, keyboard: false, err, reason: null });
+
+  it("is off only when no keyboard & mouse mode can be picked, with the console's reason", () => {
+    expect(kbmBlocked({ ...BOTH, supported: true })).toBeNull();
+    // Mixed alone (mouse, no keyboard) still leaves a choice.
+    expect(kbmBlocked({ mouse: true, keyboard: false, supported: true })).toBeNull();
+    expect(kbmBlocked(null)).toBe("unavailable");
+    expect(kbmBlocked({ ...NONE, supported: false, reason: "helper_old" })).toBe("helper_old");
+    expect(kbmBlocked({ ...NONE, supported: true, reason: "vinput_needs_loader" })).toBe("needs_loader");
+    expect(kbmBlocked({ ...NONE, supported: true, reason: "vinput_companion_failed" })).toBe("companion_failed");
+    expect(kbmBlocked({ ...NONE, supported: true, reason: "vinput_unsupported" })).toBe("unavailable");
+    expect(kbmBlocked({ ...NONE, supported: true, reason: "unreachable" })).toBe("unavailable");
+    // A reason does not turn off devices the console says it has.
+    expect(kbmBlocked({ ...BOTH, supported: true, reason: "vinput_needs_loader" })).toBeNull();
+  });
+
+  it("has the i18n key and English for every reason", () => {
+    expect(KBM_BLOCK_TEXT.needs_loader).toEqual({ key: "rp_kbm_needs_loader", en: "Needs a payload loader on port 9021" });
+    expect(KBM_BLOCK_TEXT.companion_failed.key).toBe("rp_kbm_companion_failed");
+    expect(KBM_BLOCK_TEXT.helper_old.key).toBe("rp_kbm_helper_old");
+    expect(KBM_BLOCK_TEXT.unavailable.key).toBe("rp_kbm_unavailable");
+  });
+
+  it("spins while the console's helper starts", () => {
+    const caps = { ...BOTH, supported: true, companion: "idle" };
+    expect(kbmStarting(caps, null)).toBe(false);
+    expect(kbmStarting(caps, st(true, "vinput_starting"))).toBe(true);
+    // A starting error with the devices off is old news.
+    expect(kbmStarting(caps, st(false, "vinput_starting"))).toBe(false);
+    expect(kbmStarting(caps, st(true, "vinput_needs_loader"))).toBe(false);
+    expect(kbmStarting({ ...caps, companion: "starting" }, null)).toBe(true);
+    expect(kbmStarting({ ...caps, companion: "running" }, st(true, null))).toBe(false);
+    expect(kbmStarting(null, null)).toBe(false);
+  });
+
+  it("shows the mode's icon, or the spinner, and why it is off", () => {
+    const caps = { ...BOTH, supported: true, companion: "running" };
+    for (const m of ["controller", "native", "mixed"] as KbmMode[])
+      expect(kbmButtonView(m, caps, null)).toEqual({ mode: m, icon: m, blocked: null });
+    expect(kbmButtonView("native", caps, st(true, "vinput_starting"))).toEqual({
+      mode: "native",
+      icon: "spinner",
+      blocked: null,
+    });
+    expect(kbmButtonView("controller", { ...NONE, supported: true, reason: "vinput_needs_loader" }, null)).toEqual({
+      mode: "controller",
+      icon: "controller",
+      blocked: "needs_loader",
+    });
   });
 });

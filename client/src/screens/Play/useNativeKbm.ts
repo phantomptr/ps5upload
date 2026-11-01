@@ -5,15 +5,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  KBM_BLOCK_TEXT,
   KbmSender,
   devicesFor,
   effectiveMode,
   isCycleHotkey,
   nextMode,
   routeFor,
+  type KbmBlock,
   type KbmMode,
   type Route,
 } from "../../lib/kbmInput";
+import type { Translator } from "../../state/lang";
 import type { RemotePlayStream } from "../../lib/remotePlayStream";
 import { pushNotification } from "../../state/notifications";
 import { rpControls } from "../../state/gameControls";
@@ -23,6 +26,8 @@ import { trStatic } from "../../lib/trStatic";
 
 /** How long a quick Esc holds its key down on the console. */
 const ESC_TAP_MS = 80;
+/** How often the console is asked again while its keyboard & mouse helper starts. */
+const CAPS_STARTING_POLL_MS = 2000;
 
 /** A text box of the app has the keyboard: its keys are typing, not play. */
 function typingInApp(): boolean {
@@ -41,6 +46,19 @@ export function chooseKbmMode(title: string | null, mode: KbmMode): void {
   }
 }
 
+/** A mode's name, as Settings › Controls and the stream bar show it. */
+export function kbmModeLabel(tr: Translator, mode: KbmMode): string {
+  if (mode === "native") return tr("rp_kbm_native", undefined, "Keyboard & mouse");
+  if (mode === "mixed") return tr("rp_kbm_mixed", undefined, "Mixed");
+  return tr("rp_kbm_controller", undefined, "Controller");
+}
+
+/** Why this console takes no keyboard & mouse mode, in words. */
+export function kbmBlockText(tr: Translator, block: KbmBlock): string {
+  const t = KBM_BLOCK_TEXT[block];
+  return tr(t.key, undefined, t.en);
+}
+
 interface Opts {
   stream: RemotePlayStream | null;
   /** This page shows the session and it plays (spectators and other windows never route). */
@@ -55,6 +73,7 @@ interface Opts {
 export function useNativeKbm({ stream, owner, host, title, stage, full, settingsOpen }: Opts) {
   const modes = useKbmStore((s) => s.modes);
   const caps = useKbmStore((s) => s.caps);
+  const err = useKbmStore((s) => s.status?.err ?? null);
   const setCaps = useKbmStore((s) => s.setCaps);
   const remembered = rememberedMode(modes, title);
   const hostCaps = caps && caps.host === host ? caps : null;
@@ -70,6 +89,27 @@ export function useNativeKbm({ stream, owner, host, title, stage, full, settings
       live = false;
     };
   }, [owner, host, setCaps]);
+
+  // Asked again when the engine's answer changes its error (the console's helper starting, up, or
+  // unable to start), and every few seconds while the console says it is starting: the bar button
+  // and Settings › Controls follow it.
+  const lastErr = useRef(err);
+  const starting = hostCaps?.companion === "starting";
+  useEffect(() => {
+    if (lastErr.current === err) return;
+    lastErr.current = err;
+    if (!owner || !host) return;
+    let live = true;
+    void fetchKbmCaps(host).then((c) => live && setCaps(c));
+    return () => {
+      live = false;
+    };
+  }, [err, owner, host, setCaps]);
+  useEffect(() => {
+    if (!owner || !host || !starting) return;
+    const id = window.setInterval(() => void fetchKbmCaps(host).then(setCaps), CAPS_STARTING_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [owner, host, starting, setCaps]);
 
   // One sender per stream: its socket is the stream's.
   const sender = useMemo(
@@ -171,13 +211,18 @@ export function useNativeKbm({ stream, owner, host, title, stage, full, settings
 
   /** The stage's key handler asks first: true when the key was taken (the hotkey, or a key for
    *  the PS5's keyboard). */
+  /** The next mode the console can take, for the running game (Ctrl+Alt+M, the bar button). */
+  const cycle = useCallback(() => {
+    if (owner) chooseKbmMode(title, nextMode(mode, hostCaps));
+  }, [owner, title, mode, hostCaps]);
+
   const onKey = useCallback(
     (e: React.KeyboardEvent | KeyboardEvent, down: boolean): boolean => {
       if (!owner) return false;
       if (isCycleHotkey(e)) {
         e.preventDefault();
         e.stopPropagation();
-        if (down && !e.repeat) chooseKbmMode(title, nextMode(mode, hostCaps));
+        if (down && !e.repeat) cycle();
         return true;
       }
       if (route().keys !== "native" || !sender) return false;
@@ -187,7 +232,7 @@ export function useNativeKbm({ stream, owner, host, title, stage, full, settings
       sender.key(e.code, down);
       return true;
     },
-    [owner, title, mode, hostCaps, route, sender],
+    [owner, cycle, route, sender],
   );
 
   /** A quick Esc in full screen: in Native mode it is the PS5 keyboard's Esc. False otherwise
@@ -202,5 +247,5 @@ export function useNativeKbm({ stream, owner, host, title, stage, full, settings
   /** Lets go of everything native (Esc held to leave full screen, stop). */
   const releaseAll = useCallback(() => sender?.releaseAll(), [sender]);
 
-  return { mode, remembered, mouseNative, keysNative, onKey, escTap, releaseAll };
+  return { mode, remembered, hostCaps, mouseNative, keysNative, onKey, escTap, releaseAll, cycle };
 }

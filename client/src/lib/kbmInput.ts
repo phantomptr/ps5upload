@@ -391,3 +391,60 @@ export function readKbmStatus(v: unknown): KbmStatus | null {
   const str = (x: unknown) => (typeof x === "string" ? x : null);
   return { on: o.on === true, mouse: o.mouse === true, keyboard: o.keyboard === true, err: str(o.err), reason: str(o.reason) };
 }
+
+// ── The stream bar's mode button: what it shows, and why it cannot switch ──────────────────────
+
+/** What the console said about its devices (state/kbm.ts KbmConsoleCaps), as far as the button
+ *  needs it. `companion` is the on-console keyboard & mouse process: idle, starting, running,
+ *  stopped or unavailable (absent from older engines). */
+export interface KbmCapsInfo extends KbmCaps {
+  supported?: boolean;
+  reason?: string | null;
+  companion?: string | null;
+}
+
+/** Why no keyboard & mouse mode can be picked on this console. */
+export type KbmBlock = "helper_old" | "needs_loader" | "companion_failed" | "unavailable";
+
+/** The text for each KbmBlock: the i18n key and its English. */
+export const KBM_BLOCK_TEXT: Readonly<Record<KbmBlock, { key: string; en: string }>> = {
+  helper_old: { key: "rp_kbm_helper_old", en: "Update the PS5 helper to use a keyboard and mouse." },
+  needs_loader: { key: "rp_kbm_needs_loader", en: "Needs a payload loader on port 9021" },
+  companion_failed: {
+    key: "rp_kbm_companion_failed",
+    en: "The keyboard & mouse helper could not start on the PS5",
+  },
+  unavailable: { key: "rp_kbm_unavailable", en: "Native keyboard & mouse isn't available on this console yet." },
+};
+
+/** Why `caps` rules out every mode but Controller (no caps yet, or a reason the engine gave). */
+export function kbmBlockReason(caps: KbmCapsInfo | null): KbmBlock {
+  if (caps && caps.supported === false) return "helper_old";
+  if (caps?.reason === "helper_old") return "helper_old";
+  if (caps?.reason === "vinput_needs_loader") return "needs_loader";
+  if (caps?.reason === "vinput_companion_failed") return "companion_failed";
+  return "unavailable";
+}
+
+/** Null when some keyboard & mouse mode can be picked on this console, else why not. */
+export function kbmBlocked(caps: KbmCapsInfo | null): KbmBlock | null {
+  const open = KBM_MODES.some((m) => m !== "controller" && !modeUnavailable(m, caps));
+  return open ? null : kbmBlockReason(caps);
+}
+
+/** The console's keyboard & mouse helper is on its way up: the devices are not there yet. */
+export function kbmStarting(caps: KbmCapsInfo | null, status: KbmStatus | null): boolean {
+  return (!!status?.on && status.err === "vinput_starting") || caps?.companion === "starting";
+}
+
+/** The bar button: the icon (the mode, or a spinner), and the reason it is off. */
+export interface KbmButtonView {
+  mode: KbmMode;
+  icon: KbmMode | "spinner";
+  blocked: KbmBlock | null;
+}
+
+export function kbmButtonView(mode: KbmMode, caps: KbmCapsInfo | null, status: KbmStatus | null): KbmButtonView {
+  const blocked = kbmBlocked(caps);
+  return { mode, icon: kbmStarting(caps, status) ? "spinner" : mode, blocked };
+}
