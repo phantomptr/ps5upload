@@ -27,6 +27,12 @@ export default function Ps2Saves({
 }) {
   const tr = useTr();
   const [saves, setSaves] = useState<Ps2Save[]>([]);
+  // Per emulator: a backup takes both its saves, so both rows' backup lists load again.
+  const [reloads, setReloads] = useState<Record<string, number>>({});
+  const backedUp = useCallback(
+    (app: string) => setReloads((r) => ({ ...r, [app]: (r[app] ?? 0) + 1 })),
+    [],
+  );
 
   useEffect(() => {
     setSaves([]);
@@ -88,7 +94,13 @@ export default function Ps2Saves({
               </p>
               <ul className="space-y-2">
                 {mine.map((s) => (
-                  <Ps2SaveRow key={s.path} host={host} save={s} />
+                  <Ps2SaveRow
+                    key={s.path}
+                    host={host}
+                    save={s}
+                    reload={reloads[app] ?? 0}
+                    onBackedUp={backedUp}
+                  />
                 ))}
               </ul>
             </div>
@@ -99,12 +111,21 @@ export default function Ps2Saves({
   );
 }
 
-function Ps2SaveRow({ host, save }: { host: string; save: Ps2Save }) {
+function Ps2SaveRow({
+  host,
+  save,
+  reload,
+  onBackedUp,
+}: {
+  host: string;
+  save: Ps2Save;
+  reload: number;
+  onBackedUp: (app: string) => void;
+}) {
   const tr = useTr();
   const navigate = useNavigate();
   const dir = useAutoSaveBackupStore((s) => s.settings?.dir ?? "");
   const [busy, setBusy] = useState(false);
-  const [reload, setReload] = useState(0);
   const entry: SaveEntry = {
     title_id: save.title_id,
     user_id: save.user_id,
@@ -134,7 +155,7 @@ function Ps2SaveRow({ host, save }: { host: string; save: Ps2Save }) {
           "Backed up {title}",
         ),
       );
-      setReload((n) => n + 1);
+      onBackedUp(save.title_id);
     } catch (e) {
       pushNotification(
         "error",
@@ -148,7 +169,7 @@ function Ps2SaveRow({ host, save }: { host: string; save: Ps2Save }) {
     } finally {
       setBusy(false);
     }
-  }, [host, save.title_id, save.emulator, tr]);
+  }, [host, save.title_id, save.emulator, tr, onBackedUp]);
 
   return (
     <li

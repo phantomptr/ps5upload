@@ -363,12 +363,13 @@ describe("where the packages go, and folders left behind", () => {
       { path: "/L/rar_a", bytes: 10 },
       { path: "/L/rar_b", bytes: 20 },
     ]);
-    await scanArchiveLeftovers(A, []);
+    await scanArchiveLeftovers(A, () => []);
     expect(archiveLeftoversFor(useArchiveInstallStore.getState(), A)?.items).toHaveLength(2);
     mod.removeConsoleFolder.mockImplementation(async (_h: string, p: string) => {
       if (p === "/L/rar_b") throw new Error("busy");
+      return true;
     });
-    await removeArchiveLeftovers(A, []);
+    await removeArchiveLeftovers(A, () => []);
     const left = archiveLeftoversFor(useArchiveInstallStore.getState(), A);
     expect(left?.items).toEqual([{ path: "/L/rar_b", bytes: 20 }]);
     expect(left?.error).toContain("/L/rar_b");
@@ -377,8 +378,35 @@ describe("where the packages go, and folders left behind", () => {
 
   it("never removes a folder that became in use after the scan", async () => {
     mod.findArchiveLeftovers.mockResolvedValue([{ path: "/L/rar_a", bytes: 10 }]);
-    await scanArchiveLeftovers(A, []);
-    await removeArchiveLeftovers(A, ["/L/rar_a/x.pkg"]);
+    await scanArchiveLeftovers(A, () => []);
+    await removeArchiveLeftovers(A, () => ["/L/rar_a/x.pkg"]);
     expect(mod.removeConsoleFolder).not.toHaveBeenCalled();
+  });
+
+  it("asks again before each try: a folder queued during the removal is kept", async () => {
+    mod.findArchiveLeftovers.mockResolvedValue([{ path: "/L/rar_a", bytes: 10 }]);
+    await scanArchiveLeftovers(A, () => []);
+    let queued: string[] = [];
+    mod.removeConsoleFolder.mockImplementation(
+      async (_h: string, p: string, _w: unknown, mayDelete: () => boolean) => {
+        // A first try failed and, meanwhile, an install of a file in it was queued.
+        queued = [`${p}/x.pkg`];
+        return mayDelete();
+      },
+    );
+    await removeArchiveLeftovers(A, () => queued);
+    const left = archiveLeftoversFor(useArchiveInstallStore.getState(), A);
+    expect(left?.items).toEqual([{ path: "/L/rar_a", bytes: 10 }]);
+    expect(left?.error).toBeNull();
+  });
+
+  it("starts no run while leftovers are being removed", async () => {
+    useArchiveInstallStore.setState({
+      byHost: { [A]: { ...blank(), packages: [{ path: "a.pkg", size: 5 }] as never } },
+      leftoversByHost: { [A]: { items: [], scanning: false, removing: true, error: null } },
+    });
+    await runArchiveInstall(A);
+    expect(mod.installRarPackages).not.toHaveBeenCalled();
+    expect(at(A)?.busy).toBe(false);
   });
 });

@@ -2,8 +2,9 @@
  *
  * Locking: vinput.c calls the backend with its own lock held; every function here then takes g_mu
  * (vinput's lock -> g_mu, never the other way). The relay thread takes only g_mu, and drops it for
- * the slow start (the loader send, the companion's Init). The companion socket is used only under
- * g_mu, one request at a time, each answer matched by its seq (a late answer is skipped). */
+ * the slow start (the loader send, the companion's Init) and for ending a silent companion (C.kill
+ * may wait for it to let go). The companion socket is used only under g_mu, one request at a time,
+ * each answer matched by its seq (a late answer is skipped). */
 #include "vinput_relay.h"
 
 #include <arpa/inet.h>
@@ -42,6 +43,7 @@ static int g_want_m, g_want_k; /* what the session has open (made again after a 
 static int g_m_open, g_k_open; /* what the companion has open */
 static uint8_t g_buttons, g_mods, g_keys[VINPUT_KEYS];
 static int g_fails;
+static int g_kill_pid; /* a silent companion to end: the relay thread does it, without g_mu */
 static long long g_retry_at, g_last_reply, g_last_hb, g_running_since, g_unavail_at, g_asked_at = -100000;
 static int g_thread_on, g_shutdown;
 static pthread_t g_thread;
@@ -173,12 +175,13 @@ static void lost_locked(int kill_it, const char *why) {
     long long now = now_ms();
     int wanted = g_want_m || g_want_k || now - g_asked_at < 5000;
     fprintf(stderr, "[vinput] companion pid %d %s\n", g_pid, why);
-    if (kill_it && g_pid > 0 && C.kill) C.kill(C.ctx, g_pid);
+    if (kill_it && g_pid > 0 && C.kill) g_kill_pid = g_pid;
     if (g_fd >= 0) close(g_fd);
     g_fd = -1;
     g_pid = 0;
     g_rhave = 0;
     g_m_open = g_k_open = 0;
+    if (g_kill_pid) wake_thread_locked();
     if (!wanted && !kill_it) {
         g_st = ST_IDLE; /* it went idle: started again when a session opens */
         return;
@@ -326,8 +329,21 @@ static void *relay_main(void *arg) {
     proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     pthread_mutex_lock(&g_mu);
     while (!g_shutdown) {
-        long long now = now_ms();
-        int wanted = g_want_m || g_want_k || now - g_asked_at < 5000;
+        long long now;
+        int wanted;
+        if (g_kill_pid) {
+            /* A silent companion: asked to let go, then killed (C.kill), with the lock dropped so
+             * sessions are answered meanwhile. The backoff to its restart runs from when it went
+             * silent, as before. */
+            int pid = g_kill_pid;
+            g_kill_pid = 0;
+            pthread_mutex_unlock(&g_mu);
+            C.kill(C.ctx, pid);
+            pthread_mutex_lock(&g_mu);
+            continue;
+        }
+        now = now_ms();
+        wanted = g_want_m || g_want_k || now - g_asked_at < 5000;
         if (g_st == ST_STARTING || (g_st == ST_STOPPED && wanted && now >= g_retry_at)) {
             started_t s;
             int rc;
@@ -580,13 +596,18 @@ int vinput_relay_pid(void) {
 }
 
 void vinput_relay_reset(void) {
-    int join;
+    int join, pid;
     pthread_mutex_lock(&g_mu);
     g_shutdown = 1;
     join = g_thread_on;
     pthread_cond_broadcast(&g_cv);
     pthread_mutex_unlock(&g_mu);
     if (join) pthread_join(g_thread, NULL);
+    pthread_mutex_lock(&g_mu);
+    pid = g_kill_pid; /* one the thread did not get to */
+    g_kill_pid = 0;
+    pthread_mutex_unlock(&g_mu);
+    if (pid > 0 && C.kill) C.kill(C.ctx, pid);
     pthread_mutex_lock(&g_mu);
     if (g_fd >= 0) close(g_fd);
     g_fd = -1;

@@ -96,4 +96,15 @@ describe("convertPrefs", () => {
     expect(second.parseMake("image")).toBe("image");
     for (const v of [null, "", "dir", "pkg"]) expect(second.parseMake(v)).toBe("pkg");
   });
+
+  it("shows a one-off make without remembering it", async () => {
+    const first = await import("./convertPrefs");
+    first.useConvertPrefs.getState().setMake("image");
+    first.useConvertPrefs.getState().showMake("folder");
+    expect(first.useConvertPrefs.getState().make).toBe("folder");
+    expect(stored.get("ps5upload.convert.make")).toBe("image");
+    vi.resetModules();
+    const second = await import("./convertPrefs");
+    expect(second.useConvertPrefs.getState().make).toBe("image");
+  });
 });

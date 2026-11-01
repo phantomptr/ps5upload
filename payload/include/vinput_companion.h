@@ -17,10 +17,12 @@ typedef struct {
     /* Before the port listens (after it is bound, so a second instance never gets here). NULL: none. */
     void (*dev_init)(void);
     /* About once a second; 1 when the devices were made again (a new foreground user): whatever
-     * was held is gone. NULL: none. */
+     * was held is gone, and each open device is opened again (a no-op when the backend has it);
+     * one it could not make is asked for again every tick until it is back. NULL: none. */
     int (*dev_tick)(void);
     void (*log)(const char *fmt, ...);
-    /* Tests: set to end the loop; set `hang` to stop answering (a stuck companion). */
+    /* Set to end the loop (the console's SIGTERM handler; tests); set `hang` to stop answering (a
+     * stuck companion, tests). */
     volatile int *stop;
     volatile int *hang;
 } vcomp_cfg_t;

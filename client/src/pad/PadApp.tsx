@@ -70,6 +70,7 @@ function PadTouchpad({ client, caps }: { client: PadClient; caps: KbmCapsMsg }) 
       button: (b: number, d: boolean) => sender.button(b, d),
       scroll: (dy: number, dx: number) => sender.scroll(dy, dx, 0),
       key: (code: string, d: boolean) => sender.key(code, d),
+      shiftHeld: () => sender.shiftHeld(),
     }),
     [sender],
   );

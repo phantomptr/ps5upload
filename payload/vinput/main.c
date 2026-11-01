@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <time.h>
@@ -31,6 +32,13 @@ static void vlog(const char *fmt, ...) {
     fclose(f);
 }
 
+/* SIGTERM (the helper ending a silent companion): the loop stops and lets go of everything. */
+static volatile int g_stop;
+static void on_term(int sig) {
+    (void)sig;
+    g_stop = 1;
+}
+
 static void dev_init(void) {
     vinput_dev_init(vlog, VWIRE_HANDLES_PATH);
 }
@@ -42,6 +50,13 @@ int main(void) {
     (void)syscall(SYS_thr_set_name, -1, VWIRE_NAME);
 #endif
     signal(SIGPIPE, SIG_IGN);
+    {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_handler = on_term;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGTERM, &sa, NULL); /* no SA_RESTART: poll wakes */
+    }
     /* elfldr hands its connection over as stdio: let it go. */
     fd = open("/dev/null", O_RDWR);
     if (fd >= 0) {
@@ -56,6 +71,7 @@ int main(void) {
     cfg.dev_init = dev_init;
     cfg.dev_tick = vinput_dev_tick;
     cfg.log = vlog;
+    cfg.stop = &g_stop;
     code = vcomp_run(&cfg);
     vlog("exit %d", code);
     return code;

@@ -146,6 +146,9 @@ describe("shortcutProblem (the conflict check)", () => {
     expect(shortcutProblem("cycle", s({ meta: true, code: "KeyQ" }), ctx)).toBe("app");
     expect(shortcutProblem("cycle", s({ shift: true, code: "Slash" }), ctx)).toBe("app");
     expect(shortcutProblem("release", s({ code: "F5" }), ctx)).toBe("app");
+    // Esc with any modifier stays reserved: Shift+Esc would never reach the shortcut in full screen.
+    expect(shortcutProblem("release", s({ shift: true, code: "Escape" }), ctx)).toBe("app");
+    expect(shortcutProblem("cycle", s({ ctrl: true, alt: true, code: "Escape" }), ctx)).toBe("app");
     expect(shortcutProblem("release", s({ code: "F2" }), { ...ctx, keymap: { F2: "options" } })).toBe("keymap");
     expect(shortcutProblem("release", DEFAULT_SHORTCUTS.cycle, ctx)).toBe("same");
   });

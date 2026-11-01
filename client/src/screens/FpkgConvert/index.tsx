@@ -141,13 +141,14 @@ export default function WorkshopScreen() {
   // back to the screen mid-image must not show it as a package build.
   const make = useConvertPrefs((s) => s.make);
   const setMake = useConvertPrefs((s) => s.setMake);
+  const showMake = useConvertPrefs((s) => s.showMake);
   const imageFormat = useConvertPrefs((s) => s.imageFormat);
   const imageCompress = useConvertPrefs((s) => s.imageCompress);
   const setImageChoice = useConvertPrefs((s) => s.setImageChoice);
   useEffect(() => {
     if (pipeline.phase === "running") {
       const building = makesFolder(pipeline.mode) ? "folder" : makesImage(pipeline.mode) ? "image" : "pkg";
-      if (building !== make) setMake(building);
+      if (building !== make) showMake(building);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipeline.phase]);
@@ -573,7 +574,8 @@ export default function WorkshopScreen() {
       dest = outFor(src).outputDir;
     }
     setError(null);
-    setMake("folder");
+    // This one run, not the user's remembered choice of what to make.
+    showMake("folder");
     setThen("keep");
     if (inside) setInside(false);
     void buildFolder(src, dest, true);

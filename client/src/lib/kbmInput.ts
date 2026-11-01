@@ -311,6 +311,11 @@ export class KbmSender {
     return this.st;
   }
 
+  /** Either Shift held by this sender (not a phone's). */
+  shiftHeld(): boolean {
+    return (this.st.mods & (MODIFIER_BITS.ShiftLeft | MODIFIER_BITS.ShiftRight)) !== 0;
+  }
+
   /** Anything held. */
   get holding(): boolean {
     return this.st.buttons !== 0 || this.st.mods !== 0 || this.st.keys.length > 0;

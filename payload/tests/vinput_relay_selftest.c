@@ -1,11 +1,12 @@
 /* Host-side tests for the keyboard & mouse companion and the helper's relay to it:
  *   - the companion (vinput_companion.c) over a raw socket: the token, one helper at a time, a
  *     second instance, the heartbeat timeout letting go and removing the devices, the helper leaving
- *     ending it, idle exit;
+ *     ending it, idle exit, a device the backend could not make again asked for until it is back,
+ *     the pid file written while it runs and removed only while it is its own;
  *   - the relay (vinput_relay.c) under vinput.c, against the real companion loop on a thread with a
  *     fake device ("launch" starts that thread, "kill" ends it): a session starts it ("starting"),
- *     input flows, a companion that dies or goes silent is killed and started again with the
- *     session's devices made again, three failed starts make it "unavailable", no loader says so.
+ *     input flows, a companion that dies or goes silent is killed (without the relay's lock) and
+ *     started again with the session's devices made again, three failed starts make it "unavailable", no loader says so.
  * Build: see the root Makefile test-root (also under ASan and TSan). */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -51,6 +52,8 @@ static void nap(int ms) {
 static pthread_mutex_t f_mu = PTHREAD_MUTEX_INITIALIZER;
 static char f_log[16384];
 static int f_can = 1;
+static int f_fail_open; /* opens fail (AddDevice for a new user failing) */
+static int f_remade;    /* the next tick says the devices were made again */
 
 static void flog(const char *s) {
     pthread_mutex_lock(&f_mu);
@@ -75,7 +78,7 @@ static void d_caps(int *m, int *k) {
 }
 static int d_mopen(void) {
     flog("mopen");
-    return VINPUT_OK;
+    return __atomic_load_n(&f_fail_open, __ATOMIC_ACQUIRE) ? VINPUT_E_FAILED : VINPUT_OK;
 }
 static void d_mclose(void) {
     flog("mclose");
@@ -88,7 +91,10 @@ static int d_msend(uint8_t b, int dx, int dy, int w, int hw) {
 }
 static int d_kopen(void) {
     flog("kopen");
-    return VINPUT_OK;
+    return __atomic_load_n(&f_fail_open, __ATOMIC_ACQUIRE) ? VINPUT_E_FAILED : VINPUT_OK;
+}
+static int d_tick(void) {
+    return __atomic_exchange_n(&f_remade, 0, __ATOMIC_ACQ_REL);
 }
 static void d_kclose(void) {
     flog("kclose");
@@ -120,6 +126,7 @@ static pthread_mutex_t l_mu = PTHREAD_MUTEX_INITIALIZER;
 static comp_t *g_comp;
 static int l_mode; /* 0 start a companion, 1 no loader, 2 sent but nothing starts */
 static int l_launches, l_kills;
+static const char *g_comp_pid = ""; /* the pid file of the next comp_start */
 
 #define DONE(c) __atomic_load_n(&(c)->done, __ATOMIC_ACQUIRE)
 
@@ -143,7 +150,8 @@ static comp_t *comp_start(long long hb_ms, long long idle_ms) {
     comp_t *c = calloc(1, sizeof *c);
     c->cfg.port = g_port;
     c->cfg.token_path = g_token;
-    c->cfg.pid_path = "";
+    c->cfg.pid_path = g_comp_pid;
+    c->cfg.dev_tick = d_tick;
     c->cfg.hb_timeout_ms = hb_ms;
     c->cfg.idle_exit_ms = idle_ms;
     c->cfg.auth_wait_ms = 3000;
@@ -229,7 +237,19 @@ static void test_wire(void) {
     CHECK(vwire_token_from_hex(hex, strlen(hex), back) == -1);
 }
 
+static long pid_in(const char *path) {
+    char s[24] = {0};
+    FILE *f = fopen(path, "r");
+    size_t n;
+    if (!f) return 0;
+    n = fread(s, 1, sizeof s - 1, f);
+    fclose(f);
+    s[n] = 0;
+    return strtol(s, NULL, 10);
+}
+
 static void test_companion(void) {
+    char pidf[256];
     uint8_t tok[VWIRE_TOKEN_LEN], hello[2 + VWIRE_TOKEN_LEN], out[VWIRE_MAX_PAYLOAD], rep[VINPUT_REPORT_LEN] = {0};
     comp_t *c, *c2;
     int fd, fd2;
@@ -308,15 +328,86 @@ static void test_companion(void) {
     CHECK(fhas("m0,0,0,0,0;mclose") && fhas("kclose"));
     comp_end(c);
 
-    /* idle: no device for idle_exit_ms ends it */
+    /* idle: no device for idle_exit_ms ends it; its own pid file is removed */
+    snprintf(pidf, sizeof pidf, "%s/vinput.pid", g_dir);
     write_token(tok);
+    g_comp_pid = pidf;
     c2 = comp_start(300, 200);
+    g_comp_pid = "";
     fd = dial();
     CHECK(req(fd, VWIRE_HELLO, hello, sizeof hello, out) == VWIRE_RC_OK);
+    CHECK(pid_in(pidf) == (long)getpid());
     for (int i = 0; i < 100 && !DONE(c2); i++) nap(10);
     CHECK(DONE(c2));
+    CHECK(access(pidf, F_OK) != 0);
     close(fd);
     comp_end(c2);
+}
+
+static int caps_open(int fd, int m, int k) {
+    uint8_t out[VWIRE_MAX_PAYLOAD];
+    return req(fd, VWIRE_CAPS, NULL, 0, out) == VWIRE_RC_OK && out[2] == m && out[3] == k;
+}
+
+/* A new foreground user and AddDevice failing: the devices are not there, input says so, and they
+ * are asked for again every tick until they are back. A pid file that is no longer its own stays. */
+static void test_companion_remake(void) {
+    uint8_t tok[VWIRE_TOKEN_LEN], hello[2 + VWIRE_TOKEN_LEN], out[VWIRE_MAX_PAYLOAD], rep[VINPUT_REPORT_LEN] = {0};
+    char pidf[256];
+    comp_t *c;
+    int fd, ok;
+    for (int i = 0; i < VWIRE_TOKEN_LEN; i++) tok[i] = (uint8_t)(0x30 + i);
+    vwire_put16(hello, VWIRE_VERSION);
+    memcpy(hello + 2, tok, VWIRE_TOKEN_LEN);
+    snprintf(pidf, sizeof pidf, "%s/vinput.pid", g_dir);
+    write_token(tok);
+    g_comp_pid = pidf;
+    c = comp_start(5000, 100000);
+    g_comp_pid = "";
+    fd = dial();
+    CHECK(req(fd, VWIRE_HELLO, hello, sizeof hello, out) == VWIRE_RC_OK);
+    CHECK(req(fd, VWIRE_OPEN, "\x01\x01", 2, out) == VWIRE_RC_OK && out[0] == 1 && out[1] == 1);
+    __atomic_store_n(&f_fail_open, 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&f_remade, 1, __ATOMIC_RELEASE);
+    ok = 0;
+    for (int i = 0; i < 30 && !ok; i++) {
+        nap(100);
+        ok = caps_open(fd, 0, 0);
+    }
+    CHECK(ok);
+    rep[0] = 1;
+    rep[2] = 5;
+    CHECK(req(fd, VWIRE_REPORT, rep, sizeof rep, NULL) == VWIRE_RC_FAILED);
+    /* an OPEN asks again (and still fails) */
+    fclear();
+    CHECK(req(fd, VWIRE_OPEN, "\x01\x01", 2, out) == VWIRE_RC_FAILED && out[0] == 0 && out[1] == 0);
+    CHECK(fhas("mopen") && fhas("kopen"));
+    /* AddDevice works again: the next tick makes them, input flows */
+    fclear();
+    __atomic_store_n(&f_fail_open, 0, __ATOMIC_RELEASE);
+    ok = 0;
+    for (int i = 0; i < 30 && !ok; i++) {
+        nap(100);
+        ok = caps_open(fd, 1, 1);
+    }
+    CHECK(ok);
+    CHECK(fhas("mopen") && fhas("kopen"));
+    CHECK(req(fd, VWIRE_REPORT, rep, sizeof rep, NULL) == VWIRE_RC_OK);
+    CHECK(fhas("m1,5,0,0,0"));
+    /* another companion's pid in the file: left alone at exit */
+    {
+        FILE *f = fopen(pidf, "w");
+        if (f) {
+            fprintf(f, "%d\n", 1);
+            fclose(f);
+        }
+    }
+    close(fd);
+    for (int i = 0; i < 100 && !DONE(c); i++) nap(10);
+    CHECK(DONE(c));
+    CHECK(pid_in(pidf) == 1);
+    unlink(pidf);
+    comp_end(c);
 }
 
 /* ---- the relay ---- */
@@ -336,9 +427,28 @@ static int fake_launch(void *ctx) {
     return l_mode == 1 ? VRELAY_NO_LOADER : 0;
 }
 
+static void *relay_lock_probe(void *arg) {
+    (void)vinput_relay_pid(); /* takes the relay's lock */
+    __atomic_store_n((int *)arg, 1, __ATOMIC_RELEASE);
+    return NULL;
+}
+
 static void fake_kill(void *ctx, int pid) {
+    static int got;
+    pthread_t t;
     (void)ctx;
     CHECK(pid == (int)getpid());
+    /* Called without the relay's lock: the console's kill waits for the companion to let go, and
+     * sessions must be answered meanwhile. */
+    __atomic_store_n(&got, 0, __ATOMIC_RELEASE);
+    if (pthread_create(&t, NULL, relay_lock_probe, &got) == 0) {
+        for (int i = 0; i < 50 && !__atomic_load_n(&got, __ATOMIC_ACQUIRE); i++) nap(10);
+        CHECK(__atomic_load_n(&got, __ATOMIC_ACQUIRE));
+        if (__atomic_load_n(&got, __ATOMIC_ACQUIRE))
+            pthread_join(t, NULL);
+        else
+            pthread_detach(t);
+    }
     pthread_mutex_lock(&l_mu);
     l_kills++;
     comp_end(g_comp);
@@ -547,6 +657,7 @@ int main(void) {
 
     test_wire();
     test_companion();
+    test_companion_remake();
     test_relay();
     test_relay_no_loader();
     test_relay_gives_up();

@@ -10666,29 +10666,6 @@ async fn bug_report_bundle_handler(Json(req): Json<BugBundleReq>) -> axum::respo
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
-/// Spawn the parent-watch thread when running under the desktop shell.
-///
-/// **Why:** the engine binds 19113. If the parent (Tauri shell) dies
-/// abruptly — taskkill /F, segfault, panic, OOM, kernel kill, power
-/// loss recovery — `kill_on_drop(true)` on the parent side never
-/// fires (no `Drop` runs on a crashed process), and the engine is
-/// orphaned holding the port. Next launch can't bind 19113 and the
-/// user is stuck until they manually kill the orphan.
-///
-/// **How:** the parent spawns us with `Stdio::piped()` for stdin and
-/// holds the write end; the OS guarantees that handle is closed when
-/// the parent process dies, however it dies. We park a thread on a
-/// blocking `stdin().read()`. When read returns Ok(0) (EOF), the
-/// parent is gone — exit immediately. No FFI, no per-OS code, no env
-/// crates needed. Works the same on Linux, macOS, Windows.
-///
-/// **Gating:** opt-in via `PS5UPLOAD_PARENT_WATCH=1` so a developer
-/// running the engine standalone (`cargo run -p ps5upload-engine`)
-/// doesn't get auto-killed when their stdin closes (e.g. piping a
-/// file in, or running headless under nohup).
-/// Cooperative shutdown signal. Set by either the parent-watcher
-/// thread (stdin EOF when parent died) or a Unix signal handler
-/// (SIGTERM / SIGINT — `kill` from systemd, ^C from a dev terminal).
 /// Every connection the engine accepts sends at once (TCP_NODELAY). Without it a small
 /// write waits until the peer acknowledges the last one, and a Linux peer that is also
 /// sending (the Remote Play page's pad input) holds its acks up to 40 ms: Remote Play frames
@@ -10706,6 +10683,9 @@ fn no_delay(
     l.tap_io(set as fn(&mut tokio::net::TcpStream))
 }
 
+/// Cooperative shutdown signal. Set by either the parent-watcher
+/// thread (stdin EOF when parent died) or a Unix signal handler
+/// (SIGTERM / SIGINT — `kill` from systemd, ^C from a dev terminal).
 /// `axum::serve(...).with_graceful_shutdown` awaits this future,
 /// drains in-flight requests up to the cap, then returns. Replaces
 /// a `process::exit(0)` torn-down hard exit that left in-flight
@@ -10777,6 +10757,26 @@ fn stderr_quiet(msg: &str) {
     let _ = writeln!(std::io::stderr(), "{msg}");
 }
 
+/// Spawn the parent-watch thread when running under the desktop shell.
+///
+/// **Why:** the engine binds 19113. If the parent (Tauri shell) dies
+/// abruptly — taskkill /F, segfault, panic, OOM, kernel kill, power
+/// loss recovery — `kill_on_drop(true)` on the parent side never
+/// fires (no `Drop` runs on a crashed process), and the engine is
+/// orphaned holding the port. Next launch can't bind 19113 and the
+/// user is stuck until they manually kill the orphan.
+///
+/// **How:** the parent spawns us with `Stdio::piped()` for stdin and
+/// holds the write end; the OS guarantees that handle is closed when
+/// the parent process dies, however it dies. We park a thread on a
+/// blocking `stdin().read()`. When read returns Ok(0) (EOF), the
+/// parent is gone — exit immediately. No FFI, no per-OS code, no env
+/// crates needed. Works the same on Linux, macOS, Windows.
+///
+/// **Gating:** opt-in via `PS5UPLOAD_PARENT_WATCH=1` so a developer
+/// running the engine standalone (`cargo run -p ps5upload-engine`)
+/// doesn't get auto-killed when their stdin closes (e.g. piping a
+/// file in, or running headless under nohup).
 fn spawn_parent_watcher() {
     if std::env::var("PS5UPLOAD_PARENT_WATCH").as_deref() != Ok("1") {
         return;

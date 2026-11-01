@@ -203,6 +203,8 @@ function phaseDetail(p: RarPhase): string {
 export async function runArchiveInstall(host: string): Promise<void> {
   const cur = archiveInstallFor(useArchiveInstallStore.getState(), host);
   if (!cur || cur.busy) return;
+  // Leftover folders are being deleted: one of them may be this run's.
+  if (archiveLeftoversFor(useArchiveInstallStore.getState(), host)?.removing) return;
   put(host, {
     busy: true,
     result: null,
@@ -312,16 +314,17 @@ export function leftoverInUse(
   return queuedPaths.some((p) => p === path || p.startsWith(`${path}/`));
 }
 
-/** Looks for unpacked folders earlier runs left on this console. */
+/** Looks for unpacked folders earlier runs left on this console. `queuedPaths` gives the
+ *  files queued installs read, asked again for each folder. */
 export async function scanArchiveLeftovers(
   host: string,
-  queuedPaths: readonly string[],
+  queuedPaths: () => readonly string[],
 ): Promise<void> {
   if (archiveLeftoversFor(useArchiveInstallStore.getState(), host)?.scanning) return;
   putLeftovers(host, { scanning: true });
   try {
     const items = await findArchiveLeftovers(host, (p) =>
-      leftoverInUse(p, host, queuedPaths),
+      leftoverInUse(p, host, queuedPaths()),
     );
     putLeftovers(host, { items, scanning: false });
   } catch {
@@ -329,10 +332,11 @@ export async function scanArchiveLeftovers(
   }
 }
 
-/** Deletes the leftover folders found by the last scan (those still not in use). */
+/** Deletes the leftover folders found by the last scan (those still not in use, checked again
+ *  before each try: `queuedPaths` is read each time). */
 export async function removeArchiveLeftovers(
   host: string,
-  queuedPaths: readonly string[],
+  queuedPaths: () => readonly string[],
 ): Promise<void> {
   const cur = archiveLeftoversFor(useArchiveInstallStore.getState(), host);
   if (!cur || cur.removing || cur.items.length === 0) return;
@@ -340,12 +344,14 @@ export async function removeArchiveLeftovers(
   const kept: ArchiveLeftover[] = [];
   let error: string | null = null;
   for (const it of cur.items) {
-    if (leftoverInUse(it.path, host, queuedPaths)) {
+    const inUse = () => leftoverInUse(it.path, host, queuedPaths());
+    if (inUse()) {
       kept.push(it);
       continue;
     }
     try {
-      await removeConsoleFolder(host, it.path);
+      if (!(await removeConsoleFolder(host, it.path, undefined, () => !inUse())))
+        kept.push(it);
     } catch (e) {
       kept.push(it);
       error = `${it.path}: ${e instanceof Error ? e.message : String(e)}`;

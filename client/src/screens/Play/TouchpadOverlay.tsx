@@ -13,6 +13,8 @@ import { namedKey, pressKey, textDiff, typeText } from "../../lib/charToHid";
 /** Where typed keys go: the PS5's keyboard (KbmSender.key or the phone link's sender). */
 export interface KeySink {
   key: (code: string, down: boolean) => void;
+  /** Shift already held by the sender (typing then leaves Shift alone). */
+  shiftHeld?: () => boolean;
 }
 
 export type TouchpadInput = TouchpadSink & KeySink;
