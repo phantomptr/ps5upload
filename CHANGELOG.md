@@ -4,6 +4,15 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **Type into the PS5's on-screen keyboard during Remote Play (experimental).** When a game or
+  the PS5 opens its keyboard, a text box shows over the stream (in full screen too) with the
+  console's text in it, ready to type, and a phone opens its own keyboard. What you type reaches
+  the PS5 as you go; Enter or Done keeps it, Esc or Cancel drops it, and the box closes when the
+  PS5 closes its keyboard. The game gets no keys or controller presses while you type. Needs the
+  engine from this version; not yet tried on a console.
+
 ## 10.3.0
 
 - **Remote Play's Settings open over the stream.** Every Settings button (on the picture's bar,
