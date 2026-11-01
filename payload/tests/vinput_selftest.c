@@ -232,6 +232,17 @@ static void test_takeover_and_devices(void) {
     snprintf(body, sizeof body, "{\"id\":2,\"r\":\"%s\"}", a);
     f_log[0] = 0;
     CHECK(report(body, 50) > 0 && strcmp(f_log, "k0,4,0;") == 0);
+    /* the same owner opening again (its queue, a key-up among it, was lost on the way) holds
+     * nothing afterwards, and keeps its devices */
+    rep_hex(a, 1, 0, 0, 0, 0, 0, 0x04, 0);
+    snprintf(body, sizeof body, "{\"id\":2,\"r\":\"%s\"}", a);
+    CHECK(report(body, 60) > 0);
+    f_log[0] = 0;
+    CHECK(session("{\"op\":\"open\",\"id\":2,\"mouse\":false,\"keyboard\":true}", 70) > 0 && HAS("\"ok\":true"));
+    CHECK(strcmp(f_log, "k0,0,0;") == 0);
+    f_log[0] = 0;
+    CHECK(session("{\"op\":\"open\",\"id\":2,\"mouse\":false,\"keyboard\":true}", 80) > 0);
+    CHECK(strcmp(f_log, "") == 0); /* nothing held: nothing sent */
     /* a console that has only a mouse: asking for both opens the mouse and says the keyboard is not there */
     reset();
     f_can_keyboard = 0;

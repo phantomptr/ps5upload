@@ -89,6 +89,19 @@ static void keyboard_release_locked(void) {
     memset(g_keys, 0, sizeof g_keys);
 }
 
+/* Lets go of every held button and key, keeping the devices. */
+static void let_go_locked(void) {
+    if (g_mouse && g_buttons) {
+        (void)g_be->mouse_send(0, 0, 0, 0, 0);
+        g_buttons = 0;
+    }
+    if (g_keyboard && (g_mods || memcmp(g_keys, NO_KEYS, sizeof g_keys) != 0)) {
+        (void)g_be->keyboard_send(0, NO_KEYS);
+        g_mods = 0;
+        memset(g_keys, 0, sizeof g_keys);
+    }
+}
+
 static void release_locked(const char *why) {
     if (!g_owner && !g_mouse && !g_keyboard) return;
     mouse_release_locked();
@@ -272,8 +285,14 @@ int vinput_session_json(const char *body, size_t n, long long now_ms, char *out,
             rc = session_answer(out, cap, 0, "bad_request");
             goto done;
         }
-        /* Another owner: its input is let go before this one gets the devices. */
-        if (g_owner && g_owner != id) release_locked("takeover");
+        /* Another owner: its input is let go before this one gets the devices. The same owner
+         * opening again starts from nothing held as well: it opens again after an error on its
+         * side dropped what it had queued, a key-up among it, and it only sends a report when
+         * something changes, so a held key would otherwise stay down. */
+        if (g_owner && g_owner != id)
+            release_locked("takeover");
+        else if (g_owner)
+            let_go_locked();
         g_be->caps(&can_mouse, &can_keyboard);
         em = device_locked(want_mouse, can_mouse, &g_mouse, g_be->mouse_open, mouse_release_locked);
         ek = device_locked(want_keyboard, can_keyboard, &g_keyboard, g_be->keyboard_open, keyboard_release_locked);
