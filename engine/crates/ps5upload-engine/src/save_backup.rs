@@ -798,6 +798,9 @@ pub(crate) fn restore_zip(
         if !emulator {
             restore_prepare(&tmp.join(title_id)).map_err(|e| format!("prepare: {e:#}"))?;
         }
+        if let Some(place) = crate::ps2_saves::place_of(save_path).filter(|p| p.loose) {
+            only_the_saves_own(&tmp.join(title_id), &place)?;
+        }
         put_in_place(
             host,
             title_id,
@@ -810,6 +813,29 @@ pub(crate) fn restore_zip(
     })();
     let _ = cleanup_temp_dir(&tmp_s);
     result
+}
+
+/// A save loose in a folder (a PlayStation 2 emulator's, beside its BIOS and games) goes back
+/// into that folder as it is: a backup holding anything that is not part of that save (a `bios`
+/// folder, a card among the saved states) would overwrite the emulator's own files, so it is
+/// refused before anything on the console changes.
+fn only_the_saves_own(src: &Path, place: &crate::ps2_saves::Place) -> Result<(), String> {
+    let rd = std::fs::read_dir(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let mut foreign: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| !place.holds(name))
+        .collect();
+    if foreign.is_empty() {
+        return Ok(());
+    }
+    foreign.sort();
+    Err(format!(
+        "this backup holds more than {}'s save ({}): not put into {}",
+        place.emulator.name,
+        foreign.join(", "),
+        place.folder
+    ))
 }
 
 /// The most entries one `list-dir` page carries (the payload's own ceiling).
@@ -1805,6 +1831,24 @@ mod tests {
                 Some((user as u32, "1970-01-01_000000".to_string()))
             );
         }
+    }
+
+    #[test]
+    fn a_loose_save_restores_only_its_own_entries() {
+        let dir = std::env::temp_dir().join(format!("ps5u-ps2-loose-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Mcd002.ps2")).unwrap();
+        std::fs::write(dir.join("Mcd001.ps2"), b"card").unwrap();
+        let cards = crate::ps2_saves::place_of("/data/PCSX2/*.ps2").unwrap();
+        let states = crate::ps2_saves::place_of("/data/PCSX2/*.p2s").unwrap();
+        // Cards (a file card and a folder card) into the cards' place: fine.
+        assert!(only_the_saves_own(&dir, &cards).is_ok());
+        // Into the states' place, or with anything of the emulator's own beside them: refused.
+        assert!(only_the_saves_own(&dir, &states).is_err());
+        std::fs::create_dir_all(dir.join("bios")).unwrap();
+        let err = only_the_saves_own(&dir, &cards).unwrap_err();
+        assert!(err.contains("bios"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -260,6 +260,73 @@ fn measure_loose(
     Ok((size, newest, files))
 }
 
+// ── HTTP ────────────────────────────────────────────────────────────────
+
+/// One of the emulators' saves, as the app lists it.
+#[derive(serde::Serialize)]
+pub struct Ps2Save {
+    #[serde(flatten)]
+    pub save: SaveEntry,
+    /// The emulator's name (Crux2, PS5SX2).
+    pub emulator: &'static str,
+    /// The folder the save's files are in (a loose save's `path` names only some of them).
+    pub folder: String,
+    /// The emulator runs now (its saves cannot be restored meanwhile); None when the console did
+    /// not say.
+    pub running: Option<bool>,
+}
+
+/// `GET /api/save-backup/ps2?addr=` — the PlayStation 2 emulators' cards and saved states on that
+/// console, each with whether its emulator runs now: `{saves}`. None when neither is installed or
+/// has saved anything.
+pub async fn get_ps2(
+    axum::extract::Query(q): axum::extract::Query<crate::emulator_saves::SwitchQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let host = q.addr.trim().to_string();
+    if host.is_empty() {
+        return crate::save_backup::json_error(
+            axum::http::StatusCode::BAD_REQUEST,
+            "addr is required",
+        );
+    }
+    let r = tokio::task::spawn_blocking(move || {
+        let saves = list(&host);
+        // Asked once per emulator, and only when it has something to restore.
+        let mut running: Vec<(String, Option<bool>)> = Vec::new();
+        saves
+            .into_iter()
+            .map(|save| {
+                let run = match running.iter().find(|(a, _)| *a == save.title_id) {
+                    Some((_, r)) => *r,
+                    None => {
+                        let r = crate::save_backup::title_running(&host, &save.title_id).ok();
+                        running.push((save.title_id.clone(), r));
+                        r
+                    }
+                };
+                let place = place_of(&save.path);
+                Ps2Save {
+                    emulator: place.as_ref().map_or("", |p| p.emulator.name),
+                    folder: place
+                        .as_ref()
+                        .map_or_else(|| save.path.clone(), |p| p.folder.to_string()),
+                    running: run,
+                    save,
+                }
+            })
+            .collect::<Vec<_>>()
+    })
+    .await;
+    match r {
+        Ok(saves) => axum::Json(serde_json::json!({ "saves": saves })).into_response(),
+        Err(e) => crate::save_backup::json_error(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
