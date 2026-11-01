@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 10.3.0
 
 - **Remote Play's Settings open over the stream.** Every Settings button (on the picture's bar,
   beside Start, in the menu) opens the same panel: at the right edge on a computer or tablet, a
