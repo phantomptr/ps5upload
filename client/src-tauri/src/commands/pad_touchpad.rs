@@ -315,24 +315,73 @@ mod reader {
         }
     }
 
+    /// One thread owns hidapi for the life of the app and does every device scan and open.
+    /// On macOS hidapi's HID manager is tied to the run loop of the thread that created it: made
+    /// on a reader thread (which ends with each stream) or on a command thread, the next scan
+    /// touched a freed run loop and the app crashed (EXC_BREAKPOINT in
+    /// IOHIDDeviceScheduleWithRunLoop, 10.2.0 on a Mac with a DualSense attached).
+    mod host {
+        use std::sync::mpsc;
+        use std::sync::{Mutex, OnceLock};
+
+        type Job = Box<dyn FnOnce(Option<&mut hidapi::HidApi>) + Send>;
+
+        fn sender() -> Option<&'static Mutex<mpsc::Sender<Job>>> {
+            static TX: OnceLock<Option<Mutex<mpsc::Sender<Job>>>> = OnceLock::new();
+            TX.get_or_init(|| {
+                let (tx, rx) = mpsc::channel::<Job>();
+                std::thread::Builder::new()
+                    .name("hid-host".into())
+                    .spawn(move || {
+                        let mut api = match hidapi::HidApi::new() {
+                            Ok(a) => Some(a),
+                            Err(e) => {
+                                eprintln!("[pad-touchpad] no HID access: {e}");
+                                None
+                            }
+                        };
+                        // Never returns while the app runs: its run loop is the HID manager's.
+                        for job in rx {
+                            job(api.as_mut());
+                        }
+                    })
+                    .ok()
+                    .map(|_| Mutex::new(tx))
+            })
+            .as_ref()
+        }
+
+        /// Run `f` on the HID thread and wait for its answer; None without HID access.
+        pub fn with_api<R: Send + 'static>(
+            f: impl FnOnce(&mut hidapi::HidApi) -> R + Send + 'static,
+        ) -> Option<R> {
+            let (tx, rx) = mpsc::sync_channel(1);
+            let job: Job = Box::new(move |api| {
+                let _ = tx.send(api.map(f));
+            });
+            sender()?.lock().ok()?.send(job).ok()?;
+            rx.recv().ok().flatten()
+        }
+    }
+
     /// Is a DualSense attached, and on USB? A quick look, without opening it.
     pub fn find() -> (bool, bool) {
-        let Ok(mut api) = hidapi::HidApi::new() else {
-            return (false, false);
-        };
-        let _ = api.reset_devices();
-        let _ = api.add_devices(SONY_VID, 0);
-        let mut found = (false, false);
-        for d in api
-            .device_list()
-            .filter(|d| DUALSENSE_PIDS.contains(&d.product_id()))
-        {
-            found.0 = true;
-            if matches!(d.bus_type(), hidapi::BusType::Usb) {
-                found.1 = true;
+        host::with_api(|api| {
+            let _ = api.reset_devices();
+            let _ = api.add_devices(SONY_VID, 0);
+            let mut found = (false, false);
+            for d in api
+                .device_list()
+                .filter(|d| DUALSENSE_PIDS.contains(&d.product_id()))
+            {
+                found.0 = true;
+                if matches!(d.bus_type(), hidapi::BusType::Usb) {
+                    found.1 = true;
+                }
             }
-        }
-        found
+            found
+        })
+        .unwrap_or((false, false))
     }
 
     /// Sleep `d` in short steps; false once stopped.
@@ -348,32 +397,33 @@ mod reader {
     }
 
     fn run(app: AppHandle, stop: Arc<AtomicBool>) {
-        let mut api = match hidapi::HidApi::new() {
-            Ok(a) => a,
-            Err(e) => {
-                eprintln!("[pad-touchpad] no HID access: {e}");
-                return;
-            }
-        };
         let mut refused: Option<std::ffi::CString> = None;
         while !stop.load(Ordering::Relaxed) {
-            let _ = api.reset_devices();
-            let _ = api.add_devices(SONY_VID, 0);
-            // The game pad collection (a platform that does not say which is which: any).
-            let found = api
-                .device_list()
-                .find(|d| {
-                    DUALSENSE_PIDS.contains(&d.product_id())
-                        && (d.usage_page() == 0 || (d.usage_page() == 1 && d.usage() == 5))
-                })
-                .map(|d| d.path().to_owned());
-            let Some(path) = found else {
+            // Scan and open on the HID thread (see `host`); this thread only reads and writes.
+            let Some(opened) = host::with_api(|api| {
+                let _ = api.reset_devices();
+                let _ = api.add_devices(SONY_VID, 0);
+                // The game pad collection (a platform that does not say which is which: any).
+                let path = api
+                    .device_list()
+                    .find(|d| {
+                        DUALSENSE_PIDS.contains(&d.product_id())
+                            && (d.usage_page() == 0 || (d.usage_page() == 1 && d.usage() == 5))
+                    })
+                    .map(|d| d.path().to_owned())?;
+                let dev = api.open_path(&path).map_err(|e| e.to_string());
+                Some((path, dev))
+            }) else {
+                // No HID access at all on this machine.
+                return;
+            };
+            let Some((path, dev)) = opened else {
                 if !wait(&stop, Duration::from_secs(1)) {
                     break;
                 }
                 continue;
             };
-            let dev = match api.open_path(&path) {
+            let dev = match dev {
                 Ok(d) => d,
                 Err(e) => {
                     // Linux without a udev rule for it, say: tell the log once per device.
