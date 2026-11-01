@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { FileArchive, Square } from "lucide-react";
 
 import { Button, Spinner } from "../../components";
@@ -69,19 +69,18 @@ export function ArchivePackagesCard({ host }: { host: string }) {
   const [linksText, setLinksText] = useState("");
   const links = parseArchiveLinks(linksText);
   const leftovers = useArchiveInstallStore((s) => archiveLeftoversFor(s, host));
-  const queueItems = useUploadQueueStore((s) => s.items);
-  const queuedPaths = useMemo(
-    () => queuedInstallPaths(queueItems, host),
-    [queueItems, host],
-  );
-  const queuedRef = useRef(queuedPaths);
-  useEffect(() => {
-    queuedRef.current = queuedPaths;
-  }, [queuedPaths]);
+  // Read when asked (not a snapshot): a removal checks each folder again before each try.
+  const queuedPaths = () =>
+    queuedInstallPaths(useUploadQueueStore.getState().items, host);
+  // While leftovers are being deleted, nothing may start that could use one of them.
+  const removing = leftovers?.removing ?? false;
   const { confirm, dialog: confirmDialog } = useConfirm();
   // Look for folders earlier runs left behind: when the card opens, and after each run.
   useEffect(() => {
-    if (!busy) void scanArchiveLeftovers(host, queuedRef.current);
+    if (!busy)
+      void scanArchiveLeftovers(host, () =>
+        queuedInstallPaths(useUploadQueueStore.getState().items, host),
+      );
   }, [host, busy]);
   const leftoverBytes = (leftovers?.items ?? []).reduce((n, l) => n + l.bytes, 0);
   const noRoom = st?.target?.space.kind === "no_room";
@@ -102,7 +101,7 @@ export function ArchivePackagesCard({ host }: { host: string }) {
       confirmLabel: tr("arcpkg.leftovers.remove", undefined, "Remove"),
       destructive: true,
     });
-    if (ok) await removeArchiveLeftovers(host, queuedRef.current);
+    if (ok) await removeArchiveLeftovers(host, queuedPaths);
   }
 
   async function choose() {
@@ -188,7 +187,7 @@ export function ArchivePackagesCard({ host }: { host: string }) {
           variant="secondary"
           size="sm"
           onClick={choose}
-          disabled={busy || !!dl}
+          disabled={busy || !!dl || removing}
         >
           {tr("arcpkg.choose", undefined, "Choose archive…")}
         </Button>
@@ -231,7 +230,7 @@ export function ArchivePackagesCard({ host }: { host: string }) {
           <textarea
             value={linksText}
             onChange={(e) => setLinksText(e.currentTarget.value)}
-            disabled={busy || !!dl}
+            disabled={busy || !!dl || removing}
             rows={3}
             placeholder={LINKS_PLACEHOLDER}
             className="input w-full! font-mono text-xs"
@@ -251,7 +250,7 @@ export function ArchivePackagesCard({ host }: { host: string }) {
               <Button
                 variant="secondary"
                 size="sm"
-                disabled={busy || links.length === 0}
+                disabled={busy || removing || links.length === 0}
                 onClick={() =>
                   void downloadArchiveParts(host, links, insecure, linkDeps)
                 }
@@ -338,7 +337,7 @@ export function ArchivePackagesCard({ host }: { host: string }) {
             variant="primary"
             size="sm"
             onClick={() => void runArchiveInstall(host)}
-            disabled={busy || noRoom}
+            disabled={busy || noRoom || removing}
             data-testid="archive-packages-run"
           >
             {tr(

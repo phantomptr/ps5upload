@@ -251,19 +251,22 @@ export async function findArchiveLeftovers(
 }
 
 /** Deletes an unpacked folder from the console, retrying briefly: right after an install
- *  Sony's installer can still hold a file for a moment. */
+ *  Sony's installer can still hold a file for a moment. `mayDelete` is asked before each try
+ *  (something may have started using the folder meanwhile): false leaves it, and resolves false. */
 export async function removeConsoleFolder(
   host: string,
   path: string,
   wait: (ms: number) => Promise<void> = (ms) =>
     new Promise((r) => setTimeout(r, ms)),
-): Promise<void> {
+  mayDelete: () => boolean = () => true,
+): Promise<boolean> {
   let last: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await wait(1000);
+    if (!mayDelete()) return false;
     try {
       await fsDelete(transferAddr(host), path);
-      return;
+      return true;
     } catch (e) {
       last = e;
     }

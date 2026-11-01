@@ -49,6 +49,7 @@ import {
   isArchiveFirstVolume,
   isRarFirstVolume,
   orderForInstall,
+  removeConsoleFolder,
   siblingsOf,
 } from "./rarPackages";
 import { splitPkgBytes } from "../lib/splitPkgSize";
@@ -332,6 +333,22 @@ describe("space and clean-up", () => {
     expect(await findArchiveLeftovers(HOST, () => false)).toEqual([
       { path: "/user/data/ps5upload/pkg_library/rar_A", bytes: 12 },
     ]);
+  });
+
+  it("asks before each try whether the folder may still be deleted", async () => {
+    let free = true;
+    vi.mocked(fsDelete).mockReset();
+    vi.mocked(fsDelete).mockImplementationOnce(async () => {
+      free = false; // something started using it while the first try failed
+      throw new Error("busy");
+    });
+    const waits: number[] = [];
+    const done = await removeConsoleFolder(HOST, "/L/rar_A", async (ms) => void waits.push(ms), () => free);
+    expect(done).toBe(false);
+    expect(fsDelete).toHaveBeenCalledTimes(1);
+    expect(waits).toEqual([1000]);
+    vi.mocked(fsDelete).mockImplementation(async () => ({}) as never);
+    expect(await removeConsoleFolder(HOST, "/L/rar_A", async () => {})).toBe(true);
   });
 });
 
