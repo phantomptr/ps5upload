@@ -975,6 +975,11 @@ test-payload: payload
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-activity-selftest \
 		$(PAYLOAD_DIR)/tests/activity_launch_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-activity-selftest
+	@echo "Running play-time title pick self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-play-pick-selftest \
+		$(PAYLOAD_DIR)/tests/play_pick_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-play-pick-selftest
 	@echo "Running app-info layout self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-app-info-selftest \
 		$(PAYLOAD_DIR)/tests/app_info_selftest.c

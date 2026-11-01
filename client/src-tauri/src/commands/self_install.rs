@@ -240,8 +240,15 @@ xattr -dr com.apple.quarantine "$app" 2>/dev/null
         Plan::LinuxAppImage { zip, appimage } => {
             let zip = sh_quote(&zip.to_string_lossy());
             let target = sh_quote(&appimage.to_string_lossy());
+            // Through the launcher beside it when it starts this AppImage, so its FUSE and
+            // WebKit rescues apply to the new version too.
             let start = if relaunch {
-                r#"nohup "$target" >/dev/null 2>&1 &"#
+                r#"launcher="$(dirname "$target")/PS5Upload.sh"
+if [ "$(basename "$target")" = PS5Upload.AppImage ] && [ -x "$launcher" ]; then
+  nohup "$launcher" >/dev/null 2>&1 &
+else
+  nohup "$target" >/dev/null 2>&1 &
+fi"#
             } else {
                 ""
             };
@@ -759,7 +766,7 @@ mod tests {
         assert!(script_for(&plan, 9, true)
             .unwrap()
             .trim_end()
-            .ends_with(r#"nohup "$target" >/dev/null 2>&1 &"#));
+            .ends_with("nohup \"$target\" >/dev/null 2>&1 &\nfi"));
     }
 
     #[test]
