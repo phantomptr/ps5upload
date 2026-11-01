@@ -180,6 +180,7 @@ test("Save replay turns the engine's last seconds into an MP4 that plays", async
   // Turning it off mid-stream tells the session.
   await page.getByTestId("rp-toolbar").hover();
   await page.getByTestId("rp-toolbar").getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("tab", { name: "Session" }).click();
   await page.getByTestId("rp-replay-setting").selectOption("0");
   await expect.poll(() => changes).toEqual([0]);
   await expect(page.getByTestId("rp-replay-save")).toHaveCount(0);

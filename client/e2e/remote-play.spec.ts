@@ -1031,10 +1031,13 @@ test.describe("Remote Play in a phone's browser", () => {
 
     // The setting is there on a phone, on by default.
     await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("tab", { name: "Session" }).click();
     await expect(page.getByRole("switch", { name: "Save screenshots and clips to Photos" })).toHaveAttribute(
       "aria-checked",
       "true",
     );
+    // The sheet covers the page: close it to reach Start.
+    await page.getByTestId("rp-settings-close").click();
     await page.getByTestId("rp-start").click();
     await expect(page.getByTestId("rp-menu-handle")).toBeVisible({ timeout: 30_000 });
 

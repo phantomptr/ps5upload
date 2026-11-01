@@ -74,6 +74,7 @@ test("a controller the browser does not recognize is mapped by pressing its butt
   await page.goto("/play", { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("tab", { name: "Controls" }).click();
   const row = page.getByTestId("rp-pad");
   await expect(row).toContainText("GameSir G8 Galileo");
   await expect(row).toContainText("Not recognized");
