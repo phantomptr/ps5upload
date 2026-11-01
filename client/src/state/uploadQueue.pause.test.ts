@@ -25,6 +25,7 @@ vi.mock("../api/ps5", async (importOriginal) => {
 
 import { jobCancel, jobStatus, startTransferFile, uploadQueueLoad } from "../api/ps5";
 import {
+  canPauseItem,
   distinctPendingHosts,
   nextPendingForHost,
   useUploadQueueStore,
@@ -317,6 +318,38 @@ describe("pause / resume / send now", () => {
     expect(running()).toEqual(["big"]);
   });
 
+  it("Pause and Send now leave a pkg that is installing alone", async () => {
+    addItem("big");
+    addItem("small");
+    void useUploadQueueStore.getState().startHost(HOST);
+    await vi.advanceTimersByTimeAsync(50);
+    // Its upload has finished and Sony is installing it.
+    useUploadQueueStore.setState((s) => ({
+      items: s.items.map((it) =>
+        it.displayName === "big" ? { ...it, sourceKind: "pkg", installPhase: "installing" } : it,
+      ),
+    }));
+    expect(canPauseItem(byName("big"))).toBe(false);
+    useUploadQueueStore.getState().pauseItem(byName("big").id);
+    expect(byName("big").paused ?? null).toBeNull();
+    expect(byName("big").status).toBe("running");
+    useUploadQueueStore.getState().sendNow(byName("small").id);
+    expect(byName("big").paused ?? null).toBeNull();
+    expect(vi.mocked(jobCancel)).not.toHaveBeenCalled();
+    // small goes right after it.
+    finish.add("big");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(running()).toEqual(["small"]);
+  });
+
+  it("an upload whose job has finished can no longer be paused", () => {
+    const row = { status: "running", sourceKind: "file", installPhase: null } as const;
+    expect(canPauseItem(row)).toBe(true);
+    expect(canPauseItem({ ...row, uploadDone: true })).toBe(false);
+    expect(canPauseItem({ ...row, sourceKind: "install" })).toBe(false);
+    expect(canPauseItem({ ...row, status: "pending" })).toBe(false);
+  });
+
   it("paused rows survive a reload", async () => {
     vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
       items: [
@@ -374,3 +407,127 @@ function savedItem(name: string): QueueItem {
     completedAt: null,
   };
 }
+
+describe("pause / send now while the stopped upload is still ending", () => {
+  /** Engine whose cancelled jobs keep running for SLOW ms, the way a real one ends at its next
+   *  shard boundary. Counts every start made while another started job was still running. */
+  const SLOW = 4_000;
+  const cancelledAt = new Map<string, number>();
+  let overlaps: string[] = [];
+  const statusOf = (jobId: string): string => {
+    const name = jobId.replace(/^job-/, "");
+    const at = cancelledAt.get(jobId);
+    if (at !== undefined) return Date.now() < at + SLOW ? "running" : "failed";
+    return finish.has(name) ? "done" : "running";
+  };
+  const live = new Set<string>();
+
+  beforeEach(() => {
+    installLocalStorageStub();
+    vi.useFakeTimers();
+    finish.clear();
+    failing.clear();
+    cancelledAt.clear();
+    live.clear();
+    overlaps = [];
+    useUploadSettingsStore.setState({ autoResume: false });
+    vi.mocked(jobCancel)
+      .mockReset()
+      .mockImplementation(async (jobId: string) => {
+        if (!cancelledAt.has(jobId)) cancelledAt.set(jobId, Date.now());
+      });
+    mockedStartFile.mockReset().mockImplementation(async (src: string) => {
+      const jobId = `job-${src.split("/").pop()}`;
+      for (const j of live) if (statusOf(j) === "running") overlaps.push(`${jobId} beside ${j}`);
+      // A new job under the same name: not the cancelled one.
+      cancelledAt.delete(jobId);
+      live.add(jobId);
+      return jobId;
+    });
+    mockedJobStatus.mockReset().mockImplementation(async (jobId: string) => {
+      const status = statusOf(jobId);
+      if (status !== "running") live.delete(jobId);
+      return { status, bytes_sent: 1, total_bytes: 10 } as Snap;
+    });
+    useUploadQueueStore.setState({
+      items: [],
+      running: false,
+      runningHosts: {},
+      limitedHosts: {},
+      continueOnFailure: false,
+      loaded: true,
+      isLeader: true,
+    });
+  });
+  afterEach(() => {
+    useUploadQueueStore.getState().stop();
+    vi.useRealTimers();
+  });
+
+  it("stacked Send nows wait for the stopped upload, run in click order, then resume it", async () => {
+    addItem("big");
+    addItem("one");
+    addItem("two");
+    void useUploadQueueStore.getState().startHost(HOST);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(running()).toEqual(["big"]);
+
+    useUploadQueueStore.getState().sendNow(byName("two").id);
+    await vi.advanceTimersByTimeAsync(100);
+    // big is still ending on the console: the second click must not start a transfer now.
+    useUploadQueueStore.getState().sendNow(byName("one").id);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(started()).toEqual(["big"]);
+
+    await vi.advanceTimersByTimeAsync(SLOW + 2_000);
+    expect(running()).toEqual(["two"]);
+    finish.add("two");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(running()).toEqual(["one"]);
+    expect(byName("big").paused).toBe("sendNow");
+    finish.add("one");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(running()).toEqual(["big"]);
+    expect(byName("big").paused).toBeNull();
+    expect(started()).toEqual(["big", "two", "one", "big"]);
+    expect(overlaps).toEqual([]);
+  });
+
+  it("a Send now in a limited run joins the restart instead of starting at once", async () => {
+    addItem("big");
+    addItem("other");
+    addItem("next");
+    void useUploadQueueStore.getState().startHost(HOST, { onlyIds: [byName("big").id] });
+    await vi.advanceTimersByTimeAsync(50);
+    useUploadQueueStore.getState().pauseItem(byName("big").id);
+    await vi.advanceTimersByTimeAsync(100);
+    useUploadQueueStore.getState().sendNow(byName("next").id);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(started()).toEqual(["big"]);
+    await vi.advanceTimersByTimeAsync(SLOW + 2_000);
+    expect(running()).toEqual(["next"]);
+    expect(overlaps).toEqual([]);
+  });
+
+  it("a quick Pause then Resume waits for the old job before running it again", async () => {
+    addItem("big");
+    addItem("small");
+    void useUploadQueueStore.getState().startHost(HOST);
+    await vi.advanceTimersByTimeAsync(50);
+    useUploadQueueStore.getState().pauseItem(byName("big").id);
+    await vi.advanceTimersByTimeAsync(100);
+    useUploadQueueStore.getState().resumeItem(byName("big").id);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(started()).toEqual(["big"]);
+    expect(running()).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(SLOW + 2_000);
+    // big is ahead of small in line.
+    expect(running()).toEqual(["big"]);
+    finish.add("big");
+    await vi.advanceTimersByTimeAsync(3_000);
+    // The console's whole run went on: small was not left behind.
+    expect(running()).toEqual(["small"]);
+    expect(overlaps).toEqual([]);
+  });
+});

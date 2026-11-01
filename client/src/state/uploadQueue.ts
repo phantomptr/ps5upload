@@ -298,6 +298,9 @@ export interface QueueItem {
   /** Send now: the row runs ahead of everything else waiting on its console. Rows sent now
    *  run in the order they were clicked (this value). Cleared once the row finishes. */
   sendNowAt?: number | null;
+  /** Its upload job has finished: what runs now (mount, register, the pkg's install) can't
+   *  be paused, only waited for. Cleared when the row runs again. */
+  uploadDone?: boolean;
   /** Parked because the console went into rest mode: the row waits (pending) for the PS5 to
    *  wake and resumes by itself on the helper-up edge after it (resumeFailedRecoverable). Not
    *  a failure and not a spent recovery attempt. Cleared when it runs again. */
@@ -697,6 +700,18 @@ class InstallItemError extends Error {
   }
 }
 
+/** A running row Pause can stop: an upload still sending. Not an install, and not a row
+ *  whose upload has finished and is now installing or being mounted — Sony's install can't
+ *  be stopped, and pausing then would only send the whole thing again. Pure. */
+export function canPauseItem(it: Pick<QueueItem, "status" | "sourceKind" | "installPhase" | "uploadDone">): boolean {
+  return (
+    it.status === "running" &&
+    it.sourceKind !== "install" &&
+    it.installPhase !== "installing" &&
+    !it.uploadDone
+  );
+}
+
 /** The next pending item to run for `host` (port-stripped match), or null.
  *  Picks the lowest install-order priority (base → update → DLC), breaking ties
  *  by add-order (the first such pending item wins, so a user's manual reorder
@@ -847,6 +862,14 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
   type RunScope = { installs: boolean; ids: Set<string> };
   /** Per console: what the current run may take, or absent for everything. */
   const runScope = new Map<string, RunScope>();
+  /** A console whose loop was stopped to take one row out and that runs again once the
+   *  stopped job has ended (restartAfterStop). `gen` is the generation it was stopped at. */
+  type PendingRestart = {
+    gen: number | undefined;
+    again: { installsOnly?: boolean; onlyIds?: string[] } | undefined;
+  };
+  /** Per console: the restart still waiting for its stopped job, if any. */
+  const stoppingHosts = new Map<string, PendingRestart>();
   /** Mirrors "this console's run is limited" into state for the queue panel. */
   const markLimited = (h: string, on: boolean) => {
     if (!!get().limitedHosts[h] === on) return;
@@ -1424,6 +1447,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       pollFailures = 0;
       lostSince = null;
       if (snap.status === "done") {
+        // From here the row mounts / registers / installs: no longer something Pause can stop.
+        set((s) => ({ items: patchItem(s.items, item.id, { uploadDone: true }) }));
         if (!isFolder && !isArchive) {
           // Nothing left to resume: the next upload of this file is a new job.
           try {
@@ -1945,6 +1970,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           status: "running",
           interrupted: false,
           waitingForWake: false,
+          uploadDone: false,
           stalledForMs: null,
           startedAt,
           // Reset live counters so a previously-failed-then-retried
@@ -2242,6 +2268,13 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
     again?: { installsOnly?: boolean; onlyIds?: string[] },
   ) => {
     const stoppedGen = hostGen.get(h);
+    // The console is "stopping" until the restart below: a Resume or Send now meanwhile joins
+    // it (see joinPendingRestart) instead of starting a transfer beside the one still ending.
+    const pending: PendingRestart = {
+      gen: stoppedGen,
+      again: again ? { ...again, onlyIds: [...(again.onlyIds ?? [])] } : undefined,
+    };
+    stoppingHosts.set(h, pending);
     void (async () => {
       if (stoppedJob) {
         for (let i = 0; i < CANCEL_SETTLE_TRIES; i++) {
@@ -2255,9 +2288,24 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           await sleep(CANCEL_SETTLE_MS);
         }
       }
+      if (stoppingHosts.get(h) === pending) stoppingHosts.delete(h);
       if (hostGen.get(h) !== stoppedGen) return;
-      if (nextPendingForHost(get().items, h)) void get().startHost(h, again);
+      if (nextPendingForHost(get().items, h)) void get().startHost(h, pending.again);
     })();
+  };
+
+  /** While `h` waits for a stopped job to end (restartAfterStop), runs `id` in that restart
+   *  rather than now. True when it joined; false when nothing is pending (start it yourself).
+   *  The restart's run order is the queue's, so rows sent now still go in click order. */
+  const joinPendingRestart = (h: string, id: string): boolean => {
+    const pending = stoppingHosts.get(h);
+    // A Stop, Start or Clear since then dropped that restart: nothing to join.
+    if (!pending || hostGen.get(h) !== pending.gen) return false;
+    // A full run takes the row anyway; a limited one is widened to it.
+    if (pending.again?.onlyIds && !pending.again.onlyIds.includes(id)) {
+      pending.again.onlyIds.push(id);
+    }
+    return true;
   };
 
   /** Stops the running upload `item` and marks it paused (`why`). The console then runs again
@@ -2631,14 +2679,13 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       scheduleSave();
       // Cancelling a row sent now ends that Send now: the row it paused goes back in line.
       settleSendNow(h);
-      if (wasRunning && nextPendingForHost(get().items, h)) {
-        restartAfterStop(h, item.addr, cancelledJob);
-      }
+      // Even with nothing waiting: a Resume while the cancelled job ends must wait for it.
+      if (wasRunning) restartAfterStop(h, item.addr, cancelledJob);
     },
 
     pauseItem(id) {
       const item = get().items.find((it) => it.id === id);
-      if (!item || item.status !== "running" || item.sourceKind === "install") return;
+      if (!item || !canPauseItem(item)) return;
       pauseRunning(item, "user");
     },
 
@@ -2647,9 +2694,11 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       if (!item || item.status !== "pending" || !item.paused) return;
       set((s) => ({ items: patchItem(s.items, id, { paused: null }) }));
       scheduleSave();
-      // A run going takes it in its turn (a limited run is widened to it); an idle console
-      // runs it now.
-      void get().startHost(hostOf(item.addr), { onlyIds: [id] });
+      // A run going takes it in its turn (a limited run is widened to it); a console still
+      // stopping an upload runs it once that has ended; an idle console runs it now.
+      const h = hostOf(item.addr);
+      if (joinPendingRestart(h, id)) return;
+      void get().startHost(h, { onlyIds: [id] });
     },
 
     sendNow(id) {
@@ -2667,11 +2716,13 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
         (it) => it.status === "running" && hostOf(it.addr) === h,
       );
       // Pause the upload going now, unless it was sent now itself (they run in click order)
-      // or is an install (Sony's install cannot be stopped; this row runs right after it).
-      if (running && running.sourceKind !== "install" && !running.sendNowAt) {
+      // or is installing (Sony's install cannot be stopped; this row runs right after it).
+      if (running && canPauseItem(running) && !running.sendNowAt) {
         pauseRunning(running, "sendNow", [id]);
         return;
       }
+      // The console is still stopping an upload: this row goes in that restart, in click order.
+      if (joinPendingRestart(h, id)) return;
       void get().startHost(h, { onlyIds: [id] });
     },
 

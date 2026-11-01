@@ -72,6 +72,7 @@ import { useConsoleLabel } from "../../state/roster";
 import {
   installOrderPriority,
   moveGroupOf,
+  canPauseItem,
   useUploadQueueStore,
   type QueueItem,
   type QueueItemStatus,
@@ -1281,16 +1282,19 @@ export function QueueRow({
             // stays resumable) and lets the console's other pending jobs keep going —
             // unlike Stop, which halts the whole console.
             <>
-              <button
-                type="button"
-                data-testid="queue-pause"
-                onClick={() => useUploadQueueStore.getState().pauseItem(item.id)}
-                title={tr("queue_pause_tip", undefined, "Pause: keeps what is sent and lets the next item go")}
-                aria-label={tr("queue_pause", undefined, "Pause")}
-                className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
-              >
-                <Pause size={14} />
-              </button>
+              {/* Once the upload has finished (installing, mounting) there is nothing to pause. */}
+              {canPauseItem(item) && (
+                <button
+                  type="button"
+                  data-testid="queue-pause"
+                  onClick={() => useUploadQueueStore.getState().pauseItem(item.id)}
+                  title={tr("queue_pause_tip", undefined, "Pause: keeps what is sent and lets the next item go")}
+                  aria-label={tr("queue_pause", undefined, "Pause")}
+                  className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+                >
+                  <Pause size={14} />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onCancel}
