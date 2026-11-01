@@ -10,6 +10,7 @@ import {
 import { Button } from "../../components";
 import { useTr } from "../../state/lang";
 import { pairConsole } from "../../lib/pairConsole";
+import { PinPairForm } from "../Play/setup/PinPairForm";
 import { useRosterStore, withConsolePrefix } from "../../state/roster";
 import { pushNotification } from "../../state/notifications";
 import { audit } from "../../state/auditLog";
@@ -304,6 +305,23 @@ export default function WakeSetup({
         <div className="flex items-start gap-2 text-xs text-[var(--color-bad)]">
           <AlertTriangle size={12} className="mt-0.5 shrink-0" />
           <span>{pairError}</span>
+        </div>
+      ) : null}
+
+      {/* Automatic pairing failed: the PS5's own PIN works without the helper (#609). */}
+      {pairError && profileId ? (
+        <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] p-2">
+          <div className="mb-1 text-xs font-medium">
+            {tr("play_setup_pair_with_pin", undefined, "Pair with the PIN shown on the PS5")}
+          </div>
+          <PinPairForm
+            host={host}
+            profileId={profileId}
+            onPaired={(name) => {
+              setPairError(null);
+              setPairedAs(name);
+            }}
+          />
         </div>
       ) : null}
 

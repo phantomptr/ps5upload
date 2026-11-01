@@ -56,10 +56,10 @@ function decimalToHex(dec: string): string | null {
 
 /** Any of the three spellings → 16 hex digits (the uint64), or null.
  *
- *  Which spelling it is: 12 characters ending in "=" is base64 (8 bytes);
- *  17 or more digits is decimal (no 64-bit hex is that long); anything else
- *  of 1-16 hex digits, with or without 0x, is hex — the console's spelling,
- *  and the one the field asks for. */
+ *  Which spelling it is, never by length alone: 12 characters ending in "=" is
+ *  base64 (8 bytes); "0x" or any of the letters a-f is hex (the app always shows
+ *  the hex with 0x); only digits is decimal (pxplay's number), however short —
+ *  reading a short decimal as hex gave a different account. */
 function accountIdHex(raw: string): string | null {
   const t = raw.trim();
   if (/^[A-Za-z0-9+/]{11}=$/.test(t)) {
@@ -74,7 +74,7 @@ function accountIdHex(raw: string): string | null {
     for (let i = 7; i >= 0; i--) hex += bin.charCodeAt(i).toString(16).padStart(2, "0");
     return hex;
   }
-  if (/^\d{17,}$/.test(t)) {
+  if (/^\d+$/.test(t)) {
     const hex = decimalToHex(t);
     return hex === null ? null : hex.padStart(16, "0");
   }

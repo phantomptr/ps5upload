@@ -21,6 +21,8 @@ function stageText(tr: Tr, s: PadLinkStage, computer: string): string {
     case "joined":
       return !s.host
         ? tr("pad_no_session", undefined, "Connected. Waiting for Remote Play to start on the computer.")
+        : s.passcode && !s.playing
+          ? tr("pad_wait_passcode", { name: computer }, `Waiting for the passcode on ${computer}`)
         : s.playing
           ? tr("pad_playing", { host: s.host }, `Controller for ${s.host}`)
           : tr("pad_starting", undefined, "Connected. The stream is starting…");
@@ -189,7 +191,7 @@ export function PadApp({
           }}
         />
         <span className="truncate" data-testid="pad-stage">
-          {watch && live && stage.kind === "joined" && stage.host
+          {watch && live && stage.kind === "joined" && stage.host && !(stage.passcode && !stage.playing)
             ? control
               ? tr("pad_watch_control", undefined, "Watching, and you have the controller")
               : tr("pad_watch_watching", { host: stage.host }, `Watching ${stage.host}`)

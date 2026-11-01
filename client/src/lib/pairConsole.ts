@@ -10,8 +10,14 @@ import { isValidSessionKey } from "./wakeState";
 
 /** Pair and keep the keys. Returns the console's nickname when it said one. Throws the engine's
  *  own error (already specific: "no signed-in user with an activated PSN account…"). */
-export async function pairConsole(host: string, profileId: string, addr = mgmtAddr(host)): Promise<string | null> {
-  const r = await pairForWake(host, addr);
+export async function pairConsole(
+  host: string,
+  profileId: string,
+  addr = mgmtAddr(host),
+  /** The PIN the PS5 shows under Link Device, and the account to pair (no helper needed). */
+  manual?: { pin: string; accountIdB64: string },
+): Promise<string | null> {
+  const r = await pairForWake(host, addr, manual);
   const st = useRosterStore.getState();
   st.setWakeCredential(profileId, r.credential);
   // Both keys arrive from the same handshake, already padded to the 16-byte form the session
@@ -19,6 +25,6 @@ export async function pairConsole(host: string, profileId: string, addr = mgmtAd
   if (isValidSessionKey(r.regist_key) && isValidSessionKey(r.rp_key)) {
     st.setWakeSessionKeys(profileId, r.regist_key, r.rp_key);
   }
-  audit("system_wake", withConsolePrefix(host, "paired for wake"));
+  audit("system_wake", withConsolePrefix(host, manual ? "paired with the PS5's PIN" : "paired for wake"));
   return r.nickname || null;
 }

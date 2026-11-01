@@ -68,6 +68,7 @@
 #define VINPUT_E_UNSUPPORTED (-1) /* this firmware cannot (or we do not yet know how to) */
 #define VINPUT_E_FAILED (-2)      /* it can, but this call failed */
 #define VINPUT_E_STARTING (-3)    /* the backend's process is starting: ask again shortly */
+#define VINPUT_E_NO_USER (-6)     /* nobody is signed in (the PS5 waits at sign-in): no device to add */
 
 typedef struct {
     uint8_t buttons;

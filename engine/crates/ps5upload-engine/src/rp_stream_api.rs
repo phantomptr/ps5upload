@@ -23,6 +23,10 @@
 //!   The console's on-screen keyboard, only for a session started with `"keyboard": true`:
 //!   `{"keyboard_text": "…"}`, `{"keyboard_accept": true}`, `{"keyboard_reject": true}`
 //!   (see rp_keyboard.rs).
+//!   The user's sign-in passcode, when the console asks for it before the stream starts (the
+//!   page is told `{"stage": "passcode", "retry": bool, "wait_s": n}`): `{"passcode": "1234"}`
+//!   (four digits) or `{"passcode_cancel": true}`. Only the attached page's answer counts; the
+//!   passcode is passed to the console and never kept or logged.
 //! * engine → client, binary `[u8 kind][payload]`: 0 = video codec header
 //!   (Annex-B parameter sets), 1 = video access unit, 3 = audio header,
 //!   4 = audio frame (Opus), 6 = DualSense haptics frame (10 ms of 3 kHz stereo s16le PCM),
@@ -67,8 +71,9 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::rp_stream::{
-    run_stream, Codec, ControllerState, KeyboardEvent, KeyboardInput, MicInput, Progress,
-    StreamConfig, StreamSink,
+    run_stream, valid_passcode, Codec, ControllerState, KeyboardEvent, KeyboardInput, MicInput,
+    Passcode, Progress, StreamConfig, StreamSink, PASSCODE_CANCELLED, PASSCODE_CONSOLE_GAVE_UP,
+    PASSCODE_TIMEOUT, PASSCODE_TOO_MANY, PASSCODE_WAIT,
 };
 use tokio::sync::mpsc;
 
@@ -169,6 +174,23 @@ struct ClientMsg {
     /// Typing into the console's keyboard (rp_keyboard.rs).
     #[serde(flatten)]
     keyboard: crate::rp_keyboard::PageKeyboard,
+    /// The user's passcode, when the console asked for it.
+    #[serde(default)]
+    passcode: Option<Secret>,
+    /// The user would rather not enter it: the start ends.
+    #[serde(default)]
+    passcode_cancel: bool,
+}
+
+/// A passcode as the page sent it: never printed, not even in a debug dump.
+#[derive(serde::Deserialize)]
+#[serde(transparent)]
+struct Secret(String);
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
 }
 
 /// The answer to a ping: the page's own value back, untouched, and the engine's clock now.
@@ -234,6 +256,10 @@ struct Live {
     spectators: Mutex<Vec<Spectator>>,
     /// The console's on-screen keyboard (rp_keyboard.rs).
     keyboard: crate::rp_keyboard::KeyboardLink,
+    /// While the console waits for the user's passcode: whether the last one was wrong.
+    passcode_ask: Mutex<Option<bool>>,
+    /// The page's answer, until the stream thread takes it.
+    passcode_answer: Mutex<Option<Passcode>>,
 }
 
 /// A watcher's queue. `need_key`: it cannot use a frame until the next keyframe (it just
@@ -447,7 +473,64 @@ impl Live {
             replay: Mutex::new(None),
             spectators: Mutex::new(Vec::new()),
             keyboard: Default::default(),
+            passcode_ask: Mutex::new(None),
+            passcode_answer: Mutex::new(None),
         }
+    }
+
+    /// What the page is told while the console waits for the passcode.
+    fn passcode_status(retry: bool) -> Message {
+        text(serde_json::json!({
+            "stage": "passcode",
+            "retry": retry,
+            "wait_s": PASSCODE_WAIT.as_secs(),
+        }))
+    }
+
+    /// The console asks for the passcode: ask the page (and any page that attaches meanwhile).
+    fn ask_passcode(&self, retry: bool) {
+        if let Ok(mut a) = self.passcode_answer.lock() {
+            *a = None;
+        }
+        if let Ok(mut q) = self.passcode_ask.lock() {
+            *q = Some(retry);
+        }
+        self.send_ctl(Self::passcode_status(retry));
+    }
+
+    /// Page `id` answered. Kept only from the attached page, while a passcode is asked for,
+    /// and only four digits (or a cancel).
+    fn answer_passcode(&self, id: u64, answer: Passcode) -> bool {
+        if !self.is_viewer(id) {
+            return false;
+        }
+        if let Passcode::Digits(d) = &answer {
+            if !valid_passcode(d) {
+                return false;
+            }
+        }
+        let Ok(q) = self.passcode_ask.lock() else {
+            return false;
+        };
+        if q.is_none() {
+            return false;
+        }
+        match self.passcode_answer.lock() {
+            Ok(mut a) => {
+                *a = Some(answer);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// The answer for the stream thread, once.
+    fn take_passcode(&self) -> Option<Passcode> {
+        let a = self.passcode_answer.lock().ok()?.take()?;
+        if let Ok(mut q) = self.passcode_ask.lock() {
+            *q = None;
+        }
+        Some(a)
     }
 
     fn is_viewer(&self, id: u64) -> bool {
@@ -533,6 +616,10 @@ impl Live {
         if let Some(k) = self.keyboard.on_attach() {
             let _ = ctl.try_send(text(k));
         }
+        // The console still waits for the passcode: this page is the one to ask now.
+        if let Some(retry) = self.passcode_ask.lock().ok().and_then(|g| *g) {
+            let _ = ctl.try_send(Self::passcode_status(retry));
+        }
         self.need_key.store(true, Ordering::Relaxed);
         self.want_key.store(true, Ordering::Relaxed);
         let old = self.viewer.lock().ok().and_then(|mut g| {
@@ -584,10 +671,18 @@ impl Live {
 
     fn snapshot(&self) -> serde_json::Value {
         let attached = self.viewer.lock().map(|g| g.is_some()).unwrap_or(false);
+        // The console waits for the user's passcode: phones and watchers are told only that (the
+        // prompt itself goes to the page that runs the session, see ask_passcode).
+        let passcode = self
+            .passcode_ask
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false);
         serde_json::json!({
             "host": self.host,
             "playing": self.playing.load(Ordering::Relaxed),
             "attached": attached,
+            "passcode": passcode,
         })
     }
 }
@@ -744,6 +839,13 @@ impl StreamSink for Sink {
     fn keyboard_input(&mut self) -> Option<KeyboardInput> {
         self.live.keyboard.next()
     }
+    fn passcode_needed(&mut self, retry: bool) {
+        crate::log_info!("rp_stream: the console asks for the user's passcode (retry {retry})");
+        self.live.ask_passcode(retry);
+    }
+    fn passcode(&mut self) -> Option<Passcode> {
+        self.live.take_passcode()
+    }
 }
 
 /// An error as the player shows it: a stable `code` to pick the plain-English
@@ -761,7 +863,11 @@ fn error_status(e: &anyhow::Error) -> serde_json::Value {
         // Any other refusal at session init: a code nobody has explained yet (80108b26, …).
         None if text.contains("session init refused") => ("refused", None),
         None if text.contains("did not wake") => ("wake_failed", None),
-        None if text.contains("login passcode") => ("passcode", None),
+        None if text.contains(PASSCODE_CANCELLED) => ("passcode_cancelled", None),
+        None if text.contains(PASSCODE_TOO_MANY) => ("passcode_too_many", None),
+        None if text.contains(PASSCODE_TIMEOUT) || text.contains(PASSCODE_CONSOLE_GAVE_UP) => {
+            ("passcode_timeout", None)
+        }
         None if text.contains("Nagare") || text.contains("AvCap") => ("video_refused", None),
         // Mid-stream: the console went quiet or closed the control connection.
         None if text.contains("console stopped sending")
@@ -1072,6 +1178,12 @@ async fn session(mut socket: WebSocket) {
                         if live.is_viewer(id) {
                             live.keyboard.page_typed(&m.keyboard);
                         }
+                        if let Some(Secret(p)) = m.passcode {
+                            live.answer_passcode(id, Passcode::Digits(p));
+                        }
+                        if m.passcode_cancel {
+                            live.answer_passcode(id, Passcode::Cancel);
+                        }
                     }
                 }
                 Some(Ok(Message::Binary(b))) if b.first() == Some(&KIND_MIC) => {
@@ -1106,6 +1218,83 @@ pub async fn player() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_console_asking_for_the_passcode_reaches_the_page_and_back() {
+        let live = Live::new("10.0.0.9".into(), false, Duration::from_secs(60));
+        let (vtx, _vrx) = mpsc::channel(8);
+        let (ctx, mut crx) = mpsc::channel(8);
+        let id = live.attach(vtx, ctx, false);
+        let next_text = |rx: &mut mpsc::Receiver<Message>| loop {
+            match rx.try_recv() {
+                Ok(Message::Text(t)) => {
+                    break serde_json::from_str::<serde_json::Value>(t.as_str()).unwrap()
+                }
+                Ok(_) => continue,
+                Err(e) => panic!("no status: {e}"),
+            }
+        };
+        // Nothing is taken before the console asks.
+        assert!(!live.answer_passcode(id, Passcode::Digits("1234".into())));
+        // A watcher (watch party): it never gets the prompt.
+        let (stx, mut srx) = mpsc::channel(8);
+        live.spectators.lock().unwrap().push(Spectator {
+            id: 77,
+            tx: stx,
+            need_key: true,
+        });
+        let mut sink = Sink {
+            live: Arc::new(live),
+            t0: Instant::now(),
+        };
+        assert_eq!(sink.live.snapshot()["passcode"], false);
+        sink.passcode_needed(false);
+        // Phones and watchers see only that the console waits (pad_link sends the snapshot).
+        assert_eq!(sink.live.snapshot()["passcode"], true);
+        let v = next_text(&mut crx);
+        assert_eq!(v["stage"], "passcode");
+        assert_eq!(v["retry"], false);
+        assert_eq!(v["wait_s"], PASSCODE_WAIT.as_secs());
+        assert!(srx.try_recv().is_err(), "a watcher was asked");
+        // Nor can it answer.
+        assert!(!sink
+            .live
+            .answer_passcode(77, Passcode::Digits("1234".into())));
+        assert!(sink.passcode().is_none());
+        // Not four digits, or from another page: ignored.
+        assert!(!sink.live.answer_passcode(id, Passcode::Digits("12".into())));
+        assert!(!sink
+            .live
+            .answer_passcode(id + 1, Passcode::Digits("1234".into())));
+        // A ClientMsg carries it; the answer goes to the stream thread once.
+        let m: ClientMsg = serde_json::from_str(r#"{"passcode":"1234"}"#).unwrap();
+        assert!(!format!("{:?}", m.passcode).contains("1234"));
+        assert!(sink
+            .live
+            .answer_passcode(id, Passcode::Digits(m.passcode.unwrap().0)));
+        assert!(matches!(sink.passcode(), Some(Passcode::Digits(d)) if d == "1234"));
+        assert!(sink.passcode().is_none());
+        // Wrong: asked again, and a page attaching meanwhile is asked too.
+        sink.passcode_needed(true);
+        assert_eq!(next_text(&mut crx)["retry"], true);
+        let (vtx2, _vrx2) = mpsc::channel(8);
+        let (ctx2, mut crx2) = mpsc::channel(8);
+        let id2 = sink.live.attach(vtx2, ctx2, false);
+        assert_eq!(next_text(&mut crx2)["stage"], "passcode");
+        let m: ClientMsg = serde_json::from_str(r#"{"passcode_cancel":true}"#).unwrap();
+        assert!(m.passcode_cancel);
+        assert!(sink.live.answer_passcode(id2, Passcode::Cancel));
+        assert!(matches!(sink.passcode(), Some(Passcode::Cancel)));
+    }
+
+    #[test]
+    fn passcode_endings_have_their_own_codes() {
+        let code = |t: &str| error_status(&anyhow::anyhow!(t.to_string()))["code"].clone();
+        assert_eq!(code(PASSCODE_CANCELLED), "passcode_cancelled");
+        assert_eq!(code(PASSCODE_TIMEOUT), "passcode_timeout");
+        assert_eq!(code(PASSCODE_CONSOLE_GAVE_UP), "passcode_timeout");
+        assert_eq!(code(PASSCODE_TOO_MANY), "passcode_too_many");
+    }
 
     #[test]
     fn watchers_start_at_a_keyframe_and_a_slow_one_skips_ahead() {

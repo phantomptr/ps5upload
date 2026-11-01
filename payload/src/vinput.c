@@ -249,6 +249,7 @@ static const char *device_locked(int want, int can, int *is_open, int (*open_fn)
     }
     return rc == VINPUT_E_UNSUPPORTED ? "vinput_unsupported"
            : rc == VINPUT_E_STARTING  ? "vinput_starting"
+           : rc == VINPUT_E_NO_USER   ? "vinput_no_user"
                                       : "vinput_failed";
 }
 

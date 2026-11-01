@@ -40,7 +40,7 @@ static void f_caps(int *m, int *k) {
     *k = f_can_keyboard;
 }
 static int f_mouse_open(void) {
-    if (f_fail_open) return VINPUT_E_FAILED;
+    if (f_fail_open) return f_fail_open == 2 ? VINPUT_E_NO_USER : VINPUT_E_FAILED;
     logf_("mopen");
     return VINPUT_OK;
 }
@@ -54,7 +54,7 @@ static int f_mouse_send(uint8_t b, int dx, int dy, int w, int hw) {
     return VINPUT_OK;
 }
 static int f_kbd_open(void) {
-    if (f_fail_open) return VINPUT_E_FAILED;
+    if (f_fail_open) return f_fail_open == 2 ? VINPUT_E_NO_USER : VINPUT_E_FAILED;
     logf_("kopen");
     return VINPUT_OK;
 }
@@ -253,6 +253,11 @@ static void test_takeover_and_devices(void) {
     reset();
     f_fail_open = 1;
     CHECK(session("{\"op\":\"open\",\"id\":3,\"mouse\":true}", 0) > 0 && HAS("\"err\":\"vinput_failed\"") &&
+          HAS("\"open\":false"));
+    /* nobody signed in (the PS5 waits at sign-in): said apart, so the app can offer Sign in */
+    reset();
+    f_fail_open = 2;
+    CHECK(session("{\"op\":\"open\",\"id\":3,\"keyboard\":true}", 0) > 0 && HAS("\"err\":\"vinput_no_user\"") &&
           HAS("\"open\":false"));
 }
 

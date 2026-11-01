@@ -11,6 +11,9 @@ interface Console {
   enabled: string[];
   /** Hush on the console: null = not there; else whether config.ini says enabled=1. */
   hush: { enabled: boolean } | null;
+  /** Every pairing request's body, and an error the helper's automatic pairing fails with. */
+  pairBodies: Record<string, unknown>[];
+  failAuto: string | null;
 }
 
 /** A console part-way set up: the user signed in on an activated account, the offline sign-in
@@ -35,6 +38,8 @@ async function consoleHalfSetUp(page: Page, opts: { paired?: boolean } = {}): Pr
     paired: 0,
     enabled: [],
     hush: null,
+    pairBodies: [],
+    failAuto: null,
   };
   await page.addInitScript(
     ([host, paired]) => {
@@ -116,6 +121,12 @@ async function consoleHalfSetUp(page: Page, opts: { paired?: boolean } = {}): Pr
           dob: "1983-04-12", auth_dat: true, config_dat: true, sub_account: 0, offline_adult: 1, age: 43, login_flag: 1,
         };
       if (path === "/api/ps5/power/pair") {
+        const sent = req.postDataJSON() as Record<string, unknown>;
+        c.pairBodies.push(sent);
+        if (c.failAuto && !sent.pin) {
+          await route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ error: c.failAuto }) });
+          return;
+        }
         c.paired++;
         body = {
           credential: "1234567890",
@@ -223,4 +234,48 @@ test("Home's Play card can be hidden, and comes back from Play › Set up", asyn
   await page.getByRole("switch", { name: "Show Play on Home" }).click();
   await page.goto("/home", { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("home-play")).toBeVisible({ timeout: 30_000 });
+});
+
+test("pairing that fails on the console says why and offers the PIN shown on the PS5 (#609)", async ({ page }) => {
+  const c = await consoleHalfSetUp(page);
+  c.readiness = { ...c.readiness, service_enabled: 1, user_enabled: 1 };
+  c.failAuto = "the PS5 could not make a pairing PIN: sceRemoteplayGeneratePinCode failed: 0x80C60011";
+  await page.goto("/play/setup", { waitUntil: "domcontentloaded" });
+  const step = page.locator('[data-step="pair"]');
+  await page.getByTestId("play-setup-rest-done").click();
+  await expect(step).toHaveAttribute("data-state", "todo", { timeout: 30_000 });
+  await page.getByTestId("play-setup-pair").click();
+  // The console's own reason, and the way round it, opened.
+  await expect(step).toContainText("sceRemoteplayGeneratePinCode failed: 0x80C60011");
+  await expect(page.getByTestId("play-setup-pair-fallback")).toBeVisible();
+  const form = page.getByTestId("pin-pair");
+  await expect(form).toContainText("Settings › System › Remote Play › Link Device");
+  // The signed-in user's account, read by the helper, is filled in.
+  await expect(page.getByTestId("pin-pair-account")).toHaveValue("0x0100000000000000");
+  const go = page.getByTestId("pin-pair-go");
+  await page.getByTestId("pin-pair-pin").fill("1234 567");
+  await expect(go).toBeDisabled();
+  await page.getByTestId("pin-pair-pin").fill("1234 5678");
+  await expect(page.getByTestId("pin-pair-pin")).toHaveValue("12345678");
+  await go.click();
+  await expect(step).toHaveAttribute("data-state", "ok");
+  expect(c.pairBodies[c.pairBodies.length - 1]).toMatchObject({ host: HOST, pin: "12345678", account_id: "AAAAAAAAAAE=" });
+});
+
+test("the PIN shown on the PS5 pairs without the helper", async ({ page }) => {
+  await consoleHalfSetUp(page);
+  // No helper: the payload's status fails, so nothing above the pair step can be read.
+  await page.route(
+    (url) => url.pathname === "/api/ps5/status" || url.pathname === "/api/ps5/remoteplay/readiness",
+    (route) => route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ error: "no helper" }) }),
+  );
+  await page.goto("/play/setup", { waitUntil: "domcontentloaded" });
+  const step = page.locator('[data-step="pair"]');
+  await step.getByRole("button", { name: /Pair this app with the console/ }).click();
+  await page.getByTestId("play-setup-pin-pair").click();
+  await page.getByTestId("pin-pair-pin").fill("87654321");
+  // chiaki-ng's base64 spelling of the account id works as typed.
+  await page.getByTestId("pin-pair-account").fill("XCDiqZluNXo=");
+  await page.getByTestId("pin-pair-go").click();
+  await expect(step).toHaveAttribute("data-state", "ok", { timeout: 15_000 });
 });

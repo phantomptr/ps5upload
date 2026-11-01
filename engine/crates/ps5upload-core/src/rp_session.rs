@@ -53,7 +53,21 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
 
+use crate::rp_login_pin::{
+    PasscodePrompt, PinFlow, CTRL_LOGIN, LOGIN_STATE_SUCCESS as CTRL_LOGIN_STATE_SUCCESS,
+    PASSCODE_CONSOLE_GAVE_UP, PASSCODE_WAIT,
+};
 use crate::rp_regist::{generate_iv, resolve, split_http};
+
+/// How a Wake & sign in ended, when it did not fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignIn {
+    /// The console signed the user in.
+    SignedIn,
+    /// The user has a login passcode and nobody was there to type it: the console is awake at
+    /// its passcode / user-select screen (automatic wakes, e.g. for an upload).
+    PasscodeNeeded,
+}
 use crate::rp_regist_keys::{PS5_AUTH_NONCE_KEY, PS5_AUTH_SEED_KEY};
 
 type Aes128CfbEnc = cfb_mode::Encryptor<aes::Aes128>;
@@ -232,7 +246,8 @@ fn ctrl_connect(
     creds: &SessionCreds,
     nonce: &[u8; KEY_SIZE],
     hold: Duration,
-) -> Result<()> {
+    prompt: Option<&mut dyn PasscodePrompt>,
+) -> Result<SignIn> {
     let amb = ambassador(nonce);
     let brt = bright(nonce, &creds.morning);
 
@@ -332,7 +347,20 @@ fn ctrl_connect(
         .position(|w| w == b"\r\n\r\n")
         .map(|i| i + 4)
         .unwrap_or(raw.len());
-    let result = hold_control_session(&mut stream, raw[header_end..].to_vec(), &brt, &amb, hold);
+    // Our counter after the five request fields: a passcode reply goes out on it.
+    let mut counter_local = counter;
+    let result = hold_control_session(
+        &mut stream,
+        raw[header_end..].to_vec(),
+        Keys {
+            bright: &brt,
+            ambassador: &amb,
+            counter_local: &mut counter_local,
+        },
+        hold,
+        prompt,
+        PASSCODE_WAIT,
+    );
     // Close the control session cleanly. Dropping the socket closes it too, but
     // an explicit graceful shutdown gives the console an unambiguous "the client
     // is leaving" FIN instead of a half-open session it must time out — a
@@ -353,12 +381,8 @@ fn ctrl_connect(
 /// moves on to the stream. Waiting for this signal instead of a timer is the
 /// difference between "we connected" and "the console accepted the session".
 const CTRL_SESSION_ID: u16 = 0x0033;
-const CTRL_LOGIN: u16 = 0x0005;
-const CTRL_LOGIN_PIN_REQ: u16 = 0x0004;
 const CTRL_HEARTBEAT_REQ: u16 = 0x00fe;
 const CTRL_HEARTBEAT_REP: u16 = 0x01fe;
-/// The state byte in a LOGIN message: 0 = signed in.
-const CTRL_LOGIN_STATE_SUCCESS: u8 = 0x00;
 
 /// Decrypt a received ctrl payload. The console encrypts with the same key
 /// and IV scheme as our request fields, on its own counter that advances once
@@ -375,6 +399,13 @@ pub(crate) fn auth_decrypt(
     buf
 }
 
+/// The ctrl cipher, and our side's counter (a passcode reply is encrypted on it).
+struct Keys<'a> {
+    bright: &'a [u8; 16],
+    ambassador: &'a [u8; 16],
+    counter_local: &'a mut u64,
+}
+
 /// Keep the control session alive for `hold`, answering heartbeats, and
 /// confirm the sign-in.
 ///
@@ -387,14 +418,22 @@ pub(crate) fn auth_decrypt(
 /// The console also announces the outcome: a `LOGIN` message whose one-byte
 /// (encrypted) payload is the login state. Decrypting it turns "we held the
 /// session" into "the console reported the user signed in". A `LOGIN_PIN_REQ`
-/// means the account has a login passcode we cannot supply.
+/// means the account has a login passcode: with a `prompt` the user is asked
+/// for it (heartbeats answered meanwhile, re-asked after a wrong one, see
+/// rp_login_pin); without one the console is left awake at that screen.
 fn hold_control_session(
     stream: &mut TcpStream,
     initial: Vec<u8>,
-    bright: &[u8; 16],
-    ambassador: &[u8; 16],
+    keys: Keys<'_>,
     hold: Duration,
-) -> Result<()> {
+    mut prompt: Option<&mut dyn PasscodePrompt>,
+    passcode_wait: Duration,
+) -> Result<SignIn> {
+    let Keys {
+        bright,
+        ambassador,
+        counter_local,
+    } = keys;
     let mut buf = initial;
     let mut tmp = [0u8; 2048];
     // The console's send counter starts at 1, not 0: it advances once over the
@@ -402,8 +441,7 @@ fn hold_control_session(
     // hardware — decrypting the LOGIN message at 0 gives garbage, at 1 gives
     // the real state byte (0 = signed in).
     let mut remote_counter = 1u64;
-    let started = std::time::Instant::now();
-    let deadline = started + hold;
+    let mut deadline = std::time::Instant::now() + hold;
     // Once the console reports success, hold a short grace answering heartbeats
     // so the sign-in commits and sticks after we disconnect, then stop — no
     // need to wait out the full timeout.
@@ -414,8 +452,9 @@ fn hold_control_session(
     // console that woke already signed in has no transition to announce, so
     // LOGIN alone is not something we can wait for.
     let mut established_at: Option<std::time::Instant> = None;
+    let mut flow = PinFlow::new(passcode_wait);
     stream
-        .set_read_timeout(Some(Duration::from_millis(500)))
+        .set_read_timeout(Some(Duration::from_millis(250)))
         .ok();
 
     loop {
@@ -442,13 +481,21 @@ fn hold_control_session(
             } else {
                 Vec::new()
             };
+            buf.drain(0..8 + size);
+
+            // The passcode exchange, when someone can type it.
+            if let Some(p) = prompt.as_deref_mut() {
+                if flow.on_message(msg_type, &payload, p)? {
+                    // Asked (again): any earlier LOGIN success was not for this passcode.
+                    login_at = None;
+                    continue;
+                }
+            } else if msg_type == crate::rp_login_pin::CTRL_LOGIN_PIN_REQ {
+                // Nobody to ask (an automatic wake): the console is up, at the passcode screen.
+                return Ok(SignIn::PasscodeNeeded);
+            }
 
             match msg_type {
-                CTRL_LOGIN_PIN_REQ => bail!(
-                    "the account has a login passcode, so the console is waiting for \
-                     a PIN we cannot supply. Remove it (Settings › Users and Accounts \
-                     › Login Settings) to wake straight to this user."
-                ),
                 CTRL_LOGIN => {
                     if payload.first() == Some(&CTRL_LOGIN_STATE_SUCCESS) {
                         login_at.get_or_insert_with(std::time::Instant::now);
@@ -474,17 +521,32 @@ fn hold_control_session(
                 }
                 _ => {}
             }
-            buf.drain(0..8 + size);
         }
 
         // Done as soon as the sign-in is confirmed and has been held through
         // its grace period; otherwise keep going until the overall deadline.
-        if let Some(at) = login_at.or(established_at) {
+        // Once the console asked for a passcode, only its LOGIN success says the user
+        // signed in: a SESSION_ID before the ask says nothing about the passcode, and
+        // nothing is confirmed while the user is still typing.
+        let confirmed = if flow.involved() {
+            login_at
+        } else {
+            login_at.or(established_at)
+        };
+        if let Some(at) = confirmed.filter(|_| !flow.asking()) {
             if at.elapsed() >= grace_after_login {
-                return Ok(());
+                return Ok(SignIn::SignedIn);
             }
         }
-        if std::time::Instant::now() >= deadline {
+        if flow.asking() {
+            // The user is typing: the console waits, and so do we (up to the passcode wait).
+            if let Some(p) = prompt.as_deref_mut() {
+                if flow.poll(stream, bright, ambassador, counter_local, p)? {
+                    // A fresh wait for the console's verdict.
+                    deadline = std::time::Instant::now() + hold;
+                }
+            }
+        } else if std::time::Instant::now() >= deadline {
             // No LOGIN arrived. We genuinely do not know whether the user was
             // signed in, so say exactly that — an earlier revision of this
             // returned Ok() here, which reported "signed in" for consoles that
@@ -502,6 +564,8 @@ fn hold_control_session(
             );
         }
         match stream.read(&mut tmp) {
+            // Once a passcode is involved, a retry would only ask again: final.
+            Ok(0) if flow.involved() => bail!(PASSCODE_CONSOLE_GAVE_UP),
             Ok(0) => bail!("the console closed the control session before sign-in settled"),
             Ok(n) => buf.extend_from_slice(&tmp[..n]),
             Err(ref e)
@@ -510,6 +574,7 @@ fn hold_control_session(
             {
                 // Quiet gap between heartbeats — keep holding until the deadline.
             }
+            Err(_) if flow.involved() => bail!(PASSCODE_CONSOLE_GAVE_UP),
             Err(e) => return Err(anyhow!("reading the control session: {e}")),
         }
     }
@@ -567,8 +632,9 @@ const RETRY_MAX: Duration = Duration::from_secs(2);
 ///     it had settled. This one was missing, so the first refusal after a wake
 ///     ended the attempt and told the user their RP-Key was wrong.
 ///
-/// A login passcode or a rejected sign-in is final: retrying cannot help, and
-/// pretending otherwise just delays a real answer.
+/// A rejected sign-in, or anything after the passcode was asked for (cancelled, timed out,
+/// too many wrong ones), is final: retrying cannot help, and pretending otherwise just delays a
+/// real answer (and would ask again).
 fn is_transient_session_error(msg: &str) -> bool {
     msg.contains("connecting")
         || msg.contains("Connection refused")
@@ -584,7 +650,14 @@ fn is_transient_session_error(msg: &str) -> bool {
         || msg.contains("sent no response")
 }
 
-pub fn login_session_when_ready(host: &str, creds: &SessionCreds, timeout: Duration) -> Result<()> {
+/// `prompt`: who types the user's login passcode if the console asks for one; None (an
+/// automatic wake) leaves the console awake at that screen and returns `PasscodeNeeded`.
+pub fn login_session_when_ready(
+    host: &str,
+    creds: &SessionCreds,
+    timeout: Duration,
+    mut prompt: Option<&mut dyn PasscodePrompt>,
+) -> Result<SignIn> {
     let deadline = std::time::Instant::now() + timeout;
     let mut backoff = RETRY_FIRST;
 
@@ -611,8 +684,14 @@ pub fn login_session_when_ready(host: &str, creds: &SessionCreds, timeout: Durat
                 }
                 Err(e) => e,
             },
-            Some(n) => match ctrl_connect(host, creds, &n, sign_in_hold()) {
-                Ok(()) => return Ok(()),
+            Some(n) => match ctrl_connect(
+                host,
+                creds,
+                &n,
+                sign_in_hold(),
+                prompt.as_mut().map(|p| &mut **p as &mut dyn PasscodePrompt),
+            ) {
+                Ok(r) => return Ok(r),
                 Err(e) => e,
             },
         };
@@ -650,6 +729,211 @@ pub fn login_session_when_ready(host: &str, creds: &SessionCreds, timeout: Durat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rp_login_pin::test_support::{console_msg, read_pin, Typist, AMB, BRT};
+    use crate::rp_login_pin::{
+        Passcode, CTRL_LOGIN_PIN_REQ, LOGIN_STATE_PIN_INCORRECT, PASSCODE_CANCELLED,
+        PASSCODE_TIMEOUT, PASSCODE_TOO_MANY,
+    };
+
+    /// Hold a sign-in session against a fake console thread. Returns the outcome and our ctrl
+    /// counter after (5 = nothing sent).
+    fn sign_in_against(
+        user: Option<&mut Typist>,
+        passcode_wait: Duration,
+        console: impl FnOnce(TcpStream) + Send + 'static,
+    ) -> (Result<SignIn>, u64) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (c, _) = l.accept().unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            console(c);
+        });
+        let mut s = TcpStream::connect(addr).unwrap();
+        let mut ours = 5u64;
+        let r = hold_control_session(
+            &mut s,
+            Vec::new(),
+            Keys {
+                bright: &BRT,
+                ambassador: &AMB,
+                counter_local: &mut ours,
+            },
+            Duration::from_secs(5),
+            user.map(|u| u as &mut dyn PasscodePrompt),
+            passcode_wait,
+        );
+        drop(s);
+        t.join().unwrap();
+        (r, ours)
+    }
+
+    /// The console's side after a passcode it took: signed in, then live.
+    fn accept(c: &mut TcpStream, n: &mut u64) {
+        c.write_all(&console_msg(CTRL_LOGIN, &[0], n)).unwrap();
+        c.write_all(&console_msg(
+            CTRL_SESSION_ID,
+            &[4, b'a', b'b', b'c', b'd'],
+            n,
+        ))
+        .unwrap();
+        // Held through the grace: the engine closes ctrl itself.
+        let mut b = [0u8; 64];
+        while c.read(&mut b).map(|n| n > 0).unwrap_or(false) {}
+    }
+
+    #[test]
+    fn wake_sign_in_asks_for_the_passcode_and_signs_in() {
+        let mut user = Typist::new(vec![None, None, Some(Passcode::Digits("2468".into()))]);
+        let (r, ours) = sign_in_against(Some(&mut user), PASSCODE_WAIT, |mut c| {
+            let mut n = 1u64;
+            c.write_all(&console_msg(CTRL_LOGIN_PIN_REQ, &[], &mut n))
+                .unwrap();
+            // Heartbeats are answered while the user types.
+            c.write_all(&console_msg(CTRL_HEARTBEAT_REQ, &[], &mut n))
+                .unwrap();
+            assert_eq!(read_pin(&mut c, 5), b"2468");
+            accept(&mut c, &mut n);
+        });
+        assert_eq!(r.unwrap(), SignIn::SignedIn);
+        assert_eq!(user.asked, vec![false]);
+        assert_eq!(ours, 6);
+    }
+
+    #[test]
+    fn a_session_id_before_the_passcode_ask_is_not_a_sign_in() {
+        // The console declares the session live, then asks for the passcode. The user types
+        // for longer than the sign-in grace: we must keep asking, not report "signed in".
+        let mut answers: Vec<Option<Passcode>> = (0..16).map(|_| None).collect();
+        answers.push(Some(Passcode::Digits("2468".into())));
+        let mut user = Typist::new(answers);
+        let (r, ours) = sign_in_against(Some(&mut user), PASSCODE_WAIT, |mut c| {
+            let mut n = 1u64;
+            c.write_all(&console_msg(
+                CTRL_SESSION_ID,
+                &[4, b'a', b'b', b'c', b'd'],
+                &mut n,
+            ))
+            .unwrap();
+            c.write_all(&console_msg(CTRL_LOGIN_PIN_REQ, &[], &mut n))
+                .unwrap();
+            assert_eq!(read_pin(&mut c, 5), b"2468");
+            accept(&mut c, &mut n);
+        });
+        assert_eq!(r.unwrap(), SignIn::SignedIn);
+        assert_eq!(ours, 6);
+    }
+
+    #[test]
+    fn a_sent_passcode_without_login_success_is_not_a_sign_in() {
+        let mut user = Typist::new(vec![Some(Passcode::Digits("2468".into()))]);
+        let (r, _) = sign_in_against(Some(&mut user), PASSCODE_WAIT, |mut c| {
+            let mut n = 1u64;
+            c.write_all(&console_msg(
+                CTRL_SESSION_ID,
+                &[4, b'a', b'b', b'c', b'd'],
+                &mut n,
+            ))
+            .unwrap();
+            c.write_all(&console_msg(CTRL_LOGIN_PIN_REQ, &[], &mut n))
+                .unwrap();
+            assert_eq!(read_pin(&mut c, 5), b"2468");
+            // No verdict: the console never says LOGIN success.
+            let mut b = [0u8; 64];
+            while c.read(&mut b).map(|n| n > 0).unwrap_or(false) {}
+        });
+        assert!(r.is_err(), "reported {r:?} with no LOGIN success");
+    }
+
+    #[test]
+    fn a_wrong_wake_passcode_asks_again() {
+        let mut user = Typist::new(vec![
+            Some(Passcode::Digits("0000".into())),
+            Some(Passcode::Digits("1357".into())),
+        ]);
+        let (r, ours) = sign_in_against(Some(&mut user), PASSCODE_WAIT, |mut c| {
+            let mut n = 1u64;
+            c.write_all(&console_msg(CTRL_LOGIN_PIN_REQ, &[], &mut n))
+                .unwrap();
+            assert_eq!(read_pin(&mut c, 5), b"0000");
+            let mut both = console_msg(CTRL_LOGIN, &[LOGIN_STATE_PIN_INCORRECT], &mut n);
+            both.extend(console_msg(CTRL_LOGIN_PIN_REQ, &[], &mut n));
+            c.write_all(&both).unwrap();
+            assert_eq!(read_pin(&mut c, 6), b"1357");
+            accept(&mut c, &mut n);
+        });
+        assert_eq!(r.unwrap(), SignIn::SignedIn);
+        assert_eq!(user.asked, vec![false, true]);
+        assert_eq!(ours, 7);
+    }
+
+    #[test]
+    fn cancelling_the_wake_passcode_sends_nothing() {
+        let mut user = Typist::new(vec![Some(Passcode::Cancel)]);
+        let (r, ours) = sign_in_against(Some(&mut user), PASSCODE_WAIT, |mut c| {
+            let mut n = 1u64;
+            c.write_all(&console_msg(CTRL_LOGIN_PIN_REQ, &[], &mut n))
+                .unwrap();
+            let mut b = [0u8; 1];
+            assert_eq!(c.read(&mut b).unwrap_or(0), 0);
+        });
+        assert!(format!("{:#}", r.unwrap_err()).contains(PASSCODE_CANCELLED));
+        assert_eq!(ours, 5);
+    }
+
+    #[test]
+    fn an_unanswered_wake_passcode_times_out() {
+        let mut user = Typist::default();
+        let (r, _) = sign_in_against(Some(&mut user), Duration::from_millis(300), |mut c| {
+            let mut n = 1u64;
+            c.write_all(&console_msg(CTRL_LOGIN_PIN_REQ, &[], &mut n))
+                .unwrap();
+            let mut b = [0u8; 1];
+            assert_eq!(c.read(&mut b).unwrap_or(0), 0);
+        });
+        assert!(format!("{:#}", r.unwrap_err()).contains(PASSCODE_TIMEOUT));
+    }
+
+    #[test]
+    fn five_wrong_wake_passcodes_stop_the_asking() {
+        let mut user = Typist::new(
+            (0..6)
+                .map(|_| Some(Passcode::Digits("9999".into())))
+                .collect(),
+        );
+        let (r, ours) = sign_in_against(Some(&mut user), PASSCODE_WAIT, |mut c| {
+            let mut n = 1u64;
+            c.write_all(&console_msg(CTRL_LOGIN_PIN_REQ, &[], &mut n))
+                .unwrap();
+            for i in 0..5u64 {
+                assert_eq!(read_pin(&mut c, 5 + i), b"9999");
+                c.write_all(&console_msg(
+                    CTRL_LOGIN,
+                    &[LOGIN_STATE_PIN_INCORRECT],
+                    &mut n,
+                ))
+                .unwrap();
+            }
+            let mut b = [0u8; 1];
+            assert_eq!(c.read(&mut b).unwrap_or(0), 0);
+        });
+        assert!(format!("{:#}", r.unwrap_err()).contains(PASSCODE_TOO_MANY));
+        assert_eq!(user.asked, vec![false, true, true, true, true]);
+        assert_eq!(ours, 10);
+    }
+
+    #[test]
+    fn an_automatic_wake_stops_at_the_passcode_screen() {
+        let (r, ours) = sign_in_against(None, PASSCODE_WAIT, |mut c| {
+            let mut n = 1u64;
+            c.write_all(&console_msg(CTRL_LOGIN_PIN_REQ, &[], &mut n))
+                .unwrap();
+            let mut b = [0u8; 1];
+            assert_eq!(c.read(&mut b).unwrap_or(0), 0);
+        });
+        assert_eq!(r.unwrap(), SignIn::PasscodeNeeded);
+        assert_eq!(ours, 5);
+    }
 
     #[test]
     fn the_device_id_is_stable_per_console() {

@@ -186,7 +186,7 @@ static int dev_mouse_open(void) {
     if (g_mh >= 0) return VINPUT_OK;
     g_mh = add_device(m_add, "mouse");
     save_handles();
-    return g_mh >= 0 ? VINPUT_OK : VINPUT_E_FAILED;
+    return g_mh >= 0 ? VINPUT_OK : foreground_user() < 0 ? VINPUT_E_NO_USER : VINPUT_E_FAILED;
 }
 
 static void dev_mouse_close(void) {
@@ -219,7 +219,7 @@ static int dev_keyboard_open(void) {
     if (g_kh >= 0) return VINPUT_OK;
     g_kh = add_device(k_add, "keyboard");
     save_handles();
-    return g_kh >= 0 ? VINPUT_OK : VINPUT_E_FAILED;
+    return g_kh >= 0 ? VINPUT_OK : foreground_user() < 0 ? VINPUT_E_NO_USER : VINPUT_E_FAILED;
 }
 
 static void dev_keyboard_close(void) {

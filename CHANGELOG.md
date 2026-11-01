@@ -4,6 +4,42 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.5.0
+
+- **Home's Recent games shows more games, at a sensible size.** The covers keep about the size of
+  a console's home screen instead of three filling the whole width, so a wide window shows six or
+  seven; up to twelve of your newest games are there, the row scrolls sideways, and with a mouse
+  the arrow buttons beside it page through.
+- **Pause an upload, send something else, carry on.** A running upload has a **Pause** button,
+  on the Upload & Install queue and on the Files screen alike. It stops the upload keeping what
+  already reached the PS5, marks it **Paused**, and the next item goes. **Resume** puts it back in
+  line where it was and it continues from where it stopped (nothing is sent twice); with nothing
+  else running it starts at once. Paused stays paused after you leave the screen or restart the
+  app. Asked for by Marc.
+- **Send now.** A waiting item has **Send now**: the upload running on that console pauses, this
+  item goes, and the paused upload carries on by itself when it's done (or fails). Several Send
+  nows run in the order you clicked them, and the paused upload continues after the last one. An
+  upload you paused yourself is never resumed for you. Still one transfer at a time per console.
+- **Remote Play asks for your PS5 passcode instead of giving up (#608).** If the user you play as
+  has a sign-in passcode, a box over the stream asks for its four digits when you press Start (a
+  number pad on phones), and asks again if it was wrong. It goes straight to the console and is
+  never saved. Cancel ends the start. Wake & sign in asks the same way (Cancel leaves the PS5 at
+  its sign-in screen); automatic wakes for uploads don't ask and just wake the console. After five
+  wrong passcodes the app stops asking and says to enter it on the PS5.
+- **"The PS5 is waiting at sign-in" (#608).** Playing a game, the native keyboard & mouse or a new
+  avatar with nobody signed in now says so once, with a **Sign in** button (Wake & sign in, and
+  the passcode box if the user has one). Nothing changes while a user is signed in.
+- **The passcode stays on the device that started the stream (#608).** A phone used as a
+  controller or watching shows "Waiting for the passcode on <computer>" instead; watchers never
+  get the box or the code. The FAQ has a short "My PS5 profile has a passcode" answer.
+- **Pair with the PIN shown on the PS5 (#609).** Play › Set up's pairing step (and Wake & sign in,
+  when pairing fails) can now pair the way PS Remote Play and chiaki-ng do: open Settings › System
+  › Remote Play › Link Device on the PS5 and type the 8-digit number it shows. It needs no helper,
+  so it works on any firmware, including ones where the app can't make a pairing PIN itself.
+- **A failed pairing says why (#609).** Instead of "the Remote Play request failed on-console",
+  you see the console's own reason and code (for example "sceRemoteplayGeneratePinCode failed:
+  0x…"), with the PIN pairing offered right there.
+
 ## 10.4.1
 
 - **Keyboard & mouse in Remote Play now works on every firmware**, not only FW 13.60 (still the

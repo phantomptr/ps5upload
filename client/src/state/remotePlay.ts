@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import { askToSignIn } from "../lib/signInNeeded";
 import { getEngineUrl } from "./engine";
 import {
   DEFAULT_KEYMAP,
@@ -17,6 +18,7 @@ import {
   type StreamError,
   type StreamPhase,
   type StreamStats,
+  type PasscodeAsk,
 } from "../lib/remotePlayStream";
 import type { MotionReading } from "../lib/motion";
 import { gamepadsOf } from "../lib/nativePad";
@@ -177,6 +179,11 @@ interface RpState {
   keyboard: RpKeyboardState | null;
   /** The text box is closed here (done or cancelled) before the console says so. */
   closeKeyboard: () => void;
+  /** The console waits for the user's sign-in passcode (`seq` changes with each ask). Only
+   *  whether it asks lives here: the digits are sent straight on and never kept. */
+  passcode: (PasscodeAsk & { seq: number }) | null;
+  answerPasscode: (digits: string) => void;
+  cancelPasscode: () => void;
   prefs: RpPrefs;
   keymap: Record<string, KeyAction>;
   /** The Remote Play screen is on show: only then do controllers drive the console. */
@@ -272,6 +279,15 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
   light: null,
   keyboard: null,
   closeKeyboard: () => set({ keyboard: null }),
+  passcode: null,
+  answerPasscode: (digits) => {
+    const st = get();
+    if (st.stream?.sendPasscode(digits)) set({ passcode: null });
+  },
+  cancelPasscode: () => {
+    get().stream?.cancelPasscode();
+    set({ passcode: null });
+  },
   prefs: loadRpPrefs(),
   keymap: loadKeymap(),
   onScreen: false,
@@ -346,20 +362,31 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
         if (p === "ended") {
           dualSense?.stop();
           rpInput.held.clear();
-          set({ stream: null, light: null, keyboard: null });
+          set({ stream: null, light: null, keyboard: null, passcode: null });
         }
       },
       onStats: (st) => get().stream === stream && set({ stats: st }),
       onError: (e) => get().stream === stream && set({ error: e }),
       onLight: (rgb) => get().stream === stream && set({ light: rgb }),
-      onKbm: (v) => get().stream === stream && useKbmStore.getState().setStatus(readKbmStatus(v)),
+      onKbm: (v) => {
+        if (get().stream !== stream) return;
+        const kbm = useKbmStore.getState();
+        const next = readKbmStatus(v);
+        // Nobody signed in: the PS5 has no user to give a keyboard to. Said once per change.
+        if (next?.err === "vinput_no_user" && kbm.status?.err !== "vinput_no_user") askToSignIn(t.host);
+        kbm.setStatus(next);
+      },
       onPadKbm: (v) => get().stream === stream && emitPadKbm(v),
       onKeyboard: (m) => get().stream === stream && set({ keyboard: nextKeyboard(get().keyboard, m) }),
+      onPasscode: (ask) => {
+        if (get().stream !== stream) return;
+        set({ passcode: ask ? { ...ask, seq: (get().passcode?.seq ?? 0) + 1 } : null });
+      },
       readPad,
       gamepads: rpGamepads,
     });
     stream.setVolume(prefs.muted ? 0 : prefs.volume);
-    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null });
+    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null, passcode: null });
     await stream.start();
   },
 

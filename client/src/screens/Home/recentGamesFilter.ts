@@ -1,5 +1,8 @@
 import type { CollectionGame, GameConsoleState } from "../../api/collection";
 
+/** How many games the Home row holds at most; the rest are a click away in the Collection. */
+export const RECENT_GAMES_LIMIT = 12;
+
 /** "all", "missing" (on none of the consoles read so far), or a console's host. */
 export type RecentFilter = "all" | "missing" | { host: string };
 
@@ -16,7 +19,7 @@ export function recentGames(
   games: readonly CollectionGame[],
   filter: RecentFilter,
   states: StatesByHost,
-  limit = 8,
+  limit = RECENT_GAMES_LIMIT,
 ): CollectionGame[] {
   const read = Object.values(states).filter((s): s is Record<string, GameConsoleState> => !!s);
   const keep = (g: CollectionGame) => {
@@ -28,4 +31,16 @@ export function recentGames(
     .filter(keep)
     .sort((a, b) => b.added_ts - a.added_ts || a.title.localeCompare(b.title))
     .slice(0, limit);
+}
+
+/**
+ * Whether a sideways-scrolling row has more before and after what shows.
+ * `scrollLeft` is negative in a right-to-left layout (browsers count from the
+ * start edge towards negative), so the distance from the start is its
+ * magnitude. A pixel of slack absorbs fractional scroll positions on scaled
+ * displays.
+ */
+export function rowEdges(scrollLeft: number, scrollWidth: number, clientWidth: number) {
+  const from = Math.abs(scrollLeft);
+  return { prev: from > 1, next: from + clientWidth < scrollWidth - 1 };
 }

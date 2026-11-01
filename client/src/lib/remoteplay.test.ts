@@ -20,6 +20,16 @@ describe("accountIdToChiakiNumeric", () => {
     expect(accountIdToChiakiNumeric(CONSOLES.b64)).toBe(CONSOLES.dec);
   });
 
+  it("reads digits alone as decimal, however short; 0x or a-f as hex", () => {
+    // 16 digits or fewer used to be read as hex: 1234 became 4660, another account.
+    expect(accountIdToChiakiNumeric("1234")).toBe("1234");
+    expect(accountIdToChiakiNumeric("1234567890123456")).toBe("1234567890123456");
+    expect(accountIdToChiakiNumeric("0x1234")).toBe("4660");
+    expect(accountIdToChiakiNumeric("0X1234")).toBe("4660");
+    expect(accountIdToChiakiNumeric("12ab")).toBe("4779");
+    expect(accountIdToPairingB64("1234")).toBe(accountIdToPairingB64("0x4d2"));
+  });
+
   it("reads a typed hex id, with or without 0x", () => {
     expect(accountIdToChiakiNumeric(REPORTED.hex)).toBe(REPORTED.dec);
     expect(accountIdToChiakiNumeric("7ed3586971779f76")).toBe(REPORTED.dec);

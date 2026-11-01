@@ -78,20 +78,85 @@ pub fn remoteplay_request(addr: &str, manual_account_id: Option<&str>) -> Result
     // without inspecting the body — so a genuine on-console failure
     // (libSceRemoteplay absent, Initialize returned non-zero, no foreground
     // user, …) was silently swallowed and the user only saw "failed" on the
-    // next status poll. Parse the ack and bail when the payload says !ok.
+    // next status poll. Parse the ack and bail when the payload says !ok,
+    // with the payload's own reason (#609: FW 11.60 users saw only "failed
+    // on-console" while the payload knew the Sony call and its code).
+    match parse_request_ack(&resp)? {
+        Ok(snap) => Ok(snap),
+        Err(err) => {
+            // Payloads before 10.5.0 ack a failure as a bare {"ok":false}; their status still
+            // holds the reason (a failed request is not polled any further, so reading it is
+            // harmless).
+            let err = if err.is_empty() {
+                remoteplay_status(addr).map(|s| s.err).unwrap_or_default()
+            } else {
+                err
+            };
+            bail!("{}", request_failure_text(&err))
+        }
+    }
+}
+
+/// The REMOTEPLAY_REQUEST ack: the snapshot when the console made a PIN, else the payload's
+/// reason (empty from payloads before 10.5.0).
+fn parse_request_ack(resp: &[u8]) -> Result<std::result::Result<PinSnapshot, String>> {
     #[derive(Deserialize)]
     struct RequestAck {
         #[serde(default)]
         ok: bool,
         #[serde(default)]
         snapshot: Option<PinSnapshot>,
+        #[serde(default)]
+        err: String,
     }
-    let ack: RequestAck = serde_json::from_slice(&resp)
+    let ack: RequestAck = serde_json::from_slice(resp)
         .map_err(|e| anyhow::anyhow!("bad REMOTEPLAY_REQUEST ack: {e}"))?;
-    if !ack.ok {
-        bail!("payload reports the Remote Play request failed on-console");
+    Ok(if ack.ok {
+        Ok(ack.snapshot.unwrap_or_default())
+    } else {
+        Err(ack.err.trim().to_string())
+    })
+}
+
+/// What a failed PIN request says: Sony's own call and code when the payload knows them.
+pub fn request_failure_text(err: &str) -> String {
+    let err = err.trim();
+    if err.is_empty() {
+        "the PS5 could not make a pairing PIN (it gave no reason)".into()
+    } else {
+        format!("the PS5 could not make a pairing PIN: {err}")
     }
-    Ok(ack.snapshot.unwrap_or_default())
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_request_keeps_the_payloads_reason() {
+        let ok = parse_request_ack(
+            br#"{"ok":true,"snapshot":{"pin":"12345678","account_id":"AAAAAAAAAAE="}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(ok.pin, "12345678");
+        let failed = parse_request_ack(
+            br#"{"ok":false,"err":"sceRemoteplayGeneratePinCode failed: 0x80C60011"}"#,
+        )
+        .unwrap()
+        .unwrap_err();
+        let text = request_failure_text(&failed);
+        assert!(
+            text.contains("sceRemoteplayGeneratePinCode failed: 0x80C60011"),
+            "{text}"
+        );
+        // An older payload says only ok:false.
+        assert_eq!(
+            parse_request_ack(br#"{"ok":false}"#).unwrap().unwrap_err(),
+            ""
+        );
+        assert!(request_failure_text("").contains("no reason"));
+    }
 }
 
 /// The PIN and account id, read without probing for pairing completion.

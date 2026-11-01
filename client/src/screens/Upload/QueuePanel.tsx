@@ -20,6 +20,8 @@ import {
   UploadCloud,
   Moon,
   HardDrive,
+  Pause,
+  Send,
 } from "lucide-react";
 
 import {
@@ -70,6 +72,7 @@ import { useConsoleLabel } from "../../state/roster";
 import {
   installOrderPriority,
   moveGroupOf,
+  canPauseItem,
   useUploadQueueStore,
   type QueueItem,
   type QueueItemStatus,
@@ -139,13 +142,15 @@ export function queueItemsForHost(
 }
 
 /** Each pending item's 1-based place in its console's run order: the order the
- *  queue actually runs them in (base → update → DLC, then add order). */
+ *  queue actually runs them in (rows sent now in click order, then base → update → DLC, then
+ *  add order). A paused row has no place: it does not run until resumed. */
 export function pendingPositions(items: QueueItem[]): Map<string, number> {
   const pending = items
     .map((it, index) => ({ it, index }))
-    .filter(({ it }) => it.status === "pending")
+    .filter(({ it }) => it.status === "pending" && !it.paused)
     .sort(
       (a, b) =>
+        (a.it.sendNowAt ?? Infinity) - (b.it.sendNowAt ?? Infinity) ||
         installOrderPriority(a.it) - installOrderPriority(b.it) ||
         a.index - b.index,
     );
@@ -162,9 +167,13 @@ export function queueSections(
 ): { key: "now" | "next" | "finished"; items: QueueItem[] }[] {
   const positions = pendingPositions(items);
   const now = items.filter((it) => it.status === "running");
+  // Paused rows (no place in the run order) after the ones that will run.
   const next = items
     .filter((it) => it.status === "pending")
-    .sort((a, b) => (positions.get(a.id) ?? 0) - (positions.get(b.id) ?? 0));
+    .sort(
+      (a, b) =>
+        (positions.get(a.id) ?? Infinity) - (positions.get(b.id) ?? Infinity),
+    );
   const finished = items
     .filter((it) => it.status === "done" || it.status === "failed")
     .sort(
@@ -1022,7 +1031,15 @@ export function QueueRow({
             <GripVertical size={14} />
           </span>
         )}
-        {isPending && position != null ? (
+        {isPending && item.paused ? (
+          <span
+            data-testid="queue-paused-icon"
+            className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center text-[var(--color-muted)]"
+            title={tr("queue_paused", undefined, "Paused")}
+          >
+            <Pause size={14} aria-hidden />
+          </span>
+        ) : isPending && position != null ? (
           <span
             className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-3)] px-1 text-[10px] font-semibold tabular-nums text-[var(--color-muted)]"
             title={tr(
@@ -1068,6 +1085,14 @@ export function QueueRow({
             {kind && (
               <span className="shrink-0 rounded bg-[var(--color-surface-3)] px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
                 {kind}
+              </span>
+            )}
+            {isPending && item.paused && (
+              <span
+                data-testid="queue-paused"
+                className="shrink-0 rounded bg-[var(--color-warn)]/15 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-[var(--color-warn)]"
+              >
+                {tr("queue_paused", undefined, "Paused")}
               </span>
             )}
           </div>
@@ -1202,6 +1227,18 @@ export function QueueRow({
               >
                 <ArrowDown size={14} />
               </button>
+              {!item.paused && (
+                <button
+                  type="button"
+                  data-testid="queue-send-now"
+                  onClick={() => useUploadQueueStore.getState().sendNow(item.id)}
+                  title={tr("queue_send_now_tip", undefined, "Send now: pauses the current upload and carries it on after this one")}
+                  aria-label={tr("queue_send_now", undefined, "Send now")}
+                  className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)]"
+                >
+                  <Send size={14} />
+                </button>
+              )}
             </>
           )}
           {convertState && <ConvertFirstButton state={convertState} />}
@@ -1240,22 +1277,37 @@ export function QueueRow({
             )
           ) : isActive ? (
             // The actively-uploading row: move/remove are locked (mutating the
-            // array under the runner is unsafe), so Cancel is the only per-item
-            // control here. It aborts THIS upload (partial transfer stays
-            // resumable) and lets the console's other pending jobs keep going —
+            // array under the runner is unsafe). Pause stops it keeping what the console
+            // has and lets the next row go; Cancel aborts THIS upload (partial transfer
+            // stays resumable) and lets the console's other pending jobs keep going —
             // unlike Stop, which halts the whole console.
-            <button
-              type="button"
-              onClick={onCancel}
-              title={tr(
-                "queue_cancel_item",
-                undefined,
-                "Cancel this upload (keeps the rest of the queue going)",
+            <>
+              {/* Once the upload has finished (installing, mounting) there is nothing to pause. */}
+              {canPauseItem(item) && (
+                <button
+                  type="button"
+                  data-testid="queue-pause"
+                  onClick={() => useUploadQueueStore.getState().pauseItem(item.id)}
+                  title={tr("queue_pause_tip", undefined, "Pause: keeps what is sent and lets the next item go")}
+                  aria-label={tr("queue_pause", undefined, "Pause")}
+                  className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+                >
+                  <Pause size={14} />
+                </button>
               )}
-              className="rounded-full p-1.5 text-[var(--color-bad)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)]"
-            >
-              <Ban size={14} />
-            </button>
+              <button
+                type="button"
+                onClick={onCancel}
+                title={tr(
+                  "queue_cancel_item",
+                  undefined,
+                  "Cancel this upload (keeps the rest of the queue going)",
+                )}
+                className="rounded-full p-1.5 text-[var(--color-bad)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)]"
+              >
+                <Ban size={14} />
+              </button>
+            </>
           ) : (
             <button
               type="button"
@@ -1335,7 +1387,33 @@ export function QueueRow({
         </div>
       )}
 
-      {isPending && item.interrupted && !item.waitingForWake && (
+      {isPending && item.paused && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]">
+          <span className="min-w-0 flex-1">
+            {item.paused === "sendNow"
+              ? tr(
+                  "queue_paused_for_send_now",
+                  undefined,
+                  "Paused for a Send now. It carries on by itself after.",
+                )
+              : tr(
+                  "queue_paused_body",
+                  undefined,
+                  "Paused. Resume carries on from what the PS5 already has.",
+                )}
+          </span>
+          <Button
+            size="sm"
+            variant="secondary"
+            data-testid="queue-resume-paused"
+            onClick={() => useUploadQueueStore.getState().resumeItem(item.id)}
+          >
+            {tr("queue_resume", undefined, "Resume")}
+          </Button>
+        </div>
+      )}
+
+      {isPending && item.interrupted && !item.waitingForWake && !item.paused && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]">
           <span className="min-w-0 flex-1">
             {tr(

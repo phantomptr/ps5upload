@@ -124,7 +124,7 @@ fn new_token() -> u64 {
 /// its virtual devices are open), and why not (`err`: `vinput_unsupported` (this console cannot
 /// make them yet), `vinput_starting` (its keyboard & mouse process is starting: asked again on its
 /// own), `vinput_needs_loader`, `vinput_companion_failed`, `vinput_helper_old`, `unreachable`,
-/// `vinput_failed`, `rp_session_owns_input`), or why
+/// `vinput_failed`, `vinput_no_user` (nobody is signed in on the PS5), `rp_session_owns_input`), or why
 /// it ended (`reason`: `off`, `timeout`, `taken`, `left`).
 fn status_json(
     on: bool,

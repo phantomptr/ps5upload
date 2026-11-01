@@ -236,7 +236,10 @@ static int open_locked(int m, int k) {
         g_m_open = out[0];
         g_k_open = out[1];
     }
-    return rc == VWIRE_RC_OK ? VINPUT_OK : rc == VWIRE_RC_UNSUPPORTED ? VINPUT_E_UNSUPPORTED : VINPUT_E_FAILED;
+    return rc == VWIRE_RC_OK            ? VINPUT_OK
+           : rc == VWIRE_RC_UNSUPPORTED ? VINPUT_E_UNSUPPORTED
+           : rc == VWIRE_RC_NO_USER     ? VINPUT_E_NO_USER
+                                        : VINPUT_E_FAILED;
 }
 
 /* ── starting it ────────────────────────────────────────────────────────────────────────────── */

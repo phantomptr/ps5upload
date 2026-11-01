@@ -39,6 +39,7 @@ pub mod profile;
 pub mod rar_helper;
 pub mod rar_stream;
 pub mod remoteplay;
+pub mod rp_login_pin;
 pub mod rp_regist;
 mod rp_regist_keys;
 pub mod rp_session;

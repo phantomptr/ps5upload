@@ -141,6 +141,22 @@ describe("Queue panel", () => {
     expect(row(folderRow)).not.toContain('data-testid="queue-convert-first"');
   });
 
+  it("offers Pause on a sending upload, not once its pkg is installing", () => {
+    const pkg = (over: Record<string, unknown>) =>
+      item({
+        id: "p",
+        sourceKind: "pkg",
+        sourcePath: "/g/p.pkg",
+        displayName: "Game P",
+        addr: "10.0.0.2:9113",
+        status: "running",
+        ...over,
+      });
+    expect(row(pkg({}))).toContain('data-testid="queue-pause"');
+    expect(row(pkg({ installPhase: "installing" }))).not.toContain('data-testid="queue-pause"');
+    expect(row(pkg({ uploadDone: true }))).not.toContain('data-testid="queue-pause"');
+  });
+
   it("shows only the given console's items", () => {
     const items = [failedStream, waitingLibrary, otherConsole];
     expect(queueItemsForHost(items, "10.0.0.2").map((i) => i.id)).toEqual(["a", "c"]);

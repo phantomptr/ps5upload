@@ -47,6 +47,6 @@ describe("Play's Remote Play blocker notices", () => {
 
   it("blames a blocker only for the errors it can cause", () => {
     expect(["busy", "lost", "other"].every(blockerCanCause)).toBe(true);
-    expect(["keys", "passcode", "asleep", "unreachable", "busy_other", "no_decoder", "socket"].some(blockerCanCause)).toBe(false);
+    expect(["keys", "passcode_cancelled", "passcode_timeout", "asleep", "unreachable", "busy_other", "no_decoder", "socket"].some(blockerCanCause)).toBe(false);
   });
 });

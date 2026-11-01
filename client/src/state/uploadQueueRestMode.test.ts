@@ -25,7 +25,7 @@ vi.mock("../api/ps5", async (importOriginal) => {
     fsDelete: vi.fn(async () => {}),
     powerStandby: vi.fn(async () => ({ ok: true })),
     powerWake: vi.fn(async () => ({ ok: true })),
-    wakeAndSignIn: vi.fn(async () => ({ ok: true })),
+    wakeAndSignIn: vi.fn(async () => ({ state: "signed_in" as const })),
   };
 });
 

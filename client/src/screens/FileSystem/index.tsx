@@ -176,7 +176,7 @@ import {
   useFsUploadStore,
   type FsUploadActive,
 } from "../../state/fsUpload";
-import { enqueueFsUpload, fsUploadReservations, pauseFsUploadQueue, resumeFsUploadQueue, removeFsUploadQueued, useFsUploadQueue } from "../../state/fsUploadQueue";
+import { enqueueFsUpload, fsUploadReservations, pauseFsUpload, pauseFsUploadQueue, resumeFsUploadItem, resumeFsUploadQueue, removeFsUploadQueued, sendFsUploadNow, useFsUploadQueue } from "../../state/fsUploadQueue";
 import { nameKey, type FsExistingEntry } from "../../state/fsUploadPlan";
 import { fsUploadDeps } from "../../state/fsUploadRuntime";
 import { useScrollLock } from "../../lib/useScrollLock";
@@ -3797,10 +3797,24 @@ export default function FileSystemScreen() {
             <div className="mb-3 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3 text-xs" data-testid="fs-upload-queue">
               <strong>{tr("queue_title", undefined, "Queue")} · {uploadQueue.items.length}</strong>
               {uploadQueue.error && <p role="alert">{uploadQueue.error}</p>}
-              {uploadQueue.items.map((item, index) => (
+              {uploadQueue.items.map((item) => (
                 <div key={item.id} className="mt-2 flex items-center gap-2">
-                  <span className="min-w-0 flex-1 break-all">{item.request.steps?.flatMap((s) => s.kind === "list" ? s.files.map((f) => f.name) : [s.name]).join(", ")} → {item.request.destDir}</span>
-                  <Button size="sm" variant="ghost" disabled={uploadQueue.running && index === 0} onClick={() => removeFsUploadQueued(host, item.id)}>
+                  <span className="min-w-0 flex-1 break-all">
+                    {item.paused && <span className="mr-1 rounded bg-[var(--color-warn)]/15 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-[var(--color-warn)]" data-testid="fs-upload-paused">{tr("queue_paused", undefined, "Paused")}</span>}
+                    {item.request.steps?.flatMap((s) => s.kind === "list" ? s.files.map((f) => f.name) : [s.name]).join(", ")} → {item.request.destDir}
+                    {item.paused === "sendNow" && <span className="block text-[var(--color-muted)]">{tr("queue_paused_for_send_now", undefined, "Paused for a Send now. It carries on by itself after.")}</span>}
+                    {item.error && <span className="block text-[var(--color-bad)]">{humanizePs5Error(item.error) || item.error}</span>}
+                  </span>
+                  {item.paused ? (
+                    <Button size="sm" variant="secondary" data-testid="fs-upload-resume-item" onClick={() => resumeFsUploadItem(host, item.id, fsUploadDeps)}>
+                      {tr("queue_resume", undefined, "Resume")}
+                    </Button>
+                  ) : !(uploadQueue.running && uploadQueue.currentId === item.id) && (
+                    <Button size="sm" variant="ghost" data-testid="fs-upload-send-now" title={tr("queue_send_now_tip", undefined, "Send now: pauses the current upload and carries it on after this one")} onClick={() => sendFsUploadNow(host, item.id, fsUploadDeps)}>
+                      {tr("queue_send_now", undefined, "Send now")}
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" disabled={uploadQueue.running && uploadQueue.currentId === item.id} onClick={() => removeFsUploadQueued(host, item.id)}>
                     {tr("queue_remove", undefined, "Remove from queue")}
                   </Button>
                 </div>
@@ -3829,7 +3843,7 @@ export default function FileSystemScreen() {
                 )}
               </span>
               {busyEntry.op === "upload" && (
-                <FsUploadProgress host={host} onCancel={cancelUpload} />
+                <FsUploadProgress host={host} onCancel={cancelUpload} onPause={() => pauseFsUpload(host, fsUploadDeps)} />
               )}
             </div>
           )}
@@ -4279,13 +4293,15 @@ function ElapsedSince({ sinceMs }: { sinceMs: number }) {
 function FsUploadProgress({
   host,
   onCancel,
+  onPause,
 }: {
   host: string;
   onCancel: () => void;
+  onPause: () => void;
 }) {
   const active = useFsUploadStore((s) => fsUploadForHost(s, host).active);
   if (!active) return null;
-  return <UploadProgressDetail progress={active} onCancel={onCancel} />;
+  return <UploadProgressDetail progress={active} onCancel={onCancel} onPause={onPause} />;
 }
 
 /** Bytes, percent, speed, time left and a bar for an "Add files" upload, and Cancel. Once every
@@ -4294,9 +4310,12 @@ function FsUploadProgress({
 function UploadProgressDetail({
   progress,
   onCancel,
+  onPause,
 }: {
   progress: UploadProgress;
   onCancel: () => void;
+  /** Absent: no Pause (the copy cannot be paused). */
+  onPause?: () => void;
 }) {
   const tr = useTr();
   const { sent, total, index, count, jobId, live, retry } = progress;
@@ -4358,10 +4377,21 @@ function UploadProgressDetail({
               )}`}
           </span>
         )}
+        {onPause && (
+          <button
+            type="button"
+            data-testid="fs-upload-pause"
+            onClick={onPause}
+            title={tr("queue_pause_tip", undefined, "Pause: keeps what is sent and lets the next item go")}
+            className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ml-auto px-3 py-1"
+          >
+            {tr("queue_pause", undefined, "Pause")}
+          </button>
+        )}
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ml-auto px-3 py-1"
+          className={`rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-1 ${onPause ? "" : "ml-auto"}`}
         >
           {tr("cancel", undefined, "Cancel")}
         </button>

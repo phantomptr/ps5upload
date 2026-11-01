@@ -4,6 +4,7 @@ import { appLaunch, fsChmod, processList } from "../api/ps5";
 import { useConfirm } from "../components/ConfirmDialog";
 import { hostOf, mgmtAddr, transferAddr } from "./addr";
 import { humanizePs5Error } from "./humanizeError";
+import { askToSignIn, isSignInNeeded } from "./signInNeeded";
 import { DOC_ANCHORS, faqLink, installErrorLink } from "./installErrorDoc";
 import { killGame } from "./killGame";
 import {
@@ -201,6 +202,11 @@ export function useGameLaunch(
           return;
         }
         const raw = e instanceof Error ? e.message : String(e);
+        // Nobody is signed in on the PS5: one message with a Sign in button, not an error.
+        if (isSignInNeeded(raw)) {
+          askToSignIn(probe.host);
+          return;
+        }
         pushNotification("error", withConsolePrefix(probe.host, t.titleName), {
           body: helpBody(humanizePs5Error(raw), probe.host, t.titleId),
           link: installErrorLink(raw),

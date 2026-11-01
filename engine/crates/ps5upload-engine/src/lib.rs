@@ -104,6 +104,7 @@ mod shared_state;
 mod state_io;
 mod telemetry;
 mod vinput_api;
+mod wake_login_api;
 #[cfg(feature = "webui")]
 mod webui;
 mod win_net;
@@ -4127,6 +4128,11 @@ struct PowerWakeLoginReq {
     /// full session keys, not just the wake credential.
     regist_key: String,
     rp_key: String,
+    /// Someone is there to type the user's login passcode if the console asks: the sign-in is
+    /// held and the passcode asked for (wake_login_api). Otherwise (an automatic wake) a
+    /// passcode request ends it with the console awake at its sign-in screen.
+    #[serde(default)]
+    ask_passcode: bool,
 }
 
 /// POST /api/ps5/power/wake-login — wake the console AND sign its user in.
@@ -4144,7 +4150,7 @@ async fn ps5_power_wake_login(Json(req): Json<PowerWakeLoginReq>) -> impl IntoRe
             Err(e) => return json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
         };
     let regist_key = req.regist_key.clone();
-    let r = tokio::task::spawn_blocking(move || {
+    let job: wake_login_api::SignInJob = Box::new(move |prompt| {
         // The wake credential is the registration key as a number, so derive
         // it from the regist key when the client did not send one — a console
         // with sign-in keys can then always be woken, not just signed in.
@@ -4169,19 +4175,10 @@ async fn ps5_power_wake_login(Json(req): Json<PowerWakeLoginReq>) -> impl IntoRe
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(90),
             ),
+            prompt,
         )
-    })
-    .await
-    .map_err(anyhow::Error::from)
-    .and_then(|r| r);
-    match r {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "ok": true, "signed_in": true })),
-        )
-            .into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
+    });
+    wake_login_api::start(job, req.ask_passcode).await
 }
 
 async fn ps5_power_wake(Json(req): Json<PowerWakeReq>) -> impl IntoResponse {
@@ -4198,7 +4195,8 @@ async fn ps5_power_wake(Json(req): Json<PowerWakeReq>) -> impl IntoResponse {
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
+// No Debug: the PIN must not reach a log line by accident.
+#[derive(serde::Deserialize)]
 struct PowerPairReq {
     /// The payload's management address. Optional — falls back to the
     /// engine's configured console, like every other payload call.
@@ -4206,6 +4204,13 @@ struct PowerPairReq {
     /// The console's address. Registration and wake use their own ports,
     /// so this is the bare host, not the management address.
     host: String,
+    /// The 8-digit PIN the PS5 shows under Settings › System › Remote Play › Link Device. With
+    /// it the engine registers on its own (no helper, any firmware); never logged.
+    #[serde(default)]
+    pin: Option<String>,
+    /// The PSN account id (base64 of its 8 bytes) to pair, with `pin`.
+    #[serde(default)]
+    account_id: Option<String>,
 }
 
 /// POST /api/ps5/power/pair — pair with a console so it can be woken.
@@ -4213,6 +4218,8 @@ struct PowerPairReq {
 /// One call, nothing asked of the user: the payload supplies the PSN
 /// account id and mints the PIN, and the engine runs the registration
 /// handshake. Returns the wake credential for the client to store.
+/// With `pin` (and `account_id`), the PIN the PS5 shows on its Link Device
+/// screen is used instead, and the helper is not needed.
 ///
 /// The console has to be awake with the payload running. That is not a
 /// limitation worth working around — pairing happens once, and what it
@@ -4223,9 +4230,19 @@ async fn ps5_power_pair(
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
     let host = req.host.clone();
-    crate::log_info!("power_pair: addr={addr} host={host}");
-    let r = tokio::task::spawn_blocking(move || {
-        ps5upload_core::rp_regist::pair_with_console(&addr, &host)
+    let manual = req.pin.filter(|p| !p.trim().is_empty());
+    crate::log_info!(
+        "power_pair: addr={addr} host={host} with={}",
+        if manual.is_some() {
+            "the PS5's PIN"
+        } else {
+            "the helper"
+        }
+    );
+    let account_id = req.account_id.unwrap_or_default();
+    let r = tokio::task::spawn_blocking(move || match manual {
+        Some(pin) => ps5upload_core::rp_regist::pair_with_pin(&host, &account_id, &pin),
+        None => ps5upload_core::rp_regist::pair_with_console(&addr, &host),
     })
     .await
     .map_err(anyhow::Error::from)
@@ -11325,6 +11342,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/power/telemetry", get(ps5_power_telemetry))
         .route("/api/ps5/power/wake", post(ps5_power_wake))
         .route("/api/ps5/power/wake-login", post(ps5_power_wake_login))
+        .route(
+            "/api/ps5/power/wake-login/passcode",
+            post(wake_login_api::answer),
+        )
         // Remote Play stream spike (rp_stream_api).
         .route("/api/ps5/rp/ws", get(rp_stream_api::ws))
         .route("/api/ps5/rp/session", get(rp_stream_api::current))
