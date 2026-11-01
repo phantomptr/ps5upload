@@ -16,6 +16,7 @@ import {
 } from "mediabunny";
 
 import { getEngineUrl } from "../state/engine";
+import { withDecoderStart } from "./videoDecoderGuard";
 
 export interface ReplayFrame {
   kind: 1 | 4;
@@ -92,6 +93,11 @@ export function avcCodecFromHeader(h: Uint8Array): string {
 
 /** The picture's size, from decoding the first keyframe (exact whatever the stream's shape). */
 async function probeSize(codec: string, keyframe: Uint8Array): Promise<{ width: number; height: number }> {
+  // The Linux app: the GL display WebKitGTK needs before a decoder (videoDecoderGuard).
+  return withDecoderStart(() => probeSizeNow(codec, keyframe));
+}
+
+async function probeSizeNow(codec: string, keyframe: Uint8Array): Promise<{ width: number; height: number }> {
   let size: { width: number; height: number } | null = null;
   let failed: unknown = null;
   const dec = new VideoDecoder({

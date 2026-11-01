@@ -34,7 +34,13 @@ vi.mock("../api/ps5", () => ({
   updateDownload: vi.fn(),
   updateInstall: vi.fn(),
   updateInstallOnQuit: vi.fn(async () => true),
+  updateLastInstall: vi.fn(async () => null),
+  updateForgetFailure: vi.fn(async () => {}),
+  updateOldDownloads: vi.fn(async () => ({ count: 0, bytes: 0 })),
+  updateRemoveOldDownloads: vi.fn(async () => 0),
 }));
+
+vi.mock("./notifications", () => ({ pushNotification: vi.fn() }));
 
 const result = (latest: string): UpdateCheck => ({
   available: true,
@@ -132,5 +138,73 @@ describe("desktop updates", () => {
       expect(s.phase.download.can_install).toBe(false);
       expect(s.phase.download.install_command).toContain("sudo apt install");
     }
+  });
+
+  it("a failed install keeps the download, is not tried again by itself, and Try again retries it", async () => {
+    const api = await import("../api/ps5");
+    vi.mocked(api.updateInstall).mockRejectedValueOnce("could not move C:\\Apps\\PS5Upload.exe aside");
+    const { useUpdateStore, installOnQuitTarget, failedInstall } = await import("./update");
+    const zip = download({
+      path: "C:\\u\\updates\\PS5Upload-10.2.0-win-x64.zip",
+      install_command: undefined,
+    });
+    useUpdateStore.setState({ phase: { kind: "downloaded", result: result("10.2.0"), download: zip } });
+    await useUpdateStore.getState().install();
+    expect(api.updateInstall).toHaveBeenCalledWith(zip.path, "10.2.0");
+    let s = useUpdateStore.getState();
+    // The app stayed open on the old version: the download is still there to retry.
+    expect(s.installing).toBe(false);
+    expect(s.phase.kind).toBe("downloaded");
+    expect(failedInstall(s, "10.2.0")?.message).toContain("aside");
+    // Not on quit either, until the person tries again.
+    expect(installOnQuitTarget(s, true)).toBeNull();
+    // A newer release is a new attempt.
+    expect(failedInstall(s, "10.3.0")).toBeNull();
+
+    vi.mocked(api.updateInstall).mockResolvedValueOnce(undefined);
+    await useUpdateStore.getState().retryInstall();
+    expect(api.updateForgetFailure).toHaveBeenCalled();
+    expect(api.updateInstall).toHaveBeenCalledTimes(2);
+    s = useUpdateStore.getState();
+    expect(s.lastInstall).toBeNull();
+  });
+
+  it("a failed install found at launch is said once and stops the automatic install", async () => {
+    const api = await import("../api/ps5");
+    const notes = await import("./notifications");
+    vi.mocked(api.updateLastInstall).mockResolvedValue({
+      version: "10.2.0",
+      installed: false,
+      message: "could not open the .dmg",
+      new: true,
+    });
+    vi.mocked(api.updateOldDownloads).mockResolvedValue({ count: 3, bytes: 300 });
+    localStorage.setItem("ps5upload.update.autoinstall", "1");
+    const { useUpdateStore } = await import("./update");
+    await useUpdateStore.getState().loadInstallStatus();
+    expect(useUpdateStore.getState().oldDownloads).toBe(3);
+    expect(notes.pushNotification).toHaveBeenCalledWith(
+      "warning",
+      expect.any(String),
+      expect.objectContaining({ link: "/settings" }),
+    );
+    // The launch check finds 10.2.0 again: no download, no install, no quit.
+    vi.mocked(api.updateCheck).mockResolvedValue(result("10.2.0"));
+    await useUpdateStore.getState().checkNow();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.updateDownload).not.toHaveBeenCalled();
+    expect(api.updateInstall).not.toHaveBeenCalled();
+    expect(useUpdateStore.getState().phase.kind).toBe("available");
+  });
+
+  it("removing old downloads asks the app and counts again", async () => {
+    const api = await import("../api/ps5");
+    vi.mocked(api.updateRemoveOldDownloads).mockResolvedValue(2);
+    vi.mocked(api.updateOldDownloads).mockResolvedValue({ count: 0, bytes: 0 });
+    const { useUpdateStore } = await import("./update");
+    useUpdateStore.setState({ oldDownloads: 2 });
+    await useUpdateStore.getState().removeOldDownloads();
+    expect(api.updateRemoveOldDownloads).toHaveBeenCalled();
+    expect(useUpdateStore.getState().oldDownloads).toBe(0);
   });
 });

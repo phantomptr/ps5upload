@@ -4,6 +4,35 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.5.1
+
+- **Pressing Play no longer crashes the Linux app (#610).** On WebKitGTK 2.54 (Fedora 44 and other
+  current distros) the whole window died the moment Play checked which video formats it can
+  decode, whenever WebKit's DMA-BUF renderer was off, which the app does on most AMD and Intel
+  machines. WebKit wanted a graphics display the page had not made yet; the app now makes it
+  first.
+- **If Play ever crashes while the picture starts, the next launch recovers (Linux).** The app
+  notices, decodes the picture without the graphics card from then on, and says so once.
+- **Settings › Window › Graphics › Hardware video decoding (Linux).** Off decodes Remote Play's
+  picture in software (GStreamer's graphics-card decoders are ranked out; applies after a
+  restart). Safe graphics mode turns it off too, and `PS5UPLOAD_SOFTWARE_VIDEO=1` does for one
+  launch. The startup log says which is used (`[linux] video decoding: …`).
+- **Updating the Windows zip copy works again, and leaves nothing behind (#611).** "Install and
+  restart" (and installing updates automatically) closed the app without installing anything and
+  without opening it again, and every launch downloaded the same update once more. The install
+  ran in a hidden PowerShell script after the app had quit, the same pattern the Windows setup
+  stopped using in 9.0.1 because security software and policies can block it. PS5Upload now puts
+  the new PS5Upload.exe in place itself before it closes, starts the new version, and the new
+  version tidies up. If anything goes wrong the app stays open on the old version and says why.
+- **Updates no longer pile up in Downloads (#611).** An update the app installs itself is
+  downloaded into its own folder, reused if it's already there, and deleted once the new version
+  starts. Only a download you install by hand still goes to Downloads. Old update downloads that
+  earlier versions left there are listed in Settings → Updates with a **Remove** button; nothing
+  is deleted without asking.
+- **A failed update is said once and not retried in a loop.** If an install didn't take (on any
+  system), the next launch says so with the reason, and that version isn't installed by itself
+  again. Settings → Updates and the update bar offer **Try again** and **Download page**.
+
 ## 10.5.0
 
 - **Home's Recent games shows more games, at a sensible size.** The covers keep about the size of

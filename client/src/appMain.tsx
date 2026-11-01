@@ -32,6 +32,9 @@ installConsoleCapture();
 installDiskLogSink();
 log.info("app", "ps5upload client booting");
 installEngineStartupEvents();
+// The Linux app: Play crashed while starting the picture last time, so this launch decodes video
+// in software. Said once (lib/videoDecoderGuard.ts).
+void import("./lib/videoDecoderGuard").then((m) => m.announceVideoRecovery());
 
 // Auto-collect a detailed diagnostic report to ~/.ps5upload/crash-reports/
 // whenever the app surfaces an error (error-level notification) or the React

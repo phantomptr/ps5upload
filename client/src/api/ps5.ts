@@ -4935,12 +4935,10 @@ export async function portProbe(
 //
 //   updateCheck()    → fetches latest.json, returns availability +
 //                      release notes + platform-specific download URL
-//   updateDownload() → streams the archive into ~/Downloads, opens
-//                      the folder in the OS file manager so the user
-//                      can finish installing manually
-//
-// Deliberately no auto-install: the user asked for "notify + download
-// + user replaces." See commands/updates.rs for the rationale.
+//   updateDownload() → streams the archive into the app's updates folder
+//                      (or, when it is installed by hand, ~/Downloads,
+//                      which then opens in the file manager)
+//   updateInstall()  → installs it and restarts (commands/self_install.rs)
 
 export interface UpdateCheck {
   available: boolean;
@@ -4990,8 +4988,8 @@ export async function updateCheck(
   return invoke<UpdateCheck>("update_check", { channel });
 }
 
-/** Stream the update archive into the user's Downloads folder and
- *  reveal it in the OS file manager. Re-running with the same URL
+/** Stream the update archive into the app's updates folder (a download
+ *  installed by hand: the Downloads folder, revealed in the file manager). Re-running with the same URL
  *  is idempotent: if the file is already on disk with the expected
  *  size, we skip the download and just re-open the folder. With a
  *  `sha256`, the file must match it or the call rejects (and the file
@@ -5026,18 +5024,55 @@ export async function updateDownloadApk(
   return invoke<ApkDownload>("update_download_apk", { url, filename, sha256: sha256 || null });
 }
 
-/** Install a downloaded update and restart into it (desktop: Windows, macOS, a Linux
- *  AppImage). The app quits once the install has started and comes back as the new version;
- *  a rejection means nothing changed. */
-export async function updateInstall(path: string): Promise<void> {
-  return invoke<void>("update_install", { path });
+/** Install a downloaded update (`version`) and restart into it (desktop: Windows, macOS, a
+ *  Linux AppImage or package). The app quits once the install has started and comes back as
+ *  the new version; a rejection means nothing changed. */
+export async function updateInstall(path: string, version?: string): Promise<void> {
+  return invoke<void>("update_install", { path, version: version ?? null });
 }
 
 /** Arm (a downloaded update's path) or disarm (null) installing it when the app quits,
  *  without starting it again. Resolves whether it is armed: only an update this copy installs
  *  without a password can be. */
-export async function updateInstallOnQuit(path: string | null): Promise<boolean> {
-  return invoke<boolean>("update_install_on_quit", { path });
+export async function updateInstallOnQuit(
+  path: string | null,
+  version?: string | null,
+): Promise<boolean> {
+  return invoke<boolean>("update_install_on_quit", { path, version: version ?? null });
+}
+
+/** What the last install came to, judged on this launch (commands/update_files.rs). */
+export interface LastInstall {
+  /** The version that was being installed. */
+  version: string;
+  /** That version (or a newer one) is running: it worked. */
+  installed: boolean;
+  /** Why it failed; empty when not known. */
+  message: string;
+  /** Not reported before: say so once. */
+  new: boolean;
+}
+
+/** The last install's outcome (null when there was none). Also deletes what a finished
+ *  install left in the app's updates folder. Once per launch. */
+export async function updateLastInstall(): Promise<LastInstall | null> {
+  return invoke<LastInstall | null>("update_last_install");
+}
+
+/** Forget a failed install so that version may be installed by itself again ("Try again"). */
+export async function updateForgetFailure(): Promise<void> {
+  return invoke<void>("update_forget_failure");
+}
+
+/** Update downloads earlier versions left in the Downloads folder (our exact file names, this
+ *  version or older). */
+export async function updateOldDownloads(): Promise<{ count: number; bytes: number }> {
+  return invoke<{ count: number; bytes: number }>("update_old_downloads");
+}
+
+/** Delete them; resolves how many were deleted. */
+export async function updateRemoveOldDownloads(): Promise<number> {
+  return invoke<number>("update_remove_old_downloads");
 }
 
 /** Whether the console's loader on :9021 answers (`healthy`), took the connection and never

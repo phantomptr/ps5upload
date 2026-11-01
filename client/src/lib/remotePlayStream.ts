@@ -11,6 +11,7 @@ import { isPasscode } from "./passcode";
 import { DEFAULT_PICTURE, PicturePass, PlaneReader, cropRect, isPlaneFormat, needsPass, sharpens, upscaleSize, upscales, type PictureTools } from "./rpPicture";
 import { isLinuxDesktop } from "./platform";
 import { linuxCompositingOff } from "./linuxGraphics";
+import { decoderStarting, linuxSoftwareVideo, withDecoderStart, type DecoderStart } from "./videoDecoderGuard";
 import { isTauriEnv } from "./tauriEnv";
 import { HdrPresenter, hdrSupport, isHdrFrame, pickCodec, supportedHevcMain10, type CodecPref, type StreamCodec } from "./rpHdr";
 import type { MotionReading } from "./motion";
@@ -315,18 +316,20 @@ const AVC_CANDIDATES = ["avc1.4d4032", "avc1.640032", "avc1.4d4028", "avc1.42e01
  *  throws is not a no, so a device with a quirky check still gets to try. */
 export async function canDecodeAvc(width: number, height: number): Promise<boolean> {
   if (typeof VideoDecoder === "undefined") return false;
-  let answered = false;
-  for (const codec of AVC_CANDIDATES) {
-    try {
-      if ((await VideoDecoder.isConfigSupported({ codec, codedWidth: width, codedHeight: height })).supported) {
-        return true;
+  return withDecoderStart(async () => {
+    let answered = false;
+    for (const codec of AVC_CANDIDATES) {
+      try {
+        if ((await VideoDecoder.isConfigSupported({ codec, codedWidth: width, codedHeight: height })).supported) {
+          return true;
+        }
+        answered = true;
+      } catch {
+        // Not an answer.
       }
-      answered = true;
-    } catch {
-      // Not an answer.
     }
-  }
-  return !answered;
+    return !answered;
+  });
 }
 
 /** True for a decoder error that means "no decoder for this codec here", which starting over
@@ -339,7 +342,7 @@ export function isNoDecoderError(e: unknown): boolean {
 /** HEVC whenever this device can decode it (same picture in fewer bits); else H.264. The PS5
  *  offers only these two. */
 export async function chooseCodec(width: number, height: number): Promise<"h265" | "h264"> {
-  return (await supportedHevc(width, height)) ? "h265" : "h264";
+  return (await withDecoderStart(() => supportedHevc(width, height))) ? "h265" : "h264";
 }
 
 /** How the picture fills the place it is shown in: the whole picture with black bars (fit),
@@ -593,6 +596,8 @@ export class RemotePlayStream {
   private cv: HTMLCanvasElement;
   private ws: WebSocket | null = null;
   private video: VideoDecoder | null = null;
+  /** The decoder is being made (videoDecoderGuard): ended by its first picture or the stream's end. */
+  private decoderStart: DecoderStart | null = null;
   private header: Uint8Array | null = null;
   private hevc = false;
   private codecChoice: StreamCodec = "h264";
@@ -1208,6 +1213,7 @@ export class RemotePlayStream {
 
   /** A fresh start for the picture and sound: the engine sends the headers again on attach. */
   private resetMedia(): void {
+    this.endDecoderStart();
     try {
       this.video?.close();
     } catch {
@@ -1391,6 +1397,7 @@ export class RemotePlayStream {
   private finish(): void {
     if (this.ended) return;
     this.ended = true;
+    this.endDecoderStart();
     this.ticking = false;
     try {
       this.rafWin.cancelAnimationFrame(this.raf);
@@ -1793,9 +1800,18 @@ export class RemotePlayStream {
     }
   }
 
+  private endDecoderStart(): void {
+    this.decoderStart?.end();
+    this.decoderStart = null;
+  }
+
   private openVideo(): void {
     // A new decoder: its wait for a picture starts with its first frame.
     this.waitingSince = 0;
+    // Linux: the GL display WebKitGTK needs first, and the crash marker until the first picture.
+    this.endDecoderStart();
+    const start = decoderStarting();
+    this.decoderStart = start;
     const video = new VideoDecoder({
       output: (decoded) => {
         const now = performance.now();
@@ -1812,7 +1828,8 @@ export class RemotePlayStream {
           }
           if (Number.isFinite(engineAt)) this.stages.add("net", recv - engineAt, now);
         }
-        // A picture: the watchdog starts over.
+        // A picture: the watchdog starts over, and the decoder is made.
+        if (this.decoderStart === start) this.endDecoderStart();
         this.waitingSince = 0;
         this.rebuilds = 0;
         this.gaveUp = false;
@@ -1823,6 +1840,7 @@ export class RemotePlayStream {
       },
       error: (e) => {
         if (video !== this.video) return;
+        if (this.decoderStart === start) this.endDecoderStart();
         if (isNoDecoderError(e)) {
           // Starting over would fail the same way, forever: end the session instead.
           this.video = null;
@@ -1844,12 +1862,15 @@ export class RemotePlayStream {
       // the device has none for this codec, configure() fails and no picture ever comes.
       // Software when asked (Settings › Video decoding) or after the hardware one gave a picture
       // that could not be put right.
-      const software = this.o.decoding === "software" || this.softwareAfterBadFrame;
+      // The Linux app decoding in software this launch (Settings › Window › Graphics) too.
+      const software = this.o.decoding === "software" || this.softwareAfterBadFrame || linuxSoftwareVideo();
       const base: VideoDecoderConfig = description ? { codec, description, optimizeForLatency: true } : { codec, optimizeForLatency: true };
       let cfg: VideoDecoderConfig = {
         ...base,
         hardwareAcceleration: software ? "prefer-software" : "prefer-hardware",
       };
+      await start.ready;
+      if (video !== this.video) return;
       try {
         if (!(await VideoDecoder.isConfigSupported(cfg)).supported) cfg = base;
       } catch {
@@ -1877,6 +1898,7 @@ export class RemotePlayStream {
       // Main10: the SPS's own codec string where the device takes it, else the usual ones.
       const own = this.header ? hevcCodecString(this.header) : null;
       void (async () => {
+        await start.ready;
         let c: string | null = null;
         try {
           if (own && (await VideoDecoder.isConfigSupported({ codec: own })).supported) c = own;
