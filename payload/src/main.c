@@ -25,6 +25,7 @@
 #include "wake_watchdog.h"
 #include "icon_keeper.h"
 #include "fakelib_overlay.h"
+#include "vinput.h"
 #include "ava1_glue.h"
 #include "archive_extract.h"
 #include "takeover_flag.h"
@@ -854,6 +855,8 @@ int main(void) {
     activity_flush();
     /* Leaves a running game's overlay mounted for the next helper to adopt. */
     fakelib_overlay_stop();
+    /* Lets go of every key and button the PC held on the console and removes its virtual devices. */
+    vinput_stop();
 
     /* The AVA1 half: stop accepting, wait for the sessions (2 s) and for any in-flight Sony call
      * (this does NOT return while one runs: only the exit watchdog armed above (8 s, or up to 60 s while a Sony call runs) can end the
