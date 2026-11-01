@@ -6718,6 +6718,15 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "saves_switch_need_dir": "Hãy chọn thư mục cho sao lưu tự động trước.",
   "saves_switch_backup_now": "Sao lưu ngay",
   "saves_switch_no_backups": "Chưa có bản sao lưu.",
+  "fpkg.beside": "Lưu từng cái cạnh nguồn của nó",
+  "fpkg.besideHint": "Mỗi cái được đặt trong thư mục chứa game hoặc image của nó, không đặt bên trong thư mục game. Nếu tên đã có ở đó, sẽ thêm (2). Game trên máy chủ hoặc trên PS5 vẫn vào thư mục Đầu ra.",
+  "workshop_description_v3": "Tạo gói, image game hoặc thư mục từ một game, hoặc xem bên trong một image. Việc xử lý chạy trên máy tính này. Để gửi game nguyên trạng, dùng {send}.",
+  "workshop_to_folder": "Chuyển thành thư mục",
+  "workshop_to_folder_hint": "Ghi toàn bộ image hoặc gói thành một thư mục thường trên máy tính này.",
+  "workshop_to_folder_where": "Chọn nơi đặt thư mục",
+  "workshop_bar_running": "Đang xử lý {title}…",
+  "workshop_bar_show": "Xem tiến độ",
+  "workshop_bar_review": "Xem lại",
 };
 
 export default vi;

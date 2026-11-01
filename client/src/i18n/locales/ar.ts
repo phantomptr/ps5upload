@@ -6716,6 +6716,15 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "saves_switch_need_dir": "اختر مجلدًا للنسخ الاحتياطية التلقائية أولًا.",
   "saves_switch_backup_now": "انسخ الآن",
   "saves_switch_no_backups": "لا توجد نسخ احتياطية بعد.",
+  "fpkg.beside": "احفظ كل واحد بجوار مصدره",
+  "fpkg.besideHint": "يذهب كل واحد إلى المجلد الذي يحوي لعبته أو صورته، وليس داخل مجلد لعبة. إذا كان الاسم مستخدمًا هناك تُضاف (2). الألعاب على خادم أو على PS5 تذهب إلى مجلد الإخراج كما هي.",
+  "workshop_description_v3": "اصنع حزمة أو صورة لعبة أو مجلدًا من لعبة، أو انظر داخل صورة. يجري العمل على هذا الكمبيوتر. لإرسال لعبة كما هي، استخدم {send}.",
+  "workshop_to_folder": "تحويل إلى مجلد",
+  "workshop_to_folder_hint": "اكتب الصورة أو الحزمة كاملة كمجلد عادي على هذا الكمبيوتر.",
+  "workshop_to_folder_where": "اختر مكان وضع المجلد",
+  "workshop_bar_running": "جارٍ العمل على {title}…",
+  "workshop_bar_show": "عرض التقدم",
+  "workshop_bar_review": "مراجعة",
 };
 
 export default ar;

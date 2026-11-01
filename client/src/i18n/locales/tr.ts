@@ -6723,6 +6723,15 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "saves_switch_need_dir": "Önce otomatik yedekler için bir klasör seçin.",
   "saves_switch_backup_now": "Şimdi yedekle",
   "saves_switch_no_backups": "Henüz yedek yok.",
+  "fpkg.beside": "Her birini kaynağının yanına kaydet",
+  "fpkg.besideHint": "Her biri, oyununun veya kalıbının bulunduğu klasöre gider; bir oyun klasörünün içine değil. Ad orada kullanılıyorsa (2) eklenir. Sunucudaki veya PS5'teki oyunlar yine Çıktı klasörüne gider.",
+  "workshop_description_v3": "Bir oyundan paket, oyun kalıbı veya klasör yap ya da bir kalıbın içine bak. İş bu bilgisayarda yapılır. Bir oyunu olduğu gibi göndermek için {send} kullan.",
+  "workshop_to_folder": "Klasöre dönüştür",
+  "workshop_to_folder_hint": "Tüm kalıbı veya paketi bu bilgisayara düz bir klasör olarak yaz.",
+  "workshop_to_folder_where": "Klasörün nereye konacağını seç",
+  "workshop_bar_running": "{title} üzerinde çalışılıyor…",
+  "workshop_bar_show": "İlerlemeyi göster",
+  "workshop_bar_review": "Gözden geçir",
 };
 
 export default tr;

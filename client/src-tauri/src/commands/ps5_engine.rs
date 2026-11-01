@@ -2437,6 +2437,8 @@ pub async fn fpkg_build(
     language: Option<String>,
     // Read everything back to verify; absent means the fast, sampled check.
     full_verify: Option<bool>,
+    // A name already taken in the output folder is numbered instead of refused.
+    keep_both: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/fpkg/build");
@@ -2451,6 +2453,7 @@ pub async fn fpkg_build(
             "firmware": firmware,
             "language": language,
             "full_verify": full_verify.unwrap_or(false),
+            "keep_both": keep_both.unwrap_or(false),
         }),
     )
     .await
@@ -2577,6 +2580,8 @@ pub async fn exfat_build(
     ffpfsc_level: Option<String>,
     // An edited copy of the image `source`: [{op: "delete"|"put", path, from?}], passed through.
     edits: Option<JsonValue>,
+    // A name already taken in the output folder is numbered instead of refused.
+    keep_both: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2593,6 +2598,7 @@ pub async fn exfat_build(
             "name": name,
             "ffpfsc_level": ffpfsc_level,
             "edits": edits.unwrap_or_else(|| serde_json::json!([])),
+            "keep_both": keep_both.unwrap_or(false),
         }),
     )
     .await
@@ -2607,6 +2613,8 @@ pub async fn folder_build(
     full_verify: Option<bool>,
     // Only this file or folder of the image (the image browser's Save).
     entry: Option<String>,
+    // A name already taken in the output folder is numbered instead of refused.
+    keep_both: Option<bool>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/folder/build");
@@ -2618,6 +2626,7 @@ pub async fn folder_build(
             "name": name,
             "full_verify": full_verify.unwrap_or(false),
             "entry": entry,
+            "keep_both": keep_both.unwrap_or(false),
         }),
     )
     .await

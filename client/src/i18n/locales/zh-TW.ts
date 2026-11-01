@@ -6669,6 +6669,15 @@ helper_mismatch_boot_copy: "你的 PS5 啟動了為開機保留的舊版助手�
   "saves_switch_need_dir": "請先選擇自動備份的資料夾。",
   "saves_switch_backup_now": "立即備份",
   "saves_switch_no_backups": "還沒有備份。",
+  "fpkg.beside": "每個都儲存在其來源旁邊",
+  "fpkg.besideHint": "每個都放在其遊戲或映像所在的資料夾中,而不是遊戲資料夾內。如果那裡已有同名項目,會加上 (2)。伺服器或 PS5 上的遊戲仍放到輸出資料夾。",
+  "workshop_description_v3": "把遊戲製作成安裝包、遊戲映像或資料夾,或查看映像內部。處理在這台電腦上進行。要原樣傳送遊戲,請使用{send}。",
+  "workshop_to_folder": "轉換為資料夾",
+  "workshop_to_folder_hint": "把整個映像或安裝包寫成這台電腦上的一般資料夾。",
+  "workshop_to_folder_where": "選擇資料夾的存放位置",
+  "workshop_bar_running": "正在處理 {title}…",
+  "workshop_bar_show": "查看進度",
+  "workshop_bar_review": "查看",
 };
 
 export default zh_TW;

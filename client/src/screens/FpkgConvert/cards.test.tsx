@@ -118,6 +118,31 @@ describe("OptionsCard for a folder", () => {
   });
 });
 
+describe("OptionsCard output place", () => {
+  const props = {
+    outputDir: "/out",
+    onChangeOutput: () => {},
+    onOutputTyped: () => {},
+    canBrowse: true,
+    compression: "balanced" as const,
+    onCompression: () => {},
+    estimates: undefined,
+    locked: false,
+  };
+  it("offers Save each next to its source, explained only when on", () => {
+    const off = renderToStaticMarkup(<OptionsCard {...props} outputPlace="folder" onOutputPlace={() => {}} />);
+    expect(off).toContain("Save each next to its source");
+    expect(off).not.toContain("output-beside-hint");
+    const on = renderToStaticMarkup(<OptionsCard {...props} outputPlace="beside" onOutputPlace={() => {}} />);
+    expect(on).toMatch(/data-testid="output-beside"[^>]*checked/);
+    expect(on).toContain("output-beside-hint");
+    expect(on).toContain("(2) is added");
+  });
+  it("hides the choice where it is not wired", () => {
+    expect(renderToStaticMarkup(<OptionsCard {...props} />)).not.toContain("output-beside");
+  });
+});
+
 describe("OptionsCard for an image", () => {
   const props = {
     outputDir: "/out",

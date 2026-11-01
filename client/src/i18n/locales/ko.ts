@@ -6733,6 +6733,15 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "saves_switch_need_dir": "먼저 자동 백업 폴더를 선택하세요.",
   "saves_switch_backup_now": "지금 백업",
   "saves_switch_no_backups": "아직 백업이 없습니다.",
+  "fpkg.beside": "각각 원본 옆에 저장",
+  "fpkg.besideHint": "각각 게임이나 이미지가 있는 폴더에 저장되며, 게임 폴더 안에는 넣지 않습니다. 같은 이름이 있으면 (2)가 붙습니다. 서버나 PS5에 있는 게임은 그대로 출력 폴더에 저장됩니다.",
+  "workshop_description_v3": "게임으로 패키지, 게임 이미지, 폴더를 만들거나 이미지 안을 살펴봅니다. 작업은 이 컴퓨터에서 실행됩니다. 게임을 그대로 보내려면 {send}을(를) 사용하세요.",
+  "workshop_to_folder": "폴더로 변환",
+  "workshop_to_folder_hint": "이미지나 패키지 전체를 이 컴퓨터에 일반 폴더로 씁니다.",
+  "workshop_to_folder_where": "폴더를 둘 위치 선택",
+  "workshop_bar_running": "{title} 작업 중…",
+  "workshop_bar_show": "진행 상황 보기",
+  "workshop_bar_review": "검토",
 };
 
 export default ko;

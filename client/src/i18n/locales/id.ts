@@ -6725,6 +6725,15 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "saves_switch_need_dir": "Pilih folder untuk cadangan otomatis dulu.",
   "saves_switch_backup_now": "Cadangkan sekarang",
   "saves_switch_no_backups": "Belum ada cadangan.",
+  "fpkg.beside": "Simpan masing-masing di samping sumbernya",
+  "fpkg.besideHint": "Masing-masing masuk ke folder yang berisi game atau image-nya, bukan ke dalam folder game. Jika nama itu sudah dipakai di sana, (2) ditambahkan. Game di server atau di PS5 tetap masuk ke folder Output.",
+  "workshop_description_v3": "Buat paket, image game, atau folder dari sebuah game, atau lihat isi sebuah image. Prosesnya berjalan di komputer ini. Untuk mengirim game apa adanya, gunakan {send}.",
+  "workshop_to_folder": "Ubah ke folder",
+  "workshop_to_folder_hint": "Tulis seluruh image atau paket sebagai folder biasa di komputer ini.",
+  "workshop_to_folder_where": "Pilih tempat folder",
+  "workshop_bar_running": "Memproses {title}…",
+  "workshop_bar_show": "Lihat progres",
+  "workshop_bar_review": "Tinjau",
 };
 
 export default id;

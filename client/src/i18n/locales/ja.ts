@@ -6735,6 +6735,15 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "saves_switch_need_dir": "先に自動バックアップのフォルダーを選んでください。",
   "saves_switch_backup_now": "今すぐバックアップ",
   "saves_switch_no_backups": "バックアップはまだありません。",
+  "fpkg.beside": "それぞれを元の場所の隣に保存",
+  "fpkg.besideHint": "それぞれ、ゲームまたはイメージがあるフォルダーに保存されます(ゲームフォルダーの中には入れません)。同じ名前がある場合は (2) が付きます。サーバーや PS5 上のゲームは出力フォルダーに保存されます。",
+  "workshop_description_v3": "ゲームからパッケージ、ゲームイメージ、フォルダーを作成したり、イメージの中を見たりできます。処理はこのコンピューターで行います。ゲームをそのまま送るには {send} を使います。",
+  "workshop_to_folder": "フォルダーに変換",
+  "workshop_to_folder_hint": "イメージやパッケージ全体を、このコンピューター上の通常のフォルダーとして書き出します。",
+  "workshop_to_folder_where": "フォルダーの保存先を選択",
+  "workshop_bar_running": "{title} を処理中…",
+  "workshop_bar_show": "進行状況を表示",
+  "workshop_bar_review": "確認",
 };
 
 export default ja;

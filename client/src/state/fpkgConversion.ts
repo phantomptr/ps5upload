@@ -141,9 +141,12 @@ export interface ConversionState {
     lz4?: AmprLz4Options,
     /** An archive's password (RAR); never stored. */
     password?: string,
+    /** Number the image's name when it is taken in `outputDir`, instead of refusing. */
+    keepBoth?: boolean,
   ) => Promise<void>;
-  /** Unpack a game image or a debug-key package into a plain folder in `outputDir`. */
-  buildFolder: (source: string, outputDir: string | undefined) => Promise<void>;
+  /** Unpack a game image or a debug-key package into a plain folder in `outputDir`; with
+   *  `keepBoth`, a name already taken there is numbered instead of refused. */
+  buildFolder: (source: string, outputDir: string | undefined, keepBoth?: boolean) => Promise<void>;
   /** Put the finished image in the Upload queue. */
   uploadImage: (plan: ImageUploadPlan) => void;
   /** Install the kept package again: after a failed install, or Install again on a result. */
@@ -764,7 +767,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     }
   },
 
-  buildImage: async (source, outputDir, thenCompress, format = "exfat", thenUpload, lz4, password) => {
+  buildImage: async (source, outputDir, thenCompress, format = "exfat", thenUpload, lz4, password, keepBoth) => {
     if (get().pipeline.phase === "running") return;
     pendingImageUpload = thenUpload ?? null;
     const { verifyChunkKib, fullVerify, imageLevel } = useConvertPrefs.getState();
@@ -781,7 +784,18 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         source,
         outputDir,
         (local) =>
-          fpkg.buildImage(local, outputDir, format, thenCompress, lz4, verifyChunkKib, fullVerify, name, imageLevel),
+          fpkg.buildImage(
+            local,
+            outputDir,
+            format,
+            thenCompress,
+            lz4,
+            verifyChunkKib,
+            fullVerify,
+            name,
+            imageLevel,
+            keepBoth,
+          ),
         null,
         password,
       );
@@ -799,6 +813,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         fullVerify,
         undefined,
         imageLevel,
+        keepBoth,
       );
       update({ jobId: job_id });
       poll(job_id, null);
@@ -807,12 +822,19 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     }
   },
 
-  buildFolder: async (source, outputDir) => {
+  buildFolder: async (source, outputDir, keepBoth) => {
     if (get().pipeline.phase === "running") return;
     pendingImageUpload = null;
     beginRun("folder", source, null, "write");
     try {
-      const { job_id } = await fpkg.buildFolder(source, outputDir, undefined, useConvertPrefs.getState().fullVerify);
+      const { job_id } = await fpkg.buildFolder(
+        source,
+        outputDir,
+        undefined,
+        useConvertPrefs.getState().fullVerify,
+        undefined,
+        keepBoth,
+      );
       update({ jobId: job_id });
       poll(job_id, null);
     } catch (error) {

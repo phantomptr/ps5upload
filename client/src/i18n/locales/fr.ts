@@ -6732,6 +6732,15 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "saves_switch_need_dir": "Choisissez d'abord un dossier pour les sauvegardes automatiques.",
   "saves_switch_backup_now": "Sauvegarder maintenant",
   "saves_switch_no_backups": "Aucune sauvegarde pour l'instant.",
+  "fpkg.beside": "Enregistrer chacun à côté de sa source",
+  "fpkg.besideHint": "Chacun va dans le dossier qui contient son jeu ou son image, pas dans un dossier de jeu. Si le nom est déjà pris, (2) est ajouté. Les jeux sur un serveur ou sur la PS5 vont toujours dans le dossier de sortie.",
+  "workshop_description_v3": "Créez un paquet, une image de jeu ou un dossier à partir d'un jeu, ou regardez dans une image. Le travail se fait sur cet ordinateur. Pour envoyer un jeu tel quel, utilisez {send}.",
+  "workshop_to_folder": "Convertir en dossier",
+  "workshop_to_folder_hint": "Écrire toute l'image ou tout le paquet sous forme de dossier ordinaire sur cet ordinateur.",
+  "workshop_to_folder_where": "Choisissez où mettre le dossier",
+  "workshop_bar_running": "Travail sur {title}…",
+  "workshop_bar_show": "Voir la progression",
+  "workshop_bar_review": "Vérifier",
 };
 
 export default fr;

@@ -7030,6 +7030,15 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
   "saves_switch_need_dir": "Choose a folder for automatic backups first.",
   "saves_switch_backup_now": "Back up now",
   "saves_switch_no_backups": "No backups yet.",
+  "fpkg.beside": "Save each next to its source",
+  "fpkg.besideHint": "Each one goes in the folder that holds its game or image, not inside a game folder. If the name is taken there, (2) is added. Games on a server or the PS5 still go to the Output folder.",
+  "workshop_description_v3": "Make a package, a game image or a folder from a game, or look inside an image. The work runs on this computer. To send a game as it is, use {send}.",
+  "workshop_to_folder": "Convert to folder",
+  "workshop_to_folder_hint": "Write the whole image or package as a plain folder on this computer.",
+  "workshop_to_folder_where": "Choose where to put the folder",
+  "workshop_bar_running": "Working on {title}…",
+  "workshop_bar_show": "Show progress",
+  "workshop_bar_review": "Review",
 };
 
 export default en;
