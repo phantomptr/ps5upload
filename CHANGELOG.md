@@ -19,6 +19,11 @@ What's new in ps5upload, written for humans.
   work in the settings; play goes on as you close it.
 - **Picture, frame rate, video decoding, video format and Keep playing can be changed during a
   stream.** They say "Applies when you start again"; everything else applies at once.
+## 10.2.1
+
+- **Fixed: Play crashed on a Mac with a DualSense connected.** The app quit while starting or
+  stopping Remote Play, often several times in a row (10.1.0 and 10.2.0). The controller is now
+  read from one place for the whole session, so starting and stopping streams is safe again.
 
 ## 10.2.0
 
