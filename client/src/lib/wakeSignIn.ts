@@ -17,8 +17,8 @@ import { trStatic } from "./trStatic";
  *
  * The engine holds the sign-in open while the user types (see engine wake_login_api.rs). The ask
  * lives here, not in a component, so the box stays up when the screen that pressed Wake changes
- * (the rest-mode notice goes away as soon as the console is awake). One box, over the app
- * (WakePasscodeHost). The passcode is sent to the engine and never kept.
+ * (the rest-mode notice goes away as soon as the console is awake). One box at a time, over the
+ * app (WakePasscodeHost); a second console asking waits in line behind the first. The passcode is sent to the engine and never kept.
  */
 
 export interface WakePasscodeAsk {
@@ -34,7 +34,10 @@ export interface WakePasscodeAsk {
 }
 
 interface WakeSignInState {
+  /** The box shown now: the first of `asks`. */
   ask: WakePasscodeAsk | null;
+  /** Every console waiting for its passcode, one box at a time in the order they asked. */
+  asks: WakePasscodeAsk[];
   /** Hosts with a Wake & sign in running (including while the box is up). */
   busy: Record<string, boolean>;
   /** The last Wake & sign in error per host. */
@@ -43,11 +46,28 @@ interface WakeSignInState {
 
 export const useWakeSignInStore = create<WakeSignInState>(() => ({
   ask: null,
+  asks: [],
   busy: {},
   error: {},
 }));
 
 let seq = 0;
+
+/** Puts `asks` in the store, the first one shown. */
+function setAsks(asks: WakePasscodeAsk[]) {
+  useWakeSignInStore.setState({ asks, ask: asks[0] ?? null });
+}
+
+/** `host`'s ask is now `ask` (a new one goes last in line; a retry keeps its place), or gone. */
+function putAsk(host: string, ask: WakePasscodeAsk | null) {
+  const asks = useWakeSignInStore.getState().asks;
+  const at = asks.findIndex((a) => a.host === host);
+  if (!ask) {
+    if (at >= 0) setAsks(asks.filter((_, i) => i !== at));
+    return;
+  }
+  setAsks(at >= 0 ? asks.map((a, i) => (i === at ? ask : a)) : [...asks, ask]);
+}
 
 function setBusy(host: string, busy: boolean) {
   useWakeSignInStore.setState((s) => ({ busy: { ...s.busy, [host]: busy } }));
@@ -76,12 +96,10 @@ export function wakeErrorText(e: unknown): string {
 /** Act on one step of the sign-in. Returns true when it is over. */
 function settle(host: string, r: WakeLoginResult): boolean {
   if (r.state === "passcode") {
-    useWakeSignInStore.setState({
-      ask: { host, id: r.id, retry: r.retry, seq: ++seq, sending: false },
-    });
+    putAsk(host, { host, id: r.id, retry: r.retry, seq: ++seq, sending: false });
     return false;
   }
-  useWakeSignInStore.setState({ ask: null });
+  putAsk(host, null);
   if (r.state === "signed_in") {
     pushNotification("success", trStatic("power_wake_signedin", "Woken and signed in"), {
       body: trStatic("power_wake_signedin_body", "The console is on and signed in to your user."),
@@ -96,7 +114,7 @@ function settle(host: string, r: WakeLoginResult): boolean {
 }
 
 function failed(host: string, e: unknown) {
-  useWakeSignInStore.setState({ ask: null });
+  putAsk(host, null);
   if (e instanceof WakeLoginError && e.code === "passcode_cancelled") {
     // The user chose this: not an error.
     pushNotification(
@@ -115,6 +133,7 @@ async function run(host: string, step: Promise<WakeLoginResult>) {
   } catch (e) {
     failed(host, e);
   }
+  // Every way out but a box still up for this console ends its busy.
   setBusy(host, false);
 }
 
@@ -137,7 +156,7 @@ export async function wakeAndSignInAsking(
 export async function submitWakePasscode(digits: string): Promise<void> {
   const ask = useWakeSignInStore.getState().ask;
   if (!ask || ask.sending) return;
-  useWakeSignInStore.setState({ ask: { ...ask, sending: true } });
+  putAsk(ask.host, { ...ask, sending: true });
   await run(ask.host, answerWakePasscode(ask.id, digits));
 }
 
@@ -145,11 +164,12 @@ export async function submitWakePasscode(digits: string): Promise<void> {
 export async function cancelWakeSignIn(): Promise<void> {
   const ask = useWakeSignInStore.getState().ask;
   if (!ask) return;
-  useWakeSignInStore.setState({ ask: null });
+  // The next console's box (if any) shows now.
+  putAsk(ask.host, null);
   await run(ask.host, cancelWakePasscode(ask.id));
 }
 
 /** Test seam. */
 export function resetWakeSignIn(): void {
-  useWakeSignInStore.setState({ ask: null, busy: {}, error: {} });
+  useWakeSignInStore.setState({ ask: null, asks: [], busy: {}, error: {} });
 }

@@ -110,4 +110,62 @@ describe("Wake & sign in with a login passcode (#608)", () => {
     await wakeAndSignInAsking(HOST, CREDS);
     expect(wakeAndSignIn).toHaveBeenCalledTimes(1);
   });
+
+  describe("two consoles asking at once", () => {
+    const OTHER = "192.168.1.11";
+    const asking = async () => {
+      vi.mocked(wakeAndSignIn)
+        .mockResolvedValueOnce({ state: "passcode", id: "t1", retry: false, waitS: 180 })
+        .mockResolvedValueOnce({ state: "passcode", id: "t2", retry: false, waitS: 180 });
+      await wakeAndSignInAsking(HOST, CREDS);
+      await wakeAndSignInAsking(OTHER, CREDS);
+    };
+
+    it("shows one box at a time; the second console's comes after the first is answered", async () => {
+      await asking();
+      expect(st().ask).toMatchObject({ host: HOST, id: "t1" });
+      expect(st().busy).toEqual({ [HOST]: true, [OTHER]: true });
+
+      vi.mocked(answerWakePasscode).mockResolvedValue({ state: "signed_in" });
+      await submitWakePasscode("1111");
+      expect(answerWakePasscode).toHaveBeenLastCalledWith("t1", "1111");
+      expect(st().busy[HOST]).toBe(false);
+      expect(st().ask).toMatchObject({ host: OTHER, id: "t2", sending: false });
+
+      await submitWakePasscode("2222");
+      expect(answerWakePasscode).toHaveBeenLastCalledWith("t2", "2222");
+      expect(st().ask).toBeNull();
+      expect(st().busy).toEqual({ [HOST]: false, [OTHER]: false });
+    });
+
+    it("cancelling the first box shows the second; both end not busy", async () => {
+      await asking();
+      vi.mocked(cancelWakePasscode).mockRejectedValue(new WakeLoginError("cancelled", "passcode_cancelled"));
+      await cancelWakeSignIn();
+      expect(cancelWakePasscode).toHaveBeenLastCalledWith("t1");
+      expect(st().busy[HOST]).toBe(false);
+      expect(st().ask).toMatchObject({ host: OTHER, id: "t2" });
+      await cancelWakeSignIn();
+      expect(cancelWakePasscode).toHaveBeenLastCalledWith("t2");
+      expect(st().ask).toBeNull();
+      expect(st().busy).toEqual({ [HOST]: false, [OTHER]: false });
+    });
+
+    it("a wrong passcode keeps that console's box first; the other still waits", async () => {
+      await asking();
+      vi.mocked(answerWakePasscode).mockResolvedValue({ state: "passcode", id: "t1", retry: true, waitS: 180 });
+      await submitWakePasscode("0000");
+      expect(st().ask).toMatchObject({ host: HOST, retry: true });
+      expect(st().asks.map((a) => a.host)).toEqual([HOST, OTHER]);
+    });
+
+    it("the first console failing leaves the second's box up", async () => {
+      await asking();
+      vi.mocked(answerWakePasscode).mockRejectedValue(new WakeLoginError("too many", "passcode_too_many"));
+      await submitWakePasscode("0000");
+      expect(st().busy[HOST]).toBe(false);
+      expect(st().error[HOST]).toContain("Too many");
+      expect(st().ask).toMatchObject({ host: OTHER, id: "t2" });
+    });
+  });
 });
