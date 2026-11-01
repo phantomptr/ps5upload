@@ -2055,6 +2055,10 @@ a file and Load a save file always take every part together. The console also ke
 backup copy of each part (`sdimg_sce_bu_…`); those are never offered as saves. Open works on one
 part at a time and asks which when there are several.
 
+After a save is loaded, copied or restored, the console's own backup copy (`sce_bu`) still holds the
+old save until the game saves again, so the PS5's own "restore from backup" (offered when it finds
+a save damaged) could bring the old one back. Start the game and save once to bring it up to date.
+
 **Q: Move a save to another account on the same PS5**
 From 10.6.0, PS5 saves only. On the save, **Copy to… › Another user on this PS5** lists the
 console's other users. Those with a save of the game can be picked; for the others it says what to

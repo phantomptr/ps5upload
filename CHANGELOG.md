@@ -33,6 +33,17 @@ What's new in ps5upload, written for humans.
   offers the console's backup copies.
 - **A restore that fails part way puts the save back** as it was, from the backup taken just
   before it.
+- **A failed save copy never leaves the old save under one still open.** Closing the save is
+  tried again a few times (a dropped connection included); if the PS5 still holds it open, the
+  save there before is not put back over it, and the message names the backup to restore with
+  **Restore…** once the PS5 can be reached.
+- **A save too big for the other user's save is refused before anything changes.** A PS5 save
+  has a fixed size; the message gives both sizes and what to do.
+- **Backups made on another PS5 are refused.** An encrypted save only opens on the PS5 that made
+  it, so new backups note their console and **Restore…** refuses one from another PS5 up front
+  (use **Save as a file** on that PS5). Older backups are not checked.
+- **Automatic backups wait for the game to close.** A running game's save is skipped and backed
+  up on the next pass after it closes, never copied while the game may be writing it.
 - **PS1 emulator saves.** PSSwanStation's (PPSA99248) memory cards and saved states are listed,
   backed up and restored in Save Data like the PS2 emulators'. Thanks to EnriqueWood (#618).
 - **Save Data rows wrap instead of squeezing.** A save's buttons move to a new line when they
@@ -46,6 +57,9 @@ What's new in ps5upload, written for humans.
   refused. Nothing on screen changes, no second stream starts, and none of it is reachable from
   other machines. See [AUTOMATION.md](https://github.com/phantomptr/ps5upload/blob/main/AUTOMATION.md); not a
   stable API yet (#430).
+- **Local-only endpoints refuse requests that don't address localhost.** The automation routes
+  and the keyboard & mouse socket answer only requests to `localhost`, `127.0.0.1` or `[::1]`, so
+  a web page can't reach them by pointing its own name at this computer.
 - **The Remote Play microphone no longer switches off when a button is pressed.** Any controller
   change (yours, a phone's) turned the experimental mic off; now only leaving the stream does.
 - **Save Data shows the games' names and covers.** A game is named the way Games names it (the
