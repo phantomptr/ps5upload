@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { NAV_ITEMS } from "../../layout/navItems";
 
-const app: string = readFileSync(new URL("../../App.tsx", import.meta.url).pathname, "utf8");
+const app: string = readFileSync(new URL("../../App.tsx", import.meta.url), "utf8");
 
 // shell_run_cmd has no browser mapping, so the screen can do nothing there.
 describe("Shell outside the desktop app", () => {

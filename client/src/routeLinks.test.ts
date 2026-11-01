@@ -1,13 +1,15 @@
 // @ts-expect-error -- the app tsconfig has no node types; Vitest runs this under Node.
 import { readFileSync, readdirSync, statSync } from "node:fs";
+// @ts-expect-error -- as above.
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // Collection's "Progress shows in Install Package" went to "/install", a page that does not
 // exist, and the catch-all route quietly sent the user Home. Every fixed in-app link in the
 // source must name a route App.tsx declares.
 
-const src: string = new URL(".", import.meta.url).pathname;
-const join = (a: string, b: string) => `${a.replace(/\/$/, "")}/${b}`;
+const src: string = fileURLToPath(new URL(".", import.meta.url));
+const join = (a: string, b: string) => `${a.replace(/[\\/]$/, "")}/${b}`;
 const app: string = readFileSync(join(src, "App.tsx"), "utf8");
 const routes = [...app.matchAll(/path="([^"]+)"/g)].map((m) => m[1]).filter((p) => p !== "*");
 
