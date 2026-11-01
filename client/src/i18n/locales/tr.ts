@@ -6296,6 +6296,8 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_stats_latency_decode": "Gecikme ≈ {decode} ms çözme",
 "rp_stats_stages": "ağ {net} · kuyruk {queue} · çözme {decode} · ekran {draw} ms",
 "rp_stats_decoder_restarts": "çözücü yeniden başlatma {n}",
+"rp_stats_input": "giriş ≈ {ms} ms, artı oyunun kendi süresi",
+"rp_stats_input_hint": "Ölçülebilenlerden bir tahmin: bu uygulamadan motora, motordan PS5'e ve geri yol, ve görüntünün motordan ekranına yolu. Dahil değil: kumandanın kendi gecikmesi ve oyunla PS5'in tepki verip görüntüyü kodlaması için geçen süre, çoğu zaman bir kare veya daha fazlası.",
 "rp_low_latency": "Düşük gecikme",
 "rp_low_latency_hint": "En az gecikme için en küçük ses arabelleği ve en kısa görüntü kuyruğu. Yoğun bir ağda daha çok kare düşer ve ses cızırdayabilir. Görüntü kısmı bir sonraki başlatmada geçerli olur.",
 "rp_auto_quality": "Yoğun ağda kaliteyi düşür",

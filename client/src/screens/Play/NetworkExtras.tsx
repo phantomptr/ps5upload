@@ -7,7 +7,7 @@ import { Wifi, X } from "lucide-react";
 import { Spinner, Toggle } from "../../components";
 import { BusyNetworkWatch, canStepDown } from "../../lib/rpAutoQuality";
 import type { StreamStats } from "../../lib/remotePlayStream";
-import { STAGES, stageValues } from "../../lib/rpLatency";
+import { inputEstimate, STAGES, stageValues } from "../../lib/rpLatency";
 import { useTr } from "../../state/lang";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { useRpQualityStore, wasOffered } from "../../state/rpQuality";
@@ -30,6 +30,8 @@ export function LatencyLine({ stats }: { stats: StreamStats }) {
   const timed = !!stats.stages && STAGES.some((k) => stats.stages?.[k]);
   const v = stageValues(stats.stages);
   const restarts = stats.decoderRestarts ?? 0;
+  const input = inputEstimate({ pageRttMs: stats.rttMs, consoleRttMs: stats.consoleRttMs, stages: stats.stages });
+  const inputMs = input === null ? null : Math.round(input);
   return (
     <>
       <div data-testid="rp-latency">
@@ -46,6 +48,21 @@ export function LatencyLine({ stats }: { stats: StreamStats }) {
               {tr("rp_stats_decoder_restarts", { n: restarts }, `decoder restarts ${restarts}`)}
             </>
           )}
+        </div>
+      )}
+      {inputMs !== null && (
+        // The overlay lets presses through to the picture; this line takes the pointer so its
+        // explanation shows on hover.
+        <div
+          className="pointer-events-auto cursor-help"
+          title={tr(
+            "rp_stats_input_hint",
+            undefined,
+            "An estimate from what can be measured: the trip from this app to the engine, the engine to the PS5 and back, and the picture's way from the engine to your screen. Not included: your controller's own delay, and the time the game and the PS5 take to react and encode the picture, often a frame or more.",
+          )}
+          data-testid="rp-latency-input"
+        >
+          {tr("rp_stats_input", { ms: inputMs }, `input ≈ ${inputMs} ms, plus the game's own time`)}
         </div>
       )}
     </>

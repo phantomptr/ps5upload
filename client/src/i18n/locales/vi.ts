@@ -6291,6 +6291,8 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_stats_latency_decode": "Độ trễ ≈ {decode} ms giải mã",
 "rp_stats_stages": "mạng {net} · hàng đợi {queue} · giải mã {decode} · màn hình {draw} ms",
 "rp_stats_decoder_restarts": "khởi động lại bộ giải mã {n}",
+"rp_stats_input": "đầu vào ≈ {ms} ms, cộng thời gian của chính trò chơi",
+"rp_stats_input_hint": "Ước tính từ những gì đo được: đường từ ứng dụng này đến engine, từ engine đến PS5 và trở lại, và đường của hình ảnh từ engine đến màn hình của bạn. Không bao gồm: độ trễ riêng của tay cầm, và thời gian trò chơi và PS5 cần để phản hồi và mã hóa hình ảnh, thường là một khung hình trở lên.",
 "rp_low_latency": "Độ trễ thấp",
 "rp_low_latency_hint": "Bộ đệm âm thanh nhỏ nhất và hàng đợi hình ngắn nhất, cho độ trễ thấp nhất. Trên mạng đông, nhiều khung hình bị rơi hơn và âm thanh có thể rè. Phần hình áp dụng từ lần bắt đầu sau.",
 "rp_auto_quality": "Giảm chất lượng khi mạng đông",

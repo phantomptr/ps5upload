@@ -225,11 +225,37 @@ pub struct StreamInfo {
     pub audio_header: Vec<u8>,
 }
 
+/// The console's own view of the link, sent now and then while streaming (chiaki-ng's
+/// `ConnectionQualityPayload`, which it only logs). `target_bitrate` is what its encoder aims
+/// for: it falls when our congestion reports show loss. The units are not documented: the
+/// values are passed on raw, for the logs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
+pub struct ConnectionQuality {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_bitrate: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_bitrate: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_loss: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rtt: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loss: Option<u64>,
+}
+
 pub enum Message {
     Bang(Bang),
     StreamInfo(StreamInfo),
     Disconnect(String),
+    ConnectionQuality(ConnectionQuality),
     Other(u64),
+}
+
+fn get_fixed(f: &[(u32, Value)], field: u32) -> Option<u64> {
+    f.iter().find_map(|(n, v)| match v {
+        Value::Fixed(x) if *n == field => Some(*x),
+        _ => None,
+    })
 }
 
 pub fn decode(buf: &[u8]) -> Result<Message> {
@@ -268,6 +294,16 @@ pub fn decode(buf: &[u8]) -> Result<Message> {
             let reason = String::from_utf8_lossy(get_bytes(&p, 1).unwrap_or_default()).into_owned();
             Message::Disconnect(reason)
         }
+        kind::CONNECTIONQUALITY => {
+            let p = fields(get_bytes(&f, 17).unwrap_or_default())?;
+            Message::ConnectionQuality(ConnectionQuality {
+                target_bitrate: get_u(&p, 1).map(|v| v as u32),
+                upstream_bitrate: get_u(&p, 2).map(|v| v as u32),
+                upstream_loss: get_fixed(&p, 3).map(|v| f32::from_bits(v as u32)),
+                rtt: get_fixed(&p, 5).map(f64::from_bits),
+                loss: get_u(&p, 6),
+            })
+        }
         k => Message::Other(k),
     })
 }
@@ -281,6 +317,34 @@ mod tests {
         let m = disconnect("bye");
         match decode(&m).unwrap() {
             Message::Disconnect(r) => assert_eq!(r, "bye"),
+            _ => panic!("wrong kind"),
+        }
+    }
+
+    #[test]
+    fn reads_the_consoles_connection_quality() {
+        // TakionMessage{type CONNECTIONQUALITY (16), connection_quality_payload (17) {
+        // target_bitrate 9000, upstream_loss 0.5f, rtt 3.25, loss 7}}, by hand.
+        let mut q = vec![0x08];
+        put_varint(&mut q, 9000);
+        q.push(0x1d);
+        q.extend_from_slice(&0.5f32.to_le_bytes());
+        q.push(0x29);
+        q.extend_from_slice(&3.25f64.to_le_bytes());
+        q.extend_from_slice(&[0x30, 7]);
+        let mut m = vec![0x08, 0x10, 0x8a, 0x01, q.len() as u8];
+        m.extend_from_slice(&q);
+        match decode(&m).unwrap() {
+            Message::ConnectionQuality(c) => assert_eq!(
+                c,
+                ConnectionQuality {
+                    target_bitrate: Some(9000),
+                    upstream_bitrate: None,
+                    upstream_loss: Some(0.5),
+                    rtt: Some(3.25),
+                    loss: Some(7),
+                }
+            ),
             _ => panic!("wrong kind"),
         }
     }

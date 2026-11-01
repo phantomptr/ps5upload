@@ -135,6 +135,9 @@ pub struct Takion {
     /// which is what any lost chunk was before resends.
     drop_out_data: Option<(u64, bool)>,
     data_sent: u64,
+    /// The round trip to the console and back, smoothed: our DATA chunk (a heartbeat each
+    /// second) out, its DATA_ACK in. None until the first sample.
+    rtt: Option<Duration>,
 }
 
 /// Our DATA chunks waiting for the console's DATA_ACK (chiaki-ng `takionsendbuffer.c`).
@@ -174,12 +177,20 @@ impl SendBuffer {
         true
     }
 
-    /// The console has every chunk up to `cumulative`: forget them. Returns how many.
-    fn ack(&mut self, cumulative: u32) -> usize {
+    /// The console has every chunk up to `cumulative`: forget them. Returns how many, and the
+    /// round trip of the chunk the ack names when it was sent only once (Karn's rule: an ack
+    /// for a resent chunk could answer either copy). Since a chunk is resent after 200 ms, a
+    /// sample is always shorter than that.
+    fn ack(&mut self, cumulative: u32, now: Instant) -> (usize, Option<Duration>) {
+        let rtt = self
+            .packets
+            .iter()
+            .find(|p| p.seq == cumulative && p.tries == 1)
+            .map(|p| now.saturating_duration_since(p.sent));
         let before = self.packets.len();
         self.packets
             .retain(|p| p.seq != cumulative && !seq32_lt(p.seq, cumulative));
-        before - self.packets.len()
+        (before - self.packets.len(), rtt)
     }
 
     /// The packets to send again now, and how many were given up on.
@@ -200,6 +211,15 @@ impl SendBuffer {
             true
         });
         (out, given_up)
+    }
+}
+
+/// A new round-trip sample folded into the last value: a quarter of the way, so one late ack
+/// moves it little (the page's own round trip is smoothed the same way).
+fn smooth_rtt(prev: Option<Duration>, sample: Duration) -> Duration {
+    match prev {
+        None => sample,
+        Some(p) => (p * 3 + sample) / 4,
     }
 }
 
@@ -301,6 +321,7 @@ impl Takion {
                 .ok()
                 .and_then(|v| drop_knob(&v)),
             data_sent: 0,
+            rtt: None,
         };
         t.handshake()?;
         Ok(t)
@@ -557,6 +578,13 @@ impl Takion {
         self.send_maced(&mut pkt, key_pos)
     }
 
+    /// The round trip to the console and back (DATA out, DATA_ACK in), smoothed; None before
+    /// the console acknowledged one of our chunks the first time it was sent. It includes how
+    /// long the console takes to acknowledge, which we cannot see apart.
+    pub fn rtt(&self) -> Option<Duration> {
+        self.rtt
+    }
+
     /// The periodic "received n, lost m" report (chiaki sends it every
     /// 200 ms; the counts come from the frame and audio assemblers).
     pub fn send_congestion(&mut self, received: u16, lost: u16) -> Result<()> {
@@ -712,7 +740,10 @@ impl Takion {
                 };
                 // The console has our DATA up to this sequence number.
                 if chunk == CHUNK_DATA_ACK && payload.len() >= 4 {
-                    self.send_buffer.ack(be32(&payload[0..4]));
+                    let (_, rtt) = self.send_buffer.ack(be32(&payload[0..4]), Instant::now());
+                    if let Some(sample) = rtt {
+                        self.rtt = Some(smooth_rtt(self.rtt, sample));
+                    }
                     return Ok(None);
                 }
                 if chunk == CHUNK_DATA && payload.len() >= 9 {
@@ -892,11 +923,35 @@ mod tests {
     fn a_cumulative_ack_forgets_everything_up_to_it_across_the_wrap() {
         let t = Instant::now();
         let mut b = buffer_with(&[u32::MAX - 1, u32::MAX, 0, 1], t);
-        assert_eq!(b.ack(0), 3);
+        assert_eq!(b.ack(0, t).0, 3);
         let (left, _) = b.due(t + Duration::from_secs(1));
         assert_eq!(left, vec![vec![1u8]]);
         // An old ack changes nothing.
-        assert_eq!(b.ack(u32::MAX - 5), 0);
+        assert_eq!(b.ack(u32::MAX - 5, t).0, 0);
+    }
+
+    #[test]
+    fn an_ack_times_the_round_trip_of_a_chunk_sent_once() {
+        let t = Instant::now();
+        let mut b = buffer_with(&[5, 6], t);
+        // 6 acknowledged 12 ms after it went: one sample, from the chunk the ack names.
+        assert_eq!(
+            b.ack(6, t + Duration::from_millis(12)),
+            (2, Some(Duration::from_millis(12)))
+        );
+        // A resent chunk gives none: the ack could answer either copy.
+        let mut b = buffer_with(&[7], t);
+        b.due(t + Duration::from_millis(201));
+        assert_eq!(b.ack(7, t + Duration::from_millis(210)), (1, None));
+        // An ack for something no longer held gives none.
+        assert_eq!(b.ack(7, t + Duration::from_millis(220)), (0, None));
+    }
+
+    #[test]
+    fn the_round_trip_moves_a_quarter_of_the_way() {
+        let ms = Duration::from_millis;
+        assert_eq!(smooth_rtt(None, ms(8)), ms(8));
+        assert_eq!(smooth_rtt(Some(ms(8)), ms(40)), ms(16));
     }
 
     #[test]
@@ -923,7 +978,7 @@ mod tests {
         let seqs: Vec<u32> = (0..SendBuffer::SIZE as u32).collect();
         let mut b = buffer_with(&seqs, t);
         assert!(!b.push(99, vec![], t));
-        assert_eq!(b.ack(0), 1);
+        assert_eq!(b.ack(0, t).0, 1);
         assert!(b.push(99, vec![], t));
     }
 
@@ -987,6 +1042,7 @@ mod tests {
             last_rx: Instant::now(),
             drop_out_data: None,
             data_sent: 0,
+            rtt: None,
         };
         t.send_message(1, b"heartbeat").unwrap();
         let mut buf = [0u8; 256];
@@ -999,7 +1055,7 @@ mod tests {
         let n = console.recv(&mut buf).unwrap();
         assert_eq!(&buf[..n], &first[..]);
         // Acknowledged: never again.
-        assert_eq!(t.send_buffer.ack(100), 1);
+        assert_eq!(t.send_buffer.ack(100, Instant::now()).0, 1);
         std::thread::sleep(Duration::from_millis(220));
         let _ = t.poll(Duration::from_millis(1));
         assert_eq!(t.data_resent, 1);

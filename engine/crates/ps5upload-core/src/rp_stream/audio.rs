@@ -87,16 +87,18 @@ impl AudioAssembler {
 
     /// Packets received and lost since the last call, as chiaki counts them:
     /// the spread of frame indexes seen against how many packets came.
+    ///
+    /// chiaki-ng (`packetstats.c`) reports the whole spread as lost when more packets came
+    /// than it spans: the first window (its first packet is counted and spans nothing), or a
+    /// late or repeated packet from the window before. That told the console a burst of loss
+    /// that never happened, and it cuts its bitrate on that. More packets than the spread
+    /// means none of it was lost.
     pub fn take_seq(&mut self) -> (u64, u64) {
         let Some(min) = self.seq_min else {
             return (0, 0);
         };
         let diff = self.seq_max.wrapping_sub(min) as u64;
-        let lost = if self.seq_received > diff {
-            diff
-        } else {
-            diff - self.seq_received
-        };
+        let lost = diff.saturating_sub(self.seq_received);
         let r = (self.seq_received, lost);
         self.seq_min = Some(self.seq_max);
         self.seq_received = 0;
@@ -214,6 +216,33 @@ mod tests {
         h[6..10].copy_from_slice(&480u32.to_be_bytes());
         let a = AudioHeader::parse(&h).unwrap();
         assert_eq!((a.channels, a.rate, a.frame_size), (2, 48000, 480));
+    }
+
+    #[test]
+    fn audio_loss_counts_only_missing_packets() {
+        let mut a = AudioAssembler::default();
+        // The first window: 10..=14, nothing missing. chiaki-ng called this 4 lost.
+        for f in 10..=14 {
+            a.push(&pkt(f, 1, 0, 4));
+        }
+        assert_eq!(a.take_seq(), (5, 0));
+        // 16 and 17 missing, but a late 13 from the window before is counted here: 1 lost.
+        for f in [15, 13, 18, 19] {
+            a.push(&pkt(f, 1, 0, 4));
+        }
+        assert_eq!(a.take_seq(), (4, 1));
+        // 20..=23 with one repeated: more packets than the spread, so none lost (chiaki-ng: 4).
+        for f in [20, 21, 21, 22, 23] {
+            a.push(&pkt(f, 1, 0, 4));
+        }
+        assert_eq!(a.take_seq(), (5, 0));
+        // Two of 24..=27 missing.
+        for f in [24, 27] {
+            a.push(&pkt(f, 1, 0, 4));
+        }
+        assert_eq!(a.take_seq(), (2, 2));
+        // Nothing came: nothing to say.
+        assert_eq!(a.take_seq(), (0, 0));
     }
 
     #[test]

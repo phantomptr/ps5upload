@@ -5,6 +5,8 @@
 //   decode — handed to the decoder → the decoder gave the picture
 //   draw   — the decoder gave it → the next animation frame (when the browser shows it)
 // The console's own leg to the engine has no clock both ends share, so it is not in here.
+// What a press takes to show on screen is estimated from these and two round trips; see
+// inputEstimate.
 
 export const STAGES = ["net", "queue", "decode", "draw"] as const;
 export type Stage = (typeof STAGES)[number];
@@ -113,4 +115,25 @@ export function stagesLogText(s: StageSummary | null | undefined): string {
     return `${k} ${t ? `${Math.round(t.p50)}/${Math.round(t.p95)}` : "?"}`;
   };
   return `${STAGES.map(part).join(" · ")} ms (median/95th)`;
+}
+
+/** Press to picture, ms, from what can be measured:
+ *   - the pad state from this page to the engine: half the page's round trip (pings);
+ *   - the engine to the PS5 and back: the engine's Takion round trip (its messages out, the
+ *     console's acknowledgements in). The press goes one way, the picture comes back the other;
+ *   - the picture from the engine to the screen: the net, queue, decode and screen stages
+ *     (medians).
+ *  Not in it, because nothing here can see it: the controller's own delay, and the time the
+ *  game and the PS5 take to react and encode the picture (often a frame or more). So the real
+ *  figure is this plus that. Null until the round trips and the net and decode stages are known. */
+export function inputEstimate(o: {
+  pageRttMs: number | null | undefined;
+  consoleRttMs: number | null | undefined;
+  stages: StageSummary | null | undefined;
+}): number | null {
+  const { pageRttMs, consoleRttMs, stages } = o;
+  const ok = (v: number | null | undefined): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
+  if (!ok(pageRttMs) || !ok(consoleRttMs) || !stages?.net || !stages.decode) return null;
+  const p50 = (k: Stage) => stages[k]?.p50 ?? 0;
+  return pageRttMs / 2 + consoleRttMs + p50("net") + p50("queue") + p50("decode") + p50("draw");
 }

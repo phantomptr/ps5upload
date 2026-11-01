@@ -6305,6 +6305,8 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_stats_latency_decode": "Latence ≈ {decode} ms décodage",
 "rp_stats_stages": "réseau {net} · file {queue} · décodage {decode} · écran {draw} ms",
 "rp_stats_decoder_restarts": "redémarrages du décodeur {n}",
+"rp_stats_input": "entrée ≈ {ms} ms, plus le temps propre au jeu",
+"rp_stats_input_hint": "Une estimation à partir de ce qui peut être mesuré : le trajet de cette app au moteur, du moteur à la PS5 et retour, et le chemin de l'image du moteur à ton écran. Non inclus : le délai propre de ta manette, et le temps que le jeu et la PS5 mettent à réagir et à encoder l'image, souvent une image ou plus.",
 "rp_low_latency": "Faible latence",
 "rp_low_latency_hint": "Le plus petit tampon audio et la file d'images la plus courte, pour le moins de délai. Sur un réseau chargé, plus d'images sont perdues et le son peut grésiller. La partie image s'applique au prochain démarrage.",
 "rp_auto_quality": "Baisser la qualité sur un réseau chargé",

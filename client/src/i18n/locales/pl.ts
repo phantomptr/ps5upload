@@ -6537,6 +6537,8 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_stats_latency_decode": "Opóźnienie ≈ {decode} ms dekodowanie",
 "rp_stats_stages": "sieć {net} · kolejka {queue} · dekodowanie {decode} · ekran {draw} ms",
 "rp_stats_decoder_restarts": "restarty dekodera {n}",
+"rp_stats_input": "wejście ≈ {ms} ms plus czas samej gry",
+"rp_stats_input_hint": "Szacunek z tego, co da się zmierzyć: droga z tej aplikacji do silnika, z silnika do PS5 i z powrotem oraz droga obrazu z silnika na twój ekran. Nie obejmuje: opóźnienia samego kontrolera ani czasu, jaki gra i PS5 potrzebują na reakcję i zakodowanie obrazu, często klatkę lub więcej.",
 "rp_low_latency": "Niskie opóźnienie",
 "rp_low_latency_hint": "Najmniejszy bufor dźwięku i najkrótsza kolejka obrazu, dla najmniejszego opóźnienia. W obciążonej sieci gubi się więcej klatek, a dźwięk może trzeszczeć. Część dotycząca obrazu działa od następnego startu.",
 "rp_auto_quality": "Niższa jakość w obciążonej sieci",

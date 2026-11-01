@@ -160,6 +160,13 @@ pub struct LiveStats {
     pub video_bytes: u64,
     pub units: u64,
     pub units_lost: u64,
+    /// The engine's round trip to the console and back, ms (Takion DATA out, its ack in;
+    /// see `Takion::rtt`). Absent until measured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub console_rtt_ms: Option<f64>,
+    /// The console's last connection-quality report, raw (see `proto::ConnectionQuality`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<proto::ConnectionQuality>,
 }
 
 /// Ctrl: our auth, the console's SESSION_ID, then heartbeats until stopped.
@@ -875,6 +882,7 @@ pub fn run_stream(
     let mut last_idr: Option<Instant> = None;
     let (mut state_seq, mut history_seq) = (0u16, 0u16);
     let mut ctrl_gone: Option<Instant> = None;
+    let mut quality: Option<proto::ConnectionQuality> = None;
     let result = loop {
         if started.elapsed() > max || sink.stopped() {
             break Ok(());
@@ -971,6 +979,8 @@ pub fn run_stream(
                 video_bytes: now.bytes - stats_prev.bytes,
                 units: std::mem::take(&mut second_units),
                 units_lost: std::mem::take(&mut second_units_lost),
+                console_rtt_ms: takion.rtt().map(|d| d.as_secs_f64() * 1000.0),
+                quality,
             }));
             stats_prev = now;
         }
@@ -1039,12 +1049,14 @@ pub fn run_stream(
             Err(e) => break Err(e),
         };
         match ev {
-            Event::Data(DATA_TYPE_PROTOBUF, buf) => {
-                if let Ok(Message::Disconnect(r)) = proto::decode(&buf) {
+            Event::Data(DATA_TYPE_PROTOBUF, buf) => match proto::decode(&buf) {
+                Ok(Message::Disconnect(r)) => {
                     report.disconnect_reason = Some(r);
                     break Ok(());
                 }
-            }
+                Ok(Message::ConnectionQuality(q)) => quality = Some(q),
+                _ => {}
+            },
             // Rumble: [?, left (strong), right (weak)] (chiaki
             // stream_connection_takion_data_rumble).
             Event::Data(DATA_TYPE_RUMBLE, b) if b.len() >= 3 => sink.rumble(b[1], b[2]),

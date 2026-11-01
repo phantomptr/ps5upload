@@ -6595,6 +6595,8 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_stats_latency_decode": "Késés ≈ {decode} ms dekódolás",
 "rp_stats_stages": "hálózat {net} · sor {queue} · dekódolás {decode} · kijelző {draw} ms",
 "rp_stats_decoder_restarts": "dekóder-újraindítások {n}",
+"rp_stats_input": "bevitel ≈ {ms} ms, plusz a játék saját ideje",
+"rp_stats_input_hint": "Becslés abból, ami mérhető: az út az alkalmazástól a motorig, a motortól a PS5-ig és vissza, valamint a kép útja a motortól a képernyődig. Nem tartalmazza: a kontroller saját késését, és azt az időt, amíg a játék és a PS5 reagál és kódolja a képet, ami gyakran egy képkocka vagy több.",
 "rp_low_latency": "Alacsony késés",
 "rp_low_latency_hint": "A legkisebb hangpuffer és a legrövidebb képsor a legkisebb késésért. Terhelt hálózaton több képkocka vész el, és a hang recseghet. A képre vonatkozó rész a következő indításkor lép életbe.",
 "rp_auto_quality": "Alacsonyabb minőség terhelt hálózaton",

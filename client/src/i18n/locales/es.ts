@@ -6242,6 +6242,8 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_stats_latency_decode": "Latencia ≈ {decode} ms decodificación",
 "rp_stats_stages": "red {net} · cola {queue} · decodificación {decode} · pantalla {draw} ms",
 "rp_stats_decoder_restarts": "reinicios del decodificador {n}",
+"rp_stats_input": "entrada ≈ {ms} ms, más el tiempo propio del juego",
+"rp_stats_input_hint": "Una estimación con lo que se puede medir: el trayecto de esta app al motor, del motor a la PS5 y de vuelta, y el camino de la imagen del motor a tu pantalla. No incluye: el retardo propio de tu mando ni el tiempo que el juego y la PS5 tardan en reaccionar y codificar la imagen, a menudo un fotograma o más.",
 "rp_low_latency": "Baja latencia",
 "rp_low_latency_hint": "El búfer de sonido más pequeño y la cola de imagen más corta, para el menor retraso. En una red ocupada se pierden más fotogramas y el sonido puede crepitar. La parte de imagen se aplica la próxima vez que empieces.",
 "rp_auto_quality": "Bajar la calidad en una red ocupada",

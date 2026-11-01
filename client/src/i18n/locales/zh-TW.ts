@@ -6242,6 +6242,8 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_stats_latency_decode": "延遲 ≈ 解碼 {decode} ms",
 "rp_stats_stages": "網路 {net} · 排隊 {queue} · 解碼 {decode} · 螢幕 {draw} ms",
 "rp_stats_decoder_restarts": "解碼器重新啟動 {n}",
+"rp_stats_input": "輸入 ≈ {ms} 毫秒,另加遊戲本身的時間",
+"rp_stats_input_hint": "根據可測量的部分估算: 從本應用程式到引擎、引擎到 PS5 的往返,以及畫面從引擎到你螢幕的路程。不包括: 手把本身的延遲,以及遊戲和 PS5 做出反應並編碼畫面的時間,通常一格或更多。",
 "rp_low_latency": "低延遲",
 "rp_low_latency_hint": "使用最小的聲音緩衝和最短的畫面佇列，延遲最低。網路繁忙時會掉更多影格，聲音可能有爆音。畫面部分在下次開始時生效。",
 "rp_auto_quality": "網路繁忙時降低畫質",

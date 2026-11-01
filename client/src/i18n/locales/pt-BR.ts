@@ -6304,6 +6304,8 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_stats_latency_decode": "Latência ≈ {decode} ms decodificação",
 "rp_stats_stages": "rede {net} · fila {queue} · decodificação {decode} · tela {draw} ms",
 "rp_stats_decoder_restarts": "reinícios do decodificador {n}",
+"rp_stats_input": "entrada ≈ {ms} ms, mais o tempo do próprio jogo",
+"rp_stats_input_hint": "Uma estimativa do que pode ser medido: o trajeto deste app até o motor, do motor até o PS5 e de volta, e o caminho da imagem do motor até a sua tela. Não inclui: o atraso do seu controle e o tempo que o jogo e o PS5 levam para reagir e codificar a imagem, muitas vezes um quadro ou mais.",
 "rp_low_latency": "Baixa latência",
 "rp_low_latency_hint": "O menor buffer de som e a fila de imagem mais curta, para o menor atraso. Numa rede ocupada mais quadros são perdidos e o som pode chiar. A parte da imagem vale a partir do próximo início.",
 "rp_auto_quality": "Reduzir a qualidade numa rede ocupada",
