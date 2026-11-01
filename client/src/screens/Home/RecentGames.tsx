@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, ChevronLeft, ChevronRight } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 
-import { CoverCaption, CoverFrame, CoverTag, MetaDot, PlatformTag } from "../../components/GameIconFrame";
+import { CoverCaption, CoverFrame, CoverTag, PlatformTag } from "../../components/GameIconFrame";
 import { formatCollectionBytes } from "../../lib/collectionView";
 import { gamePath } from "../../lib/gamePage";
 import { hostOf } from "../../lib/addr";
@@ -12,7 +12,7 @@ import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 import { useRosterStore } from "../../state/roster";
 import { CollectionCover } from "../Collection/CollectionCover";
-import { recentGames, type RecentFilter, type StatesByHost } from "./recentGamesFilter";
+import { recentGames, rowEdges, type RecentFilter, type StatesByHost } from "./recentGamesFilter";
 
 const filterKey = (f: RecentFilter) => (typeof f === "string" ? f : `host:${f.host}`);
 
@@ -66,6 +66,44 @@ export function RecentGames() {
     typeof filter === "object" && !consoles.some((c) => c.host === filter.host) ? "all" : filter;
   const shown = useMemo(() => recentGames(games, active, states), [games, active, states]);
 
+  // Previous/next arrows for a mouse: shown only while the row overflows, and
+  // each is off when there is nothing more that way. Touch swipes the row
+  // instead (CSS hides the arrows there).
+  const rowRef = useRef<HTMLUListElement>(null);
+  const [edges, setEdges] = useState({ prev: false, next: false });
+  const measure = useCallback(() => {
+    const el = rowRef.current;
+    if (!el) return;
+    const e = rowEdges(el.scrollLeft, el.scrollWidth, el.clientWidth);
+    setEdges((p) => (p.prev === e.prev && p.next === e.next ? p : e));
+  }, []);
+  useEffect(() => {
+    const el = rowRef.current;
+    if (!el) {
+      setEdges({ prev: false, next: false });
+      return;
+    }
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    ro?.observe(el);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      ro?.disconnect();
+    };
+  }, [measure, shown]);
+  const page = (towardsEnd: boolean) => {
+    const el = rowRef.current;
+    if (!el) return;
+    // About a row's width at a time, keeping a card of overlap; the end is
+    // leftwards in a right-to-left layout.
+    const rtl = getComputedStyle(el).direction === "rtl";
+    const step = Math.max(el.clientWidth * 0.85, 120) * (towardsEnd ? 1 : -1) * (rtl ? -1 : 1);
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    el.scrollBy({ left: step, behavior: still ? "auto" : "smooth" });
+  };
+  const overflowing = shown.length > 0 && (edges.prev || edges.next);
+
   if (games.length === 0) return null;
 
   const chips: Array<{ f: RecentFilter; label: string }> = [
@@ -98,41 +136,76 @@ export function RecentGames() {
             <ArrowRight size={13} className="rtl:rotate-180" />
           </Link>
         </div>
-        {chips.length > 1 && (
-          <div
-            role="group"
-            aria-label={tr("home_recent_games_filter", undefined, "Show games")}
-            className="flex flex-wrap items-center gap-2"
-          >
-            {chips.map(({ f, label }) => (
+        <div className="flex flex-wrap items-center gap-2">
+          {chips.length > 1 && (
+            <div
+              role="group"
+              aria-label={tr("home_recent_games_filter", undefined, "Show games")}
+              className="flex flex-wrap items-center gap-2"
+            >
+              {chips.map(({ f, label }) => (
+                <button
+                  key={filterKey(f)}
+                  type="button"
+                  aria-pressed={filterKey(active) === filterKey(f)}
+                  onClick={() => setFilter(f)}
+                  className="chip min-h-9 px-4 text-xs font-medium"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          {overflowing && (
+            // For a mouse and keyboard only: a touch screen swipes the row.
+            <div
+              data-testid="home-recent-games-arrows"
+              className="hidden items-center gap-1.5 [@media(hover:hover)_and_(pointer:fine)]:flex"
+            >
               <button
-                key={filterKey(f)}
                 type="button"
-                aria-pressed={filterKey(active) === filterKey(f)}
-                onClick={() => setFilter(f)}
-                className="chip min-h-9 px-4 text-xs font-medium"
+                onClick={() => page(false)}
+                disabled={!edges.prev}
+                aria-label={tr("home_recent_games_prev", undefined, "Previous games")}
+                title={tr("home_recent_games_prev", undefined, "Previous games")}
+                className="chip h-9 w-9 justify-center disabled:cursor-default disabled:opacity-40"
               >
-                {label}
+                <ChevronLeft size={16} className="rtl:rotate-180" />
               </button>
-            ))}
-          </div>
-        )}
+              <button
+                type="button"
+                onClick={() => page(true)}
+                disabled={!edges.next}
+                aria-label={tr("home_recent_games_next", undefined, "More games")}
+                title={tr("home_recent_games_next", undefined, "More games")}
+                className="chip h-9 w-9 justify-center disabled:cursor-default disabled:opacity-40"
+              >
+                <ChevronRight size={16} className="rtl:rotate-180" />
+              </button>
+            </div>
+          )}
+        </div>
       </div>
       {shown.length === 0 ? (
         <p className="surface-panel !rounded-[var(--radius-card)] px-5 py-4 text-sm text-[var(--color-muted)]">
           {tr("home_recent_games_none", undefined, "No games match.")}
         </p>
       ) : (
-        // One row that scrolls sideways on a narrow window rather than wrapping
+        // One row of covers about the size of the console's own home screen,
+        // scrolling sideways when there are more than fit rather than wrapping
         // into a wall of covers on Home.
-        <ul className="-mx-2 -mb-2 flex snap-x gap-4 overflow-x-auto px-2 pt-1 pb-4 [scrollbar-width:thin]">
+        <ul
+          ref={rowRef}
+          data-testid="home-recent-games-row"
+          className="-mx-2 -mb-2 flex snap-x snap-mandatory scroll-px-2 gap-3 overflow-x-auto px-2 pt-1 pb-4 [scrollbar-width:thin]"
+        >
           {shown.map((g) => {
             const installedHere = !!connectedStates?.[g.game_id]?.installed;
             return (
               <li
                 key={g.game_id}
-                // Three to a row at the column's width, as in the reference; the rest scroll.
-                className="w-[9.5rem] shrink-0 snap-start sm:w-[calc((100%-2rem)/3)] sm:min-w-[10rem]"
+                // A fixed width, so a wide window shows more games, not bigger ones.
+                className="w-[7.75rem] shrink-0 snap-start sm:w-[8.5rem]"
               >
                 <Link to={gamePath(g.game_id)} className="group block rounded-[var(--radius-card)]">
                   <CoverFrame
@@ -158,13 +231,14 @@ export function RecentGames() {
                     title={g.title}
                     titleAttr={g.title}
                     meta={
-                      <>
+                      // The id and the size, the size on its own line when the
+                      // narrow card can't hold both: a cut-off id is no use.
+                      <span className="flex min-w-0 flex-wrap items-center gap-x-2">
                         <span className="truncate font-mono">{g.game_id}</span>
-                        <MetaDot />
                         <span className="shrink-0 tabular-nums">
                           {formatCollectionBytes(g.total_size_bytes)}
                         </span>
-                      </>
+                      </span>
                     }
                   />
                 </Link>
