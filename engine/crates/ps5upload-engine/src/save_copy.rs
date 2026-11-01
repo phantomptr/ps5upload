@@ -1,9 +1,12 @@
 //! Sharing a PS5 save with another account, and moving one to another account on the same
 //! console (#612).
 //!
-//! A PS5 save is encrypted for the account and console that made it, so a save copied over as it
-//! is (even with the account ID changed) does not load. What does carry over is what is inside
-//! it: the game's own files. So a save is shared as those files, opened decrypted on the console
+//! A PS5 save image is encrypted with a key sealed for the console that made it: the console
+//! unseals it itself, no account involved. The account it belongs to is data: its param.sfo
+//! (ACCOUNT_ID), the image's own parameters (user id, HMAC) and the console's save database. So a
+//! save copied into another user's folder as it is (even with the account ID changed) does not
+//! load as theirs, and an encrypted backup from another PS5 does not open at all. What does carry
+//! over is what is inside it: the game's own files. So a save is shared as those files, opened decrypted on the console
 //! with its sce_sys left out (that is the owner's account information), and used by opening the
 //! other account's own save of the same game, putting those files in it and closing it, which the
 //! console encrypts again as theirs.
@@ -100,16 +103,29 @@ pub trait Console {
     fn save_open(&self) -> bool;
     /// The save image names in a PS5 save folder, without the console's backup copies.
     fn images(&self, folder: &str) -> Result<Vec<String>, String>;
+    /// The PS5's own identity (see `save_backup::console_identity`); None when it does not say.
+    fn identity(&self) -> Option<String>;
+    /// The size of the save image `image` (a file in a save folder): the most its files can
+    /// ever hold, as the image never grows. None when it is not listed.
+    fn image_size(&self, image: &str) -> Result<Option<u64>, String>;
+    /// What the open save at `mount` holds in its sce_sys (kept when its files are replaced).
+    fn sys_bytes(&self, mount: &str) -> Result<u64, String>;
     /// Err when the save there now can't be kept before it is replaced.
     fn can_back_up(&self) -> Result<(), String>;
     /// Backs up the save folder `entry`, every image of it (tagged `tag`); the backup zip.
     fn back_up(&self, entry: &SaveEntry, tag: &str) -> Result<PathBuf, String>;
-    /// Copies the files of the save image `image`, opened decrypted, into the new local folder
-    /// `dest`.
-    fn read_image(&self, image: &str, dest: &Path) -> Result<(), String>;
-    /// Replaces the files in the save image `image` (opened, emptied but for sce_sys, filled
-    /// from `src`, closed).
-    fn replace_files(&self, image: &str, src: &Path) -> Result<(), String>;
+    /// Whether a save is open now; Err when the console could not be asked.
+    fn open_now(&self) -> Result<bool, String>;
+    /// Opens the save image `image` decrypted (one at a time); its mount point.
+    fn open_image(&self, image: &str) -> Result<String, String>;
+    /// Copies the files of the open save at `mount` into the new local folder `dest`.
+    fn copy_out(&self, mount: &str, dest: &Path) -> Result<(), String>;
+    /// Empties the open save at `mount` but for sce_sys and fills it from `src`.
+    fn fill(&self, mount: &str, src: &Path) -> Result<(), String>;
+    /// One try at closing the open save (written back when it changed).
+    fn close_once(&self) -> Result<Closed, String>;
+    /// The wait between two tries at closing.
+    fn pause(&self) {}
     /// Puts the folder `src` into the save folder `folder` as it is, without a backup first.
     fn put_raw(&self, title_id: &str, src: &Path, folder: &str, user_id: u32)
         -> Result<(), String>;
@@ -123,6 +139,174 @@ pub trait Console {
     ) -> Result<(), String>;
 }
 
+/// What a close of the open save said.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Closed {
+    /// A save was open (false: nothing was, it was closed already).
+    pub was_open: bool,
+}
+
+/// How many times a close is tried before giving up (with [`Console::pause`] between).
+const CLOSE_TRIES: usize = 5;
+
+/// Closes the open save, trying again when a close fails: the helper can refuse one (still in
+/// use, or the write-back failed and it keeps the edited copy for the next close) or the
+/// connection can drop in the middle. Left open, the next open or close of any save would write
+/// that copy over whatever is put in the folder meanwhile. `changed`: files were put in the save.
+/// A close that worked only on a later try, finding nothing open, can't say the files were
+/// written (the helper gives up on a second failed write-back and closes): an Err then.
+fn close_save(c: &dyn Console, changed: bool) -> Result<(), String> {
+    let mut first: Option<String> = None;
+    let mut last = String::new();
+    for i in 0..CLOSE_TRIES {
+        if i > 0 {
+            c.pause();
+        }
+        match c.close_once() {
+            Ok(closed) => {
+                return match first {
+                    Some(e) if changed && !closed.was_open => Err(format!(
+                        "closing the save failed ({e}), so its new files may not have been kept"
+                    )),
+                    _ => Ok(()),
+                };
+            }
+            Err(e) => {
+                crate::log_warn!("save copy: closing the save failed (try {}): {e}", i + 1);
+                first.get_or_insert_with(|| e.clone());
+                last = e;
+            }
+        }
+    }
+    Err(format!("the save could not be closed ({last})"))
+}
+
+/// Copies the files of the save image `image`, opened decrypted, into the new local folder
+/// `dest`; closed again after.
+fn read_image(c: &dyn Console, image: &str, dest: &Path) -> Result<(), String> {
+    let mount = c.open_image(image)?;
+    let copied = c.copy_out(&mount, dest);
+    // Read only: closing it changes nothing on the console.
+    let closed = close_save(c, false);
+    copied?;
+    closed
+}
+
+/// The bytes of every file under the local folder `dir`.
+fn local_bytes(dir: &Path) -> Result<u64, String> {
+    let mut total = 0u64;
+    for e in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+        let e = e.map_err(|e| format!("{}: {e}", dir.display()))?;
+        let t = e
+            .file_type()
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        total += if t.is_dir() {
+            local_bytes(&e.path())?
+        } else {
+            e.metadata().map(|m| m.len()).unwrap_or(0)
+        };
+    }
+    Ok(total)
+}
+
+/// The refusal of a save too big for the image it goes into. A PS5 save image has a fixed size
+/// (set when the game made it); a bigger one would fail part way through the upload.
+fn too_small(title_id: &str, who: &str, need: u64, have: u64) -> String {
+    use ps5upload_core::health::human_bytes;
+    format!(
+        "{title_id}'s save on {who} is too small for this save (needs {}, has {}). Start the game as {who}, make a bigger save if the game allows it, or use a save from the same game version.",
+        human_bytes(need),
+        human_bytes(have)
+    )
+}
+
+/// Err (`too_small`) when `need` bytes can't fit the image `image` at all: its whole size, the
+/// most it can ever hold. Asked before anything changes, without opening it.
+fn fits_image(
+    c: &dyn Console,
+    title_id: &str,
+    who: &str,
+    image: &str,
+    need: u64,
+) -> Result<(), String> {
+    match c.image_size(image)? {
+        Some(size) if need > size => Err(too_small(title_id, who, need, size)),
+        _ => Ok(()),
+    }
+}
+
+/// Replaces the files in the save image `image`: opened, emptied but for sce_sys, filled from
+/// `src` and closed (which the console encrypts as the folder owner's). Refused, closed again
+/// with nothing deleted, when `src` is bigger than the image can hold besides its sce_sys.
+fn replace_files(
+    c: &dyn Console,
+    title_id: &str,
+    who: &str,
+    image: &str,
+    src: &Path,
+) -> Result<(), String> {
+    let need = local_bytes(src)?;
+    let mount = c.open_image(image)?;
+    let room = (|| {
+        let Some(size) = c.image_size(image)? else {
+            return Ok(());
+        };
+        let have = size.saturating_sub(c.sys_bytes(&mount)?);
+        if need > have {
+            return Err(too_small(title_id, who, need, have));
+        }
+        Ok(())
+    })();
+    if let Err(e) = room {
+        // Nothing was changed: closing it changes nothing either.
+        return match close_save(c, false) {
+            Ok(()) => Err(e),
+            Err(why) => Err(format!("{e} ({why})")),
+        };
+    }
+    let filled = c.fill(&mount, src);
+    let closed = close_save(c, true);
+    filled?;
+    closed
+}
+
+/// Puts the backup `zip` back into `folder` after a failed step; Err is the sentence telling the
+/// person what to do instead. Never while a save is still open (or the console can't say): the
+/// helper would write its copy over the save put back at the next open or close of any save.
+fn undo(
+    c: &dyn Console,
+    title_id: &str,
+    zip: &Path,
+    folder: &str,
+    user_id: u32,
+) -> Result<(), String> {
+    let file = zip
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut open = c.open_now();
+    for _ in 1..CLOSE_TRIES {
+        if open.is_ok() {
+            break;
+        }
+        c.pause();
+        open = c.open_now();
+    }
+    if open != Ok(false) {
+        crate::log_warn!(
+            "save copy: not putting {file} back into {folder}: a save may still be open ({open:?})"
+        );
+        return Err(format!(
+            "A save is still open on the PS5, so the save there before was not put back: once the PS5 can be reached, restore {file} from Save Data › Restore."
+        ));
+    }
+    c.put_back(title_id, zip, folder, user_id).map_err(|e| {
+        format!(
+            "Putting the save back failed too ({e}); restore {file} from the game's save backups."
+        )
+    })
+}
+
 fn running_error(title_id: &str) -> String {
     format!("{title_id} is running on the PS5. Close the game, then try again.")
 }
@@ -134,6 +318,23 @@ fn title_of_folder(folder: &str) -> Result<String, String> {
     local::ps5_save_image(&format!("{}/x", folder.trim_end_matches('/')))
         .map(|(t, _)| t)
         .ok_or_else(|| format!("{folder} is not a PS5 save folder"))
+}
+
+/// The user a PS5 save folder belongs to (`/user/home/<8 hex>/...`): the one the save is put
+/// back as. `asked`: the user the request named, refused when it is someone else.
+fn user_of_folder(folder: &str, asked: Option<u32>) -> Result<u32, String> {
+    title_of_folder(folder)?;
+    let hex = folder
+        .trim_start_matches("/user/home/")
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    let user =
+        u32::from_str_radix(hex, 16).map_err(|_| format!("{folder} is not a PS5 save folder"))?;
+    match asked {
+        Some(a) if a != user => Err(format!("{folder} is not user {a:08x}'s save folder")),
+        _ => Ok(user),
+    }
 }
 
 fn checks(c: &dyn Console, title_id: &str) -> Result<(), String> {
@@ -163,7 +364,7 @@ pub fn share(c: &dyn Console, folder: &str) -> Result<(String, Vec<u8>), String>
         std::fs::create_dir_all(&dir).map_err(|e| format!("copy: {e}"))?;
         for name in &images {
             let dest = dir.join(name);
-            c.read_image(&format!("{folder}/{name}"), &dest)?;
+            read_image(c, &format!("{folder}/{name}"), &dest)?;
             let _ = std::fs::remove_dir_all(dest.join(SYS_DIR));
         }
         let manifest = json!({
@@ -340,6 +541,19 @@ pub fn import(
     backup: Option<&Path>,
     compat: Option<&str>,
 ) -> Result<Vec<String>, Failed> {
+    import_as(c, folder, user_id, "this user", zip_bytes, backup, compat)
+}
+
+/// `import`, `who` naming the user the folder belongs to in a refusal.
+fn import_as(
+    c: &dyn Console,
+    folder: &str,
+    user_id: u32,
+    who: &str,
+    zip_bytes: &[u8],
+    backup: Option<&Path>,
+    compat: Option<&str>,
+) -> Result<Vec<String>, Failed> {
     let folder = folder.trim_end_matches('/');
     let title_id = title_of_folder(folder)?;
     if backup.is_none() {
@@ -356,8 +570,18 @@ pub fn import(
             .map_err(|e| format!("this file is not a shared save of {title_id}: {e:#}"))?;
         let parts = shared_parts(&unpacked, &title_id)?;
         let pairs = match_parts(&parts, &c.images(folder)?, compat)
-            .map_err(|m| missing_error(&title_id, "this user", m))?;
+            .map_err(|m| missing_error(&title_id, who, m))?;
         checks(c, &title_id)?;
+        // A part too big for its image is refused before anything changes.
+        for (image, src) in &pairs {
+            fits_image(
+                c,
+                &title_id,
+                who,
+                &format!("{folder}/{image}"),
+                local_bytes(src)?,
+            )?;
+        }
         // Theirs first, so this can be undone.
         let backup = match backup {
             Some(b) => b.to_path_buf(),
@@ -375,7 +599,7 @@ pub fn import(
             }
         };
         let replaced = pairs.iter().try_for_each(|(image, src)| {
-            c.replace_files(&format!("{folder}/{image}"), src)
+            replace_files(c, &title_id, who, &format!("{folder}/{image}"), src)
                 .map_err(|e| format!("{}: {e}", part_label(image)))
         });
         match replaced {
@@ -386,19 +610,11 @@ pub fn import(
                 );
                 Ok(pairs.into_iter().map(|(i, _)| i).collect())
             }
-            Err(why) => {
-                let file = backup
-                    .file_name()
-                    .map(|f| f.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                Err(match c.put_back(&title_id, &backup, folder, user_id) {
-                    Ok(()) => format!("{why}. The save there before was put back."),
-                    Err(e) => format!(
-                        "{why}. Putting the save back failed too ({e}); restore {file} from the game's save backups."
-                    ),
-                }
-                .into())
+            Err(why) => Err(match undo(c, &title_id, &backup, folder, user_id) {
+                Ok(()) => format!("{why}. The save there before was put back."),
+                Err(then) => format!("{why}. {then}"),
             }
+            .into()),
         }
     })();
     let _ = cleanup_temp_dir(&tmp_s);
@@ -491,7 +707,7 @@ pub fn copy_to_user(c: &dyn Console, b: &CopyBody) -> Result<Done, Failed> {
         return Err(missing_error(&title_id, "the other user", missing));
     }
     let (_, zip) = share(c, &from.path)?;
-    let parts = import(c, &to.path, b.to_user, &zip, None, None)?;
+    let parts = import_as(c, &to.path, b.to_user, "the other user", &zip, None, None)?;
     Ok(Done {
         from: from.path.clone(),
         to: to.path.clone(),
@@ -519,6 +735,8 @@ pub fn restore_to_user(
     if from_user == to_user {
         return Err("This backup is already this user's: use Restore.".into());
     }
+    // Encrypted for the PS5 that made it: one from another can't be opened here.
+    local::same_console(zip, c.identity().as_deref())?;
     c.can_back_up()?;
     let saves = c.saves()?;
     let to = target_save(&saves, &title_id, to_user)?.clone();
@@ -558,20 +776,21 @@ pub fn restore_to_user(
             })
         })();
         // Their own save back, whatever happened.
-        let back = c.put_back(&title_id, &theirs, &to.path, to_user);
-        let kept = theirs
-            .file_name()
-            .map(|f| f.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let back = undo(c, &title_id, &theirs, &to.path, to_user);
         match (shared, back) {
-            (Ok(zip), Ok(())) => import(c, &to.path, to_user, &zip, Some(&theirs), None),
+            (Ok(zip), Ok(())) => import_as(
+                c,
+                &to.path,
+                to_user,
+                "the other user",
+                &zip,
+                Some(&theirs),
+                None,
+            ),
             (Err(why), Ok(())) => Err(format!("{why}. The save there before was put back.").into()),
-            (shared, Err(e)) => {
+            (shared, Err(then)) => {
                 let why = shared.err().unwrap_or_else(|| "copy stopped".into());
-                Err(format!(
-                    "{why}. Putting the save back failed ({e}); restore {kept} from the game's save backups."
-                )
-                .into())
+                Err(format!("{why}. {then}").into())
             }
         }
     })();
@@ -609,6 +828,27 @@ impl Console for Live<'_> {
     fn images(&self, folder: &str) -> Result<Vec<String>, String> {
         Ok(image_names(&local::folder_entries(self.host, folder)?))
     }
+    fn identity(&self) -> Option<String> {
+        local::console_identity(self.host)
+    }
+    fn image_size(&self, image: &str) -> Result<Option<u64>, String> {
+        let name = image.rsplit('/').next().unwrap_or_default();
+        Ok(local::folder_entries(self.host, local::folder_of(image))?
+            .iter()
+            .find(|e| e.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(|e| e.get("size").and_then(Value::as_u64))
+            .filter(|n| *n > 0))
+    }
+    fn sys_bytes(&self, mount: &str) -> Result<u64, String> {
+        // sce_sys holds files only (param.sfo, icon0.png, …).
+        Ok(
+            local::folder_entries(self.host, &format!("{mount}/{SYS_DIR}"))?
+                .iter()
+                .filter(|e| e.get("kind").and_then(Value::as_str) != Some("dir"))
+                .filter_map(|e| e.get("size").and_then(Value::as_u64))
+                .sum(),
+        )
+    }
     fn can_back_up(&self) -> Result<(), String> {
         if local::settings().dir.trim().is_empty() {
             return Err("Choose a folder for save backups first (Save Data › Automatic backups): the save there now is kept there before its files are replaced.".into());
@@ -619,72 +859,70 @@ impl Console for Live<'_> {
         let s = local::settings();
         local::back_up_one(self.host, entry, &s.dir, s.keep, Some(tag), &|| Ok(()))
     }
-    fn read_image(&self, image: &str, dest: &Path) -> Result<(), String> {
-        let host = self.host;
+    fn open_now(&self) -> Result<bool, String> {
+        local::save_open_state(self.host)
+    }
+    fn open_image(&self, image: &str) -> Result<String, String> {
+        local::open_save(self.host, image)
+    }
+    fn copy_out(&self, mount: &str, dest: &Path) -> Result<(), String> {
         let dl = make_temp_dir("share")?;
         let dl_s = dl.to_string_lossy().into_owned();
         let r = (|| {
-            let mount = local::open_save(host, image)?;
-            let copied = (|| {
-                let start = local::post(
-                    "/api/transfer/download",
-                    json!({ "addr": host, "src_path": mount, "dest_dir": dl_s, "kind": "folder" }),
-                )?;
-                let job = start
-                    .get("job_id")
-                    .and_then(Value::as_str)
-                    .ok_or("download did not start")?;
-                local::wait_job(job)
-            })();
-            // Read only: closing it changes nothing on the console.
-            let closed = local::close_save(host);
-            copied?;
-            closed?;
+            let start = local::post(
+                "/api/transfer/download",
+                json!({ "addr": self.host, "src_path": mount, "dest_dir": dl_s, "kind": "folder" }),
+            )?;
+            let job = start
+                .get("job_id")
+                .and_then(Value::as_str)
+                .ok_or("download did not start")?;
+            local::wait_job(job)?;
             let leaf = mount.rsplit('/').next().unwrap_or("save_mount");
             std::fs::rename(dl.join(leaf), dest).map_err(|e| format!("copy: {e}"))
         })();
         let _ = cleanup_temp_dir(&dl_s);
         r
     }
-    fn replace_files(&self, image: &str, src: &Path) -> Result<(), String> {
+    fn fill(&self, mount: &str, src: &Path) -> Result<(), String> {
         let host = self.host;
-        let mount = local::open_save(host, image)?;
-        let replaced = (|| {
-            let listing = local::get(&format!(
-                "/api/ps5/list-dir?addr={}&path={}&offset=0&limit=4096",
-                local::enc(host),
-                local::enc(&mount)
-            ))?;
-            for e in listing
-                .get("entries")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-            {
-                let Some(name) = e.get("name").and_then(Value::as_str) else {
-                    continue;
-                };
-                if name == "." || name == ".." || name == SYS_DIR {
-                    continue;
-                }
-                local::post(
-                    "/api/ps5/fs/delete",
-                    json!({ "addr": host, "path": format!("{mount}/{name}") }),
-                )?;
+        let listing = local::get(&format!(
+            "/api/ps5/list-dir?addr={}&path={}&offset=0&limit=4096",
+            local::enc(host),
+            local::enc(mount)
+        ))?;
+        for e in listing
+            .get("entries")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            let Some(name) = e.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            if name == "." || name == ".." || name == SYS_DIR {
+                continue;
             }
-            let start = local::post(
-                "/api/transfer/dir",
-                json!({ "addr": host, "src_dir": src.to_string_lossy(), "dest_root": mount, "excludes": [] }),
+            local::post(
+                "/api/ps5/fs/delete",
+                json!({ "addr": host, "path": format!("{mount}/{name}") }),
             )?;
-            let job = start
-                .get("job_id")
-                .and_then(Value::as_str)
-                .ok_or("upload did not start")?;
-            local::wait_job(job)
-        })();
-        let closed = local::close_save(host);
-        replaced?;
-        closed.map(|_| ())
+        }
+        let start = local::post(
+            "/api/transfer/dir",
+            json!({ "addr": host, "src_dir": src.to_string_lossy(), "dest_root": mount, "excludes": [] }),
+        )?;
+        let job = start
+            .get("job_id")
+            .and_then(Value::as_str)
+            .ok_or("upload did not start")?;
+        local::wait_job(job)
+    }
+    fn close_once(&self) -> Result<Closed, String> {
+        local::close_save(self.host).map(|was_open| Closed { was_open })
+    }
+    fn pause(&self) {
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
     fn put_raw(
         &self,
@@ -806,7 +1044,9 @@ pub struct UseSharedQuery {
     /// An app before 10.6.0 names the image a one-image file goes into.
     #[serde(default)]
     pub image: Option<String>,
-    pub user_id: u32,
+    /// Checked against the folder's own user, which is the one used.
+    #[serde(default)]
+    pub user_id: Option<u32>,
 }
 
 /// `POST /api/save-backup/use-shared?addr=&folder=&user_id=` with the shared zip as the body.
@@ -819,11 +1059,12 @@ pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::
                 .as_deref()
                 .and_then(|i| i.rsplit('/').next())
                 .map(String::from);
+            let user_id = user_of_folder(&folder, q.user_id)?;
             let host = q.addr.trim().to_string();
             import(
                 &Live::new(&host),
                 &folder,
-                q.user_id,
+                user_id,
                 &body,
                 None,
                 compat.as_deref(),
@@ -901,7 +1142,7 @@ pub async fn post_restore_to_user(Json(b): Json<RestoreToUserBody>) -> Response 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::BTreeMap;
 
     const T: &str = "PPSA01650";
@@ -956,6 +1197,11 @@ mod tests {
 
     /// A backup zip of `T`: encrypted images, keys and the console's backup copies.
     fn backup_zip(dir: &Path, images: &[&str]) -> PathBuf {
+        backup_zip_from(dir, images, None)
+    }
+
+    /// `backup_zip`, noting the PS5 it was made on.
+    fn backup_zip_from(dir: &Path, images: &[&str], console: Option<&str>) -> PathBuf {
         let src = dir.join("b");
         std::fs::create_dir_all(src.join(T)).unwrap();
         for i in images {
@@ -963,7 +1209,8 @@ mod tests {
         }
         std::fs::write(src.join(T).join("sdimg_sce_bu_STARBOARD"), b"sealed").unwrap();
         let zip = dir.join(format!("{T}_user{A:08x}_2026-11-01_101500.zip"));
-        zip_folder(&src, T, &zip).unwrap();
+        ps5upload_core::save_archive::zip_folder_noted(&src, T, &zip, &local::backup_note(console))
+            .unwrap();
         zip
     }
 
@@ -977,6 +1224,24 @@ mod tests {
         /// Replacing this image fails.
         fail_replace: Option<String>,
         fail_read: bool,
+        /// The image open now.
+        mounted: RefCell<Option<String>>,
+        /// What the next closes say before one works: "reset" (the connection dropped before
+        /// the close), "gone" (it dropped after the console closed it), anything else (the
+        /// helper refused: still open).
+        close_errors: RefCell<Vec<&'static str>>,
+        /// Every close fails (still open).
+        close_stuck: bool,
+        /// Asking whether a save is open fails.
+        probe_fails: bool,
+        /// Tries at closing.
+        closes: Cell<usize>,
+        /// The PS5's identity.
+        identity: Option<String>,
+        /// Image (name) → its size; not listed: unknown.
+        sizes: BTreeMap<String, u64>,
+        /// What every save's sce_sys holds.
+        sys: u64,
         calls: RefCell<Vec<String>>,
         /// Image → the game file put in it.
         replaced: RefCell<BTreeMap<String, Vec<u8>>>,
@@ -993,6 +1258,14 @@ mod tests {
                 images: BTreeMap::from([(folder(A), v(a)), (folder(B), v(b))]),
                 fail_replace: None,
                 fail_read: false,
+                mounted: RefCell::default(),
+                close_errors: RefCell::default(),
+                close_stuck: false,
+                probe_fails: false,
+                closes: Cell::default(),
+                identity: None,
+                sizes: BTreeMap::new(),
+                sys: 0,
                 calls: RefCell::default(),
                 replaced: RefCell::default(),
             }
@@ -1027,6 +1300,16 @@ mod tests {
         fn images(&self, folder: &str) -> Result<Vec<String>, String> {
             Ok(self.images.get(folder).cloned().unwrap_or_default())
         }
+        fn identity(&self) -> Option<String> {
+            self.identity.clone()
+        }
+        fn image_size(&self, image: &str) -> Result<Option<u64>, String> {
+            Ok(self.sizes.get(image.rsplit('/').next().unwrap()).copied())
+        }
+        fn sys_bytes(&self, mount: &str) -> Result<u64, String> {
+            assert_eq!(mount, "/mnt/save");
+            Ok(self.sys)
+        }
         fn can_back_up(&self) -> Result<(), String> {
             if self.no_backup_dir {
                 Err("no backup folder".into())
@@ -1041,7 +1324,24 @@ mod tests {
                 entry.user_id as u32
             )))
         }
-        fn read_image(&self, image: &str, dest: &Path) -> Result<(), String> {
+        fn open_now(&self) -> Result<bool, String> {
+            if self.probe_fails {
+                return Err("connection refused".into());
+            }
+            Ok(self.mounted.borrow().is_some())
+        }
+        fn open_image(&self, image: &str) -> Result<String, String> {
+            // One at a time, as the helper.
+            assert!(
+                self.mounted.borrow().is_none(),
+                "{image} opened over another"
+            );
+            *self.mounted.borrow_mut() = Some(image.to_string());
+            Ok("/mnt/save".into())
+        }
+        fn copy_out(&self, mount: &str, dest: &Path) -> Result<(), String> {
+            assert_eq!(mount, "/mnt/save");
+            let image = self.mounted.borrow().clone().unwrap();
             self.log(format!("read {image}"));
             if self.fail_read {
                 return Err("mount failed".into());
@@ -1051,7 +1351,9 @@ mod tests {
             std::fs::write(dest.join("GAME.DAT"), image.as_bytes()).unwrap();
             Ok(())
         }
-        fn replace_files(&self, image: &str, src: &Path) -> Result<(), String> {
+        fn fill(&self, mount: &str, src: &Path) -> Result<(), String> {
+            assert_eq!(mount, "/mnt/save");
+            let image = self.mounted.borrow().clone().unwrap();
             self.log(format!("replace {image}"));
             // The owner's account details and the manifest never go across.
             assert!(!src.join(SYS_DIR).exists());
@@ -1064,6 +1366,27 @@ mod tests {
                 Err("upload failed".into())
             } else {
                 Ok(())
+            }
+        }
+        fn close_once(&self) -> Result<Closed, String> {
+            self.closes.set(self.closes.get() + 1);
+            if self.close_stuck {
+                return Err("save_unmount_failed: the save is still in use".into());
+            }
+            let next = {
+                let mut q = self.close_errors.borrow_mut();
+                (!q.is_empty()).then(|| q.remove(0))
+            };
+            match next {
+                Some("reset") => Err("connection reset by peer".into()),
+                Some("gone") => {
+                    *self.mounted.borrow_mut() = None;
+                    Err("connection reset by peer".into())
+                }
+                Some(e) => Err(e.into()),
+                None => Ok(Closed {
+                    was_open: self.mounted.borrow_mut().take().is_some(),
+                }),
             }
         }
         fn put_raw(&self, _: &str, src: &Path, folder: &str, _: u32) -> Result<(), String> {
@@ -1314,6 +1637,164 @@ mod tests {
         );
     }
 
+    /// A shared save of `T` from A's save (every image in `images`).
+    fn shared_zip(images: &[&str]) -> Vec<u8> {
+        share(&Fake::both(images), &folder(A)).unwrap().1
+    }
+
+    /// A close the helper refuses once (the write-back failed, "the next Close tries again")
+    /// is tried again: the save is used, nothing put back.
+    #[test]
+    fn a_close_that_fails_once_is_tried_again() {
+        let c = Fake::both(&[MAIN, STAR]);
+        c.close_errors.borrow_mut().push(
+            "save_writeback_failed: the edited copy could not be written over the save; it is kept and the next Close tries again",
+        );
+        let parts = import(&c, &folder(B), B, &shared_zip(&[MAIN, STAR]), None, None).unwrap();
+        assert_eq!(parts, vec![MAIN.to_string(), STAR.to_string()]);
+        assert_eq!(c.closes.get(), 3);
+        assert!(c.mounted.borrow().is_none());
+        assert!(!c.calls().iter().any(|x| x.starts_with("put_back")));
+    }
+
+    /// The connection dropping in the middle of a close: tried again on a new one.
+    #[test]
+    fn a_connection_drop_during_close_is_tried_again() {
+        let c = Fake::both(&[MAIN]);
+        c.close_errors.borrow_mut().extend(["reset", "reset"]);
+        assert!(import(&c, &folder(B), B, &shared_zip(&[MAIN]), None, None).is_ok());
+        assert_eq!(c.closes.get(), 3);
+        assert!(!c.calls().iter().any(|x| x.starts_with("put_back")));
+        // Dropped after the console closed it: the retry finds nothing open and can't say the
+        // files were kept, so the folder is put back (safe: nothing is open).
+        let c = Fake::both(&[MAIN]);
+        c.close_errors.borrow_mut().push("gone");
+        let e = import(&c, &folder(B), B, &shared_zip(&[MAIN]), None, None)
+            .unwrap_err()
+            .msg;
+        assert!(
+            e.contains("may not have been kept") && e.contains("put back"),
+            "{e}"
+        );
+        assert!(c.calls().last().unwrap().starts_with("put_back"));
+    }
+
+    /// A save still open after every try: the folder is not put back (the helper would write its
+    /// copy over it at the next open or close), and the error names the backup to restore.
+    #[test]
+    fn a_save_left_open_is_never_put_back_over() {
+        let c = Fake {
+            close_stuck: true,
+            ..Fake::both(&[MAIN, STAR])
+        };
+        let e = import(&c, &folder(B), B, &shared_zip(&[MAIN, STAR]), None, None)
+            .unwrap_err()
+            .msg;
+        let kept = format!("{T}_user{B:08x}_x_beforeshare.zip");
+        assert!(
+            e.contains("could not be closed")
+                && e.contains("not put back")
+                && e.contains(&kept)
+                && e.contains("Save Data › Restore"),
+            "{e}"
+        );
+        assert_eq!(c.closes.get(), CLOSE_TRIES);
+        assert!(!c.calls().iter().any(|x| x.starts_with("put_back")));
+        // Nor when the console can't be asked whether one is open.
+        let c = Fake {
+            fail_replace: Some(MAIN.into()),
+            probe_fails: true,
+            ..Fake::both(&[MAIN])
+        };
+        let e = import(&c, &folder(B), B, &shared_zip(&[MAIN]), None, None)
+            .unwrap_err()
+            .msg;
+        assert!(
+            e.contains("not put back") && e.contains("beforeshare"),
+            "{e}"
+        );
+        assert!(!c.calls().iter().any(|x| x.starts_with("put_back")));
+    }
+
+    /// Restore to another user: the backup opened from the target's folder and left open is
+    /// not covered by the target's own save either.
+    #[test]
+    fn restore_to_user_never_puts_back_under_an_open_save() {
+        let tmp = make_temp_dir("restoretest").unwrap();
+        let zip = backup_zip(&tmp, &[MAIN, STAR]);
+        let file = zip.file_name().unwrap().to_string_lossy().into_owned();
+        let c = Fake {
+            close_stuck: true,
+            ..Fake::both(&[MAIN, STAR])
+        };
+        let e = restore_to_user(&c, T, &file, &zip, B).unwrap_err().msg;
+        assert!(
+            e.contains("not put back") && e.contains("beforecopy"),
+            "{e}"
+        );
+        assert!(!c.calls().iter().any(|x| x.starts_with("put_back")));
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// The user a shared save goes in as is the folder's own; another one named is refused.
+    #[test]
+    fn the_user_comes_from_the_folder() {
+        assert_eq!(user_of_folder(&folder(B), None), Ok(B));
+        assert_eq!(user_of_folder(&format!("{}/", folder(B)), Some(B)), Ok(B));
+        assert!(user_of_folder(&folder(B), Some(A))
+            .unwrap_err()
+            .contains("not user 11111111's"));
+        assert!(user_of_folder("/user/home/zzzzzzzz/savedata_prospero/PPSA01650", None).is_err());
+        assert!(user_of_folder("/data/x", None).is_err());
+    }
+
+    /// A save bigger than the target's image is refused before anything changes: by the image's
+    /// whole size without opening it, and once open by what is left besides its sce_sys, closed
+    /// again with nothing deleted.
+    #[test]
+    fn a_save_too_big_for_the_image_is_refused_before_anything_changes() {
+        // shared_zip's GAME.DAT is the source image's path (63 bytes for STARBOARD).
+        let zip = shared_zip(&[MAIN, STAR]);
+        let c = Fake {
+            sizes: BTreeMap::from([(MAIN.to_string(), 1 << 20), (STAR.to_string(), 10)]),
+            ..Fake::both(&[MAIN, STAR])
+        };
+        let e = import(&c, &folder(B), B, &zip, None, None).unwrap_err().msg;
+        assert!(
+            e.contains(
+                "PPSA01650's save on this user is too small for this save (needs 63 B, has 10 B)"
+            ) && e.contains("Start the game as this user"),
+            "{e}"
+        );
+        assert!(c.calls().is_empty(), "{:?}", c.calls());
+        assert_eq!(c.closes.get(), 0);
+        // Fits the image, but not beside its sce_sys: refused once open, nothing filled, closed.
+        let c = Fake {
+            sizes: BTreeMap::from([(MAIN.to_string(), 70)]),
+            sys: 40,
+            ..Fake::both(&[MAIN])
+        };
+        let e = import(&c, &folder(B), B, &shared_zip(&[MAIN]), None, None)
+            .unwrap_err()
+            .msg;
+        assert!(e.contains("too small") && e.contains("has 30 B"), "{e}");
+        assert!(!c.calls().iter().any(|x| x.starts_with("replace")));
+        assert!(c.mounted.borrow().is_none());
+        // Copy names the other user; sizes that fit go ahead.
+        let c = Fake {
+            sizes: BTreeMap::from([(MAIN.to_string(), 10)]),
+            ..Fake::both(&[MAIN])
+        };
+        let e = copy_to_user(&c, &body(A, B)).unwrap_err().msg;
+        assert!(e.contains("save on the other user is too small"), "{e}");
+        let c = Fake {
+            sizes: BTreeMap::from([(MAIN.to_string(), 1 << 20)]),
+            sys: 1000,
+            ..Fake::both(&[MAIN])
+        };
+        assert!(copy_to_user(&c, &body(A, B)).is_ok());
+    }
+
     /// A file shared before 10.6.0 (one image, files at the top) still loads.
     #[test]
     fn an_old_one_image_file_still_loads() {
@@ -1431,6 +1912,36 @@ mod tests {
         };
         assert!(restore_to_user(&c, T, &file, &zip, B).is_err());
         assert!(c.calls().last().unwrap().starts_with("put_back"));
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    /// A backup made on another PS5 is refused before anything changes; one made here, or one
+    /// that does not say (older, or a console with Remote Play off), goes ahead.
+    #[test]
+    fn a_backup_from_another_ps5_is_refused() {
+        let tmp = make_temp_dir("restoretest").unwrap();
+        let zip = backup_zip_from(&tmp, &[MAIN, STAR], Some("D4F7D5D36123"));
+        let file = zip.file_name().unwrap().to_string_lossy().into_owned();
+        let c = Fake {
+            identity: Some("5C843CA8AE72".into()),
+            ..Fake::both(&[MAIN, STAR])
+        };
+        let e = restore_to_user(&c, T, &file, &zip, B).unwrap_err().msg;
+        assert_eq!(e, local::OTHER_CONSOLE_ERROR);
+        assert!(c.calls().is_empty());
+        for here in [Some("d4f7d5d36123"), None] {
+            let c = Fake {
+                identity: here.map(String::from),
+                ..Fake::both(&[MAIN, STAR])
+            };
+            assert!(restore_to_user(&c, T, &file, &zip, B).is_ok());
+        }
+        let old = backup_zip(&tmp.join("old"), &[MAIN, STAR]);
+        let c = Fake {
+            identity: Some("5C843CA8AE72".into()),
+            ..Fake::both(&[MAIN, STAR])
+        };
+        assert!(restore_to_user(&c, T, &file, &old, B).is_ok());
         let _ = cleanup_temp_dir(&tmp.to_string_lossy());
     }
 

@@ -19,6 +19,8 @@ Added in 10.6.0 for [#615](https://github.com/phantomptr/ps5upload/issues/615).
 - **This computer only.** Every endpoint here answers only to the engine's own computer
   (a loopback address: `127.0.0.1` or `::1`). `PS5UPLOAD_ALLOW_IP` does **not** open them to
   other machines; from anywhere else they answer `403 {"error": "local_only"}`.
+- **Address it as localhost.** Requests must use `localhost`, `127.0.0.1` or `[::1]` as the host
+  name (any port); any other name answers `403 {"error": "host_not_local"}`.
 - **It never starts a stream.** Start Remote Play in the app first (Play › Start). The session is
   the one the app runs.
 - **It never takes the picture over.** The engine does not decode video. A frame request asks the

@@ -188,8 +188,12 @@ pub struct FrameQuery {
 /// `GET /api/ps5/rp/frame`.
 pub async fn frame(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Query(q): Query<FrameQuery>,
 ) -> Response {
+    if !crate::vinput_api::host_is_local(&headers) {
+        return crate::vinput_api::host_not_local();
+    }
     frame_for(peer.ip(), super::live(), q).await
 }
 
@@ -452,8 +456,12 @@ fn parse_input(r: &InputReq) -> Result<(ControllerState, u64), serde_json::Value
 /// `POST /api/ps5/rp/input`.
 pub async fn input(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Json(r): Json<InputReq>,
 ) -> Response {
+    if !crate::vinput_api::host_is_local(&headers) {
+        return crate::vinput_api::host_not_local();
+    }
     input_for(peer.ip(), super::live(), r)
 }
 
@@ -515,8 +523,12 @@ pub struct ReleaseReq {
 /// `POST /api/ps5/rp/input/release`.
 pub async fn release(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Json(r): Json<ReleaseReq>,
 ) -> Response {
+    if !crate::vinput_api::host_is_local(&headers) {
+        return crate::vinput_api::host_not_local();
+    }
     release_for(peer.ip(), super::live(), r)
 }
 
@@ -606,6 +618,52 @@ mod tests {
                 Ok(Some(_)) => continue,
                 other => panic!("no snapshot request: {other:?}"),
             }
+        }
+    }
+
+    /// From this computer but not addressed as localhost (a page whose name was re-pointed at
+    /// 127.0.0.1): refused before anything else.
+    #[tokio::test]
+    async fn a_request_not_addressed_to_localhost_is_refused() {
+        let peer = ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 50000)));
+        let hdr = |h: &str| {
+            let mut m = HeaderMap::new();
+            m.insert(header::HOST, h.parse().unwrap());
+            m
+        };
+        let refused = |(st, v): (StatusCode, serde_json::Value)| {
+            st == StatusCode::FORBIDDEN && v["error"] == "host_not_local"
+        };
+        for h in ["evil.example:19113", "192.168.1.10:19113"] {
+            assert!(refused(
+                body_json(frame(peer, hdr(h), Query(q("10.0.0.9"))).await).await
+            ));
+            let r = input(
+                peer,
+                hdr(h),
+                Json(InputReq {
+                    host: "10.0.0.9".into(),
+                    session: Some(1),
+                    ..Default::default()
+                }),
+            )
+            .await;
+            assert!(refused(body_json(r).await), "{h}");
+            let r = release(
+                peer,
+                hdr(h),
+                Json(ReleaseReq {
+                    host: "10.0.0.9".into(),
+                    session: Some(1),
+                }),
+            )
+            .await;
+            assert!(refused(body_json(r).await), "{h}");
+        }
+        // Addressed as localhost it gets past that check (to whatever the session says).
+        for h in ["127.0.0.1:19113", "localhost:19113", "[::1]:19113"] {
+            let got = body_json(frame(peer, hdr(h), Query(q("10.0.0.9"))).await).await;
+            assert!(!refused(got), "{h}");
         }
     }
 

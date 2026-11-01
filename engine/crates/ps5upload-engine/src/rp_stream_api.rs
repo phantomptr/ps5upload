@@ -909,12 +909,25 @@ pub async fn ws(upgrade: WebSocketUpgrade) -> Response {
 }
 
 /// What is streaming now, for a page that wants to show or rejoin it.
-pub async fn current() -> Json<serde_json::Value> {
+pub async fn current(headers: axum::http::HeaderMap) -> Json<serde_json::Value> {
     let live = LIVE.lock().ok().and_then(|g| g.clone());
-    Json(match live {
-        Some(l) => l.snapshot(),
-        None => serde_json::json!({"host": null, "session": null}),
-    })
+    Json(current_for(
+        live.map(|l| l.snapshot()),
+        crate::vinput_api::host_is_local(&headers),
+    ))
+}
+
+/// The session's state for `current`. Its id is only for a local script driving it (#615,
+/// AUTOMATION.md; the app's pages read only `host`): left out for a request that does not
+/// address this computer as localhost.
+fn current_for(snapshot: Option<serde_json::Value>, local: bool) -> serde_json::Value {
+    let mut v = snapshot.unwrap_or_else(|| serde_json::json!({"host": null, "session": null}));
+    if !local {
+        if let Some(o) = v.as_object_mut() {
+            o.remove("session");
+        }
+    }
+    v
 }
 
 /// `GET /api/ps5/rp/replay`: the instant replay's frames (rp_replay.rs), for the page to save as
@@ -1246,6 +1259,19 @@ pub async fn player() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The session id (for a local script) is left out for a request not addressed to
+    /// localhost; the rest, which the app reads, stays.
+    #[test]
+    fn the_session_id_goes_only_to_localhost() {
+        let snap = || Some(serde_json::json!({"host": "10.0.0.9", "session": 3, "playing": true}));
+        assert_eq!(current_for(snap(), true)["session"], 3);
+        let v = current_for(snap(), false);
+        assert!(v.get("session").is_none());
+        assert_eq!(v["host"], "10.0.0.9");
+        assert_eq!(v["playing"], true);
+        assert_eq!(current_for(None, false), serde_json::json!({"host": null}));
+    }
 
     #[test]
     fn the_console_asking_for_the_passcode_reaches_the_page_and_back() {

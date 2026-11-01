@@ -14,7 +14,7 @@
 //!
 //! Settings, and what was last backed up, are kept in `state/` under the data folder.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -25,7 +25,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::save_archive::{
     auto_backup_slot, backup_finalize, cleanup_temp_dir, make_temp_dir, restore_prepare,
-    unzip_strict, zip_folder,
+    unzip_strict, zip_comment, zip_folder_noted,
 };
 use ps5upload_core::saves::SaveEntry;
 use serde::{Deserialize, Serialize};
@@ -92,16 +92,21 @@ pub(crate) fn done_key(host: &str, path: &str) -> String {
 /// PlayStation or PlayStation 2 emulator's cards or saved states; not the console's own
 /// `sce_backup*` folders, which it lists among the saves, empty), changed since the
 /// last one, and not written to in the last few minutes. A save never backed up counts as changed.
+/// Not while its game (or emulator) runs (`running`, upper-case title IDs): the game may be
+/// writing it, and a long pause between writes looks settled. It is due again once the game
+/// closes, as nothing marks it done.
 pub fn needing_backup<'a>(
     host: &str,
     saves: &'a [SaveEntry],
     done: &Done,
     now_secs: i64,
+    running: &BTreeSet<String>,
 ) -> Vec<&'a SaveEntry> {
     saves
         .iter()
         .filter(|e| {
-            crate::emulator_saves::backs_up(e)
+            !running.contains(&crate::emulator_saves::app_of(e).to_ascii_uppercase())
+                && crate::emulator_saves::backs_up(e)
                 && e.mtime > 0
                 && now_secs - e.mtime >= SETTLE_SECS
                 && e.mtime > done.get(&done_key(host, &e.path)).copied().unwrap_or(0)
@@ -343,7 +348,8 @@ pub(crate) fn back_up_one(
             None => stamp(now_ms()),
         };
         let dest = auto_backup_slot(dir, &entry.title_id, user, &st, keep, false)?;
-        if let Err(e) = zip_folder(&tmp, &entry.title_id, &dest) {
+        let note = backup_note(console_identity(host).as_deref());
+        if let Err(e) = zip_folder_noted(&tmp, &entry.title_id, &dest, &note) {
             let _ = std::fs::remove_file(&dest);
             return Err(format!("zip: {e:#}"));
         }
@@ -353,6 +359,68 @@ pub(crate) fn back_up_one(
     })();
     let _ = cleanup_temp_dir(&tmp_s);
     result
+}
+
+// ── which PS5 a backup was made on ──────────────────────────────────────
+//
+// A PS5 save image is encrypted with a key sealed for the console that made it (the console
+// unseals it, no account involved); the account it belongs to is data inside it (param.sfo, the
+// console's save database), which is why a save moves between users of one console. So an
+// encrypted backup made on another PS5 does not open here. From 10.6.0 a backup notes the PS5 it
+// was made on (its Remote Play host-id, the console's MAC) in the zip's comment, and a restore of
+// one made on another is refused before anything changes. Older backups, and consoles that don't
+// say (Remote Play off), are unknown and never refused.
+
+/// The message for a backup made on another PS5.
+pub(crate) const OTHER_CONSOLE_ERROR: &str = "This backup was made on another PS5; encrypted backups only open on the PS5 that made them. Use Save as a file on that PS5 instead.";
+
+/// The PS5 at `host` (its host-id): None when it does not say. Kept for a while per address.
+pub(crate) fn console_identity(host: &str) -> Option<String> {
+    static SEEN: OnceLock<Mutex<BTreeMap<String, (String, std::time::Instant)>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(Mutex::default);
+    if let Some((id, at)) = seen.lock().ok()?.get(host) {
+        if at.elapsed() < Duration::from_secs(600) {
+            return Some(id.clone());
+        }
+    }
+    let id = ps5upload_core::ddp::probe(host, Duration::from_millis(1500))
+        .ok()
+        .map(|st| st.host_id.trim().to_ascii_uppercase())
+        .filter(|id| !id.is_empty())?;
+    if let Ok(mut g) = seen.lock() {
+        g.insert(host.to_string(), (id.clone(), std::time::Instant::now()));
+    }
+    Some(id)
+}
+
+/// A backup zip's comment naming the PS5 it was made on ("" when that is not known).
+pub(crate) fn backup_note(console: Option<&str>) -> String {
+    match console {
+        Some(c) => json!({ "ps5upload": "save-backup", "console": c }).to_string(),
+        None => String::new(),
+    }
+}
+
+/// The PS5 the backup `zip` was made on, from its comment; None for an older backup.
+pub(crate) fn backup_console(zip: &Path) -> Option<String> {
+    let note: Value = serde_json::from_str(&zip_comment(zip).ok()?).ok()?;
+    if note.get("ps5upload").and_then(Value::as_str) != Some("save-backup") {
+        return None;
+    }
+    note.get("console")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|c| !c.is_empty())
+}
+
+/// Err when the backup `zip` was made on a PS5 other than `here`; unknown either side is fine.
+pub(crate) fn same_console(zip: &Path, here: Option<&str>) -> Result<(), String> {
+    match (backup_console(zip), here) {
+        (Some(made), Some(here)) if !made.eq_ignore_ascii_case(here) => {
+            Err(OTHER_CONSOLE_ERROR.into())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Copies the save folder `entry` off `host` into `tmp/<title_id>` and tidies it for a backup
@@ -451,8 +519,12 @@ pub fn run_pass() -> Result<(), String> {
         }
         // A console that does not answer (off, asleep, no helper) is simply not due now.
         let Ok(list) = list_saves(host) else { continue };
+        // Nor one that can't say what runs: a save being written is never copied.
+        let Ok(running) = crate::save_backup_server::running_titles(host) else {
+            continue;
+        };
         let now = (now_ms() / 1000) as i64;
-        for entry in needing_backup(host, &list, &done, now) {
+        for entry in needing_backup(host, &list, &done, now, &running) {
             // The switch may be turned off part-way through a long pass.
             if !settings().enabled {
                 break;
@@ -872,6 +944,13 @@ pub(crate) fn restore_zip(
     save_path: &str,
     user_id: u32,
 ) -> Result<(), String> {
+    // An encrypted save made on another PS5 does not open here (an emulator's is plain files).
+    if save_writer(save_path, title_id, user_id)?
+        .emulator
+        .is_none()
+    {
+        same_console(zip, console_identity(host).as_deref())?;
+    }
     restore_zip_with(host, title_id, zip, save_path, user_id, true)
 }
 
@@ -1209,8 +1288,9 @@ pub async fn post_import_ps4(Json(b): Json<ImportPs4Body>) -> Response {
 
 // ── Sharing a save with another account ─────────────────────────────────
 //
-// A PS5 save is encrypted for the account and console that made it, so a friend's save copied
-// over as it is (even with the account ID changed to theirs) does not load. What does carry over
+// A PS5 save is encrypted for the console that made it and records the account it belongs to
+// (see "which PS5 a backup was made on"), so a friend's save copied over as it is (even with the
+// account ID changed to theirs) does not load. What does carry over
 // is what is inside it: the game's own files. So a save is shared as those files (opened
 // decrypted on the friend's console, its sce_sys left out: that is the owner's account
 // information), and used by opening your own save of the same game, putting those files in it
@@ -1270,20 +1350,24 @@ pub(crate) fn open_save(host: &str, image: &str) -> Result<String, String> {
     }
 }
 
-/// Closes the open save (written back when it changed).
+/// Closes the open save (written back when it changed); whether one was open.
 pub(crate) fn close_save(host: &str) -> Result<bool, String> {
     let v = post("/api/ps5/saves/close", json!({ "addr": host }))?;
-    Ok(v.get("written_back")
+    // An older helper does not say: assume it was.
+    Ok(v.get("was_open").and_then(Value::as_bool).unwrap_or(true))
+}
+
+/// Whether a save is open on the console (one at a time); Err when it could not be asked.
+pub(crate) fn save_open_state(host: &str) -> Result<bool, String> {
+    let v = post("/api/ps5/saves/open", json!({ "addr": host, "image": "" }))?;
+    v.get("mounted")
         .and_then(Value::as_bool)
-        .unwrap_or(false))
+        .ok_or_else(|| "the PS5 did not say whether a save is open".to_string())
 }
 
 /// A save is already open on the console (one at a time).
 pub(crate) fn a_save_is_open(host: &str) -> bool {
-    post("/api/ps5/saves/open", json!({ "addr": host, "image": "" }))
-        .ok()
-        .and_then(|v| v.get("mounted").and_then(Value::as_bool))
-        .unwrap_or(false)
+    save_open_state(host).unwrap_or(false)
 }
 
 /// What a shared save holds, checked before anything on the console changes: the folder of
@@ -1453,6 +1537,31 @@ pub async fn post_restore(Json(b): Json<RestoreBody>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A backup notes the PS5 it was made on; one from another is refused, unknown never.
+    #[test]
+    fn a_backup_names_the_ps5_it_was_made_on() {
+        let tmp = make_temp_dir("notetest").unwrap();
+        std::fs::create_dir_all(tmp.join("PPSA01234")).unwrap();
+        std::fs::write(tmp.join("PPSA01234").join("sdimg_x"), b"x").unwrap();
+        let made = |name: &str, console: Option<&str>| {
+            let z = tmp.join(name);
+            zip_folder_noted(&tmp, "PPSA01234", &z, &backup_note(console)).unwrap();
+            z
+        };
+        let here = made("a.zip", Some("D4F7D5D36123"));
+        assert_eq!(backup_console(&here).as_deref(), Some("D4F7D5D36123"));
+        assert!(same_console(&here, Some("d4f7d5d36123")).is_ok());
+        assert!(same_console(&here, None).is_ok());
+        assert_eq!(
+            same_console(&here, Some("5C843CA8AE72")).unwrap_err(),
+            OTHER_CONSOLE_ERROR
+        );
+        let old = made("b.zip", None);
+        assert_eq!(backup_console(&old), None);
+        assert!(same_console(&old, Some("5C843CA8AE72")).is_ok());
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
 
     /// Save Data's "Backed up …" line: the newest of each game and user, tags left off.
     #[test]
@@ -1650,14 +1759,34 @@ mod tests {
         ];
         let mut done = Done::new();
         done.insert(done_key("h", "/a"), 1000); // already backed up at this mtime
-        let due: Vec<&str> = needing_backup("h", &saves, &done, 2000)
+        let due: Vec<&str> = needing_backup("h", &saves, &done, 2000, &BTreeSet::new())
             .iter()
             .map(|e| e.path.as_str())
             .collect();
         // /c changed 100 s ago: still settling. /d has no time: skipped.
         assert_eq!(due, vec!["/b"]);
         // Another console's record does not count for this one.
-        assert_eq!(needing_backup("other", &saves, &done, 2000).len(), 2);
+        assert_eq!(
+            needing_backup("other", &saves, &done, 2000, &BTreeSet::new()).len(),
+            2
+        );
+    }
+
+    /// A running game's save waits (it may be mid-write); due again once the game closed.
+    #[test]
+    fn a_running_games_save_is_not_backed_up() {
+        let mut other = save("/b", 1000);
+        other.title_id = "PPSA09999".into();
+        let saves = [save("/a", 1000), other];
+        // As the process list gives it: upper case.
+        let running: BTreeSet<String> = ["PPSA01234".to_string()].into();
+        let due = needing_backup("h", &saves, &Done::new(), 2000, &running);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].path, "/b");
+        assert_eq!(
+            needing_backup("h", &saves, &Done::new(), 2000, &BTreeSet::new()).len(),
+            2
+        );
     }
 
     #[test]
@@ -1666,7 +1795,7 @@ mod tests {
         let mut sys = save("/user/home/1/savedata/sce_backup2", 1000);
         sys.title_id = "sce_backup2".into();
         let saves = [sys, save("/user/home/1/savedata_prospero/PPSA01234", 1000)];
-        let due = needing_backup("h", &saves, &Done::new(), 2000);
+        let due = needing_backup("h", &saves, &Done::new(), 2000, &BTreeSet::new());
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].title_id, "PPSA01234");
     }
@@ -1747,7 +1876,13 @@ mod tests {
         );
         sw.title_id = "0100F2C0115B6000".into();
         sw.kind = crate::emulator_saves::KIND.into();
-        let due = needing_backup("h", std::slice::from_ref(&sw), &Done::new(), 2000);
+        let due = needing_backup(
+            "h",
+            std::slice::from_ref(&sw),
+            &Done::new(),
+            2000,
+            &BTreeSet::new(),
+        );
         assert_eq!(due.len(), 1);
         // Its backup is named, kept and listed as a PS5 save's is.
         let name = format!(
@@ -1774,7 +1909,10 @@ mod tests {
             ps2("/mnt/ext1/homebrew/PPSA99249/memcards", CARDS_USER),
             ps2("/mnt/ext1/homebrew/PPSA99249/sstates", STATES_USER),
         ];
-        assert_eq!(needing_backup("h", &saves, &Done::new(), 2000).len(), 2);
+        assert_eq!(
+            needing_backup("h", &saves, &Done::new(), 2000, &BTreeSet::new()).len(),
+            2
+        );
         // Both under the emulator's title, the user number keeping their backups apart.
         for user in [CARDS_USER, STATES_USER] {
             let name = format!(
