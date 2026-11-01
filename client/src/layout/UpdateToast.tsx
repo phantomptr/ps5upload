@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ExternalLink, Download, RefreshCw, X, Sparkles } from "lucide-react";
 
-import { useUpdateStore } from "../state/update";
+import { failedInstall, useUpdateStore } from "../state/update";
 import { getAppVersion } from "../lib/appVersion";
 import { loadBundledDoc } from "../lib/bundledDoc";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
@@ -115,6 +115,8 @@ export function UpdateToast() {
   const skippedVersion = useUpdateStore((s) => s.skippedVersion);
   const skipVersion = useUpdateStore((s) => s.skipVersion);
   const installOnQuit = useUpdateStore((s) => s.installOnQuitArmed);
+  const lastInstall = useUpdateStore((s) => s.lastInstall);
+  const retryInstall = useUpdateStore((s) => s.retryInstall);
   const apkStep = useApkUpdateStore((s) => s.step);
   // Dismiss is keyed by version so a NEWER release later in the session
   // re-surfaces the bar instead of staying hidden.
@@ -139,6 +141,8 @@ export function UpdateToast() {
   const downloaded = phase.kind === "downloaded";
   const failed = phase.kind === "download-failed";
   const canInstall = phase.kind === "downloaded" && !!phase.download.can_install;
+  // The last install of this version failed (#611): not tried again by itself.
+  const installFailed = failedInstall({ lastInstall }, version) != null;
   // Android with the installer bridge: one tap downloads and opens Android's dialog.
   const apkInstall =
     isMobile() && "result" in phase && !!phase.result.download_url && apkUpdaterAvailable();
@@ -152,14 +156,16 @@ export function UpdateToast() {
       <Sparkles size={15} className="shrink-0 text-[var(--color-accent)]" />
       <span className="min-w-0 flex-1 truncate">
         <span className="font-medium text-[var(--color-text)]">
-          {downloaded
+          {installFailed
+            ? tr("update_install_failed_title", undefined, "Update didn't install")
+            : downloaded
             ? tr("update_toast_downloaded", undefined, "Update downloaded")
             : failed
               ? tr("update_toast_failed", undefined, "Update download failed")
               : tr("update_toast_title", undefined, "Update available")}
         </span>
         <span className="text-[var(--color-muted)]"> — v{version}</span>
-        {downloaded && installOnQuit && (
+        {downloaded && installOnQuit && !installFailed && (
           <span className="text-[var(--color-muted)]">
             {" · "}
             {tr("update_toast_installs_on_quit", undefined, "installs when you quit")}
@@ -197,7 +203,28 @@ export function UpdateToast() {
       </button>
       {/* Download / Retry — hidden once downloaded (the install step lives in
           Settings). Disabled while a download is in flight. */}
-      {!downloaded && (
+      {installFailed && !downloading && (
+        <>
+          <button
+            type="button"
+            disabled={installing}
+            onClick={() => void retryInstall()}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent)] disabled:opacity-60"
+          >
+            {installing ? <Spinner size={14} /> : <RefreshCw size={13} />}
+            {tr("update_try_again", undefined, "Try again")}
+          </button>
+          <button
+            type="button"
+            onClick={() => void openExternalUrl(releasePageUrl(version))}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)] max-sm:hidden"
+          >
+            <ExternalLink size={13} />
+            {tr("update_download_page", undefined, "Download page")}
+          </button>
+        </>
+      )}
+      {!downloaded && !installFailed && (
         <button
           type="button"
           disabled={downloading}
@@ -220,7 +247,7 @@ export function UpdateToast() {
                 : tr("update_toast_download", undefined, "Download")}
         </button>
       )}
-      {canInstall && (
+      {canInstall && !installFailed && (
         <button
           type="button"
           disabled={installing}

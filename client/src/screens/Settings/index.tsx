@@ -67,7 +67,9 @@ import { useInstallPathFallbackStore } from "../../state/installPathFallback";
 import { hasBetaItems } from "../../layout/navItems";
 import { useRestAfterUploadStore } from "../../state/restAfterUpload";
 import { userConfigPath, resetAllAppData } from "../../state/userConfig";
-import { useUpdateStore, type UpdatePhase } from "../../state/update";
+import { failedInstall, useUpdateStore, type UpdatePhase } from "../../state/update";
+import { openExternalUrl } from "../../lib/openExternalUrl";
+import { releasePageUrl } from "../../layout/UpdateToast";
 import { isIOS, isMobile } from "../../lib/platform";
 import { apkUpdaterAvailable } from "../../state/apkUpdate";
 import { ApkUpdateStatus } from "../../layout/ApkUpdateStatus";
@@ -1772,6 +1774,10 @@ function UpdatesPanel() {
   const setAutoCheckEnabled = useUpdateStore((s) => s.setAutoCheckEnabled);
   const channel = useUpdateStore((s) => s.channel);
   const setChannel = useUpdateStore((s) => s.setChannel);
+  const lastInstall = useUpdateStore((s) => s.lastInstall);
+  const retryInstall = useUpdateStore((s) => s.retryInstall);
+  const oldDownloads = useUpdateStore((s) => s.oldDownloads);
+  const removeOldDownloads = useUpdateStore((s) => s.removeOldDownloads);
   // Mobile: the store's download() opens the APK URL (or the release
   // page) in the system browser instead of saving to ~/Downloads —
   // that flow can't work in Android's sandbox. Relabel the CTA so it
@@ -1816,9 +1822,77 @@ function UpdatesPanel() {
   // Android with the installer bridge: download and install inside the app.
   const apkInstall = mobile && !!hasPlatformBundle && apkUpdaterAvailable();
 
+  // The last install failed (#611): say why, and offer it again or the download page. "Try
+  // again" only while that version is the one on offer.
+  const failed = lastInstall && !lastInstall.installed ? lastInstall : null;
+  const canRetry = failedInstall({ lastInstall }, resultForNotes?.latest_version) != null;
+
   return (
     <div className="flex flex-col gap-3">
       <StatusRow phase={phase} />
+      {failed && (
+        <div className="rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-surface)] p-3 text-xs">
+          <div className="mb-1 font-medium text-[var(--color-warn)]">
+            {tr("update_install_failed_title", undefined, "Update didn't install")}
+          </div>
+          <div className="text-[var(--color-muted)]">
+            {tr(
+              "update_install_failed_body",
+              { version: failed.version },
+              "v{version} couldn't be installed, so PS5Upload is still on the old version.",
+            )}
+          </div>
+          {failed.message && (
+            <div className="mt-1 break-words font-mono text-[var(--color-text)]">
+              {tr("update_install_failed_reason", { message: failed.message }, "Reason: {message}")}
+            </div>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {canRetry && (
+              <button
+                type="button"
+                disabled={installing || phase.kind === "downloading"}
+                onClick={() => void retryInstall()}
+                className="inline-flex items-center gap-1.5 rounded-[var(--radius-card)] bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-accent-contrast)] disabled:opacity-60 max-md:min-h-11"
+              >
+                {installing || phase.kind === "downloading" ? (
+                  <Spinner size={12} tone="inherit" />
+                ) : (
+                  <RefreshCw size={12} />
+                )}
+                {tr("update_try_again", undefined, "Try again")}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void openExternalUrl(releasePageUrl(failed.version))}
+              className="inline-flex items-center gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface-3)] max-md:min-h-11"
+            >
+              <ExternalLink size={12} />
+              {tr("update_download_page", undefined, "Download page")}
+            </button>
+          </div>
+        </div>
+      )}
+      {!mobile && oldDownloads > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]">
+          <span>
+            {tr(
+              "update_old_downloads",
+              { count: oldDownloads },
+              "{count} old update downloads are in your Downloads folder.",
+            )}
+          </span>
+          <button
+            type="button"
+            onClick={() => void removeOldDownloads()}
+            className="inline-flex items-center gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-border)] px-2.5 py-1 text-xs hover:bg-[var(--color-surface-3)] max-md:min-h-11"
+          >
+            <Trash2 size={12} />
+            {tr("update_old_downloads_remove", undefined, "Remove")}
+          </button>
+        </div>
+      )}
       {apkInstall && resultForNotes && (
         <ApkUpdateStatus result={resultForNotes} failed={phase.kind === "download-failed"} />
       )}
@@ -1841,7 +1915,7 @@ function UpdatesPanel() {
           <div className="mb-2 font-mono text-[var(--color-text)]">
             {phase.download.path}
           </div>
-          {phase.download.can_install ? (
+          {phase.download.can_install && canRetry ? null : phase.download.can_install ? (
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"

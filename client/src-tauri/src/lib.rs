@@ -145,6 +145,11 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     linux_gpu::apply();
 
+    // Started by an update (Windows portable): the old version is still on its way out. Wait
+    // for it before anything else, or its single-instance lock sends this launch away.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    commands::self_install::wait_for_previous_instance();
+
     let builder = tauri::Builder::default();
     // Single-instance MUST run before any other setup (window creation,
     // engine spawn). When a second launch hits, the runtime calls our
@@ -634,6 +639,10 @@ pub fn run() {
             commands::update_download,
             commands::update_install,
             commands::update_install_on_quit,
+            commands::update_last_install,
+            commands::update_forget_failure,
+            commands::update_old_downloads,
+            commands::update_remove_old_downloads,
             // Android: the APK into the app cache with progress, for the system installer.
             commands::update_download_apk,
             tray::tray_configure,

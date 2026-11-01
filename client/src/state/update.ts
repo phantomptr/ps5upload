@@ -6,6 +6,11 @@ import {
   updateDownload,
   updateInstall,
   updateInstallOnQuit,
+  updateLastInstall,
+  updateForgetFailure,
+  updateOldDownloads,
+  updateRemoveOldDownloads,
+  type LastInstall,
   type UpdateCheck,
   type UpdateDownload,
 } from "../api/ps5";
@@ -189,6 +194,16 @@ export function updateOffered(s: { phase: UpdatePhase; skippedVersion: string | 
   return s.phase.kind === "available" && s.phase.result.latest_version !== s.skippedVersion;
 }
 
+/** The failed install of `version`, if the last attempt to install exactly that version
+ *  failed (#611): it is then not installed by itself again, only by "Try again". */
+export function failedInstall(
+  s: { lastInstall: LastInstall | null },
+  version: string | null | undefined,
+): LastInstall | null {
+  const l = s.lastInstall;
+  return l && !l.installed && version && l.version === version ? l : null;
+}
+
 interface UpdateStore {
   phase: UpdatePhase;
   /** Last time we asked the endpoint. 0 when never. Refreshed after
@@ -212,7 +227,8 @@ interface UpdateStore {
   /** Force a check regardless of cache. Used by the Settings card's
    *  "Check now" button. */
   checkNow: () => Promise<void>;
-  /** Download the update archive to ~/Downloads and reveal the folder.
+  /** Download the update archive (the app's updates folder; ~/Downloads, revealed, when it is
+   *  installed by hand).
    *  Transitions through `downloading` → `downloaded` (success) or
    *  `download-failed`. Only valid when current phase is `available`.
    *  Mobile: opens the APK download URL (or the GitHub release page)
@@ -246,6 +262,17 @@ interface UpdateStore {
   skipVersion: () => void;
   /** Offer the skipped version again. */
   unskipVersion: () => void;
+  /** What the last install came to (read once at launch), or after a failed install in this
+   *  session. A failed version is not installed by itself again (`failedInstall`). */
+  lastInstall: LastInstall | null;
+  /** Read the last install's outcome and the old update downloads in Downloads (once). */
+  loadInstallStatus: () => Promise<void>;
+  /** After a failed install: forget it, download again if needed, and install. */
+  retryInstall: () => Promise<void>;
+  /** How many old update downloads earlier versions left in the Downloads folder. */
+  oldDownloads: number;
+  /** Delete them (the person clicked Remove). */
+  removeOldDownloads: () => Promise<void>;
 }
 
 function loadCache(): CachedCheck | null {
@@ -320,6 +347,8 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     }
   };
 
+  /** Settles once the last install's outcome is known: the automatic install waits for it. */
+  let statusLoaded: Promise<void> | null = null;
   let autoInstallRunning = false;
   /** Download, wait for the app to be idle, install. One at a time; gives up quietly (the
    *  update stays offered as usual) when this copy cannot install by itself. */
@@ -327,6 +356,13 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     if (autoInstallRunning) return;
     autoInstallRunning = true;
     try {
+      if (statusLoaded) await statusLoaded;
+      // #611: an install of this version already failed. Trying again by itself would close the
+      // app on every launch; the person decides ("Try again").
+      if ("result" in get().phase) {
+        const p = get().phase as Extract<UpdatePhase, { result: UpdateCheck }>;
+        if (failedInstall(get(), p.result.latest_version)) return;
+      }
       if (get().phase.kind === "available") await get().download();
       const phase = get().phase;
       // A .deb / .rpm asks for a password: a prompt out of nowhere is not "automatic".
@@ -361,6 +397,67 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     installOnQuitArmed: false,
     installFallback: null,
     skippedVersion: loadSkipped(),
+    lastInstall: null,
+    oldDownloads: 0,
+
+    loadInstallStatus() {
+      statusLoaded ??= (async () => {
+        try {
+          const last = await updateLastInstall();
+          if (last) set({ lastInstall: last });
+          if (last && !last.installed && last.new) {
+            pushNotification(
+              "warning",
+              trFb("update_install_failed_title", undefined, "Update didn't install"),
+              {
+                body: trFb(
+                  "update_install_failed_body",
+                  { version: last.version },
+                  `v${last.version} couldn't be installed, so PS5Upload is still on the old version.`,
+                ),
+                link: "/settings",
+              },
+            );
+          }
+        } catch {
+          // No record to read: nothing to say.
+        }
+        try {
+          set({ oldDownloads: (await updateOldDownloads()).count });
+        } catch {
+          // No Downloads folder: nothing to offer.
+        }
+      })();
+      return statusLoaded;
+    },
+
+    async retryInstall() {
+      try {
+        await updateForgetFailure();
+      } catch {
+        // Nothing recorded: trying again needs nothing forgotten.
+      }
+      set({ lastInstall: null });
+      if (get().phase.kind === "available" || get().phase.kind === "download-failed") {
+        await get().download();
+      }
+      const phase = get().phase;
+      if (phase.kind === "downloaded" && phase.download.can_install && !phase.download.needs_password) {
+        await get().install();
+      }
+    },
+
+    async removeOldDownloads() {
+      try {
+        await updateRemoveOldDownloads();
+      } finally {
+        try {
+          set({ oldDownloads: (await updateOldDownloads()).count });
+        } catch {
+          set({ oldDownloads: 0 });
+        }
+      }
+    },
 
     setInstallOnQuitEnabled(enabled: boolean) {
       if (typeof localStorage !== "undefined") safeSetItem(INSTALL_ON_QUIT_KEY, enabled ? "1" : "0");
@@ -394,7 +491,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       if (phase.kind !== "downloaded" || !phase.download.can_install || get().installing) return;
       set({ installing: true, installFallback: null });
       try {
-        await updateInstall(phase.download.path);
+        await updateInstall(phase.download.path, phase.result.latest_version);
         // The app quits from here; nothing else to do.
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -412,13 +509,11 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
           });
           return;
         }
+        // The download is fine; the install is what failed, and the app is still open on the
+        // old version. Not tried again by itself (#611): "Try again" or the download page.
         set({
           installing: false,
-          phase: {
-            kind: "download-failed",
-            result: phase.result,
-            message: e instanceof Error ? e.message : String(e),
-          },
+          lastInstall: { version: phase.result.latest_version, installed: false, message, new: false },
         });
       }
     },
@@ -564,13 +659,18 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
 
 /** What should be armed right now, or null. */
 export function installOnQuitTarget(
-  s: Pick<UpdateStore, "phase" | "installOnQuitEnabled" | "installing" | "skippedVersion">,
+  s: Pick<
+    UpdateStore,
+    "phase" | "installOnQuitEnabled" | "installing" | "skippedVersion" | "lastInstall"
+  >,
   idle: boolean,
 ): string | null {
   const p = s.phase;
   if (!s.installOnQuitEnabled || s.installing || !idle || p.kind !== "downloaded") return null;
   if (!p.download.can_install || p.download.needs_password) return null;
   if (p.result.latest_version === s.skippedVersion) return null;
+  // Already failed once: not again on every quit.
+  if (failedInstall(s, p.result.latest_version)) return null;
   return p.download.path;
 }
 
@@ -607,7 +707,8 @@ async function syncInstallOnQuit(): Promise<void> {
       if (want === armedPath) continue;
       let armed = false;
       try {
-        armed = await updateInstallOnQuit(want);
+        const version = s.phase.kind === "downloaded" ? s.phase.result.latest_version : null;
+        armed = await updateInstallOnQuit(want, version);
         armedPath = want;
       } catch {
         // Not a downloaded update any more (moved or deleted): nothing is armed.
@@ -628,9 +729,12 @@ if (isTauriEnv() && !isMobile()) {
       s.phase !== prev.phase ||
       s.installOnQuitEnabled !== prev.installOnQuitEnabled ||
       s.installing !== prev.installing ||
-      s.skippedVersion !== prev.skippedVersion
+      s.skippedVersion !== prev.skippedVersion ||
+      s.lastInstall !== prev.lastInstall
     ) {
       void syncInstallOnQuit();
     }
   });
+  // What the last install came to, before the launch check can start another.
+  void useUpdateStore.getState().loadInstallStatus();
 }

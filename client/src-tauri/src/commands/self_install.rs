@@ -14,7 +14,16 @@
 //!   a pattern security software and execution-policy group policy can block; the app had
 //!   already quit by then, so nothing was installed, nothing restarted and nothing was shown
 //!   (#533, Windows; the exact cause there is not known). If the setup fails now, it says so.
-//! * Windows, portable: the zip holds one `PS5Upload.exe`, which replaces the running one.
+//! * Windows, portable: the zip holds one `PS5Upload.exe`, which replaces the running one. The
+//!   app does this itself before it quits, with no script (`swap_in_zip_exe`): Windows lets a
+//!   running program's file be renamed, though not overwritten, so the running exe is renamed
+//!   aside, the new one put in its place, and the new version started; it waits for this
+//!   process to end (`wait_for_previous_instance`) and deletes the old file. Until 10.5.1 a
+//!   hidden `powershell -ExecutionPolicy Bypass -File %TEMP%\….ps1` did it after the app had
+//!   quit, the same pattern the Windows setup dropped in 9.0.1 (#533): when that script did not
+//!   run, the app closed, nothing was installed, nothing started again, and the next launch
+//!   downloaded and "installed" the same update once more (#611). Now every failure happens
+//!   while the app is still open, which says why and keeps running.
 //! * macOS: the `.app` in the `.dmg` replaces the running bundle, if its folder is writable.
 //! * Linux, portable: the zip's `PS5Upload.AppImage` (and launcher) replace the running
 //!   AppImage (`$APPIMAGE`), if its folder is writable.
@@ -33,6 +42,10 @@
 //! Not here: an rpm-ostree system (Bazzite, Silverblue: the swap applies at the next boot,
 //! so `update_download` still hands over the command), Android (the system asks before every
 //! install), iOS (re-signed by the user's own tool) and Docker (the image is pulled).
+//!
+//! Every install records what it installs (`update_files`, `install.json`) and logs its steps to
+//! `update.log`; the next launch tells a success (the download is deleted) from a failure (said
+//! once, and that version is not installed by itself again).
 //!
 //! Install on quit: the renderer arms `update_install_on_quit` with a downloaded update while
 //! nothing transfers; when the app then quits normally, `install_armed_on_quit` (lib.rs,
@@ -178,11 +191,6 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// A PowerShell single-quoted string.
-fn ps_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
-}
-
 /// How the Windows setup is started: `WINDOWS_SETUP_ARGS`, without `/R` when the app is not
 /// to start again (an install on quit).
 pub fn windows_setup_args(relaunch: bool) -> Vec<&'static str> {
@@ -192,13 +200,25 @@ pub fn windows_setup_args(relaunch: bool) -> Vec<&'static str> {
         .collect()
 }
 
-/// The script that carries `plan` out once process `pid` has quit. With `relaunch`, every path
-/// ends by starting the app, new or old; without it (an install on quit) nothing is started.
-/// None for the Windows setup, which is started directly.
+/// The shell lines every script starts with: `say` appends a step to `update.log`
+/// (`update_files`), which the next launch shows when the install did not take.
+fn sh_log_prelude(log: &Path) -> String {
+    format!(
+        r#"log={}
+say() {{ echo "$(date +%s) $*" >> "$log" 2>/dev/null; }}"#,
+        sh_quote(&log.to_string_lossy())
+    )
+}
+
+/// The script that carries `plan` out once process `pid` has quit, logging its steps to `log`.
+/// With `relaunch`, every path ends by starting the app, new or old; without it (an install on
+/// quit) nothing is started. None for the Windows plans: the setup is started directly and the
+/// zip is swapped in by the app itself (`swap_in_zip_exe`).
 ///
 /// For a `.deb` / `.rpm` the package is already installed when this runs (`update_install`
 /// ran pkexec first): the script only waits for the old process and starts the new one.
-pub fn script_for(plan: &Plan, pid: u32, relaunch: bool) -> Option<String> {
+pub fn script_for(plan: &Plan, pid: u32, relaunch: bool, log: &Path) -> Option<String> {
+    let prelude = sh_log_prelude(log);
     Some(match plan {
         Plan::MacDmg { dmg, bundle } => {
             let dmg = sh_quote(&dmg.to_string_lossy());
@@ -207,6 +227,7 @@ pub fn script_for(plan: &Plan, pid: u32, relaunch: bool) -> Option<String> {
             format!(
                 r#"#!/bin/sh
 # PS5Upload update: replace the app bundle with the one in the .dmg, then start it.
+{prelude}
 pid={pid}
 dmg={dmg}
 app={app}
@@ -214,7 +235,7 @@ n=0
 while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 60 ]; do sleep 0.5; n=$((n+1)); done
 # Still running after 30 s: it hung on the way out. Replacing a running app and opening it
 # would only bring the old one forward.
-if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid"; sleep 1; fi
+if kill -0 "$pid" 2>/dev/null; then say "the app did not quit in 30 s: ended it"; kill -9 "$pid"; sleep 1; fi
 mnt=$(mktemp -d /tmp/ps5upload-update.XXXXXX)
 # hdiutil attach is deprecated from macOS 27 (still works); diskutil image is its successor.
 if hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$dmg" >/dev/null 2>&1 \
@@ -223,13 +244,23 @@ if hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$dmg" >/de
   new="$app.new.$$"
   old="$app.old.$$"
   rm -rf "$new"
-  if [ -n "$src" ] && ditto "$src" "$new"; then
-    if mv "$app" "$old"; then
-      if mv "$new" "$app"; then rm -rf "$old"; else mv "$old" "$app"; fi
-    fi
+  if [ -z "$src" ]; then
+    say "the .dmg holds no app"
+  elif ! ditto "$src" "$new"; then
+    say "could not copy the new app next to $app"
+  elif ! mv "$app" "$old"; then
+    say "could not move $app aside"
+  elif mv "$new" "$app"; then
+    rm -rf "$old"
+    say "replaced $app"
+  else
+    mv "$old" "$app"
+    say "could not put the new app in place of $app"
   fi
   rm -rf "$new"
   hdiutil detach "$mnt" -quiet || hdiutil detach "$mnt" -force -quiet
+else
+  say "could not open the .dmg"
 fi
 rmdir "$mnt" 2>/dev/null
 xattr -dr com.apple.quarantine "$app" 2>/dev/null
@@ -255,30 +286,40 @@ fi"#
             format!(
                 r#"#!/bin/sh
 # PS5Upload update: replace the AppImage (and its launcher) with the zip's, then start it.
+{prelude}
 pid={pid}
 zip={zip}
 target={target}
 n=0
 while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 60 ]; do sleep 0.5; n=$((n+1)); done
 # Still running after 30 s: it hung on the way out.
-if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid"; sleep 1; fi
+if kill -0 "$pid" 2>/dev/null; then say "the app did not quit in 30 s: ended it"; kill -9 "$pid"; sleep 1; fi
 dir=$(mktemp -d /tmp/ps5upload-update.XXXXXX)
 if unzip -oq "$zip" -d "$dir" 2>/dev/null || python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$zip" "$dir"; then
-  if [ -f "$dir/PS5Upload.AppImage" ]; then
+  if [ ! -f "$dir/PS5Upload.AppImage" ]; then
+    say "the zip holds no PS5Upload.AppImage"
+  else
     chmod +x "$dir/PS5Upload.AppImage"
-    cp -f "$dir/PS5Upload.AppImage" "$target.new.$$" && mv -f "$target.new.$$" "$target"
+    if cp -f "$dir/PS5Upload.AppImage" "$target.new.$$" && mv -f "$target.new.$$" "$target"; then
+      say "replaced $target"
+    else
+      rm -f "$target.new.$$"
+      say "could not replace $target"
+    fi
     if [ -f "$dir/PS5Upload.sh" ] && [ -f "$(dirname "$target")/PS5Upload.sh" ]; then
       cp -f "$dir/PS5Upload.sh" "$(dirname "$target")/PS5Upload.sh"
       chmod +x "$(dirname "$target")/PS5Upload.sh"
     fi
   fi
+else
+  say "could not unpack the zip (no unzip or python3?)"
 fi
 rm -rf "$dir"
 {start}
 "#
             )
         }
-        Plan::WindowsSetup { .. } => return None,
+        Plan::WindowsSetup { .. } | Plan::WindowsZip { .. } => return None,
         Plan::LinuxPackage { exe, .. } => {
             if !relaunch {
                 return None;
@@ -287,61 +328,295 @@ rm -rf "$dir"
             format!(
                 r#"#!/bin/sh
 # PS5Upload update: the package is installed; start the new version once the old one has quit.
+{prelude}
 pid={pid}
 exe={exe}
 n=0
 while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 60 ]; do sleep 0.5; n=$((n+1)); done
 # Still running after 30 s: it hung on the way out.
-if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid"; sleep 1; fi
+if kill -0 "$pid" 2>/dev/null; then say "the app did not quit in 30 s: ended it"; kill -9 "$pid"; sleep 1; fi
 nohup "$exe" >/dev/null 2>&1 &
-"#
-            )
-        }
-        Plan::WindowsZip { zip, exe } => {
-            let zip = ps_quote(&zip.to_string_lossy());
-            let exe = ps_quote(&exe.to_string_lossy());
-            let start = if relaunch {
-                "Start-Process -FilePath $exe"
-            } else {
-                ""
-            };
-            format!(
-                r#"# PS5Upload update: replace the portable PS5Upload.exe with the zip's, then start it.
-$ErrorActionPreference = 'Continue'
-$zip = {zip}
-$exe = {exe}
-Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue
-# Still running after 30 s: it hung on the way out.
-Get-Process -Id {pid} -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq $exe }} | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 500
-$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("ps5upload-update-" + [guid]::NewGuid())
-try {{
-  Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
-  $new = Join-Path $tmp 'PS5Upload.exe'
-  if (Test-Path -LiteralPath $new) {{
-    for ($i = 0; $i -lt 20; $i++) {{
-      try {{ Copy-Item -LiteralPath $new -Destination $exe -Force -ErrorAction Stop; break }}
-      catch {{ Start-Sleep -Milliseconds 500 }}
-    }}
-  }}
-}} catch {{ }}
-Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
-{start}
 "#
             )
         }
     })
 }
 
-/// The bytes written to the script file. Windows PowerShell 5.1 reads a `.ps1` without a
-/// byte-order mark in the ANSI code page, so a UTF-8 path with any non-ASCII letter (a user
-/// name like `José`, a localised Downloads folder) came out mangled: the update was not found
-/// and the app was not started again. The BOM makes it read the file as UTF-8.
-fn script_file_contents(windows: bool, script: &str) -> String {
-    if windows {
-        format!("\u{FEFF}{script}")
-    } else {
-        script.to_string()
+/// The file the running exe is renamed to while the new one takes its name.
+fn aside_path(exe: &Path, pid: u32) -> PathBuf {
+    let name = exe.file_name().map_or_else(
+        || "PS5Upload.exe".into(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    exe.with_file_name(format!("{name}.old-{pid}"))
+}
+
+/// The file the new exe is unpacked to, beside the running one (the same volume, so putting it
+/// in place is a rename).
+fn staged_path(exe: &Path, pid: u32) -> PathBuf {
+    let name = exe.file_name().map_or_else(
+        || "PS5Upload.exe".into(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    exe.with_file_name(format!("{name}.new-{pid}"))
+}
+
+/// A leftover of an earlier swap beside `exe_name`: `<exe>.old-<pid>` or `<exe>.new-<pid>`.
+fn is_swap_leftover(name: &str, exe_name: &str) -> bool {
+    name.strip_prefix(exe_name)
+        .and_then(|r| r.strip_prefix(".old-").or_else(|| r.strip_prefix(".new-")))
+        .is_some_and(|pid| !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The update's exe is far smaller; this only stops a damaged zip from filling the disk.
+const EXE_MAX_BYTES: u64 = 500 * 1024 * 1024;
+
+/// Unpack the zip's `PS5Upload.exe` to `to`. Its first bytes must be an executable's ("MZ").
+fn unpack_exe(zip: &Path, to: &Path) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let file = std::fs::File::open(zip).map_err(|e| format!("open {}: {e}", zip.display()))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("read {}: {e}", zip.display()))?;
+    let index = (0..archive.len())
+        .find(|&i| {
+            archive
+                .name_for_index(i)
+                .and_then(|r| r.ok())
+                .is_some_and(|n| {
+                    n.rsplit(['/', '\\'])
+                        .next()
+                        .is_some_and(|b| b.eq_ignore_ascii_case("PS5Upload.exe"))
+                })
+        })
+        .ok_or_else(|| format!("{} holds no PS5Upload.exe", zip.display()))?;
+    let mut entry = archive
+        .by_index(index)
+        .map_err(|e| format!("read {}: {e}", zip.display()))?;
+    let mut out = std::fs::File::create(to).map_err(|e| format!("create {}: {e}", to.display()))?;
+    let mut head = [0u8; 2];
+    entry
+        .read_exact(&mut head)
+        .map_err(|e| format!("unpack PS5Upload.exe: {e}"))?;
+    if &head != b"MZ" {
+        return Err("the PS5Upload.exe in the zip is not a Windows program".into());
+    }
+    out.write_all(&head).map_err(|e| format!("write: {e}"))?;
+    let copied = std::io::copy(&mut entry.take(EXE_MAX_BYTES), &mut out)
+        .map_err(|e| format!("unpack PS5Upload.exe to {}: {e}", to.display()))?;
+    if copied + 2 >= EXE_MAX_BYTES {
+        return Err("the PS5Upload.exe in the zip is too large".into());
+    }
+    out.sync_all().map_err(|e| format!("write: {e}"))?;
+    Ok(())
+}
+
+/// Rename with a few retries: a virus scanner looking at a fresh file holds it for a moment.
+fn rename_retrying(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut last = None;
+    for i in 0..10 {
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) => last = Some(e),
+        }
+        if i < 9 {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("rename failed")))
+}
+
+/// Windows portable: put the zip's `PS5Upload.exe` in place of `exe` (the running program),
+/// while it runs. Returns where the old exe was moved aside; `undo_swap` puts it back. On any
+/// error nothing has changed. `say` logs each step.
+pub fn swap_in_zip_exe(
+    zip: &Path,
+    exe: &Path,
+    pid: u32,
+    say: &dyn Fn(&str),
+) -> Result<PathBuf, String> {
+    let staged = staged_path(exe, pid);
+    let aside = aside_path(exe, pid);
+    let _ = std::fs::remove_file(&staged);
+    say(&format!(
+        "unpacking {} to {}",
+        zip.display(),
+        staged.display()
+    ));
+    if let Err(e) = unpack_exe(zip, &staged) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(e);
+    }
+    // Downloaded by the app, so it carries no mark of the web; a zip saved by a browser and
+    // put here by hand could, and its "unblock" is this stream.
+    #[cfg(windows)]
+    let _ = std::fs::remove_file(format!("{}:Zone.Identifier", staged.display()));
+    let _ = std::fs::remove_file(&aside);
+    if let Err(e) = rename_retrying(exe, &aside) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(format!("could not move {} aside: {e}", exe.display()));
+    }
+    if let Err(e) = rename_retrying(&staged, exe) {
+        let back = std::fs::rename(&aside, exe);
+        let _ = std::fs::remove_file(&staged);
+        return Err(format!(
+            "could not put the new PS5Upload.exe in place of {}: {e}{}",
+            exe.display(),
+            match back {
+                Ok(()) => String::new(),
+                Err(b) => format!(
+                    " (and the old one could not be put back from {}: {b})",
+                    aside.display()
+                ),
+            }
+        ));
+    }
+    say(&format!(
+        "replaced {} (old copy at {})",
+        exe.display(),
+        aside.display()
+    ));
+    Ok(aside)
+}
+
+/// Put the old exe back after `swap_in_zip_exe` (the new one could not be started).
+pub fn undo_swap(exe: &Path, aside: &Path) -> std::io::Result<()> {
+    std::fs::remove_file(exe)?;
+    std::fs::rename(aside, exe)
+}
+
+/// The environment variable a new version started by an update reads: the PID of the old one,
+/// to wait for before anything else (its single-instance lock would otherwise send the new one
+/// away, and its engine is still stopping).
+pub const WAIT_PID_ENV: &str = "PS5UPLOAD_UPDATE_WAIT_PID";
+
+/// Start the new `exe` (Windows portable), detached; it waits for this process to end.
+fn spawn_new_exe(exe: &Path) -> Result<(), String> {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.env(WAIT_PID_ENV, std::process::id().to_string());
+    if let Some(dir) = exe.parent() {
+        cmd.current_dir(dir);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("start the new version {}: {e}", exe.display()))
+}
+
+/// Started by an update (`WAIT_PID_ENV`): wait up to 30 s for the old version to end, then end
+/// it. Called first thing in `run()`, before the single-instance check.
+pub fn wait_for_previous_instance() {
+    let Some(pid) = std::env::var(WAIT_PID_ENV)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+    else {
+        return;
+    };
+    // Still single-threaded here; nothing this process starts should wait again.
+    std::env::remove_var(WAIT_PID_ENV);
+    if pid != std::process::id() {
+        wait_for_pid(pid, std::time::Duration::from_secs(30));
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_pid(pid: u32, limit: std::time::Duration) {
+    use std::ffi::c_void;
+    #[allow(non_snake_case)]
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+        fn WaitForSingleObject(handle: *mut c_void, ms: u32) -> u32;
+        fn TerminateProcess(handle: *mut c_void, code: u32) -> i32;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const PROCESS_TERMINATE: u32 = 0x0001;
+    const WAIT_TIMEOUT: u32 = 0x0000_0102;
+    // SAFETY: plain kernel32 calls on a handle this function owns and closes.
+    unsafe {
+        let h = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, 0, pid);
+        if h.is_null() {
+            return; // Already gone.
+        }
+        if WaitForSingleObject(h, limit.as_millis().min(u32::MAX as u128) as u32) == WAIT_TIMEOUT {
+            TerminateProcess(h, 1);
+            WaitForSingleObject(h, 5_000);
+        }
+        CloseHandle(h);
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_pid(pid: u32, limit: std::time::Duration) {
+    let Ok(pid) = i32::try_from(pid) else {
+        return;
+    };
+    let alive = || {
+        // SAFETY: signal 0 only checks that the process exists.
+        unsafe { libc::kill(pid, 0) == 0 }
+    };
+    let until = std::time::Instant::now() + limit;
+    while alive() && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if alive() {
+        // SAFETY: as above; the old version hung on its way out.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn wait_for_pid(_pid: u32, _limit: std::time::Duration) {}
+
+/// Delete what earlier updates left: the old exe a swap moved aside (once that version has
+/// ended, which `wait_for_previous_instance` saw to) and the scripts in the temp folder. Only
+/// names this module creates.
+pub fn clean_leftovers() {
+    if let Ok(exe) = std::env::current_exe() {
+        if let (Some(dir), Some(name)) = (exe.parent(), exe.file_name().and_then(|n| n.to_str())) {
+            clean_swap_leftovers(dir, name);
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+        for e in entries.flatten() {
+            let name = e.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let ours = name
+                .strip_prefix("ps5upload-update-")
+                .and_then(|r| r.strip_suffix(".sh").or_else(|| r.strip_suffix(".ps1")))
+                .is_some_and(|pid| {
+                    !pid.is_empty()
+                        && pid.chars().all(|c| c.is_ascii_digit())
+                        && pid != std::process::id().to_string()
+                });
+            if ours {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+}
+
+fn clean_swap_leftovers(dir: &Path, exe_name: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        if e.file_name()
+            .to_str()
+            .is_some_and(|n| is_swap_leftover(n, exe_name))
+        {
+            let _ = std::fs::remove_file(e.path());
+        }
     }
 }
 
@@ -433,47 +708,18 @@ fn without_appimage_env(cmd: &mut std::process::Command, appimage: bool) {
     }
 }
 
-/// Start `script` detached from this process, so it outlives the app.
-fn spawn_detached(plan: &Plan, script: &str) -> Result<(), String> {
-    let dir = std::env::temp_dir();
-    let windows = matches!(plan, Plan::WindowsSetup { .. } | Plan::WindowsZip { .. });
-    let path = dir.join(format!(
-        "ps5upload-update-{}.{}",
-        std::process::id(),
-        if windows { "ps1" } else { "sh" }
-    ));
-    std::fs::write(&path, script_file_contents(windows, script))
-        .map_err(|e| format!("write {}: {e}", path.display()))?;
-    let mut cmd;
-    if windows {
-        cmd = std::process::Command::new("powershell.exe");
-        cmd.args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-WindowStyle",
-            "Hidden",
-            "-File",
-        ])
-        .arg(&path);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const DETACHED_PROCESS: u32 = 0x0000_0008;
-            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
-        }
-    } else {
-        cmd = std::process::Command::new("/bin/sh");
-        cmd.arg(&path);
-        without_appimage_env(&mut cmd, std::env::var_os("APPIMAGE").is_some());
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            // Its own process group: nothing that ends the app's group ends the update.
-            cmd.process_group(0);
-        }
+/// Start `script` (a shell script) detached from this process, so it outlives the app.
+fn spawn_detached(script: &str) -> Result<(), String> {
+    let path = std::env::temp_dir().join(format!("ps5upload-update-{}.sh", std::process::id()));
+    std::fs::write(&path, script).map_err(|e| format!("write {}: {e}", path.display()))?;
+    let mut cmd = std::process::Command::new("/bin/sh");
+    cmd.arg(&path);
+    without_appimage_env(&mut cmd, std::env::var_os("APPIMAGE").is_some());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Its own process group: nothing that ends the app's group ends the update.
+        cmd.process_group(0);
     }
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -511,26 +757,86 @@ pub fn install_ability(path: &str) -> (bool, bool) {
     }
 }
 
-/// `path` as a downloaded update: a file `update_download` saved, never an arbitrary path.
-fn downloaded_update(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
+/// `path` as a downloaded update: a file `update_download` saved in the updates folder, never
+/// an arbitrary path. Returns it and the updates folder.
+fn downloaded_update(app: &AppHandle, path: &str) -> Result<(PathBuf, PathBuf), String> {
     let download = PathBuf::from(path);
-    let downloads = super::updates::downloads_dir(app)?;
-    if download.parent() != Some(downloads.as_path()) || !download.is_file() {
+    let dir = super::update_files::updates_dir(app)?;
+    if download.parent() != Some(dir.as_path()) || !download.is_file() {
         return Err(format!("{path} is not a downloaded update"));
     }
-    Ok(download)
+    Ok((download, dir))
 }
 
-/// Start carrying out `plan` (for a package, its pkexec step has already run).
-fn start(plan: &Plan, relaunch: bool) -> Result<(), String> {
-    match script_for(plan, std::process::id(), relaunch) {
-        Some(script) => spawn_detached(plan, &script),
+/// The version `download` installs: the one the renderer names, else the one in the release
+/// file name (`PS5Upload-<version>-…`).
+fn target_version(download: &Path, named: Option<&str>) -> String {
+    named
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| v.trim_start_matches('v').to_string())
+        .or_else(|| {
+            let name = download.file_name()?.to_str()?;
+            super::update_files::release_file_version(name).map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+/// Start carrying out `plan` (for a package, its pkexec step has already run), logging to the
+/// updates folder `dir`.
+fn start(plan: &Plan, relaunch: bool, dir: &Path) -> Result<(), String> {
+    let say = |line: &str| super::update_files::log(dir, line);
+    if let Plan::WindowsZip { zip, exe } = plan {
+        let aside = swap_in_zip_exe(zip, exe, std::process::id(), &say)?;
+        if relaunch {
+            if let Err(e) = spawn_new_exe(exe) {
+                // Put the old exe back: the app stays open as it was.
+                let undone = undo_swap(exe, &aside);
+                say(&format!("{e}; old version put back: {undone:?}"));
+                return Err(e);
+            }
+            say("started the new version");
+        }
+        return Ok(());
+    }
+    let log = super::update_files::log_path(dir);
+    match script_for(plan, std::process::id(), relaunch, &log) {
+        Some(script) => spawn_detached(&script),
         None => match plan {
             Plan::WindowsSetup { installer, .. } => spawn_setup(installer, relaunch),
             Plan::LinuxPackage { .. } => Ok(()),
             _ => Err("no way to install this update".into()),
         },
     }
+}
+
+/// Record the install (`update_files`), then start it. A failure to start is recorded as the
+/// reason, so that version is not tried again by itself (`update_last_install`).
+fn record_and_start(
+    plan: &Plan,
+    relaunch: bool,
+    dir: &Path,
+    record: &super::update_files::InstallRecord,
+) -> Result<(), String> {
+    use super::update_files as files;
+    let _ = files::write_record(dir, record);
+    files::log(
+        dir,
+        &format!(
+            "installing {} over {} from {}",
+            record.to,
+            record.from,
+            record.file.display()
+        ),
+    );
+    start(plan, relaunch, dir).inspect_err(|e| {
+        files::log(dir, &format!("failed: {e}"));
+        let mut failed = record.clone();
+        failed.error = Some(e.clone());
+        // The app says so itself right now: the next launch need not say it again.
+        failed.reported = true;
+        let _ = files::write_record(dir, &failed);
+    })
 }
 
 /// What a pkexec exit status means. The renderer matches the two fixed strings to fall back
@@ -583,35 +889,66 @@ async fn run_pkexec(manager: PackageManager, package: &Path) -> Result<(), Strin
 }
 
 /// The update armed to install when the app quits (`update_install_on_quit`).
-static ON_QUIT: Mutex<Option<PathBuf>> = Mutex::new(None);
+struct Armed {
+    download: PathBuf,
+    dir: PathBuf,
+    record: super::update_files::InstallRecord,
+}
 
-fn on_quit_slot() -> std::sync::MutexGuard<'static, Option<PathBuf>> {
+static ON_QUIT: Mutex<Option<Armed>> = Mutex::new(None);
+
+fn on_quit_slot() -> std::sync::MutexGuard<'static, Option<Armed>> {
     ON_QUIT.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+fn record_for(
+    app: &AppHandle,
+    download: &Path,
+    version: Option<&str>,
+) -> super::update_files::InstallRecord {
+    super::update_files::InstallRecord {
+        from: app.package_info().version.to_string(),
+        to: target_version(download, version),
+        file: download.to_path_buf(),
+        error: None,
+        reported: false,
+    }
 }
 
 /// Arm (a path) or disarm (None) installing a downloaded update when the app quits. Returns
 /// whether it is armed: only an update this copy installs without a password can be. The
 /// renderer arms it only while nothing transfers and disarms it when a transfer starts.
 #[tauri::command]
-pub fn update_install_on_quit(app: AppHandle, path: Option<String>) -> Result<bool, String> {
+pub fn update_install_on_quit(
+    app: AppHandle,
+    path: Option<String>,
+    version: Option<String>,
+) -> Result<bool, String> {
     let Some(path) = path else {
         *on_quit_slot() = None;
         return Ok(false);
     };
-    let download = downloaded_update(&app, &path)?;
+    let (download, dir) = downloaded_update(&app, &path)?;
     let armed = plan(&download).is_some_and(|p| !p.needs_password());
-    *on_quit_slot() = armed.then_some(download);
+    let record = record_for(&app, &download, version.as_deref());
+    *on_quit_slot() = armed.then_some(Armed {
+        download,
+        dir,
+        record,
+    });
     Ok(armed)
 }
 
 /// The app is quitting (lib.rs, `RunEvent::Exit`): start the armed update, if any, without
 /// starting the app again. Best effort: a failure leaves the old version and the download.
 pub fn install_armed_on_quit() {
-    let Some(download) = on_quit_slot().take() else {
+    let Some(armed) = on_quit_slot().take() else {
         return;
     };
-    let result = match plan(&download) {
-        Some(p) if !p.needs_password() && download.is_file() => start(&p, false),
+    let result = match plan(&armed.download) {
+        Some(p) if !p.needs_password() && armed.download.is_file() => {
+            record_and_start(&p, false, &armed.dir, &armed.record)
+        }
         _ => Err("the armed update can no longer be installed".into()),
     };
     if let Err(e) = result {
@@ -622,11 +959,16 @@ pub fn install_armed_on_quit() {
     }
 }
 
-/// Install the downloaded update at `path` and restart into it. The app quits once the
-/// installing script has started; the script starts the app again when it is done.
+/// Install the downloaded update at `path` (version `version`) and restart into it. The app
+/// quits once the install has started; the new version (or, after a failure the script saw,
+/// the old one) starts again when it is done. An error means the app stays open, unchanged.
 #[tauri::command]
-pub async fn update_install(app: AppHandle, path: String) -> Result<(), String> {
-    let download = downloaded_update(&app, &path)?;
+pub async fn update_install(
+    app: AppHandle,
+    path: String,
+    version: Option<String>,
+) -> Result<(), String> {
+    let (download, dir) = downloaded_update(&app, &path)?;
     let plan = plan(&download).ok_or_else(|| {
         "this copy cannot install updates by itself; install the download by hand".to_string()
     })?;
@@ -638,7 +980,8 @@ pub async fn update_install(app: AppHandle, path: String) -> Result<(), String> 
     }
     // This install replaces any armed for the quit.
     *on_quit_slot() = None;
-    start(&plan, true)?;
+    let record = record_for(&app, &download, version.as_deref());
+    record_and_start(&plan, true, &dir, &record)?;
     // Let the reply reach the window before the app goes.
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     // The update waits for this process to end: it must end. The orderly exit is bounded
@@ -795,58 +1138,232 @@ mod tests {
         );
     }
 
+    const LOG: &str = "/Users/o'neil/Library/Application Support/PS5Upload/updates/update.log";
+
     #[test]
     fn scripts_quote_paths_and_always_restart_the_app() {
+        let log = Path::new(LOG);
         let plan = Plan::MacDmg {
             dmg: "/Users/o'neil/Downloads/PS5Upload.dmg".into(),
             bundle: "/Applications/PS5Upload.app".into(),
         };
-        let s = script_for(&plan, 42, true).unwrap();
+        let s = script_for(&plan, 42, true, log).unwrap();
         assert!(s.contains("pid=42"));
         // An app that hangs on the way out is ended, not waited on forever.
-        assert!(s.contains(r#"then kill -9 "$pid""#));
+        assert!(s.contains(r#"kill -9 "$pid""#));
         assert!(s.contains(r"dmg='/Users/o'\''neil/Downloads/PS5Upload.dmg'"));
+        assert!(s.contains(
+            r"log='/Users/o'\''neil/Library/Application Support/PS5Upload/updates/update.log'"
+        ));
         assert!(s.trim_end().ends_with(r#"open "$app""#));
-
-        let plan = Plan::WindowsZip {
-            zip: r"C:\Users\o'neil\Downloads\PS5Upload.zip".into(),
-            exe: r"C:\Apps\PS5Upload.exe".into(),
-        };
-        let s = script_for(&plan, 7, true).unwrap();
-        assert!(s.contains(r"$zip = 'C:\Users\o''neil\Downloads\PS5Upload.zip'"));
-        assert!(s.contains("Wait-Process -Id 7"));
-        assert!(s.contains("Get-Process -Id 7 -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Stop-Process -Force"));
-        assert!(s.trim_end().ends_with("Start-Process -FilePath $exe"));
-
-        let plan = Plan::WindowsSetup {
-            installer: r"C:\d\setup.exe".into(),
-            exe: r"C:\Apps\PS5Upload.exe".into(),
-        };
-        // #533: the setup is started directly (no PowerShell), in Tauri's update mode.
-        assert_eq!(script_for(&plan, 7, true), None);
-        assert_eq!(WINDOWS_SETUP_ARGS, ["/P", "/R", "/UPDATE"]);
 
         let plan = Plan::LinuxAppImage {
             zip: "/d/x.zip".into(),
             appimage: "/home/me/PS5Upload.AppImage".into(),
         };
-        assert!(script_for(&plan, 9, true)
+        assert!(script_for(&plan, 9, true, log)
             .unwrap()
             .trim_end()
             .ends_with("nohup \"$target\" >/dev/null 2>&1 &\nfi"));
+
+        // #533 / #611: neither Windows plan runs a script (no PowerShell at all).
+        let setup = Plan::WindowsSetup {
+            installer: r"C:\d\setup.exe".into(),
+            exe: r"C:\Apps\PS5Upload.exe".into(),
+        };
+        let zip = Plan::WindowsZip {
+            zip: r"C:\d\PS5Upload-10.5.1-win-x64.zip".into(),
+            exe: r"C:\Apps\PS5Upload.exe".into(),
+        };
+        for relaunch in [true, false] {
+            assert_eq!(script_for(&setup, 7, relaunch, log), None);
+            assert_eq!(script_for(&zip, 7, relaunch, log), None);
+        }
+        assert_eq!(WINDOWS_SETUP_ARGS, ["/P", "/R", "/UPDATE"]);
     }
 
     #[test]
-    fn powershell_scripts_carry_a_bom_so_non_ascii_paths_survive() {
-        let plan = Plan::WindowsZip {
-            zip: r"C:\Users\José\Downloads\PS5Upload-9.0.1-win-x64.zip".into(),
-            exe: r"C:\Users\José\Apps\PS5Upload.exe".into(),
-        };
-        let file = script_file_contents(true, &script_for(&plan, 7, true).unwrap());
-        assert!(file.as_bytes().starts_with(&[0xEF, 0xBB, 0xBF]));
-        assert!(file.contains("José"));
-        // A shell script must not get one: `#!` has to be the first two bytes.
-        assert!(script_file_contents(false, "#!/bin/sh\n").starts_with("#!"));
+    fn every_failure_a_script_can_see_is_logged() {
+        let log = Path::new("/u/updates/update.log");
+        let mac = script_for(
+            &Plan::MacDmg {
+                dmg: "/d/x.dmg".into(),
+                bundle: "/Applications/PS5Upload.app".into(),
+            },
+            1,
+            true,
+            log,
+        )
+        .unwrap();
+        for step in [
+            "say \"could not open the .dmg\"",
+            "say \"the .dmg holds no app\"",
+            "say \"could not move $app aside\"",
+            "say \"replaced $app\"",
+        ] {
+            assert!(mac.contains(step), "{step}");
+        }
+        let img = script_for(
+            &Plan::LinuxAppImage {
+                zip: "/d/x.zip".into(),
+                appimage: "/a/PS5Upload.AppImage".into(),
+            },
+            1,
+            true,
+            log,
+        )
+        .unwrap();
+        for step in [
+            "say \"could not unpack the zip",
+            "say \"the zip holds no PS5Upload.AppImage\"",
+            "say \"could not replace $target\"",
+        ] {
+            assert!(img.contains(step), "{step}");
+        }
+    }
+
+    /// A zip like the release's (publish.yml: Compress-Archive of one PS5Upload.exe).
+    fn release_zip(path: &Path, entry: &str, body: &[u8]) {
+        use std::io::Write;
+        let mut z = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        z.start_file(
+            entry,
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated),
+        )
+        .unwrap();
+        z.write_all(body).unwrap();
+        z.finish().unwrap();
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ps5upload-swap-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn the_windows_zip_is_swapped_in_by_the_app_itself_and_can_be_undone() {
+        let d = scratch("ok");
+        // A user folder with a space and a non-ASCII letter (no script, so no quoting at all).
+        let app_dir = d.join("José Apps");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        let exe = app_dir.join("PS5Upload.exe");
+        std::fs::write(&exe, b"MZold").unwrap();
+        let zip = d.join("PS5Upload-10.5.1-win-x64.zip");
+        release_zip(&zip, "PS5Upload.exe", b"MZnew version");
+        let lines = std::cell::RefCell::new(Vec::new());
+        let say = |l: &str| lines.borrow_mut().push(l.to_string());
+        let aside = swap_in_zip_exe(&zip, &exe, 4242, &say).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"MZnew version");
+        assert_eq!(aside, app_dir.join("PS5Upload.exe.old-4242"));
+        assert_eq!(std::fs::read(&aside).unwrap(), b"MZold");
+        assert!(!app_dir.join("PS5Upload.exe.new-4242").exists());
+        assert!(lines.borrow().iter().any(|l| l.starts_with("replaced ")));
+        // The new version could not be started: the old one goes back.
+        undo_swap(&exe, &aside).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"MZold");
+        assert!(!aside.exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_bad_zip_changes_nothing() {
+        let d = scratch("bad");
+        let exe = d.join("PS5Upload.exe");
+        std::fs::write(&exe, b"MZold").unwrap();
+        let say = |_: &str| {};
+        let cases: [(&str, &str, &[u8], &str); 3] = [
+            ("no-exe.zip", "README.txt", b"hi", "holds no PS5Upload.exe"),
+            (
+                "not-pe.zip",
+                "PS5Upload.exe",
+                b"<html>",
+                "not a Windows program",
+            ),
+            ("nested.zip", "x/PS5Upload.exe", b"MZnested", ""),
+        ];
+        for (name, entry, body, err) in cases {
+            let zip = d.join(name);
+            release_zip(&zip, entry, body);
+            let r = swap_in_zip_exe(&zip, &exe, 1, &say);
+            if err.is_empty() {
+                // One folder down is still found.
+                let aside = r.unwrap();
+                undo_swap(&exe, &aside).unwrap();
+            } else {
+                assert!(r.unwrap_err().contains(err), "{name}");
+            }
+            assert_eq!(std::fs::read(&exe).unwrap(), b"MZold", "{name}");
+            let left: Vec<_> = std::fs::read_dir(&d)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.contains(".old-") || n.contains(".new-"))
+                .collect();
+            assert!(left.is_empty(), "{name}: {left:?}");
+        }
+        // Not a zip at all.
+        let junk = d.join("junk.zip");
+        std::fs::write(&junk, b"not a zip").unwrap();
+        assert!(swap_in_zip_exe(&junk, &exe, 1, &say).is_err());
+        assert_eq!(std::fs::read(&exe).unwrap(), b"MZold");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn only_our_own_swap_leftovers_are_cleaned() {
+        assert!(is_swap_leftover("PS5Upload.exe.old-1234", "PS5Upload.exe"));
+        assert!(is_swap_leftover("PS5Upload.exe.new-9", "PS5Upload.exe"));
+        assert!(!is_swap_leftover("PS5Upload.exe", "PS5Upload.exe"));
+        assert!(!is_swap_leftover("PS5Upload.exe.old-", "PS5Upload.exe"));
+        assert!(!is_swap_leftover("PS5Upload.exe.old-12x", "PS5Upload.exe"));
+        assert!(!is_swap_leftover("notes.old-1", "PS5Upload.exe"));
+        let d = scratch("clean");
+        for n in [
+            "PS5Upload.exe",
+            "PS5Upload.exe.old-77",
+            "PS5Upload.exe.new-78",
+            "settings.json",
+        ] {
+            std::fs::write(d.join(n), b"x").unwrap();
+        }
+        clean_swap_leftovers(&d, "PS5Upload.exe");
+        let mut left: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["PS5Upload.exe", "settings.json"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_target_version_comes_from_the_renderer_or_the_file_name() {
+        let f = Path::new("/u/updates/PS5Upload-10.5.1-win-x64.zip");
+        assert_eq!(target_version(f, Some("v10.6.0")), "10.6.0");
+        assert_eq!(target_version(f, None), "10.5.1");
+        assert_eq!(target_version(f, Some("  ")), "10.5.1");
+        assert_eq!(target_version(Path::new("/u/x.zip"), None), "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_version_waits_for_the_old_one_to_end() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("0.3")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        // Reaped on another thread, or it would linger as a zombie (signal 0 still sees one).
+        let reaper = std::thread::spawn(move || child.wait());
+        let t = std::time::Instant::now();
+        wait_for_pid(pid, std::time::Duration::from_secs(10));
+        assert!(t.elapsed() >= std::time::Duration::from_millis(200));
+        assert!(t.elapsed() < std::time::Duration::from_secs(5));
+        reaper.join().unwrap().unwrap();
     }
 
     #[cfg(unix)]
@@ -868,7 +1385,7 @@ mod tests {
             },
         ] {
             for relaunch in [true, false] {
-                let Some(script) = script_for(&plan, 42, relaunch) else {
+                let Some(script) = script_for(&plan, 42, relaunch, Path::new(LOG)) else {
                     continue;
                 };
                 let out = std::process::Command::new("/bin/sh")
@@ -985,13 +1502,13 @@ mod tests {
             manager: PackageManager::Apt,
             exe: "/opt/PS5 Upload/ps5-upload".into(),
         };
-        let s = script_for(&plan, 9, true).unwrap();
+        let s = script_for(&plan, 9, true, Path::new(LOG)).unwrap();
         assert!(s.contains("pid=9"));
         assert!(s.contains("exe='/opt/PS5 Upload/ps5-upload'"));
         // pkexec already ran inside the app: no root, no package manager here.
         assert!(!s.contains("apt") && !s.contains("pkexec"));
         assert!(s.trim_end().ends_with(r#"nohup "$exe" >/dev/null 2>&1 &"#));
-        assert_eq!(script_for(&plan, 9, false), None);
+        assert_eq!(script_for(&plan, 9, false, Path::new(LOG)), None);
     }
 
     #[test]
@@ -1000,21 +1517,15 @@ mod tests {
             dmg: "/d/x.dmg".into(),
             bundle: "/Applications/PS5Upload.app".into(),
         };
-        let s = script_for(&mac, 1, false).unwrap();
+        let s = script_for(&mac, 1, false, Path::new(LOG)).unwrap();
         assert!(s.contains("ditto"));
         assert!(!s.contains(r#"open "$app""#));
         let img = Plan::LinuxAppImage {
             zip: "/d/x.zip".into(),
             appimage: "/a/PS5Upload.AppImage".into(),
         };
-        let s = script_for(&img, 1, false).unwrap();
+        let s = script_for(&img, 1, false, Path::new(LOG)).unwrap();
         assert!(s.contains("PS5Upload.AppImage") && !s.contains("nohup"));
-        let zip = Plan::WindowsZip {
-            zip: r"C:\d\x.zip".into(),
-            exe: r"C:\a\PS5Upload.exe".into(),
-        };
-        let s = script_for(&zip, 1, false).unwrap();
-        assert!(s.contains("Expand-Archive") && !s.contains("Start-Process"));
         assert_eq!(windows_setup_args(true), ["/P", "/R", "/UPDATE"]);
         assert_eq!(windows_setup_args(false), ["/P", "/UPDATE"]);
     }
