@@ -6769,6 +6769,7 @@ helper_mismatch_boot_copy: "PS5 запустила старую копию по�
   "arcpkg.leftovers.confirmBody": "Неудачные установки из этих файлов потом нельзя будет повторить.",
   "arcpkg.leftovers.failed": "Не удалось удалить: {error}",
   "saves_ps2_title": "Эмуляторы PS2 (Crux2, PS5SX2)",
+  "saves_ps1_title": "Эмулятор PS1 (PSSwanStation)",
   "saves_ps2_running": "{name} запущен. Закройте его перед восстановлением.",
   "saves_ps2_close_note": "Закройте {name} перед восстановлением.",
   "saves_ps2_cards": "Карты памяти",

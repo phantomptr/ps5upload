@@ -6823,6 +6823,7 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
   "arcpkg.leftovers.confirmBody": "การติดตั้งที่ล้มเหลวจากไฟล์เหล่านี้จะลองใหม่ไม่ได้อีก",
   "arcpkg.leftovers.failed": "ลบไม่ได้: {error}",
   "saves_ps2_title": "อีมูเลเตอร์ PS2 (Crux2, PS5SX2)",
+  "saves_ps1_title": "อีมูเลเตอร์ PS1 (PSSwanStation)",
   "saves_ps2_running": "{name} กำลังทำงานอยู่ ปิดก่อนกู้คืน",
   "saves_ps2_close_note": "ปิด {name} ก่อนกู้คืน",
   "saves_ps2_cards": "เมมโมรี่การ์ด",

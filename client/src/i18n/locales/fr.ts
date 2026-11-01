@@ -6832,6 +6832,7 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "arcpkg.leftovers.confirmBody": "Les installations échouées depuis ces fichiers ne pourront plus être relancées.",
   "arcpkg.leftovers.failed": "Suppression impossible : {error}",
   "saves_ps2_title": "Émulateurs PS2 (Crux2, PS5SX2)",
+  "saves_ps1_title": "Émulateur PS1 (PSSwanStation)",
   "saves_ps2_running": "{name} est en cours d'exécution. Fermez-le avant de restaurer.",
   "saves_ps2_close_note": "Fermez {name} avant de restaurer.",
   "saves_ps2_cards": "Cartes mémoire",

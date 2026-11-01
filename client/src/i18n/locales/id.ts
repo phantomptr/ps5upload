@@ -6825,6 +6825,7 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "arcpkg.leftovers.confirmBody": "Instalasi yang gagal dari file ini tidak bisa dicoba lagi setelahnya.",
   "arcpkg.leftovers.failed": "Tidak dapat menghapus: {error}",
   "saves_ps2_title": "Emulator PS2 (Crux2, PS5SX2)",
+  "saves_ps1_title": "Emulator PS1 (PSSwanStation)",
   "saves_ps2_running": "{name} sedang berjalan. Tutup sebelum memulihkan.",
   "saves_ps2_close_note": "Tutup {name} sebelum memulihkan.",
   "saves_ps2_cards": "Kartu memori",

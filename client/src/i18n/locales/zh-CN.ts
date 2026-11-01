@@ -6775,6 +6775,7 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "arcpkg.leftovers.confirmBody": "之后将无法重试这些文件中失败的安装。",
   "arcpkg.leftovers.failed": "无法删除：{error}",
   "saves_ps2_title": "PS2 模拟器（Crux2、PS5SX2）",
+  "saves_ps1_title": "PS1 模拟器（PSSwanStation）",
   "saves_ps2_running": "{name} 正在运行。恢复前请先关闭它。",
   "saves_ps2_close_note": "恢复前请先关闭 {name}。",
   "saves_ps2_cards": "记忆卡",

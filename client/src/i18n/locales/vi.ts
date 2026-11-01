@@ -6818,6 +6818,7 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "arcpkg.leftovers.confirmBody": "Các lần cài đặt thất bại từ những tệp này sẽ không thể thử lại sau đó.",
   "arcpkg.leftovers.failed": "Không xóa được: {error}",
   "saves_ps2_title": "Trình giả lập PS2 (Crux2, PS5SX2)",
+  "saves_ps1_title": "Trình giả lập PS1 (PSSwanStation)",
   "saves_ps2_running": "{name} đang chạy. Hãy đóng nó trước khi khôi phục.",
   "saves_ps2_close_note": "Hãy đóng {name} trước khi khôi phục.",
   "saves_ps2_cards": "Thẻ nhớ",

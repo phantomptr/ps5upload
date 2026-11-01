@@ -6823,6 +6823,7 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "arcpkg.leftovers.confirmBody": "Bu dosyalardan başarısız olan kurulumlar daha sonra yeniden denenemez.",
   "arcpkg.leftovers.failed": "Silinemedi: {error}",
   "saves_ps2_title": "PS2 emülatörleri (Crux2, PS5SX2)",
+  "saves_ps1_title": "PS1 emülatörü (PSSwanStation)",
   "saves_ps2_running": "{name} çalışıyor. Geri yüklemeden önce kapatın.",
   "saves_ps2_close_note": "Geri yüklemeden önce {name} uygulamasını kapatın.",
   "saves_ps2_cards": "Hafıza kartları",

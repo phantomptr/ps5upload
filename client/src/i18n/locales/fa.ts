@@ -7108,6 +7108,7 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
   "arcpkg.leftovers.confirmBody": "نصب‌های ناموفق از این فایل‌ها بعداً قابل تلاش دوباره نیستند.",
   "arcpkg.leftovers.failed": "حذف نشد: {error}",
   "saves_ps2_title": "شبیه‌سازهای PS2 (Crux2، PS5SX2)",
+  "saves_ps1_title": "شبیه‌ساز PS1 (PSSwanStation)",
   "saves_ps2_running": "{name} در حال اجراست. پیش از بازگردانی آن را ببندید.",
   "saves_ps2_close_note": "پیش از بازگردانی {name} را ببندید.",
   "saves_ps2_cards": "کارت‌های حافظه",

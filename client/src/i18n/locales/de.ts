@@ -6824,6 +6824,7 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "arcpkg.leftovers.confirmBody": "Fehlgeschlagene Installationen aus diesen Dateien lassen sich danach nicht wiederholen.",
   "arcpkg.leftovers.failed": "Konnte nicht gelöscht werden: {error}",
   "saves_ps2_title": "PS2-Emulatoren (Crux2, PS5SX2)",
+  "saves_ps1_title": "PS1-Emulator (PSSwanStation)",
   "saves_ps2_running": "{name} läuft. Schließe es vor dem Wiederherstellen.",
   "saves_ps2_close_note": "Schließe {name} vor dem Wiederherstellen.",
   "saves_ps2_cards": "Memory Cards",
