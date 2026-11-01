@@ -105,6 +105,11 @@ pub trait Console {
     fn images(&self, folder: &str) -> Result<Vec<String>, String>;
     /// The PS5's own identity (see `save_backup::console_identity`); None when it does not say.
     fn identity(&self) -> Option<String>;
+    /// The size of the save image `image` (a file in a save folder): the most its files can
+    /// ever hold, as the image never grows. None when it is not listed.
+    fn image_size(&self, image: &str) -> Result<Option<u64>, String>;
+    /// What the open save at `mount` holds in its sce_sys (kept when its files are replaced).
+    fn sys_bytes(&self, mount: &str) -> Result<u64, String>;
     /// Err when the save there now can't be kept before it is replaced.
     fn can_back_up(&self) -> Result<(), String>;
     /// Backs up the save folder `entry`, every image of it (tagged `tag`); the backup zip.
@@ -187,10 +192,78 @@ fn read_image(c: &dyn Console, image: &str, dest: &Path) -> Result<(), String> {
     closed
 }
 
+/// The bytes of every file under the local folder `dir`.
+fn local_bytes(dir: &Path) -> Result<u64, String> {
+    let mut total = 0u64;
+    for e in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+        let e = e.map_err(|e| format!("{}: {e}", dir.display()))?;
+        let t = e
+            .file_type()
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        total += if t.is_dir() {
+            local_bytes(&e.path())?
+        } else {
+            e.metadata().map(|m| m.len()).unwrap_or(0)
+        };
+    }
+    Ok(total)
+}
+
+/// The refusal of a save too big for the image it goes into. A PS5 save image has a fixed size
+/// (set when the game made it); a bigger one would fail part way through the upload.
+fn too_small(title_id: &str, who: &str, need: u64, have: u64) -> String {
+    use ps5upload_core::health::human_bytes;
+    format!(
+        "{title_id}'s save on {who} is too small for this save (needs {}, has {}). Start the game as {who}, make a bigger save if the game allows it, or use a save from the same game version.",
+        human_bytes(need),
+        human_bytes(have)
+    )
+}
+
+/// Err (`too_small`) when `need` bytes can't fit the image `image` at all: its whole size, the
+/// most it can ever hold. Asked before anything changes, without opening it.
+fn fits_image(
+    c: &dyn Console,
+    title_id: &str,
+    who: &str,
+    image: &str,
+    need: u64,
+) -> Result<(), String> {
+    match c.image_size(image)? {
+        Some(size) if need > size => Err(too_small(title_id, who, need, size)),
+        _ => Ok(()),
+    }
+}
+
 /// Replaces the files in the save image `image`: opened, emptied but for sce_sys, filled from
-/// `src` and closed (which the console encrypts as the folder owner's).
-fn replace_files(c: &dyn Console, image: &str, src: &Path) -> Result<(), String> {
+/// `src` and closed (which the console encrypts as the folder owner's). Refused, closed again
+/// with nothing deleted, when `src` is bigger than the image can hold besides its sce_sys.
+fn replace_files(
+    c: &dyn Console,
+    title_id: &str,
+    who: &str,
+    image: &str,
+    src: &Path,
+) -> Result<(), String> {
+    let need = local_bytes(src)?;
     let mount = c.open_image(image)?;
+    let room = (|| {
+        let Some(size) = c.image_size(image)? else {
+            return Ok(());
+        };
+        let have = size.saturating_sub(c.sys_bytes(&mount)?);
+        if need > have {
+            return Err(too_small(title_id, who, need, have));
+        }
+        Ok(())
+    })();
+    if let Err(e) = room {
+        // Nothing was changed: closing it changes nothing either.
+        return match close_save(c, false) {
+            Ok(()) => Err(e),
+            Err(why) => Err(format!("{e} ({why})")),
+        };
+    }
     let filled = c.fill(&mount, src);
     let closed = close_save(c, true);
     filled?;
@@ -468,6 +541,19 @@ pub fn import(
     backup: Option<&Path>,
     compat: Option<&str>,
 ) -> Result<Vec<String>, Failed> {
+    import_as(c, folder, user_id, "this user", zip_bytes, backup, compat)
+}
+
+/// `import`, `who` naming the user the folder belongs to in a refusal.
+fn import_as(
+    c: &dyn Console,
+    folder: &str,
+    user_id: u32,
+    who: &str,
+    zip_bytes: &[u8],
+    backup: Option<&Path>,
+    compat: Option<&str>,
+) -> Result<Vec<String>, Failed> {
     let folder = folder.trim_end_matches('/');
     let title_id = title_of_folder(folder)?;
     if backup.is_none() {
@@ -484,8 +570,18 @@ pub fn import(
             .map_err(|e| format!("this file is not a shared save of {title_id}: {e:#}"))?;
         let parts = shared_parts(&unpacked, &title_id)?;
         let pairs = match_parts(&parts, &c.images(folder)?, compat)
-            .map_err(|m| missing_error(&title_id, "this user", m))?;
+            .map_err(|m| missing_error(&title_id, who, m))?;
         checks(c, &title_id)?;
+        // A part too big for its image is refused before anything changes.
+        for (image, src) in &pairs {
+            fits_image(
+                c,
+                &title_id,
+                who,
+                &format!("{folder}/{image}"),
+                local_bytes(src)?,
+            )?;
+        }
         // Theirs first, so this can be undone.
         let backup = match backup {
             Some(b) => b.to_path_buf(),
@@ -503,7 +599,7 @@ pub fn import(
             }
         };
         let replaced = pairs.iter().try_for_each(|(image, src)| {
-            replace_files(c, &format!("{folder}/{image}"), src)
+            replace_files(c, &title_id, who, &format!("{folder}/{image}"), src)
                 .map_err(|e| format!("{}: {e}", part_label(image)))
         });
         match replaced {
@@ -611,7 +707,7 @@ pub fn copy_to_user(c: &dyn Console, b: &CopyBody) -> Result<Done, Failed> {
         return Err(missing_error(&title_id, "the other user", missing));
     }
     let (_, zip) = share(c, &from.path)?;
-    let parts = import(c, &to.path, b.to_user, &zip, None, None)?;
+    let parts = import_as(c, &to.path, b.to_user, "the other user", &zip, None, None)?;
     Ok(Done {
         from: from.path.clone(),
         to: to.path.clone(),
@@ -682,7 +778,15 @@ pub fn restore_to_user(
         // Their own save back, whatever happened.
         let back = undo(c, &title_id, &theirs, &to.path, to_user);
         match (shared, back) {
-            (Ok(zip), Ok(())) => import(c, &to.path, to_user, &zip, Some(&theirs), None),
+            (Ok(zip), Ok(())) => import_as(
+                c,
+                &to.path,
+                to_user,
+                "the other user",
+                &zip,
+                Some(&theirs),
+                None,
+            ),
             (Err(why), Ok(())) => Err(format!("{why}. The save there before was put back.").into()),
             (shared, Err(then)) => {
                 let why = shared.err().unwrap_or_else(|| "copy stopped".into());
@@ -726,6 +830,24 @@ impl Console for Live<'_> {
     }
     fn identity(&self) -> Option<String> {
         local::console_identity(self.host)
+    }
+    fn image_size(&self, image: &str) -> Result<Option<u64>, String> {
+        let name = image.rsplit('/').next().unwrap_or_default();
+        Ok(local::folder_entries(self.host, local::folder_of(image))?
+            .iter()
+            .find(|e| e.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(|e| e.get("size").and_then(Value::as_u64))
+            .filter(|n| *n > 0))
+    }
+    fn sys_bytes(&self, mount: &str) -> Result<u64, String> {
+        // sce_sys holds files only (param.sfo, icon0.png, …).
+        Ok(
+            local::folder_entries(self.host, &format!("{mount}/{SYS_DIR}"))?
+                .iter()
+                .filter(|e| e.get("kind").and_then(Value::as_str) != Some("dir"))
+                .filter_map(|e| e.get("size").and_then(Value::as_u64))
+                .sum(),
+        )
     }
     fn can_back_up(&self) -> Result<(), String> {
         if local::settings().dir.trim().is_empty() {
@@ -1116,6 +1238,10 @@ mod tests {
         closes: Cell<usize>,
         /// The PS5's identity.
         identity: Option<String>,
+        /// Image (name) → its size; not listed: unknown.
+        sizes: BTreeMap<String, u64>,
+        /// What every save's sce_sys holds.
+        sys: u64,
         calls: RefCell<Vec<String>>,
         /// Image → the game file put in it.
         replaced: RefCell<BTreeMap<String, Vec<u8>>>,
@@ -1138,6 +1264,8 @@ mod tests {
                 probe_fails: false,
                 closes: Cell::default(),
                 identity: None,
+                sizes: BTreeMap::new(),
+                sys: 0,
                 calls: RefCell::default(),
                 replaced: RefCell::default(),
             }
@@ -1174,6 +1302,13 @@ mod tests {
         }
         fn identity(&self) -> Option<String> {
             self.identity.clone()
+        }
+        fn image_size(&self, image: &str) -> Result<Option<u64>, String> {
+            Ok(self.sizes.get(image.rsplit('/').next().unwrap()).copied())
+        }
+        fn sys_bytes(&self, mount: &str) -> Result<u64, String> {
+            assert_eq!(mount, "/mnt/save");
+            Ok(self.sys)
         }
         fn can_back_up(&self) -> Result<(), String> {
             if self.no_backup_dir {
@@ -1611,6 +1746,53 @@ mod tests {
             .contains("not user 11111111's"));
         assert!(user_of_folder("/user/home/zzzzzzzz/savedata_prospero/PPSA01650", None).is_err());
         assert!(user_of_folder("/data/x", None).is_err());
+    }
+
+    /// A save bigger than the target's image is refused before anything changes: by the image's
+    /// whole size without opening it, and once open by what is left besides its sce_sys, closed
+    /// again with nothing deleted.
+    #[test]
+    fn a_save_too_big_for_the_image_is_refused_before_anything_changes() {
+        // shared_zip's GAME.DAT is the source image's path (63 bytes for STARBOARD).
+        let zip = shared_zip(&[MAIN, STAR]);
+        let c = Fake {
+            sizes: BTreeMap::from([(MAIN.to_string(), 1 << 20), (STAR.to_string(), 10)]),
+            ..Fake::both(&[MAIN, STAR])
+        };
+        let e = import(&c, &folder(B), B, &zip, None, None).unwrap_err().msg;
+        assert!(
+            e.contains(
+                "PPSA01650's save on this user is too small for this save (needs 63 B, has 10 B)"
+            ) && e.contains("Start the game as this user"),
+            "{e}"
+        );
+        assert!(c.calls().is_empty(), "{:?}", c.calls());
+        assert_eq!(c.closes.get(), 0);
+        // Fits the image, but not beside its sce_sys: refused once open, nothing filled, closed.
+        let c = Fake {
+            sizes: BTreeMap::from([(MAIN.to_string(), 70)]),
+            sys: 40,
+            ..Fake::both(&[MAIN])
+        };
+        let e = import(&c, &folder(B), B, &shared_zip(&[MAIN]), None, None)
+            .unwrap_err()
+            .msg;
+        assert!(e.contains("too small") && e.contains("has 30 B"), "{e}");
+        assert!(!c.calls().iter().any(|x| x.starts_with("replace")));
+        assert!(c.mounted.borrow().is_none());
+        // Copy names the other user; sizes that fit go ahead.
+        let c = Fake {
+            sizes: BTreeMap::from([(MAIN.to_string(), 10)]),
+            ..Fake::both(&[MAIN])
+        };
+        let e = copy_to_user(&c, &body(A, B)).unwrap_err().msg;
+        assert!(e.contains("save on the other user is too small"), "{e}");
+        let c = Fake {
+            sizes: BTreeMap::from([(MAIN.to_string(), 1 << 20)]),
+            sys: 1000,
+            ..Fake::both(&[MAIN])
+        };
+        assert!(copy_to_user(&c, &body(A, B)).is_ok());
     }
 
     /// A file shared before 10.6.0 (one image, files at the top) still loads.
