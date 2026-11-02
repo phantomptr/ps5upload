@@ -16,9 +16,11 @@
  * game process, with kernel mprotect to temporarily flip execute-only
  * pages to RWX for the write, then restore.
  *
- * A background watcher thread (3s poll) auto-applies "patches" (always-on
- * cheats from /data/ps5upload/patches/) and re-applies user-toggled
- * cheats when a new game process appears.
+ * A background watcher thread (3s poll) applies "patches" (always-on
+ * cheats from /data/ps5upload/patches/) and the switched-on cheats to the
+ * running game once its code is loaded, re-reads them and puts back what the
+ * game undid (cheats_session.h, #627). cheats_list_mods reports what happened
+ * to each one in the running game ("applied").
  */
 
 /* Initialize the cheat engine: create directories, start watcher thread. */

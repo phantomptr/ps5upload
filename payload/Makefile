@@ -234,7 +234,7 @@ SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/takeover
         src/sony_api_lock.c src/kernel_rw_lock.c src/sys_time.c \
         src/sys_registry.c src/smp_meta.c src/profile.c \
         src/backup.c src/remoteplay.c src/rp_pair.c src/fan_curve.c src/fan_map.c src/fan_servo.c src/mp1_clock.c src/cpu_measure.c src/indicator.c src/notif.c \
-        src/wake_watchdog.c src/icon_keeper.c src/ffpfsc_unpack.c src/cheats.c src/cheats_plan.c src/cheats_guard.c src/cheats_list.c src/game_patch.c src/xml_encoding.c src/activity.c src/sdk_changer.c src/fakelib_overlay.c \
+        src/wake_watchdog.c src/icon_keeper.c src/ffpfsc_unpack.c src/cheats.c src/cheats_plan.c src/cheats_guard.c src/cheats_session.c src/cheats_list.c src/game_patch.c src/xml_encoding.c src/activity.c src/sdk_changer.c src/fakelib_overlay.c \
         src/tmdb.c src/fw_spoof.c src/focus_probe.c \
         src/content_db.c src/mgmt_rpc.c src/fs_jobs.c src/net_probe.c src/net_ports.c src/mgmt_fs.c src/path_policy.c \
         src/webui_http.c src/webui_auth.c src/webui_server.c src/webui_codec.c src/webui_api.c \
