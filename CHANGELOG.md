@@ -19,6 +19,16 @@ What's new in ps5upload, written for humans.
   conversion takes longer. It applies to a conversion that is already running, and it is kept by the
   engine, so the web UI and Docker follow it too. This is used instead of a "use N% of my CPU" slider,
   which Windows, macOS and Linux can't hold to the same way.
+- **Load a save file: clearer, and more files work (For #633).** Picking a save *backup* (the zip that
+  sits beside a save file and looks alike) said only "this is not a shared save (no manifest)"; it
+  now says it is a backup, which only works on the PS5 that made it, and how to make a save file to
+  move a save to another PS5. The error also names the file you picked. A save file that was
+  unpacked and zipped again still loads: by its parts' folder names when its manifest was lost, and
+  with the extra folder Windows' "Send to › Compressed folder" puts around it.
+- **SMB: a share typed with folders now connects.** `Media/Games/PS5` (or a pasted
+  `\\nas\Media\Games`) in **Share** gave `STATUS_BAD_NETWORK_NAME`: the server only knows the share's
+  own name. Now the first name is the share and the rest is where browsing starts, for new and
+  already saved connections, and a wrong share name gets a plain explanation.
 
 ## 10.7.2
 
