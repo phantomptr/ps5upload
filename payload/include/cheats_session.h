@@ -189,6 +189,12 @@ int cheats_state_build(const char *old, int flat, int value, int max_keys, char 
  * listed). */
 int cheats_switch_on(int saved, int from_file, int pending_off);
 
+/* The one answer to "is cheat `flat` on" that the watcher (still_on), the mod list
+ * (cheats_load_state) and the turn-off cave protection (collect_enabled_ranges) all use: the
+ * sidecar text `state` (NULL: it could not be read, kept on), else the file's own flag, minus an
+ * explicit or pending off. */
+int cheats_effective_on(const char *state, int flat, int from_file, int pending_off);
+
 /* Switches turned off by hand whose off could not be saved: kept for the game process they were
  * turned off in, so the watcher does not put them back on this session. */
 #define CHEATS_OFFS_MAX 64

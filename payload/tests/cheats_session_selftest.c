@@ -504,6 +504,31 @@ static void test_saved_switches(void) {
     CHECK(cheats_switch_on(CHEATS_SW_ON, 1, 1) == 0);
 }
 
+/* The cave protection on turn-off, the watcher and the mod list agree on what is on: a cheat on
+ * only by its file flag is protected, an explicit or pending off is not. */
+static void test_effective_on(void) {
+    const char *state = "{\"1\":false,\"2\":true}";
+    const int file_flag[5] = { 1, 1, 0, 0, 1 };
+    cheats_offs_t o;
+    memset(&o, 0, sizeof o);
+    cheats_offs_add(&o, 106, "CUSA04402", 4); /* turned off, save failed */
+    int on[5];
+    for (int i = 0; i < 5; i++)
+        on[i] = cheats_effective_on(state, i, file_flag[i], cheats_offs_has(&o, "CUSA04402", i));
+    CHECK(on[0] == 1); /* file flag only: on, so its cave is protected */
+    CHECK(on[1] == 0); /* file flag, turned off: "1":false wins */
+    CHECK(on[2] == 1); /* saved on */
+    CHECK(on[3] == 0); /* neither */
+    CHECK(on[4] == 0); /* file flag, pending off */
+    /* each answer is the same as the decision still_on and cheats_load_state make */
+    for (int i = 0; i < 5; i++)
+        CHECK(on[i] == cheats_switch_on(cheats_state_get(state, i), file_flag[i],
+                                        cheats_offs_has(&o, "CUSA04402", i)));
+    /* unreadable: kept on (the watcher); the mod list passes "" and gets the file flag */
+    CHECK(cheats_effective_on(NULL, 3, 0, 0) == 1);
+    CHECK(cheats_effective_on("", 3, 0, 0) == 0 && cheats_effective_on("", 0, 1, 0) == 1);
+}
+
 /* Review #5: an off that could not be saved holds for the rest of that game's run. */
 static void test_pending_offs(void) {
     cheats_offs_t o;
@@ -559,6 +584,7 @@ int main(void) {
     test_reapply_after_module_moved();
     test_saved_switches();
     test_pending_offs();
+    test_effective_on();
     test_loc_still_ours();
     test_marker_cleared_on_failed_write();
     test_waiting_backs_off();

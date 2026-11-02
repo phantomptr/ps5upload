@@ -366,6 +366,11 @@ int cheats_switch_on(int saved, int from_file, int pending_off) {
     }
 }
 
+int cheats_effective_on(const char *state, int flat, int from_file, int pending_off) {
+    int saved = state ? cheats_state_get(state, flat) : CHEATS_SW_UNKNOWN;
+    return cheats_switch_on(saved, from_file, pending_off);
+}
+
 static int offs_same(const cheats_offs_t *o, const char *title) {
     return o->n > 0 && strcasecmp(o->title, title ? title : "") == 0;
 }

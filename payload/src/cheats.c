@@ -1309,10 +1309,6 @@ static char *state_read(const char *title_id) {
     return buf;
 }
 
-static int state_has(const char *buf, int flat) {
-    return cheats_state_get(buf, flat) == CHEATS_SW_ON;
-}
-
 /* Switches turned off by hand whose off could not be saved (cheats_session.h cheats_offs_t): the
  * watcher must not put them back on while that game runs. A leaf lock: taken under g_apply_lock
  * or g_pass_lock, never the other way round. */
@@ -1331,11 +1327,11 @@ static int offs_has(const char *title_id, int flat) {
  * switches on that the player turned off stays off (#627). */
 static void cheats_load_state(const char *title_id, cheat_file_t *cf, int flat_base) {
     char *buf = state_read(title_id);
-    for (int i = 0; i < cf->mod_count; i++) {
-        int saved = buf ? cheats_state_get(buf, flat_base + i) : CHEATS_SW_UNSET;
-        cf->mods[i].enabled =
-            cheats_switch_on(saved, cf->mods[i].enabled, offs_has(title_id, flat_base + i));
-    }
+    /* unreadable: the file's flags (as "" reads), never every cheat on */
+    for (int i = 0; i < cf->mod_count; i++)
+        cf->mods[i].enabled = cheats_effective_on(buf ? buf : "", flat_base + i,
+                                                  cf->mods[i].enabled,
+                                                  offs_has(title_id, flat_base + i));
     free(buf);
 }
 
@@ -2273,9 +2269,9 @@ static int sess_list(void *ctx, const char *title, cheats_item_t *items, int max
 static int still_on(const char *title, const sess_slot_t *sl) {
     if (sl->flat < 0) return 1;
     char *st = state_read(title);
-    int saved = st ? cheats_state_get(st, sl->flat) : CHEATS_SW_UNKNOWN;
+    int on = cheats_effective_on(st, sl->flat, sl->from_file, offs_has(title, sl->flat));
     free(st);
-    return cheats_switch_on(saved, sl->from_file, offs_has(title, sl->flat));
+    return on;
 }
 
 static int sess_apply(void *vctx, cheats_session_t *s, const cheats_item_t *it, int reapply,
@@ -2763,7 +2759,11 @@ static int collect_enabled_ranges(pid_t pid, intptr_t base, const char *title_id
         for (int fi = 0; fi < n && count >= 0; fi++) {
             if (load_cheat_file(files[fi].path, files[fi].format, cf) != 0) { count = -1; break; }
             for (int mi = 0; mi < cf->mod_count && count >= 0; mi++, flat++) {
-                if (flat == skip_flat || !state_has(state, flat)) continue;
+                /* on as the watcher sees it: saved on, or switched on by its file and not turned
+                 * off (#627). A button is one press, never kept on (slots_load skips it too). */
+                if (flat == skip_flat || strcmp(cf->mods[mi].type, "button") == 0 ||
+                    !cheats_effective_on(state, flat, cf->mods[mi].enabled, offs_has(title_id, flat)))
+                    continue;
                 if (cf->mods[mi].xml_path[0]) {
                     /* what it wrote this session, if anything (it cannot be resolved again) */
                     xml_applied_t *a = xml_applied_find(pid, cf->mods[mi].xml_path, cf->mods[mi].xml_entry);
