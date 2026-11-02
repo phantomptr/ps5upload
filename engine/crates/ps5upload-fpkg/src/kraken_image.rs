@@ -14,7 +14,7 @@
 
 use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use crate::crypto::Hasher;
 use crate::kraken::{self, Half};
@@ -167,10 +167,12 @@ fn pipeline_local<T: Send, U: Send>(
         let (tx_out, rx_out) = sync_channel::<(u64, Result<U>)>(depth);
         let rx_in = Arc::new(Mutex::new(rx_in));
         let work = &work;
+        let lane = crate::workshop::Lane::current();
         for _ in 0..threads {
             let rx_in = Arc::clone(&rx_in);
             let tx_out = tx_out.clone();
             s.spawn(move || loop {
+                lane.enter();
                 let next = rx_in.lock().map(|rx| rx.recv());
                 match next {
                     Ok(Ok((i, item))) => {
@@ -256,7 +258,7 @@ pub fn compress(
             let Some(t) = next.next() else {
                 return Ok(None);
             };
-            if cancel.load(Ordering::Relaxed) {
+            if crate::workshop::checkpoint(cancel) {
                 return format_err("the build was cancelled");
             }
             let bytes = match (&t.owner, &t.source) {

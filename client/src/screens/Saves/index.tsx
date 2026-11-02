@@ -314,7 +314,8 @@ export default function SavesScreen() {
       });
       void refresh();
     } catch (e) {
-      pushNotification("error", tr("saves_use_shared_failed_v2", { error: missingText(e, game, user) }, "Could not load the save file: {error}"));
+      // The file's name too: a backup beside the shared file is easy to pick instead (#633).
+      pushNotification("error", tr("saves_use_shared_failed_v2", { error: `${file.name}: ${missingText(e, game, user)}` }, "Could not load the save file: {error}"));
     } finally {
       setOpenBusy(false);
       markBusy(target.path, false);

@@ -1954,6 +1954,17 @@ in order. With **Start the queue when you add something** on (Settings › Uploa
 nothing else is needed; off, they wait until you press **Convert N queued**. A game set to
 install still goes on to **Upload & Install**'s queue once it is made.
 
+**Q: Can I pause a conversion, or make it use less of my computer?**
+Yes, both. While a game is being made (or an archive unpacked) in Workshop, ④ has **Pause** beside
+**Cancel**. Paused, the work stops where it is and uses no processor or disk until you press
+**Resume**; the games waiting in ⑤ wait for it, and **Cancel** still works while paused.
+To keep your computer quick while converting, turn on **Use less of this computer** (under ④, or
+Settings › Workshop). Converting then uses about half your processor and lets other apps go first,
+for the processor and the disk. It takes longer. You can switch it on or off while a conversion runs.
+There is no "use 60% of my CPU" slider on purpose: Windows, macOS and Linux don't keep to a
+percentage the same way, while fewer cores at background priority gives the computer back at once
+whenever anything else needs it.
+
 **Q: What does "Rebuild AMPR index" do?**
 A backported game whose `eboot.bin` reads its files through libSceAmpr is served by `ampr_emu`,
 which looks every file up in `ampr_emu.index` and trusts the sizes there. If the folder changed

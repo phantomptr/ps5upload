@@ -6877,6 +6877,14 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
   "ampr_index_done_same": "Ricostruito: {count} file. Il vecchio indice era già corretto.",
   "ampr_index_backup": "Il vecchio è conservato come ampr_emu.index.bak.",
   "ampr_index_image_done": "Scritta in {path}, con il nuovo indice. L'immagine aperta non è cambiata.",
+  "fpkg.pause": "Pausa",
+  "fpkg.resume": "Riprendi",
+  "fpkg.paused_queue_waits": "In pausa — la coda attende",
+  "fpkg.pause_failed": "Pausa o ripresa non riuscita: {error}",
+  "workshop_gentle_label": "Usa meno questo computer",
+  "workshop_gentle_hint": "La conversione usa circa metà del processore e lascia passare prima le altre app, per il processore e per il disco. Ci mette di più.",
+  "workshop_gentle_error": "Il motore non ha mantenuto questa impostazione: {error}",
+  "settings_card_workshop_share": "Questo computer",
 };
 
 export default it;

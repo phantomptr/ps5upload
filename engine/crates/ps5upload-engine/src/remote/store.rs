@@ -156,7 +156,13 @@ impl Store {
                     .as_deref()
                     .and_then(|blob| decrypt(&key, blob))
                     .unwrap_or(Secret::None);
-                state.push((st.conn, secret));
+                let mut conn = st.conn;
+                // Saved before 10.7.3 with folders in Share: fixed the way the form now does.
+                if conn.protocol == Protocol::Smb {
+                    (conn.share, conn.start_path) =
+                        super::api::split_share(&conn.share, &conn.start_path);
+                }
+                state.push((conn, secret));
             }
         }
         Ok(Self {

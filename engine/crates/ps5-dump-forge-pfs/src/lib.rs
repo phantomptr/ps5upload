@@ -24,7 +24,7 @@
 //! zlib PFSC container of the inner image (see [`wrap`]).
 
 use std::io::{Seek, SeekFrom, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use ps5upload_fpkg::source::SourceTree;
 use ps5upload_fpkg::{Error, Result};
@@ -181,7 +181,8 @@ fn now() -> i64 {
 }
 
 fn check_cancel(cancel: &AtomicBool) -> Result<()> {
-    if cancel.load(Ordering::Relaxed) {
+    // Also where a paused Workshop job waits (#631).
+    if ps5upload_fpkg::workshop::checkpoint(cancel) {
         return Err(Error::Cancelled);
     }
     Ok(())

@@ -230,7 +230,7 @@ impl Default for Config {
             io_page_size: 64 << 10,
             payload_alignment: 64 << 10,
             chunk_alignment: 64,
-            workers: std::thread::available_parallelism().map_or(1, |n| n.get().min(8)),
+            workers: crate::workshop::workshop_threads().min(8),
             compression_mode: CompressionMode::Hc,
             compression_level: 12,
             acceleration: 1,

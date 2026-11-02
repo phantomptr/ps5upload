@@ -6924,6 +6924,14 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "ampr_index_done_same": "تمت إعادة البناء: {count} ملف. كان الفهرس القديم صحيحًا بالفعل.",
   "ampr_index_backup": "تم الاحتفاظ بالقديم باسم ampr_emu.index.bak.",
   "ampr_index_image_done": "كُتبت إلى {path} مع الفهرس الجديد. الصورة التي فتحتها لم تتغير.",
+  "fpkg.pause": "إيقاف مؤقت",
+  "fpkg.resume": "استئناف",
+  "fpkg.paused_queue_waits": "متوقف مؤقتًا — قائمة الانتظار تنتظر",
+  "fpkg.pause_failed": "لم ينجح الإيقاف المؤقت أو الاستئناف: {error}",
+  "workshop_gentle_label": "استخدم قدرًا أقل من هذا الكمبيوتر",
+  "workshop_gentle_hint": "يستخدم التحويل نحو نصف المعالج ويترك التطبيقات الأخرى تسبقه، في المعالج وفي القرص. يستغرق وقتًا أطول.",
+  "workshop_gentle_error": "لم يحتفظ المحرك بهذا الإعداد: {error}",
+  "settings_card_workshop_share": "هذا الكمبيوتر",
 };
 
 export default ar;

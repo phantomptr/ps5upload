@@ -6938,6 +6938,14 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
   "ampr_index_done_same": "फिर से बना: {count} फ़ाइलें। पुराना इंडेक्स पहले से सही था।",
   "ampr_index_backup": "पुराना ampr_emu.index.bak के रूप में रखा गया है।",
   "ampr_index_image_done": "नए इंडेक्स के साथ {path} में लिखा गया। आपकी खोली गई इमेज नहीं बदली।",
+  "fpkg.pause": "रोकें",
+  "fpkg.resume": "फिर शुरू करें",
+  "fpkg.paused_queue_waits": "रुका हुआ — कतार इंतज़ार कर रही है",
+  "fpkg.pause_failed": "रोकना या फिर शुरू करना नहीं हो सका: {error}",
+  "workshop_gentle_label": "इस कंप्यूटर का कम इस्तेमाल करें",
+  "workshop_gentle_hint": "कन्वर्ट करना आपके प्रोसेसर का लगभग आधा हिस्सा इस्तेमाल करता है और प्रोसेसर व डिस्क दोनों पर दूसरे ऐप्स को पहले जाने देता है। इसमें ज़्यादा समय लगता है।",
+  "workshop_gentle_error": "इंजन ने यह सेटिंग नहीं रखी: {error}",
+  "settings_card_workshop_share": "यह कंप्यूटर",
 };
 
 export default hi;

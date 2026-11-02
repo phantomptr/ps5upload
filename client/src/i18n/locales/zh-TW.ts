@@ -6877,6 +6877,14 @@ helper_mismatch_boot_copy: "你的 PS5 啟動了為開機保留的舊版助手�
   "ampr_index_done_same": "已重建：{count} 個檔案。舊索引本來就是正確的。",
   "ampr_index_backup": "舊索引已保留為 ampr_emu.index.bak。",
   "ampr_index_image_done": "已寫入 {path}，附有新索引。你開啟的映像沒有改變。",
+  "fpkg.pause": "暫停",
+  "fpkg.resume": "繼續",
+  "fpkg.paused_queue_waits": "已暫停 — 佇列正在等候",
+  "fpkg.pause_failed": "暫停或繼續未成功：{error}",
+  "workshop_gentle_label": "少佔用這台電腦",
+  "workshop_gentle_hint": "轉換只使用大約一半的處理器，並讓其他 App 優先使用處理器和磁碟。耗時會更長。",
+  "workshop_gentle_error": "引擎沒有保留此設定：{error}",
+  "settings_card_workshop_share": "這台電腦",
 };
 
 export default zh_TW;

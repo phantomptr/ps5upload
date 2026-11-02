@@ -11,7 +11,7 @@ import { imageUploadItem, type ImageUploadPlan } from "../lib/imageUpload";
 import { useUploadQueueStore } from "./uploadQueue";
 
 import { fpkg, type AmprLz4Options, type FpkgBuildRequest, type ImageFormat } from "../api/fpkg";
-import { jobCancel, jobStatus } from "../api/ps5";
+import { jobCancel, jobPause, jobResume, jobStatus } from "../api/ps5";
 import { useConnectionStore } from "./connection";
 import { useRosterStore } from "./roster";
 import { hostOf } from "../lib/addr";
@@ -81,6 +81,14 @@ export type Pipeline =
       /** The game unpacked from an archive (inside an engine unpack folder); removed with it
        *  once the run is over. */
       extractedSource: string | null;
+      /** The engine job is paused (#631): it waits, and so does the queue behind it. */
+      paused?: boolean;
+      /** When the current pause began; null or absent while not paused. */
+      pausedAtMs?: number | null;
+      /** Paused time in this run before the current pause, left out of its times left. */
+      pausedMs?: number;
+      /** The same, for the current stage only (its speed). */
+      stagePausedMs?: number;
     }
   | {
       phase: "done";
@@ -152,6 +160,10 @@ export interface ConversionState {
   /** Install the kept package again: after a failed install, or Install again on a result. */
   retryInstall: (host: string, method?: InstallMethod) => Promise<void>;
   cancel: () => Promise<void>;
+  /** Hold the running engine job where it is (#631); the queue waits behind it. */
+  pause: () => Promise<void>;
+  /** Let a paused job go on. */
+  resume: () => Promise<void>;
   /** A new source: clears a finished result; ignored while running. */
   reset: () => void;
   deletePackage: () => Promise<void>;
@@ -201,6 +213,35 @@ function update(patch: Partial<Running>) {
   if (p) useFpkgConversion.setState({ pipeline: { ...p, ...patch } });
 }
 
+/** Time this run has spent paused up to `now`, the current pause included. */
+export function pausedSoFar(p: Running, now: number): number {
+  return (p.pausedMs ?? 0) + (p.pausedAtMs != null ? Math.max(0, now - p.pausedAtMs) : 0);
+}
+
+/** Time the current stage has spent paused up to `now`. */
+export function stagePausedSoFar(p: Running, now: number): number {
+  const current = p.pausedAtMs != null ? Math.max(0, now - Math.max(p.pausedAtMs, p.stageStartedMs)) : 0;
+  return (p.stagePausedMs ?? 0) + current;
+}
+
+/** Follow the engine's word on whether the job is paused, keeping the paused time apart. */
+function markPaused(paused: boolean) {
+  const p = running();
+  if (!p || !!p.paused === paused) return;
+  const now = Date.now();
+  if (paused) {
+    update({ paused: true, pausedAtMs: now });
+  } else {
+    update({
+      paused: false,
+      pausedAtMs: null,
+      pausedMs: pausedSoFar(p, now),
+      stagePausedMs: stagePausedSoFar(p, now),
+    });
+  }
+  if (p.taskId) useTaskStore.getState().updateTask(p.taskId, { status: paused ? "paused" : "running" });
+}
+
 function reportStage(taskId: string | null, stage: PipelineStage, done: number, total: number) {
   if (!taskId) return;
   useTaskStore.getState().updateTask(taskId, {
@@ -224,7 +265,9 @@ function enterStage(stage: PipelineStage, done = 0, total = 0) {
     stageDone: done,
     stageTotal: total,
     stageStartedMs: now,
-    stageMs: { ...p.stageMs, [p.stage]: now - p.stageStartedMs },
+    stageMs: { ...p.stageMs, [p.stage]: now - p.stageStartedMs - stagePausedSoFar(p, now) },
+    // A pause that runs on into the new stage counts from the stage's start (stagePausedSoFar).
+    stagePausedMs: 0,
   });
 }
 
@@ -478,6 +521,7 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
     }
     if (running()?.jobId !== jobId) return;
     if (snapshot.status === "running") {
+      markPaused(snapshot.paused === true);
       const s = snapshot.stage;
       if (s && BUILD_STAGES.includes(s.id as PipelineStage)) {
         enterStage(s.id as PipelineStage, s.done, s.total);
@@ -488,6 +532,7 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
       poll(jobId, install);
       return;
     }
+    markPaused(false);
     if (snapshot.status === "done") {
       const path = snapshot.dest ?? "";
       const bytes = snapshot.bytes_sent ?? 0;
@@ -510,7 +555,7 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
         update({ host: target.host });
         await runInstall(path, target.host, install);
       } else {
-        finish(path, bytes, Date.now() - cur.startedMs);
+        finish(path, bytes, Date.now() - cur.startedMs - pausedSoFar(cur, Date.now()));
         pushNotification(
           "success",
           cur.mode === "ffpfsc"
@@ -606,6 +651,7 @@ async function extractArchive(archive: string, outputDir: string | undefined, pa
   update({ jobId: job_id });
   for (;;) {
     const s = await jobStatus(job_id);
+    if (running()?.jobId === job_id) markPaused(s.status === "running" && s.paused === true);
     if (s.status === "done") return s.dest ?? "";
     if (s.status === "failed") throw new Error(s.error ?? "The archive did not unpack.");
     if (running()?.jobId === job_id) enterStage("extract", s.bytes_sent ?? 0, s.total_bytes ?? 0);
@@ -857,6 +903,23 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
   cancel: async () => {
     const p = running();
     if (p?.jobId) await jobCancel(p.jobId);
+  },
+
+  pause: async () => {
+    const p = running();
+    if (!p?.jobId || p.paused) return;
+    const jobId = p.jobId;
+    await jobPause(jobId);
+    // Shown at once; the next poll keeps it in line with the engine.
+    if (running()?.jobId === jobId) markPaused(true);
+  },
+
+  resume: async () => {
+    const p = running();
+    if (!p?.jobId || !p.paused) return;
+    const jobId = p.jobId;
+    await jobResume(jobId);
+    if (running()?.jobId === jobId) markPaused(false);
   },
 
   reset: () => {

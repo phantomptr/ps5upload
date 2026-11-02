@@ -15,6 +15,8 @@ import { QueueItemOptions } from "./QueueItemOptions";
 export interface QueueCardProps {
   items: ConvertItem[];
   running: boolean;
+  /** The game being made is paused (#631): the rest wait for it. */
+  paused?: boolean;
   /** Open Upload & Install, where a made game installs or uploads. */
   onOpenUpload: () => void;
   onStart: () => void;
@@ -115,7 +117,9 @@ export function QueueCard(p: QueueCardProps) {
                   <div
                     className={`truncate text-xs ${i.status === "failed" ? "text-[var(--color-bad)]" : "text-[var(--color-muted)]"}`}
                   >
-                    {statusText[i.status]}
+                    {i.status === "running" && p.paused
+                      ? tr("fpkg.paused_queue_waits", undefined, "Paused — the queue waits")
+                      : statusText[i.status]}
                     {i.error ? ` — ${i.error}` : i.packagePath ? ` — ${i.packagePath}` : ""}
                   </div>
                 </div>

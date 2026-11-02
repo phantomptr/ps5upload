@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use sha2::{Digest, Sha256};
 
@@ -516,7 +516,7 @@ fn build_into(
     volumes: &mut Volumes,
     control: &mut Control,
 ) -> Result<Output> {
-    let cancelled = |c: &Control| c.cancel.is_some_and(|f| f.load(Ordering::Relaxed));
+    let cancelled = |c: &Control| crate::workshop::checkpoint_opt(c.cancel);
     let mut stats = Stats {
         files_total: entries.len() as u64,
         ..Stats::default()
@@ -770,11 +770,13 @@ fn build_into(
         let mut blocks: Vec<Option<Block>> = (0..items.len()).map(|_| None).collect();
         let per = jobs.len().div_ceil(workers).max(1);
         let (items_ref, selected_ref): (&[Item], &[Selected]) = (&items, &selected);
+        let lane = crate::workshop::Lane::current();
         std::thread::scope(|scope| {
             let handles: Vec<_> = jobs
                 .chunks(per)
                 .map(|part| {
                     scope.spawn(move || {
+                        lane.enter();
                         part.iter()
                             .map(|&(i, raw)| {
                                 let Item::Data { file, .. } = &items_ref[i] else {

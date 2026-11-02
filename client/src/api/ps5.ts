@@ -4359,6 +4359,12 @@ export interface JobSnapshot {
   status: JobStatus;
   /** Present on a running job that reports stages (an FPKG build). */
   stage?: JobStageSnapshot;
+  /** A running Workshop job (a conversion or an extraction) can be paused. */
+  pausable?: boolean;
+  /** The Workshop job is paused: its workers wait, using no processor or disk. */
+  paused?: boolean;
+  /** All the time the Workshop job has spent paused so far (ms). */
+  paused_ms?: number;
   /** The job id in hex (an FPKG build reuses the field for its content id). */
   tx_id_hex?: string;
   started_at_ms?: number;
@@ -4778,6 +4784,17 @@ export async function jobStatus(
  *  Idempotent + best-effort: a finished/unknown job just returns cancelled:false. */
 export async function jobCancel(jobId: string): Promise<void> {
   await invoke("job_cancel", { jobId });
+}
+
+/** Hold a running Workshop job (a conversion or an extraction) where it is; its workers stop at
+ *  their next chunk until {@link jobResume}. Rejects when the job is over or cannot pause. */
+export async function jobPause(jobId: string): Promise<void> {
+  await invoke("job_pause", { jobId });
+}
+
+/** Let a paused Workshop job go on. */
+export async function jobResume(jobId: string): Promise<void> {
+  await invoke("job_resume", { jobId });
 }
 
 export async function waitForJob(
