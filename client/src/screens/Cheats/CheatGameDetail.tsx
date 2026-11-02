@@ -29,6 +29,7 @@ import { platformForTitleId } from "../../lib/titleDetails";
 import { useTr } from "../../state/lang";
 import { afterToggle, anyWaiting } from "./cheatApplied";
 import { CheatAppliedLine } from "./CheatAppliedLine";
+import { useWaitingPoll } from "./waitingPoll";
 import { beginTask } from "../../state/trackTask";
 import { useToast } from "../../state/toasts";
 
@@ -50,9 +51,6 @@ function formatDbDate(v: string | null): string | null {
 
 /** One game: who it is, the cheats on the console to switch on, and the
  *  cheats in the collection to download — in the order a player needs them. */
-/** While a switched-on cheat waits for the game to load, its status is read this often. */
-const WAITING_POLL_MS = 4000;
-
 export function CheatGameDetail({
   host,
   addr,
@@ -109,15 +107,13 @@ export function CheatGameDetail({
 
   // A cheat waiting for the game to load (#627): read the list again quietly until it applies.
   const waiting = game.running && anyWaiting(mods);
-  useEffect(() => {
-    if (!waiting) return;
-    const t = window.setInterval(() => {
-      void cheatsGet(game.titleId, addr)
-        .then((r) => setMods(r.mods ?? []))
-        .catch(() => {});
-    }, WAITING_POLL_MS);
-    return () => window.clearInterval(t);
-  }, [waiting, game.titleId, addr]);
+  useWaitingPoll(
+    waiting,
+    `${game.titleId}@${addr}`,
+    () => cheatsGet(game.titleId, addr),
+    (r) => setMods(r.mods ?? []),
+    () => toggling !== null,
+  );
 
   async function download(e: CheatRepoEntry) {
     setDownloading(e.filename);
@@ -161,6 +157,10 @@ export function CheatGameDetail({
       const r = await cheatsToggle(game.titleId, m.index, !m.on, addr);
       if (!r.ok) {
         setError(r.err || tr("cheats_toggle_failed", undefined, "The PS5 didn't switch that cheat."));
+        // What the console has now (an off that went through but could not be saved is off).
+        void cheatsGet(game.titleId, addr)
+          .then((x) => setMods(x.mods ?? []))
+          .catch(() => {});
         return;
       }
       setMods((prev) => prev.map((x) => (x.index === m.index ? afterToggle(x, !m.on) : x)));
