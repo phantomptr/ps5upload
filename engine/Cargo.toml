@@ -17,7 +17,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-or-later"
-version = "10.7.0"
+version = "10.7.1"
 
 [workspace.dependencies]
 # AVA1 (github.com/phantomptr/ava1): the Rust crate from crates.io; the payload builds the C side

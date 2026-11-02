@@ -2496,7 +2496,10 @@ can (see "How do I set Play up?"):
    changing the user. If it fails, the message gives the console's reason, and **Pair with the
    PIN shown on the PS5** pairs the way PS Remote Play does: on the PS5 open Settings › System ›
    Remote Play › Link Device and type the 8-digit number it shows. That needs no helper, so it
-   works on any firmware.
+   works on any firmware. Some consoles drop the first try (one on FW 11.60 also showed
+   CE-110024-8 "Something went wrong"): the app tries again by itself, and if it still fails,
+   press Pair again; the same PIN works while the PS5 shows it. Closing the CE-110024-8 dialog
+   is harmless.
 7. **Play**: Play › Start.
 
 If the picture stays black or stutters, use a wired connection or 5 GHz Wi-Fi, try 720p or 30 fps,

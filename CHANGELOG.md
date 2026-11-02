@@ -4,6 +4,16 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.7.1
+
+- **Pairing with the PIN shown on the PS5 tries again by itself (#609).** On a PS5 Pro with FW
+  11.60 the console dropped the connection on the first try (sometimes showing CE-110024-8
+  "Something went wrong") and accepted the same PIN on the next. The app now retries a dropped
+  connection twice, two seconds apart; a refused PIN is never retried. If it still fails, the
+  message says to press Pair again, since the same PIN works while the PS5 shows it.
+- Tested by the #609 reporter on FW 11.60: native keyboard & mouse devices start and stop
+  cleanly there too.
+
 ## 10.7.0
 
 - **Add games to Workshop's queue while one converts (For #621).** While a game is being made,
