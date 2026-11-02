@@ -244,6 +244,7 @@ function StatsLine({
       className={`pointer-events-none absolute z-20 rounded-md bg-black/60 px-2 py-1 font-mono text-[11px] leading-4 text-white/85 ${style ? "" : "bottom-3 left-3"}`}
       style={style}
       data-testid="rp-stats"
+      data-audio={stats.audio?.path}
     >
       {light && (
         <span
@@ -259,6 +260,13 @@ function StatsLine({
       )}
       {" · "}
       {tr("rp_stats_audio", { ms: v.audio }, `sound ${v.audio} ms`)}
+      {/* The sound ran dry (each one a short fade out and in): shown once it happened. */}
+      {stats.underruns > 0 && (
+        <>
+          {" · "}
+          {tr("rp_stats_audio_gaps", { n: stats.underruns }, `${stats.underruns} gaps`)}
+        </>
+      )}
       <LatencyLine stats={stats} />
     </div>
   );

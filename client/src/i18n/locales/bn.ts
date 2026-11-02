@@ -6299,6 +6299,7 @@ library_compressed_hint: "সংকুচিত ইমেজ চালাতে 
 "rp_err_socket_lost": "ইঞ্জিনের সাথে সংযোগ হারিয়েছে এবং 30 সেকেন্ডের মধ্যে ফেরত পাওয়া যায়নি।",
 "rp_phase_reconnecting": "পুনরায় সংযোগ হচ্ছে…",
 "rp_stats_audio": "শব্দ {ms} ms",
+"rp_stats_audio_gaps": "{n}টি বিরতি",
 "rp_set_picture": "ছবি",
 "rp_fps": "ফ্রেম রেট",
 "rp_fps_60": "60 fps (মসৃণ)",

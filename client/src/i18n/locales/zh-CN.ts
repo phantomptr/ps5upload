@@ -6258,6 +6258,7 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_err_socket_lost": "与引擎的连接已断开，30 秒内未能恢复。",
 "rp_phase_reconnecting": "正在重新连接…",
 "rp_stats_audio": "声音 {ms} ms",
+"rp_stats_audio_gaps": "中断 {n} 次",
 "rp_set_picture": "画面",
 "rp_fps": "帧率",
 "rp_fps_60": "60 fps（流畅）",

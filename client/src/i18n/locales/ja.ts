@@ -6318,6 +6318,7 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_err_socket_lost": "エンジンとの接続が切れ、30 秒以内に復旧できませんでした。",
 "rp_phase_reconnecting": "再接続中…",
 "rp_stats_audio": "音声 {ms} ms",
+"rp_stats_audio_gaps": "途切れ {n} 回",
 "rp_set_picture": "映像",
 "rp_fps": "フレームレート",
 "rp_fps_60": "60 fps（なめらか）",

@@ -6252,6 +6252,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_err_socket_lost": "Connessione al motore persa e non ripristinata entro 30 s.",
 "rp_phase_reconnecting": "Riconnessione…",
 "rp_stats_audio": "audio {ms} ms",
+"rp_stats_audio_gaps": "{n} interruzioni",
 "rp_set_picture": "Immagine",
 "rp_fps": "Frequenza fotogrammi",
 "rp_fps_60": "60 fps (fluido)",

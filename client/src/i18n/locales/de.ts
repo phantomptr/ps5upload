@@ -6307,6 +6307,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_err_socket_lost": "Verbindung zur Engine verloren und innerhalb von 30 s nicht wiederhergestellt.",
 "rp_phase_reconnecting": "Verbindung wird wiederhergestellt…",
 "rp_stats_audio": "Ton {ms} ms",
+"rp_stats_audio_gaps": "{n} Aussetzer",
 "rp_set_picture": "Bild",
 "rp_fps": "Bildrate",
 "rp_fps_60": "60 fps (flüssig)",

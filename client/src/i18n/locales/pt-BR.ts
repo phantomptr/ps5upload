@@ -6314,6 +6314,7 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_err_socket_lost": "A conexão com o motor caiu e não voltou em 30 s.",
 "rp_phase_reconnecting": "Reconectando…",
 "rp_stats_audio": "som {ms} ms",
+"rp_stats_audio_gaps": "{n} falhas",
 "rp_set_picture": "Imagem",
 "rp_fps": "Taxa de quadros",
 "rp_fps_60": "60 fps (fluido)",

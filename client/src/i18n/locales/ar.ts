@@ -6299,6 +6299,7 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "rp_err_socket_lost": "انقطع الاتصال بالمحرك وتعذّرت استعادته خلال 30 ث.",
 "rp_phase_reconnecting": "جارٍ إعادة الاتصال…",
 "rp_stats_audio": "الصوت {ms} ms",
+"rp_stats_audio_gaps": "{n} انقطاعات",
 "rp_set_picture": "الصورة",
 "rp_fps": "معدل الإطارات",
 "rp_fps_60": "60 fps (سلس)",

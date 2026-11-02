@@ -6313,6 +6313,7 @@ library_compressed_hint: "संपीड़ित इमेज चलाने 
 "rp_err_socket_lost": "इंजन से कनेक्शन टूट गया और 30 सेकंड में वापस नहीं मिला।",
 "rp_phase_reconnecting": "फिर से कनेक्ट हो रहा है…",
 "rp_stats_audio": "ध्वनि {ms} ms",
+"rp_stats_audio_gaps": "{n} रुकावटें",
 "rp_set_picture": "चित्र",
 "rp_fps": "फ़्रेम दर",
 "rp_fps_60": "60 fps (सहज)",

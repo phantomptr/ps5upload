@@ -152,6 +152,10 @@ export function closePip(closeWindow = true): void {
   useRemotePlayStore.getState().stream?.sendPad();
   if (cur.video) {
     if (document.pictureInPictureElement === cur.video) void document.exitPictureInPicture().catch(() => {});
+    // Stop the canvas's capture: a live track keeps copying the canvas at each frame and, in
+    // WebKit, stays alive (with the canvas) for as long as it is live.
+    const src = cur.video.srcObject as MediaStream | null;
+    for (const t of src?.getTracks?.() ?? []) t.stop();
     cur.video.srcObject = null;
     cur.video.remove();
   }

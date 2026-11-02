@@ -6301,6 +6301,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_err_socket_lost": "Mất kết nối với engine và không khôi phục được trong 30 giây.",
 "rp_phase_reconnecting": "Đang kết nối lại…",
 "rp_stats_audio": "âm thanh {ms} ms",
+"rp_stats_audio_gaps": "{n} lần ngắt",
 "rp_set_picture": "Hình ảnh",
 "rp_fps": "Tốc độ khung hình",
 "rp_fps_60": "60 fps (mượt)",

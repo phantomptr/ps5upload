@@ -6591,6 +6591,7 @@ library_compressed_hint: "برای اجرای ایمیج فشرده به ShadowM
 "rp_err_socket_lost": "اتصال به موتور قطع شد و ظرف ۳۰ ثانیه برقرار نشد.",
 "rp_phase_reconnecting": "در حال اتصال مجدد…",
 "rp_stats_audio": "صدا {ms} ms",
+"rp_stats_audio_gaps": "{n} قطعی",
 "rp_set_picture": "تصویر",
 "rp_fps": "نرخ فریم",
 "rp_fps_60": "60 fps (روان)",
