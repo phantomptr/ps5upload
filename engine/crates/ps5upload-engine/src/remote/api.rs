@@ -88,6 +88,14 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
             .map(|password| Secret::Password { password })
     };
     let insecure_tls = c.protocol == Protocol::Webdavs && c.insecure_tls;
+    let (share, start_path) = if c.protocol == Protocol::Smb {
+        split_share(&c.share, c.start_path.trim())
+    } else {
+        (
+            c.share.trim().trim_matches(['/', '\\']).to_string(),
+            c.start_path.trim().to_string(),
+        )
+    };
     let from_root =
         c.from_root && matches!(c.protocol, Protocol::Sftp | Protocol::Ftp | Protocol::Ftps);
     Ok((
@@ -97,15 +105,44 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
             protocol: c.protocol,
             host: c.host.trim().to_string(),
             port,
-            share: c.share.trim().trim_matches(['/', '\\']).to_string(),
+            share,
             user,
-            start_path: c.start_path.trim().to_string(),
+            start_path,
             from_root,
             host_key: None,
             insecure_tls,
         },
         secret,
     ))
+}
+
+/// An SMB share typed with folders after it (`Media/Games/PS5`, or a pasted
+/// `\\nas\Media\Games`): the share is the first name, the folders go in front of the start
+/// folder. The server only knows the share's own name ("STATUS_BAD_NETWORK_NAME" otherwise).
+pub(crate) fn split_share(raw: &str, start: &str) -> (String, String) {
+    let original = start;
+    let raw = raw.trim();
+    let unc = raw.starts_with("\\\\") || raw.starts_with("//");
+    let mut segs: Vec<&str> = raw
+        .split(['/', '\\'])
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+    if unc && segs.len() >= 2 {
+        segs.remove(0);
+    }
+    let Some((share, rest)) = segs.split_first() else {
+        return (String::new(), start.to_string());
+    };
+    let start = start.trim_matches(['/', '\\']);
+    let path: Vec<&str> = rest
+        .iter()
+        .copied()
+        .chain(start.split(['/', '\\']).filter(|s| !s.is_empty()))
+        .collect();
+    if rest.is_empty() {
+        return (share.trim().to_string(), original.to_string());
+    }
+    (share.trim().to_string(), format!("/{}", path.join("/")))
 }
 
 /// `{ error, hint? }` with a status that says what kind of failure it was.
@@ -368,6 +405,32 @@ pub async fn shares_form_handler(Json(mut body): Json<ConnectionBody>) -> Respon
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_smb_share_typed_with_folders_is_split() {
+        assert_eq!(split_share("Media", ""), ("Media".into(), String::new()));
+        assert_eq!(
+            split_share("/Media/", "games"),
+            ("Media".into(), "games".into())
+        );
+        assert_eq!(
+            split_share("Media/Games/PS5", ""),
+            ("Media".into(), "/Games/PS5".into())
+        );
+        assert_eq!(
+            split_share("\\\\nas\\Media\\Games", ""),
+            ("Media".into(), "/Games".into())
+        );
+        assert_eq!(
+            split_share("//nas/Media", "/x"),
+            ("Media".into(), "/x".into())
+        );
+        assert_eq!(
+            split_share("Media/Games", "/PS5/"),
+            ("Media".into(), "/Games/PS5".into())
+        );
+    }
+
     use super::*;
     use crate::remote::pool::testing::remote_with;
     use crate::remote::MemFs;

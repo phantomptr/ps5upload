@@ -5,6 +5,8 @@ pub fn hint_for(error: &str) -> Option<&'static str> {
     let has = |needles: &[&str]| needles.iter().any(|n| e.contains(n));
     if has(&["0xc0000072", "account_disabled", "account disabled"]) {
         Some("The share's Guest account is disabled. Enable it on the server, or sign in with a user and password.")
+    } else if has(&["0xc00000cc", "bad_network_name", "bad network name"]) {
+        Some("The server has no share by that name. Put only the share's own name in Share (for example Media); folders inside it go in Start folder.")
     } else if has(&["0xc000015b", "logon_type_not_granted", "logon type"]) {
         Some("The server does not allow this account to sign in over the network. Check its network logon policy.")
     } else if has(&[
@@ -55,6 +57,9 @@ mod tests {
         assert!(hint_for("access denied 0xC0000022")
             .unwrap()
             .contains("permissions"));
+        assert!(hint_for("STATUS_BAD_NETWORK_NAME during tree connect")
+            .unwrap()
+            .contains("share's own name"));
         assert!(hint_for("the server requires signing")
             .unwrap()
             .contains("signing"));
