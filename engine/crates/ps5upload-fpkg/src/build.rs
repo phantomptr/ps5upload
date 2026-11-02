@@ -395,7 +395,7 @@ fn build_mode(
                     cb(walked_upto[n.min(checked.len())], walk_total);
                 }
             }
-            !cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+            !crate::workshop::checkpoint_opt(cancel)
         };
         tree.read_heads(&checked_paths, 0x20, &mut on_progress)?
     };
@@ -546,11 +546,7 @@ fn build_mode(
     }
     let sizes: std::collections::HashMap<&str, u64> =
         files.iter().map(|f| (f.path.as_str(), f.size)).collect();
-    let cancelled = || {
-        control
-            .cancel
-            .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let cancelled = || crate::workshop::checkpoint_opt(control.cancel);
 
     // Refuse before the first write rather than fill the disk and fail halfway: a game
     // package is as large as the game.
@@ -1315,7 +1311,8 @@ pub fn estimate(source_path: &Path, output_dir: Option<&Path>) -> Result<Estimat
     if total == 0 {
         return format_err("the source has no data to estimate");
     }
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    // What the build's pool will get, "use less of this computer" included.
+    let threads = crate::workshop::workshop_threads();
     let wanted = ESTIMATE_BLOCKS.max(threads * 4);
     let step = (total / wanted as u64).max(1);
     let mut blocks = Vec::new();

@@ -87,7 +87,7 @@ impl WrapOptions {
     /// The worker count these options mean on this machine.
     pub fn worker_threads(&self) -> usize {
         match self.threads {
-            0 => std::thread::available_parallelism().map_or(4, |n| n.get()),
+            0 => ps5upload_fpkg::workshop::workshop_threads(),
             n => n,
         }
     }
@@ -235,11 +235,15 @@ fn wrap_with<T>(
         }
         // Only the workers hold the queue: once they are all gone, a submit fails at once.
         let queue = Arc::new(Mutex::new(queue));
+        let lane = ps5upload_fpkg::workshop::Lane::current();
         let workers: Vec<_> = (0..threads)
             .map(|_| {
                 let queue = Arc::clone(&queue);
                 let done = done.clone();
-                s.spawn(move || worker(&queue, &done, encode, block_opts))
+                s.spawn(move || {
+                    lane.enter();
+                    worker(&queue, &done, encode, block_opts)
+                })
             })
             .collect();
         drop(queue);
@@ -248,6 +252,7 @@ fn wrap_with<T>(
         let zero = &zero[..];
         let sink = BufWriter::with_capacity(8 << 20, &mut *out);
         let writer = s.spawn(move || {
+            lane.enter();
             let r = write_blocks(results, free, sink, data_at, zero, cancel);
             if r.is_err() {
                 failed.store(true, Ordering::Relaxed);
@@ -391,7 +396,7 @@ fn write_blocks(
     for (seq, buf, result) in results {
         waiting.insert(seq, (buf, result?));
         while let Some((buf, stored)) = waiting.remove(&next) {
-            if cancel.load(Ordering::Relaxed) {
+            if ps5upload_fpkg::workshop::checkpoint(cancel) {
                 return Err(Failure::Io(io::Error::other("cancelled")));
             }
             let bytes: &[u8] = match &stored {
@@ -468,6 +473,7 @@ fn worker(
         let Ok((seq, raw)) = next else {
             return busy;
         };
+        ps5upload_fpkg::workshop::sync_thread_priority();
         let t = Instant::now();
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| encode(&mut encoder, &raw)));
@@ -558,7 +564,7 @@ impl Stream<'_> {
     /// Hands the cut block to the workers. The queue holds as many as the pool has buffers, so
     /// the send never waits.
     fn submit(&mut self) -> io::Result<()> {
-        if self.cancel.load(Ordering::Relaxed) {
+        if ps5upload_fpkg::workshop::checkpoint(self.cancel) {
             return Err(io::Error::other("the .ffpfsc build was cancelled"));
         }
         if self.failed.load(Ordering::Relaxed) {

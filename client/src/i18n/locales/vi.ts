@@ -6926,6 +6926,14 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "ampr_index_done_same": "Đã tạo lại: {count} tệp. Chỉ mục cũ vốn đã đúng.",
   "ampr_index_backup": "Bản cũ được giữ lại là ampr_emu.index.bak.",
   "ampr_index_image_done": "Đã ghi vào {path} cùng chỉ mục mới. Image bạn đã mở không thay đổi.",
+  "fpkg.pause": "Tạm dừng",
+  "fpkg.resume": "Tiếp tục",
+  "fpkg.paused_queue_waits": "Đã tạm dừng — hàng đợi đang chờ",
+  "fpkg.pause_failed": "Không tạm dừng hoặc tiếp tục được: {error}",
+  "workshop_gentle_label": "Dùng ít máy tính này hơn",
+  "workshop_gentle_hint": "Chuyển đổi dùng khoảng một nửa bộ xử lý và nhường các ứng dụng khác đi trước, cả bộ xử lý lẫn ổ đĩa. Sẽ lâu hơn.",
+  "workshop_gentle_error": "Engine không giữ cài đặt này: {error}",
+  "settings_card_workshop_share": "Máy tính này",
 };
 
 export default vi;

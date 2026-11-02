@@ -6877,6 +6877,14 @@ helper_mismatch_boot_copy: "PS5 запустила старую копию по�
   "ampr_index_done_same": "Пересобрано: файлов — {count}. Старый индекс уже был верным.",
   "ampr_index_backup": "Старый сохранён как ampr_emu.index.bak.",
   "ampr_index_image_done": "Записано в {path} с новым индексом. Открытый образ не изменился.",
+  "fpkg.pause": "Пауза",
+  "fpkg.resume": "Продолжить",
+  "fpkg.paused_queue_waits": "На паузе — очередь ждёт",
+  "fpkg.pause_failed": "Не удалось поставить на паузу или продолжить: {error}",
+  "workshop_gentle_label": "Меньше нагружать этот компьютер",
+  "workshop_gentle_hint": "Конвертация использует примерно половину процессора и пропускает другие приложения вперёд — и по процессору, и по диску. Это дольше.",
+  "workshop_gentle_error": "Движок не сохранил эту настройку: {error}",
+  "settings_card_workshop_share": "Этот компьютер",
 };
 
 export default ru;

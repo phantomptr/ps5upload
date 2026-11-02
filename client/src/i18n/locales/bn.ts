@@ -6924,6 +6924,14 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
   "ampr_index_done_same": "আবার তৈরি হয়েছে: {count}টি ফাইল। পুরোনো ইনডেক্সটি আগেই ঠিক ছিল।",
   "ampr_index_backup": "পুরোনোটি ampr_emu.index.bak নামে রাখা হয়েছে।",
   "ampr_index_image_done": "নতুন ইনডেক্সসহ {path}-এ লেখা হয়েছে। আপনার খোলা ইমেজটি বদলায়নি।",
+  "fpkg.pause": "বিরতি",
+  "fpkg.resume": "আবার শুরু",
+  "fpkg.paused_queue_waits": "বিরতিতে — সারি অপেক্ষা করছে",
+  "fpkg.pause_failed": "বিরতি বা আবার শুরু কাজ করেনি: {error}",
+  "workshop_gentle_label": "এই কম্পিউটার কম ব্যবহার করুন",
+  "workshop_gentle_hint": "রূপান্তর আপনার প্রসেসরের প্রায় অর্ধেক ব্যবহার করে এবং প্রসেসর ও ডিস্ক—দুটোতেই অন্য অ্যাপকে আগে যেতে দেয়। এতে বেশি সময় লাগে।",
+  "workshop_gentle_error": "ইঞ্জিন এই সেটিং রাখেনি: {error}",
+  "settings_card_workshop_share": "এই কম্পিউটার",
 };
 
 export default bn;

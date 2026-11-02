@@ -7230,6 +7230,14 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "ampr_index_done_same": "Újraépítve: {count} fájl. A régi index már jó volt.",
   "ampr_index_backup": "A régi ampr_emu.index.bak néven megmaradt.",
   "ampr_index_image_done": "Kiírva ide: {path}, az új indexszel. A megnyitott képfájl nem változott.",
+  "fpkg.pause": "Szünet",
+  "fpkg.resume": "Folytatás",
+  "fpkg.paused_queue_waits": "Szüneteltetve — a sor vár",
+  "fpkg.pause_failed": "A szüneteltetés vagy a folytatás nem sikerült: {error}",
+  "workshop_gentle_label": "Kevesebbet használjon ebből a gépből",
+  "workshop_gentle_hint": "Az átalakítás nagyjából a processzor felét használja, és előre engedi a többi alkalmazást a processzornál és a lemeznél is. Tovább tart.",
+  "workshop_gentle_error": "A motor nem tartotta meg ezt a beállítást: {error}",
+  "settings_card_workshop_share": "Ez a számítógép",
 };
 
 export default hu;

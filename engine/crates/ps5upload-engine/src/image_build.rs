@@ -241,10 +241,13 @@ impl<'a> HashingTree<'a> {
             sizes: sizes.clone(),
             ..Default::default()
         };
+        let lane = ps5upload_fpkg::workshop::Lane::current();
         let hasher = std::thread::Builder::new()
             .name("image-hash".into())
             .spawn(move || {
+                lane.enter();
                 for (path, offset, bytes) in reads {
+                    ps5upload_fpkg::workshop::sync_thread_priority();
                     state.observe(&path, offset, &bytes);
                 }
                 state.done
@@ -389,7 +392,7 @@ fn hash_slices(
     let end = (to * SLICE).min(size);
     let mut at = from * SLICE;
     while at < end {
-        if cancel.load(Ordering::Relaxed) {
+        if ps5upload_fpkg::workshop::checkpoint(cancel) {
             return Err("cancelled".into());
         }
         let want = (end - at).min(chunk) as usize;
@@ -714,7 +717,7 @@ impl Planned {
         match self {
             Self::Exfat(p) => {
                 ps5upload_fpkg::exfat_write::write_exfat(p, tree, out, progress, &|| {
-                    cancel.load(Ordering::Relaxed)
+                    ps5upload_fpkg::workshop::checkpoint(cancel)
                 })
             }
             Self::Ffpkg(l) => {

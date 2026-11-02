@@ -6941,6 +6941,14 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "ampr_index_done_same": "다시 만듦: 파일 {count}개. 이전 인덱스가 이미 맞았습니다.",
   "ampr_index_backup": "이전 인덱스는 ampr_emu.index.bak으로 보관했습니다.",
   "ampr_index_image_done": "새 인덱스와 함께 {path}에 썼습니다. 연 이미지는 바뀌지 않았습니다.",
+  "fpkg.pause": "일시 중지",
+  "fpkg.resume": "계속",
+  "fpkg.paused_queue_waits": "일시 중지됨 — 대기열이 기다리는 중",
+  "fpkg.pause_failed": "일시 중지 또는 계속하지 못했습니다: {error}",
+  "workshop_gentle_label": "이 컴퓨터를 덜 사용",
+  "workshop_gentle_hint": "변환이 프로세서의 약 절반만 쓰고, 프로세서와 디스크 모두에서 다른 앱을 먼저 보냅니다. 시간이 더 걸립니다.",
+  "workshop_gentle_error": "엔진이 이 설정을 유지하지 못했습니다: {error}",
+  "settings_card_workshop_share": "이 컴퓨터",
 };
 
 export default ko;

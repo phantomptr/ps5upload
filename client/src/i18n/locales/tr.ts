@@ -6931,6 +6931,14 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "ampr_index_done_same": "Yeniden oluşturuldu: {count} dosya. Eski dizin zaten doğruydu.",
   "ampr_index_backup": "Eskisi ampr_emu.index.bak olarak saklandı.",
   "ampr_index_image_done": "Yeni dizinle {path} konumuna yazıldı. Açtığınız imaj değişmedi.",
+  "fpkg.pause": "Duraklat",
+  "fpkg.resume": "Devam et",
+  "fpkg.paused_queue_waits": "Duraklatıldı — kuyruk bekliyor",
+  "fpkg.pause_failed": "Duraklatma ya da devam ettirme olmadı: {error}",
+  "workshop_gentle_label": "Bu bilgisayarı daha az kullan",
+  "workshop_gentle_hint": "Dönüştürme işlemcinin yaklaşık yarısını kullanır ve hem işlemcide hem diskte diğer uygulamaların önce gitmesine izin verir. Daha uzun sürer.",
+  "workshop_gentle_error": "Motor bu ayarı saklamadı: {error}",
+  "settings_card_workshop_share": "Bu bilgisayar",
 };
 
 export default tr;

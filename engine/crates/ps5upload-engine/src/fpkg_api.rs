@@ -19,7 +19,7 @@ use uuid::Uuid;
 use ps5upload_fpkg::build::{self, BuildControl, BuildRequest};
 
 use crate::{
-    json_err, now_ms, register_transfer_cancel, set_job, AppState, JobCreated, JobFailOnDropGuard,
+    json_err, now_ms, register_workshop_job, set_job, AppState, JobCreated, JobFailOnDropGuard,
     JobStage, JobState,
 };
 
@@ -83,6 +83,12 @@ fn language_of(v: Option<String>) -> Option<String> {
 
 /// Where packages go when the caller does not say: the user's Downloads folder, which is
 /// where a package is easiest to find afterwards.
+/// Run a Workshop job's work off the async runtime, on a thread of its own that "use less of
+/// this computer" can lower (#632) without touching the shared blocking pool.
+fn spawn_workshop_job(work: impl FnOnce() + Send + 'static) {
+    tokio::task::spawn_blocking(move || ps5upload_fpkg::workshop::on_job_thread(work));
+}
+
 pub(crate) fn default_output_dir() -> PathBuf {
     user_home().join("Downloads").join("fpkgs")
 }
@@ -360,7 +366,7 @@ pub(crate) async fn fpkg_build_handler(
     };
 
     let job_id = Uuid::new_v4();
-    let cancel = register_transfer_cancel(job_id);
+    let cancel = register_workshop_job(job_id);
     let bytes = Arc::new(AtomicU64::new(0));
     let total = Arc::new(AtomicU64::new(inspection.planned_size));
     // The stage the build is in, by index (`u64::MAX` before the first).
@@ -418,7 +424,7 @@ pub(crate) async fn fpkg_build_handler(
                         .flatten();
                     drop(g);
                     if let Some(state) = state {
-                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": state });
+                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": crate::with_live_notes(job_id, state) });
                         let _ = events_tx.send(msg.to_string());
                     }
                 }
@@ -431,7 +437,7 @@ pub(crate) async fn fpkg_build_handler(
     let state_for_job = state.clone();
     let request_source = source_path.clone();
     let ticker = JobTicker(ticker.abort_handle());
-    tokio::task::spawn_blocking(move || {
+    spawn_workshop_job(move || {
         // A panic in the work below must not leave the job "running" forever with its
         // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
         let mut fail = JobFailOnDropGuard::new(
@@ -680,7 +686,7 @@ pub(crate) async fn ffpfsc_compress_handler(
     };
 
     let job_id = Uuid::new_v4();
-    let cancel = register_transfer_cancel(job_id);
+    let cancel = register_workshop_job(job_id);
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
     set_job(
@@ -717,7 +723,7 @@ pub(crate) async fn ffpfsc_compress_handler(
                         .flatten();
                     drop(g);
                     if let Some(state) = state {
-                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": state });
+                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": crate::with_live_notes(job_id, state) });
                         let _ = events_tx.send(msg.to_string());
                     }
                 }
@@ -728,7 +734,7 @@ pub(crate) async fn ffpfsc_compress_handler(
 
     let state_for_job = state.clone();
     let ticker = JobTicker(ticker.abort_handle());
-    tokio::task::spawn_blocking(move || {
+    spawn_workshop_job(move || {
         // A panic in the work below must not leave the job "running" forever with its
         // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
         let mut fail = JobFailOnDropGuard::new(
@@ -769,7 +775,7 @@ pub(crate) async fn ffpfsc_compress_handler(
                         report.blocks,
                         completed_at_ms.saturating_sub(started_at_ms),
                         options.level,
-                        std::thread::available_parallelism().map_or(4, |n| n.get()),
+                        ps5upload_fpkg::workshop::workshop_threads(),
                         options.sample.is_none(),
                     ),
                 );
@@ -1208,7 +1214,7 @@ pub(crate) async fn exfat_build_handler(
     };
 
     let job_id = Uuid::new_v4();
-    let cancel = register_transfer_cancel(job_id);
+    let cancel = register_workshop_job(job_id);
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
     set_job(
@@ -1251,7 +1257,7 @@ pub(crate) async fn exfat_build_handler(
                         .flatten();
                     drop(g);
                     if let Some(state) = state {
-                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": state });
+                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": crate::with_live_notes(job_id, state) });
                         let _ = events_tx.send(msg.to_string());
                     }
                 }
@@ -1262,7 +1268,7 @@ pub(crate) async fn exfat_build_handler(
 
     let state_for_job = state.clone();
     let ticker = JobTicker(ticker.abort_handle());
-    tokio::task::spawn_blocking(move || {
+    spawn_workshop_job(move || {
         // A panic in the work below must not leave the job "running" forever with its
         // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
         let mut fail = JobFailOnDropGuard::new(
@@ -1609,7 +1615,7 @@ pub(crate) async fn folder_build_handler(
     let mode = ps5upload_fpkg::sample::VerifyMode::from_full(req.full_verify, false);
 
     let job_id = Uuid::new_v4();
-    let cancel = register_transfer_cancel(job_id);
+    let cancel = register_workshop_job(job_id);
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
     set_job(
@@ -1650,7 +1656,7 @@ pub(crate) async fn folder_build_handler(
                         .flatten();
                     drop(g);
                     if let Some(state) = state {
-                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": state });
+                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": crate::with_live_notes(job_id, state) });
                         let _ = events_tx.send(msg.to_string());
                     }
                 }
@@ -1661,7 +1667,7 @@ pub(crate) async fn folder_build_handler(
 
     let state_for_job = state.clone();
     let ticker = JobTicker(ticker.abort_handle());
-    tokio::task::spawn_blocking(move || {
+    spawn_workshop_job(move || {
         let mut fail = JobFailOnDropGuard::new(
             state_for_job.jobs.clone(),
             state_for_job.events_tx.clone(),
@@ -2065,7 +2071,7 @@ pub(crate) async fn fpkg_extract_handler(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(dest.clone());
-    let cancel = register_transfer_cancel(job_id);
+    let cancel = register_workshop_job(job_id);
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
     set_job(
@@ -2102,7 +2108,7 @@ pub(crate) async fn fpkg_extract_handler(
                         .flatten();
                     drop(g);
                     if let Some(state) = state {
-                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": state });
+                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": crate::with_live_notes(job_id, state) });
                         let _ = events_tx.send(msg.to_string());
                     }
                 }
@@ -2113,7 +2119,7 @@ pub(crate) async fn fpkg_extract_handler(
 
     let state_for_job = state.clone();
     let ticker = JobTicker(ticker.abort_handle());
-    tokio::task::spawn_blocking(move || {
+    spawn_workshop_job(move || {
         // A panic in the work below must not leave the job "running" forever with its
         // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
         let mut fail = JobFailOnDropGuard::new(
@@ -2124,7 +2130,12 @@ pub(crate) async fn fpkg_extract_handler(
         );
         // Until the game is found, the folder is this job's to remove (a panic included).
         let mut unpacking = Unpacking(Some(dest.clone()));
-        let mut progress = |done: u64, _total: u64| bytes.store(done, Ordering::Relaxed);
+        let mut progress = |done: u64, _total: u64| {
+            bytes.store(done, Ordering::Relaxed);
+            // Called every MiB on the unpacking thread: a pause holds it here, and a RAR's
+            // helper process, its pipe full, waits with it (#631). A cancel is seen just after.
+            ps5upload_fpkg::workshop::checkpoint(&cancel);
+        };
         let outcome =
             archive_extract::extract(&source, &dest, password.as_deref(), &mut progress, &cancel)
                 .and_then(|()| archive_extract::find_game(&dest));

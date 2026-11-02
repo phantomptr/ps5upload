@@ -6943,6 +6943,14 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "ampr_index_done_same": "再作成しました: {count} ファイル。古いインデックスは既に正しいものでした。",
   "ampr_index_backup": "古いものは ampr_emu.index.bak として残してあります。",
   "ampr_index_image_done": "新しいインデックス入りで {path} に書き込みました。開いたイメージは変更されていません。",
+  "fpkg.pause": "一時停止",
+  "fpkg.resume": "再開",
+  "fpkg.paused_queue_waits": "一時停止中 — キューは待機中",
+  "fpkg.pause_failed": "一時停止または再開できませんでした: {error}",
+  "workshop_gentle_label": "このコンピューターの使用を控えめにする",
+  "workshop_gentle_hint": "変換はプロセッサーの約半分を使い、プロセッサーとディスクの両方で他のアプリを優先します。時間は長くかかります。",
+  "workshop_gentle_error": "エンジンがこの設定を保持しませんでした: {error}",
+  "settings_card_workshop_share": "このコンピューター",
 };
 
 export default ja;

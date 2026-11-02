@@ -25,6 +25,7 @@
 //!   POST /api/transfer/file-list      → start multi-file transfer from explicit list
 //!   GET  /api/jobs/{id}               → poll job status/result
 //!   GET  /api/jobs                    → list all jobs (summary)
+//!   POST /api/jobs/{id}/pause|resume  → hold / continue a Workshop job (see `workshop_api`)
 //!   GET  /api/events                  → SSE stream of job state changes
 //!   GET  /api/event-journal           → bug-report event journal (since/until/cat)
 //!   POST /api/ps5/cleanup             → recursively remove a path under PS5 allowlist
@@ -110,6 +111,7 @@ mod wake_login_api;
 #[cfg(feature = "webui")]
 mod webui;
 mod win_net;
+mod workshop_api;
 
 #[cfg(test)]
 mod ava1_only_tests;
@@ -1527,7 +1529,43 @@ pub(crate) fn with_live_notes(job_id: Uuid, v: serde_json::Value) -> serde_json:
         .unwrap_or_else(|e| e.into_inner())
         .get(&job_id)
         .and_then(|w| w.upgrade());
-    merge_live_notes(notes.as_deref(), v)
+    merge_pause(job_id, merge_live_notes(notes.as_deref(), v))
+}
+
+/// A running Workshop job's pause state: `pausable`, `paused` and `paused_ms` (all its paused
+/// time so far, so a client leaves it out of speed and time left). Other jobs are unchanged.
+fn merge_pause(job_id: Uuid, mut v: serde_json::Value) -> serde_json::Value {
+    let running = v.get("status").and_then(|s| s.as_str()) == Some("running");
+    let Some(flag) = running.then(|| cancel_flag(job_id)).flatten() else {
+        return v;
+    };
+    if let (Some(st), Some(o)) = (ps5upload_fpkg::workshop::status(&flag), v.as_object_mut()) {
+        o.insert("pausable".into(), true.into());
+        o.insert("paused".into(), st.paused.into());
+        o.insert("paused_ms".into(), st.paused_ms.into());
+    }
+    v
+}
+
+/// [`register_transfer_cancel`] for a Workshop job (a conversion or an extraction on this
+/// computer): the same flag, which `POST /api/jobs/{id}/pause` can also hold (#631).
+pub(crate) fn register_workshop_job(job_id: Uuid) -> Arc<AtomicBool> {
+    let flag = register_transfer_cancel(job_id);
+    ps5upload_fpkg::workshop::register(&flag);
+    flag
+}
+
+fn cancel_flag(job_id: Uuid) -> Option<Arc<AtomicBool>> {
+    cancel_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&job_id)
+        .and_then(Weak::upgrade)
+}
+
+/// Pause or resume a running Workshop job. False when there is none by that id.
+pub(crate) fn set_job_paused(job_id: Uuid, paused: bool) -> bool {
+    cancel_flag(job_id).is_some_and(|f| ps5upload_fpkg::workshop::set_paused(&f, paused))
 }
 
 /// Register a fresh cancel flag for `job_id` and return it to thread into
@@ -1548,6 +1586,8 @@ fn signal_transfer_cancel(job_id: Uuid) -> bool {
         Some(weak) => match weak.upgrade() {
             Some(flag) => {
                 flag.store(true, Ordering::Relaxed);
+                // A paused Workshop job wakes to see it.
+                ps5upload_fpkg::workshop::wake(&flag);
                 true
             }
             None => false,
@@ -10934,6 +10974,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         default_ps5_addr: ps5_addr.clone(),
         events_tx,
     };
+    // "Use less of this computer" as it was last set (#632).
+    workshop_api::load();
 
     // The Collection's automatic refresh (a no-op until a folder is added).
     collection_api::spawn_auto_refresh();
@@ -11590,6 +11632,12 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/jobs/{id}", get(get_job))
         .route("/api/jobs/{id}/files", get(get_job_files))
         .route("/api/jobs/{id}/cancel", post(cancel_job))
+        .route("/api/jobs/{id}/pause", post(workshop_api::pause_job))
+        .route("/api/jobs/{id}/resume", post(workshop_api::resume_job))
+        .route(
+            "/api/workshop/settings",
+            get(workshop_api::get_settings).post(workshop_api::set_settings),
+        )
         .route("/api/events", get(events_stream))
         .route("/api/engine-logs", get(engine_logs_tail))
         .route("/api/event-journal", get(event_journal::events_handler))

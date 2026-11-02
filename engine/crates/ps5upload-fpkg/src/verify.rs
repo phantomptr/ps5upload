@@ -540,7 +540,7 @@ fn verify_streaming_inner(
         }
         done += 1;
         if done.is_multiple_of(256) {
-            if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            if crate::workshop::checkpoint_opt(cancel) {
                 return format_err("cancelled");
             }
             progress(done * BLOCK, sweep * BLOCK);

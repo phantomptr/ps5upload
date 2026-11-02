@@ -62,6 +62,7 @@ pub mod source;
 pub mod stream;
 pub mod ufs2_source;
 pub mod verify;
+pub mod workshop;
 pub mod xts;
 
 /// Every PFS and finalized-image block is 64 KiB.

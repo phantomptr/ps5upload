@@ -237,7 +237,7 @@ fn copy_file(
         .map_err(|e| format!("{path}: {e}"))?;
     let mut at = 0u64;
     while at < size {
-        if cancel.load(Ordering::Relaxed) {
+        if ps5upload_fpkg::workshop::checkpoint(cancel) {
             return Err("cancelled".into());
         }
         let want = CHUNK.min(size - at) as usize;
@@ -267,7 +267,7 @@ fn hash_source(
     let mut h = Sha256::new();
     let mut at = 0u64;
     while at < len {
-        if cancel.load(Ordering::Relaxed) {
+        if ps5upload_fpkg::workshop::checkpoint(cancel) {
             return Err("cancelled".into());
         }
         let want = CHUNK.min(len - at) as usize;
@@ -297,7 +297,7 @@ fn hash_written(
     let mut buf = vec![0u8; CHUNK.min(len.max(1)) as usize];
     let mut left = len;
     while left > 0 {
-        if cancel.load(Ordering::Relaxed) {
+        if ps5upload_fpkg::workshop::checkpoint(cancel) {
             return Err("cancelled".into());
         }
         let n = buf.len().min(left as usize);
@@ -428,7 +428,7 @@ pub(crate) fn build(
                 stage("write", written, total);
             })?;
         }
-        if cancel.load(Ordering::Relaxed) {
+        if ps5upload_fpkg::workshop::checkpoint(cancel) {
             return Err("cancelled".into());
         }
 
@@ -498,7 +498,7 @@ pub(crate) fn extract_file(
             written += n;
             stage("write", written, size);
         })?;
-        if cancel.load(Ordering::Relaxed) {
+        if ps5upload_fpkg::workshop::checkpoint(cancel) {
             return Err("cancelled".into());
         }
         let got_len = std::fs::metadata(&partial)

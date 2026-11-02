@@ -6883,6 +6883,14 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "ampr_index_done_same": "已重建：{count} 个文件。旧索引本来就是正确的。",
   "ampr_index_backup": "旧索引已保留为 ampr_emu.index.bak。",
   "ampr_index_image_done": "已写入 {path}，带有新索引。你打开的镜像没有改变。",
+  "fpkg.pause": "暂停",
+  "fpkg.resume": "继续",
+  "fpkg.paused_queue_waits": "已暂停 — 队列在等待",
+  "fpkg.pause_failed": "暂停或继续未成功：{error}",
+  "workshop_gentle_label": "少占用这台电脑",
+  "workshop_gentle_hint": "转换只使用大约一半的处理器，并让其他应用优先使用处理器和磁盘。耗时会更长。",
+  "workshop_gentle_error": "引擎没有保存此设置：{error}",
+  "settings_card_workshop_share": "这台电脑",
 };
 
 export default zh_CN;
