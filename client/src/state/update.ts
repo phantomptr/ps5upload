@@ -435,9 +435,15 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       const p = get().phase;
       return p.kind === "available" && p.result.latest_version === version && backgroundDownloadWanted(get());
     };
+    // A job that stepped aside (a new check, a skip, a click on Download) leaves the notice to
+    // whoever took over; otherwise it says what came of it.
+    let steppedAside = false;
+    const aside = () => {
+      steppedAside = true;
+    };
     try {
       if (statusLoaded) await statusLoaded;
-      if (!stillWanted()) return;
+      if (!stillWanted()) return aside();
       let quiet = false;
       try {
         quiet = await updateCanSelfInstall(result.download_filename);
@@ -448,9 +454,9 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       // Never while something transfers: the download would compete with it.
       while (!(await appIdle())) {
         await new Promise((r) => setTimeout(r, IDLE_RECHECK_MS));
-        if (!stillWanted()) return;
+        if (!stillWanted()) return aside();
       }
-      if (!stillWanted()) return;
+      if (!stillWanted()) return aside();
       await get().download();
       const p = get().phase;
       if (p.kind === "download-failed" && p.result.latest_version === version) {
@@ -465,7 +471,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         p.result.latest_version === version &&
         !!p.download.can_install &&
         !p.download.needs_password;
-      if (version !== get().skippedVersion) notifyUpdate(result, ready);
+      if (!steppedAside && version !== get().skippedVersion) notifyUpdate(result, ready);
     }
   };
 

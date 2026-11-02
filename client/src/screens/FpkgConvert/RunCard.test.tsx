@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../state/lang", () => ({
   useTr: () =>
@@ -304,6 +304,14 @@ describe("RunCard", () => {
 
   describe("pause (#631)", () => {
     const now = Date.now();
+    // The speed is worked out against the clock: hold it still, or a slow run reads 9.89 MiB/s.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(now);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
     const writing = (over: Partial<Extract<Pipeline, { phase: "running" }>> = {}): Pipeline => ({
       phase: "running",
       mode: "convert",

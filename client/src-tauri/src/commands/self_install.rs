@@ -768,12 +768,15 @@ fn installs_quietly(download: &Path) -> bool {
 /// installs when the app quits. The same plan `install_ability` makes, for where
 /// `update_download` would save it (the plan reads only the name and this copy's own folders).
 #[tauri::command]
-pub fn update_can_self_install(app: AppHandle, filename: String) -> Result<bool, String> {
+pub async fn update_can_self_install(app: AppHandle, filename: String) -> Result<bool, String> {
     if !super::updates::is_plain_file_name(&filename) {
         return Err(format!("invalid filename: {filename:?}"));
     }
     let dir = super::update_files::updates_dir(&app)?;
-    Ok(installs_quietly(&dir.join(filename)))
+    // Off the main thread: the plan probes the app's folder with a write (a slow disk).
+    tauri::async_runtime::spawn_blocking(move || installs_quietly(&dir.join(filename)))
+        .await
+        .map_err(|e| format!("update_can_self_install: {e}"))
 }
 
 /// `path` as a downloaded update: a file `update_download` saved in the updates folder, never
