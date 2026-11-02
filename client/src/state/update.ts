@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { listen } from "@tauri-apps/api/event";
 
 import { openExternalUrl } from "../lib/openExternalUrl";
 import {
@@ -10,6 +11,7 @@ import {
   updateForgetFailure,
   updateOldDownloads,
   updateRemoveOldDownloads,
+  updateCanSelfInstall,
   type LastInstall,
   type UpdateCheck,
   type UpdateDownload,
@@ -20,7 +22,9 @@ import { apkUpdaterAvailable, downloadAndInstallApk } from "./apkUpdate";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "../lib/safeStorage";
 import { t as translate } from "../i18n";
 import { useLangStore } from "./lang";
-import { pushNotification } from "./notifications";
+import { pushNotification, useNotificationsStore } from "./notifications";
+import { appIsForeground, sendOsNotification } from "../lib/osNotify";
+import { log } from "./logs";
 
 // Shared store for update check + download state.
 //
@@ -50,6 +54,12 @@ const AUTOCHECK_KEY = "ps5upload.update.autocheck";
 // and must survive a restart, hence localStorage rather than the session cache.
 const CHANNEL_KEY = "ps5upload.update.channel";
 const NOTIFIED_KEY = "ps5upload.update.notified-version";
+// When that notice was posted (ms). Releases can come several a day: at most one notice a day,
+// a newer version inside that day only updates the bar and the sidebar dot.
+const NOTIFIED_AT_KEY = "ps5upload.update.notified-at";
+const NOTIFY_EVERY_MS = 24 * 60 * 60 * 1000;
+// The version the "installs when you quit from the tray" hint was shown for (once per version).
+const TRAY_HINT_KEY = "ps5upload.update.tray-hint-version";
 // Install updates without asking (desktop copies that can, commands/self_install.rs). Off unless
 // the user turns it on: it quits and restarts the app.
 const AUTOINSTALL_KEY = "ps5upload.update.autoinstall";
@@ -129,44 +139,66 @@ function trFb(
   return out === key ? fallback : out;
 }
 
-/** Fire a one-time "update available" notification per version. Returns
- *  without notifying if we've already announced this exact version (across
- *  restarts), so the user isn't pestered on every daily check or launch. */
-function notifyAvailableOnce(result: UpdateCheck) {
+/** Whether to post the "update available" notice for `version` now: never twice for one
+ *  version, and at most once a day (`NOTIFY_EVERY_MS`) whatever the version, so three releases
+ *  in a day are one notice. A clock set back past the last notice does not hold it off. */
+export function shouldNotifyUpdate(
+  version: string,
+  lastVersion: string | null,
+  lastAtMs: number | null,
+  nowMs: number,
+): boolean {
+  if (!version || version === lastVersion) return false;
+  if (lastAtMs == null || !Number.isFinite(lastAtMs) || lastAtMs > nowMs) return true;
+  return nowMs - lastAtMs >= NOTIFY_EVERY_MS;
+}
+
+/** The notification-center entry for an update (see `shouldNotifyUpdate`). `ready`: it was
+ *  downloaded in the background and installs when the app quits. */
+function notifyUpdate(result: UpdateCheck, ready: boolean) {
   if (!result.available || !result.latest_version) return;
-  const already = (() => {
-    try {
-      return typeof localStorage !== "undefined"
-        ? safeGetItem(NOTIFIED_KEY)
-        : null;
-    } catch {
-      return null;
-    }
-  })();
-  if (already === result.latest_version) return;
-  pushNotification(
-    "info",
-    trFb(
-      "update_notif_title",
-      { ver: result.latest_version },
-      `Update available — v${result.latest_version}`,
-    ),
-    {
-      body: trFb(
-        "update_notif_body",
-        undefined,
-        "A newer version of PS5Upload is ready. Open Settings → Updates to download it.",
-      ),
-      link: "/settings",
-    },
-  );
-  try {
-    if (typeof localStorage !== "undefined") {
-      safeSetItem(NOTIFIED_KEY, result.latest_version);
-    }
-  } catch {
-    // Best-effort dedup; worst case the user sees the notice twice.
+  const ver = result.latest_version;
+  const lastAt = Number(safeGetItem(NOTIFIED_AT_KEY) ?? "");
+  if (
+    !shouldNotifyUpdate(
+      ver,
+      safeGetItem(NOTIFIED_KEY),
+      Number.isFinite(lastAt) && lastAt > 0 ? lastAt : null,
+      Date.now(),
+    )
+  ) {
+    return;
   }
+  if (ready) {
+    pushNotification(
+      "info",
+      trFb("update_notif_ready_title", { ver }, `v${ver} is ready`),
+      {
+        body: trFb(
+          "update_notif_ready_body",
+          undefined,
+          "Downloaded in the background. It installs when you quit PS5Upload, or choose Restart now.",
+        ),
+        link: "/settings",
+      },
+    );
+  } else {
+    pushNotification(
+      "info",
+      trFb("update_notif_title", { ver }, `Update available — v${ver}`),
+      {
+        body: trFb(
+          "update_notif_body",
+          undefined,
+          "A newer version of PS5Upload is ready. Open Settings → Updates to download it.",
+        ),
+        link: "/settings",
+      },
+    );
+  }
+  // Best effort; worst case the user sees the notice twice.
+  safeSetItem(NOTIFIED_KEY, ver);
+  safeSetItem(NOTIFIED_AT_KEY, String(Date.now()));
 }
 
 /** Browser fallback when the manifest has no asset for this platform
@@ -192,6 +224,40 @@ export type UpdatePhase =
  *  the user has not skipped. Settings shows every phase regardless. */
 export function updateOffered(s: { phase: UpdatePhase; skippedVersion: string | null }): boolean {
   return s.phase.kind === "available" && s.phase.result.latest_version !== s.skippedVersion;
+}
+
+/** Download an offered update in the background (desktop), so "install when I quit" needs no
+ *  click: only with automatic checks and install-on-quit on, and not when the automatic install
+ *  is on (that downloads it itself), the release has no file for this platform, or this version
+ *  already failed to install. Whether this copy installs it without a password is asked of the
+ *  app separately (`updateCanSelfInstall`), before anything is downloaded. */
+export function backgroundDownloadWanted(
+  s: Pick<
+    UpdateStore,
+    | "phase"
+    | "skippedVersion"
+    | "lastInstall"
+    | "autoCheckEnabled"
+    | "installOnQuitEnabled"
+    | "autoInstallEnabled"
+  >,
+): boolean {
+  if (!updateOffered(s) || s.phase.kind !== "available") return false;
+  if (s.autoInstallEnabled || !s.autoCheckEnabled || !s.installOnQuitEnabled) return false;
+  const r = s.phase.result;
+  if (!r.download_url || !r.download_filename) return false;
+  return !failedInstall(s, r.latest_version);
+}
+
+/** The version to give the one-time "installs when you quit from the tray" hint for, when the
+ *  window was just closed to the tray: an update armed for the quit not hinted before. */
+export function trayHintVersion(
+  s: Pick<UpdateStore, "phase" | "installOnQuitArmed">,
+  hinted: string | null,
+): string | null {
+  if (!s.installOnQuitArmed || s.phase.kind !== "downloaded") return null;
+  const v = s.phase.result.latest_version;
+  return v && v !== hinted ? v : null;
 }
 
 /** The failed install of `version`, if the last attempt to install exactly that version
@@ -331,11 +397,18 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         phase: phaseFromResult(result),
         lastCheckedMs: Date.now(),
       });
-      // Surface a notification-center entry the first time we see a given
-      // new version — the toast bar is dismissible/session-scoped, this is
-      // the durable "you have an update" record.
-      notifyAvailableOnce(result);
-      if (updateOffered(get()) && get().autoInstallEnabled && !isMobile()) void autoInstall();
+      // A notification-center entry (at most one a day, `shouldNotifyUpdate`): the toast bar is
+      // dismissible and session-scoped, this is the durable "you have an update" record. An
+      // update downloaded in the background says so once it is ready instead.
+      const offered = updateOffered(get());
+      if (offered && get().autoInstallEnabled && !isMobile()) {
+        notifyUpdate(result, false);
+        void autoInstall();
+      } else if (offered && isTauriEnv() && !isMobile() && backgroundDownloadWanted(get())) {
+        void backgroundDownload();
+      } else if (offered) {
+        notifyUpdate(result, false);
+      }
     } catch (e) {
       set({
         phase: {
@@ -344,6 +417,55 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         },
         lastCheckedMs: Date.now(),
       });
+    }
+  };
+
+  let backgroundRunning = false;
+  /** Download the offered update in the background, once nothing transfers, when this copy
+   *  installs it on quit by itself (`backgroundDownloadWanted`, `updateCanSelfInstall`). Says
+   *  so once it is ready ("installs when you quit"); otherwise the usual "update available". A
+   *  failed download goes back to plain "available": nobody clicked Download. */
+  const backgroundDownload = async () => {
+    const start = get().phase;
+    if (backgroundRunning || start.kind !== "available") return;
+    backgroundRunning = true;
+    const result = start.result;
+    const version = result.latest_version;
+    const stillWanted = () => {
+      const p = get().phase;
+      return p.kind === "available" && p.result.latest_version === version && backgroundDownloadWanted(get());
+    };
+    try {
+      if (statusLoaded) await statusLoaded;
+      if (!stillWanted()) return;
+      let quiet = false;
+      try {
+        quiet = await updateCanSelfInstall(result.download_filename);
+      } catch {
+        // An app without the command: the person downloads it as before.
+      }
+      if (!quiet) return;
+      // Never while something transfers: the download would compete with it.
+      while (!(await appIdle())) {
+        await new Promise((r) => setTimeout(r, IDLE_RECHECK_MS));
+        if (!stillWanted()) return;
+      }
+      if (!stillWanted()) return;
+      await get().download();
+      const p = get().phase;
+      if (p.kind === "download-failed" && p.result.latest_version === version) {
+        log.warn("update", `background download of v${version} failed: ${p.message}`);
+        set({ phase: { kind: "available", result: p.result } });
+      }
+    } finally {
+      backgroundRunning = false;
+      const p = get().phase;
+      const ready =
+        p.kind === "downloaded" &&
+        p.result.latest_version === version &&
+        !!p.download.can_install &&
+        !p.download.needs_password;
+      if (version !== get().skippedVersion) notifyUpdate(result, ready);
     }
   };
 
@@ -737,4 +859,30 @@ if (isTauriEnv() && !isMobile()) {
   });
   // What the last install came to, before the launch check can start another.
   void useUpdateStore.getState().loadInstallStatus();
+  // Closed to the tray (src-tauri/src/tray.rs): the app keeps running, so an update armed for
+  // the quit waits until it is quit from the tray icon. Say so, once per version.
+  void listen("tray-closed", () => {
+    // Let the hidden window's blur / visibility arrive, so the notice goes to the system too.
+    setTimeout(trayClosedHint, 500);
+  }).catch(() => {});
+}
+
+function trayClosedHint() {
+  const s = useUpdateStore.getState();
+  const ver = trayHintVersion(s, safeGetItem(TRAY_HINT_KEY));
+  if (!ver) return;
+  safeSetItem(TRAY_HINT_KEY, ver);
+  const title = trFb("update_tray_hint_title", { ver }, `v${ver} installs when you quit`);
+  const body = trFb(
+    "update_tray_hint_body",
+    undefined,
+    "PS5Upload is still running in the tray. Quit it from the tray icon to install the update, or open it and choose Restart now.",
+  );
+  const foreground = appIsForeground();
+  pushNotification("info", title, { body, link: "/settings" });
+  // The inbox mirrors to the system only in the background; a hidden window some systems still
+  // report as focused gets it here, since the window that would show the inbox is gone.
+  if (foreground && useNotificationsStore.getState().osNotifyEnabled) {
+    void sendOsNotification("info", title, body);
+  }
 }

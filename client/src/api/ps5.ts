@@ -5093,6 +5093,19 @@ export async function updateRemoveOldDownloads(): Promise<number> {
   return invoke<number>("update_remove_old_downloads");
 }
 
+/** Whether this copy would install the release file `filename` by itself, without a password
+ *  (the same plan as `UpdateDownload.can_install` / `needs_password`), asked before it is
+ *  downloaded: only such an update is downloaded in the background for install on quit. */
+export async function updateCanSelfInstall(filename: string): Promise<boolean> {
+  return invoke<boolean>("update_can_self_install", { filename });
+}
+
+/** Open the updater's log (`update.log` in the app's updates folder) in the system's viewer.
+ *  Resolves false when there is no log yet. */
+export async function updateOpenLog(): Promise<boolean> {
+  return invoke<boolean>("update_open_log");
+}
+
 /** Whether the console's loader on :9021 answers (`healthy`), took the connection and never
  *  answered (`stuck`), or isn't there (`absent`). See lib/elfldrGuard.ts. */
 export async function elfldrHealth(host: string): Promise<"healthy" | "stuck" | "absent"> {

@@ -16,7 +16,7 @@ use std::sync::Mutex;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, Runtime, Window, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, Runtime, Window, WindowEvent};
 
 const TRAY_ID: &str = "ps5upload-main";
 
@@ -178,6 +178,9 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
         WindowEvent::CloseRequested { api, .. } if CLOSE.load(Ordering::SeqCst) => {
             api.prevent_close();
             hide_main(window);
+            // The app keeps running, so an update armed to install on quit waits for Quit: the
+            // renderer says so once (state/update.ts).
+            let _ = window.emit("tray-closed", ());
         }
         // Minimizing shows up as a resize on Windows and Linux; on macOS it stays the Dock's.
         WindowEvent::Resized(_)

@@ -757,6 +757,25 @@ pub fn install_ability(path: &str) -> (bool, bool) {
     }
 }
 
+/// Whether this copy installs `download` by itself without a password: what install on quit
+/// (and the automatic install) need.
+fn installs_quietly(download: &Path) -> bool {
+    plan(download).is_some_and(|p| !p.needs_password())
+}
+
+/// Whether this copy would install the release file `filename` by itself, without a password,
+/// asked before it is downloaded: the renderer then downloads it in the background so it
+/// installs when the app quits. The same plan `install_ability` makes, for where
+/// `update_download` would save it (the plan reads only the name and this copy's own folders).
+#[tauri::command]
+pub fn update_can_self_install(app: AppHandle, filename: String) -> Result<bool, String> {
+    if !super::updates::is_plain_file_name(&filename) {
+        return Err(format!("invalid filename: {filename:?}"));
+    }
+    let dir = super::update_files::updates_dir(&app)?;
+    Ok(installs_quietly(&dir.join(filename)))
+}
+
 /// `path` as a downloaded update: a file `update_download` saved in the updates folder, never
 /// an arbitrary path. Returns it and the updates folder.
 fn downloaded_update(app: &AppHandle, path: &str) -> Result<(PathBuf, PathBuf), String> {
@@ -929,7 +948,7 @@ pub fn update_install_on_quit(
         return Ok(false);
     };
     let (download, dir) = downloaded_update(&app, &path)?;
-    let armed = plan(&download).is_some_and(|p| !p.needs_password());
+    let armed = installs_quietly(&download);
     let record = record_for(&app, &download, version.as_deref());
     *on_quit_slot() = armed.then_some(Armed {
         download,

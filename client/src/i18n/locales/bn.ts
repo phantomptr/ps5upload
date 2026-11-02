@@ -179,7 +179,7 @@ update_autoinstall_label: "আপডেট স্বয়ংক্রিয়�
 update_autoinstall_now: "v{ver} ইনস্টল হচ্ছে: PS5Upload একটু পরেই আবার চালু হবে",
 update_autoinstall_hint_v2: "নতুন রিলিজ ডাউনলোড করে, কোনো ট্রান্সফার না চলা পর্যন্ত অপেক্ষা করে, তারপর ইনস্টল করে PS5Upload আবার চালু করে। Windows ইনস্টলার ও zip, macOS এবং Linux AppImage-এ কাজ করে; .deb বা .rpm ইনস্টল আপনার পাসওয়ার্ড চায়, তাই আপনি ইনস্টল-এ ক্লিক করা পর্যন্ত অপেক্ষা করে।",
 update_install_on_quit_label: "বন্ধ করার সময় আপডেট ইনস্টল করুন",
-update_install_on_quit_hint: "ডাউনলোড করা আপডেট PS5Upload বন্ধ করার সময় ইনস্টল হয়, কোনো ট্রান্সফার চলার সময় কখনো নয়, আর অ্যাপ বন্ধই থাকে। .deb বা .rpm ইনস্টল আপনার পাসওয়ার্ড চায়, তাই ইনস্টল বোতামের অপেক্ষা করে।",
+update_install_on_quit_hint_v2: "স্বয়ংক্রিয় যাচাই চালু থাকলে নতুন রিলিজ ব্যাকগ্রাউন্ডে ডাউনলোড হয় এবং PS5Upload বন্ধ করার সময় ইনস্টল হয়, স্থানান্তর চলাকালীন কখনো নয়, আর অ্যাপটি বন্ধই থাকে। .deb বা .rpm ইনস্টল আপনার পাসওয়ার্ড চায়, তাই ইনস্টল বোতামের অপেক্ষা করে।",
 update_install_on_quit_armed: "অথবা PS5Upload বন্ধ করুন: তখন v{version} ইনস্টল হবে এবং অ্যাপ বন্ধ থাকবে।",
 update_install_password_hint: "আপনার পাসওয়ার্ড চায়, নতুন প্যাকেজ ইনস্টল করে এবং PS5Upload আবার চালু করে। আগে চলমান ট্রান্সফার শেষ হতে দিন।",
 update_pkexec_cancelled: "পাসওয়ার্ডের প্রম্পট বন্ধ করা হয়েছে, কিছুই ইনস্টল হয়নি। ইনস্টল করতে নিচের কমান্ডটি চালান।",
@@ -6932,6 +6932,17 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
   "workshop_gentle_hint": "রূপান্তর আপনার প্রসেসরের প্রায় অর্ধেক ব্যবহার করে এবং প্রসেসর ও ডিস্ক—দুটোতেই অন্য অ্যাপকে আগে যেতে দেয়। এতে বেশি সময় লাগে।",
   "workshop_gentle_error": "ইঞ্জিন এই সেটিং রাখেনি: {error}",
   "settings_card_workshop_share": "এই কম্পিউটার",
+  "whats_new_since": "v{version} থেকে নতুন যা এসেছে",
+  "whats_new_full_changelog": "GitHub-এ সম্পূর্ণ পরিবর্তন লগ",
+  "update_toast_ready": "v{version} প্রস্তুত",
+  "update_restart_now": "এখনই রিস্টার্ট করুন",
+  "update_notif_ready_title": "v{ver} প্রস্তুত",
+  "update_notif_ready_body": "ব্যাকগ্রাউন্ডে ডাউনলোড হয়েছে। PS5Upload বন্ধ করলে ইনস্টল হবে, অথবা এখনই রিস্টার্ট করুন বেছে নিন।",
+  "update_tray_hint_title": "v{ver} বন্ধ করার সময় ইনস্টল হবে",
+  "update_tray_hint_body": "PS5Upload এখনও সিস্টেম ট্রেতে চলছে। আপডেট ইনস্টল করতে ট্রে আইকন থেকে বন্ধ করুন, অথবা খুলে এখনই রিস্টার্ট করুন বেছে নিন।",
+  "update_open_log": "আপডেট লগ খুলুন",
+  "update_no_log": "এখনও কোনো আপডেট লগ নেই।",
+  "update_open_log_failed": "আপডেট লগ খোলা যায়নি: {message}",
 };
 
 export default bn;

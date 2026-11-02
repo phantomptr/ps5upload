@@ -648,6 +648,8 @@ pub fn run() {
             commands::update_forget_failure,
             commands::update_old_downloads,
             commands::update_remove_old_downloads,
+            commands::update_can_self_install,
+            commands::update_open_log,
             // Android: the APK into the app cache with progress, for the system installer.
             commands::update_download_apk,
             tray::tray_configure,

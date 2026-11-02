@@ -7,9 +7,11 @@ import { loadBundledDoc } from "../lib/bundledDoc";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { isTauriEnv } from "../lib/tauriEnv";
 import {
+  CHANGELOG_URL,
   HISTORY_KEYS,
   LAST_SEEN_VERSION_KEY,
-  changelogSection,
+  changelogSince,
+  changelogSinceMarkdown,
   shouldShowWhatsNew,
 } from "../lib/whatsNew";
 import { useTr } from "../state/lang";
@@ -31,10 +33,16 @@ export function releasePageUrl(version: string): string {
 export function ReleaseNotesDialog({
   version,
   notes,
+  since,
+  more,
   onClose,
 }: {
   version: string;
   notes: string;
+  /** The notes cover every release since this version (each under its own heading). */
+  since?: string;
+  /** Older releases were left out: link the full changelog too. */
+  more?: boolean;
   onClose: () => void;
 }) {
   const tr = useTr();
@@ -42,13 +50,25 @@ export function ReleaseNotesDialog({
     <Modal
       open
       onClose={onClose}
-      title={tr("whats_new_in", { version }, `What's new in v${version}`)}
+      title={
+        since
+          ? tr("whats_new_since", { version: since }, `What's new since v${since}`)
+          : tr("whats_new_in", { version }, `What's new in v${version}`)
+      }
       size="xl"
       footer={
-        <Button size="sm" variant="ghost" onClick={() => void openExternalUrl(releasePageUrl(version))}>
-          <ExternalLink size={13} />
-          {tr("library_fpkg_kstuff_tip_repo", undefined, "View on GitHub")}
-        </Button>
+        <>
+          {more && (
+            <Button size="sm" variant="ghost" onClick={() => void openExternalUrl(CHANGELOG_URL)}>
+              <ExternalLink size={13} />
+              {tr("whats_new_full_changelog", undefined, "Full changelog on GitHub")}
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={() => void openExternalUrl(releasePageUrl(version))}>
+            <ExternalLink size={13} />
+            {tr("library_fpkg_kstuff_tip_repo", undefined, "View on GitHub")}
+          </Button>
+        </>
       }
     >
       <div className="max-h-[60vh] overflow-auto p-4 text-sm">
@@ -63,9 +83,16 @@ export function ReleaseNotesDialog({
 }
 
 /** The first launch of a new version shows its notes once (from the bundled CHANGELOG.md, so
- *  it needs no network). Desktop and phone apps; the browser page updates with the engine. */
+ *  it needs no network), and those of every release skipped since the last version seen (frequent
+ *  releases: 10.7.1 → 10.7.3 also shows 10.7.2). Desktop and phone apps; the browser page updates
+ *  with the engine. */
 export function WhatsNewOnLaunch() {
-  const [shown, setShown] = useState<{ version: string; notes: string } | null>(null);
+  const [shown, setShown] = useState<{
+    version: string;
+    notes: string;
+    since?: string;
+    more: boolean;
+  } | null>(null);
   useEffect(() => {
     if (!isTauriEnv()) return;
     let cancelled = false;
@@ -79,8 +106,18 @@ export function WhatsNewOnLaunch() {
         // Remembered before anything is shown: once means once, even if this launch dies.
         safeSetItem(LAST_SEEN_VERSION_KEY, version);
         if (!shouldShowWhatsNew(lastSeen, version, usedBefore)) return;
-        const notes = changelogSection((await loadBundledDoc("changelog")) ?? "", version);
-        if (notes && !cancelled) setShown({ version, notes });
+        const since = changelogSince((await loadBundledDoc("changelog")) ?? "", lastSeen, version);
+        if (since.sections.length === 0 || cancelled) return;
+        if (since.sections.length === 1) {
+          setShown({ version, notes: since.sections[0].notes, more: false });
+        } else {
+          setShown({
+            version,
+            notes: changelogSinceMarkdown(since),
+            since: lastSeen ?? undefined,
+            more: since.truncated,
+          });
+        }
       } catch {
         // No version or no changelog: nothing to show.
       }
@@ -91,7 +128,13 @@ export function WhatsNewOnLaunch() {
   }, []);
   if (!shown) return null;
   return (
-    <ReleaseNotesDialog version={shown.version} notes={shown.notes} onClose={() => setShown(null)} />
+    <ReleaseNotesDialog
+      version={shown.version}
+      notes={shown.notes}
+      since={shown.since}
+      more={shown.more}
+      onClose={() => setShown(null)}
+    />
   );
 }
 
@@ -143,6 +186,9 @@ export function UpdateToast() {
   const canInstall = phase.kind === "downloaded" && !!phase.download.can_install;
   // The last install of this version failed (#611): not tried again by itself.
   const installFailed = failedInstall({ lastInstall }, version) != null;
+  // Downloaded (often in the background) and armed for the quit: a quiet "ready" line with
+  // Restart now, nothing to do otherwise.
+  const ready = canInstall && installOnQuit && !installFailed;
   // Android with the installer bridge: one tap downloads and opens Android's dialog.
   const apkInstall =
     isMobile() && "result" in phase && !!phase.result.download_url && apkUpdaterAvailable();
@@ -156,15 +202,17 @@ export function UpdateToast() {
       <Sparkles size={15} className="shrink-0 text-[var(--color-accent)]" />
       <span className="min-w-0 flex-1 truncate">
         <span className="font-medium text-[var(--color-text)]">
-          {installFailed
-            ? tr("update_install_failed_title", undefined, "Update didn't install")
-            : downloaded
-            ? tr("update_toast_downloaded", undefined, "Update downloaded")
-            : failed
-              ? tr("update_toast_failed", undefined, "Update download failed")
-              : tr("update_toast_title", undefined, "Update available")}
+          {ready
+            ? tr("update_toast_ready", { version }, "v{version} ready")
+            : installFailed
+              ? tr("update_install_failed_title", undefined, "Update didn't install")
+              : downloaded
+                ? tr("update_toast_downloaded", undefined, "Update downloaded")
+                : failed
+                  ? tr("update_toast_failed", undefined, "Update download failed")
+                  : tr("update_toast_title", undefined, "Update available")}
         </span>
-        <span className="text-[var(--color-muted)]"> — v{version}</span>
+        {!ready && <span className="text-[var(--color-muted)]"> — v{version}</span>}
         {downloaded && installOnQuit && !installFailed && (
           <span className="text-[var(--color-muted)]">
             {" · "}
@@ -255,7 +303,9 @@ export function UpdateToast() {
           className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent)] disabled:opacity-60"
         >
           {installing ? <Spinner size={14} /> : <RefreshCw size={13} />}
-          {tr("update_install_restart", undefined, "Install and restart")}
+          {ready
+            ? tr("update_restart_now", undefined, "Restart now")
+            : tr("update_install_restart", undefined, "Install and restart")}
         </button>
       )}
       {!downloading && !installing && (

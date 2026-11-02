@@ -7,9 +7,10 @@ import type { UpdatePhase } from "../state/update";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 // Under SSR zustand renders a store's initial state, so the toast reads a seeded one instead.
-const seeded: { phase: UpdatePhase; lastInstall: LastInstall | null } = {
+const seeded: { phase: UpdatePhase; lastInstall: LastInstall | null; installOnQuitArmed: boolean } = {
   phase: { kind: "idle" },
   lastInstall: null,
+  installOnQuitArmed: false,
 };
 vi.mock("../state/update", async (orig) => {
   const real = await orig<typeof import("../state/update")>();
@@ -18,10 +19,9 @@ vi.mock("../state/update", async (orig) => {
     useUpdateStore: <T,>(sel: (s: Record<string, unknown>) => T) =>
       sel({
         ...real.useUpdateStore.getState(),
-        ...seeded,
         installing: false,
         skippedVersion: null,
-        installOnQuitArmed: false,
+        ...seeded,
       }),
   };
 });
@@ -68,5 +68,20 @@ describe("update banner after a failed install (#611)", () => {
     const html = renderToStaticMarkup(<UpdateToast />);
     expect(html).toContain("Update available");
     expect(html).not.toContain("Try again");
+  });
+});
+
+describe("update banner for an update downloaded in the background", () => {
+  it("reads as a quiet 'ready, installs when you quit' with Restart now", () => {
+    seeded.phase = { kind: "downloaded", result, download };
+    seeded.lastInstall = null;
+    seeded.installOnQuitArmed = true;
+    const html = renderToStaticMarkup(<UpdateToast />);
+    expect(html).toContain("v10.5.1 ready");
+    expect(html).toContain("installs when you quit");
+    expect(html).toContain("Restart now");
+    expect(html).not.toContain("Install and restart");
+    expect(html).not.toContain("Update downloaded");
+    seeded.installOnQuitArmed = false;
   });
 });

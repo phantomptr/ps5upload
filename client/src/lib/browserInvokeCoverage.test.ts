@@ -101,6 +101,8 @@ const NATIVE_ONLY: Record<string, string> = {
   update_forget_failure: "native: desktop self-update",
   update_old_downloads: "native: desktop self-update",
   update_remove_old_downloads: "native: desktop self-update",
+  update_can_self_install: "native: desktop self-update",
+  update_open_log: "native: desktop self-update (opens a local file)",
   update_download_apk: "native: Android self-update (APK into the app cache)",
   changelog_load: "native: reads a bundled resource",
   faq_load: "native: reads a bundled resource",
