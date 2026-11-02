@@ -774,14 +774,7 @@ pub async fn update_download(
     //   - NUL rules out C-string early-terminators (would still fail on
     //     create, but the error would be confusing).
     //   - leading dot rules out hidden-file shenanigans.
-    if filename.is_empty()
-        || filename == "."
-        || filename == ".."
-        || filename.starts_with('.')
-        || filename.contains('/')
-        || filename.contains('\\')
-        || filename.contains('\0')
-    {
+    if !is_plain_file_name(&filename) {
         return Err(format!("invalid filename: {filename:?}"));
     }
     // Whether this copy installs it is known from the name alone (`self_install::plan`), so the
@@ -965,6 +958,18 @@ pub async fn update_download(
         path,
         bytes: total,
     })
+}
+
+/// A bare file name to save an update as: no path separators, no `.` / `..`, no hidden file,
+/// no NUL (the name comes from the remote manifest; see `update_download`).
+pub(crate) fn is_plain_file_name(name: &str) -> bool {
+    !(name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.starts_with('.')
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0'))
 }
 
 /// Shows the download where the person installs it by hand: the Windows setup is started, else
@@ -1159,7 +1164,15 @@ mod checksum_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::is_safe_update_url;
+    use super::{is_plain_file_name, is_safe_update_url};
+
+    #[test]
+    fn update_file_names_are_bare_names() {
+        assert!(is_plain_file_name("PS5Upload-10.7.4-win-x64.zip"));
+        for bad in ["", ".", "..", ".hidden", "a/b.zip", "a\\b.zip", "a\0.zip"] {
+            assert!(!is_plain_file_name(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn update_urls_require_https_except_loopback_http() {

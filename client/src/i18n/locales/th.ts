@@ -179,7 +179,7 @@ update_autoinstall_label: "ติดตั้งอัปเดตอัตโ�
 update_autoinstall_now: "กำลังติดตั้ง v{ver}: PS5Upload จะเริ่มใหม่ในอีกสักครู่",
 update_autoinstall_hint_v2: "ดาวน์โหลดรุ่นใหม่ รอจนไม่มีการโอนข้อมูล แล้วติดตั้งและเริ่ม PS5Upload ใหม่ ใช้ได้กับตัวติดตั้งและ zip ของ Windows, macOS และ AppImage ของ Linux ส่วนการติดตั้ง .deb หรือ .rpm จะขอรหัสผ่าน จึงรอให้คุณคลิกติดตั้ง",
 update_install_on_quit_label: "ติดตั้งอัปเดตเมื่อออกจากแอป",
-update_install_on_quit_hint: "อัปเดตที่ดาวน์โหลดแล้วจะติดตั้งตอนคุณออกจาก PS5Upload ไม่ใช่ระหว่างการโอนข้อมูล และแอปจะปิดอยู่ การติดตั้ง .deb หรือ .rpm จะขอรหัสผ่าน จึงรอปุ่มติดตั้ง",
+update_install_on_quit_hint_v2: "เมื่อเปิดการตรวจสอบอัตโนมัติ รุ่นใหม่จะดาวน์โหลดเบื้องหลังและติดตั้งเมื่อคุณออกจาก PS5Upload ไม่ติดตั้งระหว่างการโอนไฟล์ และแอปจะปิดอยู่ การติดตั้ง .deb หรือ .rpm ต้องใช้รหัสผ่าน จึงรอให้คุณกดปุ่มติดตั้ง",
 update_install_on_quit_armed: "หรือออกจาก PS5Upload: v{version} จะติดตั้งตอนนั้น และแอปจะปิดอยู่",
 update_install_password_hint: "ขอรหัสผ่านของคุณ ติดตั้งแพ็กเกจใหม่ และเริ่ม PS5Upload ใหม่ รอให้การโอนที่กำลังทำงานเสร็จก่อน",
 update_pkexec_cancelled: "หน้าต่างขอรหัสผ่านถูกปิดและไม่มีอะไรถูกติดตั้ง หากต้องการติดตั้ง ให้รันคำสั่งด้านล่าง",
@@ -6939,6 +6939,17 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
   "workshop_gentle_hint": "การแปลงจะใช้โปรเซสเซอร์ราวครึ่งหนึ่ง และให้แอปอื่นได้ไปก่อน ทั้งโปรเซสเซอร์และดิสก์ ใช้เวลานานขึ้น",
   "workshop_gentle_error": "เอนจินไม่ได้เก็บการตั้งค่านี้: {error}",
   "settings_card_workshop_share": "คอมพิวเตอร์เครื่องนี้",
+  "whats_new_since": "มีอะไรใหม่ตั้งแต่ v{version}",
+  "whats_new_full_changelog": "บันทึกการเปลี่ยนแปลงทั้งหมดบน GitHub",
+  "update_toast_ready": "v{version} พร้อมแล้ว",
+  "update_restart_now": "รีสตาร์ทเลย",
+  "update_notif_ready_title": "v{ver} พร้อมแล้ว",
+  "update_notif_ready_body": "ดาวน์โหลดเบื้องหลังแล้ว จะติดตั้งเมื่อคุณออกจาก PS5Upload หรือเลือก รีสตาร์ทเลย",
+  "update_tray_hint_title": "v{ver} จะติดตั้งเมื่อออกจากแอป",
+  "update_tray_hint_body": "PS5Upload ยังทำงานอยู่ในถาดระบบ ออกจากแอปที่ไอคอนในถาดเพื่อติดตั้งอัปเดต หรือเปิดแอปแล้วเลือก รีสตาร์ทเลย",
+  "update_open_log": "เปิดบันทึกการอัปเดต",
+  "update_no_log": "ยังไม่มีบันทึกการอัปเดต",
+  "update_open_log_failed": "เปิดบันทึกการอัปเดตไม่ได้: {message}",
 };
 
 export default th;

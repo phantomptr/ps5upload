@@ -4,6 +4,25 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.7.4
+
+- **Updates install when you quit, with no click (For #611).** On Windows, macOS and the Linux
+  AppImage, a new release is now downloaded in the background (never while something is
+  transferring) and installed as you quit PS5Upload. The update bar then just says "v10.7.4 ready ·
+  installs when you quit", with **Restart now** if you'd rather not wait. This needs **Check for
+  updates automatically** and **Install updates when I quit** (both on unless you turned them off)
+  in Settings › Updates. A `.deb` / `.rpm` install, which asks for your password, still waits for you.
+- **Fewer update notices.** Releases sometimes come several in a day; the notification center now
+  says "update available" at most once a day. A newer release inside that day only updates the
+  update bar and the sidebar dot.
+- **"What's new" covers every version you skipped.** Going from 10.7.1 straight to 10.7.3 now shows
+  the notes of 10.7.2 too, newest first, with a link to the full changelog when there are many.
+- **Closed to the tray with an update waiting.** With "close to tray" on, closing the window doesn't
+  quit, so the update doesn't install yet. The first time that happens for a release, PS5Upload
+  tells you to quit from the tray icon (or choose Restart now) to install it.
+- **Open update log (For #611).** Settings › Updates has a button that opens the updater's own log,
+  which now keeps what the last installs did, including the ones that worked. Bug reports include it.
+
 ## 10.7.3
 
 - **Pause a conversion, and the queue with it (For #631).** Workshop's ④ now has **Pause** beside

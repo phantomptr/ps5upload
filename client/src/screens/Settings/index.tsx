@@ -26,6 +26,7 @@ import {
   Vibrate,
   Waves,
   RotateCcw,
+  FileText,
 } from "lucide-react";
 import { useThemeStore, type Theme } from "../../state/theme";
 import {
@@ -68,6 +69,8 @@ import { hasBetaItems } from "../../layout/navItems";
 import { useRestAfterUploadStore } from "../../state/restAfterUpload";
 import { userConfigPath, resetAllAppData } from "../../state/userConfig";
 import { failedInstall, useUpdateStore, type UpdatePhase } from "../../state/update";
+import { updateOpenLog } from "../../api/ps5";
+import { useToastStore } from "../../state/toasts";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { releasePageUrl } from "../../layout/UpdateToast";
 import { isIOS, isMobile } from "../../lib/platform";
@@ -1804,6 +1807,25 @@ function UpdatesPanel() {
     }
   };
 
+  // The updater's own log (updates/update.log): what the last installs did, for a report.
+  const handleOpenLog = async () => {
+    const toast = useToastStore.getState().push;
+    try {
+      if (!(await updateOpenLog())) {
+        toast({ tone: "info", message: tr("update_no_log", undefined, "There is no update log yet.") });
+      }
+    } catch (e) {
+      toast({
+        tone: "warn",
+        message: tr(
+          "update_open_log_failed",
+          { message: e instanceof Error ? e.message : String(e) },
+          "Couldn't open the update log: {message}",
+        ),
+      });
+    }
+  };
+
   const handleDownload = async () => {
     if (busy) return;
     setBusy(true);
@@ -2044,9 +2066,9 @@ function UpdatesPanel() {
             </span>
           }
           hint={tr(
-            "update_install_on_quit_hint",
+            "update_install_on_quit_hint_v2",
             undefined,
-            "A downloaded update is installed as you quit PS5Upload, never while something is transferring, and the app stays closed. A .deb or .rpm install asks for your password, so it waits for the Install button.",
+            "With automatic checks on, a new release is downloaded in the background and installed as you quit PS5Upload, never while something is transferring, and the app stays closed. A .deb or .rpm install asks for your password, so it waits for the Install button.",
           )}
           className="text-xs"
         />
@@ -2105,6 +2127,16 @@ function UpdatesPanel() {
           <RefreshCw size={12} className={busy ? "animate-spin" : ""} />
           {tr("check_updates", undefined, "Check for updates")}
         </button>
+        {!mobile && isTauriEnv() && (
+          <button
+            type="button"
+            onClick={() => void handleOpenLog()}
+            className="inline-flex items-center gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface-3)] max-md:min-h-11 max-md:px-4"
+          >
+            <FileText size={12} />
+            {tr("update_open_log", undefined, "Open update log")}
+          </button>
+        )}
         {canDownload && mobile && (
           <button
             type="button"

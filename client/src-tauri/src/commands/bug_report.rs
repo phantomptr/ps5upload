@@ -613,6 +613,11 @@ fn assemble_zip_at(
         for (src, name) in [
             (dirs.engine.join("engine.log"), "logs/engine.log"),
             (dirs.engine.join("engine.log.old"), "logs/engine.log.old"),
+            // The desktop updater's own steps (#611), beside the engine folder.
+            (
+                dirs.engine.with_file_name("updates").join("update.log"),
+                "logs/update.log",
+            ),
         ] {
             if let Some(data) = read_tail(&src, ENGINE_LOG_TAIL_BYTES) {
                 let text = red.text(&String::from_utf8_lossy(&data));

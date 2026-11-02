@@ -131,7 +131,7 @@ pub fn judge(record: &InstallRecord, current: &str, log_tail: Option<String>) ->
 }
 
 /// What the last install came to, once per launch, and the clean-up that goes with it: after a
-/// success the record, the download and the log go; after a failure the download is kept for
+/// success the record and the download go (the log says it worked); after a failure the download is kept for
 /// "Try again". A finished download of a newer version stays too (it is reused, not downloaded
 /// again); anything else in the updates folder (older downloads, a `.part` a crash left) goes.
 pub fn settle(dir: &Path, current: &str) -> Option<LastInstall> {
@@ -144,7 +144,12 @@ pub fn settle(dir: &Path, current: &str) -> Option<LastInstall> {
         (Some(r), Some(o)) if o.installed => {
             let _ = std::fs::remove_file(&r.file);
             remove_record(dir);
-            let _ = std::fs::remove_file(log_path(dir));
+            // The log stays (#611): an update that failed before this one leaves its steps
+            // for a report, which a clean folder could not explain. `log` keeps it small.
+            log(
+                dir,
+                &format!("{current} is running: the install of {} worked", r.to),
+            );
         }
         (Some(r), Some(_)) => {
             keep = Some(r.file.clone());
@@ -306,6 +311,18 @@ pub fn update_remove_old_downloads(app: AppHandle) -> Result<usize, String> {
         .count())
 }
 
+/// Open `update.log` in the system's viewer for it (Settings › Updates). False when there is
+/// no log yet. Never waits for the viewer (`reveal` only spawns it).
+#[tauri::command]
+pub async fn update_open_log(app: AppHandle) -> Result<bool, String> {
+    let path = log_path(&updates_dir(&app)?);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    super::reveal::reveal(&path)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn a_successful_install_leaves_nothing_behind() {
+    fn a_successful_install_leaves_only_its_log() {
         let dir = tmp("ok");
         let r = record(&dir, "10.5.1");
         std::fs::write(&r.file, b"zip").unwrap();
@@ -341,7 +358,17 @@ mod tests {
         log(&dir, "replaced PS5Upload.exe");
         let out = settle(&dir, "10.5.1").unwrap();
         assert!(out.installed && out.message.is_empty() && out.version == "10.5.1");
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "all gone");
+        let left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec![LOG.to_string()], "only the log stays");
+        let log_text = std::fs::read_to_string(log_path(&dir)).unwrap();
+        assert!(log_text.contains("replaced PS5Upload.exe"), "{log_text}");
+        assert!(
+            log_text.contains("10.5.1 is running: the install of 10.5.1 worked"),
+            "{log_text}"
+        );
         // Nothing more to say on the launch after.
         assert_eq!(settle(&dir, "10.5.1"), None);
         let _ = std::fs::remove_dir_all(&dir);
