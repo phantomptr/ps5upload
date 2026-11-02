@@ -1,5 +1,9 @@
 {
   "cw_actions": "操作",
+  "cw_cheats_applied_changed": "遊戲已變更此處；未作更動",
+  "cw_cheats_applied_failed": "無法套用：{reason}",
+  "cw_cheats_applied_ok": "已套用 ✓",
+  "cw_cheats_applied_waiting": "正在等待遊戲載入…",
   "cw_cheats_apply": "套用",
   "cw_cheats_engine_off_state": "金手指引擎已關閉：開啟的金手指已儲存，但未生效。",
   "cw_cheats_engine_on_state": "金手指引擎已開啟：開啟的金手指會在遊戲啟動時生效，重新啟動後也是。",

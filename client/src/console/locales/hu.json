@@ -1,5 +1,9 @@
 {
   "cw_actions": "Műveletek",
+  "cw_cheats_applied_changed": "A játék megváltoztatta; érintetlenül hagyva",
+  "cw_cheats_applied_failed": "Nem sikerült alkalmazni: {reason}",
+  "cw_cheats_applied_ok": "Alkalmazva ✓",
+  "cw_cheats_applied_waiting": "Várakozás a játék betöltésére…",
   "cw_cheats_apply": "Alkalmaz",
   "cw_cheats_engine_off_state": "A csalásmotor ki van kapcsolva: a bekapcsolt csalások mentve vannak, de nem aktívak.",
   "cw_cheats_engine_on_state": "A csalásmotor be van kapcsolva: a bekapcsolt csalások a játék indulásakor érvénybe lépnek, újraindítás után is.",

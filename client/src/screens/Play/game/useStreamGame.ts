@@ -8,6 +8,7 @@ import {
   type CheatMod,
 } from "../../../api/ps5";
 import { transferAddr } from "../../../lib/addr";
+import { afterToggle, anyWaiting } from "../../Cheats/cheatApplied";
 
 /** How often the Game panel reads what runs, while it is open (nothing while closed). */
 export const GAME_POLL_MS = 3000;
@@ -98,7 +99,9 @@ export function useStreamGame(host: string | null, on: boolean) {
         // Another game (or none): never show the last one's cheats.
         ...(title !== before ? { mods: null, modsError: null, message: null } : {}),
       });
-      if (title && (title !== before || ref.current.mods === null)) void loadMods(title);
+      // A cheat still waiting for the game to load (#627): read the list again to show it apply.
+      if (title && (title !== before || ref.current.mods === null || anyWaiting(ref.current.mods)))
+        void loadMods(title);
     } catch (e) {
       patch({ ready: true, error: text(e) });
     }
@@ -129,7 +132,7 @@ export function useStreamGame(host: string | null, on: boolean) {
           return;
         }
         patch({
-          mods: ref.current.mods?.map((x) => (x.index === m.index ? { ...x, on: !m.on } : x)) ?? null,
+          mods: ref.current.mods?.map((x) => (x.index === m.index ? afterToggle(x, !m.on) : x)) ?? null,
           // Switching one on turns the engine on (the helper does it) and resumes a held game.
           ...(!m.on ? { engine: true, held: false } : {}),
         });

@@ -1,5 +1,9 @@
 {
   "cw_actions": "Działania",
+  "cw_cheats_applied_changed": "Gra to zmieniła; pozostawiono bez zmian",
+  "cw_cheats_applied_failed": "Nie udało się zastosować: {reason}",
+  "cw_cheats_applied_ok": "Zastosowano ✓",
+  "cw_cheats_applied_waiting": "Czekam na załadowanie gry…",
   "cw_cheats_apply": "Zastosuj",
   "cw_cheats_engine_off_state": "Silnik kodów jest wyłączony: włączone kody są zapisane, ale nie działają.",
   "cw_cheats_engine_on_state": "Silnik kodów jest włączony: włączone kody działają po uruchomieniu gry, także po restarcie.",

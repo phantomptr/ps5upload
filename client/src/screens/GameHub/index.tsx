@@ -96,6 +96,7 @@ import {
   useTrackedPlay,
 } from "../../lib/trackedPlay";
 import { PlayedLine } from "./PlayedLine";
+import { CheatAppliedLine } from "../Cheats/CheatAppliedLine";
 import { runningOn, useRunningAppsStore } from "../../state/runningApps";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -887,6 +888,8 @@ function CheatsTab({
                   label={mod.name}
                   hint={mod.desc || undefined}
                 />
+                {/* What happened in the running game (#627); a switch flipped here waits for the next read. */}
+                {overrides[mod.index] === undefined && <CheatAppliedLine mod={mod} className="mt-0.5" />}
               </li>
             ))}
           </ul>

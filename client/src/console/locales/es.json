@@ -1,5 +1,9 @@
 {
   "cw_actions": "Acciones",
+  "cw_cheats_applied_changed": "El juego cambió esto; no se tocó",
+  "cw_cheats_applied_failed": "No se pudo aplicar: {reason}",
+  "cw_cheats_applied_ok": "Aplicado ✓",
+  "cw_cheats_applied_waiting": "Esperando a que cargue el juego…",
   "cw_cheats_apply": "Aplicar",
   "cw_cheats_engine_off_state": "El motor de trucos está apagado: los trucos activados están guardados, pero no aplicados.",
   "cw_cheats_engine_on_state": "El motor de trucos está encendido: los trucos activados se aplican al iniciar su juego, también tras un reinicio.",

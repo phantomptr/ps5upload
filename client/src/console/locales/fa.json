@@ -1,5 +1,9 @@
 {
   "cw_actions": "کارها",
+  "cw_cheats_applied_changed": "بازی این را تغییر داد؛ دست نخورد",
+  "cw_cheats_applied_failed": "اعمال نشد: {reason}",
+  "cw_cheats_applied_ok": "اعمال شد ✓",
+  "cw_cheats_applied_waiting": "در انتظار بارگذاری بازی…",
   "cw_cheats_apply": "اعمال",
   "cw_cheats_engine_off_state": "موتور چیت خاموش است: چیت‌های روشن ذخیره شده‌اند اما اعمال نشده‌اند.",
   "cw_cheats_engine_on_state": "موتور چیت روشن است: چیت‌های روشن هنگام شروع بازی اعمال می‌شوند، حتی پس از راه‌اندازی دوباره.",

@@ -11,6 +11,7 @@ import { SECTIONS } from "../sections";
 import { t } from "../strings";
 import { CheatsView, finderClosesFor, focusedCheatIndex, type CheatsViewProps } from "./Cheats";
 import {
+  appliedText,
   cheatsPhase,
   createCheatsController,
   EMPTY_STATE,
@@ -152,6 +153,56 @@ describe("cheats section", () => {
     html = view(c.get());
     expect(html).toContain(t("cw_cheats_held"));
     expect(html).toContain(`>${t("cw_cheats_saved")}<`);
+  });
+
+  it("a_switched_on_cheat_says_what_happened_in_the_game", async () => {
+    // #627: the helper reports what actually happened, not only the saved switch.
+    const raw = {
+      mods: [
+        { index: 0, name: "60 FPS", on: true, applied: "applied" },
+        { index: 1, name: "B", on: true, applied: "waiting", applied_reason: "the game's code is not loaded yet" },
+        { index: 2, name: "C", on: true, applied: "failed", applied_reason: "doesn't match this game version" },
+        { index: 3, name: "D", on: true, applied: "changed" },
+        { index: 4, name: "E", on: true, applied: "bogus" },
+        { index: 5, name: "F", on: false },
+      ],
+    };
+    const list = readList(GAME, raw);
+    expect(list.mods.map((m) => m.applied)).toEqual(["applied", "waiting", "failed", "changed", undefined, undefined]);
+    expect(list.mods[2].appliedReason).toBe("doesn't match this game version");
+    expect(appliedText(list.mods[0])).toBe(t("cw_cheats_applied_ok"));
+    expect(appliedText(list.mods[1])).toBe(t("cw_cheats_applied_waiting"));
+    expect(appliedText(list.mods[2])).toBe(t("cw_cheats_applied_failed", { reason: "doesn't match this game version" }));
+    expect(appliedText(list.mods[3])).toBe(t("cw_cheats_applied_changed"));
+    expect(appliedText(list.mods[4])).toBeNull();
+    expect(appliedText({ ...list.mods[0], on: false })).toBeNull();
+
+    // Shown under the switch while the engine applies cheats; not while they are only saved.
+    const state = { status: { engine: true, game: { title_id: GAME } }, list };
+    let html = view(state);
+    expect(html).toContain(t("cw_cheats_applied_waiting"));
+    expect(html).toContain('data-applied="failed"');
+    html = view({ ...state, status: { engine: false, game: { title_id: GAME } } });
+    expect(html).not.toContain("data-applied");
+  });
+
+  it("a_waiting_cheat_is_read_again_until_it_applies", async () => {
+    let applied = "waiting";
+    mockCall.mockImplementation(async (route: string) => {
+      if (route === "/api/cheats/status") return { engine: true, game: { title_id: GAME } } as never;
+      if (route === "/api/cheats/list") return { mods: [{ index: 0, name: "A", on: true, applied }] } as never;
+      throw new Error(`unexpected ${route}`);
+    });
+    const c = createCheatsController(() => {});
+    await c.loadStatus();
+    expect(c.get().list?.mods[0].applied).toBe("waiting");
+    applied = "applied";
+    await c.loadStatus(); // the status poll reads the list again while something waits
+    expect(c.get().list?.mods[0].applied).toBe("applied");
+    const lists = () => mockCall.mock.calls.filter(([r]) => r === "/api/cheats/list").length;
+    const before = lists();
+    await c.loadStatus(); // nothing waits now: the poll leaves the list alone
+    expect(lists()).toBe(before);
   });
 
   it("the_engine_switch_works_with_or_without_a_game", async () => {

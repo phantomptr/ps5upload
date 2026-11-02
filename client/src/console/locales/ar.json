@@ -1,5 +1,9 @@
 {
   "cw_actions": "إجراءات",
+  "cw_cheats_applied_changed": "غيّرت اللعبة هذا؛ لم يُمَس",
+  "cw_cheats_applied_failed": "تعذّر التطبيق: {reason}",
+  "cw_cheats_applied_ok": "تم التطبيق ✓",
+  "cw_cheats_applied_waiting": "بانتظار تحميل اللعبة…",
   "cw_cheats_apply": "تطبيق",
   "cw_cheats_engine_off_state": "محرك الشفرات متوقف: الشفرات المفعّلة محفوظة لكنها غير مطبّقة.",
   "cw_cheats_engine_on_state": "محرك الشفرات يعمل: تُطبَّق الشفرات المفعّلة عند بدء لعبتها، حتى بعد إعادة التشغيل.",

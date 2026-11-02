@@ -27,6 +27,8 @@ import { humanizePs5Error } from "../../lib/humanizeError";
 import { hasVersionMatch, rankCheatFiles, sameVersion, type CheatGame } from "../../lib/cheatGames";
 import { platformForTitleId } from "../../lib/titleDetails";
 import { useTr } from "../../state/lang";
+import { afterToggle, anyWaiting } from "./cheatApplied";
+import { CheatAppliedLine } from "./CheatAppliedLine";
 import { beginTask } from "../../state/trackTask";
 import { useToast } from "../../state/toasts";
 
@@ -48,6 +50,9 @@ function formatDbDate(v: string | null): string | null {
 
 /** One game: who it is, the cheats on the console to switch on, and the
  *  cheats in the collection to download — in the order a player needs them. */
+/** While a switched-on cheat waits for the game to load, its status is read this often. */
+const WAITING_POLL_MS = 4000;
+
 export function CheatGameDetail({
   host,
   addr,
@@ -102,6 +107,18 @@ export function CheatGameDetail({
     void loadMods();
   }, [loadMods]);
 
+  // A cheat waiting for the game to load (#627): read the list again quietly until it applies.
+  const waiting = game.running && anyWaiting(mods);
+  useEffect(() => {
+    if (!waiting) return;
+    const t = window.setInterval(() => {
+      void cheatsGet(game.titleId, addr)
+        .then((r) => setMods(r.mods ?? []))
+        .catch(() => {});
+    }, WAITING_POLL_MS);
+    return () => window.clearInterval(t);
+  }, [waiting, game.titleId, addr]);
+
   async function download(e: CheatRepoEntry) {
     setDownloading(e.filename);
     setError(null);
@@ -146,7 +163,7 @@ export function CheatGameDetail({
         setError(r.err || tr("cheats_toggle_failed", undefined, "The PS5 didn't switch that cheat."));
         return;
       }
-      setMods((prev) => prev.map((x) => (x.index === m.index ? { ...x, on: !m.on } : x)));
+      setMods((prev) => prev.map((x) => (x.index === m.index ? afterToggle(x, !m.on) : x)));
       setError(null);
       // Switching a cheat on also turns the engine on (the payload does it),
       // so let the engine bar catch up.
@@ -313,14 +330,16 @@ export function CheatGameDetail({
                     m.on ? "bg-[var(--color-accent-soft)]" : "hover:bg-[var(--color-surface-2)]"
                   }`}
                 >
-                  <Toggle
-                    className="min-w-0 flex-1"
-                    checked={m.on}
-                    disabled={toggling === m.index || !game.running}
-                    onChange={() => void toggle(m)}
-                    label={m.name || `Cheat #${m.index}`}
-                    hint={m.desc || undefined}
-                  />
+                  <div className="min-w-0 flex-1">
+                    <Toggle
+                      checked={m.on}
+                      disabled={toggling === m.index || !game.running}
+                      onChange={() => void toggle(m)}
+                      label={m.name || `Cheat #${m.index}`}
+                      hint={m.desc || undefined}
+                    />
+                    {game.running && <CheatAppliedLine mod={m} className="mt-0.5" />}
+                  </div>
                   {m.other_version && (
                     <span className="shrink-0 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]">
                       {tr("cheats_other_version", undefined, "Other game version")}

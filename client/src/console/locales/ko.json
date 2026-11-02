@@ -1,5 +1,9 @@
 {
   "cw_actions": "작업",
+  "cw_cheats_applied_changed": "게임이 이 부분을 바꿔서 건드리지 않았습니다",
+  "cw_cheats_applied_failed": "적용할 수 없음: {reason}",
+  "cw_cheats_applied_ok": "적용됨 ✓",
+  "cw_cheats_applied_waiting": "게임 로딩을 기다리는 중…",
   "cw_cheats_apply": "적용",
   "cw_cheats_engine_off_state": "치트 엔진이 꺼져 있습니다. 켠 치트는 저장되어 있지만 적용되지 않습니다.",
   "cw_cheats_engine_on_state": "치트 엔진이 켜져 있습니다. 켠 치트는 게임이 시작될 때 적용되며, 재시작 후에도 적용됩니다.",

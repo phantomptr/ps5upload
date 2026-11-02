@@ -1,5 +1,9 @@
 {
   "cw_actions": "Действия",
+  "cw_cheats_applied_changed": "Игра изменила это; не трогаем",
+  "cw_cheats_applied_failed": "Не удалось применить: {reason}",
+  "cw_cheats_applied_ok": "Применено ✓",
+  "cw_cheats_applied_waiting": "Ждём загрузки игры…",
   "cw_cheats_apply": "Применить",
   "cw_cheats_engine_off_state": "Движок читов выключен: включённые читы сохранены, но не применены.",
   "cw_cheats_engine_on_state": "Движок читов включён: включённые читы применяются при запуске игры, и после перезапуска тоже.",
