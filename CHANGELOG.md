@@ -12,9 +12,10 @@ What's new in ps5upload, written for humans.
   nothing was applied, until you switched it Off and On. Now each switched-on cheat is tried again
   every few seconds until the game is ready for it, checked after it is written, and put back if the
   game undoes it (a loading screen or coming back from rest mode; at most 5 times in 2 minutes).
-  Cheats that don't match the game version, or that the game changed itself, are left alone. The
-  crash guard still counts from the first time a game's cheats are applied, and paused games and the
-  engine switch work as before.
+  Cheats that don't match the game version, or that the game changed itself, are left alone; a game
+  patch whose code isn't found gives up after about a minute. The crash guard now also watches a
+  cheat that only applies later in the game, and paused games and the engine switch work as before.
+  A cheat its file switches on by itself now stays Off once you turn it off.
 - **See what actually happened to each cheat.** Under each switched-on cheat (Cheats, the game's
   page, Play's Game panel and Minion › Cheats) a short line says **Applied ✓**, **Waiting for the
   game to load…**, **Couldn't apply:** and why, or **The game changed this; not touched**. The TV

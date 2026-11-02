@@ -109,6 +109,29 @@ static void test_guard(void) {
     cheats_guard_applied(&g, "CUSA04402", 402, 100000);
     CHECK(cheats_guard_tick(&g, 0, 101000) == CHEATS_GUARD_STRIKE); /* one again, not two */
 
+    /* A later cheat's window in the same run (#627 review): surviving the first window does not
+     * clear the count, closing inside the second one is a strike; twice is a pause. */
+    memset(&g, 0, sizeof(g));
+    for (int run = 0; run < 2; run++) {
+        int pid = 600 + run;
+        uint64_t t0 = 1000000u * (uint64_t)(run + 1);
+        cheats_guard_applied(&g, "CUSA04402", pid, t0 + 3000);
+        CHECK(cheats_guard_tick(&g, pid, t0 + 3000 + W) == CHEATS_GUARD_SURVIVED);
+        CHECK(cheats_guard_tick(&g, pid, t0 + 50000) == CHEATS_GUARD_NONE);
+        cheats_guard_applied(&g, "CUSA04402", pid, t0 + 60000);
+        CHECK(cheats_guard_tick(&g, 0, t0 + 66000) ==
+              (run == 0 ? CHEATS_GUARD_STRIKE : CHEATS_GUARD_HOLD));
+    }
+    /* ...but a run that plays past its windows and then closes does clear it */
+    memset(&g, 0, sizeof(g));
+    cheats_guard_applied(&g, "CUSA04402", 700, 0);
+    CHECK(cheats_guard_tick(&g, 0, 1000) == CHEATS_GUARD_STRIKE);
+    cheats_guard_applied(&g, "CUSA04402", 701, 10000);
+    CHECK(cheats_guard_tick(&g, 701, 10000 + W) == CHEATS_GUARD_SURVIVED);
+    CHECK(g.strikes == 1);                                 /* the run is not over yet */
+    CHECK(cheats_guard_tick(&g, 0, 500000) == CHEATS_GUARD_NONE); /* closed later */
+    CHECK(g.strikes == 0);
+
     /* Quick closes of two different games are not "in a row" for either. */
     memset(&g, 0, sizeof(g));
     cheats_guard_applied(&g, "CUSA04402", 500, 0);
