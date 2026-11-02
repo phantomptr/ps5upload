@@ -2661,6 +2661,38 @@ pub async fn job_cancel(job_id: String) -> Result<JsonValue, String> {
     post_json(&url, &serde_json::json!({})).await
 }
 
+/// Hold a running Workshop job (a conversion or an archive extraction) where it is:
+/// POST /api/jobs/{id}/pause. Its workers stop at their next chunk until resumed (#631).
+#[tauri::command]
+pub async fn job_pause(job_id: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/jobs/{job_id}/pause");
+    post_json(&url, &serde_json::json!({})).await
+}
+
+/// Let a paused Workshop job go on: POST /api/jobs/{id}/resume.
+#[tauri::command]
+pub async fn job_resume(job_id: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/jobs/{job_id}/resume");
+    post_json(&url, &serde_json::json!({})).await
+}
+
+/// "Use less of this computer" (#632), the engine's own setting: GET /api/workshop/settings.
+#[tauri::command]
+pub async fn workshop_settings_get() -> Result<JsonValue, String> {
+    let base = engine::url();
+    get_json(&format!("{base}/api/workshop/settings")).await
+}
+
+/// Turn "use less of this computer" on or off: POST /api/workshop/settings.
+#[tauri::command]
+pub async fn workshop_settings_set(gentle: bool) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/workshop/settings");
+    post_json(&url, &serde_json::json!({ "gentle": gentle })).await
+}
+
 /// Pull recent engine log lines from the sidecar's in-memory ring so the
 /// renderer can mirror them into its Log tab. `since` is the highest
 /// `seq` the caller has already seen; pass `0` on first call. Response

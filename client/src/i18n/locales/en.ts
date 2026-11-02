@@ -7238,6 +7238,14 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
   "ampr_index_done_same": "Rebuilt: {count} files. The old index was already right.",
   "ampr_index_backup": "The old one is kept as ampr_emu.index.bak.",
   "ampr_index_image_done": "Written to {path}, with the new index. The image you opened is unchanged.",
+  "fpkg.pause": "Pause",
+  "fpkg.resume": "Resume",
+  "fpkg.paused_queue_waits": "Paused — the queue waits",
+  "fpkg.pause_failed": "Pause or resume did not work: {error}",
+  "workshop_gentle_label": "Use less of this computer",
+  "workshop_gentle_hint": "Converting uses about half your processor and lets other apps go first, for the processor and the disk. It takes longer.",
+  "workshop_gentle_error": "The engine did not keep this setting: {error}",
+  "settings_card_workshop_share": "This computer",
 };
 
 export default en;

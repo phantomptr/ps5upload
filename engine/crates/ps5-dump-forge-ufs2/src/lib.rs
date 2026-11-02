@@ -16,7 +16,7 @@ mod ondisk;
 mod tree;
 
 use std::io::{Seek, SeekFrom, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use ps5upload_fpkg::source::SourceTree;
 use ps5upload_fpkg::{Error, Result};
@@ -85,7 +85,8 @@ pub struct Report {
 }
 
 fn check_cancel(cancel: &AtomicBool) -> Result<()> {
-    if cancel.load(Ordering::Relaxed) {
+    // Also where a paused Workshop job waits (#631).
+    if ps5upload_fpkg::workshop::checkpoint(cancel) {
         return Err(Error::Format("UFS2 image cancelled".into()));
     }
     Ok(())

@@ -887,6 +887,22 @@ export async function browserInvoke<T>(
       return postJson<T>(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, {});
     }
 
+    case "job_pause": {
+      const jobId = args["jobId"] as string;
+      return postJson<T>(`/api/jobs/${encodeURIComponent(jobId)}/pause`, {});
+    }
+
+    case "job_resume": {
+      const jobId = args["jobId"] as string;
+      return postJson<T>(`/api/jobs/${encodeURIComponent(jobId)}/resume`, {});
+    }
+
+    case "workshop_settings_get":
+      return getJson<T>("/api/workshop/settings");
+
+    case "workshop_settings_set":
+      return postJson<T>("/api/workshop/settings", { gentle: args["gentle"] === true });
+
     // ── Engine logs ─────────────────────────────────────────────────────────
 
     case "engine_logs_tail":

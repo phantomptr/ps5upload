@@ -29,7 +29,7 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
@@ -382,10 +382,12 @@ pub(crate) fn pipeline<T: Send, U: Send>(
         let (tx_out, rx_out) = sync_channel::<(u64, Result<U>)>(depth);
         let rx_in = Arc::new(Mutex::new(rx_in));
         let work = &work;
+        let lane = crate::workshop::Lane::current();
         for _ in 0..threads {
             let rx_in = Arc::clone(&rx_in);
             let tx_out = tx_out.clone();
             s.spawn(move || loop {
+                lane.enter();
                 // Holding the lock only to take the next item keeps the workers independent.
                 let next = rx_in.lock().map(|rx| rx.recv());
                 match next {
@@ -402,6 +404,7 @@ pub(crate) fn pipeline<T: Send, U: Send>(
         let tx_err = tx_out.clone();
         drop(tx_out);
         s.spawn(move || {
+            lane.enter();
             let mut i = 0u64;
             loop {
                 match produce() {
@@ -470,7 +473,7 @@ pub fn wrap(
             .unwrap_or(0)
     });
     let threads = match options.threads {
-        0 => std::thread::available_parallelism().map_or(4, |n| n.get()),
+        0 => crate::workshop::workshop_threads(),
         n => n,
     };
     let partial = PathBuf::from(format!("{}.partial", output.display()));
@@ -480,7 +483,12 @@ pub fn wrap(
     .and_then(|(report, crcs)| {
         // Decoded and matched against the checksums taken as the source was read, so the
         // check costs no second pass over the source — on a slow disk, a third of the time.
-        check(&partial, Expect::Crcs(&crcs), options.sample)?;
+        check_controlled(
+            &partial,
+            Expect::Crcs(&crcs),
+            options.sample,
+            control.cancel,
+        )?;
         std::fs::rename(&partial, output)?;
         Ok(WrapReport {
             output: output.to_path_buf(),
@@ -531,7 +539,7 @@ fn write_image(
             if read >= raw_size {
                 return Ok(None);
             }
-            if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            if crate::workshop::checkpoint_opt(cancel) {
                 return format_err("cancelled");
             }
             let n = (raw_size - read).min(BLOCK) as usize;
@@ -726,7 +734,17 @@ pub(crate) fn layout<R: Read + Seek>(f: &mut R) -> Result<Layout> {
     })
 }
 
-fn check(image: &Path, mut expect: Expect, sample: Option<u64>) -> Result<Inspection> {
+fn check(image: &Path, expect: Expect, sample: Option<u64>) -> Result<Inspection> {
+    check_controlled(image, expect, sample, None)
+}
+
+/// [`check`], pausable and cancellable through the job's `cancel` flag.
+fn check_controlled(
+    image: &Path,
+    mut expect: Expect,
+    sample: Option<u64>,
+    cancel: Option<&AtomicBool>,
+) -> Result<Inspection> {
     let mut f = File::open(image)?;
     let Layout {
         name,
@@ -836,7 +854,7 @@ fn check(image: &Path, mut expect: Expect, sample: Option<u64>) -> Result<Inspec
         });
     }
     // Every block decoded on every core, each checked against the source as it comes.
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let threads = crate::workshop::workshop_threads();
     let mut pairs = offsets.windows(2);
     let mut left = raw_size;
     let mut block = 0u64;
@@ -848,6 +866,9 @@ fn check(image: &Path, mut expect: Expect, sample: Option<u64>) -> Result<Inspec
             let Some(pair) = pairs.next() else {
                 return Ok(None);
             };
+            if crate::workshop::checkpoint_opt(cancel) {
+                return format_err("cancelled");
+            }
             let len = pair[1]
                 .checked_sub(pair[0])
                 .filter(|l| *l <= BLOCK)

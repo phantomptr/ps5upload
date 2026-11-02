@@ -6932,6 +6932,14 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "ampr_index_done_same": "Neu erstellt: {count} Dateien. Der alte Index war schon richtig.",
   "ampr_index_backup": "Der alte bleibt als ampr_emu.index.bak erhalten.",
   "ampr_index_image_done": "Nach {path} geschrieben, mit dem neuen Index. Das geöffnete Image ist unverändert.",
+  "fpkg.pause": "Pausieren",
+  "fpkg.resume": "Fortsetzen",
+  "fpkg.paused_queue_waits": "Pausiert — die Warteschlange wartet",
+  "fpkg.pause_failed": "Pausieren oder Fortsetzen hat nicht geklappt: {error}",
+  "workshop_gentle_label": "Weniger von diesem Computer nutzen",
+  "workshop_gentle_hint": "Das Umwandeln nutzt etwa die Hälfte deines Prozessors und lässt andere Apps vor, beim Prozessor und bei der Festplatte. Es dauert länger.",
+  "workshop_gentle_error": "Die Engine hat diese Einstellung nicht übernommen: {error}",
+  "settings_card_workshop_share": "Dieser Computer",
 };
 
 export default de;

@@ -12,7 +12,14 @@ vi.mock("../../state/lang", () => ({
 
 import type { Pipeline } from "../../state/fpkgConversion";
 import { ImageChoice } from "./ImageOptions";
-import { RunCard, deleteLabel, lz4Active, type Lz4Choice, type OutputChoiceProps } from "./RunCard";
+import {
+  RunCard,
+  deleteLabel,
+  lz4Active,
+  type Lz4Choice,
+  type OutputChoiceProps,
+  type RunCardProps,
+} from "./RunCard";
 
 // No DOM here (vitest in node, no testing-library): render to markup and check what a user
 // would see and could press.
@@ -46,6 +53,7 @@ const actions = {
 function html(
   pipeline: Pipeline,
   opts: { canInstall?: boolean; isImage?: boolean; title?: string; sourceBytes?: number } = {},
+  extra: Partial<RunCardProps> = {},
 ) {
   return renderToStaticMarkup(
     <RunCard
@@ -58,6 +66,7 @@ function html(
       title={opts.title ?? null}
       sourceBytes={opts.sourceBytes ?? 0}
       {...actions}
+      {...extra}
     />,
   );
 }
@@ -291,6 +300,61 @@ describe("RunCard", () => {
     }
     expect(button(out, "Cancel")).not.toBeNull();
     expect(button(out, "Convert only")).toBeNull();
+  });
+
+  describe("pause (#631)", () => {
+    const now = Date.now();
+    const writing = (over: Partial<Extract<Pipeline, { phase: "running" }>> = {}): Pipeline => ({
+      phase: "running",
+      mode: "convert",
+      source: "/g",
+      host: null,
+      stage: "write",
+      stageDone: 100 * 1024 * 1024,
+      stageTotal: 400 * 1024 * 1024,
+      startedMs: now - 20_000,
+      stageStartedMs: now - 20_000,
+      stageMs: {},
+      jobId: "j",
+      installTaskId: null,
+      taskId: null,
+      packagePath: null,
+      titleId: null,
+      copiedSource: null,
+      extractedSource: null,
+      ...over,
+    });
+    const pausable = { onPause: noop, onResume: noop };
+
+    it("offers Pause beside Cancel while the job runs, and Resume once paused", () => {
+      let out = html(writing(), {}, pausable);
+      expect(button(out, "Pause")).not.toBeNull();
+      expect(button(out, "Resume")).toBeNull();
+      expect(button(out, "Cancel")).not.toBeNull();
+      out = html(writing({ paused: true, pausedAtMs: now - 5000 }), {}, pausable);
+      expect(button(out, "Resume")).not.toBeNull();
+      expect(button(out, "Cancel")).not.toBeNull();
+      expect(out).toContain("Paused — the queue waits");
+      // No speed or time left while nothing moves.
+      expect(out).not.toContain("left");
+      expect(out).not.toMatch(/iB\/s/);
+    });
+
+    it("has no Pause where the caller cannot pause, or before the job exists", () => {
+      expect(button(html(writing()), "Pause")).toBeNull();
+      expect(button(html(writing({ jobId: null }), {}, pausable), "Pause")).toBeNull();
+      expect(button(html(writing({ stage: "copy" }), {}, pausable), "Pause")).toBeNull();
+    });
+
+    it("leaves paused time out of the speed", () => {
+      // 100 MiB in 20 s, 10 of them paused: 10 MiB/s, not 5.
+      const out = html(writing({ stagePausedMs: 10_000, pausedMs: 10_000 }), {}, pausable);
+      expect(out).toMatch(/· (9\.9\d|10\.0) MiB\/s/);
+    });
+
+    it("shows the Use less of this computer switch while a build runs", () => {
+      expect(html(writing(), {}, pausable)).toContain("Use less of this computer");
+    });
   });
 
   it("names the kept package and offers both install routes after an install failure", () => {

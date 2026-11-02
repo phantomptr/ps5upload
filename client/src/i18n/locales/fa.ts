@@ -7216,6 +7216,14 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
   "ampr_index_done_same": "بازسازی شد: {count} فایل. فهرست قبلی از پیش درست بود.",
   "ampr_index_backup": "فهرست قبلی با نام ampr_emu.index.bak نگه داشته شد.",
   "ampr_index_image_done": "در {path} با فهرست جدید نوشته شد. ایمیجی که باز کردید تغییری نکرده است.",
+  "fpkg.pause": "توقف",
+  "fpkg.resume": "ادامه",
+  "fpkg.paused_queue_waits": "متوقف شده — صف منتظر است",
+  "fpkg.pause_failed": "توقف یا ادامه انجام نشد: {error}",
+  "workshop_gentle_label": "استفادهٔ کمتر از این رایانه",
+  "workshop_gentle_hint": "تبدیل حدود نیمی از پردازنده را به کار می‌گیرد و می‌گذارد برنامه‌های دیگر جلوتر بروند، هم در پردازنده و هم در دیسک. بیشتر طول می‌کشد.",
+  "workshop_gentle_error": "موتور این تنظیم را نگه نداشت: {error}",
+  "settings_card_workshop_share": "این رایانه",
 };
 
 export default fa;

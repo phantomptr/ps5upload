@@ -6933,6 +6933,14 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "ampr_index_done_same": "Dibangun ulang: {count} file. Indeks lama sudah benar.",
   "ampr_index_backup": "Yang lama disimpan sebagai ampr_emu.index.bak.",
   "ampr_index_image_done": "Ditulis ke {path}, dengan indeks baru. Image yang Anda buka tidak berubah.",
+  "fpkg.pause": "Jeda",
+  "fpkg.resume": "Lanjutkan",
+  "fpkg.paused_queue_waits": "Dijeda — antrean menunggu",
+  "fpkg.pause_failed": "Jeda atau lanjutkan tidak berhasil: {error}",
+  "workshop_gentle_label": "Gunakan lebih sedikit komputer ini",
+  "workshop_gentle_hint": "Konversi memakai sekitar separuh prosesor dan membiarkan aplikasi lain jalan lebih dulu, untuk prosesor dan disk. Waktunya lebih lama.",
+  "workshop_gentle_error": "Engine tidak menyimpan setelan ini: {error}",
+  "settings_card_workshop_share": "Komputer ini",
 };
 
 export default id;

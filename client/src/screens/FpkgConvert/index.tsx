@@ -135,6 +135,8 @@ export default function WorkshopScreen() {
   const buildFolder = useFpkgConversion((s) => s.buildFolder);
   const retryInstall = useFpkgConversion((s) => s.retryInstall);
   const cancel = useFpkgConversion((s) => s.cancel);
+  const pauseRun = useFpkgConversion((s) => s.pause);
+  const resumeRun = useFpkgConversion((s) => s.resume);
   const reset = useFpkgConversion((s) => s.reset);
   const deletePackage = useFpkgConversion((s) => s.deletePackage);
   const finishReplace = useFpkgConversion((s) => s.finishReplace);
@@ -908,6 +910,16 @@ export default function WorkshopScreen() {
             }}
             onCompress={() => void compress(source.trim(), outFor(src).outputDir)}
             onCancel={() => void cancel()}
+            onPause={() =>
+              void pauseRun().catch((e: unknown) =>
+                setError(tr("fpkg.pause_failed", { error: e instanceof Error ? e.message : String(e) }, "Pause or resume did not work: {error}")),
+              )
+            }
+            onResume={() =>
+              void resumeRun().catch((e: unknown) =>
+                setError(tr("fpkg.pause_failed", { error: e instanceof Error ? e.message : String(e) }, "Pause or resume did not work: {error}")),
+              )
+            }
             onInstall={(method) => void retryInstall(host, method)}
             onLaunch={onLaunch}
             targetLabel={
@@ -988,6 +1000,7 @@ export default function WorkshopScreen() {
       <QueueCard
         items={queueItems}
         running={queueRunning}
+        paused={pipeline.phase === "running" && !!pipeline.paused}
         onOpenUpload={() => navigate("/send")}
         onStart={() => void useConvertQueue.getState().start()}
         onStop={() => useConvertQueue.getState().stop()}

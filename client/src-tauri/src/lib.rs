@@ -404,6 +404,10 @@ pub fn run() {
             commands::fpkg_extract_cleanup,
             commands::job_status,
             commands::job_cancel,
+            commands::job_pause,
+            commands::job_resume,
+            commands::workshop_settings_get,
+            commands::workshop_settings_set,
             commands::engine_logs_tail,
             // ── PKG install (parse + host + install via BGFT) ─────────
             // Engine proxies for the new Install Package tab. Single

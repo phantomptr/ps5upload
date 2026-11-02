@@ -4,6 +4,22 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.7.3
+
+- **Pause a conversion, and the queue with it (For #631).** Workshop's ④ now has **Pause** beside
+  **Cancel** while a game is being made: a package, a game image (`.ffpkg`, `.ffpfs`, `.exfat`), a
+  compressed `.ffpfsc`, LZ4 asset packs, a game folder, or an archive being unpacked. Paused, the
+  work stops at its next chunk and uses no processor or disk until you press **Resume**; **Cancel**
+  still works while paused. The queue waits for it (⑤ says **Paused — the queue waits**), and the
+  speed and time left leave the paused time out. Over the API: `POST /api/jobs/{id}/pause` and
+  `/resume`.
+- **Use less of this computer (For #632).** One switch, in Settings › Workshop and under ④: while it
+  is on, converting uses about half your processor and runs at low priority, which also puts
+  its disk reads and writes behind other apps'. Your computer stays quick for other things; the
+  conversion takes longer. It applies to a conversion that is already running, and it is kept by the
+  engine, so the web UI and Docker follow it too. This is used instead of a "use N% of my CPU" slider,
+  which Windows, macOS and Linux can't hold to the same way.
+
 ## 10.7.2
 
 - **Switched-on cheats now apply once the game is ready, and stay applied (For #627).** The helper

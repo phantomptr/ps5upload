@@ -6931,6 +6931,14 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
   "ampr_index_done_same": "สร้างใหม่แล้ว: {count} ไฟล์ ดัชนีเดิมถูกต้องอยู่แล้ว",
   "ampr_index_backup": "เก็บอันเดิมไว้เป็น ampr_emu.index.bak",
   "ampr_index_image_done": "เขียนไปที่ {path} พร้อมดัชนีใหม่แล้ว อิมเมจที่คุณเปิดไม่เปลี่ยนแปลง",
+  "fpkg.pause": "หยุดชั่วคราว",
+  "fpkg.resume": "ทำต่อ",
+  "fpkg.paused_queue_waits": "หยุดชั่วคราว — คิวกำลังรอ",
+  "fpkg.pause_failed": "หยุดชั่วคราวหรือทำต่อไม่สำเร็จ: {error}",
+  "workshop_gentle_label": "ใช้คอมพิวเตอร์เครื่องนี้ให้น้อยลง",
+  "workshop_gentle_hint": "การแปลงจะใช้โปรเซสเซอร์ราวครึ่งหนึ่ง และให้แอปอื่นได้ไปก่อน ทั้งโปรเซสเซอร์และดิสก์ ใช้เวลานานขึ้น",
+  "workshop_gentle_error": "เอนจินไม่ได้เก็บการตั้งค่านี้: {error}",
+  "settings_card_workshop_share": "คอมพิวเตอร์เครื่องนี้",
 };
 
 export default th;

@@ -11,7 +11,7 @@
 
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use crate::cnt_write::{self, CntParams};
 use crate::crypto::{crc32c, derive_ekpfs, derive_xts_keys, sha3, Hasher};
@@ -196,7 +196,7 @@ pub fn write_package(
     let kraken = match &request.kraken_spool {
         Some(where_to) => {
             (progress.phase)("compressing the image");
-            let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+            let threads = crate::workshop::workshop_threads();
             let keystone = crate::inner::keystone(request.passcode);
             let metadata = source.metadata_region();
             let image = crate::kraken_image::compress(
@@ -277,7 +277,7 @@ pub fn write_package(
     let mut block = vec![0u8; BLOCK as usize];
     let mut spans: Vec<(usize, usize, usize)> = Vec::with_capacity(8);
     for index in 0..inner_blocks {
-        if cancel.load(Ordering::Relaxed) {
+        if crate::workshop::checkpoint(cancel) {
             return Err(cancelled());
         }
         if let Some(spool) = spool.as_mut() {

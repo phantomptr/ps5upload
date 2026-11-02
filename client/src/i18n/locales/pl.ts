@@ -7172,6 +7172,14 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "ampr_index_done_same": "Odbudowano: {count} plików. Stary indeks był już poprawny.",
   "ampr_index_backup": "Stary zachowano jako ampr_emu.index.bak.",
   "ampr_index_image_done": "Zapisano w {path} z nowym indeksem. Otwarty obraz się nie zmienił.",
+  "fpkg.pause": "Wstrzymaj",
+  "fpkg.resume": "Wznów",
+  "fpkg.paused_queue_waits": "Wstrzymane — kolejka czeka",
+  "fpkg.pause_failed": "Wstrzymanie lub wznowienie nie powiodło się: {error}",
+  "workshop_gentle_label": "Używaj mniej tego komputera",
+  "workshop_gentle_hint": "Konwersja używa mniej więcej połowy procesora i przepuszcza inne aplikacje przodem, przy procesorze i przy dysku. Trwa dłużej.",
+  "workshop_gentle_error": "Silnik nie zachował tego ustawienia: {error}",
+  "settings_card_workshop_share": "Ten komputer",
 };
 
 export default pl;

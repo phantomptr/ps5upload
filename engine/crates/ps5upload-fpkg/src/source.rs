@@ -157,9 +157,11 @@ impl SourceTree for FolderSource {
             Mutex::new((0..paths.len()).map(|_| None).collect());
         let root = self.root.as_path();
         let workers = FOLDER_HEAD_READERS.min(paths.len());
+        let lane = crate::workshop::Lane::current();
         let cancelled = std::thread::scope(|scope| {
             for _ in 0..workers {
                 scope.spawn(|| loop {
+                    lane.enter();
                     if stop.load(Ordering::Relaxed) {
                         break;
                     }
