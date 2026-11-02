@@ -23,6 +23,7 @@ What's new in ps5upload, written for humans.
 - **Open update log (For #611).** Settings › Updates has a button that opens the updater's own log,
   which now keeps what the last installs did, including the ones that worked. Bug reports include it.
 
+## 10.7.3
 
 - **Pause a conversion, and the queue with it (For #631).** Workshop's ④ now has **Pause** beside
   **Cancel** while a game is being made: a package, a game image (`.ffpkg`, `.ffpfs`, `.exfat`), a
