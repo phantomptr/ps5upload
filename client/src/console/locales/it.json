@@ -1,5 +1,9 @@
 {
   "cw_actions": "Azioni",
+  "cw_cheats_applied_changed": "Il gioco l'ha modificato; non toccato",
+  "cw_cheats_applied_failed": "Impossibile applicare: {reason}",
+  "cw_cheats_applied_ok": "Applicato ✓",
+  "cw_cheats_applied_waiting": "In attesa che il gioco si carichi…",
   "cw_cheats_apply": "Applica",
   "cw_cheats_engine_off_state": "Il motore dei cheat è spento: i cheat attivi sono salvati ma non applicati.",
   "cw_cheats_engine_on_state": "Il motore dei cheat è acceso: i cheat attivi si applicano all'avvio del gioco, anche dopo un riavvio.",

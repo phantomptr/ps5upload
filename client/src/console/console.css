@@ -1079,6 +1079,17 @@ button {
 .cw-cheat-desc {
   font-size: 0.8rem;
 }
+/* What happened to a switched-on cheat in the game (#627). */
+.cw-cheat-applied {
+  color: var(--color-muted);
+}
+.cw-cheat-applied.is-applied {
+  color: var(--color-good);
+}
+.cw-cheat-applied.is-failed,
+.cw-cheat-applied.is-changed {
+  color: var(--color-warn);
+}
 .cw-cheat .cw-tag {
   flex: none;
   min-width: 3.2rem;

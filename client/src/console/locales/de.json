@@ -1,5 +1,9 @@
 {
   "cw_actions": "Aktionen",
+  "cw_cheats_applied_changed": "Das Spiel hat dies geändert; nicht angetastet",
+  "cw_cheats_applied_failed": "Konnte nicht angewendet werden: {reason}",
+  "cw_cheats_applied_ok": "Angewendet ✓",
+  "cw_cheats_applied_waiting": "Wartet, bis das Spiel geladen ist…",
   "cw_cheats_apply": "Anwenden",
   "cw_cheats_engine_off_state": "Die Cheat-Engine ist aus: eingeschaltete Cheats sind gespeichert, aber nicht aktiv.",
   "cw_cheats_engine_on_state": "Die Cheat-Engine ist an: eingeschaltete Cheats greifen beim Spielstart, auch nach einem Neustart.",

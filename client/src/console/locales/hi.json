@@ -1,5 +1,9 @@
 {
   "cw_actions": "कार्य",
+  "cw_cheats_applied_changed": "गेम ने इसे बदल दिया; छुआ नहीं गया",
+  "cw_cheats_applied_failed": "लागू नहीं हो सका: {reason}",
+  "cw_cheats_applied_ok": "लागू किया गया ✓",
+  "cw_cheats_applied_waiting": "गेम के लोड होने की प्रतीक्षा…",
   "cw_cheats_apply": "लागू करें",
   "cw_cheats_engine_off_state": "चीट इंजन बंद है: चालू किए चीट सहेजे गए हैं, पर लागू नहीं हैं।",
   "cw_cheats_engine_on_state": "चीट इंजन चालू है: चालू किए चीट गेम शुरू होने पर लागू होते हैं, रीस्टार्ट के बाद भी।",

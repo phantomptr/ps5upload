@@ -1,5 +1,9 @@
 {
   "cw_actions": "操作",
+  "cw_cheats_applied_changed": "ゲームが変更したため、触れていません",
+  "cw_cheats_applied_failed": "適用できませんでした: {reason}",
+  "cw_cheats_applied_ok": "適用済み ✓",
+  "cw_cheats_applied_waiting": "ゲームの読み込みを待っています…",
   "cw_cheats_apply": "適用",
   "cw_cheats_engine_off_state": "チートエンジンはオフです。オンにしたチートは保存されていますが、適用されていません。",
   "cw_cheats_engine_on_state": "チートエンジンはオンです。オンにしたチートはゲームの起動時に適用されます (再起動後も)。",

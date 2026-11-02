@@ -9,9 +9,9 @@
  *   - Memory reads/writes through the game's physical pages (page-table
  *     walk + kernel direct map), applied all-or-nothing per cheat. See
  *     "Game memory access" below for why not ptrace + kernel_mprotect.
- *   - A background watcher thread polls every 3s for new game processes
- *     and auto-applies "patches" (always-on) + re-applies user-toggled
- *     cheats.
+ *   - A background watcher thread polls every 3s and applies "patches"
+ *     (always-on) + the switched-on cheats to the running game once it is
+ *     ready for them, then keeps them applied (cheats_session.h, #627).
  *   - Toggle state persisted to sidecar JSON files so it survives payload
  *     redeploy.
  *
@@ -51,6 +51,7 @@
 #include "xml_encoding.h" /* UTF-16 → UTF-8 for SHN/MC4 trainer XML (#317) */
 #include "cheats_plan.h"
 #include "cheats_guard.h"
+#include "cheats_session.h"
 #include "game_patch.h" /* PS-Game-Patch XML game patches (#527) */
 #include "content_db.h"
 #include "fw_spoof.h"
@@ -490,8 +491,10 @@ _Static_assert(offsetof(dynlib_head_t, mapbase) == 0x30, "dynlib_obj_t.mapbase")
  * walking vm_map entries (kernel_get_vmem_protection) panicked the kernel on PS4-BC games and on
  * PS5 games with special vmem entry types, so we do not either.
  *
- * Returns 1 when the write may go ahead; 0 with `why` set when it may not. */
-static int phys_write_allowed(pid_t pid, intptr_t addr, size_t len, char *why, size_t why_cap) {
+ * Returns 1 when the write may go ahead; 0 with `why` set when it may not, and *transient set
+ * (when given) when that is only because the module list could not be read just now. */
+static int phys_write_allowed(pid_t pid, intptr_t addr, size_t len, char *why, size_t why_cap,
+                              int *transient) {
     int verdict = 1; /* no module overlaps: allowed (see above) */
     int walked = 0;
     char path[256] = "";
@@ -527,6 +530,7 @@ static int phys_write_allowed(pid_t pid, intptr_t addr, size_t len, char *why, s
     pthread_mutex_unlock(&kernel_rw_lock);
     if (!walked) {
         if (why) snprintf(why, why_cap, "the game's module list could not be read");
+        if (transient) *transient = 1;
         return 0;
     }
     return verdict;
@@ -1305,52 +1309,58 @@ static char *state_read(const char *title_id) {
     return buf;
 }
 
-static int state_has(const char *buf, int flat) {
-    char key[24];
-    snprintf(key, sizeof(key), "\"%d\"", flat);
-    const char *p = strstr(buf, key);
-    if (!p) return 0;
-    p += strlen(key);
-    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == ':') p++;
-    return strncmp(p, "true", 4) == 0;
+/* Switches turned off by hand whose off could not be saved (cheats_session.h cheats_offs_t): the
+ * watcher must not put them back on while that game runs. A leaf lock: taken under g_apply_lock
+ * or g_pass_lock, never the other way round. */
+static pthread_mutex_t g_offs_lock = PTHREAD_MUTEX_INITIALIZER;
+static cheats_offs_t g_offs;
+
+static int offs_has(const char *title_id, int flat) {
+    pthread_mutex_lock(&g_offs_lock);
+    int r = cheats_offs_has(&g_offs, title_id, flat);
+    pthread_mutex_unlock(&g_offs_lock);
+    return r;
 }
 
 /* Load enabled state from sidecar into one file's mods, whose first mod has flat index
- * `flat_base`. */
+ * `flat_base`. A saved switch wins over the file's own flag, either way: a cheat its file
+ * switches on that the player turned off stays off (#627). */
 static void cheats_load_state(const char *title_id, cheat_file_t *cf, int flat_base) {
     char *buf = state_read(title_id);
-    if (!buf) return;
+    /* unreadable: the file's flags (as "" reads), never every cheat on */
     for (int i = 0; i < cf->mod_count; i++)
-        if (state_has(buf, flat_base + i)) cf->mods[i].enabled = 1;
+        cf->mods[i].enabled = cheats_effective_on(buf ? buf : "", flat_base + i,
+                                                  cf->mods[i].enabled,
+                                                  offs_has(title_id, flat_base + i));
     free(buf);
 }
 
-/* Record one mod's state, keeping every other mod's. (This used to rewrite the file from the
- * one cheat file being toggled with per-file indices, so a toggle in a title's second file
- * marked the first file's mods instead, and the watcher re-applied those on the next launch.)
- * Call with g_apply_lock held. Returns 0 on success; a sidecar it cannot read is left alone
- * rather than rewritten without its other keys. */
-static int state_set(const char *title_id, int flat, int on) {
+/* Record one mod's state (CHEATS_SW_*), keeping every other mod's. (This used to rewrite the
+ * file from the one cheat file being toggled with per-file indices, so a toggle in a title's
+ * second file marked the first file's mods instead, and the watcher re-applied those on the next
+ * launch.) Call with g_apply_lock held. Returns 0 on success; a sidecar it cannot read is left
+ * alone rather than rewritten without its other keys. */
+static int state_set(const char *title_id, int flat, int value) {
     char *buf = state_read(title_id);
     if (!buf) return -1;
+    size_t cap = STATE_FILE_MAX;
+    char *out = (char *)malloc(cap);
+    int len = out ? cheats_state_build(buf, flat, value, MAX_MODS_PER_FILE * 16, out, cap) : -1;
+    free(buf);
+    if (len < 0) {
+        free(out);
+        return -1;
+    }
 
     char path[MAX_CHEAT_FILEPATH];
     state_path(title_id, path, sizeof(path));
     char tmp[MAX_CHEAT_FILEPATH + 8];
     snprintf(tmp, sizeof(tmp), "%s.tmp", path);
     FILE *f = fopen(tmp, "w");
-    if (!f) { free(buf); return -1; }
-    fprintf(f, "{");
-    int first = 1;
-    for (int i = 0; i < MAX_MODS_PER_FILE * 16; i++) {
-        int en = (i == flat) ? on : state_has(buf, i);
-        if (!en) continue;
-        fprintf(f, "%s\"%d\":true", first ? "" : ",", i);
-        first = 0;
-    }
-    fprintf(f, "}");
-    free(buf);
-    if (fclose(f) != 0) {
+    if (!f) { free(out); return -1; }
+    size_t wr = fwrite(out, 1, (size_t)len, f);
+    free(out);
+    if (fclose(f) != 0 || wr != (size_t)len) {
         unlink(tmp);
         return -1;
     }
@@ -1360,7 +1370,8 @@ static int state_set(const char *title_id, int flat, int on) {
 /* ── Core: apply a single mod ────────────────────────────────────── */
 
 /* Parse a mod's locations and work out their addresses (no memory access). Returns the number
- * of locations, or -1 with err set. */
+ * of locations, or -1 with err set; -2 when that is only because the game's code or the module is
+ * not loaded yet (the watcher tries again). */
 static int resolve_mod_locs(pid_t pid, intptr_t base, const cheat_mod_t *mod, cheat_loc_t *locs,
                             char *err, size_t err_cap) {
     if (mod->incomplete) {
@@ -1376,7 +1387,7 @@ static int resolve_mod_locs(pid_t pid, intptr_t base, const cheat_mod_t *mod, ch
      * absolute address. */
     if (base <= 0) {
         if (err) snprintf(err, err_cap, "the game's code is not loaded yet; try again");
-        return -1;
+        return -2;
     }
     int n = mod->mem_count;
     for (int i = 0; i < n; i++) {
@@ -1413,7 +1424,7 @@ static int resolve_mod_locs(pid_t pid, intptr_t base, const cheat_mod_t *mod, ch
             if (sec_base <= 0) {
                 if (err) snprintf(err, err_cap, "location %d: module %d is not loaded",
                                   i + 1, e->section);
-                return -1;
+                return -2;
             }
             l->addr = (intptr_t)((uint64_t)sec_base + off);
         } else {
@@ -1486,6 +1497,8 @@ typedef struct {
     int        n;
     xml_rec_t *rec;
     uint8_t   *data;
+    uint32_t   handle; /* the module the locations were found in, as it was then */
+    cheats_module_t mod;
 } xml_applied_t;
 
 #define XML_APPLIED_MAX 64
@@ -1509,7 +1522,8 @@ static xml_applied_t *xml_applied_find(pid_t pid, const char *path, int entry) {
     return NULL;
 }
 
-static int xml_applied_add(pid_t pid, const char *path, int entry, const cheat_loc_t *locs, int n) {
+static int xml_applied_add(pid_t pid, const char *path, int entry, const cheat_loc_t *locs, int n,
+                           uint32_t handle, uint64_t mbase, uint64_t msize) {
     xml_applied_t *a = NULL;
     for (int i = 0; i < XML_APPLIED_MAX && !a; i++)
         if (!g_xml_applied[i].rec) a = &g_xml_applied[i];
@@ -1535,6 +1549,9 @@ static int xml_applied_add(pid_t pid, const char *path, int entry, const cheat_l
     snprintf(a->path, sizeof a->path, "%s", path);
     a->entry = entry;
     a->n = n;
+    a->handle = handle;
+    a->mod.base = mbase;
+    a->mod.size = msize;
     return 0;
 }
 
@@ -1544,10 +1561,12 @@ static int xml_applied_add(pid_t pid, const char *path, int entry, const cheat_l
 /* One pass over the module [start, start + size): the first match of every pattern the lines
  * need (site[i] for a line's own pattern, tgt[i] for a jump32 cave), or -1. The scan never leaves
  * the module's mapping, and a chunk that cannot be read whole is read page by page, searching
- * only the pages that could be read. */
+ * only the pages that could be read. *partial is set when some page could not be read (early in
+ * a launch: a pattern not found may just not be loaded yet). */
 static void xml_scan(pid_t pid, uint64_t start, uint64_t size, const gp_line_t *l, int n,
-                     int64_t *site, int64_t *tgt) {
+                     int64_t *site, int64_t *tgt, int *partial) {
     int pending = 0, maxlen = 1;
+    *partial = 0;
     for (int i = 0; i < n; i++) {
         site[i] = tgt[i] = -1;
         if (l[i].by_pattern) {
@@ -1575,7 +1594,10 @@ static void xml_scan(pid_t pid, uint64_t start, uint64_t size, const gp_line_t *
         } else {
             for (size_t p = 0; p < want; p += XML_SCAN_PAGE) {
                 size_t len = want - p < XML_SCAN_PAGE ? want - p : XML_SCAN_PAGE;
-                if (game_mem_read(pid, (intptr_t)(start + pos + p), buf + p, len) != 0) continue;
+                if (game_mem_read(pid, (intptr_t)(start + pos + p), buf + p, len) != 0) {
+                    *partial = 1;
+                    continue;
+                }
                 if (runs > 0 && re[runs - 1] == p) {
                     re[runs - 1] = p + len;
                 } else if (runs < (int)(sizeof rs / sizeof rs[0])) {
@@ -1656,10 +1678,65 @@ static char *xml_load_text(const char *path) {
     return buf;
 }
 
+/* What the watcher's automatic apply (#627) needs from an apply: `wait` is set when it failed
+ * only because the game is not ready yet (code or module not loaded, a page not readable), so
+ * it is tried again rather than given up; before_write runs right before the first write (the
+ * crash-guard marker). A switch flipped by hand passes NULL and behaves as before. */
+typedef struct {
+    cheats_session_t *s;
+    int               wait;
+    int               scan; /* waiting: a pattern not in the readable part of its module */
+} apply_hook_t;
+
+static void hook_wait(apply_hook_t *hk) {
+    if (hk) hk->wait = 1;
+}
+
+static void hook_before_write(apply_hook_t *hk) {
+    if (hk && hk->s) cheats_session_before_write(hk->s);
+}
+
+/* An applied entry's locations from its record, with `cur` read from the game now. NULL with err
+ * set (and the hook told to wait when a location cannot be read). */
+static cheat_loc_t *xml_record_locs(pid_t pid, const xml_applied_t *a, apply_hook_t *hk, char *err,
+                                    size_t err_cap) {
+    cheat_loc_t *locs = (cheat_loc_t *)calloc((size_t)a->n, sizeof *locs);
+    if (!locs) {
+        if (err) snprintf(err, err_cap, "out of memory");
+        return NULL;
+    }
+    for (int i = 0; i < a->n; i++) {
+        locs[i].addr = a->rec[i].addr;
+        locs[i].len = a->rec[i].len;
+        memcpy(locs[i].on, a->data + a->rec[i].at, (size_t)a->rec[i].len);
+        memcpy(locs[i].off, a->data + a->rec[i].at + (size_t)a->rec[i].len, (size_t)a->rec[i].len);
+        if (game_mem_read(pid, locs[i].addr, locs[i].cur, (size_t)locs[i].len) != 0) {
+            if (err) snprintf(err, err_cap, "location 0x%lx cannot be read", (unsigned long)locs[i].addr);
+            hook_wait(hk);
+            free(locs);
+            return NULL;
+        }
+    }
+    return locs;
+}
+
+/* 1 when an applied entry's recorded locations still belong to the module they were found in:
+ * it is loaded at the same base and size, and every location is inside it. Otherwise the memory
+ * there may be something else now, and nothing is written to it. */
+static int xml_record_current(pid_t pid, const xml_applied_t *a) {
+    cheats_module_t now = { 0, 0 };
+    int loaded = module_info(pid, a->handle, &now.base, &now.size, NULL, 0) == 0;
+    for (int i = 0; i < a->n; i++)
+        if (!cheats_loc_still_ours(&a->mod, loaded ? &now : NULL, (uint64_t)a->rec[i].addr,
+                                   a->rec[i].len))
+            return 0;
+    return 1;
+}
+
 /* Turn an XML game patch entry on or off: every line or none (cheat_plan_apply), only for the
  * game version and executable it names, only inside its module. Call with g_apply_lock held. */
 static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const cheat_range_t *keep,
-                            int n_keep, char *err, size_t err_cap) {
+                            int n_keep, apply_hook_t *hk, char *err, size_t err_cap) {
     if (err && err_cap) err[0] = '\0';
     game_mem_ctx_t ctx = { .pid = pid };
     cheat_mem_ops_t ops = { .ctx = &ctx, .write = game_mem_write, .alive = game_alive };
@@ -1667,23 +1744,14 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
 
     if (!turn_on || a) {
         if (turn_on || !a) return 0; /* already on / never applied to this game session */
-        cheat_loc_t *locs = (cheat_loc_t *)calloc((size_t)a->n, sizeof *locs);
-        if (!locs) {
-            if (err) snprintf(err, err_cap, "out of memory");
-            return -1;
+        if (!xml_record_current(pid, a)) {
+            /* its module moved or went: what was patched is gone with it */
+            xml_applied_free(a);
+            return 0;
         }
-        int rc = 0;
-        for (int i = 0; i < a->n && rc == 0; i++) {
-            locs[i].addr = a->rec[i].addr;
-            locs[i].len = a->rec[i].len;
-            memcpy(locs[i].on, a->data + a->rec[i].at, (size_t)a->rec[i].len);
-            memcpy(locs[i].off, a->data + a->rec[i].at + (size_t)a->rec[i].len, (size_t)a->rec[i].len);
-            if (game_mem_read(pid, locs[i].addr, locs[i].cur, (size_t)locs[i].len) != 0) {
-                if (err) snprintf(err, err_cap, "location 0x%lx cannot be read", (unsigned long)locs[i].addr);
-                rc = -1;
-            }
-        }
-        if (rc == 0) rc = cheat_plan_apply(locs, a->n, 0, keep, n_keep, &ops, err, err_cap);
+        cheat_loc_t *locs = xml_record_locs(pid, a, NULL, err, err_cap);
+        if (!locs) return -1;
+        int rc = cheat_plan_apply(locs, a->n, 0, keep, n_keep, &ops, err, err_cap);
         if (rc == 0) xml_applied_free(a);
         free(locs);
         return rc;
@@ -1693,6 +1761,7 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
     intptr_t b0 = 0;
     if (get_running_game_cached(title, sizeof title, &b0) != pid) {
         if (err) snprintf(err, err_cap, "no game is currently running");
+        hook_wait(hk); /* gone, or not seen yet: the next pass knows */
         return -1;
     }
     char *x = xml_load_text(mod->xml_path);
@@ -1729,11 +1798,13 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
     if (gp_elf_is_module(m.app_elf) && (locked_dynlib_handle(pid, m.app_elf, &handle) != 0 || !handle)) {
         free(x);
         if (err) snprintf(err, err_cap, "%s is not loaded by the game", m.app_elf);
+        hook_wait(hk);
         return -1;
     }
     if (module_info(pid, handle, &mbase, &msize, NULL, 0) != 0 || !mbase || !msize) {
         free(x);
         if (err) snprintf(err, err_cap, "the game's code is not loaded yet; try again");
+        hook_wait(hk);
         return -1;
     }
 
@@ -1744,12 +1815,12 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
     int64_t *site = (int64_t *)malloc((size_t)nl * sizeof(int64_t));
     int64_t *tgt = (int64_t *)malloc((size_t)nl * sizeof(int64_t));
     cheat_loc_t *locs = NULL;
-    int n = 0, cap = 0, rc = 0;
+    int n = 0, cap = 0, rc = 0, partial = 0;
     if (!site || !tgt) {
         if (err) snprintf(err, err_cap, "out of memory");
         rc = -1;
     } else {
-        xml_scan(pid, mbase, msize, lines, nl, site, tgt);
+        xml_scan(pid, mbase, msize, lines, nl, site, tgt, &partial);
     }
     uint8_t *site_b = (uint8_t *)malloc(GP_PATTERN_MAX), *cave_b = (uint8_t *)malloc(GP_VALUE_MAX + 5);
     if (rc == 0 && (!site_b || !cave_b)) {
@@ -1759,7 +1830,15 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
     for (int i = 0; i < nl && rc == 0; i++) {
         const gp_line_t *l = &lines[i];
         if (l->by_pattern && site[i] < 0) {
-            if (err) snprintf(err, err_cap, "line %d: its pattern is not in the game (another game version?); nothing was written", i + 1);
+            if (partial) {
+                /* part of the module could not be read: it may not be loaded yet (the watcher
+                 * waits for that only so long, cheats_session.h CHEATS_SESSION_SCAN_WAITS) */
+                if (err) snprintf(err, err_cap, "line %d: its pattern is not in the readable part of the game yet; nothing was written", i + 1);
+                hook_wait(hk);
+                if (hk) hk->scan = 1;
+            } else if (err) {
+                snprintf(err, err_cap, "line %d: its pattern is not in the game (another game version?); nothing was written", i + 1);
+            }
             rc = -1;
             break;
         }
@@ -1768,7 +1847,13 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
             rc = xml_push(&locs, &n, &cap, addr, l->value, l->value_len);
         } else if (l->kind == GP_CALL) {
             uint8_t call[5];
-            if (game_mem_read(pid, addr, call, 5) != 0 || (call[0] != 0xE8 && call[0] != 0xE9)) {
+            if (game_mem_read(pid, addr, call, 5) != 0) {
+                if (err) snprintf(err, err_cap, "line %d: 0x%lx cannot be read yet; nothing was written", i + 1, (unsigned long)addr);
+                hook_wait(hk);
+                rc = -1;
+                break;
+            }
+            if (call[0] != 0xE8 && call[0] != 0xE9) {
                 if (err) snprintf(err, err_cap, "line %d: no call at 0x%lx; nothing was written", i + 1, (unsigned long)addr);
                 rc = -1;
                 break;
@@ -1805,15 +1890,18 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
         }
         if (!use_mdbg()) {
             char why[160] = "";
-            if (!phys_write_allowed(pid, l->addr, (size_t)l->len, why, sizeof why)) {
+            int transient = 0;
+            if (!phys_write_allowed(pid, l->addr, (size_t)l->len, why, sizeof why, &transient)) {
                 if (err) snprintf(err, err_cap, "0x%lx is not the game's own memory (%s); nothing was written",
                                   (unsigned long)l->addr, why);
+                if (transient) hook_wait(hk);
                 rc = -1;
                 break;
             }
         }
         if (game_mem_read(pid, l->addr, l->cur, (size_t)l->len) != 0) {
             if (err) snprintf(err, err_cap, "0x%lx cannot be read; nothing was written", (unsigned long)l->addr);
+            hook_wait(hk);
             rc = -1;
             break;
         }
@@ -1823,12 +1911,61 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
         if (err) snprintf(err, err_cap, "patch has no lines");
         rc = -1;
     }
-    if (rc == 0) rc = cheat_plan_apply(locs, n, 1, NULL, 0, &ops, err, err_cap);
-    if (rc == 0 && xml_applied_add(pid, mod->xml_path, mod->xml_entry, locs, n) != 0)
+    if (rc == 0) {
+        hook_before_write(hk);
+        rc = cheat_plan_apply(locs, n, 1, NULL, 0, &ops, err, err_cap);
+    }
+    if (rc == 0 && xml_applied_add(pid, mod->xml_path, mod->xml_entry, locs, n, handle, mbase, msize) != 0)
         fprintf(stderr, "[cheats] %s #%d applied but not recorded; restart the game to remove it\n",
                 mod->xml_path, mod->xml_entry);
     free(locs);
     return rc;
+}
+
+/* Put an applied XML entry back after the game undid it (#627): its recorded bytes, at its
+ * recorded addresses (its patterns cannot be found again once patched). Without a record it is
+ * applied afresh. Call with g_apply_lock held. */
+static int xml_reapply_locked(pid_t pid, cheat_mod_t *mod, apply_hook_t *hk, char *err,
+                              size_t err_cap) {
+    if (err && err_cap) err[0] = '\0';
+    xml_applied_t *a = xml_applied_find(pid, mod->xml_path, mod->xml_entry);
+    if (!a) return xml_apply_locked(pid, mod, 1, NULL, 0, hk, err, err_cap);
+    if (!xml_record_current(pid, a)) {
+        /* The module moved or was unloaded: its recorded addresses may be other memory now.
+         * Write nothing; the next try applies it afresh (finds its patterns again). */
+        xml_applied_free(a);
+        if (err) snprintf(err, err_cap, "the game's code moved; it will be applied again");
+        hook_wait(hk);
+        return -1;
+    }
+    cheat_loc_t *locs = xml_record_locs(pid, a, hk, err, err_cap);
+    if (!locs) return -1;
+    int rc = 0;
+    for (int i = 0; i < a->n && rc == 0 && !use_mdbg(); i++) {
+        char why[160] = "";
+        int transient = 0;
+        if (!phys_write_allowed(pid, locs[i].addr, (size_t)locs[i].len, why, sizeof why, &transient)) {
+            if (err) snprintf(err, err_cap, "0x%lx is not the game's own memory (%s); nothing was written",
+                              (unsigned long)locs[i].addr, why);
+            if (transient) hook_wait(hk);
+            rc = -1;
+        }
+    }
+    if (rc == 0) {
+        game_mem_ctx_t ctx = { .pid = pid };
+        cheat_mem_ops_t ops = { .ctx = &ctx, .write = game_mem_write, .alive = game_alive };
+        hook_before_write(hk);
+        rc = cheat_plan_apply(locs, a->n, 1, NULL, 0, &ops, err, err_cap);
+    }
+    free(locs);
+    return rc;
+}
+
+/* 1 when every byte is zero: a code page read before the game has loaded it. */
+static int all_zero(const uint8_t *b, int len) {
+    for (int i = 0; i < len; i++)
+        if (b[i]) return 0;
+    return 1;
 }
 
 /* Apply or remove one cheat, all of its locations or none of them (cheat_plan_apply does the
@@ -1840,10 +1977,13 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
  * running half a cheat is the write order: caves before the jumps into them when turning on,
  * the jumps restored before their caves when turning off.
  *
- * Returns 0 when the cheat is in the asked-for state (including "it already was"). */
+ * Returns 0 when the cheat is in the asked-for state (including "it already was"). With a hook
+ * (the watcher), a location holding all zeros where the cheat expects code waits for the game to
+ * load it instead of failing as another game version. */
 static int apply_mod_locked(pid_t pid, intptr_t base, cheat_mod_t *mod, int turn_on,
-                            const cheat_range_t *keep, int n_keep, char *err, size_t err_cap) {
-    if (mod->xml_path[0]) return xml_apply_locked(pid, mod, turn_on, keep, n_keep, err, err_cap);
+                            const cheat_range_t *keep, int n_keep, apply_hook_t *hk, char *err,
+                            size_t err_cap) {
+    if (mod->xml_path[0]) return xml_apply_locked(pid, mod, turn_on, keep, n_keep, hk, err, err_cap);
     /* "button" type always writes "on" regardless of turn_on */
     int write_on = (strcmp(mod->type, "button") == 0) ? 1 : turn_on;
 
@@ -1854,16 +1994,19 @@ static int apply_mod_locked(pid_t pid, intptr_t base, cheat_mod_t *mod, int turn
     }
     int n = resolve_mod_locs(pid, base, mod, locs, err, err_cap);
     int rc = n > 0 ? 0 : -1;
+    if (n == -2) hook_wait(hk);
 
     for (int i = 0; i < n && rc == 0; i++) {
         cheat_loc_t *l = &locs[i];
         if (!use_mdbg()) {
             char why[160] = "";
-            if (!phys_write_allowed(pid, l->addr, (size_t)l->len, why, sizeof(why))) {
+            int transient = 0;
+            if (!phys_write_allowed(pid, l->addr, (size_t)l->len, why, sizeof(why), &transient)) {
                 if (err) snprintf(err, err_cap,
                                   "location %d (0x%lx) is not the game's own memory (%s); "
                                   "nothing was written",
                                   i + 1, (unsigned long)l->addr, why);
+                if (transient) hook_wait(hk);
                 rc = -1;
                 break;
             }
@@ -1871,13 +2014,27 @@ static int apply_mod_locked(pid_t pid, intptr_t base, cheat_mod_t *mod, int turn
         if (game_mem_read(pid, l->addr, l->cur, (size_t)l->len) != 0) {
             if (err) snprintf(err, err_cap, "location %d (0x%lx) cannot be read",
                               i + 1, (unsigned long)l->addr);
+            hook_wait(hk);
             rc = -1;
         }
+    }
+    for (int i = 0; i < n && rc == 0 && hk && write_on; i++) {
+        const cheat_loc_t *l = &locs[i];
+        if (cheat_loc_state(l) != CHEAT_LOC_MISMATCH) continue;
+        if (all_zero(l->cur, l->len) && !all_zero(l->off, l->len)) {
+            if (err) snprintf(err, err_cap, "the game's code is not loaded yet; try again");
+            hook_wait(hk);
+        } else if (err) {
+            snprintf(err, err_cap, "doesn't match this game version (location %d holds other bytes)",
+                     i + 1);
+        }
+        rc = -1;
     }
 
     if (rc == 0) {
         game_mem_ctx_t ctx = { .pid = pid };
         cheat_mem_ops_t ops = { .ctx = &ctx, .write = game_mem_write, .alive = game_alive };
+        hook_before_write(hk);
         rc = cheat_plan_apply(locs, n, write_on, keep, n_keep, &ops, err, err_cap);
     }
 
@@ -1889,14 +2046,6 @@ static int apply_mod_locked(pid_t pid, intptr_t base, cheat_mod_t *mod, int turn
  * two applies of overlapping cheats must not interleave their reads and writes. The toggle
  * state file is written under the same lock. */
 static pthread_mutex_t g_apply_lock = PTHREAD_MUTEX_INITIALIZER;
-
-static int apply_mod(pid_t pid, intptr_t base, cheat_mod_t *mod,
-                     int turn_on, char *err, size_t err_cap) {
-    pthread_mutex_lock(&g_apply_lock);
-    int rc = apply_mod_locked(pid, base, mod, turn_on, NULL, 0, err, err_cap);
-    pthread_mutex_unlock(&g_apply_lock);
-    return rc;
-}
 
 /* ── Background watcher thread ───────────────────────────────────── */
 
@@ -1919,85 +2068,6 @@ static int is_usable_game_name(const char *name, const char *title_id) {
             (name[n] == '_' || name[n] == '-')) return 0;
     }
     return 1;
-}
-
-/* Returns how many memory writes actually landed, and fills `name_out` with
- * the game's own name when a cheat file carries one — the console
- * notification reads far better as the game's title than as a title id. */
-static int apply_patches_for_game(pid_t pid, intptr_t base,
-                                  const char *title_id,
-                                  char *name_out, size_t name_cap) {
-    found_file_t files[16];
-    int n = find_cheat_files(title_id, files, 16, 1 /* patches */);
-
-    int total_writes = 0;
-    for (int i = 0; i < n; i++) {
-        cheat_file_t *cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
-        if (!cf) continue;
-        if (load_cheat_file(files[i].path, files[i].format, cf) != 0) {
-            free(cf);
-            continue;
-        }
-
-        if (name_out && name_cap && !name_out[0] &&
-            is_usable_game_name(cf->game_name, title_id)) {
-            snprintf(name_out, name_cap, "%s", cf->game_name);
-        }
-        for (int m = 0; m < cf->mod_count; m++) {
-            char err[160];
-            /* Patches are always-on: turn_on = 1 */
-            intptr_t mod_base = base;
-            if (cf->mods[m].module_name[0])
-                mod_base = resolve_module_base(pid, cf->mods[m].module_name);
-            if (mod_base && apply_mod(pid, mod_base, &cf->mods[m], 1, err, sizeof(err)) == 0) {
-                total_writes++;
-            }
-        }
-        free(cf);
-    }
-    atomic_store(&g_patches_last, n);
-    atomic_fetch_add(&g_patches_total, total_writes);
-    return total_writes;
-}
-
-/* Returns how many enabled cheats were re-applied. See the note above on
- * `name_out`. */
-static int reapply_enabled_for_game(pid_t pid, intptr_t base,
-                                    const char *title_id,
-                                    char *name_out, size_t name_cap) {
-    found_file_t files[16];
-    int n = find_cheat_files(title_id, files, 16, 0 /* cheats */);
-
-    int applied = 0;
-    int flat_base = 0;
-    for (int i = 0; i < n; i++) {
-        cheat_file_t *cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
-        if (!cf) continue;
-        /* A file that fails to load lists no mods, so it adds nothing to the flat numbering
-         * (cheats_list_mods skips it the same way). */
-        if (load_cheat_file(files[i].path, files[i].format, cf) != 0) {
-            free(cf);
-            continue;
-        }
-        cheats_load_state(title_id, cf, flat_base);
-        flat_base += cf->mod_count;
-
-        for (int m = 0; m < cf->mod_count; m++) {
-            if (!cf->mods[m].enabled) continue;
-            if (name_out && name_cap && !name_out[0] &&
-                is_usable_game_name(cf->game_name, title_id)) {
-                snprintf(name_out, name_cap, "%s", cf->game_name);
-            }
-            char err[160];
-            intptr_t mod_base = base;
-            if (cf->mods[m].module_name[0])
-                mod_base = resolve_module_base(pid, cf->mods[m].module_name);
-            if (mod_base && apply_mod(pid, mod_base, &cf->mods[m], 1, err, sizeof(err)) == 0)
-                applied++;
-        }
-        free(cf);
-    }
-    return applied;
 }
 
 static uint64_t mono_ms(void) {
@@ -2023,25 +2093,428 @@ static void guard_step(cheats_guard_t *g, pid_t pid) {
     notif_send_serialised(msg, NOTIF_LEVEL_WARN);
 }
 
+/* ── Automatic apply: one session per game process (#627) ─────────────
+ *
+ * The watcher used to try a game's saved cheats once, when it first saw the process; early in a
+ * launch the code is often not loaded yet, the apply failed and nothing tried again, so a switch
+ * read On with nothing applied. cheats_session.c now keeps a status per switched-on cheat for as
+ * long as the game runs (waiting / applied / failed / changed), tries the waiting ones again,
+ * re-reads the applied ones and puts back what the game undid. This is its glue: the cheats it
+ * lists, the memory work it calls back, and the status the mod list shows. */
+
+/* A stable key for a cheat: its file and its place in it. */
+static uint64_t mod_key(const char *path, int mi, int is_patch) {
+    uint64_t h = 1469598103934665603ull;
+    for (const char *p = path; *p; p++) {
+        h ^= (uint8_t)*p;
+        h *= 1099511628211ull;
+    }
+    h ^= (uint64_t)(unsigned)mi + (is_patch ? 0x9e3779b97f4a7c15ull : 0);
+    h *= 1099511628211ull;
+    return h;
+}
+
+typedef struct {
+    cheat_mod_t *mod;       /* a copy, as loaded */
+    uint64_t     key;
+    int          flat;      /* index in the mod list; -1 for an always-on patch */
+    int          from_file; /* switched on by the cheat file itself (_sonic_enabled) */
+} sess_slot_t;
+
+/* The running game's switched-on cheats, loaded again only when a cheat file or the saved
+ * switches change. Everything from here to the snapshot is touched only under g_pass_lock. */
+static pthread_mutex_t g_pass_lock = PTHREAD_MUTEX_INITIALIZER;
+static sess_slot_t g_slots[CHEATS_SESSION_MAX_ITEMS];
+static int g_nslots;
+static uint64_t g_slots_sig;
+static char g_slots_game[CHEATS_SESSION_NAME_MAX];
+static cheats_session_t g_sess;
+static cheats_guard_t g_guard;
+
+typedef struct {
+    pid_t    pid;
+    intptr_t base;
+    char     title[MAX_TITLE_ID];
+    int      force;
+} pass_ctx_t;
+
+static void sig_mix(uint64_t *h, const void *p, size_t n) {
+    const uint8_t *b = (const uint8_t *)p;
+    for (size_t i = 0; i < n; i++) {
+        *h ^= b[i];
+        *h *= 1099511628211ull;
+    }
+}
+
+static void sig_stat(uint64_t *h, const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) return;
+    sig_mix(h, &st.st_mtim.tv_sec, sizeof st.st_mtim.tv_sec);
+    sig_mix(h, &st.st_mtim.tv_nsec, sizeof st.st_mtim.tv_nsec);
+    sig_mix(h, &st.st_size, sizeof st.st_size);
+}
+
+/* Which cheat and patch files the title has, as they are now, and its saved switches. */
+static uint64_t files_sig(const char *title) {
+    uint64_t h = 1469598103934665603ull;
+    sig_mix(&h, title, strlen(title));
+    found_file_t files[16];
+    for (int pt = 0; pt < 2; pt++) {
+        int n = find_cheat_files(title, files, 16, pt);
+        sig_mix(&h, &n, sizeof n);
+        for (int i = 0; i < n; i++) {
+            sig_mix(&h, files[i].path, strlen(files[i].path));
+            sig_stat(&h, files[i].path);
+        }
+    }
+    char sp[MAX_CHEAT_FILEPATH];
+    state_path(title, sp, sizeof sp);
+    sig_stat(&h, sp);
+    return h | 1; /* never 0: 0 means "load again" */
+}
+
+static void slots_free(void) {
+    for (int i = 0; i < g_nslots; i++) free(g_slots[i].mod);
+    memset(g_slots, 0, sizeof g_slots);
+    g_nslots = 0;
+}
+
+/* Load the title's always-on patches and switched-on cheats. 0, or -1 (out of memory). */
+static int slots_load(const char *title) {
+    slots_free();
+    g_slots_game[0] = '\0';
+    cheat_file_t *cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
+    if (!cf) return -1;
+    for (int pt = 1; pt >= 0; pt--) {
+        found_file_t files[16];
+        int n = find_cheat_files(title, files, 16, pt);
+        if (pt) atomic_store(&g_patches_last, n);
+        int flat = 0;
+        for (int fi = 0; fi < n; fi++) {
+            /* A file that fails to load lists no mods, so it adds nothing to the flat numbering
+             * (cheats_list_mods skips it the same way). */
+            if (load_cheat_file(files[fi].path, files[fi].format, cf) != 0) continue;
+            int from_file[MAX_MODS_PER_FILE];
+            for (int mi = 0; mi < cf->mod_count; mi++) from_file[mi] = cf->mods[mi].enabled;
+            if (!pt) cheats_load_state(title, cf, flat);
+            for (int mi = 0; mi < cf->mod_count && g_nslots < CHEATS_SESSION_MAX_ITEMS; mi++) {
+                cheat_mod_t *m = &cf->mods[mi];
+                /* Patches are always on. A cheat's button is one press, never a saved switch. */
+                if (!pt && (!m->enabled || strcmp(m->type, "button") == 0)) continue;
+                sess_slot_t *sl = &g_slots[g_nslots];
+                sl->mod = (cheat_mod_t *)malloc(sizeof(cheat_mod_t));
+                if (!sl->mod) {
+                    free(cf);
+                    slots_free();
+                    return -1;
+                }
+                memcpy(sl->mod, m, sizeof(cheat_mod_t));
+                sl->key = mod_key(files[fi].path, mi, pt);
+                sl->flat = pt ? -1 : flat + mi;
+                sl->from_file = pt ? 1 : from_file[mi];
+                g_nslots++;
+                if (!g_slots_game[0] && is_usable_game_name(cf->game_name, title))
+                    snprintf(g_slots_game, sizeof g_slots_game, "%s", cf->game_name);
+            }
+            if (!pt) flat += cf->mod_count;
+        }
+    }
+    free(cf);
+    return 0;
+}
+
+static sess_slot_t *slot_of(const cheats_item_t *it) {
+    if (it->slot < 0 || it->slot >= g_nslots || g_slots[it->slot].key != it->key) return NULL;
+    return &g_slots[it->slot];
+}
+
+static int sess_engine_on(void *ctx) {
+    (void)ctx;
+    return atomic_load(&g_engine_enabled);
+}
+
+static int sess_held(void *ctx, const char *title) {
+    (void)ctx;
+    return cheats_held(CHEATS_STATE_DIR, title);
+}
+
+static int sess_list(void *ctx, const char *title, cheats_item_t *items, int max, char *game,
+                     size_t game_cap) {
+    (void)ctx;
+    uint64_t sig = files_sig(title);
+    if (sig != g_slots_sig) {
+        if (slots_load(title) != 0) {
+            g_slots_sig = 0;
+            return -1;
+        }
+        g_slots_sig = sig;
+    }
+    int k = 0;
+    for (int i = 0; i < g_nslots && k < max; i++, k++) {
+        memset(&items[k], 0, sizeof items[k]);
+        items[k].key = g_slots[i].key;
+        items[k].flat = g_slots[i].flat;
+        items[k].slot = i;
+        snprintf(items[k].name, sizeof items[k].name, "%s",
+                 g_slots[i].mod->name[0] ? g_slots[i].mod->name : "Cheat");
+    }
+    snprintf(game, game_cap, "%s", g_slots_game);
+    return k;
+}
+
+/* Still switched on: the toggle writes the state (or, when that fails, its pending off) under
+ * g_apply_lock, so a switch turned off while this pass was running is not put back on. A cheat
+ * its file switches on is on only until the player turns it off (#627). Call with g_apply_lock
+ * held. */
+static int still_on(const char *title, const sess_slot_t *sl) {
+    if (sl->flat < 0) return 1;
+    char *st = state_read(title);
+    int on = cheats_effective_on(st, sl->flat, sl->from_file, offs_has(title, sl->flat));
+    free(st);
+    return on;
+}
+
+static int sess_apply(void *vctx, cheats_session_t *s, const cheats_item_t *it, int reapply,
+                      char *why, size_t why_cap) {
+    pass_ctx_t *c = (pass_ctx_t *)vctx;
+    sess_slot_t *sl = slot_of(it);
+    if (!sl) return CHEATS_OUT_GONE;
+    cheat_mod_t *mod = sl->mod;
+    apply_hook_t hk = { .s = s, .wait = 0 };
+    int rc;
+    pthread_mutex_lock(&g_apply_lock);
+    if ((!c->force && !atomic_load(&g_engine_enabled)) || !still_on(c->title, sl)) {
+        pthread_mutex_unlock(&g_apply_lock);
+        return CHEATS_OUT_GONE;
+    }
+    if (mod->xml_path[0]) {
+        rc = reapply ? xml_reapply_locked(c->pid, mod, &hk, why, why_cap)
+                     : xml_apply_locked(c->pid, mod, 1, NULL, 0, &hk, why, why_cap);
+    } else {
+        intptr_t mb = c->base;
+        if (mod->module_name[0]) mb = resolve_module_base(c->pid, mod->module_name);
+        if (mb <= 0) {
+            snprintf(why, why_cap, "module %s is not loaded yet",
+                     mod->module_name[0] ? mod->module_name : "of the game");
+            hk.wait = 1;
+            rc = -1;
+        } else {
+            rc = apply_mod_locked(c->pid, mb, mod, 1, NULL, 0, &hk, why, why_cap);
+        }
+    }
+    pthread_mutex_unlock(&g_apply_lock);
+    if (rc == 0) {
+        if (sl->flat < 0) atomic_fetch_add(&g_patches_total, 1);
+        return CHEATS_OUT_APPLIED;
+    }
+    if (hk.scan) return CHEATS_OUT_WAITING_SCAN;
+    /* The game closed under the apply: not a failure, the next pass starts over. */
+    if (hk.wait || (kill(c->pid, 0) != 0 && errno == ESRCH)) return CHEATS_OUT_WAITING;
+    return CHEATS_OUT_FAILED;
+}
+
+/* What the locations hold now (cur filled in). */
+static int classify_locs(const cheat_loc_t *l, int n) {
+    int off = 0;
+    for (int i = 0; i < n; i++) {
+        int st = cheat_loc_state(&l[i]);
+        if (st == CHEAT_LOC_MISMATCH) {
+            if (all_zero(l[i].cur, l[i].len) && !all_zero(l[i].off, l[i].len))
+                return CHEATS_VERIFY_UNKNOWN; /* a page not loaded again yet */
+            return CHEATS_VERIFY_CHANGED;
+        }
+        if (st == CHEAT_LOC_OFF) off++;
+    }
+    return off ? CHEATS_VERIFY_REVERTED : CHEATS_VERIFY_ON;
+}
+
+static int sess_verify(void *vctx, const cheats_item_t *it) {
+    pass_ctx_t *c = (pass_ctx_t *)vctx;
+    sess_slot_t *sl = slot_of(it);
+    if (!sl) return CHEATS_VERIFY_UNKNOWN;
+    cheat_mod_t *mod = sl->mod;
+    if (strcmp(mod->type, "button") == 0) return CHEATS_VERIFY_ON; /* one press, nothing to keep */
+    int v = CHEATS_VERIFY_UNKNOWN;
+    pthread_mutex_lock(&g_apply_lock);
+    if (mod->xml_path[0]) {
+        xml_applied_t *a = xml_applied_find(c->pid, mod->xml_path, mod->xml_entry);
+        if (a && !xml_record_current(c->pid, a)) {
+            v = CHEATS_VERIFY_REVERTED; /* its module moved: the re-apply finds it again */
+        } else {
+            cheat_loc_t *locs = a ? xml_record_locs(c->pid, a, NULL, NULL, 0) : NULL;
+            if (locs) v = classify_locs(locs, a->n);
+            free(locs);
+        }
+    } else {
+        intptr_t mb = mod->module_name[0] ? resolve_module_base(c->pid, mod->module_name) : c->base;
+        cheat_loc_t *locs = (cheat_loc_t *)calloc(MAX_MEM_ENTRIES, sizeof(cheat_loc_t));
+        int n = (locs && mb > 0) ? resolve_mod_locs(c->pid, mb, mod, locs, NULL, 0) : -1;
+        int ok = n > 0;
+        for (int i = 0; i < n && ok; i++)
+            if (game_mem_read(c->pid, locs[i].addr, locs[i].cur, (size_t)locs[i].len) != 0) ok = 0;
+        if (ok) v = classify_locs(locs, n);
+        free(locs);
+    }
+    pthread_mutex_unlock(&g_apply_lock);
+    return v;
+}
+
+static void sess_marker_set(void *ctx, const char *title) {
+    (void)ctx;
+    cheats_marker_set(CHEATS_ROOT, title);
+}
+
+static void sess_marker_clear(void *ctx) {
+    (void)ctx;
+    cheats_marker_clear(CHEATS_ROOT);
+}
+
+static void sess_guard_applied(void *ctx, const char *title, int pid, uint64_t now_ms) {
+    (void)ctx;
+    cheats_guard_applied(&g_guard, title, pid, now_ms);
+}
+
+/* A guard window is running for this game (guard_step and the pass both run under g_pass_lock,
+ * so this is what the guard will act on). */
+static int sess_guard_watching(void *ctx, const char *title, int pid) {
+    (void)ctx;
+    return g_guard.title[0] && g_guard.pid == pid && strcmp(g_guard.title, title) == 0;
+}
+
+static void sess_notify(void *ctx, const char *msg, int warn) {
+    (void)ctx;
+    notif_send_serialised(msg, warn ? NOTIF_LEVEL_WARN : NOTIF_LEVEL_INFO);
+}
+
+static void sess_log(void *ctx, const char *msg) {
+    (void)ctx;
+    fprintf(stderr, "[cheats] %s\n", msg);
+}
+
+/* What the mod list shows: the session's statuses, copied after each pass. Switches flipped by
+ * hand reach the session through the mailbox (the toggle must not wait for a pass). */
+typedef struct {
+    int  flat;
+    int  status;
+    char reason[CHEATS_SESSION_REASON_MAX];
+} snap_ent_t;
+
+#define SESS_MAIL_MAX 64
+static pthread_mutex_t g_sess_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct {
+    pid_t      pid;
+    char       title[MAX_TITLE_ID];
+    int        n;
+    snap_ent_t e[CHEATS_SESSION_MAX_ITEMS];
+} g_snap;
+static struct {
+    uint64_t key;
+    int      on;
+} g_mail[SESS_MAIL_MAX];
+static int g_nmail;
+
+static void publish_snapshot(void) {
+    pthread_mutex_lock(&g_sess_lock);
+    g_snap.pid = g_sess.pid;
+    snprintf(g_snap.title, sizeof g_snap.title, "%s", g_sess.title);
+    g_snap.n = 0;
+    for (int i = 0; i < g_sess.n; i++) {
+        const cheats_entry_t *e = &g_sess.e[i];
+        if (e->item.flat < 0) continue;
+        snap_ent_t *d = &g_snap.e[g_snap.n++];
+        d->flat = e->item.flat;
+        d->status = e->status;
+        snprintf(d->reason, sizeof d->reason, "%s", e->reason);
+    }
+    pthread_mutex_unlock(&g_sess_lock);
+}
+
+/* A switch flipped by hand that applied: tell the next pass, and show it at once. */
+static void sess_manual(pid_t pid, uint64_t key, int flat, int on) {
+    pthread_mutex_lock(&g_sess_lock);
+    if (g_nmail < SESS_MAIL_MAX) {
+        g_mail[g_nmail].key = key;
+        g_mail[g_nmail].on = on;
+        g_nmail++;
+    }
+    if (g_snap.pid == pid) {
+        int i = 0;
+        while (i < g_snap.n && g_snap.e[i].flat != flat) i++;
+        if (!on && i < g_snap.n) {
+            g_snap.e[i] = g_snap.e[--g_snap.n];
+        } else if (on && (i < g_snap.n || g_snap.n < CHEATS_SESSION_MAX_ITEMS)) {
+            if (i == g_snap.n) g_snap.n++;
+            g_snap.e[i].flat = flat;
+            g_snap.e[i].status = CHEATS_ST_APPLIED;
+            g_snap.e[i].reason[0] = '\0';
+        }
+    }
+    pthread_mutex_unlock(&g_sess_lock);
+}
+
+/* One pass for the game running now. Call with g_pass_lock held. */
+static void run_pass_locked(pid_t pid, intptr_t base, const char *title, int force) {
+    struct {
+        uint64_t key;
+        int      on;
+    } mail[SESS_MAIL_MAX];
+    pthread_mutex_lock(&g_sess_lock);
+    int nm = g_nmail;
+    memcpy(mail, g_mail, (size_t)nm * sizeof mail[0]);
+    g_nmail = 0;
+    pthread_mutex_unlock(&g_sess_lock);
+
+    if (pid > 0) {
+        cheats_session_begin(&g_sess, (int)pid, title);
+        if (nm) g_slots_sig = 0; /* the saved switches changed: list them again */
+        for (int i = 0; i < nm; i++) cheats_session_manual(&g_sess, mail[i].key, mail[i].on);
+    }
+    pass_ctx_t c;
+    memset(&c, 0, sizeof c);
+    c.pid = pid;
+    c.base = base;
+    c.force = force;
+    snprintf(c.title, sizeof c.title, "%s", title ? title : "");
+    const cheats_session_ops_t ops = {
+        .ctx = &c,
+        .engine_on = sess_engine_on,
+        .held = sess_held,
+        .list = sess_list,
+        .apply = sess_apply,
+        .verify = sess_verify,
+        .marker_set = sess_marker_set,
+        .marker_clear = sess_marker_clear,
+        .guard_applied = sess_guard_applied,
+        .notify = sess_notify,
+        .log = sess_log,
+        .guard_watching = sess_guard_watching,
+    };
+    (void)cheats_session_pass(&g_sess, (int)pid, c.title, mono_ms(), force, &ops);
+    if (g_sess.pid <= 0) {
+        slots_free();
+        g_slots_sig = 0;
+    }
+    publish_snapshot();
+}
+
 static void *watcher_thread(void *arg) {
     /* Name this thread: the process listing shows a representative
      * thread that is not reliably main, so an unnamed worker makes the
      * whole process read as "payload.elf". See proc_identity.h. */
     proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     (void)arg;
-    pid_t last_pid = 0;
-    /* Only this thread touches it. */
-    static cheats_guard_t guard;
 
     while (1) {
         sleep(3);
+        pthread_mutex_lock(&g_pass_lock);
 
         if (!atomic_load(&g_engine_enabled)) {
-            last_pid = 0;
-            if (guard.title[0]) { /* turned off mid-window: nothing is being watched any more */
-                guard.title[0] = '\0';
+            if (g_guard.title[0]) { /* turned off mid-window: nothing is being watched any more */
+                g_guard.title[0] = '\0';
                 cheats_marker_clear(CHEATS_ROOT);
             }
+            if (g_sess.pid) run_pass_locked(0, 0, "", 0); /* forget the session */
+            pthread_mutex_unlock(&g_pass_lock);
             continue;
         }
 
@@ -2049,54 +2522,18 @@ static void *watcher_thread(void *arg) {
         intptr_t base = 0;
         pid_t pid = get_running_game_cached(title, sizeof(title), &base);
 
-        guard_step(&guard, pid);
+        guard_step(&g_guard, pid);
+        /* Offs not saved hold for the run they were made in (not across an engine off/on). */
+        pthread_mutex_lock(&g_offs_lock);
+        cheats_offs_session(&g_offs, (int)pid, title);
+        pthread_mutex_unlock(&g_offs_lock);
 
-        if (pid <= 0) {
-            last_pid = 0;
-            continue;
-        }
-
-        if (pid == last_pid) continue;
-        last_pid = pid;
-
-        invalidate_rg_cache();
-
-        if (cheats_held(CHEATS_STATE_DIR, title)) {
-            char msg[192];
-            snprintf(msg, sizeof(msg),
-                     "Cheats for %s are paused. Switch one of its cheats in PS5Upload to resume.",
-                     title);
-            notif_send_serialised(msg, NOTIF_LEVEL_INFO);
-            continue;
-        }
-
-        /* Auto-apply patches + re-apply user-toggled cheats. The marker says, to the next
-         * helper start, that it died while this game's cheats were fresh (cheats_guard.h). */
-        cheats_marker_set(CHEATS_ROOT, title);
-        char game_name[MAX_CHEAT_NAME] = "";
-        int applied = apply_patches_for_game(pid, base, title,
-                                             game_name, sizeof(game_name));
-        applied += reapply_enabled_for_game(pid, base, title,
-                                            game_name, sizeof(game_name));
-        if (applied > 0) cheats_guard_applied(&guard, title, (int)pid, mono_ms());
-        else cheats_marker_clear(CHEATS_ROOT);
-
-        /* Tell the player on the console. Without this the engine works
-         * silently and there is no way to know a cheat actually took — the
-         * request most asked for in issue #315.
-         *
-         * Fired here rather than per mod: this block runs once per game
-         * session (the `pid == last_pid` guard above), so the player gets one
-         * notification when the game starts rather than a burst of them. Only
-         * when something actually landed — announcing "0 cheats" on every
-         * launch of every game would be noise. */
-        if (applied > 0) {
-            char msg[256];
-            snprintf(msg, sizeof(msg), "%d cheat%s applied to %s",
-                     applied, applied == 1 ? "" : "s",
-                     game_name[0] ? game_name : title);
-            notif_send_serialised(msg, NOTIF_LEVEL_INFO);
-        }
+        /* Each pass, for as long as the game runs: apply what is switched on once the game is
+         * ready for it, re-read what was applied and put back what the game undid, and tell the
+         * player once (cheats_session.h). One notification when the session's cheats applied,
+         * one per cheat that could not be applied or that the game changed. */
+        run_pass_locked(pid, base, title, 0);
+        pthread_mutex_unlock(&g_pass_lock);
     }
     return NULL;
 }
@@ -2227,6 +2664,22 @@ int cheats_list_mods(const char *title_id, char *buf, size_t cap,
     game_ver_t gv;
     int have_gv = 0;
 
+    /* The running game's statuses (#627): what actually happened to each switched-on cheat,
+     * not only the saved switch. Only for the game running now. */
+    snap_ent_t *snap = NULL;
+    int n_snap = 0;
+    char rg_title[MAX_TITLE_ID] = "";
+    pid_t rg_pid = get_running_game_cached(rg_title, sizeof rg_title, NULL);
+    if (rg_pid > 0 && strcasecmp(rg_title, title_id) == 0) {
+        snap = (snap_ent_t *)malloc(sizeof g_snap.e);
+        pthread_mutex_lock(&g_sess_lock);
+        if (snap && g_snap.pid == rg_pid && strcasecmp(g_snap.title, title_id) == 0) {
+            n_snap = g_snap.n;
+            memcpy(snap, g_snap.e, (size_t)n_snap * sizeof snap[0]);
+        }
+        pthread_mutex_unlock(&g_sess_lock);
+    }
+
     for (int fi = 0; fi < n; fi++) {
         cheat_file_t *cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
         if (!cf) continue;
@@ -2255,17 +2708,31 @@ int cheats_list_mods(const char *title_id, char *buf, size_t cap,
                 }
                 other = (gv.content[0] || gv.app[0]) && !gp_version_ok(m->xml_ver, gv.content, gv.app);
             }
-            JB_PRINTF(&jb, "\",\"type\":\"%s\",\"on\":%s%s%s}",
+            JB_PRINTF(&jb, "\",\"type\":\"%s\",\"on\":%s%s%s",
                       m->type,
                       m->enabled ? "true" : "false",
                       m->xml_path[0] ? ",\"format\":\"xml\"" : "",
                       other ? ",\"other_version\":true" : "");
+            const char *stn = NULL;
+            for (int k = 0; m->enabled && k < n_snap && !stn; k++) {
+                if (snap[k].flat != flat) continue;
+                stn = cheats_status_name(snap[k].status);
+                if (!stn) break;
+                JB_PRINTF(&jb, ",\"applied\":\"%s\"", stn);
+                if (snap[k].reason[0]) {
+                    jb_raw(&jb, ",\"applied_reason\":\"");
+                    jb_str(&jb, snap[k].reason);
+                    jb_raw(&jb, "\"");
+                }
+            }
+            jb_raw(&jb, "}");
             flat++;
         }
         free(cf);
     }
 
     jb_raw(&jb, "]}");
+    free(snap);
 
     if (written) *written = jb.off;
     return 0;
@@ -2292,7 +2759,11 @@ static int collect_enabled_ranges(pid_t pid, intptr_t base, const char *title_id
         for (int fi = 0; fi < n && count >= 0; fi++) {
             if (load_cheat_file(files[fi].path, files[fi].format, cf) != 0) { count = -1; break; }
             for (int mi = 0; mi < cf->mod_count && count >= 0; mi++, flat++) {
-                if (flat == skip_flat || !state_has(state, flat)) continue;
+                /* on as the watcher sees it: saved on, or switched on by its file and not turned
+                 * off (#627). A button is one press, never kept on (slots_load skips it too). */
+                if (flat == skip_flat || strcmp(cf->mods[mi].type, "button") == 0 ||
+                    !cheats_effective_on(state, flat, cf->mods[mi].enabled, offs_has(title_id, flat)))
+                    continue;
                 if (cf->mods[mi].xml_path[0]) {
                     /* what it wrote this session, if anything (it cannot be resolved again) */
                     xml_applied_t *a = xml_applied_find(pid, cf->mods[mi].xml_path, cf->mods[mi].xml_entry);
@@ -2439,15 +2910,30 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
             rc = -1;
         }
     }
-    if (rc == 0) rc = apply_mod_locked(pid, mod_base, mod, turn_on, keep, n_keep, err, err_cap);
+    if (rc == 0) rc = apply_mod_locked(pid, mod_base, mod, turn_on, keep, n_keep, NULL, err, err_cap);
+    int save_failed = 0;
     if (rc == 0 && strcmp(mod->type, "button") != 0) {
-        /* Update persisted state (only for checkbox type) */
+        /* Update persisted state (only for checkbox type). Off is saved as an explicit false
+         * when the cheat file switches it on itself ("_sonic_enabled"), so the player's choice
+         * wins over the file's (#627); otherwise its key goes. `mod` is as the file has it. */
+        int value = turn_on ? CHEATS_SW_ON : (mod->enabled ? CHEATS_SW_OFF : CHEATS_SW_UNSET);
         mod->enabled = turn_on;
-        if (state_set(title_id, mod_index, turn_on) != 0)
+        save_failed = state_set(title_id, mod_index, value) != 0;
+        pthread_mutex_lock(&g_offs_lock);
+        if (!turn_on && save_failed) /* off for the rest of this run, at least */
+            cheats_offs_add(&g_offs, (int)pid, title_id, mod_index);
+        else
+            cheats_offs_del(&g_offs, title_id, mod_index);
+        pthread_mutex_unlock(&g_offs_lock);
+        if (save_failed)
             fprintf(stderr, "[cheats] could not record %s #%d as %s\n", title_id, mod_index,
                     turn_on ? "on" : "off");
     }
     pthread_mutex_unlock(&g_apply_lock);
+    /* Off/On by hand starts this cheat's status over (#627): on is applied now, off is not
+     * tracked; the watcher keeps it from here. */
+    if (rc == 0 && strcmp(mod->type, "button") != 0)
+        sess_manual(pid, mod_key(files[target_fi].path, target_mi, 0), mod_index, turn_on);
     free(keep);
 
     if (rc == 0) {
@@ -2471,6 +2957,14 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
             snprintf(msg, sizeof(msg), "%s %s", label, turn_on ? "on" : "off");
         }
         notif_send_serialised(msg, NOTIF_LEVEL_INFO);
+    }
+    /* Turned off in the game, but not saved: say so (the app shows it). It stays off while the
+     * game runs; the next launch would apply it again. */
+    if (rc == 0 && save_failed && !turn_on) {
+        if (err) snprintf(err, err_cap,
+                          "turned off, but the change could not be saved; it will be applied "
+                          "again the next time the game starts");
+        rc = -1;
     }
 
     free(target_cf);
@@ -2504,11 +2998,10 @@ int cheats_delete(const char *title_id, char *err, size_t err_cap) {
     return 0;
 }
 
-/* Force re-apply. */
+/* Force re-apply: an explicit request from the app. A fresh session for the running game, run
+ * now: applied at once (even with the engine off or the game paused, as before), announced on the
+ * console, and from then on kept by the watcher like any session. */
 int cheats_reload(char *err, size_t err_cap) {
-    (void)err;
-    (void)err_cap;
-
     invalidate_rg_cache();
 
     char title[MAX_TITLE_ID] = "";
@@ -2519,27 +3012,10 @@ int cheats_reload(char *err, size_t err_cap) {
         return -1;
     }
 
-    char game_name[MAX_CHEAT_NAME] = "";
-    int applied = apply_patches_for_game(pid, base, title,
-                                         game_name, sizeof(game_name));
-    applied += reapply_enabled_for_game(pid, base, title,
-                                        game_name, sizeof(game_name));
-
-    /* A reload is something the player asked for, so confirm it on the
-     * console the same way an automatic apply does. Saying so when nothing
-     * landed matters here — unlike the watcher, a silent reload leaves the
-     * player unsure whether they had toggled anything at all. */
-    char msg[256];
-    if (applied > 0) {
-        snprintf(msg, sizeof(msg), "%d cheat%s applied to %s",
-                 applied, applied == 1 ? "" : "s",
-                 game_name[0] ? game_name : title);
-    } else {
-        snprintf(msg, sizeof(msg), "No cheats enabled for %s",
-                 game_name[0] ? game_name : title);
-    }
-    notif_send_serialised(msg, NOTIF_LEVEL_INFO);
-
+    pthread_mutex_lock(&g_pass_lock);
+    g_slots_sig = 0; /* read the cheat files again */
+    run_pass_locked(pid, base, title, 1);
+    pthread_mutex_unlock(&g_pass_lock);
     return 0;
 }
 

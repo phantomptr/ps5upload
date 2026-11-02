@@ -5495,6 +5495,11 @@ export interface CheatMod {
   /** An XML game patch made for another game version than the installed one; the console
    *  refuses to turn it on. */
   other_version?: boolean;
+  /** What happened to this switched-on cheat in the running game (#627): applied, waiting for
+   *  the game to load, failed (see applied_reason) or changed by the game (left alone). Absent
+   *  when the cheat is off, the game is not running, or the helper is older than 10.7.2. */
+  applied?: "applied" | "waiting" | "failed" | "changed";
+  applied_reason?: string;
 }
 
 export interface CheatsGetResponse {

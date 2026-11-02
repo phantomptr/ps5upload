@@ -1,5 +1,9 @@
 {
   "cw_actions": "Tindakan",
+  "cw_cheats_applied_changed": "Game mengubah ini; tidak disentuh",
+  "cw_cheats_applied_failed": "Tidak dapat diterapkan: {reason}",
+  "cw_cheats_applied_ok": "Diterapkan ✓",
+  "cw_cheats_applied_waiting": "Menunggu game dimuat…",
   "cw_cheats_apply": "Terapkan",
   "cw_cheats_engine_off_state": "Mesin cheat mati: cheat yang dinyalakan tersimpan, tapi tidak diterapkan.",
   "cw_cheats_engine_on_state": "Mesin cheat menyala: cheat yang dinyalakan diterapkan saat gamenya mulai, juga setelah restart.",

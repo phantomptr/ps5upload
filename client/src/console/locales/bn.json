@@ -1,5 +1,9 @@
 {
   "cw_actions": "কাজ",
+  "cw_cheats_applied_changed": "গেম এটি বদলে দিয়েছে; ছোঁয়া হয়নি",
+  "cw_cheats_applied_failed": "প্রয়োগ করা যায়নি: {reason}",
+  "cw_cheats_applied_ok": "প্রয়োগ হয়েছে ✓",
+  "cw_cheats_applied_waiting": "গেম লোড হওয়ার অপেক্ষায়…",
   "cw_cheats_apply": "প্রয়োগ করুন",
   "cw_cheats_engine_off_state": "চিট ইঞ্জিন বন্ধ আছে: চালু করা চিটগুলো সংরক্ষিত, কিন্তু প্রয়োগ হয়নি।",
   "cw_cheats_engine_on_state": "চিট ইঞ্জিন চালু আছে: চালু করা চিটগুলো গেম শুরু হলে প্রয়োগ হয়, রিস্টার্টের পরেও।",

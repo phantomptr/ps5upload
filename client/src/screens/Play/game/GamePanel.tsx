@@ -20,6 +20,7 @@ import { useStreamLaunch } from "./streamLaunch";
 import { useStreamGame } from "./useStreamGame";
 import { ConsoleTab } from "./ConsoleTab";
 import { ControlsTab } from "./ControlsTab";
+import { CheatAppliedLine } from "../../Cheats/CheatAppliedLine";
 
 export type GameTab = "game" | "cheats" | "console" | "controls";
 
@@ -478,14 +479,18 @@ function CheatsTabBody({
               key={m.index}
               className={`flex items-center gap-2 rounded-lg px-2 py-1.5 ${m.on ? "bg-white/10" : ""}`}
             >
-              <Toggle
-                className="min-w-0 flex-1"
-                checked={m.on}
-                disabled={game.busy !== null || (!!m.other_version && !m.on)}
-                onChange={() => void toggle(m)}
-                label={m.name || `#${m.index}`}
-                hint={m.desc || undefined}
-              />
+              <div className="min-w-0 flex-1">
+                <Toggle
+                  checked={m.on}
+                  disabled={game.busy !== null || (!!m.other_version && !m.on)}
+                  onChange={() => void toggle(m)}
+                  label={m.name || `#${m.index}`}
+                  hint={m.desc || undefined}
+                />
+                {game.engine && !game.held && (
+                  <CheatAppliedLine mod={m} className="mt-0.5" />
+                )}
+              </div>
               {m.other_version && (
                 <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-white/70">
                   {tr("cheats_other_version", undefined, "Other game version")}

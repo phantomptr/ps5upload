@@ -116,25 +116,49 @@ int cheats_marker_take(const char *root, char *out, size_t cap) {
     return 1;
 }
 
+/* The run that survived its windows is over (closed, or another process): no quick close in it,
+ * so its game's run of quick closes is over. */
+static void ok_run_ended(cheats_guard_t *g, int pid) {
+    if (!g->ok_pid || pid == g->ok_pid) return;
+    if (strcmp(g->strike_title, g->ok_title) == 0) g->strikes = 0;
+    g->ok_pid = 0;
+    g->ok_title[0] = '\0';
+}
+
 void cheats_guard_applied(cheats_guard_t *g, const char *title, int pid, uint64_t now_ms) {
+    ok_run_ended(g, pid);
     snprintf(g->title, sizeof(g->title), "%s", title ? title : "");
     g->pid = pid;
     g->applied_ms = now_ms;
 }
 
 int cheats_guard_tick(cheats_guard_t *g, int pid, uint64_t now_ms) {
-    if (!g->title[0]) return CHEATS_GUARD_NONE;
+    if (!g->title[0]) {
+        ok_run_ended(g, pid);
+        return CHEATS_GUARD_NONE;
+    }
     int inside = now_ms - g->applied_ms < CHEATS_GUARD_WINDOW_MS;
     if (pid == g->pid && inside) return CHEATS_GUARD_NONE; /* still in the window */
     int closed_early = pid != g->pid && inside;
     char title[CHEATS_GUARD_TITLE_MAX];
     memcpy(title, g->title, sizeof(title));
+    int was_pid = g->pid;
     g->title[0] = '\0';
     g->pid = 0;
     if (!closed_early) {
-        /* It ran the window: its run of quick closes is over. */
-        if (strcmp(g->strike_title, title) == 0) g->strikes = 0;
+        /* It ran the window. Its run of quick closes ends when this run ends without one (a
+         * later cheat of the same run may still open a window it closes inside). */
+        if (pid == was_pid) {
+            g->ok_pid = was_pid;
+            memcpy(g->ok_title, title, sizeof(g->ok_title));
+        } else if (strcmp(g->strike_title, title) == 0) {
+            g->strikes = 0; /* it ran the window and closed after it */
+        }
         return CHEATS_GUARD_SURVIVED;
+    }
+    if (g->ok_pid == was_pid) {
+        g->ok_pid = 0;
+        g->ok_title[0] = '\0';
     }
     if (strcmp(g->strike_title, title) != 0) {
         memcpy(g->strike_title, title, sizeof(g->strike_title));

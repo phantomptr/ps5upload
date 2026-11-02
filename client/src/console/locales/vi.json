@@ -1,5 +1,9 @@
 {
   "cw_actions": "Thao tác",
+  "cw_cheats_applied_changed": "Trò chơi đã thay đổi phần này; không đụng vào",
+  "cw_cheats_applied_failed": "Không thể áp dụng: {reason}",
+  "cw_cheats_applied_ok": "Đã áp dụng ✓",
+  "cw_cheats_applied_waiting": "Đang chờ trò chơi tải…",
   "cw_cheats_apply": "Áp dụng",
   "cw_cheats_engine_off_state": "Bộ máy cheat đang tắt: các cheat đã bật được lưu nhưng chưa áp dụng.",
   "cw_cheats_engine_on_state": "Bộ máy cheat đang bật: các cheat đã bật sẽ áp dụng khi game khởi động, kể cả sau khi khởi động lại.",

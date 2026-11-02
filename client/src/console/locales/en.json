@@ -1,5 +1,9 @@
 {
   "cw_actions": "Actions",
+  "cw_cheats_applied_changed": "The game changed this; not touched",
+  "cw_cheats_applied_failed": "Couldn't apply: {reason}",
+  "cw_cheats_applied_ok": "Applied ✓",
+  "cw_cheats_applied_waiting": "Waiting for the game to load…",
   "cw_cheats_apply": "Apply",
   "cw_cheats_engine_off_state": "The cheat engine is off: switched-on cheats are saved but not applied.",
   "cw_cheats_engine_on_state": "The cheat engine is on: switched-on cheats apply when their game starts, also after a restart.",

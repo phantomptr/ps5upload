@@ -4,6 +4,26 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.7.2
+
+- **Switched-on cheats now apply once the game is ready, and stay applied (For #627).** The helper
+  used to try a game's saved cheats once, right when the game started. When the game's code was not
+  loaded yet, that try failed quietly and nothing tried again, so a switch could read On while
+  nothing was applied, until you switched it Off and On. Now each switched-on cheat is tried again
+  every few seconds until the game is ready for it, checked after it is written, and put back if the
+  game undoes it (a loading screen or coming back from rest mode; at most 5 times in 2 minutes).
+  Cheats that don't match the game version, or that the game changed itself, are left alone; a game
+  patch whose code isn't found gives up after about a minute. The crash guard now also watches a
+  cheat that only applies later in the game, and paused games and the engine switch work as before.
+  A cheat its file switches on by itself now stays Off once you turn it off.
+- **See what actually happened to each cheat.** Under each switched-on cheat (Cheats, the game's
+  page, Play's Game panel and Minion › Cheats) a short line says **Applied ✓**, **Waiting for the
+  game to load…**, **Couldn't apply:** and why, or **The game changed this; not touched**. The TV
+  shows one notification when the game's cheats are applied and one for each cheat that couldn't
+  be, with the reason, and the helper's log says why too.
+- Thanks to jass4l for the very detailed report, down to the exact patch, the code path and the logs
+  from the console.
+
 ## 10.7.1
 
 - **Pairing with the PIN shown on the PS5 tries again by itself (#609).** On a PS5 Pro with FW

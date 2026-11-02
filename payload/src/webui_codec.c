@@ -868,7 +868,7 @@ int webui_cheats_status_to_json(const char *json, size_t n, char *out, size_t ca
 
 int webui_cheats_mods_to_json(const char *json, size_t n, char *out, size_t cap, char *err, size_t err_cap) {
     const char *e = json + n, *p, *q;
-    char msg[160], name[512], desc[512], type[32];
+    char msg[160], name[512], desc[512], type[32], st[16], why[160];
     size_t pos;
     int written = 0, truncated = 0;
     if (cap) out[0] = '\0';
@@ -914,6 +914,12 @@ int webui_cheats_mods_to_json(const char *json, size_t n, char *out, size_t cap,
             if (webui_json_str(el, l, "type", type, sizeof type) != 1) type[0] = '\0';
             if (webui_json_bool(el, l, "on", &on) != 1) on = 0;
             if (webui_json_bool(el, l, "other_version", &other) != 1) other = 0; /* XML patch (#527) */
+            /* what happened to it in the running game (#627): one of four words, and why */
+            if (webui_json_str(el, l, "applied", st, sizeof st) != 1 ||
+                (strcmp(st, "applied") != 0 && strcmp(st, "waiting") != 0 && strcmp(st, "failed") != 0 &&
+                 strcmp(st, "changed") != 0))
+                st[0] = '\0';
+            if (!st[0] || webui_json_str(el, l, "applied_reason", why, sizeof why) != 1) why[0] = '\0';
             memset(&w, 0, sizeof w);
             w.out = out + pos;
             w.cap = cap - pos - CHEATS_TAIL_ROOM + 1; /* pos + entry stays CHEATS_TAIL_ROOM short of cap */
@@ -924,6 +930,16 @@ int webui_cheats_mods_to_json(const char *json, size_t n, char *out, size_t cap,
             esc(&w, desc, strlen(desc));
             put(&w, strcmp(type, "button") == 0 ? "\",\"button\":true" : "\",\"button\":false", strcmp(type, "button") == 0 ? 15 : 16);
             if (other) put(&w, ",\"other_version\":true", 21);
+            if (st[0]) {
+                put(&w, ",\"applied\":\"", 12);
+                put(&w, st, strlen(st));
+                put(&w, "\"", 1);
+                if (why[0]) {
+                    put(&w, ",\"applied_reason\":\"", 19);
+                    esc(&w, why, strlen(why));
+                    put(&w, "\"", 1);
+                }
+            }
             put(&w, on ? ",\"on\":true}" : ",\"on\":false}", on ? 11 : 12);
             if (w.full) {
                 truncated = 1;

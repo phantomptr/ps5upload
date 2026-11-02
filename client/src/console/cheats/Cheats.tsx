@@ -7,6 +7,7 @@ import { pollWhileVisible } from "../ui/visiblePoll";
 import { createFinder, FINDER_CLOSED, savedText, type Finder, type FinderState } from "./finder";
 import { FindCheats } from "./FindCheats";
 import {
+  appliedText,
   cheatsPhase,
   createCheatsController,
   EMPTY_STATE,
@@ -57,6 +58,8 @@ function CheatRow({
   else if (mod.button) tag = t("cw_cheats_apply");
   // On but not applied (#550): saved for when the engine is on again, never "On".
   else tag = t(mod.on ? (applied ? "cw_cheats_on" : "cw_cheats_saved") : "cw_cheats_off");
+  // What actually happened in the game (#627), only while switched-on cheats are being applied.
+  const status = applied ? appliedText(mod) : null;
   return (
     <li className="cw-cheat-item">
       <button
@@ -73,6 +76,11 @@ function CheatRow({
           <span className="cw-cheat-name">{mod.name}</span>
           {mod.desc ? <span className="cw-dim cw-cheat-desc">{mod.desc}</span> : null}
           {mod.otherVersion ? <span className="cw-dim cw-cheat-desc">{t("cw_cheats_other_version")}</span> : null}
+          {status ? (
+            <span className={`cw-cheat-desc cw-cheat-applied is-${mod.applied}`} data-applied={mod.applied}>
+              {status}
+            </span>
+          ) : null}
         </span>
         <span className={`cw-tag${mod.on && !mod.button ? " is-on" : ""}`}>{tag}</span>
       </button>

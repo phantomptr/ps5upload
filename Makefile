@@ -1172,6 +1172,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/cheats_guard_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-cheats-guard-selftest
 	@echo "✓ the cheat engine switch survives a helper restart, and a game its cheats keep crashing is paused"
+	@echo "Running cheat session self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-cheats-session-selftest \
+		$(PAYLOAD_DIR)/tests/cheats_session_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-cheats-session-selftest
+	@echo "✓ saved cheats apply once the game's code is loaded, are put back when the game undoes them, and say why when they cannot"
 	@echo "Running XML game patch self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-game-patch-selftest \

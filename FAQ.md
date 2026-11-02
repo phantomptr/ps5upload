@@ -2293,7 +2293,8 @@ that to us.
 
 **Q: What is the Cheats screen?**
 It applies memory patches to a **running** game. A watcher polls every few seconds for a game
-process, applies always-on patches and re-applies the ones you toggled. Cheat files download from
+process, applies always-on patches and the ones you switched on once the game is ready for them,
+and keeps them applied. Cheat files download from
 community repositories inside the screen. Native JSON, SHN trainer XML and encrypted MC4 files all
 work, with game names, filters and a notification when cheats load. Cheats change nothing on disk
 and stop when the game does.
@@ -2311,6 +2312,25 @@ If a game closes within 30 seconds of its cheats being applied, twice in a row, 
 helper stops during those 30 seconds, the helper pauses that game's cheats and says so on the TV, so
 a cheat that crashes a game can't do it again on every start. Switch any of that game's cheats to
 resume.
+
+**Q: My cheat is On but doesn't seem to work.**
+Look at the small line under its switch (Cheats, the game's page, Play's Game panel, Minion ›
+Cheats); it shows what happened in the running game, not only the saved switch. From 10.7.2:
+- **Applied ✓**: the helper wrote it and read it back.
+- **Waiting for the game to load…**: the game's code (or the part the cheat patches) is not loaded
+  yet. The helper tries again every few seconds for as long as the game runs and applies it as soon
+  as it can. Before 10.7.2 it tried once, right when the game started, so a cheat could stay On
+  without being applied until you switched it Off and On (#627).
+- **Couldn't apply: …** with the reason, such as a cheat made for another game version. It is not
+  tried again until the game restarts, or you switch it Off and On.
+- **The game changed this; not touched**: the game wrote something else there, so the helper leaves
+  it alone.
+
+While the game runs, the helper also re-reads what it applied. If the game puts its original code
+back (a loading screen, coming back from rest mode), the cheat is applied again; if that keeps
+happening (more than 5 times in 2 minutes) it stops and says so. The TV shows one notification when
+a game's cheats are applied, and one for each cheat that couldn't be applied or that the game
+changed.
 
 **Q: What is Play? Where did Remote Play go?**
 From 10.0.0, Remote Play is called **Play** and sits right under Home in the sidebar (and in the phone tab bar). It is the same thing: your PS5's screen streamed into the app, played with a controller, the keyboard or touch, and it wakes the console from rest mode on its own. Home shows a **Play** card (Play, or Continue the last game); a game's page has **Play** (start the game and stream it here) next to **Launch on PS5** (start it on the TV only); search has "Play {game}". Everything else in the app works without it, and the Home card can be hidden (Play › Set up brings it back). "Remote Play" is still the name of Sony's feature underneath, so the console's own setting and Sony's PS Remote Play app keep that name.

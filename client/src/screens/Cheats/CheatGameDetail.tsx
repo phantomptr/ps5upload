@@ -27,6 +27,9 @@ import { humanizePs5Error } from "../../lib/humanizeError";
 import { hasVersionMatch, rankCheatFiles, sameVersion, type CheatGame } from "../../lib/cheatGames";
 import { platformForTitleId } from "../../lib/titleDetails";
 import { useTr } from "../../state/lang";
+import { afterToggle, anyWaiting } from "./cheatApplied";
+import { CheatAppliedLine } from "./CheatAppliedLine";
+import { useWaitingPoll } from "./waitingPoll";
 import { beginTask } from "../../state/trackTask";
 import { useToast } from "../../state/toasts";
 
@@ -102,6 +105,16 @@ export function CheatGameDetail({
     void loadMods();
   }, [loadMods]);
 
+  // A cheat waiting for the game to load (#627): read the list again quietly until it applies.
+  const waiting = game.running && anyWaiting(mods);
+  useWaitingPoll(
+    waiting,
+    `${game.titleId}@${addr}`,
+    () => cheatsGet(game.titleId, addr),
+    (r) => setMods(r.mods ?? []),
+    () => toggling !== null,
+  );
+
   async function download(e: CheatRepoEntry) {
     setDownloading(e.filename);
     setError(null);
@@ -144,9 +157,13 @@ export function CheatGameDetail({
       const r = await cheatsToggle(game.titleId, m.index, !m.on, addr);
       if (!r.ok) {
         setError(r.err || tr("cheats_toggle_failed", undefined, "The PS5 didn't switch that cheat."));
+        // What the console has now (an off that went through but could not be saved is off).
+        void cheatsGet(game.titleId, addr)
+          .then((x) => setMods(x.mods ?? []))
+          .catch(() => {});
         return;
       }
-      setMods((prev) => prev.map((x) => (x.index === m.index ? { ...x, on: !m.on } : x)));
+      setMods((prev) => prev.map((x) => (x.index === m.index ? afterToggle(x, !m.on) : x)));
       setError(null);
       // Switching a cheat on also turns the engine on (the payload does it),
       // so let the engine bar catch up.
@@ -313,14 +330,16 @@ export function CheatGameDetail({
                     m.on ? "bg-[var(--color-accent-soft)]" : "hover:bg-[var(--color-surface-2)]"
                   }`}
                 >
-                  <Toggle
-                    className="min-w-0 flex-1"
-                    checked={m.on}
-                    disabled={toggling === m.index || !game.running}
-                    onChange={() => void toggle(m)}
-                    label={m.name || `Cheat #${m.index}`}
-                    hint={m.desc || undefined}
-                  />
+                  <div className="min-w-0 flex-1">
+                    <Toggle
+                      checked={m.on}
+                      disabled={toggling === m.index || !game.running}
+                      onChange={() => void toggle(m)}
+                      label={m.name || `Cheat #${m.index}`}
+                      hint={m.desc || undefined}
+                    />
+                    {game.running && <CheatAppliedLine mod={m} className="mt-0.5" />}
+                  </div>
                   {m.other_version && (
                     <span className="shrink-0 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] text-[var(--color-muted)]">
                       {tr("cheats_other_version", undefined, "Other game version")}

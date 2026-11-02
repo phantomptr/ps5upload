@@ -9,7 +9,11 @@
  * read On while nothing was applied. It is remembered now, which takes away the old way out of a
  * cheat that crashes its game at launch (reboot, and the engine is off). The guard replaces it:
  *   - a game that closes within CHEATS_GUARD_WINDOW_MS of its saved cheats being applied, twice
- *     in a row, is paused: its cheats are no longer applied when it starts;
+ *     in a row, is paused: its cheats are no longer applied when it starts. Each cheat's first
+ *     automatic apply opens (or refreshes) a window, so a cheat that applies a minute in is
+ *     watched too. A run that ends without a quick close (the game ran past every window and
+ *     closed later) resets the count; surviving one window does not, since a later cheat of the
+ *     same run can still be the one that crashes it;
  *   - a marker is written before each automatic apply and removed once the game has run for the
  *     window (or closed). A helper that starts and finds the marker died during that window
  *     (a console crash, or a restart), and that game is paused at once.
@@ -50,6 +54,8 @@ typedef struct {
     uint64_t applied_ms;
     char     strike_title[CHEATS_GUARD_TITLE_MAX];
     int      strikes;                       /* quick closes in a row, of strike_title */
+    int      ok_pid;                        /* survived a window; its run has not ended yet */
+    char     ok_title[CHEATS_GUARD_TITLE_MAX];
 } cheats_guard_t;
 
 enum {
@@ -59,7 +65,8 @@ enum {
     CHEATS_GUARD_HOLD,      /* and that was the last strike: clear the marker, pause the game */
 };
 
-/* Saved cheats were just applied to `title` running as `pid`. */
+/* Saved cheats were just applied to `title` running as `pid` (a window running for it is
+ * refreshed). */
 void cheats_guard_applied(cheats_guard_t *g, const char *title, int pid, uint64_t now_ms);
 
 /* Each watcher pass: the game running now (`pid` <= 0 for none). The game it returns

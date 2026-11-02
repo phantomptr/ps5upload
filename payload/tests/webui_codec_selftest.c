@@ -850,6 +850,18 @@ static void cheats_mods(void) {
     CHECK(webui_cheats_mods_to_json(j, strlen(j), out, sizeof out, err, sizeof err) == 1);
     CHECK(json_valid(out));
     CHECK(strstr(out, "\"button\":false,\"other_version\":true,\"on\":false}") != NULL);
+    /* what happened to it in the running game is passed on (#627); an unknown word is not */
+    j = "{\"title_id\":\"CUSA04402\",\"mods\":[{\"index\":8,\"name\":\"60 FPS (01.18)\",\"desc\":\"\","
+        "\"type\":\"checkbox\",\"on\":true,\"format\":\"xml\",\"applied\":\"failed\","
+        "\"applied_reason\":\"this patch is for game version 01.17; the game is \\\"01.18\\\"\"},"
+        "{\"index\":9,\"name\":\"B\",\"desc\":\"\",\"type\":\"checkbox\",\"on\":true,\"applied\":\"waiting\"},"
+        "{\"index\":10,\"name\":\"C\",\"desc\":\"\",\"type\":\"checkbox\",\"on\":true,\"applied\":\"bogus\","
+        "\"applied_reason\":\"x\"}]}";
+    CHECK(webui_cheats_mods_to_json(j, strlen(j), out, sizeof out, err, sizeof err) == 3);
+    CHECK(json_valid(out));
+    CHECK(strstr(out, "\"applied\":\"failed\",\"applied_reason\":\"this patch is for game version 01.17; the game is \\\"01.18\\\"\",\"on\":true}") != NULL);
+    CHECK(strstr(out, "\"name\":\"B\",\"desc\":\"\",\"button\":false,\"applied\":\"waiting\",\"on\":true}") != NULL);
+    CHECK(strstr(out, "bogus") == NULL && strstr(out, "\"name\":\"C\",\"desc\":\"\",\"button\":false,\"on\":true}") != NULL);
     /* the helper's "no cheat files" answer: an empty list, not an error */
     j = "{\"mods\":[],\"error\":\"no cheat files found\"}";
     CHECK(webui_cheats_mods_to_json(j, strlen(j), out, sizeof out, err, sizeof err) == 0);

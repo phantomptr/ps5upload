@@ -1,5 +1,9 @@
 {
   "cw_actions": "การทำงาน",
+  "cw_cheats_applied_changed": "เกมเปลี่ยนส่วนนี้แล้ว จึงไม่แตะต้อง",
+  "cw_cheats_applied_failed": "ใช้ไม่ได้: {reason}",
+  "cw_cheats_applied_ok": "ใช้แล้ว ✓",
+  "cw_cheats_applied_waiting": "กำลังรอให้เกมโหลด…",
   "cw_cheats_apply": "ใช้",
   "cw_cheats_engine_off_state": "เอนจินสูตรโกงปิดอยู่: สูตรโกงที่เปิดไว้ถูกบันทึก แต่ยังไม่ได้ใช้",
   "cw_cheats_engine_on_state": "เอนจินสูตรโกงเปิดอยู่: สูตรโกงที่เปิดไว้จะใช้เมื่อเกมเริ่ม แม้หลังรีสตาร์ท",

@@ -4,7 +4,7 @@
  * The helper's routes (payload/src/webui_api.c) adapt the cheat methods the PC
  * engine calls (engine/crates/ps5upload-core/src/cheats.rs):
  *   /api/cheats/status            → {engine, game: {title_id} | null}   (CHEATS_STATUS)
- *   /api/cheats/list   {title_id} → {mods: [{index,name,desc,button,on}], truncated} (CHEATS_GET)
+ *   /api/cheats/list   {title_id} → {mods: [{index,name,desc,button,on,applied?,applied_reason?}], truncated} (CHEATS_GET)
  *   /api/cheats/toggle {title_id, index, on} → {ok, on}                  (CHEATS_TOGGLE)
  *   /api/cheats/engine {enabled}  → {ok, enabled}                       (CHEATS_ENGINE_SET)
  * A toggle needs that game running (the helper patches the live process); a
@@ -31,6 +31,29 @@ export interface CheatMod {
   on: boolean;
   /** An XML game patch made for another game version than the installed one. */
   otherVersion?: boolean;
+  /** What happened to this switched-on cheat in the running game (#627); absent when unknown. */
+  applied?: CheatApplied;
+  /** Why, for waiting / failed / changed (the helper's own words). */
+  appliedReason?: string;
+}
+
+export type CheatApplied = "applied" | "waiting" | "failed" | "changed";
+const APPLIED: readonly string[] = ["applied", "waiting", "failed", "changed"];
+
+/** The line under a switched-on cheat: applied, waiting for the game, failed (and why), or
+ *  changed by the game. null when there is nothing to say (off, or an older helper). */
+export function appliedText(mod: CheatMod): string | null {
+  if (!mod.on || mod.button || !mod.applied) return null;
+  switch (mod.applied) {
+    case "applied":
+      return t("cw_cheats_applied_ok");
+    case "waiting":
+      return t("cw_cheats_applied_waiting");
+    case "failed":
+      return t("cw_cheats_applied_failed", { reason: mod.appliedReason || "?" });
+    case "changed":
+      return t("cw_cheats_applied_changed");
+  }
 }
 
 export interface CheatList {
@@ -138,6 +161,9 @@ export function readList(title: string, r: unknown): CheatList {
         button: m.button === true,
         on: m.on === true,
         ...(m.other_version === true ? { otherVersion: true } : {}),
+        ...(typeof m.applied === "string" && APPLIED.includes(m.applied)
+          ? { applied: m.applied as CheatApplied, ...(str(m.applied_reason) ? { appliedReason: str(m.applied_reason) } : {}) }
+          : {}),
       });
     }
   }
@@ -201,6 +227,8 @@ export function createCheatsController(onChange: (s: CheatsState) => void): Chea
     const now = next.game?.title_id ?? null;
     if (now === before) {
       set({ status: next, statusError: null });
+      // A cheat waiting for the game to load: read the list again to show when it applies.
+      if (now && s.list?.title === now && s.list.mods.some((m) => m.applied === "waiting")) await loadList();
       return;
     }
     // Another game, or none: the old switches go at once (never toggle a game that is not running).
@@ -220,7 +248,12 @@ export function createCheatsController(onChange: (s: CheatsState) => void): Chea
       // Show the switch's new state at once; the re-read below confirms it.
       if (!mod.button && s.list?.title === tid) {
         const done = r && typeof r.on === "boolean" ? r.on : on;
-        set({ list: { ...s.list, mods: s.list.mods.map((m) => (m.index === mod.index ? { ...m, on: done } : m)) } });
+        // A switch that went through applied it (or took it off): its status starts over.
+        const next = (m: CheatMod): CheatMod => {
+          const { applied: _a, appliedReason: _r, ...rest } = m;
+          return done ? { ...rest, on: true, applied: "applied" } : { ...rest, on: false };
+        };
+        set({ list: { ...s.list, mods: s.list.mods.map((m) => (m.index === mod.index ? next(m) : m)) } });
       }
     } catch (e) {
       gone = e instanceof ApiError && e.code === "game_not_running";
