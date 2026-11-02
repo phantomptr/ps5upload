@@ -6547,6 +6547,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_err_socket_lost": "Utracono połączenie z silnikiem i nie udało się go przywrócić w ciągu 30 s.",
 "rp_phase_reconnecting": "Ponowne łączenie…",
 "rp_stats_audio": "dźwięk {ms} ms",
+"rp_stats_audio_gaps": "przerwy: {n}",
 "rp_set_picture": "Obraz",
 "rp_fps": "Liczba klatek",
 "rp_fps_60": "60 fps (płynnie)",

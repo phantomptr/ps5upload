@@ -1066,3 +1066,78 @@ test.describe("Remote Play in a phone's browser", () => {
     await expect(page.getByTestId("rp-capture-notice")).toContainText("Screenshot saved");
   });
 });
+
+// The game's sound: Opus from the "engine" decoded in a worker and played from the audio
+// worklet's buffer. Also run under the apps' Content-Security-Policy (project app-csp): the
+// worklet used to be made from a blob: URL, which that policy refuses, so the apps fell back to
+// scheduling every 10 ms of sound from the page, which crackled whenever the page was busy.
+test("Remote Play: the game's sound plays through the worklet, decoded in a worker", async ({ page }) => {
+  await playableConsole(page);
+  let send: ((b: Buffer) => void) | null = null;
+  await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
+    ws.onMessage((m) => {
+      if (typeof m !== "string") return;
+      const msg = JSON.parse(m) as Record<string, unknown>;
+      if (msg.host) {
+        ws.send(JSON.stringify({ stage: "first_frame" }));
+        send = (b) => ws.send(b);
+      }
+    });
+  });
+  await page.goto("/play", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
+  // Two seconds of a 440 Hz tone as 10 ms Opus packets, made by the browser's own encoder.
+  const packets = await page.evaluate(async () => {
+    const out: number[][] = [];
+    const enc = new AudioEncoder({
+      output: (c) => {
+        const d = new Uint8Array(c.byteLength);
+        c.copyTo(d);
+        out.push([...d]);
+      },
+      error: (e) => {
+        throw e;
+      },
+    });
+    // 10 ms frames, as the console sends (the encoder's default is 20 ms).
+    enc.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: 2, bitrate: 64000, opus: { frameDuration: 10_000 } });
+    for (let i = 0; i < 200; i++) {
+      const n = 480;
+      const pcm = new Float32Array(n * 2);
+      for (let k = 0; k < n; k++) pcm[k] = pcm[n + k] = Math.sin(((i * n + k) / 48000) * 2 * Math.PI * 440) * 0.2;
+      const ad = new AudioData({ format: "f32-planar", sampleRate: 48000, numberOfFrames: n, numberOfChannels: 2, timestamp: i * 10_000, data: pcm });
+      enc.encode(ad);
+      ad.close();
+    }
+    await enc.flush();
+    return out;
+  });
+  expect(packets.length).toBeGreaterThan(150);
+  await page.getByTestId("rp-start").click();
+  await expect.poll(() => !!send).toBe(true);
+  const header = Buffer.alloc(11);
+  header[0] = 3;
+  header[1] = 2;
+  header.writeUInt32BE(48000, 3);
+  header.writeUInt32BE(480, 7);
+  send!(header);
+  let i = 0;
+  const timer = setInterval(() => {
+    const p = packets[i % packets.length];
+    send?.(Buffer.from([4, (i >> 8) & 0xff, i & 0xff, ...p]));
+    i++;
+  }, 10);
+  try {
+    const stats = page.getByTestId("rp-toggle-stats");
+    await page.getByTestId("rp-toolbar").hover();
+    await stats.click();
+    const line = page.getByTestId("rp-stats");
+    await expect(line).toHaveAttribute("data-audio", "worker", { timeout: 10_000 });
+    // Sound is waiting in the worklet's buffer (about the 60 ms it keeps).
+    await expect
+      .poll(async () => Number(/sound (\d+) ms/.exec((await line.textContent()) ?? "")?.[1] ?? 0), { timeout: 10_000 })
+      .toBeGreaterThan(20);
+  } finally {
+    clearInterval(timer);
+  }
+});

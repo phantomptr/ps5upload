@@ -24,6 +24,9 @@ import { ClockSync, inputEstimate, LatencyStages, stagesLogText, type StageSumma
 import { decoderVerdict, FED_RECENT_MS, MAX_REBUILDS } from "./rpDecoderWatch";
 import type { RpKeyboardMsg, RpKeyboardSend } from "./rpKeyboard";
 import { parseSnapshotRequest, takeSnapshot } from "./rpSnapshot";
+import { OpusPipe } from "./rpAudioPipe";
+// A file of the app's own: the apps' Content-Security-Policy refuses a worklet from a blob: URL.
+import audioWorkletUrl from "./rpAudioWorklet.js?url&no-inline";
 
 /** Button bits, as the console (and chiaki) number them. */
 export const PadButton = {
@@ -397,6 +400,41 @@ export interface StreamStats {
   stages?: StageSummary | null;
   /** Times the video decoder was rebuilt because it stopped giving pictures (rpDecoderWatch.ts). */
   decoderRestarts?: number;
+  /** How the sound has played since the start. */
+  audio?: AudioHealth;
+}
+
+/** How the sound plays and has played since the start (rpAudioWorklet.js). */
+export interface AudioHealth {
+  /** "worker": decoded off the page's main thread, played from the worklet's buffer; "page":
+   *  decoded on the page, played from the worklet's buffer; "scheduled": no worklet here, each
+   *  frame scheduled from the page as its own buffer (a busy page leaves gaps). */
+  path: "worker" | "page" | "scheduled";
+  /** The buffer while playing: on average and at its lowest, ms. */
+  avgMs: number;
+  minMs: number;
+  /** Time played a little faster or slower to keep the buffer at its size, ms. */
+  corrMs: number;
+  /** Frames that never came, covered by the one before. */
+  concealed: number;
+  /** Sound dropped to catch up after the page stalled, ms. */
+  trimmedMs: number;
+}
+
+/** The sound's part of the latency log line. */
+export function audioLogText(h: AudioHealth, underruns: number, targetMs: number): string {
+  const where =
+    h.path === "worker"
+      ? "decoded in a worker, played by the worklet"
+      : h.path === "page"
+        ? "decoded on the page, played by the worklet"
+        : "decoded on the page, each frame scheduled (no worklet)";
+  const s = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);
+  return (
+    `sound ${where}: ${underruns} underruns, buffer avg ${Math.round(h.avgMs)} / min ${Math.round(h.minMs)} ms ` +
+    `(target ${Math.round(targetMs)}), speed corrected for ${s(h.corrMs)}, ${h.concealed} frames covered` +
+    (h.trimmedMs > 0 ? `, ${s(h.trimmedMs)} dropped after stalls` : "")
+  );
 }
 
 /** A round trip from a ping's own timestamp, smoothed into the last value (a spike moves it a
@@ -503,9 +541,6 @@ export interface StreamOptions {
  *  long in all. */
 const RECONNECT_WAITS_MS = [250, 500, 1000, 2000, 4000];
 const RECONNECT_FOR_MS = 30_000;
-/** Audio frames that may arrive ahead of a missing one before it is given up on. The engine
- *  sends a lost frame's recovered copy (FEC) right after the next ones. */
-const AUDIO_HOLD = 3;
 /** Frames whose times are kept for the latency stages: ~2 s at 60 fps, far more than in flight. */
 const FRAME_SLOTS = 128;
 /** A "latency:" line in the logs this often while playing (and so in a bug report's logs). */
@@ -513,67 +548,6 @@ const LATENCY_LOG_MS = 60_000;
 /** The decoder this far behind: skip to the next keyframe rather than show old pictures. */
 const VIDEO_BACKLOG = 4;
 const VIDEO_BACKLOG_LOW_LATENCY = 2;
-
-/** The audio player: a ring buffer in an AudioWorklet that starts once `target` samples are in,
- *  fades in after a gap, and trims itself back when it runs ahead (a sound card a little slower
- *  than the console) so delay never builds up. */
-const AUDIO_WORKLET = `
-class RpAudio extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.cap = 48000;
-    this.buf = [new Float32Array(this.cap), new Float32Array(this.cap)];
-    this.r = 0; this.w = 0; this.n = 0;
-    this.target = 2880; this.primed = false; this.gain = 0; this.last = [0, 0];
-    this.under = 0; this.skip = 0; this.tick = 0;
-    this.port.onmessage = (e) => {
-      const d = e.data;
-      if (d.target) { this.target = d.target; return; }
-      if (d.reset) { this.r = this.w = this.n = 0; this.primed = false; return; }
-      this.push(d.planes, d.scale || 1);
-    };
-  }
-  push(planes, scale) {
-    const len = planes[0].length;
-    for (let i = 0; i < len; i++) {
-      if (this.n === this.cap) { this.r = (this.r + 1) % this.cap; this.n--; }
-      for (let c = 0; c < 2; c++) this.buf[c][this.w] = planes[c % planes.length][i] * scale;
-      this.w = (this.w + 1) % this.cap; this.n++;
-    }
-    // Far ahead after a stall: drop back to the target in one go.
-    if (this.n > this.target * 3) {
-      const drop = this.n - this.target;
-      this.r = (this.r + drop) % this.cap; this.n -= drop;
-    }
-  }
-  process(_inputs, outputs) {
-    const out = outputs[0];
-    const len = out[0].length;
-    if (!this.primed && this.n >= this.target) { this.primed = true; this.gain = 0; }
-    for (let i = 0; i < len; i++) {
-      if (!this.primed || this.n === 0) {
-        if (this.primed) { this.primed = false; this.under++; }
-        // Ease the last sample to silence instead of a hard step (a click).
-        for (let c = 0; c < out.length; c++) { this.last[c % 2] *= 0.95; out[c][i] = this.last[c % 2]; }
-        continue;
-      }
-      for (let c = 0; c < out.length; c++) {
-        const v = this.buf[c % 2][this.r] * this.gain;
-        out[c][i] = v; this.last[c % 2] = v;
-      }
-      if (this.gain < 1) this.gain = Math.min(1, this.gain + 1 / 480);
-      this.r = (this.r + 1) % this.cap; this.n--;
-      // Running ahead by more than 20 ms: skip one sample in 200 (inaudible) until back.
-      if (this.n > this.target + 960 && ++this.skip % 200 === 0 && this.n > 0) {
-        this.r = (this.r + 1) % this.cap; this.n--;
-      }
-    }
-    if (++this.tick % 24 === 0) this.port.postMessage({ ms: (this.n / sampleRate) * 1000, under: this.under });
-    return true;
-  }
-}
-registerProcessor("rp-audio", RpAudio);
-`;
 
 /** End the session the engine runs for `host` without showing it (it moved to another window,
  *  or this page was reloaded). */
@@ -626,17 +600,21 @@ export class RemotePlayStream {
   private audioCtx: AudioContext | null = null;
   private gainNode: GainNode | null = null;
   private worklet: AudioWorkletNode | null = null;
-  private audio: AudioDecoder | null = null;
+  /** The worklet's module is still loading: decoded sound is left out until it is ready. */
+  private workletLoading = false;
+  /** The sound decoded on the page (no decoding worker here), made at the first header. */
+  private audioPipe: OpusPipe | null = null;
+  /** The sound decoded in a worker that feeds the worklet itself (rpAudioWorker.ts). */
+  private audioWorker: Worker | null = null;
+  /** The last audio header, for the page to take over if the worker fails. */
+  private audioHeader: Uint8Array | null = null;
+  /** No worklet: when the next scheduled buffer starts (AudioContext time). */
   private audioNext = 0;
-  private audioRate = 48000;
-  private audioFrame = 480;
-  /** Next audio frame wanted (unwrapped), frames that came ahead of it, the last played. */
-  private audioWant = -1;
-  private audioAhead = new Map<number, Uint8Array>();
-  private audioLastOut = -1;
-  private audioPrev: Float32Array[] | null = null;
   private audioMs = 0;
   private underruns = 0;
+  private audioTargetMs = 60;
+  private audioHealth: AudioHealth = { path: "scheduled", avgMs: 0, minMs: 0, corrMs: 0, concealed: 0, trimmedMs: 0 };
+  private workerConcealed = 0;
   private volume = 1;
   private lastPad = "";
   private raf = 0;
@@ -885,7 +863,8 @@ export class RemotePlayStream {
    *  windows): wait a moment for it to come back, then go on with the 2D canvas. */
   private watchGl(c: HTMLCanvasElement): void {
     c.addEventListener("webglcontextlost", (e) => {
-      if (c !== this.cv) return;
+      // Ended: the context was given back on purpose (releasePicture).
+      if (c !== this.cv || this.ended) return;
       e.preventDefault(); // so it can be restored
       log.warn("remote-play", "the picture's WebGL context was lost; waiting for it to come back");
       window.clearTimeout(this.glLostTimer);
@@ -895,7 +874,7 @@ export class RemotePlayStream {
       }, 3000);
     });
     c.addEventListener("webglcontextrestored", () => {
-      if (c !== this.cv || this.noGl) return;
+      if (c !== this.cv || this.noGl || this.ended) return;
       window.clearTimeout(this.glLostTimer);
       try {
         this.drawer = { kind: "gl", pass: new PicturePass(c) };
@@ -929,7 +908,8 @@ export class RemotePlayStream {
    *  showing the old one until it is opened again). */
   private replaceCanvas(): void {
     const old = this.cv;
-    if (this.drawer?.kind === "gl") this.drawer.pass.dispose();
+    // The old canvas's context goes now, not when the canvas is collected.
+    if (this.drawer?.kind === "gl") this.drawer.pass.release();
     this.drawer = null;
     const c = document.createElement("canvas");
     c.className = old.className;
@@ -1011,10 +991,15 @@ export class RemotePlayStream {
     this.gainNode.gain.value = this.volume;
     this.gainNode.connect(this.audioCtx.destination);
     const pref = this.o.codec ?? "auto";
+    // The sound's player loads alongside: the session does not wait for it (the first moment's
+    // sound, before it is ready, is left out).
+    this.workletLoading = true;
+    void this.openWorklet().finally(() => {
+      this.workletLoading = false;
+    });
     const [hevc, hdr] = await Promise.all([
       pref === "h264" ? Promise.resolve(false) : chooseCodec(width, height).then((c) => c === "h265"),
       pref === "hdr" ? hdrSupport(width, height) : Promise.resolve(null),
-      this.openWorklet(),
     ]);
     let { codec, hdrOff } = pickCodec(pref, hevc, hdr);
     if (codec === "h265_hdr") {
@@ -1053,6 +1038,7 @@ export class RemotePlayStream {
         hdr: this.codecChoice === "h265_hdr",
         audioMs: this.audioMs,
         underruns: this.underruns,
+        audio: this.currentAudioHealth(),
         rttMs: this.rttMs,
         consoleRttMs: this.consoleRttMs,
         stages: this.stages.summary(performance.now()),
@@ -1065,29 +1051,181 @@ export class RemotePlayStream {
       this.watchDecoder();
       if (this.decoded && Date.now() - this.lastLatencyLog > LATENCY_LOG_MS) {
         this.lastLatencyLog = Date.now();
-        log.info("remote-play", `latency: ${this.linkLogText()}`);
+        log.info("remote-play", `latency: ${this.linkLogText()}; ${this.audioLogLine()}`);
       }
     }, 1000);
   }
 
+  /** The sound's player: the worklet's ring buffer (rpAudioWorklet.js), fed by a decoding
+   *  worker where one can decode Opus, else by the page. No worklet: frames are scheduled one by
+   *  one from the page. */
   private async openWorklet(): Promise<void> {
     const actx = this.audioCtx;
-    if (!actx?.audioWorklet || !this.gainNode) return;
-    const url = URL.createObjectURL(new Blob([AUDIO_WORKLET], { type: "application/javascript" }));
+    if (!actx?.audioWorklet || !this.gainNode) {
+      log.warn("remote-play", "sound: no audio worklet here: each frame is scheduled on the page");
+      return;
+    }
+    let node: AudioWorkletNode;
     try {
-      await actx.audioWorklet.addModule(url);
-      const node = new AudioWorkletNode(actx, "rp-audio", { outputChannelCount: [2] });
-      node.port.onmessage = (e: MessageEvent<{ ms: number; under: number }>) => {
-        this.audioMs = e.data.ms;
-        this.underruns = e.data.under;
-      };
+      await actx.audioWorklet.addModule(audioWorkletUrl);
+      if (this.ended || this.audioCtx !== actx || !this.gainNode) return;
+      node = new AudioWorkletNode(actx, "rp-audio", { outputChannelCount: [2] });
+      node.port.onmessage = (e: MessageEvent) => this.onWorkletStats(e.data);
       node.connect(this.gainNode);
-      this.worklet = node;
-      this.setAudioBuffer(this.o.audioBufferMs ?? 60);
+    } catch (e) {
+      log.warn("remote-play", `sound: the audio worklet did not load (${String(e)}): each frame is scheduled on the page`);
+      return;
+    }
+    this.worklet = node;
+    this.audioHealth.path = "page";
+    this.setAudioBuffer(this.o.audioBufferMs ?? 60);
+    // Not waited for: the session starts now, the page decodes until the worker is ready.
+    void this.openAudioWorker(node);
+  }
+
+  /** Decode the sound in a worker that hands it straight to the worklet, where workers have an
+   *  Opus AudioDecoder (Chromium, Safari 26); otherwise the page decodes it. */
+  private async openAudioWorker(node: AudioWorkletNode): Promise<void> {
+    if (typeof Worker === "undefined" || typeof MessageChannel === "undefined") return;
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("./rpAudioWorker.ts", import.meta.url), { type: "module" });
+    } catch (e) {
+      log.info("remote-play", `sound: no decoding worker (${String(e)}): decoded on the page`);
+      return;
+    }
+    const ok = await new Promise<boolean>((resolve) => {
+      const t = window.setTimeout(() => resolve(false), 2000);
+      worker.onmessage = (e: MessageEvent) => {
+        if (e.data && typeof e.data === "object" && "ready" in e.data) {
+          window.clearTimeout(t);
+          resolve(!!e.data.ready);
+        }
+      };
+      worker.onerror = () => {
+        window.clearTimeout(t);
+        resolve(false);
+      };
+      worker.postMessage({ probe: true });
+    });
+    if (!ok || this.ended || this.worklet !== node) {
+      worker.terminate();
+      if (!ok) log.info("remote-play", "sound: a worker here cannot decode Opus: decoded on the page");
+      return;
+    }
+    const ch = new MessageChannel();
+    worker.postMessage({ port: ch.port1 }, [ch.port1]);
+    node.port.postMessage({ feed: ch.port2 }, [ch.port2]);
+    // The stream may have started while the worker got ready: it takes over from the page's
+    // decoder with the header the page already has.
+    if (this.audioHeader) {
+      const rec = new Uint8Array(this.audioHeader.length + 1);
+      rec[0] = 3;
+      rec.set(this.audioHeader, 1);
+      worker.postMessage(rec.buffer, [rec.buffer]);
+    }
+    this.audioPipe?.reset();
+    worker.onmessage = (e: MessageEvent) => {
+      const c = (e.data as { concealed?: unknown } | null)?.concealed;
+      if (typeof c === "number") this.workerConcealed = c;
+    };
+    worker.onerror = (e) => this.audioWorkerFailed(e.message || "error");
+    this.audioWorker = worker;
+    this.audioHealth.path = "worker";
+  }
+
+  /** The decoding worker failed mid-session: the page decodes from here on. */
+  private audioWorkerFailed(why: string): void {
+    const w = this.audioWorker;
+    if (!w) return;
+    log.warn("remote-play", `sound: the decoding worker failed (${why}): decoded on the page from now on`);
+    this.audioWorker = null;
+    w.onmessage = null;
+    w.onerror = null;
+    w.terminate();
+    this.worklet?.port.postMessage({ close: true });
+    if (this.worklet) this.audioHealth.path = "page";
+    if (this.audioHeader) this.pipe().header(this.audioHeader);
+  }
+
+  /** What the worklet says every ~64 ms (RpRing.stats). */
+  private onWorkletStats(d: unknown): void {
+    if (!d || typeof d !== "object") return;
+    const s = d as Record<string, unknown>;
+    const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+    this.audioMs = n(s.ms);
+    this.underruns = n(s.under);
+    const h = this.audioHealth;
+    h.avgMs = n(s.avgMs);
+    h.minMs = n(s.minMs);
+    h.corrMs = n(s.corrMs);
+    h.trimmedMs = n(s.trimmedMs);
+  }
+
+  private currentAudioHealth(): AudioHealth {
+    return { ...this.audioHealth, concealed: this.workerConcealed + (this.audioPipe?.concealed ?? 0) };
+  }
+
+  private audioLogLine(): string {
+    return audioLogText(this.currentAudioHealth(), this.underruns, this.audioTargetMs);
+  }
+
+  /** The page's own decoder for the sound. */
+  private pipe(): OpusPipe {
+    if (!this.audioPipe) this.audioPipe = new OpusPipe((planes, scale) => this.play(planes, scale));
+    return this.audioPipe;
+  }
+
+  /** The sound's parts go: worker, worklet, context (the worklet's port would otherwise keep
+   *  this whole stream, its canvas and WebGL context alive: an AudioWorkletNode outlives its
+   *  closed context while its port listens). */
+  private closeAudio(): void {
+    const w = this.audioWorker;
+    this.audioWorker = null;
+    if (w) {
+      w.onmessage = null;
+      w.onerror = null;
+      w.terminate();
+    }
+    this.audioPipe?.reset();
+    const node = this.worklet;
+    this.worklet = null;
+    if (node) {
+      node.port.onmessage = null;
+      try {
+        node.port.postMessage({ close: true });
+        node.port.close();
+        node.disconnect();
+      } catch {
+        // Already gone.
+      }
+    }
+    try {
+      this.gainNode?.disconnect();
     } catch {
-      // No worklet here: frames are scheduled one by one instead.
-    } finally {
-      URL.revokeObjectURL(url);
+      // Already gone.
+    }
+    this.gainNode = null;
+    const actx = this.audioCtx;
+    this.audioCtx = null;
+    if (actx && actx.state !== "closed") void actx.close().catch(() => {});
+  }
+
+  /** The picture's GPU parts go now, the WebGL context given back (not left to whenever the
+   *  canvas is collected: a page that played many sessions kept every one's). */
+  private releasePicture(): void {
+    if (this.drawer?.kind === "gl") this.drawer.pass.release();
+    this.drawer = null;
+    this.hdr?.dispose();
+    this.hdr = null;
+    this.planes = null;
+    // Its pixels too (a 2D canvas keeps them until it is collected; something on the page may
+    // hold the ended stream a while: React keeps old callbacks, and with them old renders).
+    try {
+      this.cv.width = 0;
+      this.cv.height = 0;
+    } catch {
+      // Not a canvas we can size.
     }
   }
 
@@ -1145,7 +1283,7 @@ export class RemotePlayStream {
         this.onVideo(1, b.subarray(9), recv, off === null ? NaN : us / 1000 - off);
       }
       else if (kind === 6) this.o.dualSense?.haptics(payload);
-      else this.onAudio(kind, payload);
+      else if (kind === 3 || kind === 4) this.onAudio(kind, payload, m.data as ArrayBuffer);
     };
     // What a close means is decided in onclose; an error alone says nothing more.
     ws.onerror = () => {};
@@ -1239,16 +1377,10 @@ export class RemotePlayStream {
     this.gaveUp = false;
     this.planesNext?.close();
     this.planesNext = null;
-    try {
-      this.audio?.close();
-    } catch {
-      // Already closed.
-    }
-    this.audio = null;
-    this.audioWant = -1;
-    this.audioAhead.clear();
-    this.audioLastOut = -1;
+    this.audioPipe?.reset();
+    this.audioWorker?.postMessage({ reset: true });
     this.worklet?.port.postMessage({ reset: true });
+    this.audioNext = 0;
   }
 
   /** The latency log line: the stages, the round trips, the input estimate, and the console's
@@ -1381,7 +1513,8 @@ export class RemotePlayStream {
   }
 
   setAudioBuffer(ms: number): void {
-    this.worklet?.port.postMessage({ target: Math.round((Math.max(20, ms) / 1000) * 48000) });
+    this.audioTargetMs = Math.max(20, ms);
+    this.worklet?.port.postMessage({ target: Math.round((this.audioTargetMs / 1000) * 48000) });
   }
 
   /** End the session; the engine reports it and closes the socket. */
@@ -1416,20 +1549,13 @@ export class RemotePlayStream {
     if (this.decoded) {
       log.info(
         "remote-play",
-        `latency at the end: ${this.linkLogText()}; decoder restarts ${this.decoderRestarts}`,
+        `latency at the end: ${this.linkLogText()}; decoder restarts ${this.decoderRestarts}; ${this.audioLogLine()}`,
       );
     }
     this.watchBox(false);
     this.resetMedia();
-    if (this.drawer?.kind === "gl") this.drawer.pass.dispose();
-    this.hdr?.dispose();
-    this.hdr = null;
-    try {
-      this.worklet?.disconnect();
-    } catch {
-      // Already gone.
-    }
-    void this.audioCtx?.close();
+    this.releasePicture();
+    this.closeAudio();
     this.ws = null;
     this.setPhase("ended");
   }
@@ -1972,108 +2098,47 @@ export class RemotePlayStream {
     }
   }
 
-  private onAudio(kind: number, payload: Uint8Array): void {
+  /** An audio record (3 header, 4 frame): to the decoding worker as it is (the socket's buffer
+   *  handed over, not copied), or decoded here. */
+  private onAudio(kind: number, payload: Uint8Array, whole: ArrayBuffer): void {
     if (!this.audioCtx) return;
-    if (kind === 3) return this.openAudio(payload);
-    if (!this.audio || this.audio.state !== "configured") return;
-    const idx = (payload[0] << 8) | payload[1];
-    const data = payload.subarray(2);
-    if (this.audioWant < 0) this.audioWant = idx;
-    const d = (idx - (this.audioWant & 0xffff)) & 0xffff;
-    if (d >= 0x8000) return; // a copy of a frame already played
-    if (d > 200) {
-      // Far ahead (a long stall): start again from here.
-      this.audioAhead.clear();
-      this.audioWant = idx;
-      return this.onAudio(kind, payload);
+    if (kind === 3) this.audioHeader = payload.slice();
+    const w = this.audioWorker;
+    if (w) {
+      w.postMessage(whole, [whole]);
+      return;
     }
-    const u = this.audioWant + d;
-    if (d === 0) {
-      this.decodeAudio(u, data);
-      this.audioWant++;
-    } else {
-      this.audioAhead.set(u, data.slice());
-      // A frame missing for too long is given up on (the output covers the gap).
-      if (this.audioAhead.size > AUDIO_HOLD) {
-        while (!this.audioAhead.has(this.audioWant)) this.audioWant++;
-      }
-    }
-    for (let next = this.audioAhead.get(this.audioWant); next; next = this.audioAhead.get(this.audioWant)) {
-      this.audioAhead.delete(this.audioWant);
-      this.decodeAudio(this.audioWant, next);
-      this.audioWant++;
-    }
+    if (kind === 3) this.pipe().header(payload);
+    else this.pipe().packet(payload);
   }
 
-  private decodeAudio(u: number, data: Uint8Array): void {
-    this.audio?.decode(
-      new EncodedAudioChunk({ type: "key", timestamp: Math.round(u * (this.audioFrame / this.audioRate) * 1e6), data }),
-    );
-  }
-
-  private openAudio(header: Uint8Array): void {
-    const actx = this.audioCtx;
-    if (!actx) return;
-    const dv = new DataView(header.buffer, header.byteOffset, header.byteLength);
-    const channels = header[0];
-    this.audioRate = dv.getUint32(2);
-    this.audioFrame = dv.getUint32(6);
-    const frameUs = (this.audioFrame / this.audioRate) * 1e6;
-    try {
-      this.audio?.close();
-    } catch {
-      // Already closed.
-    }
-    const audio = new AudioDecoder({
-      output: (data) => {
-        const n = data.numberOfFrames;
-        const planes: Float32Array[] = [];
-        for (let c = 0; c < data.numberOfChannels; c++) {
-          const plane = new Float32Array(n);
-          data.copyTo(plane, { planeIndex: c, format: "f32-planar" });
-          planes.push(plane);
-        }
-        const u = Math.round(data.timestamp / frameUs);
-        data.close();
-        // Frames that never came: the one before, quieter, instead of a hard gap (a click).
-        const missing = this.audioLastOut >= 0 ? Math.min(u - this.audioLastOut - 1, AUDIO_HOLD) : 0;
-        for (let k = 0; k < missing && this.audioPrev; k++) this.play(this.audioPrev, 0.5 / (k + 1));
-        this.audioLastOut = u;
-        this.audioPrev = planes;
-        this.play(planes, 1);
-      },
-      error: () => {
-        // Start over on the next header-less frame: a new decoder for the same stream.
-        if (audio === this.audio) {
-          this.audio = null;
-          this.openAudio(header);
-        }
-      },
-    });
-    audio.configure({ codec: "opus", sampleRate: this.audioRate, numberOfChannels: channels });
-    this.audio = audio;
-  }
-
+  /** Decoded sound (the arrays are this call's to keep or hand over). */
   private play(planes: Float32Array[], scale: number): void {
+    if (this.workletLoading) return;
     if (this.worklet) {
-      const copy = scale === 1 ? planes : planes.map((p) => p.slice());
-      this.worklet.port.postMessage({ planes: copy, scale });
+      this.worklet.port.postMessage({ planes, scale }, planes.map((p) => p.buffer));
       return;
     }
     // No worklet: each frame scheduled back to back ~60 ms ahead.
     const actx = this.audioCtx;
     if (!actx || !this.gainNode) return;
+    const rate = this.audioPipe?.sampleRate ?? 48000;
     const n = planes[0].length;
-    const buf = actx.createBuffer(planes.length, n, this.audioRate);
+    const buf = actx.createBuffer(planes.length, n, rate);
     planes.forEach((p, c) => buf.copyToChannel(scale === 1 ? (p as Float32Array<ArrayBuffer>) : p.map((v) => v * scale), c));
     const now = actx.currentTime;
-    if (this.audioNext < now + 0.01) this.audioNext = now + 0.06;
+    if (this.audioNext < now + 0.01) {
+      // Ran dry (the page was busy, or the start): a gap, then 60 ms ahead again.
+      if (this.audioNext > 0) this.underruns++;
+      this.audioNext = now + this.audioTargetMs / 1000;
+    }
     if (this.audioNext > now + 0.25) return; // already far enough ahead: drop rather than pile up
     const src = actx.createBufferSource();
     src.buffer = buf;
     src.connect(this.gainNode);
     src.start(this.audioNext);
-    this.audioNext += n / this.audioRate;
+    this.audioNext += n / rate;
+    this.audioMs = (this.audioNext - now) * 1000;
   }
 }
 

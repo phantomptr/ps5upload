@@ -6316,6 +6316,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_err_socket_lost": "엔진과의 연결이 끊겼고 30초 안에 복구하지 못했습니다.",
 "rp_phase_reconnecting": "다시 연결 중…",
 "rp_stats_audio": "소리 {ms} ms",
+"rp_stats_audio_gaps": "끊김 {n}회",
 "rp_set_picture": "화면",
 "rp_fps": "프레임 레이트",
 "rp_fps_60": "60 fps (부드러움)",

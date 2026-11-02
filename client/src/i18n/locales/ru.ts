@@ -6252,6 +6252,7 @@ library_compressed_hint: "Для запуска сжатых образов ну
 "rp_err_socket_lost": "Связь с движком потеряна и не восстановилась за 30 с.",
 "rp_phase_reconnecting": "Переподключение…",
 "rp_stats_audio": "звук {ms} ms",
+"rp_stats_audio_gaps": "пропусков: {n}",
 "rp_set_picture": "Изображение",
 "rp_fps": "Частота кадров",
 "rp_fps_60": "60 fps (плавно)",

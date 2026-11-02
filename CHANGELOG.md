@@ -4,6 +4,27 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.7.5
+
+- **Remote Play sound no longer turns to static after the app has been open a long time.** In
+  the desktop and phone apps the game's sound was played 10 ms at a time from the app's page
+  itself (its sound player could not load under the apps' security settings), so anything that
+  kept the page busy broke it up into crackles, and restarting PS5Upload only helped for a
+  while. The sound now plays from its own buffer, decoded in the background, and stays clean
+  while the page is busy.
+- **Each Remote Play session gives back its graphics memory when it ends.** Every session kept
+  its picture's graphics context (and its sound player) until PS5Upload was restarted, so an app
+  left open through many sessions held more and more of them.
+- **Smoother sound when the PS5 and this computer keep slightly different time.** Instead of
+  skipping single samples to catch up, the sound now plays a hair faster or slower (under 0.5 %,
+  too little to hear) until its buffer is back to size. It also starts at the buffer size you set
+  instead of catching up for the first seconds.
+- **Picture in picture as a video stops copying the picture when it closes.**
+- **Sound in the stats and the logs.** With stats on, the line on the picture says how many times
+  the sound ran dry. The line logged at the end of a session now says how the sound was played,
+  how full its buffer was on average and at its lowest, how long its speed was corrected, and how
+  many lost frames were covered: handy in a bug report.
+
 ## 10.7.4
 
 - **Updates install when you quit, with no click (For #611).** On Windows, macOS and the Linux

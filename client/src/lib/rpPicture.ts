@@ -649,6 +649,18 @@ export class PicturePass {
     return out;
   }
 
+  /** Free the GPU objects and give the context back at once (the stream ended, or the canvas
+   *  is replaced): left to the canvas being collected, a context can live on, with its GPU
+   *  memory, long after its stream (each stream has its own canvas). Nothing draws after this. */
+  release(): void {
+    this.dispose();
+    try {
+      if (!this.gl.isContextLost()) this.gl.getExtension("WEBGL_lose_context")?.loseContext();
+    } catch {
+      // Already gone.
+    }
+  }
+
   /** Free the GPU objects (the canvas keeps its context: it cannot take another kind). */
   dispose(): void {
     const gl = this.gl;

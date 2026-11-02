@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PICTURE,
+  PicturePass,
   cropRect,
   isPlaneFormat,
   needsPass,
@@ -157,5 +158,40 @@ describe("YUV planes", () => {
     // Limited-range red (BT.709), to within the 8-bit code values' rounding.
     const red = rgb(yuvToRgb({ matrix: "bt709" }), 63, 102, 240);
     [255, 0, 0].forEach((v, i) => expect(Math.abs(red[i] - v)).toBeLessThanOrEqual(1));
+  });
+});
+
+describe("PicturePass.release", () => {
+  /** A WebGL 2 context that answers everything and records what was called. */
+  function fakeGl() {
+    const calls: string[] = [];
+    let lost = false;
+    const ext = { loseContext: () => ((lost = true), calls.push("loseContext")) };
+    const gl = new Proxy({} as Record<string, unknown>, {
+      get(_t, k: string) {
+        if (k === "isContextLost") return () => lost;
+        if (k === "getExtension") return (n: string) => (n === "WEBGL_lose_context" ? ext : null);
+        if (/^[A-Z_0-9]+$/.test(k)) return 1;
+        return (..._a: unknown[]) => {
+          calls.push(k);
+          return k.startsWith("get") && k.endsWith("Parameter") ? true : {};
+        };
+      },
+    });
+    return { gl, calls };
+  }
+
+  it("frees its GPU objects and gives the context back at once", () => {
+    const { gl, calls } = fakeGl();
+    const canvas = { width: 0, height: 0, getContext: () => gl } as unknown as HTMLCanvasElement;
+    const pass = new PicturePass(canvas);
+    pass.release();
+    expect(calls).toContain("deleteTexture");
+    expect(calls).toContain("deleteProgram");
+    expect(calls[calls.length - 1]).toBe("loseContext");
+    expect(pass.lost).toBe(true);
+    // Twice is harmless (a stream that ends after its canvas was replaced).
+    pass.release();
+    expect(calls.filter((c) => c === "loseContext")).toHaveLength(1);
   });
 });

@@ -13,6 +13,8 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:1420",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
+    // Never through the computer's speakers: the Remote Play specs play real sound.
+    launchOptions: { args: ["--mute-audio"] },
   },
   projects: [
     {
@@ -24,7 +26,7 @@ export default defineConfig({
     {
       name: "app-csp",
       testMatch: /remote-play\.spec\.ts/,
-      grep: /microphone sends/,
+      grep: /microphone sends|game.s sound plays/,
       use: { ...devices["Desktop Chrome"], baseURL: "http://127.0.0.1:1421" },
     },
   ],
