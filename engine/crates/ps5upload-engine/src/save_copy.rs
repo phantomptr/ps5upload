@@ -415,9 +415,7 @@ pub fn shared_parts(unpacked: &Path, title_id: &str) -> Result<Vec<Part>, String
     let manifest: Value = std::fs::read(dir.join(SHARE_MANIFEST))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
-        .ok_or(
-            "this is not a shared save (no manifest): share it from Save Data on the other console",
-        )?;
+        .ok_or(NO_MANIFEST)?;
     if manifest.get("title_id").and_then(Value::as_str) != Some(title_id) {
         return Err(format!("this shared save is not for {title_id}"));
     }
@@ -475,6 +473,51 @@ pub fn shared_parts(unpacked: &Path, title_id: &str) -> Result<Vec<Part>, String
         }
         _ => Err("only PS5 saves can be shared".into()),
     }
+}
+
+/// A zip with no share manifest in it.
+const NO_MANIFEST: &str =
+    "this is not a shared save (no manifest): share it from Save Data on the other console";
+
+/// Said when the file picked is a save backup, the zip that sits beside a shared save and is
+/// easy to pick instead (#633): it holds the console's sealed images, which only the PS5 that
+/// made it can use. Known by the note a backup carries (10.6.0 on) or, for an older one, by its
+/// images being files where a shared save has a folder per part.
+fn backup_not_share(e: String, zip: &Path, dir: &Path) -> String {
+    if e != NO_MANIFEST {
+        return e;
+    }
+    let noted = ps5upload_core::save_archive::zip_comment(zip)
+        .ok()
+        .and_then(|c| serde_json::from_str::<Value>(&c).ok())
+        .is_some_and(|n| n.get("ps5upload").and_then(Value::as_str) == Some("save-backup"));
+    let sealed = std::fs::read_dir(dir).is_ok_and(|d| {
+        d.flatten()
+            .any(|e| e.file_type().is_ok_and(|t| t.is_file()))
+    });
+    if noted || sealed {
+        crate::log_info!(
+            "save backup: a backup was picked as a save file ({})",
+            dir.display()
+        );
+        return "this file is a save backup, not a save file: a backup only works on the PS5 \
+                that made it (Restore… there). To move a save to another PS5, use Copy to › Save \
+                as a file on the PS5 that has it, and load that file here"
+            .into();
+    }
+    let seen: Vec<String> = std::fs::read_dir(dir)
+        .map(|d| {
+            d.flatten()
+                .take(12)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    crate::log_info!(
+        "save backup: no share manifest in {}: {seen:?}",
+        dir.display()
+    );
+    e
 }
 
 /// Which of the target's `images` each part goes into: the one of the same name. A file from
@@ -568,7 +611,8 @@ fn import_as(
         std::fs::create_dir_all(&unpacked).map_err(|e| format!("unpack: {e}"))?;
         unzip_strict(&zip, &unpacked, &title_id)
             .map_err(|e| format!("this file is not a shared save of {title_id}: {e:#}"))?;
-        let parts = shared_parts(&unpacked, &title_id)?;
+        let parts = shared_parts(&unpacked, &title_id)
+            .map_err(|e| backup_not_share(e, &zip, &unpacked.join(&title_id)))?;
         let pairs = match_parts(&parts, &c.images(folder)?, compat)
             .map_err(|m| missing_error(&title_id, who, m))?;
         checks(c, &title_id)?;
@@ -1640,6 +1684,30 @@ mod tests {
     /// A shared save of `T` from A's save (every image in `images`).
     fn shared_zip(images: &[&str]) -> Vec<u8> {
         share(&Fake::both(images), &folder(A)).unwrap().1
+    }
+
+    /// A save backup picked as a save file (#633) is called that, noted (10.6.0 on) or not, and
+    /// nothing on the console changes; a zip that is neither still says "no manifest".
+    #[test]
+    fn a_backup_picked_as_a_save_file_is_called_a_backup() {
+        let dir = make_temp_dir("copytest").unwrap();
+        for console in [Some("ABCDEF0123"), None] {
+            let zip = std::fs::read(backup_zip_from(&dir, &[MAIN, STAR], console)).unwrap();
+            let c = Fake::both(&[MAIN, STAR]);
+            let e = import(&c, &folder(B), B, &zip, None, None).unwrap_err().msg;
+            assert!(
+                e.starts_with("this file is a save backup, not a save file"),
+                "{e}"
+            );
+            assert!(c.calls().is_empty(), "{:?}", c.calls());
+        }
+        let c = Fake::both(&[MAIN, STAR]);
+        let folders = zip_of(&[("sdimg_STARBOARD/GAME.DAT", b"x")]);
+        let e = import(&c, &folder(B), B, &folders, None, None)
+            .unwrap_err()
+            .msg;
+        assert_eq!(e, NO_MANIFEST);
+        let _ = cleanup_temp_dir(&dir.to_string_lossy());
     }
 
     /// A close the helper refuses once (the write-back failed, "the next Close tries again")
