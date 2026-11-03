@@ -192,14 +192,20 @@ export function hushBlock(i: {
   running: boolean;
   /** state.txt is there. */
   statePresent: boolean;
-  /** The process state.txt names still runs; null when unknown. */
+  /** state.txt was last written before the console booted (both on the console's clock): it
+   *  is left over from an earlier boot, and its patch went with that boot. Null when unknown
+   *  (an older helper that doesn't say when the console booted). */
+  stateBeforeBoot: boolean | null;
+  /** The process state.txt names still runs; null when unknown. Only "gone" says anything:
+   *  the capture process gets the same pid every boot (60 on 13.60), so "alive" proves nothing. */
   statePidAlive: boolean | null;
   holdS: number;
 }): HushBlock {
   if (!i.statePresent) return "clear";
   if (i.running) return i.holdS > 0 ? "hold" : "patched";
-  // A state.txt from before a restart: the process it patched is gone, and the patch with it.
-  if (i.statePidAlive === false) return "clear";
+  // Hush not running: a state.txt from an earlier boot is stale, not a patch in place.
+  if (i.stateBeforeBoot === true) return "clear";
+  if (i.stateBeforeBoot === null && i.statePidAlive === false) return "clear";
   return i.holdS > 0 ? "leftover_reload" : "leftover_restart";
 }
 

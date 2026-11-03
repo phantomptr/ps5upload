@@ -179,7 +179,7 @@ describe("Hush and a Remote Play stream", () => {
   });
 
   it("blocks only while state.txt is there", () => {
-    const base = { running: true, statePresent: false, statePidAlive: null, holdS: 0 };
+    const base = { running: true, statePresent: false, stateBeforeBoot: null, statePidAlive: null, holdS: 0 };
     // Running without a patch in place (hold mode after the hold, or check mode): stream freely.
     expect(hushBlock(base)).toBe("clear");
     expect(hushBlock({ ...base, holdS: 45 })).toBe("clear");
@@ -191,17 +191,35 @@ describe("Hush and a Remote Play stream", () => {
   });
 
   it("tells a patch left by a Hush that stopped, and how it clears", () => {
-    const left = { running: false, statePresent: true, statePidAlive: true, holdS: 45 };
+    // Written this boot, Hush gone: the patch is still in place.
+    const left = { running: false, statePresent: true, stateBeforeBoot: false, statePidAlive: true, holdS: 45 };
     expect(hushBlock(left)).toBe("leftover_reload");
     expect(hushBlock({ ...left, holdS: 0 })).toBe("leftover_restart");
-    // Not knowing whether the patched process runs counts as patched.
-    expect(hushBlock({ ...left, statePidAlive: null })).toBe("leftover_reload");
-    // The process it patched is gone (the console restarted): so is the patch.
-    expect(hushBlock({ ...left, statePidAlive: false })).toBe("clear");
+    // From an earlier boot: stale, even though the capture process has the same pid again
+    // (it is pid 60 every boot on 13.60).
+    expect(hushBlock({ ...left, stateBeforeBoot: true })).toBe("clear");
+    expect(hushBlock({ ...left, stateBeforeBoot: true, holdS: 0 })).toBe("clear");
+    // An older helper (boot time unknown): only "that process is gone" says stale.
+    const unknown = { ...left, stateBeforeBoot: null };
+    expect(hushBlock({ ...unknown, statePidAlive: false })).toBe("clear");
+    expect(hushBlock({ ...unknown, statePidAlive: true })).toBe("leftover_reload");
+    expect(hushBlock({ ...unknown, statePidAlive: null })).toBe("leftover_reload");
+    // A running Hush decides by itself; the boot time isn't consulted.
+    expect(hushBlock({ ...left, running: true, stateBeforeBoot: true })).toBe("hold");
   });
 
   it("waits hold_s plus a few seconds", () => {
     expect(hushHoldWaitMs({ holdS: 45 })).toBe(50_000);
     expect(hushHoldWaitMs({ holdS: 1 })).toBe(6_000);
+  });
+});
+
+describe("stateOlderThanBoot", () => {
+  it("compares the two console-clock times, unknown when either is missing", async () => {
+    const { stateOlderThanBoot } = await import("../../lib/rpBlockers");
+    expect(stateOlderThanBoot(1_000, 2_000)).toBe(true);
+    expect(stateOlderThanBoot(3_000, 2_000)).toBe(false);
+    expect(stateOlderThanBoot(0, 2_000)).toBeNull();
+    expect(stateOlderThanBoot(1_000, 0)).toBeNull();
   });
 });

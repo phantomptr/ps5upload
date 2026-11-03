@@ -144,6 +144,10 @@ pub struct HwPower {
     pub operating_time_sec: u64,
     pub operating_time_hours: u64,
     pub operating_time_minutes: u64,
+    /// When the console booted, in seconds since the epoch on the console's own clock (to
+    /// compare with file times there); 0 from a helper that doesn't say.
+    #[serde(default)]
+    pub boot_time_sec: u64,
     pub boot_count: u64,
     pub power_consumption_mw: u32,
     /// System load average (1, 5, 15 minute windows) via the SDK's
@@ -452,6 +456,9 @@ pub fn hw_power(addr: &str) -> Result<HwPower> {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0),
         operating_time_minutes: get("operating_time_minutes")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
+        boot_time_sec: get("boot_time_sec")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0),
         boot_count: get("boot_count").and_then(|v| v.parse().ok()).unwrap_or(0),

@@ -14,6 +14,7 @@ import {
   fsPathExists,
   fsReadPreview,
   fsWriteText,
+  fetchHwPower,
   payloadsDownload,
   payloadsLocalPath,
   payloadsRelease,
@@ -162,6 +163,24 @@ const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Hush log reads cover the whole log (rotated at 64 KB). */
 const HUSH_LOG_MAX = 72 * 1024;
 
+/** Whether state.txt was last written before the console booted (both times on the console's
+ *  clock, so a console clock that is off doesn't matter), or null when either is unknown. */
+export async function hushStateBeforeBoot(addr: string): Promise<boolean | null> {
+  try {
+    const [power, entries] = await Promise.all([fetchHwPower(addr), fsListDir(addr, HUSH_DIR)]);
+    const mtime = entries.find((e) => e.name === "state.txt")?.mtime ?? 0;
+    return stateOlderThanBoot(mtime, power.boot_time_sec ?? 0);
+  } catch {
+    return null;
+  }
+}
+
+/** state.txt's time against the boot's (seconds, console clock); null when either is missing. */
+export function stateOlderThanBoot(stateMtimeSec: number, bootTimeSec: number): boolean | null {
+  if (!(stateMtimeSec > 0) || !(bootTimeSec > 0)) return null;
+  return stateMtimeSec < bootTimeSec;
+}
+
 export const HUSH_BLOCKER: RpBlocker = {
   id: "hush",
   name: "Hush",
@@ -188,9 +207,13 @@ export const HUSH_BLOCKER: RpBlocker = {
     }
     const statePidAlive =
       statePid === null ? null : procs.some((p) => p.pid === statePid) ? true : truncated ? null : false;
+    const running = hushProcess(procs, hushLockPid(lock)) !== null;
+    // Only needed when Hush isn't running: is state.txt from before this boot?
+    const stateBeforeBoot = running ? null : await hushStateBeforeBoot(ctx.addr);
     const block = hushBlock({
-      running: hushProcess(procs, hushLockPid(lock)) !== null,
+      running,
       statePresent: true,
+      stateBeforeBoot,
       statePidAlive,
       holdS: cfg.holdS,
     });

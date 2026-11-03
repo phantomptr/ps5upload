@@ -894,8 +894,12 @@ int hw_power_get_text(char *out, size_t out_cap, size_t *out_written,
     struct timeval boottime;
     size_t bt_len = sizeof(boottime);
     uint64_t uptime_sec = 0;
+    uint64_t boot_time_sec = 0;
     if (sysctlbyname("kern.boottime", &boottime, &bt_len, NULL, 0) == 0 &&
         boottime.tv_sec > 0) {
+        /* When the console booted, on its own clock: compared with file times on the console
+         * (a file older than the boot is left over from an earlier one). */
+        boot_time_sec = (uint64_t)boottime.tv_sec;
         struct timeval nowtv;
         gettimeofday(&nowtv, NULL);
         if (nowtv.tv_sec > boottime.tv_sec) {
@@ -925,6 +929,7 @@ int hw_power_get_text(char *out, size_t out_cap, size_t *out_written,
         "operating_time_sec=%llu\n"
         "operating_time_hours=%llu\n"
         "operating_time_minutes=%llu\n"
+        "boot_time_sec=%llu\n"
         "boot_count=0\n"
         "power_consumption_mw=0\n"
         "load_avg_1m_centi=%ld\n"
@@ -933,6 +938,7 @@ int hw_power_get_text(char *out, size_t out_cap, size_t *out_written,
         (unsigned long long)uptime_sec,
         (unsigned long long)hours,
         (unsigned long long)minutes,
+        (unsigned long long)boot_time_sec,
         la_1m, la_5m, la_15m);
     if (n < 0 || (size_t)n >= out_cap) {
         if (err_reason_out) *err_reason_out = "hw_power_format_failed";
