@@ -14,3 +14,7 @@ paths-ignore:
   - "client/e2e/**"
   - "scripts/**"
   - "bench/**"
+  # Generated single-file builds of client/src (vite.join / vite.pad configs): CodeQL scans their
+  # sources there; in the minified copy it misreads bounds (the frame wait capped at 10 s).
+  - "engine/crates/ps5upload-engine/src/join_page.html"
+  - "engine/crates/ps5upload-engine/src/pad_page.html"
