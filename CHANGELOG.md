@@ -88,7 +88,14 @@ What's new in ps5upload, written for humans.
 - **Help › Thank you.** Everyone who has supported PS5Upload on Ko-fi, by tier (each its own
   colour), and the ones who chose to stay anonymous counted. No amounts are shown or kept. The
   same list is in the README.
-
+- **Send an archive as it is, without unpacking it.** A .zip, .7z or .rar dropped on Upload was
+  always unpacked onto the PS5, which broke anything that wanted the archive itself, such as a
+  jailbreak update. The archive card now asks what should happen to it: unpack it into a folder,
+  unpack it straight into the destination, or **Send the archive as it is**, which shows where the
+  file lands. The app picks for you from what the archive holds: a game or packages are unpacked
+  as before, anything else (payloads, a jailbreak update, saves) is sent as it is, and when it
+  can't tell, nothing is picked and Upload waits for your choice. With several sources, each
+  archive in the list has its own Unpack / Send as it is choice. (For #645.)
 
 ## 10.7.6
 

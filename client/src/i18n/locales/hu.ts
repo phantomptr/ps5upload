@@ -611,6 +611,9 @@ queue_title: "Sor",
 "batch_include": "{name} bevonása",
 "batch_already_queued": "Már a sorban van – kihagyva",
 "batch_unlock": "Feloldás",
+"batch_archive_unpack": "Kibontás",
+"batch_archive_as_is": "Küldés változatlanul",
+"batch_archive_choose": "Válassz: kibontás vagy küldés változatlanul",
 "batch_resume": "Ami már a PS5-ön van, marad (folytatás)",
 "batch_resume_hint": "Ki: minden már létező cél felülíródik.",
 "batch_upload_now": "{count} feltöltése most",
@@ -1793,7 +1796,11 @@ queue_install_unverified: "a telepítés elfogadva; ellenőrizd a PS5-ön (a cso
 upload_scanning_archive_hint_v2:
   "Az archívum indexének olvasása és a beágyazott játékmetaadatok feldolgozása. A feltöltés gombok akkor válnak elérhetővé, ha ez befejeződik.",
 // Formátumérzékeny kicsomagolási mód kártya ({ext} = az archívum saját kiterjesztése).
-upload_archive_extract_heading: "Hova csomagolódjon ki a(z) {ext}?",
+upload_archive_extract_heading: "Mi történjen ezzel a(z) {ext} fájllal?",
+upload_archive_send_as_is_label: "Az archívum küldése változatlanul (kibontás nélkül)",
+upload_archive_send_as_is_desc: "Magát a(z) {ext} fájlt másolja a PS5-re. Ezt válaszd jailbreak-frissítéshez, payloadokhoz vagy bármihez, ami az archívumot várja.",
+upload_archive_choose: "Nem derült ki, mit tartalmaz ez az archívum. Válaszd ki, hogy a PS5-re legyen kibontva, vagy változatlanul menjen át.",
+upload_archive_choose_first: "Előbb válaszd ki, mi történjen az archívummal",
 upload_archive_extract_subfolder_label:
   "Minden az archívum nevét viselő új mappába kerüljön",
 upload_archive_extract_subfolder_desc:
@@ -6906,7 +6913,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "upload_drop_kind_pkg": "Csomagok (.pkg, .fpkg): játékként, frissítésként vagy DLC-ként települnek, innen streamelve vagy előbb feltöltve.",
 "upload_drop_kind_game": "Játékmappák és játékdumpok: a PS5-re másolódnak; a kezdőképernyőre tehetők.",
 "upload_drop_kind_image": "Lemezképek (.exfat, .ffpkg, .ffpfs, .ffpfsc): a PS5-re másolódnak; csatolhatók.",
-"upload_drop_kind_archive": "Archívumok (.zip, .7z, .rar): a PS5-re bontódnak ki.",
+"upload_drop_kind_archive": "Archívumok (.zip, .7z, .rar): a PS5-re bontódnak ki, vagy változatlanul mennek át — te döntesz.",
 "upload_drop_kind_other": "Bármely más fájl vagy mappa: változatlanul másolódik.",
 "upload_other_ways": "Vagy telepíts egy csomagot:",
 "queue_stream_fail_hint": "A Streamelés és telepítés során a PS5 erről a számítógépről tölti le a csomagot. Ha továbbra is sikertelen, engedélyezd a ps5upload alkalmazást a számítógép tűzfalán a helyi hálózaton, hogy a PS5 elérje, vagy használd az Újra feltöltéssel lehetőséget, amely előbb a PS5-re másolja a csomagot, majd telepíti.",

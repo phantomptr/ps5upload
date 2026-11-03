@@ -99,6 +99,10 @@ export interface ZipInspect {
   application_category_type: number | null;
   /** Path inside the zip that holds `sce_sys/` (the game root), or null. */
   game_root: string | null;
+  /** The archive's file paths, at most 5000 (#645). Absent from an older engine. */
+  entry_names?: string[] | null;
+  /** True when `entry_names` is the whole archive. */
+  entry_names_complete?: boolean;
 }
 
 /** Inspect a `.zip` without extracting it. Reads only the central directory

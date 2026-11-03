@@ -246,6 +246,36 @@ fn inspect_zip_reports_sizes_and_game_meta() {
     assert_eq!(inspect.title_id.as_deref(), Some("PPSA01234"));
     assert_eq!(inspect.application_category_type, Some(0));
     assert_eq!(inspect.game_root.as_deref(), Some("MyGame"));
+    assert_eq!(
+        inspect.entry_names.as_deref(),
+        Some(
+            &[
+                "MyGame/eboot.bin".to_string(),
+                "MyGame/sce_sys/param.json".to_string()
+            ][..]
+        )
+    );
+    assert!(inspect.entry_names_complete);
+}
+
+/// #645: the inspect lists a non-game archive's files so the client can
+/// offer to send it as it is (a jailbreak update, payloads).
+#[test]
+fn inspect_zip_lists_entry_names() {
+    let zip = build_zip(
+        &[("y2jb/payload.js", b"js"), ("y2jb/main.elf", b"elf")],
+        true,
+    );
+    let inspect = inspect_zip(&zip.0).unwrap();
+    assert_eq!(inspect.game_root, None);
+    assert_eq!(
+        inspect.entry_names,
+        Some(vec![
+            "y2jb/payload.js".to_string(),
+            "y2jb/main.elf".to_string()
+        ])
+    );
+    assert!(inspect.entry_names_complete);
 }
 
 #[test]

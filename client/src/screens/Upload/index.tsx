@@ -10,6 +10,7 @@ import {
   HardDrive,
   Gamepad2,
   FileArchive,
+  AlertTriangle,
   Info,
   Check,
   Package,
@@ -105,6 +106,7 @@ import {
   type UploadItemOptions,
 } from "../../lib/uploadQueueItem";
 import { validateBatch } from "../../lib/uploadBatch";
+import { archiveDefault } from "../../lib/archiveDefault";
 import { scanChildren } from "../../lib/folderScan";
 import {
   useUploadBatch,
@@ -184,6 +186,10 @@ function detectedLabel(
   }
 }
 
+/** What happens to an archive source: unpacked into a folder named after it, unpacked straight
+ *  into the destination, or sent as the file it is (#645). */
+type ArchiveMode = "subfolder" | "flat" | "as-is";
+
 /**
  * Sending from this computer (or a saved server): pick or drop anything, and the app works out
  * what it is and what to do with it. `embedded` is Upload & Install's use: no page header (the
@@ -247,14 +253,37 @@ export default function UploadScreen({
 
   const [dropActive, setDropActive] = useState(false);
 
-  // For a `.zip` source: wrap its contents in a folder named after the
-  // zip ("subfolder", the default) or extract them straight into the
-  // chosen destination ("flat"). Only surfaced for archives; ignored
-  // otherwise. Sticky across sources within a session.
-  const [archiveExtractMode, setArchiveExtractMode] = useState<
-    "subfolder" | "flat"
-  >("subfolder");
-  const archiveIntoSubfolder = archiveExtractMode === "subfolder";
+  // An archive source: unpack it into a folder named after it ("subfolder"), straight into the
+  // destination ("flat"), or send the archive file as it is ("as-is", #645). Each archive starts
+  // from what it holds (lib/archiveDefault): a game or packages unpack, anything else is sent as
+  // it is, and an archive whose listing is unknown has nothing chosen until the user picks.
+  // Where to unpack stays sticky across sources within a session.
+  const [unpackPlacement, setUnpackPlacement] = useState<"subfolder" | "flat">(
+    "subfolder",
+  );
+  const [archivePick, setArchivePick] = useState<{
+    path: string;
+    mode: ArchiveMode;
+  } | null>(null);
+  const archiveSuggestion =
+    source?.kind === "archive" ? archiveDefault(source.zipInfo) : null;
+  const archiveExtractMode: ArchiveMode | null =
+    source?.kind !== "archive"
+      ? null
+      : archivePick?.path === source.path
+        ? archivePick.mode
+        : archiveSuggestion === "unpack"
+          ? unpackPlacement
+          : archiveSuggestion;
+  const setArchiveExtractMode = (mode: ArchiveMode) => {
+    if (!source) return;
+    setArchivePick({ path: source.path, mode });
+    if (mode !== "as-is") setUnpackPlacement(mode);
+  };
+  const archiveAsIs = archiveExtractMode === "as-is";
+  const archiveIntoSubfolder = archiveExtractMode
+    ? archiveExtractMode === "subfolder"
+    : unpackPlacement === "subfolder";
 
   // Subscribe to the webview's drag-drop events. Tauri delivers the paths
   // already resolved to the host filesystem, so we only need to stat one
@@ -438,6 +467,7 @@ export default function UploadScreen({
       destinationVolume,
       destinationSubpath,
       archiveIntoSubfolder,
+      sendArchiveAsIs: archiveAsIs,
       reconcileMode,
       strategy,
       excludes: activeExcludes,
@@ -459,6 +489,7 @@ export default function UploadScreen({
     strategy: "overwrite" | "resume",
   ): string | null => {
     if (!source || !host?.trim()) return null;
+    if (source.kind === "archive" && !archiveExtractMode) return null;
     return queueAdd(
       buildUploadQueueItem(
         source,
@@ -483,11 +514,12 @@ export default function UploadScreen({
     if (!host?.trim() || paths.length === 0) return;
     const addr = consoleAddr(host);
     for (const partPath of paths) {
+      // Sent as they are, the parts are plain files, each under its own name.
       const { dest } = resolveUploadDest(
         destinationVolume,
         destinationSubpath,
         partPath,
-        true,
+        !archiveAsIs,
         archiveIntoSubfolder,
       );
       const displayName =
@@ -496,7 +528,7 @@ export default function UploadScreen({
           .split(/[\\/]/)
           .pop() ?? partPath;
       queueAdd({
-        sourceKind: "archive",
+        sourceKind: archiveAsIs ? "file" : "archive",
         sourcePath: partPath,
         displayName,
         resolvedDest: dest,
@@ -504,8 +536,8 @@ export default function UploadScreen({
         // Overwrite: a fresh set of parts, each into the shared folder.
         strategy: "overwrite",
         reconcileMode,
-        excludes: activeExcludes,
-        rarPassword,
+        excludes: archiveAsIs ? [] : activeExcludes,
+        rarPassword: archiveAsIs ? null : rarPassword,
         mountAfterUpload: false,
         mountReadOnly,
         registerAfterUpload: false,
@@ -588,7 +620,10 @@ export default function UploadScreen({
     // detectError set = source couldn't be inspected (corrupt/unreadable
     // zip, failed folder walk). Don't ship a half-detected source — for an
     // archive that's `zipInfo: null`, which would fail deep in the flow.
-    if (!source || detecting || preflightBusy || detectError) return;
+    // An archive sent as it is needs no listing; one with nothing chosen waits for a choice.
+    if (!source || detecting || preflightBusy) return;
+    if (detectError && !archiveAsIs) return;
+    if (source.kind === "archive" && !archiveExtractMode) return;
     // A .pkg installs via the queue's finisher (the single-shot transfer path
     // has no installer). "Upload now" therefore enqueues it and starts this
     // console's queue immediately — same end state, just routed through the
@@ -615,15 +650,15 @@ export default function UploadScreen({
     }
     // Archives extract into a directory, so the pre-flight probe treats them
     // as a folder destination (check the named subdir, not a same-named file).
+    // One sent as it is is a plain file.
+    const unpacks = source.kind === "archive" && !archiveAsIs;
     const isFolder =
-      source.kind === "folder" ||
-      source.kind === "game-folder" ||
-      source.kind === "archive";
+      source.kind === "folder" || source.kind === "game-folder" || unpacks;
     const { dest } = resolveUploadDest(
       destinationVolume,
       destinationSubpath,
       source.path,
-      source.kind === "archive",
+      unpacks,
       archiveIntoSubfolder,
     );
     const addr = consoleAddr(host);
@@ -670,13 +705,14 @@ export default function UploadScreen({
   const queueItems = useUploadQueueStore((s) => s.items);
   const hasBatchPkg = batchRows.some((r) => r.source?.kind === "pkg");
   // The preview uses fixed name parts; the add below makes real ones.
+  // Each archive in the list is unpacked or sent as it is by its own row's choice (#645).
   const batchItemFor = (r: BatchRow, notify = false, nonce = r.id, now = 0) =>
     r.source
-      ? buildUploadQueueItem(
-          r.source,
-          r.password,
-          uploadItemOptions(batchStrategy, notify && hasBatchPkg, nonce, now),
-        )
+      ? buildUploadQueueItem(r.source, r.password, {
+          ...uploadItemOptions(batchStrategy, notify && hasBatchPkg, nonce, now),
+          archiveIntoSubfolder: unpackPlacement === "subfolder",
+          sendArchiveAsIs: r.archiveChoice === "as-is",
+        })
       : null;
   const batchSizeFor = (r: BatchRow): number | null =>
     r.size ??
@@ -716,10 +752,18 @@ export default function UploadScreen({
   const toAdd = included.filter(
     (r) => r.source && r.status === "ready" && !batchCheck.skip.has(r.id),
   );
+  // An archive with nothing chosen holds the list back until the user picks (#645).
+  const batchUndecided = included.some(
+    (r) =>
+      r.status === "ready" &&
+      r.source?.kind === "archive" &&
+      !r.archiveChoice,
+  );
   const batchReady =
     !!host?.trim() &&
     toAdd.length > 0 &&
     !batchCheck.blocked &&
+    !batchUndecided &&
     included.every((r) => r.status !== "inspecting");
   const addBatch = (startNow: boolean, now: number) => {
     if (!batchReady) return;
@@ -748,7 +792,7 @@ export default function UploadScreen({
     !!host?.trim() &&
     batchPkgs.length > 0 &&
     included.every((r) => r.status !== "inspecting") &&
-    (batchRest.length === 0 || !batchCheck.blocked);
+    (batchRest.length === 0 || (!batchCheck.blocked && !batchUndecided));
   const streamBatch = async (now: number) => {
     if (!canStreamBatch || !host) return;
     const pkgs = batchPkgs;
@@ -921,6 +965,7 @@ export default function UploadScreen({
           onRemove={(id) => batch.remove(id)}
           onInclude={(id, v) => batch.setInclude(id, v)}
           onPassword={(id, pw) => batch.setPassword(id, pw)}
+          onArchiveChoice={(id, c) => batch.setArchiveChoice(id, c)}
           onClear={() => batch.clear()}
           onConvert={(state) => navigate("/workshop", { state })}
         />
@@ -1104,7 +1149,7 @@ function Step1Picker({
                 ["upload_drop_kind_pkg", "Packages (.pkg, .fpkg): installed as a game, update or DLC, streamed from here or uploaded first."],
                 ["upload_drop_kind_game", "Game folders and game dumps: copied to the PS5; they can go on the home screen."],
                 ["upload_drop_kind_image", "Disk images (.exfat, .ffpkg, .ffpfs, .ffpfsc): copied to the PS5; they can be mounted."],
-                ["upload_drop_kind_archive", "Archives (.zip, .7z, .rar): extracted onto the PS5."],
+                ["upload_drop_kind_archive", "Archives (.zip, .7z, .rar): unpacked onto the PS5, or sent as they are — you choose."],
                 ["upload_drop_kind_other", "Any other file or folder: copied as it is."],
               ] as const
             ).map(([key, text]) => (
@@ -1141,8 +1186,8 @@ function Step2Options(props: {
   mountAfterUpload: boolean;
   mountReadOnly: boolean;
   registerAfterUpload: boolean;
-  archiveExtractMode: "subfolder" | "flat";
-  onSetArchiveExtractMode: (m: "subfolder" | "flat") => void;
+  archiveExtractMode: ArchiveMode | null;
+  onSetArchiveExtractMode: (m: ArchiveMode) => void;
   destinationVolume: string | null;
   destinationSubpath: string;
   availableVolumes: Volume[];
@@ -1306,10 +1351,14 @@ function Step2Options(props: {
   // premature until we can actually read the archive, so lead with the rar
   // card and hold the rest until it's readable.
   const rarBlocked = isRarSource && !source.zipInfo;
+  // An archive sent as it is (#645) is a plain file from here on: no excludes, lands under its
+  // own name. One with nothing chosen yet holds the upload buttons until the user picks.
+  const isArchive = source.kind === "archive";
+  const asIs = isArchive && archiveExtractMode === "as-is";
+  const unpacks = isArchive && !asIs;
+  const archiveUndecided = isArchive && !archiveExtractMode;
   const showExcludes =
-    source.kind === "folder" ||
-    source.kind === "game-folder" ||
-    source.kind === "archive";
+    source.kind === "folder" || source.kind === "game-folder" || unpacks;
   // Only offer ps5upload's own mount-after-upload for images the payload can
   // attach itself (exFAT/UFS/PFS). A .ffpfsc (compressed/nested PFS container)
   // is mountable only by ShadowMount+, so we hide the toggle and let SMP pick
@@ -1345,7 +1394,17 @@ function Step2Options(props: {
   // goes after what is running. Only a one-shot transfer from before 8.10 still in flight
   // (`inFlight`) holds it, since the two share the console's transfer port.
   const uploadDisabled =
-    detecting || inFlight || preflightBusy || !!detectError;
+    detecting ||
+    inFlight ||
+    preflightBusy ||
+    (!!detectError && !asIs) ||
+    archiveUndecided;
+  // Why Upload / Add to queue are greyed out while an archive waits for its choice.
+  const undecidedHint = tr(
+    "upload_archive_choose_first",
+    undefined,
+    "Choose what to do with the archive first",
+  );
 
   return (
     <>
@@ -1614,12 +1673,16 @@ function Step2Options(props: {
       {isRarSource && <RarSourceCard key={source.path} />}
 
       {source.kind === "archive" && source.zipInfo && (
-        <ZipArchiveCard info={source.zipInfo} />
+        <ZipArchiveCard info={source.zipInfo} unpacks={unpacks} />
       )}
 
-      {source.kind === "archive" && !rarBlocked && (
+      {/* A rar that can't be read yet can still be sent as it is. */}
+      {source.kind === "archive" &&
+        (!rarBlocked || (!detecting && !!detectError)) && (
         <ArchiveExtractModeCard
           mode={archiveExtractMode}
+          detecting={detecting}
+          canUnpack={!detectError}
           onChange={onSetArchiveExtractMode}
           destinationVolume={destinationVolume}
           destinationSubpath={destinationSubpath}
@@ -1719,7 +1782,7 @@ function Step2Options(props: {
                 destinationVolume,
                 destinationSubpath,
                 source.path,
-                source.kind === "archive",
+                unpacks,
                 archiveExtractMode === "subfolder",
               ).dest
             }
@@ -1801,7 +1864,12 @@ function Step2Options(props: {
         <button
           type="button"
           onClick={() => onAddToQueue("overwrite")}
-          disabled={detecting || preflightBusy || !!detectError}
+          disabled={
+            detecting ||
+            preflightBusy ||
+            (!!detectError && !asIs) ||
+            archiveUndecided
+          }
           className={ACTION_PLAIN}
           title={
             detecting
@@ -1810,10 +1878,12 @@ function Step2Options(props: {
                   undefined,
                   "Scanning game folder — wait for the scan to finish, then this button enables.",
                 )
-              : tr(
-                  "upload_add_to_queue_tooltip",
-                  "Add this upload to the queue without starting it",
-                )
+              : archiveUndecided
+                ? undecidedHint
+                : tr(
+                    "upload_add_to_queue_tooltip",
+                    "Add this upload to the queue without starting it",
+                  )
           }
         >
           {tr("upload_add_to_queue", "Add to queue")}
@@ -1829,23 +1899,25 @@ function Step2Options(props: {
                   undefined,
                   "Scanning game folder — wait for the scan to finish, then this button enables.",
                 )
-              : queueRunning
-                ? tr(
-                    "upload_after_running",
-                    undefined,
-                    "Starts after what the queue is sending now",
-                  )
-                : queueAutoStart
+              : archiveUndecided
+                ? undecidedHint
+                : queueRunning
                   ? tr(
-                      "upload_starts_queue",
+                      "upload_after_running",
                       undefined,
-                      "Starts the queue: anything already waiting goes first, in order",
+                      "Starts after what the queue is sending now",
                     )
-                  : tr(
-                      "upload_waits_for_start",
-                      undefined,
-                      "Adds to the queue. It runs when you press Start queue (Start the queue when you add something is off)",
-                    )
+                  : queueAutoStart
+                    ? tr(
+                        "upload_starts_queue",
+                        undefined,
+                        "Starts the queue: anything already waiting goes first, in order",
+                      )
+                    : tr(
+                        "upload_waits_for_start",
+                        undefined,
+                        "Adds to the queue. It runs when you press Start queue (Start the queue when you add something is off)",
+                      )
           }
           className={
             // For a package, Stream & install (next) is the main action;
@@ -1898,7 +1970,7 @@ function Step2Options(props: {
         </div>
       )}
       <MirrorToRosterButton
-        sourceKind={source.kind}
+        sourceKind={asIs ? "file" : source.kind}
         srcPath={source.path}
         archiveIntoSubfolder={archiveExtractMode === "subfolder"}
         destinationVolume={destinationVolume}
@@ -3304,7 +3376,14 @@ function PkgFinisherCard({
   );
 }
 
-function ZipArchiveCard({ info }: { info: ZipInspect }) {
+function ZipArchiveCard({
+  info,
+  unpacks = true,
+}: {
+  info: ZipInspect;
+  /** False when the archive is sent as it is: nothing is extracted. */
+  unpacks?: boolean;
+}) {
   const tr = useTr();
   // Space saved by keeping the dump zipped, as a percentage. Guard against a
   // zero/over-100% reading (already-compressed game data can make a "zip"
@@ -3364,32 +3443,41 @@ function ZipArchiveCard({ info }: { info: ZipInspect }) {
               {tr("upload_zip_on_disk", "on disk")}
             </div>
           )}
-          <div className="mt-1 flex items-center gap-1 text-xs text-[var(--color-muted)]">
-            <Info size={12} />{" "}
-            {tr(
-              "upload_zip_explainer",
-              "Decompressed on your computer and streamed in — files land already extracted on the PS5.",
-            )}
-          </div>
+          {unpacks && (
+            <div className="mt-1 flex items-center gap-1 text-xs text-[var(--color-muted)]">
+              <Info size={12} />{" "}
+              {tr(
+                "upload_zip_explainer",
+                "Decompressed on your computer and streamed in — files land already extracted on the PS5.",
+              )}
+            </div>
+          )}
         </div>
       </div>
     </section>
   );
 }
 
-/** Lets the user choose how a `.zip` lands on the PS5: wrapped in a
- *  folder named after the archive, or extracted straight into the
- *  destination. Shows a live preview of the resulting path for each
- *  choice so the outcome is unambiguous before they upload. */
+/** Lets the user choose what happens to an archive: unpacked into a
+ *  folder named after it, unpacked straight into the destination, or sent
+ *  as the file it is (#645). Shows a live preview of the resulting path for
+ *  each choice so the outcome is unambiguous before they upload. With
+ *  nothing chosen (the archive's listing could not tell) it asks. */
 function ArchiveExtractModeCard({
   mode,
+  detecting = false,
+  canUnpack = true,
   onChange,
   destinationVolume,
   destinationSubpath,
   sourcePath,
 }: {
-  mode: "subfolder" | "flat";
-  onChange: (m: "subfolder" | "flat") => void;
+  mode: ArchiveMode | null;
+  /** The archive is still being read: no "choose" prompt yet. */
+  detecting?: boolean;
+  /** False when the archive couldn't be read: it can only be sent as it is. */
+  canUnpack?: boolean;
+  onChange: (m: ArchiveMode) => void;
   destinationVolume: string | null;
   destinationSubpath: string;
   sourcePath: string;
@@ -3413,9 +3501,14 @@ function ArchiveExtractModeCard({
     true,
     false,
   ).dest;
+  const asIsDest = resolveUploadDest(
+    destinationVolume,
+    destinationSubpath,
+    sourcePath,
+  ).dest;
 
   const options: {
-    value: "subfolder" | "flat";
+    value: ArchiveMode;
     label: string;
     desc: string;
     preview: string;
@@ -3445,6 +3538,20 @@ function ArchiveExtractModeCard({
       ),
       preview: `${flatDest}/…`,
     },
+    {
+      value: "as-is",
+      label: tr(
+        "upload_archive_send_as_is_label",
+        undefined,
+        "Send the archive as it is (don't unpack)",
+      ),
+      desc: tr(
+        "upload_archive_send_as_is_desc",
+        { ext },
+        "Copies the {ext} file itself to the PS5. Choose this for a jailbreak update, payloads or anything else that expects the archive.",
+      ),
+      preview: asIsDest,
+    },
   ];
 
   return (
@@ -3454,19 +3561,35 @@ function ArchiveExtractModeCard({
         {tr(
           "upload_archive_extract_heading",
           { ext },
-          "Where should the {ext} unpack?",
+          "What should happen to this {ext}?",
         )}
       </div>
+      {!mode && !detecting && (
+        <div
+          className="mb-3 flex items-start gap-1.5 text-xs text-[var(--color-warn)]"
+          data-testid="archive-choose"
+        >
+          <AlertTriangle size={14} className="mt-px shrink-0" />
+          {tr(
+            "upload_archive_choose",
+            undefined,
+            "Couldn't tell what this archive holds. Choose whether to unpack it on the PS5 or send it as it is.",
+          )}
+        </div>
+      )}
       <div className="flex flex-col gap-2">
         {options.map((opt) => {
           const selected = mode === opt.value;
+          const disabled = !canUnpack && opt.value !== "as-is";
           return (
             <button
               key={opt.value}
               type="button"
+              disabled={disabled}
+              data-testid={`archive-mode-${opt.value}`}
               onClick={() => onChange(opt.value)}
               className={
-                "flex items-start gap-3 rounded-[var(--radius-card)] border p-3.5 text-left transition-colors " +
+                "flex items-start gap-3 rounded-[var(--radius-card)] border p-3.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 " +
                 (selected
                   ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
                   : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]")
