@@ -6959,6 +6959,12 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
   "update_open_log": "Abrir log de atualizações",
   "update_no_log": "Ainda não há log de atualizações.",
   "update_open_log_failed": "Não foi possível abrir o log de atualizações: {message}",
+  "rp_mini_back": "Voltar para Jogar: {name}",
+  "rp_mini_close": "Ocultar o miniplayer (a transmissão continua)",
+  "rp_mini_setting": "Miniplayer em outras telas",
+  "rp_mini_setting_hint": "Enquanto você usa outras telas do app, a imagem fica em uma janela pequena que você pode arrastar para qualquer canto. Toque nela para voltar aqui.",
+  "rp_system_pip_setting": "Manter a imagem flutuando ao sair do app",
+  "rp_system_pip_setting_hint": "Ao ir para a tela inicial enquanto joga, a imagem fica em uma janela pequena sobre outros apps. Toque nela para voltar.",
 };
 
 export default pt_BR;

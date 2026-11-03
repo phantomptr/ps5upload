@@ -6897,6 +6897,12 @@ helper_mismatch_boot_copy: "La PS5 ha avviato una copia più vecchia dell'helper
   "update_open_log": "Apri il log degli aggiornamenti",
   "update_no_log": "Non c'è ancora un log degli aggiornamenti.",
   "update_open_log_failed": "Impossibile aprire il log degli aggiornamenti: {message}",
+  "rp_mini_back": "Torna a Gioca: {name}",
+  "rp_mini_close": "Nascondi il mini player (lo stream continua)",
+  "rp_mini_setting": "Mini player nelle altre schermate",
+  "rp_mini_setting_hint": "Mentre usi altre schermate dell'app, l'immagine resta in una piccola finestra che puoi trascinare in qualsiasi angolo. Toccala per tornare qui.",
+  "rp_system_pip_setting": "Mantieni l'immagine fluttuante quando esci dall'app",
+  "rp_system_pip_setting_hint": "Se vai alla schermata Home mentre giochi, l'immagine resta in una piccola finestra sopra le altre app. Toccala per tornare.",
 };
 
 export default it;

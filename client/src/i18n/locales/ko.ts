@@ -6961,6 +6961,12 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "update_open_log": "업데이트 로그 열기",
   "update_no_log": "아직 업데이트 로그가 없습니다.",
   "update_open_log_failed": "업데이트 로그를 열 수 없습니다: {message}",
+  "rp_mini_back": "플레이로 돌아가기: {name}",
+  "rp_mini_close": "미니 플레이어 숨기기(스트림은 계속됨)",
+  "rp_mini_setting": "다른 화면에서 미니 플레이어",
+  "rp_mini_setting_hint": "앱의 다른 화면을 사용하는 동안 화면이 작은 창에 표시되며, 원하는 모서리로 끌어 놓을 수 있습니다. 탭하면 여기로 돌아옵니다.",
+  "rp_system_pip_setting": "앱을 나가도 화면을 띄워 두기",
+  "rp_system_pip_setting_hint": "플레이 중 홈 화면으로 가면 화면이 다른 앱 위에 작은 창으로 표시됩니다. 탭하면 돌아옵니다.",
 };
 
 export default ko;

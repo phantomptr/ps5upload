@@ -1377,6 +1377,30 @@ select option {
 .rp-place {
   container-type: size;
 }
+
+/* The Remote Play mini player (layout/RemotePlayMini.tsx), in the corner it was dragged to.
+ * Phones: 40% of the width, clear of the top bar, the bottom tab bar and the system's insets.
+ * Wider windows: 320 px, clear of the top bar and the status bar. */
+.rp-mini {
+  --mini-top: calc(env(safe-area-inset-top) + 4.25rem);
+  --mini-bottom: calc(var(--safe-bottom) + 5.5rem);
+  --mini-left: calc(env(safe-area-inset-left) + 0.75rem);
+  --mini-right: calc(env(safe-area-inset-right) + 0.75rem);
+  width: min(max(140px, 40vw), calc(100vw - 1.5rem));
+}
+@media (min-width: 768px) {
+  .rp-mini {
+    --mini-top: 5rem;
+    --mini-bottom: 3rem;
+    --mini-left: 1rem;
+    --mini-right: 1rem;
+    width: min(320px, calc(100vw - 2rem));
+  }
+}
+.rp-mini[data-corner="tl"] { top: var(--mini-top); left: var(--mini-left); }
+.rp-mini[data-corner="tr"] { top: var(--mini-top); right: var(--mini-right); }
+.rp-mini[data-corner="bl"] { bottom: var(--mini-bottom); left: var(--mini-left); }
+.rp-mini[data-corner="br"] { bottom: var(--mini-bottom); right: var(--mini-right); }
 .rp-picture {
   display: block;
   flex: none;

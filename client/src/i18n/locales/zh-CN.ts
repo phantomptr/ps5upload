@@ -6903,6 +6903,12 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "update_open_log": "打开更新日志",
   "update_no_log": "还没有更新日志。",
   "update_open_log_failed": "无法打开更新日志：{message}",
+  "rp_mini_back": "返回畅玩：{name}",
+  "rp_mini_close": "隐藏迷你播放器（串流继续）",
+  "rp_mini_setting": "在其他界面显示迷你播放器",
+  "rp_mini_setting_hint": "在使用应用的其他界面时，画面会保留在一个小窗口中，可拖到任意角落。点按即可回到这里。",
+  "rp_system_pip_setting": "离开应用时画面保持悬浮",
+  "rp_system_pip_setting_hint": "游玩时回到主屏幕，画面会以小窗口悬浮在其他应用上方。点按即可返回。",
 };
 
 export default zh_CN;

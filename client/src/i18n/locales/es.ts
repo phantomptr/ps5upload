@@ -6897,6 +6897,12 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
   "update_open_log": "Abrir registro de actualizaciones",
   "update_no_log": "Todavía no hay registro de actualizaciones.",
   "update_open_log_failed": "No se pudo abrir el registro de actualizaciones: {message}",
+  "rp_mini_back": "Volver a Jugar: {name}",
+  "rp_mini_close": "Ocultar el minirreproductor (la transmisión sigue)",
+  "rp_mini_setting": "Minirreproductor en otras pantallas",
+  "rp_mini_setting_hint": "Mientras usas otras pantallas de la app, la imagen se queda en una ventana pequeña que puedes arrastrar a cualquier esquina. Tócala para volver aquí.",
+  "rp_system_pip_setting": "Mantener la imagen flotando al salir de la app",
+  "rp_system_pip_setting_hint": "Si vas a la pantalla de inicio mientras juegas, la imagen se queda en una ventana pequeña sobre otras apps. Tócala para volver.",
 };
 
 export default es;

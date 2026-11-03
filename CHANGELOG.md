@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.7.6
+
+- **Remote Play keeps showing while you use other screens, and over other apps on Android (For
+  #637).** Leave Play while a stream runs and the picture stays in a small mini player in a
+  corner of the app, on the desktop, phone and tablet apps and in the browser: drag it to any
+  corner (remembered), tap it to go back, mute it, or hide it with ×. The controller and keyboard
+  still play only while Play is in front, so they work the app's menus elsewhere. In the Android
+  app, going to the home screen while you play shrinks the stream into Android's
+  picture-in-picture window, which floats over other apps with its sound; tap it to come back.
+  Both can be turned off in Play › Settings › Session.
+
 ## 10.7.5
 
 - **Remote Play sound no longer turns to static after the app has been open a long time.** In

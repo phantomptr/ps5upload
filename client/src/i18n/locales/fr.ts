@@ -6960,6 +6960,12 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "update_open_log": "Ouvrir le journal des mises à jour",
   "update_no_log": "Il n'y a pas encore de journal des mises à jour.",
   "update_open_log_failed": "Impossible d'ouvrir le journal des mises à jour : {message}",
+  "rp_mini_back": "Revenir à Jouer : {name}",
+  "rp_mini_close": "Masquer le mini-lecteur (le flux continue)",
+  "rp_mini_setting": "Mini-lecteur sur les autres écrans",
+  "rp_mini_setting_hint": "Pendant que vous utilisez d'autres écrans de l'app, l'image reste dans une petite fenêtre que vous pouvez faire glisser dans n'importe quel coin. Touchez-la pour revenir ici.",
+  "rp_system_pip_setting": "Garder l'image flottante en quittant l'app",
+  "rp_system_pip_setting_hint": "Si vous allez à l'écran d'accueil pendant que vous jouez, l'image reste dans une petite fenêtre au-dessus des autres apps. Touchez-la pour revenir.",
 };
 
 export default fr;

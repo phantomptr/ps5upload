@@ -6951,6 +6951,12 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "update_open_log": "Güncelleme günlüğünü aç",
   "update_no_log": "Henüz güncelleme günlüğü yok.",
   "update_open_log_failed": "Güncelleme günlüğü açılamadı: {message}",
+  "rp_mini_back": "Oyna'ya dön: {name}",
+  "rp_mini_close": "Mini oynatıcıyı gizle (yayın devam eder)",
+  "rp_mini_setting": "Diğer ekranlarda mini oynatıcı",
+  "rp_mini_setting_hint": "Uygulamanın diğer ekranlarını kullanırken görüntü, istediğin köşeye sürükleyebileceğin küçük bir pencerede kalır. Buraya dönmek için dokun.",
+  "rp_system_pip_setting": "Uygulamadan çıkınca görüntü havada kalsın",
+  "rp_system_pip_setting_hint": "Oynarken ana ekrana gidersen görüntü diğer uygulamaların üstünde küçük bir pencerede kalır. Geri dönmek için dokun.",
 };
 
 export default tr;

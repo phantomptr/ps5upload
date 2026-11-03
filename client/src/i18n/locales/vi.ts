@@ -6946,6 +6946,12 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "update_open_log": "Mở nhật ký cập nhật",
   "update_no_log": "Chưa có nhật ký cập nhật.",
   "update_open_log_failed": "Không mở được nhật ký cập nhật: {message}",
+  "rp_mini_back": "Quay lại Chơi: {name}",
+  "rp_mini_close": "Ẩn trình phát mini (luồng vẫn chạy)",
+  "rp_mini_setting": "Trình phát mini ở các màn hình khác",
+  "rp_mini_setting_hint": "Khi bạn dùng các màn hình khác của ứng dụng, hình ảnh vẫn ở trong một cửa sổ nhỏ mà bạn có thể kéo đến bất kỳ góc nào. Chạm vào để quay lại đây.",
+  "rp_system_pip_setting": "Giữ hình ảnh nổi khi rời ứng dụng",
+  "rp_system_pip_setting_hint": "Khi bạn về màn hình chính lúc đang chơi, hình ảnh vẫn ở trong một cửa sổ nhỏ phía trên các ứng dụng khác. Chạm vào để quay lại.",
 };
 
 export default vi;
