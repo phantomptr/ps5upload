@@ -23,6 +23,13 @@ What's new in ps5upload, written for humans.
 - **Scan QR asks for the camera.** Join a friend's **Scan QR** on Android said "The camera didn't
   open": the app never asked for the camera. It asks now, and if the camera is turned off it says
   so with **Try again** and **Open settings**.
+- **Hush 1.1.0's hold mode works with Play (For #651).** Play no longer warns "Hush is on" while
+  Hush isn't holding the video encoder, and no longer turns game recording back on by pausing
+  Hush: in hold mode it waits for Hush to let go (a few seconds after a game starts). A patch Hush
+  left behind is named, with what clears it.
+- **Pairing says what to check (For #642).** When the PS5 doesn't answer pairing, the message now
+  names the two usual causes: Remote Play is off on the PS5, or the PIN didn't come from the PS5's
+  own Link Device screen (PINs from other tools don't work).
 - **"No space" on a game's disk image says why.** Changing files of a game run from an image
   (.exfat, .ffpfs, .ffpkg) was refused with "only 0 bytes are safely allocatable" and nothing
   more. The message now says the image is exactly as big as the game and how to change its files.
