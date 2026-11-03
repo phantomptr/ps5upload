@@ -112,7 +112,7 @@ running.
    page). A `.pkg` goes in the same drop zone: choose **Stream & install** or **Upload &
    install** on its card. If it will not launch, see "My uploaded game won't launch".
 
-## Short guides: phone, away from home, TV, delay
+## Short guides: phone, away from home, friends, TV, delay
 
 **Q: How do I use PS5Upload from my phone?**
 Three ways, easiest first:
@@ -154,6 +154,25 @@ from rest mode** may not (it drops off Tailscale in rest mode with ps5-tailscale
 tested it through a subnet router), so leave it on or wake it before you go. Play runs only as
 well as your home connection's upload speed allows; if it keeps dropping frames, take 720p. We
 haven't tested Play over Tailscale ourselves.
+
+**Q: How do I play with a friend as Player 2?**
+With **Play Together** (10.8.0). Your friend uses their own phone, tablet or computer, on your
+network, and plays your PS5 as Player 2, 3 or 4 while you play as Player 1.
+
+1. **Invite.** Start Play, then press the people button on the picture's bar (on a phone:
+   **⋯ › Play Together**). Your friend scans the QR code with their phone's camera, or you send
+   the link (Copy, or Share on a phone). With the PS5Upload app they can instead type the short
+   code (like `K7M-2QX`) in **Play › Join a friend**, or pick you from **Playing nearby**. No app?
+   The link opens a page in any browser.
+2. **Allow.** Their name pops up over your picture: press **Allow**.
+3. **On the TV**, your friend presses **PS** on their controller and picks **Quick Play** (or
+   their own user) under "Who's using this controller?".
+
+They play with a controller connected to their device, or the on-screen controls on a phone. PS
+and Create are blocked for friends unless you turn that off in the panel. Up to three friends at
+once; stopping Play ends it for them, and the app asks first. If a friend's delay shows red, a
+lower Play quality (720p or 30 fps) makes it smoother for everyone. **Playing from somewhere
+else?** Both of you join the same Tailscale network, then share the link.
 
 **Q: Can the app wake the PS5 without turning on the TV?**
 Yes. The TV comes on because of HDMI-CEC: a PS5 that wakes up tells the TV to turn on and switch

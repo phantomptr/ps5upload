@@ -55,6 +55,7 @@ scripts/.translate-cache.json
 client/dist/
 client/dist-console/
 client/dist-pad/
+client/dist-join/
 client/.vite/
 client/out/
 client/.cache/

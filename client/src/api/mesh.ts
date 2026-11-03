@@ -14,6 +14,20 @@ export interface MeshActivityItem {
   count?: number;
   /** Remote Play: where a phone joins this device's session as a controller (pad_link.rs). */
   pad?: string;
+  /** Remote Play with Play Together open (#641): friends nearby may join (they are asked). */
+  join?: MeshJoin;
+}
+
+/** A Play Together host as the other apps on the network see it. */
+export interface MeshJoin {
+  code: string;
+  players: number;
+  max: number;
+  host_name: string;
+  console_name: string;
+  game_title?: string | null;
+  /** The guest socket: ws://<host computer>:<port>/api/join/ws */
+  ws: string;
 }
 
 export interface MeshDevice {

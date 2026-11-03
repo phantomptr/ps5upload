@@ -1,0 +1,132 @@
+import { useEffect, useState } from "react";
+import { Users } from "lucide-react";
+
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { useTr } from "../state/lang";
+import { tokenKey } from "../lib/joinClient";
+import { JoinView } from "./JoinView";
+import { JoinSession } from "./session";
+
+/** The name a guest goes by, remembered on this device. */
+export const NAME_KEY = "ps5upload.join.name";
+
+/** A device's default name, before the friend types one. */
+export function defaultName(ua: string): string {
+  return /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : "";
+}
+
+/** A saved place for this invite (a reload while joined): go straight back in. */
+function hasPlace(invite: string | null): boolean {
+  try {
+    return !!sessionStorage.getItem(tokenKey(invite));
+  } catch {
+    return false;
+  }
+}
+
+/** Fill the screen and hold it sideways, where the browser allows (Android Chrome does). */
+async function pageFullscreen(on: boolean): Promise<void> {
+  try {
+    if (on) {
+      await document.documentElement.requestFullscreen?.({ navigationUI: "hide" });
+      await (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }).lock?.("landscape");
+    } else if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    }
+  } catch {
+    // Not here (iPhone Safari): the page still fills the window.
+  }
+}
+
+/**
+ * The /join page a friend opens from the host's QR code or link: their name, then the wait for
+ * the host's yes, then the game (JoinView).
+ */
+export function JoinFlow({ url, invite, host }: { url: string; invite: string | null; host: string | null }) {
+  const tr = useTr();
+  const [name, setName] = useState(() => safeGetItem(NAME_KEY) ?? defaultName(typeof navigator === "undefined" ? "" : navigator.userAgent));
+  const [session, setSession] = useState<JoinSession | null>(null);
+  const [round, setRound] = useState(0);
+
+  const go = (n: string) => {
+    const clean = n.trim().slice(0, 32);
+    if (!clean) return;
+    safeSetItem(NAME_KEY, clean);
+    const s = new JoinSession({ url, invite, name: clean, host });
+    setSession(s);
+    setRound((r) => r + 1);
+    s.start();
+  };
+
+  // A reload while playing resumes the place without asking again.
+  useEffect(() => {
+    if (!session && hasPlace(invite) && name.trim()) go(name);
+    // Once, on load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    const away = () => session.stop();
+    window.addEventListener("pagehide", away);
+    return () => window.removeEventListener("pagehide", away);
+  }, [session]);
+
+  if (session) {
+    return (
+      <JoinView
+        key={round}
+        session={session}
+        onLeave={() => setSession(null)}
+        onAgain={() => {
+          session.stop();
+          go(name);
+        }}
+        onFullscreen={pageFullscreen}
+      />
+    );
+  }
+
+  const shownHost = host ?? tr("join_host_fallback", undefined, "your friend");
+  return (
+    <div className="flex min-h-[100dvh] items-center justify-center bg-black px-6 text-white" data-testid="join-name-step">
+      <form
+        className="w-full max-w-sm space-y-4 rounded-2xl border border-white/10 bg-neutral-900 p-6"
+        onSubmit={(e) => {
+          e.preventDefault();
+          go(name);
+        }}
+      >
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10">
+            <Users size={20} />
+          </span>
+          <div>
+            <h1 className="text-lg font-semibold">{tr("join_title", undefined, "Join a friend's game")}</h1>
+            <p className="text-sm text-white/60">{tr("join_title_body", { host: shownHost }, `Play on ${shownHost}'s PS5 as Player 2, 3 or 4.`)}</p>
+          </div>
+        </div>
+        <label className="block space-y-1.5">
+          <span className="text-sm font-medium">{tr("join_name_label", undefined, "Your name")}</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={32}
+            autoComplete="nickname"
+            className="block w-full rounded-lg border border-white/15 bg-black px-3 py-2 text-base outline-none focus:border-white/50"
+            data-testid="join-name"
+          />
+          <span className="block text-xs text-white/50">{tr("join_name_hint", undefined, "Your friend sees this when you ask to join.")}</span>
+        </label>
+        <button
+          type="submit"
+          disabled={!name.trim()}
+          className="w-full rounded-full bg-white py-2.5 text-sm font-semibold text-black disabled:opacity-40"
+          data-testid="join-go"
+        >
+          {tr("join_button", undefined, "Join")}
+        </button>
+      </form>
+    </div>
+  );
+}
