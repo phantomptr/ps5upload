@@ -367,6 +367,13 @@ export function JoinView({
             <p className="mt-1 text-white/75">
               {tr("join_guide_body", undefined, "Press PS on your controller, then on the TV pick Quick Play.")}
             </p>
+            <p className="mt-1 text-white/60">
+              {tr(
+                "join_guide_menus",
+                undefined,
+                "On the PS5's home screen only the host controls the menus; your controller plays inside games.",
+              )}
+            </p>
             <button
               type="button"
               onClick={() => {

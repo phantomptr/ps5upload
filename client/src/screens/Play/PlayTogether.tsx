@@ -369,6 +369,13 @@ export function PlayTogetherPanel({
             <p className="text-xs text-[var(--color-muted)]">
               {tr("pt_step_tv_body", undefined, "Your friend presses PS on their controller and picks Quick Play (or their own user).")}
             </p>
+            <p className="text-xs text-[var(--color-muted)]">
+              {tr(
+                "pt_step_tv_menus",
+                undefined,
+                "On the home screen only you control the menus; your friend's controller plays inside games.",
+              )}
+            </p>
           </Step>
         </div>
       )}
