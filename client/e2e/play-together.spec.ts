@@ -205,11 +205,27 @@ test("an old helper is pointed at the update", async ({ page }) => {
   await expect(page.getByTestId("pt-qr")).toHaveCount(0);
 });
 
-/** The guest page as the engine serves it. */
-async function serveJoinPage(page: Page) {
+/** The guest page as the engine serves it. Unless `ask`, this browser already chose to stay in
+ *  the browser (the "Open in the PS5Upload app?" question, OpenInAppGate). */
+async function serveJoinPage(page: Page, { ask = false }: { ask?: boolean } = {}) {
   const html = await readFile(new URL("../../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url), "utf8");
   await page.route("**/join", (route) => route.fulfill({ contentType: "text/html", body: html }));
+  if (!ask) await page.addInitScript(() => localStorage.setItem("ps5upload.openIn", "browser"));
 }
+
+test("a friend's browser asks first: the PS5Upload app, or carry on in the browser", async ({ page }) => {
+  await serveJoinPage(page, { ask: true });
+  await page.goto(`/join#i=${INVITE}&n=Ann`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("open-in-gate")).toContainText("Open in the PS5Upload app?");
+  await expect(page.getByTestId("join-name-step")).toHaveCount(0);
+  await page.getByTestId("open-in-remember").check();
+  await page.getByTestId("open-in-browser").click();
+  await expect(page.getByTestId("join-name-step")).toBeVisible();
+  // Remembered: the next link goes straight to the page.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("join-name-step")).toBeVisible();
+  await expect(page.getByTestId("open-in-gate")).toHaveCount(0);
+});
 
 /** One second of 320x240 H.264 as the engine forwards it (kind 0 header, kind 1 frames). */
 async function makeStream(page: Page): Promise<number[][]> {

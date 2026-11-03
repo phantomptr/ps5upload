@@ -1,20 +1,18 @@
 // ps5upload:// links opened with the app (a Play Together invite's "Open in the PS5Upload app").
 // The shell keeps each link until the page takes it (open_links.rs): subscribe first, then take,
 // so a link that opened the app before the page loaded is not lost. A join link goes to Play ›
-// Join a friend with the invite filled in, which asks the host as usual.
+// Join a friend with the invite filled in, which asks the host as usual; a controller (or watch)
+// link to this device as that computer's controller (/play/pad).
 
 import { useEffect } from "react";
 import { useNavigate } from "react-router";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauriEnv } from "../lib/tauriEnv";
-import { joinLinkFromAppLink } from "../lib/joinProtocol";
+import { appLinkRoute } from "../lib/appLinks";
 
-/** Where an opened link leads in the app, or null for one it doesn't know. */
-export function openLinkRoute(url: string): string | null {
-  const join = joinLinkFromAppLink(url);
-  return join ? `/play?join=${encodeURIComponent(join)}` : null;
-}
+/** Where an opened link leads in the app, or null for one it doesn't know (lib/appLinks). */
+export const openLinkRoute = appLinkRoute;
 
 export function OpenLinks(): null {
   const navigate = useNavigate();

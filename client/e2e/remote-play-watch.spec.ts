@@ -131,6 +131,8 @@ test.describe("a phone watching", () => {
   test("shows the picture, and plays once it is handed the controller", async ({ page }) => {
     // The engine's own pad page (npm run build:pad), served as the engine serves it.
     const html = await readFile(new URL("../../engine/crates/ps5upload-engine/src/pad_page.html", import.meta.url), "utf8");
+    // This browser already chose to stay in the browser (OpenInAppGate).
+    await page.addInitScript(() => localStorage.setItem("ps5upload.openIn", "browser"));
     await page.route("**/pad", (route) => route.fulfill({ contentType: "text/html", body: html }));
     let wsUrl = "";
     const pads: Array<{ buttons: number }> = [];

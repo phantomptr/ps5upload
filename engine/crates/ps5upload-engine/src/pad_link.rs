@@ -645,6 +645,37 @@ pub struct RelayQuery {
     url: String,
     #[serde(default)]
     name: Option<String>,
+    /// The computer's link key (a QR code or link opened in the app): in without asking.
+    #[serde(default)]
+    t: Option<String>,
+    /// `w=1`: join to watch.
+    #[serde(default)]
+    w: Option<u8>,
+}
+
+/// The pad socket's query for a relayed phone: its name, then the link's key and watch flag when
+/// it came from a link. A key is passed only when it looks like one (hex, as `random_key` makes).
+fn relay_query(name: &str, t: Option<&str>, watch: bool) -> String {
+    let mut q = format!(
+        "?name={}",
+        name.bytes()
+            .map(|b| if b.is_ascii_alphanumeric() {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            })
+            .collect::<String>()
+    );
+    if let Some(t) =
+        t.filter(|t| (8..=128).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        q.push_str("&t=");
+        q.push_str(t);
+    }
+    if watch {
+        q.push_str("&w=1");
+    }
+    q
 }
 
 /// Only another engine's pad socket on the LAN may be relayed to.
@@ -733,14 +764,8 @@ async fn relay_session(mut socket: WebSocket, q: RelayQuery) {
         q.name.unwrap_or_else(crate::mesh_api::device_name).as_str(),
     ));
     let url = format!(
-        "{target}?name={}",
-        name.bytes()
-            .map(|b| if b.is_ascii_alphanumeric() {
-                (b as char).to_string()
-            } else {
-                format!("%{b:02X}")
-            })
-            .collect::<String>()
+        "{target}{}",
+        relay_query(&name, q.t.as_deref(), q.w == Some(1))
     );
     relay_to(socket, &url).await;
 }
@@ -792,6 +817,21 @@ pub(crate) async fn relay_to(mut socket: WebSocket, url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relayed_link_passes_its_key_and_watch_flag_only_when_sound() {
+        assert_eq!(
+            relay_query("Ann's phone", None, false),
+            "?name=Ann%27s%20phone"
+        );
+        assert_eq!(
+            relay_query("A", Some("0f0f0f0f0f0f0f0f"), true),
+            "?name=A&t=0f0f0f0f0f0f0f0f&w=1"
+        );
+        // not a key: dropped (the computer then asks, as for any unkeyed phone)
+        assert_eq!(relay_query("A", Some("0f0f&w=1"), false), "?name=A");
+        assert_eq!(relay_query("A", Some("short"), false), "?name=A");
+    }
 
     #[test]
     fn tailnet_address_only_when_tailscale_routes_it() {

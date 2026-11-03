@@ -26,3 +26,34 @@ describe("ps5upload:// join links", () => {
     expect(openLinkRoute("ps5upload://join?link=javascript%3Aalert(1)")).toBeNull();
   });
 });
+
+describe("ps5upload:// controller links", () => {
+  const pad = "http://192.168.1.20:19113/pad#t=0f0f0f0f0f0f0f0f";
+
+  it("route to this device as the controller, through the relay", () => {
+    const r = openLinkRoute(`ps5upload://pad?link=${encodeURIComponent(pad)}`)!;
+    const q = new URL(r, "http://x").searchParams;
+    expect(r.startsWith("/play/pad?")).toBe(true);
+    expect(q.get("url")).toBe("ws://192.168.1.20:19113/api/pad/ws");
+    expect(q.get("name")).toBe("192.168.1.20");
+    expect(q.get("t")).toBe("0f0f0f0f0f0f0f0f");
+    expect(q.get("w")).toBeNull();
+  });
+
+  it("keep watch links watching", () => {
+    const r = openLinkRoute(`ps5upload://pad?link=${encodeURIComponent(`${pad}&w=1`)}`)!;
+    expect(new URL(r, "http://x").searchParams.get("w")).toBe("1");
+  });
+
+  it("refuse what isn't a controller link", () => {
+    for (const bad of [
+      "http://192.168.1.20:19113/pad",
+      "http://192.168.1.20:19113/pad#t=xyz",
+      "http://192.168.1.20:19113/other#t=0f0f0f0f0f0f0f0f",
+      "javascript:alert(1)//pad#t=0f0f0f0f0f0f0f0f",
+      "http://u:p@192.168.1.20/pad#t=0f0f0f0f0f0f0f0f",
+    ]) {
+      expect(openLinkRoute(`ps5upload://pad?link=${encodeURIComponent(bad)}`)).toBeNull();
+    }
+  });
+});
