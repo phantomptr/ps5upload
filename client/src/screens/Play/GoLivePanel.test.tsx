@@ -88,7 +88,7 @@ const set = (s: Partial<ReturnType<typeof useGoLiveStore.getState>>) => {
 describe("The Stream panel", () => {
   afterEach(() => set({ status: null, loadError: null, actionError: null, busy: false }));
 
-  it("is for computers only (the phone apps have no pipeline in 10.8.0)", () => {
+  it("is for computers only (the phone apps have no pipeline in 11.0.0)", () => {
     expect(goLiveAvailable({ mobile: false })).toBe(true);
     expect(goLiveAvailable({ mobile: true })).toBe(false);
     // OBS reads the feed on the engine's computer only.

@@ -156,7 +156,7 @@ well as your home connection's upload speed allows; if it keeps dropping frames,
 haven't tested Play over Tailscale ourselves.
 
 **Q: How do I play with a friend as Player 2?**
-With **Play Together** (10.8.0). Your friend uses their own phone, tablet or computer, on your
+With **Play Together** (11.0.0). Your friend uses their own phone, tablet or computer, on your
 network, and plays your PS5 as Player 2, 3 or 4 while you play as Player 1.
 
 1. **Invite.** Start Play, then press the people button on the picture's bar (on a phone:

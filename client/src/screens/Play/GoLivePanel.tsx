@@ -33,7 +33,7 @@ import { useRpQualityStore } from "../../state/rpQuality";
 type Tr = ReturnType<typeof useTr>;
 
 /** The Stream button and panel are for computers: the desktop app and the web UI (where Go
- *  live runs on the engine's computer). The phone apps have no streaming pipeline in 10.8.0. */
+ *  live runs on the engine's computer). The phone apps have no streaming pipeline in 11.0.0. */
 export function goLiveAvailable(p: { mobile: boolean }): boolean {
   return !p.mobile;
 }

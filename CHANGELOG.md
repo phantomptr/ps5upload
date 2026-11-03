@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## 10.8.0
+## 11.0.0
 
 - **Play Together: friends play your PS5 as Player 2, 3 and 4 (For #641).** While you play, the
   new people button on the Play bar (or **⋯ › Play Together** on a phone) opens a panel with three

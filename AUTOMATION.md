@@ -200,7 +200,7 @@ blindly: take a frame first and decide from what the screen shows.
 
 ## The live feed (OBS, ffmpeg)
 
-Added in 10.8.0 for [#635](https://github.com/phantomptr/ps5upload/issues/635). Same rules as
+Added in 11.0.0 for [#635](https://github.com/phantomptr/ps5upload/issues/635). Same rules as
 above: this computer only, addressed as localhost.
 
 ### `GET /api/ps5/rp/live.ts`: the running stream as MPEG-TS
