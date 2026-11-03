@@ -272,3 +272,26 @@ fn sensitive_covers_a_custom_urls_key_parts() {
     assert!(v.contains(&"live/secretpath?token=abcdef".to_string()));
     assert!(v.contains(&"token=abcdef".to_string()));
 }
+
+#[test]
+fn a_password_in_a_custom_url_is_never_shown() {
+    assert_eq!(
+        origin_of("rtmp://me:secret@live.example.com:1935/app"),
+        "rtmp://live.example.com:1935"
+    );
+    assert_eq!(
+        origin_of("rtmps://live.example.com/app"),
+        "rtmps://live.example.com"
+    );
+    let (d, s) = from_input(
+        &DestinationInput {
+            preset: "custom".into(),
+            url: Some("rtmp://me:secret@live.example.com/app".into()),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(!d.server.contains("secret"), "{}", d.server);
+    assert!(s.url.contains("me:secret@"), "kept, encrypted, for ffmpeg");
+}

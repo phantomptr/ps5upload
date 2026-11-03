@@ -339,11 +339,13 @@ pub(crate) fn validate_url(url: &str, allow_srt: bool, need_tls: bool) -> Result
     Ok(format!("{scheme}://{rest}"))
 }
 
-/// scheme://host[:port] of a URL (what Custom shows).
+/// scheme://host[:port] of a URL (what Custom shows), without a `user:password@` in it: that
+/// stays in the encrypted secret only.
 pub(crate) fn origin_of(url: &str) -> String {
     match url.split_once("://") {
         Some((s, rest)) => {
-            let host = rest.split(['/', '?']).next().unwrap_or("");
+            let authority = rest.split(['/', '?']).next().unwrap_or("");
+            let host = authority.rsplit('@').next().unwrap_or("");
             format!("{s}://{host}")
         }
         None => String::new(),
@@ -551,9 +553,12 @@ impl Store {
         let (mut d, s) = from_input(inp, None)?;
         let mut st = self.lock();
         d.id = new_id(&d.preset, &st);
-        st.push((d.clone(), s.clone()));
-        self.save(&st)
+        // Saved first, then kept: a failed save leaves the list as it was.
+        let mut next = st.clone();
+        next.push((d.clone(), s.clone()));
+        self.save(&next)
             .map_err(|e| Invalid("disk", format!("Could not save it: {e}")))?;
+        *st = next;
         Ok(view(&d, &s))
     }
 
@@ -572,17 +577,23 @@ impl Store {
             inp.preset = st[i].0.preset.clone();
         }
         let (d, s) = from_input(&inp, Some(&st[i]))?;
-        st[i] = (d.clone(), s.clone());
-        self.save(&st)
+        let mut next = st.clone();
+        next[i] = (d.clone(), s.clone());
+        self.save(&next)
             .map_err(|e| Invalid("disk", format!("Could not save it: {e}")))?;
+        *st = next;
         Ok(view(&d, &s))
     }
 
     pub(crate) fn remove(&self, id: &str) -> bool {
         let mut st = self.lock();
-        let n = st.len();
-        st.retain(|(d, _)| d.id != id);
-        n != st.len() && self.save(&st).is_ok()
+        let mut next = st.clone();
+        next.retain(|(d, _)| d.id != id);
+        if next.len() == st.len() || self.save(&next).is_err() {
+            return false;
+        }
+        *st = next;
+        true
     }
 
     fn save(&self, st: &[(Destination, Secret)]) -> anyhow::Result<()> {
@@ -634,10 +645,18 @@ fn new_id(preset: &str, taken: &[(Destination, Secret)]) -> String {
 }
 
 fn load_or_create_key(path: &Path) -> anyhow::Result<[u8; 32]> {
-    if let Ok(bytes) = std::fs::read(path) {
-        if let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            return Ok(key);
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            if let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                return Ok(key);
+            }
+            // Not a key (damaged): kept aside, not overwritten, in case it can be put back.
+            let _ = std::fs::rename(path, path.with_extension("bad"));
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        // Any other failure (a lock, permissions) is not "no key": making a new one would
+        // write over the old and lose every saved stream key for good.
+        Err(e) => anyhow::bail!("reading {}: {e}", path.display()),
     }
     let mut key = [0u8; 32];
     getrandom::fill(&mut key).map_err(|e| anyhow::anyhow!("reading OS randomness: {e}"))?;

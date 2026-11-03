@@ -32,7 +32,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::extract::Path;
+use axum::extract::{ConnectInfo, Path};
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -52,6 +53,13 @@ const REJOIN_AFTER: Duration = Duration::from_secs(60);
 const MAX_REJOINS: u32 = 5;
 /// ffmpeg gets this long to finish cleanly when stopped, then it is killed.
 const STOP_GRACE: Duration = Duration::from_secs(5);
+/// ffmpeg has no network timeout of its own: a connection that dies silently (Wi-Fi gone, a NAT
+/// entry expired) blocks its writes for as long as the OS keeps the socket (minutes). No
+/// progress for this long while live means that: it is stopped and the run reconnects.
+const STALL_AFTER: Duration = Duration::from_secs(20);
+/// The same before the first frame went out: a server that took the connection and never
+/// answered the handshake.
+const CONNECT_STALL_AFTER: Duration = Duration::from_secs(30);
 /// ffmpeg's last lines (scrubbed of keys) kept for the status.
 const LOG_LINES: usize = 12;
 
@@ -150,12 +158,17 @@ impl Run {
 
     /// Sleeps `d`, or less if stopped.
     async fn sleep(&self, d: Duration) {
+        // Registered before the check: `notify_waiters` keeps no permit, so a stop between the
+        // check and the wait would otherwise sleep the whole backoff (up to 30 s).
+        let woken = self.wake.notified();
+        tokio::pin!(woken);
+        woken.as_mut().enable();
         if self.stopped() {
             return;
         }
         tokio::select! {
             _ = tokio::time::sleep(d) => {}
-            _ = self.wake.notified() => {}
+            _ = woken => {}
         }
     }
 
@@ -411,7 +424,8 @@ async fn run(r: Arc<Run>) {
 
 fn site_names(r: &Run, idx: &[usize]) -> String {
     let mut v: Vec<&str> = idx.iter().map(|&i| r.dests[i].preset.name).collect();
-    v.dedup();
+    let mut seen = std::collections::HashSet::new();
+    v.retain(|n| seen.insert(*n));
     if v.len() == 1 {
         v[0].to_string()
     } else {
@@ -599,6 +613,7 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
     let mut last_sent = r.sent.load(Ordering::Relaxed);
     let mut last_tick = Instant::now();
     let mut rejoin = false;
+    let mut moved = (0f64, Instant::now());
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let status = loop {
         tokio::select! {
@@ -623,6 +638,27 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
                     s.kbps = if s.kbps == 0.0 { kbps } else { s.kbps * 0.6 + kbps * 0.4 };
                     s.upload_skips = s.upload_skips.max(skips);
                 });
+                let t_out = out_time.lock().map(|t| *t).unwrap_or(0.0);
+                if t_out > moved.0 {
+                    moved = (t_out, now);
+                }
+                let limit = if moved.0 > 0.0 { STALL_AFTER } else { CONNECT_STALL_AFTER };
+                if now.saturating_duration_since(moved.1) >= limit
+                    && !session_ended.load(Ordering::Relaxed)
+                {
+                    crate::log_info!(
+                        "golive: no progress for {} s: the connection is gone, starting again",
+                        limit.as_secs()
+                    );
+                    if let Ok(mut g) = failure.lock() {
+                        g.get_or_insert(if moved.0 > 0.0 {
+                            Failure::Dropped
+                        } else {
+                            Failure::Unreachable
+                        });
+                    }
+                    break finish(&mut child, &writer).await;
+                }
                 let due = rejoin_at.lock().ok().and_then(|g| *g).is_some_and(|t| now >= t);
                 if due {
                     crate::log_info!("golive: letting a dropped destination back in (short restart)");
@@ -736,8 +772,25 @@ fn resolve(ids: &[String]) -> Result<Vec<Dest>, (StatusCode, &'static str, Strin
     Ok(v)
 }
 
+/// Go live answers this computer (a loopback peer, which must also address it by a loopback
+/// name: a page whose name was re-pointed at 127.0.0.1, DNS rebinding, carries its own and could
+/// otherwise send this computer's screen to its own server) and the peers the LAN guard admits
+/// (`PS5UPLOAD_ALLOW_IP`: the web UI of an engine on a NAS or in Docker). The same rule as
+/// Play Together's host API (join.rs).
+fn guard(peer: std::net::IpAddr, headers: &HeaderMap) -> Option<Response> {
+    (peer.is_loopback() && !crate::vinput_api::host_is_local(headers))
+        .then(crate::vinput_api::host_not_local)
+}
+
 /// `POST /api/stream/start`.
-pub async fn start(Json(req): Json<StartReq>) -> Response {
+pub async fn start(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Json(req): Json<StartReq>,
+) -> Response {
+    if let Some(r) = guard(peer.ip(), &headers) {
+        return r;
+    }
     if req.destinations.is_empty() {
         return err(
             StatusCode::BAD_REQUEST,
@@ -745,8 +798,15 @@ pub async fn start(Json(req): Json<StartReq>) -> Response {
             "Pick at least one place to stream to.",
         );
     }
-    let mut ids: Vec<String> = req.destinations.iter().map(|d| d.key_id.clone()).collect();
-    ids.dedup();
+    // Each destination once, in the order given (dedup alone only drops neighbours: A, B, A
+    // would publish twice with A's key and the site would refuse the second).
+    let mut seen = std::collections::HashSet::new();
+    let ids: Vec<String> = req
+        .destinations
+        .iter()
+        .map(|d| d.key_id.clone())
+        .filter(|id| seen.insert(id.clone()))
+        .collect();
     let dests = match resolve(&ids) {
         Ok(d) => d,
         Err((code, e, msg)) => return err(code, e, msg),
@@ -809,7 +869,13 @@ pub async fn start(Json(req): Json<StartReq>) -> Response {
 }
 
 /// `POST /api/stream/stop`.
-pub async fn stop() -> Response {
+pub async fn stop(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(r) = guard(peer.ip(), &headers) {
+        return r;
+    }
     match current() {
         Some(r) => {
             r.request_stop();
@@ -821,7 +887,13 @@ pub async fn stop() -> Response {
 }
 
 /// `GET /api/stream/status`.
-pub async fn status() -> Response {
+pub async fn status(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(r) = guard(peer.ip(), &headers) {
+        return r;
+    }
     let session = live_feed::session_info();
     let check = |p: &Preset| {
         session
@@ -882,7 +954,14 @@ fn invalid(e: golive_dest::Invalid) -> Response {
 }
 
 /// `POST /api/stream/destinations`.
-pub async fn add_destination(Json(inp): Json<golive_dest::DestinationInput>) -> Response {
+pub async fn add_destination(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Json(inp): Json<golive_dest::DestinationInput>,
+) -> Response {
+    if let Some(r) = guard(peer.ip(), &headers) {
+        return r;
+    }
     let store = match golive_dest::store() {
         Ok(s) => s,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, "store", e),
@@ -898,9 +977,14 @@ pub async fn add_destination(Json(inp): Json<golive_dest::DestinationInput>) -> 
 
 /// `POST /api/stream/destinations/{id}`.
 pub async fn update_destination(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(inp): Json<golive_dest::DestinationInput>,
 ) -> Response {
+    if let Some(r) = guard(peer.ip(), &headers) {
+        return r;
+    }
     let store = match golive_dest::store() {
         Ok(s) => s,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, "store", e),
@@ -912,7 +996,14 @@ pub async fn update_destination(
 }
 
 /// `DELETE /api/stream/destinations/{id}`.
-pub async fn remove_destination(Path(id): Path<String>) -> Response {
+pub async fn remove_destination(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(r) = guard(peer.ip(), &headers) {
+        return r;
+    }
     let store = match golive_dest::store() {
         Ok(s) => s,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, "store", e),
@@ -926,7 +1017,13 @@ pub async fn remove_destination(Path(id): Path<String>) -> Response {
 }
 
 /// `POST /api/stream/tools/ffmpeg/install`.
-pub async fn install_ffmpeg() -> Response {
+pub async fn install_ffmpeg(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(r) = guard(peer.ip(), &headers) {
+        return r;
+    }
     match ffmpeg_tool::start_install() {
         Ok(_) => Json(serde_json::json!({"ok": true, "ffmpeg": ffmpeg_tool::status_json()}))
             .into_response(),

@@ -127,6 +127,31 @@ fn a_slow_reader_skips_to_a_keyframe_and_others_are_not_held_up() {
 }
 
 #[test]
+fn a_stuck_reader_asks_for_one_keyframe_not_one_per_frame() {
+    let f = feed();
+    let t = Instant::now();
+    let (_, _stuck, _) = f.add("stuck".into(), false).unwrap(); // never read
+    assert!(f.wants_keyframe(t)); // joined
+    f.video(KEY, 0, true, t);
+    for i in 1..=READER_QUEUE as u16 {
+        f.video(DELTA, i, false, t);
+    }
+    assert!(f.wants_keyframe(t), "fell behind: one keyframe asked");
+    // Still stuck: frames and the next keyframes go by without asking again (the periodic
+    // keyframe, 2 s apart, is all the console sends).
+    let mut i = READER_QUEUE as u16 + 1;
+    for k in 0..3 {
+        for _ in 0..30 {
+            f.video(DELTA, i, false, t);
+            i += 1;
+        }
+        f.video(KEY, i, true, t);
+        i += 1;
+        assert!(!f.wants_keyframe(t), "asked again on round {k}");
+    }
+}
+
+#[test]
 fn keyframes_every_two_seconds_only_while_someone_reads() {
     let f = feed();
     let t = Instant::now();
@@ -189,6 +214,8 @@ fn readers_are_capped() {
         .map(|i| f.add(format!("{i}"), false).unwrap())
         .collect();
     assert!(f.add("one too many".into(), false).is_none());
+    // Go live still gets in when outside readers fill the cap.
+    assert!(f.add("go-live".into(), true).is_some());
     drop(rx);
 }
 

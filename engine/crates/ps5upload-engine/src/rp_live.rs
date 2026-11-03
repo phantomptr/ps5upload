@@ -120,6 +120,8 @@ pub(crate) struct LiveFeed {
     last_ask: Mutex<Option<Instant>>,
     /// Asked for a keyframe (a reader joined, fell behind, or saw a loss).
     want_key: std::sync::atomic::AtomicBool,
+    /// The session ended: no new readers (one added after `close` would wait forever).
+    closed: std::sync::atomic::AtomicBool,
     held_after_loss: AtomicU64,
     losses: AtomicU64,
 }
@@ -138,6 +140,7 @@ impl LiveFeed {
             last_key: Mutex::new(None),
             last_ask: Mutex::new(None),
             want_key: Default::default(),
+            closed: Default::default(),
             held_after_loss: AtomicU64::new(0),
             losses: AtomicU64::new(0),
         }
@@ -189,7 +192,12 @@ impl LiveFeed {
         internal: bool,
     ) -> Option<(u64, mpsc::Receiver<FeedEvent>, Arc<ReaderStats>)> {
         let mut g = self.readers.lock().ok()?;
-        if g.len() >= MAX_READERS {
+        if self.closed.load(Ordering::Relaxed) {
+            return None;
+        }
+        // The cap is for outside readers (OBS, scripts): the engine's own (Go live, one at a
+        // time) is never shut out by them, which would read as "Remote Play stopped".
+        if !internal && g.iter().filter(|r| !r.internal).count() >= MAX_READERS {
             return None;
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -224,7 +232,11 @@ impl LiveFeed {
         let all = self
             .readers
             .lock()
-            .map(|mut g| std::mem::take(&mut *g))
+            .map(|mut g| {
+                // Under the readers' lock, so an add can't slip in between.
+                self.closed.store(true, Ordering::Relaxed);
+                std::mem::take(&mut *g)
+            })
             .unwrap_or_default();
         for r in &all {
             log_reader("session ended", r);
@@ -261,10 +273,15 @@ impl LiveFeed {
         } else {
             None
         };
+        // A keyframe is asked for when a reader starts waiting (a loss, or it fell behind), not
+        // on every frame while it waits: a reader that stays stuck (ffmpeg blocked on a dead
+        // connection, a half-open OBS socket) would otherwise have the console send a keyframe
+        // every 500 ms for everyone. The periodic keyframe (KEYFRAME_EVERY) still comes.
         let mut want = false;
         for r in g.iter_mut() {
             if loss && !key && r.wait.is_none() {
                 r.wait = Some(Wait::Loss);
+                want = true;
             }
             if let Some(w) = r.wait {
                 if !key {
@@ -272,7 +289,6 @@ impl LiveFeed {
                         r.stats.held_after_loss.fetch_add(1, Ordering::Relaxed);
                         self.held_after_loss.fetch_add(1, Ordering::Relaxed);
                     }
-                    want = true;
                     continue;
                 }
                 r.wait = None;
@@ -287,7 +303,8 @@ impl LiveFeed {
             if let Err(mpsc::error::TrySendError::Full(_)) = r.tx.try_send(ev) {
                 r.stats.dropped_slow.fetch_add(1, Ordering::Relaxed);
                 r.wait = Some(Wait::Slow);
-                want = true;
+                // Only when it falls behind, not each keyframe it still can't take.
+                want |= !key;
             }
         }
         if want {

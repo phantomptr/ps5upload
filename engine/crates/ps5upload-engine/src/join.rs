@@ -2944,7 +2944,7 @@ mod tests {
         }
         assert!(!connect_allowed(ip, t));
         assert!(connect_allowed(ip, t + Duration::from_secs(61)));
-        assert!(LOOPBACK_CONNECTS_PER_MIN > CONNECTS_PER_MIN);
+        const { assert!(LOOPBACK_CONNECTS_PER_MIN > CONNECTS_PER_MIN) };
     }
 
     #[test]

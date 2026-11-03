@@ -160,7 +160,8 @@ impl FfmpegCmd {
 }
 
 /// Binaries already hashed this run: (path, length, modified) → fine.
-static CHECKED: Mutex<Option<(PathBuf, u64, std::time::SystemTime)>> = Mutex::new(None);
+#[allow(clippy::type_complexity)]
+static CHECKED: Mutex<Option<((PathBuf, u64, std::time::SystemTime), bool)>> = Mutex::new(None);
 
 /// The verified ffmpeg, if it is installed (or `PS5UPLOAD_FFMPEG` names one).
 pub(crate) fn find() -> Option<FfmpegCmd> {
@@ -182,22 +183,31 @@ pub(crate) fn find_in(dir: &Path) -> Option<FfmpegCmd> {
     }
     let meta = std::fs::metadata(&program).ok()?;
     let stamp = (program.clone(), meta.len(), meta.modified().ok()?);
+    // The verdict for this exact file (path, size, time) is kept, good or bad: a status poll
+    // every second must not hash 80 MB (and warn) each time.
     let known = CHECKED
         .lock()
         .ok()
-        .is_some_and(|g| g.as_ref() == Some(&stamp));
-    if !known {
-        let got = sha256_file(&program).ok()?;
-        if !got.eq_ignore_ascii_case(&rec.ffmpeg_sha256) {
-            crate::log_warn!(
-                "ffmpeg_tool: {} does not match what was installed; not running it",
-                program.display()
-            );
-            return None;
+        .and_then(|g| g.as_ref().filter(|(s, _)| *s == stamp).map(|(_, ok)| *ok));
+    let ok = match known {
+        Some(ok) => ok,
+        None => {
+            let ok =
+                sha256_file(&program).is_ok_and(|got| got.eq_ignore_ascii_case(&rec.ffmpeg_sha256));
+            if !ok {
+                crate::log_warn!(
+                    "ffmpeg_tool: {} does not match what was installed; not running it",
+                    program.display()
+                );
+            }
+            if let Ok(mut g) = CHECKED.lock() {
+                *g = Some((stamp, ok));
+            }
+            ok
         }
-        if let Ok(mut g) = CHECKED.lock() {
-            *g = Some(stamp);
-        }
+    };
+    if !ok {
+        return None;
     }
     let lib = dir.join("lib");
     Some(FfmpegCmd {
@@ -326,7 +336,9 @@ pub(crate) type Fetch = dyn Fn(&str, &mut dyn Write, &dyn Fn(u64)) -> Result<(),
 fn download(url: &str, w: &mut dyn Write, progress: &dyn Fn(u64)) -> Result<(), String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(20)))
-        .timeout_recv_body(Some(Duration::from_secs(60)))
+        // Per read, not for the whole body (`timeout_recv_body` is a total: 60 s would fail a
+        // 90 MB download on anything under about 12 Mbps).
+        .timeout_per_read(Some(Duration::from_secs(60)))
         .http_status_as_error(false)
         .build()
         .into();
