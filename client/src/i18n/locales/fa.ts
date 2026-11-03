@@ -609,6 +609,9 @@ queue_title: "صف",
 "batch_include": "شامل {name}",
 "batch_already_queued": "قبلاً در صف — رد شد",
 "batch_unlock": "باز کردن قفل",
+"batch_archive_unpack": "باز کردن",
+"batch_archive_as_is": "ارسال همان‌طور که هست",
+"batch_archive_choose": "انتخاب کنید: باز شود یا همان‌طور که هست فرستاده شود",
 "batch_resume": "آنچه از قبل روی PS5 هست را نگه دار (ادامه)",
 "batch_resume_hint": "خاموش: هر مقصدی که از قبل وجود دارد جایگزین می‌شود.",
 "batch_upload_now": "بارگذاری {count} الان",
@@ -1857,7 +1860,11 @@ queue_install_unverified: "نصب پذیرفته شد؛ روی PS5 تأیید ک
 upload_scanning_archive_hint_v2:
   "در حال خواندن ایندکس آرشیو و تحلیل فراداده‌ی بازی جاسازی‌شده. دکمه‌های بارگذاری پس از پایان فعال می‌شوند.",
 // Format-aware extract-mode card ({ext} = the archive's own extension).
-upload_archive_extract_heading: "{ext} کجا باز شود؟",
+upload_archive_extract_heading: "با این {ext} چه شود؟",
+upload_archive_send_as_is_label: "آرشیو را همان‌طور که هست بفرست (باز نکن)",
+upload_archive_send_as_is_desc: "خود فایل {ext} را روی PS5 کپی می‌کند. این را برای به‌روزرسانی جیلبریک، پی‌لودها یا هر چیزی که خود آرشیو را می‌خواهد انتخاب کنید.",
+upload_archive_choose: "مشخص نشد این آرشیو چه چیزی دارد. انتخاب کنید روی PS5 باز شود یا همان‌طور که هست فرستاده شود.",
+upload_archive_choose_first: "اول انتخاب کنید با آرشیو چه شود",
 upload_archive_extract_subfolder_label:
   "همه چیز را در یک پوشه‌ی جدید به نام آرشیو قرار بده",
 upload_archive_extract_subfolder_desc:
@@ -6892,7 +6899,7 @@ library_compressed_hint: "برای اجرای ایمیج فشرده به ShadowM
 "upload_drop_kind_pkg": "بسته‌ها (.pkg، .fpkg): به‌صورت بازی، به‌روزرسانی یا DLC نصب می‌شوند؛ از اینجا استریم یا ابتدا بارگذاری می‌شوند.",
 "upload_drop_kind_game": "پوشه‌های بازی و دامپ‌های بازی: روی PS5 کپی می‌شوند؛ می‌توانند در صفحهٔ اصلی قرار گیرند.",
 "upload_drop_kind_image": "ایمیج‌های دیسک (.exfat، .ffpkg، .ffpfs، .ffpfsc): روی PS5 کپی می‌شوند؛ قابل اتصال‌اند.",
-"upload_drop_kind_archive": "آرشیوها (.zip، .7z، .rar): روی PS5 استخراج می‌شوند.",
+"upload_drop_kind_archive": "آرشیوها (.zip، .7z، .rar): روی PS5 استخراج می‌شوند یا همان‌طور که هستند فرستاده می‌شوند — انتخاب با شماست.",
 "upload_drop_kind_other": "هر فایل یا پوشهٔ دیگر: همان‌طور که هست کپی می‌شود.",
 "upload_other_ways": "یا یک بسته نصب کنید:",
 "queue_stream_fail_hint": "«استریم و نصب» باعث می‌شود PS5 بسته را از این رایانه بگیرد. اگر مدام شکست خورد، به ps5upload در فایروال این رایانه برای شبکهٔ محلی اجازه دهید تا PS5 به آن برسد، یا از «تلاش دوباره از طریق بارگذاری» استفاده کنید که بسته را ابتدا روی PS5 کپی و سپس نصب می‌کند.",

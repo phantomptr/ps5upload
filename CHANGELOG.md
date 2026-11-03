@@ -74,6 +74,14 @@ What's new in ps5upload, written for humans.
   fresh upload went from 9.4 to 12.1 MB/s and a resumed one from 8.0 to 11.5 MB/s. (AVA1 1.0.6.)
 - **A resumed upload shows what was already on the PS5,** and its time left counts only what's
   still to send.
+- **Send an archive as it is, without unpacking it.** A .zip, .7z or .rar dropped on Upload was
+  always unpacked onto the PS5, which broke anything that wanted the archive itself, such as a
+  jailbreak update. The archive card now asks what should happen to it: unpack it into a folder,
+  unpack it straight into the destination, or **Send the archive as it is**, which shows where the
+  file lands. The app picks for you from what the archive holds: a game or packages are unpacked
+  as before, anything else (payloads, a jailbreak update, saves) is sent as it is, and when it
+  can't tell, nothing is picked and Upload waits for your choice. With several sources, each
+  archive in the list has its own Unpack / Send as it is choice. (For #645.)
 
 ## 10.7.6
 

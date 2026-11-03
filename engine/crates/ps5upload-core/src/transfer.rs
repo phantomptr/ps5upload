@@ -321,6 +321,43 @@ pub struct ZipInspect {
     /// e.g. "MyGame" for `MyGame/sce_sys/param.json`, or "" if param.json is
     /// at the archive root. `None` when no game metadata was found.
     pub game_root: Option<String>,
+    /// The archive's file paths (directories left out), in archive order, so
+    /// the client can tell a game or package archive from one the user means
+    /// to send as it is (#645). At most `ENTRY_NAMES_MAX`; `None` from an
+    /// engine that did not list them.
+    #[serde(default)]
+    pub entry_names: Option<Vec<String>>,
+    /// True when `entry_names` holds every file in the archive.
+    #[serde(default)]
+    pub entry_names_complete: bool,
+}
+
+/// How many entry paths `ZipInspect::entry_names` carries at most. Enough for
+/// every small archive (payloads, saves, a jailbreak update) whole; a bigger
+/// one is cut off and says so.
+pub const ENTRY_NAMES_MAX: usize = 5000;
+
+/// Collects `ZipInspect::entry_names` up to `ENTRY_NAMES_MAX`.
+struct EntryNames {
+    names: Vec<String>,
+    complete: bool,
+}
+
+impl EntryNames {
+    fn new() -> Self {
+        Self {
+            names: Vec::new(),
+            complete: true,
+        }
+    }
+
+    fn push(&mut self, name: &str) {
+        if self.names.len() < ENTRY_NAMES_MAX {
+            self.names.push(name.to_string());
+        } else {
+            self.complete = false;
+        }
+    }
 }
 
 /// Inspect a `.zip` without extracting it. Walks the central directory for
@@ -365,6 +402,7 @@ pub fn inspect_zip_with_progress(
     // ORIGINAL name so we can look it up by-name for the single
     // content read below.
     let mut param_hit: Option<(usize, String, String)> = None; // (depth, original_name, game_root)
+    let mut names = EntryNames::new();
     for entry in &entries {
         // Directory entries (trailing '/') don't count as files —
         // matches the old behaviour. sanitize_zip_entry keeps "foo/"
@@ -377,6 +415,7 @@ pub fn inspect_zip_with_progress(
         };
         file_count += 1;
         total_uncompressed = total_uncompressed.saturating_add(entry.uncompressed_size);
+        names.push(&rel);
         if let Some(root) = rel.strip_suffix("sce_sys/param.json") {
             let game_root = root.trim_end_matches('/').to_string();
             let depth = rel.split('/').count();
@@ -396,6 +435,8 @@ pub fn inspect_zip_with_progress(
         content_id: None,
         application_category_type: None,
         game_root: None,
+        entry_names: Some(names.names),
+        entry_names_complete: names.complete,
     };
 
     // Only open the zip-crate archive when we actually need to inflate
@@ -662,12 +703,16 @@ pub fn inspect_7z_with_progress(
 
     let mut file_count = 0u64;
     let mut total_uncompressed = 0u64;
+    let mut names = EntryNames::new();
     for (i, e) in archive.files.iter().enumerate() {
         if e.is_directory() {
             continue;
         }
         file_count += 1;
         total_uncompressed += e.size();
+        if let Some(rel) = sanitize_7z_entry(e.name()) {
+            names.push(&rel);
+        }
         if i.is_multiple_of(1000) {
             on_progress(file_count);
         }
@@ -683,6 +728,8 @@ pub fn inspect_7z_with_progress(
         content_id: None,
         application_category_type: None,
         game_root: None,
+        entry_names: Some(names.names),
+        entry_names_complete: names.complete,
     })
 }
 
@@ -938,6 +985,7 @@ mod rar_support {
         // one (`sce_sys/…`) both resolve to the real game root. Same rule as
         // the zip path.
         let mut param_hit: Option<(usize, String)> = None; // (depth, game_root)
+        let mut names = EntryNames::new();
         for entry in list_headers(&path_str, password)
             .map_err(|e| map_rar_open_err(&path_str, "open rar", e))?
         {
@@ -951,6 +999,7 @@ mod rar_support {
             // space check. Count it as 0, like the planner does.
             total_uncompressed = add_rar_entry_size(total_uncompressed, e.unpacked_size);
             if let Some(rel) = sanitize_rar_entry(&e.filename) {
+                names.push(&rel);
                 param_hit = better_param_hit(param_hit, &rel);
             }
         }
@@ -964,6 +1013,8 @@ mod rar_support {
             content_id: None,
             application_category_type: None,
             game_root: None,
+            entry_names: Some(names.names),
+            entry_names_complete: names.complete,
         };
 
         // Pull the title out of param.json. Without this a .rar upload showed

@@ -7,6 +7,7 @@ import { AlertTriangle, CheckCircle2, Loader2, X, XCircle } from "lucide-react";
 import { Button, Toggle } from "../../components";
 import { formatBytes } from "../../lib/format";
 import type { BatchCheck } from "../../lib/uploadBatch";
+import type { ArchiveChoice } from "../../lib/archiveDefault";
 import type { BatchRow } from "../../state/uploadBatch";
 import { convertFirstState, type WorkshopHandOver } from "../../lib/convertFirst";
 import { useTr } from "../../state/lang";
@@ -38,6 +39,8 @@ export interface BatchReviewProps {
   onRemove: (id: string) => void;
   onInclude: (id: string, include: boolean) => void;
   onPassword: (id: string, password: string) => void;
+  /** An archive row: unpack it, or send it as it is (#645). */
+  onArchiveChoice?: (id: string, choice: ArchiveChoice) => void;
   onClear: () => void;
   /** Hand the listed games, folders and images to the Workshop to convert first. */
   onConvert?: (state: WorkshopHandOver) => void;
@@ -66,6 +69,51 @@ function PasswordField({ onSubmit }: { onSubmit: (pw: string) => void }) {
         {tr("batch_unlock", undefined, "Unlock")}
       </Button>
     </form>
+  );
+}
+
+/** An archive row's choice: unpack it on the PS5, or send the archive as it is (#645). With
+ *  nothing chosen (its listing could not tell) it asks, and the list waits for the answer. */
+function ArchiveChoiceField({
+  choice,
+  onChoose,
+}: {
+  choice: ArchiveChoice | null;
+  onChoose: (c: ArchiveChoice) => void;
+}) {
+  const tr = useTr();
+  const opts: [ArchiveChoice, string][] = [
+    ["unpack", tr("batch_archive_unpack", undefined, "Unpack")],
+    ["as-is", tr("batch_archive_as_is", undefined, "Send as it is")],
+  ];
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-2">
+      <div role="radiogroup" className="inline-flex overflow-hidden rounded-[var(--radius-field)] border border-[var(--color-border)] text-xs">
+        {opts.map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            role="radio"
+            aria-checked={choice === value}
+            data-testid={`batch-archive-${value}`}
+            onClick={() => onChoose(value)}
+            className={
+              "px-2 py-0.5 " +
+              (choice === value
+                ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
+                : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]")
+            }
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {!choice && (
+        <span className="text-xs text-[var(--color-warn)]">
+          {tr("batch_archive_choose", undefined, "Choose: unpack it, or send it as it is")}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -118,6 +166,8 @@ export function BatchReview(p: BatchReviewProps) {
             const dest = p.destFor(r);
             const size = p.sizeFor(r);
             const name = r.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? r.path;
+            const archiveRow = r.status === "ready" && r.source?.kind === "archive";
+            const undecided = archiveRow && !r.archiveChoice;
             return (
               <li key={r.id} className="flex items-start gap-3 px-4 py-2.5 text-sm">
                 <input
@@ -133,7 +183,7 @@ export function BatchReview(p: BatchReviewProps) {
                     <Loader2 size={14} className="animate-spin text-[var(--color-muted)]" />
                   ) : r.status === "error" ? (
                     <XCircle size={14} className="text-[var(--color-bad)]" />
-                  ) : issues.length || r.status === "needs-password" ? (
+                  ) : issues.length || r.status === "needs-password" || (undecided && r.include) ? (
                     <AlertTriangle size={14} className="text-[var(--color-warn)]" />
                   ) : (
                     <CheckCircle2 size={14} className="text-[var(--color-good)]" />
@@ -165,6 +215,12 @@ export function BatchReview(p: BatchReviewProps) {
                       {tr(i.key, i.vars, i.text)}
                     </div>
                   ))}
+                  {archiveRow && p.onArchiveChoice && (
+                    <ArchiveChoiceField
+                      choice={r.archiveChoice}
+                      onChoose={(c) => p.onArchiveChoice!(r.id, c)}
+                    />
+                  )}
                   {r.status === "needs-password" && (
                     <div className="mt-1">
                       <PasswordField onSubmit={(pw) => p.onPassword(r.id, pw)} />

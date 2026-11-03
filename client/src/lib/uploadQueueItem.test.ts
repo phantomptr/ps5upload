@@ -45,4 +45,17 @@ describe("a picked source as a queue item", () => {
     const arc = buildUploadQueueItem(src({ kind: "archive", path: "/dl/G.rar" }), "pw", opts);
     expect(arc).toMatchObject({ resolvedDest: "/data/homebrew/G", rarPassword: "pw", strategy: "resume" });
   });
+
+  it("sends an archive as the file it is when asked (#645)", () => {
+    const arc = buildUploadQueueItem(src({ kind: "archive", path: "/dl/y2jb.zip" }), "pw", {
+      ...opts,
+      sendArchiveAsIs: true,
+    });
+    expect(arc).toMatchObject({
+      sourceKind: "file",
+      sourcePath: "/dl/y2jb.zip",
+      resolvedDest: "/data/homebrew/y2jb.zip",
+      rarPassword: null,
+    });
+  });
 });
