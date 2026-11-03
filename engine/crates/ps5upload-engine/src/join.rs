@@ -4187,6 +4187,18 @@ mod tests {
         ws
     }
 
+    /// The next message that has `key` (other messages, such as the host's light or a stage
+    /// change racing ahead, are skipped), within 5 s each.
+    async fn next_with(ws: &mut Guest_, key: &str) -> serde_json::Value {
+        for _ in 0..20 {
+            let v = next(ws).await;
+            if v.get(key).is_some() {
+                return v;
+            }
+        }
+        panic!("no message with {key}");
+    }
+
     /// The next text message that is not a status, within 5 s.
     async fn next(ws: &mut Guest_) -> serde_json::Value {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -4359,7 +4371,7 @@ mod tests {
 
         // Ping is answered with its own value.
         sam.send(TMsg::Text(r#"{"ping":42}"#.into())).await.unwrap();
-        assert_eq!(next(&mut sam).await["pong"], 42);
+        assert_eq!(next_with(&mut sam, "pong").await["pong"], 42);
 
         // A code join (any case, with a dash) always asks; the host says no.
         let typed = format!("{}-{}", &code[..3], &code[3..]).to_lowercase();
@@ -4409,11 +4421,11 @@ mod tests {
         // A second socket with the same token replaces the first.
         let mut sam2 = guest(&url, serde_json::json!({"hello": {"resume": token}})).await;
         assert_eq!(next(&mut sam2).await["stage"], "joined");
-        assert_eq!(next(&mut sam).await["bye"], "replaced");
+        assert_eq!(next_with(&mut sam, "bye").await["bye"], "replaced");
 
         // The host stops: Sam is told; then plays again within the minute and Sam comes back.
         set_live(console, 0);
-        assert_eq!(next(&mut sam2).await["bye"], "host_stopped");
+        assert_eq!(next_with(&mut sam2, "bye").await["bye"], "host_stopped");
         let s = host_state(console).await;
         assert_eq!(
             (s["playing"].as_bool(), s["players_in"].as_u64()),
@@ -4450,7 +4462,7 @@ mod tests {
         )
         .await;
         assert_eq!(r["ok"], true);
-        assert_eq!(next(&mut sam3).await["bye"], "kicked");
+        assert_eq!(next_with(&mut sam3, "bye").await["bye"], "kicked");
         until("pad closed", || {
             f.log().iter().filter(|l| *l == "close2").count() > n_close
         })
