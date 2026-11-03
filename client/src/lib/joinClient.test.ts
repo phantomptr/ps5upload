@@ -266,8 +266,8 @@ describe("join client", () => {
     }
   });
 
-  it("ends on bye (kicked, closed, host stopped) without reconnecting", () => {
-    for (const why of ["kicked", "closed", "host_stopped"] as const) {
+  it("ends on bye (kicked, closed) without reconnecting", () => {
+    for (const why of ["kicked", "closed"] as const) {
       stages = [];
       const c = client();
       joinNow(c);
@@ -277,6 +277,97 @@ describe("join client", () => {
       advance(5000);
       expect(FakeSocket.all.length).toBe(n);
     }
+  });
+
+  it("waits for a host who stopped playing, keeps the place, and plays on when they start again", () => {
+    const c = client();
+    joinNow(c);
+    const at = now;
+    last().say({ bye: "host_stopped" });
+    expect(stages[stages.length - 1]).toEqual({
+      kind: "reconnecting",
+      player: 2,
+      attempt: 0,
+      deadline: at + 60_000,
+      hostStopped: true,
+    });
+    expect(storage.getItem(tokenKey("INVITE"))).toBe("TOK");
+    expect(c.resumeToken).toBe("TOK");
+    // back with the token after the first backoff; the engine holds it until the host plays
+    const n = FakeSocket.all.length;
+    advance(250);
+    expect(FakeSocket.all.length).toBe(n + 1);
+    last().open();
+    expect(last().texts[0]).toEqual({ hello: { name: "Ann", invite: "INVITE", resume: "TOK" } });
+    last().say({ stage: "waiting", why: "host_stopped" });
+    expect(stages[stages.length - 1]).toMatchObject({ kind: "reconnecting", hostStopped: true, deadline: at + 60_000 });
+    // a quiet socket while waiting is not dropped, and no other one is opened
+    advance(20_000);
+    expect(FakeSocket.all.length).toBe(n + 1);
+    expect(kind()).toBe("reconnecting");
+    // the host plays again
+    last().say({ stage: "joined", player: 2, token: "TOK", hevc: false });
+    expect(stages[stages.length - 1]).toEqual({ kind: "joined", player: 2, hevc: false });
+    // a later drop is a plain reconnect again (not the host)
+    last().drop();
+    expect(stages[stages.length - 1]).toMatchObject({ kind: "reconnecting", attempt: 0 });
+    expect((stages[stages.length - 1] as { hostStopped?: boolean }).hostStopped).toBeUndefined();
+  });
+
+  it("keeps trying with backoff while the host is away, then asks to join again", () => {
+    const c = client();
+    joinNow(c);
+    last().say({ bye: "host_stopped" });
+    const waits: number[] = [];
+    let at = now;
+    let count = FakeSocket.all.length;
+    for (let i = 0; i < 2000 && kind() === "reconnecting"; i++) {
+      advance(50);
+      if (FakeSocket.all.length > count) {
+        waits.push(now - at);
+        at = now;
+        count = FakeSocket.all.length;
+        last().drop(); // the engine is not reachable
+      }
+    }
+    expect(waits.slice(0, 5)).toEqual([250, 500, 1000, 2000, 4000]);
+    expect(waits.reduce((a, b) => a + b, 0)).toBeGreaterThan(55_000);
+    expect(stages[stages.length - 1]).toEqual({ kind: "ended", why: "host_stopped" });
+    expect(storage.getItem(tokenKey("INVITE"))).toBeNull();
+  });
+
+  it("gives up when Play Together closes while waiting for the host, or the window runs out", () => {
+    // the engine closes it (the host did not come back): its refusal ends the wait
+    let c = client();
+    joinNow(c);
+    last().say({ bye: "host_stopped" });
+    advance(250);
+    last().open();
+    last().say({ stage: "waiting", why: "host_stopped" });
+    last().say({ stage: "refused", why: "closed" });
+    expect(stages[stages.length - 1]).toEqual({ kind: "ended", why: "host_stopped" });
+    expect(storage.getItem(tokenKey("INVITE"))).toBeNull();
+    // no answer at all: the page stops waiting a little after the window
+    stages = [];
+    c = client();
+    joinNow(c);
+    last().say({ bye: "host_stopped" });
+    advance(250);
+    last().open();
+    last().say({ stage: "waiting", why: "host_stopped" });
+    advance(60_000);
+    expect(kind()).toBe("reconnecting");
+    advance(6_000);
+    expect(stages[stages.length - 1]).toEqual({ kind: "ended", why: "host_stopped" });
+  });
+
+  it("learns on a reload that the host is away", () => {
+    storage.setItem(tokenKey("INVITE"), "SAVED");
+    const c = client();
+    c.start();
+    last().open();
+    last().say({ stage: "waiting", why: "host_stopped" });
+    expect(stages[stages.length - 1]).toMatchObject({ kind: "reconnecting", hostStopped: true, deadline: now + 60_000 });
   });
 
   it("a socket that never comes up is lost, not retried forever", () => {

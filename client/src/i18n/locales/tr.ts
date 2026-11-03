@@ -7037,6 +7037,7 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
 "join_guide_ok": "Anladım",
 "join_reconnecting": "Yeniden bağlanıyor…",
 "join_reconnecting_left": "Yerin {time} boyunca tutuluyor.",
+"join_host_away": "Oyunun sahibi oynamayı bıraktı — yeniden başlaması bekleniyor ({time})",
 "join_refused_key": "Bu davetin süresi doldu. {host} kullanıcısından yeni bir bağlantı iste.",
 "join_refused_full": "Oyun dolu: zaten dört oyuncu var.",
 "join_refused_denied": "{host} bu sefer seni içeri almadı.",

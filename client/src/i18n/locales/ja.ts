@@ -7049,6 +7049,7 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
 "join_guide_ok": "OK",
 "join_reconnecting": "再接続中…",
 "join_reconnecting_left": "あと{time}は枠が確保されています。",
+"join_host_away": "ホストがプレイをやめました — 再開を待っています（{time}）",
 "join_refused_key": "この招待は期限切れです。{host}さんに新しいリンクをもらってください。",
 "join_refused_full": "満員です：すでに4人がプレイしています。",
 "join_refused_denied": "今回は{host}さんに参加を許可されませんでした。",

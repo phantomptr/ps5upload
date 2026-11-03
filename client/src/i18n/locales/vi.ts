@@ -7032,6 +7032,7 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
 "join_guide_ok": "Đã hiểu",
 "join_reconnecting": "Đang kết nối lại…",
 "join_reconnecting_left": "Chỗ của bạn được giữ trong {time}.",
+"join_host_away": "Chủ phòng đã dừng chơi — đang chờ họ chơi lại ({time})",
 "join_refused_key": "Lời mời này đã hết hạn. Hãy xin {host} liên kết mới.",
 "join_refused_full": "Trò chơi đã đủ người: đã có bốn người chơi.",
 "join_refused_denied": "Lần này {host} chưa cho bạn vào.",

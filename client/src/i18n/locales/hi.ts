@@ -7044,6 +7044,7 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
 "join_guide_ok": "समझ गया",
 "join_reconnecting": "फिर से जुड़ रहे हैं…",
 "join_reconnecting_left": "आपकी जगह {time} तक रखी जाएगी।",
+"join_host_away": "होस्ट ने खेलना बंद कर दिया — उनके फिर से शुरू करने का इंतज़ार ({time})",
 "join_refused_key": "यह न्योता खत्म हो गया है। {host} से नया लिंक माँगें।",
 "join_refused_full": "गेम भर गया है: पहले से चार प्लेयर हैं।",
 "join_refused_denied": "{host} ने इस बार आपको अंदर नहीं आने दिया।",

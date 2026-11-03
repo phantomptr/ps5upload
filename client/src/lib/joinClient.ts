@@ -1,8 +1,9 @@
 // Play Together (#641), the guest's side: one friend's link to the host's engine
 // (/api/join/ws). It asks to join, plays as Player N, and keeps that place through a network
 // blip: a dropped socket reconnects on its own (250 ms, doubling to 4 s) with the resume token,
-// for as long as the host keeps the place (60 s). The token lives in sessionStorage, never in
-// the address.
+// for as long as the host keeps the place (60 s). The host stopping playing keeps it too: the
+// guest waits (and reconnects) for 60 s for the host to start again. The token lives in
+// sessionStorage, never in the address.
 //
 // Input: the pad is sent when it changes (checked every animation frame) and at least every
 // 100 ms; let go (neutral) while the page is hidden or loses the focus; never while the socket
@@ -11,6 +12,7 @@
 import {
   backoffMs,
   encodePadFrame,
+  HOST_RESTART_WINDOW_MS,
   readServerMessage,
   RESUME_WINDOW_MS,
   type ByeWhy,
@@ -25,8 +27,9 @@ export type JoinStage =
   /** Waiting for the host to allow this guest. */
   | { kind: "asking" }
   | { kind: "joined"; player: number; hevc: boolean }
-  /** The socket dropped; trying again until `deadline` (ms, the client's clock). */
-  | { kind: "reconnecting"; player: number; attempt: number; deadline: number }
+  /** The socket dropped; trying again until `deadline` (ms, the client's clock). `hostStopped`:
+   *  the host stopped playing, and the guest waits for them to start again. */
+  | { kind: "reconnecting"; player: number; attempt: number; deadline: number; hostStopped?: boolean }
   | { kind: "refused"; why: RefuseWhy }
   /** `gave_up`: the place was lost (60 s without the host); `lost`: never got in; `left`: Leave. */
   | { kind: "ended"; why: ByeWhy | "gave_up" | "lost" | "left" };
@@ -80,6 +83,8 @@ export const tokenKey = (invite: string | null) => `ps5upload.join.token.${invit
 export const KEEPALIVE_MS = 100;
 /** No message for this long while joined (status and pong come every second): the link is dead. */
 export const SILENCE_MS = 3500;
+/** Waiting for the host past the window this much longer, the engine's own answer not come: give up. */
+export const HOST_WAIT_SLACK_MS = 5000;
 
 export class JoinClient {
   private ws: WebSocket | null = null;
@@ -98,6 +103,8 @@ export class JoinClient {
   private pinger: Timer | null = null;
   private retry: Timer | null = null;
   private lastHeard = 0;
+  /** The host stopped playing: the place waits for them until `deadline`. */
+  private hostAway = false;
   private readonly now: () => number;
   private readonly storage: JoinStorage | null;
   private readonly WS: typeof WebSocket;
@@ -197,10 +204,21 @@ export class JoinClient {
       case "asking":
         if (this.stage.kind !== "reconnecting") this.setStage({ kind: "asking" });
         return;
+      case "waiting":
+        // The engine holds this resume until the host plays again (a reload after they stopped
+        // learns it here).
+        if (!this.hostAway) {
+          this.hostAway = true;
+          this.deadline = this.now() + HOST_RESTART_WINDOW_MS;
+        }
+        this.attempt = 0;
+        this.setStage(this.reconnectingStage());
+        return;
       case "joined":
         this.token = m.token;
         this.player = m.player;
         this.attempt = 0;
+        this.hostAway = false;
         try {
           this.storage?.setItem(this.key, m.token);
         } catch {
@@ -213,9 +231,17 @@ export class JoinClient {
       case "refused":
         // A resume the engine no longer knows: the place is gone, not this invite's fault.
         this.forgetToken();
-        this.finish({ kind: "refused", why: m.why });
+        // Waiting for the host, the place went with Play Together: they did not play again.
+        if (this.hostAway) this.finish({ kind: "ended", why: "host_stopped" });
+        else this.finish({ kind: "refused", why: m.why });
         return;
       case "bye":
+        if (m.why === "host_stopped" && this.token) {
+          // The place is kept while the host may start again: wait for them, coming back with
+          // the token (the engine answers "waiting" until they do).
+          this.hostWait();
+          return;
+        }
         this.forgetToken();
         this.finish({ kind: "ended", why: m.why });
         return;
@@ -227,6 +253,38 @@ export class JoinClient {
         if (m.light) this.o.onLight?.(m.light);
         return;
     }
+  }
+
+  /** The host stopped playing: drop this socket and come back with the token, for as long as the
+   *  engine keeps the place. */
+  private hostWait(): void {
+    this.hostAway = true;
+    this.deadline = this.now() + HOST_RESTART_WINDOW_MS;
+    this.attempt = 0;
+    const ws = this.ws;
+    this.ws = null;
+    try {
+      ws?.close();
+    } catch {
+      // Already closing.
+    }
+    this.scheduleRetry();
+  }
+
+  private reconnectingStage(): JoinStage {
+    return {
+      kind: "reconnecting",
+      player: this.player,
+      attempt: this.attempt,
+      deadline: this.deadline,
+      ...(this.hostAway ? { hostStopped: true } : {}),
+    };
+  }
+
+  /** Out of time: the host did not play again, or the connection did not come back. */
+  private giveUp(): void {
+    this.forgetToken();
+    this.finish({ kind: "ended", why: this.hostAway ? "host_stopped" : "gave_up" });
   }
 
   /** The socket is gone (or never came up): keep the place if there is one, else stop. */
@@ -244,20 +302,18 @@ export class JoinClient {
   private scheduleRetry(): void {
     if (this.stopped) return;
     if (this.now() >= this.deadline) {
-      this.forgetToken();
-      this.finish({ kind: "ended", why: "gave_up" });
+      this.giveUp();
       return;
     }
     const wait = backoffMs(this.attempt);
-    this.setStage({ kind: "reconnecting", player: this.player, attempt: this.attempt, deadline: this.deadline });
+    this.setStage(this.reconnectingStage());
     this.attempt += 1;
     if (this.retry) clearTimeout(this.retry);
     this.retry = setTimeout(() => {
       this.retry = null;
       if (this.stopped) return;
       if (this.now() >= this.deadline) {
-        this.forgetToken();
-        this.finish({ kind: "ended", why: "gave_up" });
+        this.giveUp();
         return;
       }
       this.connect();
@@ -274,6 +330,11 @@ export class JoinClient {
   }
 
   private ping(): void {
+    if (this.hostAway && !this.stopped && this.now() >= this.deadline + HOST_WAIT_SLACK_MS) {
+      // Still waiting past the window (the engine's answer did not come): stop waiting.
+      this.giveUp();
+      return;
+    }
     const ws = this.ws;
     if (!ws || ws.readyState !== this.WS.OPEN) return;
     if (this.stage.kind === "joined" && this.now() - this.lastHeard > SILENCE_MS) {

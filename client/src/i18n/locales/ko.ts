@@ -7047,6 +7047,7 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
 "join_guide_ok": "알겠어요",
 "join_reconnecting": "다시 연결 중…",
 "join_reconnecting_left": "{time} 동안 자리가 유지돼요.",
+"join_host_away": "호스트가 플레이를 멈췄어요 — 다시 시작하기를 기다리는 중 ({time})",
 "join_refused_key": "초대가 만료됐어요. {host} 님에게 새 링크를 요청하세요.",
 "join_refused_full": "게임이 꽉 찼어요. 이미 4명이 플레이 중이에요.",
 "join_refused_denied": "이번에는 {host} 님이 참여를 허용하지 않았어요.",

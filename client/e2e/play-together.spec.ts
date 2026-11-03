@@ -364,15 +364,24 @@ test.describe("a friend whose browser speaks German", () => {
   });
 });
 
-test("the host stopping ends the game kindly", async ({ page }) => {
+test("the host stopping keeps the friend's place until they play again", async ({ page }) => {
   await serveJoinPage(page);
   let bye: () => void = () => {};
+  let back: () => void = () => {};
+  const hellos: Array<Record<string, unknown>> = [];
   await page.routeWebSocket(/\/api\/join\/ws/, (ws) => {
     ws.onMessage((m) => {
-      if (typeof m === "string" && m.includes("hello")) {
-        ws.send(JSON.stringify({ stage: "joined", player: 2, token: "T", hevc: false }));
-        bye = () => ws.send(JSON.stringify({ bye: "host_stopped" }));
+      if (typeof m !== "string" || !m.includes("hello")) return;
+      const hello = (JSON.parse(m) as { hello: Record<string, unknown> }).hello;
+      hellos.push(hello);
+      if (hello.resume === "T") {
+        // The host's engine holds a resume until they play again.
+        ws.send(JSON.stringify({ stage: "waiting", why: "host_stopped" }));
+        back = () => ws.send(JSON.stringify({ stage: "joined", player: 2, token: "T", hevc: false }));
+        return;
       }
+      ws.send(JSON.stringify({ stage: "joined", player: 2, token: "T", hevc: false }));
+      bye = () => ws.send(JSON.stringify({ bye: "host_stopped" }));
     });
   });
   await page.goto(`/join#i=${INVITE}&n=Ann`, { waitUntil: "domcontentloaded" });
@@ -380,7 +389,14 @@ test("the host stopping ends the game kindly", async ({ page }) => {
   await page.getByTestId("join-go").click();
   await expect(page.getByTestId("join-player")).toBeVisible({ timeout: 30_000 });
   bye();
-  await expect(page.getByTestId("join-ended-text")).toHaveText("The host stopped playing.");
+  await expect(page.getByTestId("join-host-away")).toContainText(
+    /The host stopped playing — waiting for them to start again \(0:[0-5]\d\)/,
+  );
+  await expect.poll(() => hellos.length).toBe(2);
+  expect(hellos[1].resume).toBe("T");
+  back();
+  await expect(page.getByTestId("join-host-away")).toHaveCount(0);
+  await expect(page.getByTestId("join-player")).toBeVisible();
 });
 
 test("the app joins a friend from Play, and asks before starting its own Play", async ({ page }) => {

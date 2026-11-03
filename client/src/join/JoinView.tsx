@@ -391,10 +391,22 @@ export function JoinView({
         {reconnecting && (
           <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/70 px-6 text-center" data-testid="join-reconnecting">
             <span className="h-7 w-7 animate-spin rounded-full border-2 border-white/30 border-t-white" aria-hidden />
-            <p className="text-base font-medium">{tr("join_reconnecting", undefined, "Reconnecting…")}</p>
-            <p className="text-sm text-white/70" data-testid="join-reconnecting-left">
-              {tr("join_reconnecting_left", { time: clock(leftS) }, `Your place is kept for ${clock(leftS)}.`)}
-            </p>
+            {stage.hostStopped ? (
+              <p className="max-w-sm text-base font-medium" data-testid="join-host-away">
+                {tr(
+                  "join_host_away",
+                  { time: clock(leftS) },
+                  `The host stopped playing — waiting for them to start again (${clock(leftS)})`,
+                )}
+              </p>
+            ) : (
+              <>
+                <p className="text-base font-medium">{tr("join_reconnecting", undefined, "Reconnecting…")}</p>
+                <p className="text-sm text-white/70" data-testid="join-reconnecting-left">
+                  {tr("join_reconnecting_left", { time: clock(leftS) }, `Your place is kept for ${clock(leftS)}.`)}
+                </p>
+              </>
+            )}
           </div>
         )}
 

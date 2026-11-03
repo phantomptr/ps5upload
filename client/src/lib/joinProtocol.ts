@@ -27,6 +27,8 @@ export interface JoinStatus {
 
 export type ServerMessage =
   | { kind: "asking" }
+  /** A resume held until the host plays again (`{"stage":"waiting","why":"host_stopped"}`). */
+  | { kind: "waiting" }
   | { kind: "joined"; player: number; token: string; hevc: boolean }
   | { kind: "refused"; why: RefuseWhy }
   | { kind: "status"; status: JoinStatus }
@@ -51,6 +53,7 @@ export function readServerMessage(text: string): ServerMessage | null {
   }
   if (typeof v.pong === "number") return { kind: "pong", t: v.pong };
   if (v.stage === "asking") return { kind: "asking" };
+  if (v.stage === "waiting") return { kind: "waiting" };
   if (v.stage === "joined" && typeof v.player === "number" && typeof v.token === "string") {
     return { kind: "joined", player: v.player, token: v.token, hevc: v.hevc === true };
   }
@@ -145,6 +148,10 @@ export function backoffMs(n: number): number {
 
 /** How long a dropped guest keeps its place (the engine holds the slot as long). */
 export const RESUME_WINDOW_MS = 60_000;
+
+/** How long the guests keep their places after the host stops playing (join.rs
+ *  HOST_RESTART_WINDOW): they wait for the host to play again. */
+export const HOST_RESTART_WINDOW_MS = 60_000;
 
 /** A Play Together link a friend shared: `http://<computer>:<port>/join#i=<key>[&n=<name>]`. */
 export interface JoinLink {

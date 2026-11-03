@@ -7039,6 +7039,7 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
 "join_guide_ok": "Mengerti",
 "join_reconnecting": "Menyambung ulang…",
 "join_reconnecting_left": "Tempat Anda disimpan selama {time}.",
+"join_host_away": "Host berhenti main — menunggu mereka mulai lagi ({time})",
 "join_refused_key": "Undangan ini sudah kedaluwarsa. Minta tautan baru ke {host}.",
 "join_refused_full": "Game sudah penuh: sudah ada empat pemain.",
 "join_refused_denied": "{host} tidak mengizinkan Anda masuk kali ini.",

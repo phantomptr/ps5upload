@@ -309,9 +309,6 @@ static void test_state_and_seq(void) {
     CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\"}", 10) > 0 && HAS("bad_request"));                    /* no seq */
     CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":1,\"lx\":256}", 10) > 0 && HAS("bad_request")); /* > 255 */
     CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":1,\"buttons\":4294967296}", 10) > 0 && HAS("bad_request"));
-    CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":1,\"gyro\":[1,2]}", 10) > 0 && HAS("bad_request"));
-    CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":1,\"gyro\":[1,2,3,4]}", 10) > 0 && HAS("bad_request"));
-    CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":1,\"gyro\":[1,\"x\",3]}", 10) > 0 && HAS("bad_request"));
     CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":1,\"touch\":[{\"x\":1,\"y\":1},{\"x\":1,\"y\":1},{\"x\":1,\"y\":1}]}",
                  10) > 0 && HAS("bad_request"));
     CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":1,\"touch\":[{\"x\":70000,\"y\":1}]}", 10) > 0 &&
@@ -351,6 +348,20 @@ static void test_state_and_seq(void) {
     CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":2}", 70) > 0 && HAS("\"err\":\"vpad_failed\",\"code\":-"));
     f_insert_err = 0;
     CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":2}", 70) > 0 && HAS("\"applied\":true"));
+    /* a bad motion block is dropped (held still), the rest of the state still goes */
+    {
+        static const char *bad[] = {"\"gyro\":[1,2]", "\"gyro\":[1,2,3,4]", "\"gyro\":[1,\"x\",3]",
+                                    "\"gyro\":[1e7,0,0]", "\"accel\":[0,-2e6,0]", "\"gyro\":[1,2,3],\"accel\":[1e300,0,0]"};
+        char body[256];
+        for (int i = 0; i < (int)(sizeof bad / sizeof bad[0]); i++) {
+            snprintf(body, sizeof body, "{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":%d,\"buttons\":16384,\"lx\":7,%s}",
+                     10 + i, bad[i]);
+            CHECK(vstate(body, 80) > 0 && HAS("\"applied\":true"));
+            CHECK(rd32(f_pads[h].block + 0x0C) == VPAD_BTN_CROSS && f_pads[h].block[0x10] == 7);
+            CHECK(fl(f_pads[h].block + 0x88) == 0.0f && fl(f_pads[h].block + 0x94) == 0.0f &&
+                  fl(f_pads[h].block + 0x98) == 1.0f);
+        }
+    }
 }
 
 static void test_batch(void) {
@@ -368,10 +379,15 @@ static void test_batch(void) {
     CHECK(strcmp(g_out, "{\"ok\":true,\"applied\":2,\"stale\":1,\"failed\":[{\"slot\":3,\"err\":\"vpad_not_owner\"},"
                         "{\"slot\":4,\"err\":\"vpad_not_open\"}]}") == 0);
     CHECK(vstates("{\"items\":[]}", 10) > 0 && strcmp(g_out, "{\"ok\":true,\"applied\":0,\"stale\":0,\"failed\":[]}") == 0);
+    /* a bad motion block in one item drops only that block: both items apply */
+    CHECK(vstates("{\"items\":[{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":50,\"gyro\":[1e9,0,0],\"buttons\":2},"
+                  "{\"slot\":3,\"token\":\"" TOK_B "\",\"seq\":50,\"accel\":[0,1,0]}]}",
+                  10) > 0);
+    CHECK(strcmp(g_out, "{\"ok\":true,\"applied\":2,\"stale\":0,\"failed\":[]}") == 0);
     /* a malformed item refuses the whole batch, nothing applied */
-    CHECK(vstates("{\"items\":[{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":2},{\"slot\":2}]}", 10) > 0 &&
+    CHECK(vstates("{\"items\":[{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":51},{\"slot\":2}]}", 10) > 0 &&
           HAS("bad_request"));
-    CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":2}", 10) > 0 && HAS("\"applied\":true"));
+    CHECK(vstate("{\"slot\":2,\"token\":\"" TOK_A "\",\"seq\":51}", 10) > 0 && HAS("\"applied\":true"));
     CHECK(vstates("{\"items\":{}}", 10) > 0 && HAS("bad_request"));
     CHECK(vstates("{}", 10) > 0 && HAS("bad_request"));
     /* VPAD_MAX_BATCH fits, one more does not */

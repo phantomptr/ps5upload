@@ -6983,6 +6983,7 @@ helper_mismatch_boot_copy: "PS5 запустила старую копию по�
 "join_guide_ok": "Понятно",
 "join_reconnecting": "Переподключение…",
 "join_reconnecting_left": "Ваше место сохраняется ещё {time}.",
+"join_host_away": "Хозяин перестал играть — ждём, когда он начнёт снова ({time})",
 "join_refused_key": "Срок приглашения истёк. Попросите у {host} новую ссылку.",
 "join_refused_full": "Мест нет: уже играют четверо.",
 "join_refused_denied": "{host} в этот раз вас не впустил.",

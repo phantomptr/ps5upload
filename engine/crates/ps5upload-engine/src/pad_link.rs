@@ -623,20 +623,45 @@ fn relay_target(url: &str) -> Option<String> {
     lan_ws_target(url, "api/pad/ws")
 }
 
-/// `url` as `ws://<private address>[:port]/<path>` (the query dropped), when it is exactly another
-/// engine's socket `path` on the LAN (a home network, link-local, or a Tailscale-style shared
-/// 100.64/10 address): never a name, a public address, or another route.
+/// `url` when it is exactly `ws://<private IP>[:port]/<want>`: another engine's socket on the LAN
+/// (a home network, link-local, or a Tailscale-style shared 100.64/10 address). Rebuilt from the
+/// parsed address, so what is connected to is what was checked. Never a name (a name could
+/// resolve anywhere, and again differently at connect time), a public address, user info (`@`),
+/// a query or fragment, an escape, or another route.
 pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
     let rest = url.strip_prefix("ws://")?;
-    let (authority, path) = rest.split_once('/')?;
-    if path.split('?').next() != Some(want) {
+    if !rest
+        .bytes()
+        .all(|b| b.is_ascii_graphic() && !matches!(b, b'@' | b'?' | b'#' | b'%' | b'\\'))
+    {
         return None;
     }
-    let host = authority
-        .rsplit_once(':')
-        .map(|(h, _)| h)
-        .unwrap_or(authority);
-    let ip: std::net::IpAddr = host.trim_matches(['[', ']']).parse().ok()?;
+    let (authority, path) = rest.split_once('/')?;
+    if path != want {
+        return None;
+    }
+    let (ip, port): (std::net::IpAddr, Option<&str>) = if let Some(v6) = authority.strip_prefix('[')
+    {
+        let (h, tail) = v6.split_once(']')?;
+        let port = match tail {
+            "" => None,
+            t => Some(t.strip_prefix(':')?),
+        };
+        (std::net::IpAddr::V6(h.parse().ok()?), port)
+    } else {
+        let (h, port) = match authority.split_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (authority, None),
+        };
+        (std::net::IpAddr::V4(h.parse().ok()?), port)
+    };
+    let port = match port {
+        None => None,
+        Some(p) if !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()) => {
+            Some(p.parse::<u16>().ok().filter(|&n| n != 0)?)
+        }
+        Some(_) => return None,
+    };
     let private = match ip {
         std::net::IpAddr::V4(v) => {
             v.is_private()
@@ -647,7 +672,16 @@ pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
             (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80
         }
     };
-    private.then(|| format!("ws://{authority}/{want}"))
+    if !private {
+        return None;
+    }
+    let addr = match (ip, port) {
+        (std::net::IpAddr::V6(v), Some(p)) => format!("[{v}]:{p}"),
+        (std::net::IpAddr::V6(v), None) => format!("[{v}]"),
+        (v4, Some(p)) => format!("{v4}:{p}"),
+        (v4, None) => v4.to_string(),
+    };
+    Some(format!("ws://{addr}/{want}"))
 }
 
 /// `GET /api/ps5/rp/pad-relay?url=ws://<computer>/api/pad/ws&name=` (loopback only): the phone
@@ -822,6 +856,53 @@ mod tests {
             lan_ws_target("ws://10.0.0.2:1/api/pad/ws", "api/join/ws"),
             None
         );
+    }
+
+    #[test]
+    fn relay_targets_are_parsed_whole_not_guessed_at() {
+        let j = |u: &str| lan_ws_target(u, "api/join/ws");
+        // user info: the host is what follows the '@' (8.8.8.8), whatever the private-looking
+        // part before it says
+        assert_eq!(j("ws://192.168.1.5:80@8.8.8.8/api/join/ws"), None);
+        assert_eq!(j("ws://192.168.1.5@8.8.8.8:19113/api/join/ws"), None);
+        assert_eq!(j("ws://user:pw@192.168.1.5:19113/api/join/ws"), None);
+        // a query, a fragment, an escape, a backslash, a space, extra path
+        assert_eq!(j("ws://192.168.1.5:19113/api/join/ws?x=1"), None);
+        assert_eq!(j("ws://192.168.1.5:19113/api/join/ws#x"), None);
+        assert_eq!(j("ws://192.168.1.5:19113/api/join/w%73"), None);
+        assert_eq!(j("ws://192.168.1.5\\@8.8.8.8/api/join/ws"), None);
+        assert_eq!(j("ws://192.168.1.5 :19113/api/join/ws"), None);
+        assert_eq!(j("ws://192.168.1.5:19113/api/join/ws/"), None);
+        assert_eq!(j("ws://192.168.1.5:19113//api/join/ws"), None);
+        // ports: digits only, 1-65535
+        assert_eq!(j("ws://192.168.1.5:0/api/join/ws"), None);
+        assert_eq!(j("ws://192.168.1.5:65536/api/join/ws"), None);
+        assert_eq!(j("ws://192.168.1.5:+80/api/join/ws"), None);
+        assert_eq!(j("ws://192.168.1.5:/api/join/ws"), None);
+        assert_eq!(j("ws://192.168.1.5:1:2/api/join/ws"), None);
+        // names (MagicDNS too) and odd address spellings
+        assert_eq!(j("ws://my-pc.tail1234.ts.net:19113/api/join/ws"), None);
+        assert_eq!(j("ws://localhost:19113/api/join/ws"), None);
+        assert_eq!(j("ws://192.168.010.5:19113/api/join/ws"), None);
+        assert_eq!(j("ws://3232235781:19113/api/join/ws"), None);
+        assert_eq!(j("ws://[::ffff:8.8.8.8]:19113/api/join/ws"), None);
+        assert_eq!(j("ws://[2001:db8::1]:19113/api/join/ws"), None);
+        // the good ones, rebuilt from the parsed address
+        assert_eq!(
+            j("ws://192.168.1.5/api/join/ws").as_deref(),
+            Some("ws://192.168.1.5/api/join/ws")
+        );
+        assert_eq!(
+            j("ws://[fd7a:115c:a1e0::1]:19113/api/join/ws").as_deref(),
+            Some("ws://[fd7a:115c:a1e0::1]:19113/api/join/ws")
+        );
+        assert_eq!(
+            j("ws://169.254.3.4:19113/api/join/ws").as_deref(),
+            Some("ws://169.254.3.4:19113/api/join/ws")
+        );
+        // the pad relay reads them the same way
+        assert_eq!(relay_target("ws://192.168.1.5:80@8.8.8.8/api/pad/ws"), None);
+        assert_eq!(relay_target("ws://192.168.1.5:19113/api/pad/ws?t=k"), None);
     }
 
     #[test]
