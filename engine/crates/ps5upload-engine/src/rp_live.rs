@@ -41,6 +41,13 @@ use crate::rp_live_ts::TsMuxer;
 
 /// While a reader is attached, a keyframe at least this often.
 pub(crate) const KEYFRAME_EVERY: Duration = Duration::from_secs(2);
+/// How long the console takes to answer a keyframe request (measured on a PS5 Pro, FW 13.60:
+/// about a second at 1080p60). The periodic request goes out this much before KEYFRAME_EVERY so
+/// the keyframes land about KEYFRAME_EVERY apart (asked at 2 s, they came every ~3 s).
+const KEYFRAME_LEAD: Duration = Duration::from_millis(1000);
+/// No second periodic request while one is in flight (each extra one is another keyframe: a
+/// burst of bitrate for nothing).
+const KEYFRAME_ASK_GAP: Duration = Duration::from_millis(1500);
 /// Frames (video and audio) waiting for one reader: about 2 s of a 60 fps stream with sound.
 const READER_QUEUE: usize = 320;
 /// Readers at once: more is a mistake (a player retrying in a loop), not a use.
@@ -109,6 +116,8 @@ pub(crate) struct LiveFeed {
     /// The stream thread reported lost frames since the last frame.
     lost: std::sync::atomic::AtomicBool,
     last_key: Mutex<Option<Instant>>,
+    /// The last periodic keyframe request (see KEYFRAME_ASK_GAP).
+    last_ask: Mutex<Option<Instant>>,
     /// Asked for a keyframe (a reader joined, fell behind, or saw a loss).
     want_key: std::sync::atomic::AtomicBool,
     held_after_loss: AtomicU64,
@@ -127,6 +136,7 @@ impl LiveFeed {
             last_index: Mutex::new(None),
             lost: Default::default(),
             last_key: Mutex::new(None),
+            last_ask: Mutex::new(None),
             want_key: Default::default(),
             held_after_loss: AtomicU64::new(0),
             losses: AtomicU64::new(0),
@@ -316,13 +326,23 @@ impl LiveFeed {
         if self.readers() == 0 {
             return false;
         }
-        asked
-            || self
-                .last_key
-                .lock()
-                .ok()
-                .and_then(|g| *g)
-                .is_none_or(|t| now.saturating_duration_since(t) >= KEYFRAME_EVERY)
+        if asked {
+            return true;
+        }
+        let since_key = self.last_key.lock().ok().and_then(|g| *g);
+        let due = since_key
+            .is_none_or(|t| now.saturating_duration_since(t) + KEYFRAME_LEAD >= KEYFRAME_EVERY);
+        if !due {
+            return false;
+        }
+        let Ok(mut ask) = self.last_ask.lock() else {
+            return true;
+        };
+        if ask.is_some_and(|t| now.saturating_duration_since(t) < KEYFRAME_ASK_GAP) {
+            return false;
+        }
+        *ask = Some(now);
+        true
     }
 
     pub(crate) fn status(&self) -> serde_json::Value {

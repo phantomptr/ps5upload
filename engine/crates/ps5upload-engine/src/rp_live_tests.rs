@@ -789,3 +789,31 @@ async fn two_players_read_the_endpoint_over_http() {
         );
     }
 }
+
+/// The periodic request goes out a second early (the console takes about that long to answer)
+/// and is not repeated while one is in flight, so keyframes land about 2 s apart instead of 3
+/// with an extra one in between (measured on a PS5 Pro before the change: gaps 3.05, 1.0, 3.08).
+#[test]
+fn the_periodic_keyframe_is_asked_for_early_and_once() {
+    let f = feed();
+    let t = Instant::now();
+    let (_, _rx, _stats) = f.add("test".into(), false).unwrap();
+    assert!(f.wants_keyframe(t), "the join's ask");
+    f.video(KEY, 1, true, t);
+    assert!(!f.wants_keyframe(t + Duration::from_millis(900)));
+    assert!(
+        f.wants_keyframe(t + Duration::from_millis(1000)),
+        "asked 1 s early"
+    );
+    assert!(
+        !f.wants_keyframe(t + Duration::from_millis(1500)),
+        "not again while in flight"
+    );
+    assert!(!f.wants_keyframe(t + Duration::from_millis(2400)));
+    assert!(
+        f.wants_keyframe(t + Duration::from_millis(2600)),
+        "asked again if none came"
+    );
+    f.video(KEY, 2, true, t + Duration::from_millis(2700));
+    assert!(!f.wants_keyframe(t + Duration::from_millis(3000)));
+}
