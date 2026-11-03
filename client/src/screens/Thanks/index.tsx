@@ -30,6 +30,8 @@ export interface SupporterList {
 }
 
 const DISCORD = "https://discord.gg/fzK3xddtrM";
+/** Brand names, the same in every language. */
+const KOFI = "Ko-fi";
 
 export default function ThanksScreen({ list = supporters as SupporterList }: { list?: SupporterList }) {
   const tr = useTr();
@@ -159,7 +161,7 @@ function KofiCard() {
           <Coffee size={20} aria-hidden />
         </span>
         <div>
-          <h3 className="text-sm font-semibold">Ko-fi</h3>
+          <h3 className="text-sm font-semibold">{KOFI}</h3>
           <p className="text-xs text-[var(--color-muted)]">{tr("thanks_kofi_sub", undefined, "Card or PayPal, once or monthly")}</p>
         </div>
       </div>
