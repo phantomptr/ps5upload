@@ -9,39 +9,9 @@
 // again here: only a well-formed invite or controller link of a computer leads anywhere.
 
 import { joinAppLink, joinLinkFromAppLink } from "./joinProtocol";
+import { padAppLink, parsePadLink, type PadLink } from "./padLink";
 
-export { joinAppLink };
-
-/** A computer's phone controller link (`http://<computer>:<port>/pad#t=<key>[&w=1]`). */
-export interface PadLink {
-  /** `<host>:<port>` as written (an IPv6 host in brackets). */
-  authority: string;
-  /** The host alone, to name the computer. */
-  host: string;
-  key: string;
-  watch: boolean;
-}
-
-/** The controller link, or null when `text` is not one. */
-export function parsePadLink(text: string): PadLink | null {
-  let u: URL;
-  try {
-    u = new URL(text.trim());
-  } catch {
-    return null;
-  }
-  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-  if (!/^\/pad\/?$/.test(u.pathname) || u.username || u.password) return null;
-  const hash = new URLSearchParams(u.hash.replace(/^#/, ""));
-  const key = hash.get("t") ?? "";
-  if (!/^[0-9a-fA-F]{8,128}$/.test(key)) return null;
-  return { authority: u.host, host: u.hostname.replace(/^\[|\]$/g, ""), key, watch: hash.get("w") === "1" };
-}
-
-/** "Open in the PS5Upload app" for a controller (or watch) link. */
-export function padAppLink(link: string): string {
-  return `ps5upload://pad?link=${encodeURIComponent(link)}`;
-}
+export { joinAppLink, padAppLink, parsePadLink, type PadLink };
 
 /** What a ps5upload:// link asks for, or null for anything else. */
 export function readAppLink(url: string): { kind: "join"; link: string } | { kind: "pad"; pad: PadLink } | null {

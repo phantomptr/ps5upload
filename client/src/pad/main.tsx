@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import "../index.css";
 import { PadApp } from "./PadApp";
 import { OpenInAppGate } from "../components/OpenInAppGate";
-import { padAppLink } from "../lib/appLinks";
+import { padAppLink } from "../lib/padLink";
 
 const hash = new URLSearchParams(location.hash.slice(1));
 const key = hash.get("t") ?? "";
