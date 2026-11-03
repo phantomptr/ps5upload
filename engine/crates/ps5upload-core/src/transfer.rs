@@ -712,6 +712,9 @@ pub fn inspect_7z_with_progress(
         total_uncompressed += e.size();
         if let Some(rel) = sanitize_7z_entry(e.name()) {
             names.push(&rel);
+        } else {
+            // Counted but not listed: the list is not the whole archive.
+            names.complete = false;
         }
         if i.is_multiple_of(1000) {
             on_progress(file_count);
@@ -1001,6 +1004,9 @@ mod rar_support {
             if let Some(rel) = sanitize_rar_entry(&e.filename) {
                 names.push(&rel);
                 param_hit = better_param_hit(param_hit, &rel);
+            } else {
+                // Counted but not listed: the list is not the whole archive.
+                names.complete = false;
             }
         }
 

@@ -194,9 +194,13 @@ pub fn standard_state(
 pub fn dualsense_standard(buf: &[u8]) -> Option<Standard> {
     // lx, ly, rx, ry, l2, r2, and the three button bytes (hat + face, shoulders, PS).
     let (sticks, l2, r2, b) = match buf.first()? {
+        // Bluetooth's short report: 10 bytes, or 78 where Windows pads every read to the pad's
+        // longest report (as SDL tells them apart). USB's 0x01 is 64.
+        0x01 if buf.len() == 10 || buf.len() == 78 => {
+            (&buf[1..5], buf[8], buf[9], [buf[5], buf[6], buf[7]])
+        }
         0x01 if buf.len() >= 64 => (&buf[1..5], buf[5], buf[6], [buf[8], buf[9], buf[10]]),
         0x31 if buf.len() >= 78 => (&buf[2..6], buf[6], buf[7], [buf[9], buf[10], buf[11]]),
-        0x01 if buf.len() >= 10 => (&buf[1..5], buf[8], buf[9], [buf[5], buf[6], buf[7]]),
         _ => return None,
     };
     let range = AbsRange {
@@ -786,14 +790,21 @@ mod tests {
             assert_eq!(st.axes[0], -1.0);
             assert_eq!(st.axes[1], 0.0, "centre reads as 0");
         }
-        // Bluetooth's short report: sticks, then buttons, then triggers.
+        // Bluetooth's short report: sticks, then buttons, then triggers; as read on most
+        // systems (10 bytes) and as Windows pads it (78).
         let short = [0x01, 255, 128, 128, 128, 0x80 | 8, 0x20, 0x00, 0, 255];
-        let st = dualsense_standard(&short).unwrap();
-        assert_eq!(st.buttons[3], 1.0, "triangle");
-        assert_eq!(st.buttons[9], 1.0, "Options");
-        assert_eq!(st.buttons[7], 1.0, "R2");
-        assert_eq!(&st.buttons[12..16], &[0.0; 4], "hat 8 is no direction");
-        assert_eq!(st.axes[0], 1.0);
+        let mut padded = short.to_vec();
+        padded.resize(78, 0);
+        for buf in [&short[..], &padded[..]] {
+            let st = dualsense_standard(buf).unwrap();
+            assert_eq!(st.buttons[3], 1.0, "triangle");
+            assert_eq!(st.buttons[0], 0.0, "not cross");
+            assert_eq!(st.buttons[9], 1.0, "Options");
+            assert_eq!(st.buttons[6], 0.0, "L2 at rest");
+            assert_eq!(st.buttons[7], 1.0, "R2");
+            assert_eq!(&st.buttons[12..16], &[0.0; 4], "hat 8 is no direction");
+            assert_eq!(st.axes[0], 1.0);
+        }
         // Anything else is not a state report.
         assert_eq!(dualsense_standard(&[0x05; 41]), None);
         assert_eq!(dualsense_standard(&[0x01; 4]), None);
