@@ -2151,6 +2151,7 @@ upload_dialog_resume_desc: "Skip files that are already there; only send what's 
 upload_dialog_turn_off_prompt: "You can turn off this prompt in Settings → Upload.",
 upload_status_checking_existing: "Checking what's already on your PS5…",
 upload_status_resuming: "Resuming: {done} of {total} files already present ({have}); {send} to send.",
+upload_resumed_have: "Resumed: {have} was already on the PS5.",
 upload_status_preparing_files: "Preparing transfer of {count} files…",
 upload_status_preparing_hint: "(building the file list and reading the first batch — large folders or slow source disks take a minute)",
 upload_wrapped_hint_intro: "This folder isn't a game on its own, but it contains a game folder inside:",

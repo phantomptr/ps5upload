@@ -4624,6 +4624,7 @@ upload_phase_settling_count: "เหลือ {left} จาก {total} ไฟล
 upload_phase_settling_eta: "เหลืออีกประมาณ {time}",
 upload_phase_settling_rate: "ไฟล์/วินาที",
 upload_status_resuming: "กำลังทำต่อ: มีไฟล์อยู่แล้ว {done} จาก {total} ไฟล์ ({have}); ต้องส่ง {send}",
+upload_resumed_have: "ทำต่อแล้ว: มี {have} อยู่บน PS5 แล้ว",
 volumes_kept_by_console: "{kept} ถูกเครื่องเก็บไว้ใช้เอง",
 processes_and_ports: "โปรเซสและพอร์ต",
 payloads_tab_ps5: "บน PS5 ของคุณ",

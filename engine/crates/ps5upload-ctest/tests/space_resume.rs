@@ -38,6 +38,7 @@ fn cfg() -> TransferConfig {
     c.progress_files = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files_finalized = Some(Arc::new(AtomicU64::new(0)));
     c.progress_bytes_finalized = Some(Arc::new(AtomicU64::new(0)));
+    c.progress_bytes_resumed = Some(Arc::new(AtomicU64::new(0)));
     c.cancel = Some(Arc::new(AtomicBool::new(false)));
     c
 }
@@ -263,6 +264,7 @@ async fn a_kept_partial_is_credited_and_a_too_small_drive_leaves_it_for_the_retr
     room.store(total - held - 256 * 1024, Ordering::SeqCst);
     let c = cfg();
     let sent2 = c.progress_bytes.clone().unwrap();
+    let resumed2 = c.progress_bytes_resumed.clone().unwrap();
     let (p, s, d) = (
         pool.clone(),
         src.clone(),
@@ -274,7 +276,12 @@ async fn a_kept_partial_is_credited_and_a_too_small_drive_leaves_it_for_the_retr
         .expect_err("256 KiB short must be refused");
     let f = refusal(&e).unwrap_or_else(|| panic!("wrong failure: {e:#}"));
     assert!(f.detail.contains("already on the console"), "{}", f.detail);
-    assert_eq!(sent2.load(Ordering::Relaxed), 0, "refused after sending");
+    // The progress counts what the console already had as done; nothing beyond it went out.
+    assert_eq!(
+        sent2.load(Ordering::Relaxed),
+        resumed2.load(Ordering::Relaxed),
+        "refused after sending"
+    );
 
     // Room for exactly the rest: admitted, finished, byte-identical. Without the credit this
     // drive (less than the 8 MiB whole) could never take the retry.

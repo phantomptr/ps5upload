@@ -4,6 +4,10 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.8.0
+
+- A resumed upload shows what was already on the PS5, and its time left counts only what's still to send.
+
 ## 10.7.6
 
 - **Saved cheats and patches are applied the moment a game starts (For #627).** Some patches only

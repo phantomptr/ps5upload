@@ -4617,6 +4617,7 @@ upload_phase_settling_count: "{total}টির মধ্যে {left}টি ফ�
 upload_phase_settling_eta: "প্রায় {time} বাকি",
 upload_phase_settling_rate: "ফাইল/সে",
 upload_status_resuming: "আবার শুরু হচ্ছে: {total}টির মধ্যে {done}টি ফাইল আগে থেকেই আছে ({have}); {send} পাঠানো বাকি।",
+upload_resumed_have: "আবার শুরু হয়েছে: {have} আগে থেকেই PS5-এ ছিল।",
 volumes_kept_by_console: "{kept} কনসোল নিজের ব্যবহারের জন্য রেখেছে",
 processes_and_ports: "প্রসেস ও পোর্ট",
 payloads_tab_ps5: "আপনার PS5-এ",

@@ -4,7 +4,7 @@
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -627,6 +627,23 @@ fn dir_source_for(cfg: &TransferConfig, root: &Path) -> Arc<dyn Source> {
     Arc::new(crate::source::RenamedSource::new(source, &cfg.renames))
 }
 
+/// `gate`, also storing in `resumed` the bytes the receiver held before this job's own
+/// sending: what it proves durable at an open (whole files in place plus durable ranges of
+/// unfinished ones) less what this job has had acknowledged so far. The first open of a
+/// resume gives it all; a later open can only raise it, when bytes an earlier run sent became
+/// durable after that open (a resume right after a cancel).
+fn record_resumed(
+    gate: ava1::send::SpaceGate,
+    progress: Arc<Progress>,
+    resumed: Arc<AtomicU64>,
+) -> ava1::send::SpaceGate {
+    Arc::new(move |figures: &ava1::send::SpaceFigures| {
+        let ours = progress.bytes_sent.load(Ordering::Relaxed);
+        resumed.fetch_max(figures.durable_bytes.saturating_sub(ours), Ordering::AcqRel);
+        gate(figures)
+    })
+}
+
 /// One upload, retried across connection loss with the same `job_id`: the console's
 /// journal resumes the job, and durable progress bounds the retries.
 pub fn upload_with_in(
@@ -671,11 +688,17 @@ pub fn upload_with_seq_in(
     let dest = opts.root.clone();
     // What this job promised the drive is released however it ends (design 015/02).
     let _promise = crate::space::Reservation::new(job_id);
-    let space_gate =
-        crate::space::gate(pool.room_probe(), console.to_string(), dest.clone(), job_id);
+    // What the console already held when the job first opened (a resume): read from the
+    // figures the sender hands the space check before any byte goes out.
+    let resumed = Arc::new(AtomicU64::new(0));
+    let space_gate = record_resumed(
+        crate::space::gate(pool.room_probe(), console.to_string(), dest.clone(), job_id),
+        progress.clone(),
+        resumed.clone(),
+    );
     crate::block_on(async {
         SessionGate::identity(pool)?;
-        let _bridge = Bridge::start(progress.clone(), cfg);
+        let _bridge = Bridge::start_resumed(progress.clone(), cfg, resumed.clone());
         let mut backoff = Duration::from_millis(250);
         let mut gate = SessionGate::default();
         let mut busy = 0u32;
@@ -753,6 +776,9 @@ pub fn upload_with_seq_in(
                         "skipped_files": skipped_files,
                         "skipped_bytes": skipped_bytes,
                         "files_sent": manifest_files.saturating_sub(skipped_files),
+                        // Every byte the console held when the job first opened, partly
+                        // written files included (a resumed single file has no skipped files).
+                        "resumed_bytes": resumed.load(Ordering::Acquire).max(skipped_bytes),
                     });
                     // The bytes are durable, but the console did not confirm its files settled in place
                     // (SPEC.md §15.7): the job's snapshot says so instead of a clean success.
@@ -1135,6 +1161,7 @@ struct Done {
     files: u64,
     files_finalized: u64,
     bytes_finalized: u64,
+    bytes_resumed: u64,
 }
 
 /// Runs one job of a list with private counters and mirrors `done + private` into the caller's
@@ -1152,8 +1179,15 @@ fn run_aggregated<T>(
     inner.progress_files = fresh(&cfg.progress_files);
     inner.progress_files_finalized = fresh(&cfg.progress_files_finalized);
     inner.progress_bytes_finalized = fresh(&cfg.progress_bytes_finalized);
+    inner.progress_bytes_resumed = fresh(&cfg.progress_bytes_resumed);
     let pairs = |d: Done| -> Vec<(C, C, u64)> {
         vec![
+            // First: `progress_bytes` includes it, so it must never lag behind them.
+            (
+                cfg.progress_bytes_resumed.clone(),
+                inner.progress_bytes_resumed.clone(),
+                d.bytes_resumed,
+            ),
             (
                 cfg.progress_bytes.clone(),
                 inner.progress_bytes.clone(),
@@ -1223,6 +1257,7 @@ fn run_aggregated<T>(
     done.files += get(&inner.progress_files);
     done.files_finalized += get(&inner.progress_files_finalized);
     done.bytes_finalized += get(&inner.progress_bytes_finalized);
+    done.bytes_resumed += get(&inner.progress_bytes_resumed);
     r
 }
 

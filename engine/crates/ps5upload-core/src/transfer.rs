@@ -35,6 +35,10 @@ pub struct TransferConfig {
     /// motion through the end of a job. `None` = no such counters.
     pub progress_files_finalized: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     pub progress_bytes_finalized: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Bytes the console already held when the job first opened (a resume: files already in
+    /// place plus the durable ranges of unfinished ones). Absolute, set once at the open;
+    /// already included in `progress_bytes`. `None` = not reported.
+    pub progress_bytes_resumed: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     /// Bytes of the source hashed so far while a `verify` job reads every file up front
     /// (SPEC.md §11.4). The engine shows it as the job's "verify" stage.
     pub progress_verify: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
@@ -64,6 +68,7 @@ impl TransferConfig {
             progress_files: None,
             progress_files_finalized: None,
             progress_bytes_finalized: None,
+            progress_bytes_resumed: None,
             progress_verify: None,
             progress_live: None,
             bandwidth_cap_bps: None,
@@ -188,6 +193,11 @@ pub struct LiveNotes {
     pub phase: std::sync::atomic::AtomicU8,
     pub skip_done_bytes: std::sync::atomic::AtomicU64,
     pub skip_total_bytes: std::sync::atomic::AtomicU64,
+    /// Bytes the console already held when the job first opened: files already in place plus
+    /// the durable ranges of unfinished ones (a resumed upload). Already counted in the job's
+    /// `bytes_sent`, so a client subtracts it for this run's speed and time left. 0 = fresh.
+    /// Shared with `TransferConfig::progress_bytes_resumed`, which the transfer writes.
+    pub resumed_bytes: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Files are still settling on the console after the job finished.
     pub settling: std::sync::atomic::AtomicBool,
     /// The files the console still reports unswept while `settling` (0 outside it), and the

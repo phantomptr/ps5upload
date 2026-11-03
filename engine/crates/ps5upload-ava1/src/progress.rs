@@ -1,6 +1,6 @@
 //! Copying AVA1's progress into the counters the engine's ticker reads.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,7 +13,9 @@ use ps5upload_core::transfer::{TransferConfig, LIVE_PHASE_SKIPPING};
 ///
 /// Mapping (C12/A3): `progress_bytes` ← `bytes_sent` (Received bytes),
 /// `progress_files` and `progress_files_finalized` ← `files_durable`,
-/// `progress_bytes_finalized` ← `bytes_durable`. AVA1 has no per-file "sent" counter;
+/// `progress_bytes_finalized` ← `bytes_durable`. `progress_bytes` also counts what the
+/// console already held when the job first opened (whole files it skipped, or the durable
+/// ranges a resumed file kept): the bar starts where the last run left off and reaches 100%. AVA1 has no per-file "sent" counter;
 /// durability is its analogue, so the UI's file counter moves in commit-sized steps —
 /// slower but honest, and strictly better than showing 0 for the whole transfer.
 /// The engine's ticker reads these counters absolutely, so the bridge `store`s, never
@@ -25,15 +27,29 @@ pub struct Bridge {
 
 struct Counters {
     p: Arc<Progress>,
-    bytes: Option<Arc<std::sync::atomic::AtomicU64>>,
+    bytes: Option<Arc<AtomicU64>>,
     files: Option<Arc<std::sync::atomic::AtomicU64>>,
     files_finalized: Option<Arc<std::sync::atomic::AtomicU64>>,
     bytes_finalized: Option<Arc<std::sync::atomic::AtomicU64>>,
     live: Option<Arc<ps5upload_core::transfer::LiveNotes>>,
+    /// Bytes the console held when the job first opened (see [`Bridge::start_resumed`]).
+    resumed: Arc<AtomicU64>,
+    resumed_out: Option<Arc<AtomicU64>>,
 }
 
 impl Bridge {
     pub fn start(p: Arc<Progress>, cfg: &TransferConfig) -> Bridge {
+        Bridge::start_resumed(p, cfg, Arc::default())
+    }
+
+    /// [`Bridge::start`] with `resumed`: the bytes the console already held when the job
+    /// first opened (whole files in place plus durable ranges), set once by the sender's
+    /// first open. Counted as done and copied to `cfg.progress_bytes_resumed`.
+    pub fn start_resumed(
+        p: Arc<Progress>,
+        cfg: &TransferConfig,
+        resumed: Arc<AtomicU64>,
+    ) -> Bridge {
         let counters = Arc::new(Counters {
             p,
             bytes: cfg.progress_bytes.clone(),
@@ -41,6 +57,8 @@ impl Bridge {
             files_finalized: cfg.progress_files_finalized.clone(),
             bytes_finalized: cfg.progress_bytes_finalized.clone(),
             live: cfg.progress_live.clone(),
+            resumed,
+            resumed_out: cfg.progress_bytes_resumed.clone(),
         });
         let ticker = counters.clone();
         let handle = tokio::spawn(async move {
@@ -56,6 +74,12 @@ impl Bridge {
 
 impl Counters {
     fn store(&self) {
+        let resumed = self.resumed.load(Ordering::Acquire);
+        if let Some(r) = &self.resumed_out {
+            // Before the bytes below, which include it: a snapshot never sees bytes that
+            // count the resumed part without the figure that names it.
+            r.store(resumed, Ordering::Release);
+        }
         if let Some(l) = &self.live {
             let p = &self.p;
             l.bottleneck
@@ -82,12 +106,18 @@ impl Counters {
             }
         }
         if let Some(x) = &self.bytes {
-            // Skipped bytes count as done, so a resume's bar reaches 100%.
-            x.store(
-                self.p.bytes_sent.load(Ordering::Relaxed)
-                    + self.p.skipped_bytes.load(Ordering::Relaxed),
-                Ordering::Relaxed,
-            );
+            // What the console already had counts as done, so a resume's bar starts where the
+            // last run stopped and reaches 100%. `resumed` covers the skipped whole files too.
+            // Never below what the console reports durable either: a resume right after a
+            // cancel finds bytes the earlier run sent landing without this run sending them.
+            let had = self.p.skipped_bytes.load(Ordering::Relaxed).max(resumed);
+            let done = self
+                .p
+                .bytes_sent
+                .load(Ordering::Relaxed)
+                .saturating_add(had)
+                .max(self.p.bytes_durable.load(Ordering::Relaxed));
+            x.store(done, Ordering::Release);
         }
         if let Some(x) = &self.files {
             x.store(
@@ -133,6 +163,43 @@ pub fn bottleneck_name(b: u8) -> &'static str {
 #[cfg(test)]
 mod live_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_resumed_job_counts_what_the_console_already_had_as_done() {
+        let p = Arc::new(Progress::default());
+        let live = Arc::new(ps5upload_core::transfer::LiveNotes::default());
+        let bytes = Arc::new(AtomicU64::new(0));
+        let mut cfg = TransferConfig::new("h");
+        cfg.progress_live = Some(live.clone());
+        cfg.progress_bytes = Some(bytes.clone());
+        cfg.progress_bytes_resumed = Some(live.resumed_bytes.clone());
+        let resumed = Arc::new(AtomicU64::new(0));
+        let bridge = Bridge::start_resumed(p.clone(), &cfg, resumed.clone());
+        // A single 100-byte file whose first 60 bytes were already durable: no skipped
+        // files, 60 resumed, 5 sent this run.
+        resumed.store(60, Ordering::Relaxed);
+        p.bytes_sent.store(5, Ordering::Relaxed);
+        drop(bridge);
+        assert_eq!(bytes.load(Ordering::Relaxed), 65);
+        assert_eq!(live.resumed_bytes.load(Ordering::Relaxed), 60);
+
+        // A folder resume reports its skipped whole files; `resumed` includes them, so they
+        // are not counted twice.
+        let p = Arc::new(Progress::default());
+        let resumed = Arc::new(AtomicU64::new(40));
+        p.skipped_bytes.store(30, Ordering::Relaxed);
+        p.bytes_sent.store(10, Ordering::Relaxed);
+        drop(Bridge::start_resumed(p, &cfg, resumed));
+        assert_eq!(bytes.load(Ordering::Relaxed), 50);
+
+        // A fresh job (or a path without the space check): skipped bytes as before.
+        let p = Arc::new(Progress::default());
+        p.skipped_bytes.store(30, Ordering::Relaxed);
+        p.bytes_sent.store(10, Ordering::Relaxed);
+        drop(Bridge::start(p, &cfg));
+        assert_eq!(bytes.load(Ordering::Relaxed), 40);
+        assert_eq!(live.resumed_bytes.load(Ordering::Relaxed), 0);
+    }
 
     #[tokio::test]
     async fn the_bridge_copies_the_live_notes_while_running_and_once_more_on_drop() {
