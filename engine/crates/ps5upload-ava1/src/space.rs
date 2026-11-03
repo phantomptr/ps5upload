@@ -185,6 +185,10 @@ pub fn judge(figures: &SpaceFigures, room: &Room, promised_elsewhere: u64) -> Re
         ));
     }
     m.push_str(&format!("); short by {} bytes.", need - avail));
+    if room.free_bytes == 0 {
+        m.push_str(" ");
+        m.push_str(FULL_IMAGE_SENTENCE);
+    }
     let kept = figures.job_bytes.saturating_sub(need);
     if kept > 0 {
         m.push_str(&format!(
@@ -195,6 +199,10 @@ pub fn judge(figures: &SpaceFigures, room: &Room, promised_elsewhere: u64) -> Re
     }
     Err(m)
 }
+
+/// Said when the destination has nothing free at all: usually a folder inside a mounted disk
+/// image (a game run from an .exfat / .ffpfs / .ffpkg image is exactly as big as the game).
+pub const FULL_IMAGE_SENTENCE: &str = "Nothing at all is free there: if this folder is inside a game run from a disk image (.exfat, .ffpfs, .ffpkg), the image is exactly as big as the game, so files in it can't grow. Change the files where the image was made, then rebuild it, or run the game from a plain folder.";
 
 /// The sentence that explains a gap between what Volumes shows and what the console can allocate.
 pub const POOL_SENTENCE: &str = "The PS5's internal storage holds back about a fifth more than is written, so less fits than its free space suggests.";
@@ -367,6 +375,18 @@ mod tests {
             why.contains(&format!("{} bytes", 60 * GB)) && why.contains("already on the console"),
             "{why}"
         );
+    }
+
+    #[test]
+    fn a_drive_with_nothing_free_says_why_an_image_is_full() {
+        let full = Room {
+            volume: "/mnt/shadowmnt/game".into(),
+            ..Room::default()
+        };
+        let why = judge(&figures(GB, 0, 0), &full, 0).unwrap_err();
+        assert!(why.contains(FULL_IMAGE_SENTENCE), "{why}");
+        let why = judge(&figures(50 * GB, 0, 0), &room(10 * GB), 0).unwrap_err();
+        assert!(!why.contains(FULL_IMAGE_SENTENCE), "{why}");
     }
 
     #[test]
