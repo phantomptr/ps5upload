@@ -30,6 +30,9 @@ What's new in ps5upload, written for humans.
 - **Pairing says what to check (For #642).** When the PS5 doesn't answer pairing, the message now
   names the two usual causes: Remote Play is off on the PS5, or the PIN didn't come from the PS5's
   own Link Device screen (PINs from other tools don't work).
+- **No more "1e+218h left".** During a long step that moves no bytes (a conversion's hashing pass),
+  the status bar's speed faded towards zero and showed nonsense like "2.2e-211 B/s · 1.4e+218h
+  left". A job that isn't moving bytes now shows no speed, and no time left over 30 days.
 - **"No space" on a game's disk image says why.** Changing files of a game run from an image
   (.exfat, .ffpfs, .ffpkg) was refused with "only 0 bytes are safely allocatable" and nothing
   more. The message now says the image is exactly as big as the game and how to change its files.

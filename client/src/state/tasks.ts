@@ -288,6 +288,8 @@ const rateSamples = new Map<string, RateSample>();
 const MIN_SAMPLE_MS = 400;
 /** Weight of the newest sample in the smoothed speed. */
 const RATE_ALPHA = 0.3;
+/** Below this a job shows no speed (and no time left) rather than a figure that means nothing. */
+const MIN_RATE = 1;
 
 /** Many jobs (library moves, downloads, file copies, watched engine jobs) report bytes moved
  *  but no speed, so the activity bar could show a percentage and nothing about how fast or how
@@ -311,8 +313,11 @@ export function deriveRate(
     return prev.bytesPerSec > 0 ? withEta(prev.bytesPerSec, progress) : null;
   }
   const instant = ((progress.current - prev.current) * 1000) / dt;
-  const bytesPerSec =
+  let bytesPerSec =
     prev.bytesPerSec > 0 ? prev.bytesPerSec + RATE_ALPHA * (instant - prev.bytesPerSec) : instant;
+  // A step that moves no bytes (a conversion's hashing pass) decays the average by 0.7 a sample:
+  // left alone it reached 1e-211 B/s and "1e+218h left". Under a byte a second is no speed.
+  if (bytesPerSec < MIN_RATE) bytesPerSec = 0;
   samples.set(id, { at: now, current: progress.current, bytesPerSec });
   return bytesPerSec > 0 ? withEta(bytesPerSec, progress) : null;
 }

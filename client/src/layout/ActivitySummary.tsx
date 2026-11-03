@@ -17,6 +17,12 @@ type Tr = ReturnType<typeof useTr>;
 
 const kindName = (tr: Tr, kind: TaskKind) => tr(shortLabelKey(kind), undefined, shortLabel(kind));
 
+/** A time left worth showing: positive, finite and under 30 days (anything longer comes from a
+ *  speed too small to mean anything). */
+export function shownEta(eta: number | undefined | null): eta is number {
+  return eta != null && eta > 0 && Number.isFinite(eta) && eta < 30 * 86_400;
+}
+
 /** What a running job says about itself, in order: its step, how far, how fast, how long. A
  *  job that has gone quiet says only that. `long` adds the byte counts (the panel has room). */
 export function rowFigures(row: ActivityRow, tr: Tr, long = false): string[] {
@@ -41,8 +47,8 @@ export function rowFigures(row: ActivityRow, tr: Tr, long = false): string[] {
       );
     }
   }
-  if (task.rate && task.rate.bytesPerSec > 0) out.push(`${formatBytes(task.rate.bytesPerSec)}/s`);
-  if (task.eta != null && task.eta > 0 && isFinite(task.eta)) {
+  if (task.rate && task.rate.bytesPerSec >= 1) out.push(`${formatBytes(task.rate.bytesPerSec)}/s`);
+  if (shownEta(task.eta)) {
     const time = formatDuration(task.eta);
     out.push(tr("activity_left", { time }, `${time} left`));
   }
@@ -57,9 +63,9 @@ export function lineFigures(row: ActivityRow, tr: Tr): string[] {
   const out: string[] = [];
   if (pct != null) out.push(`${Math.floor(pct)}%`);
   if (task.stage && (pct == null || pct >= 100)) out.push(task.stage);
-  if (task.rate && task.rate.bytesPerSec > 0 && (pct == null || pct < 100))
+  if (task.rate && task.rate.bytesPerSec >= 1 && (pct == null || pct < 100))
     out.push(`${formatBytes(task.rate.bytesPerSec)}/s`);
-  if (task.eta != null && task.eta > 0 && isFinite(task.eta)) {
+  if (shownEta(task.eta)) {
     const time = formatDuration(task.eta);
     out.push(tr("activity_left", { time }, `${time} left`));
   }

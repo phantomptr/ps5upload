@@ -291,6 +291,20 @@ describe("deriveRate", () => {
     expect(deriveRate(samples, "b", { current: 1, total: 2, unit: "files" }, 0)).toBeNull();
   });
 
+  it("a long step with no bytes moving ends with no speed, not one decayed to nothing", async () => {
+    const { deriveRate } = await import("./tasks");
+    const samples = new Map();
+    const p = (current: number) => ({ current, total: 100 * 2 ** 30, unit: "bytes" as const });
+    deriveRate(samples, "c", p(0), 0);
+    deriveRate(samples, "c", p(10 * 2 ** 30), 1000);
+    // A conversion's hashing pass: the byte count stands still for thousands of samples.
+    let last: ReturnType<typeof deriveRate> = null;
+    for (let i = 2; i < 3000; i++) last = deriveRate(samples, "c", p(10 * 2 ** 30), i * 1000);
+    expect(last).toBeNull();
+    // Bytes moving again: a real speed comes back.
+    expect(deriveRate(samples, "c", p(11 * 2 ** 30), 3000 * 1000)?.rate.bytesPerSec).toBeGreaterThan(1);
+  });
+
   it("fills in speed for an update that reports only bytes, and never overrides one that has a speed", async () => {
     vi.useFakeTimers();
     try {
