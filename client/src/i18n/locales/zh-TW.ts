@@ -6983,6 +6983,7 @@ helper_mismatch_boot_copy: "你的 PS5 啟動了為開機保留的舊版助手�
 "join_guide_ok": "知道了",
 "join_reconnecting": "正在重新連線…",
 "join_reconnecting_left": "你的位置會保留 {time}。",
+"join_host_away": "主機玩家已停止遊戲 — 正在等待對方重新開始（{time}）",
 "join_refused_key": "此邀請已過期。請向 {host} 要一個新連結。",
 "join_refused_full": "遊戲已滿：已經有四名玩家。",
 "join_refused_denied": "{host} 這次沒有讓你加入。",

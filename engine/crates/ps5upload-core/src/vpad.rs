@@ -241,8 +241,13 @@ pub struct SlotFailure {
 pub struct Ack {
     #[serde(default)]
     pub ok: bool,
-    /// States applied (`vpad.state`: 0 or 1; a `seq` not above the last is not applied).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// States applied (`vpad.state` says true or false, read as 1 or 0; a `seq` not above the
+    /// last is not applied).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "count_or_bool"
+    )]
     pub applied: Option<u32>,
     /// `vpad.states`: the slots that failed (`vpad_not_open`, `vpad_not_owner`, `vpad_failed`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -252,6 +257,20 @@ pub struct Ack {
     pub neutral: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub err: Option<String>,
+}
+
+/// `vpad.states` counts what it applied, `vpad.state` says true or false.
+fn count_or_bool<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u32>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum N {
+        Count(u32),
+        Flag(bool),
+    }
+    Ok(Option::<N>::deserialize(d)?.map(|n| match n {
+        N::Count(c) => c,
+        N::Flag(b) => u32::from(b),
+    }))
 }
 
 /// The answer to `vpad.output`: what the game asks of Player N's controller.
@@ -581,6 +600,11 @@ mod tests {
         assert_eq!(a.failed[0].err, "vpad_not_open");
         let a: Ack = serde_json::from_str(r#"{"ok":true,"neutral":true}"#).unwrap();
         assert_eq!(a.neutral, Some(true));
+        // vpad.state answers a bool
+        let a: Ack = serde_json::from_str(r#"{"ok":true,"applied":true}"#).unwrap();
+        assert_eq!((a.ok, a.applied), (true, Some(1)));
+        let a: Ack = serde_json::from_str(r#"{"ok":true,"applied":false}"#).unwrap();
+        assert_eq!(a.applied, Some(0));
     }
 
     #[test]

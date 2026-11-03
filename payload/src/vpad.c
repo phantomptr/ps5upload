@@ -491,7 +491,14 @@ static int parse_state(const char *b, size_t n, state_req_t *r) {
         opt_u8(b, n, "l2", &r->st.l2) < 0 || opt_u8(b, n, "r2", &r->st.r2) < 0)
         return -1;
     r->st.buttons = (uint32_t)buttons;
-    if (opt_vec3(b, n, "gyro", r->st.gyro) < 0 || opt_vec3(b, n, "accel", r->st.accel) < 0) return -1;
+    /* A bad motion block (not three numbers, or one beyond +-1e6) is dropped: the pad keeps the
+     * rest of the state, held still. It never refuses the state (or the batch it is in), so one
+     * guest's odd sensor cannot stop every other player. */
+    if (opt_vec3(b, n, "gyro", r->st.gyro) < 0 || opt_vec3(b, n, "accel", r->st.accel) < 0) {
+        memset(r->st.gyro, 0, sizeof r->st.gyro);
+        memset(r->st.accel, 0, sizeof r->st.accel);
+        r->st.accel[1] = 1.0f;
+    }
     t = webui_json_array(b, n, "touch", &arr, &alen);
     if (t < 0 && !webui_json_null(b, n, "touch")) return -1;
     if (t == 1) {

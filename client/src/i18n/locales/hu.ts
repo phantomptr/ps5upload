@@ -7336,6 +7336,7 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
 "join_guide_ok": "Értem",
 "join_reconnecting": "Újracsatlakozás…",
 "join_reconnecting_left": "A helyed még {time} ideig fenntartjuk.",
+"join_host_away": "A házigazda abbahagyta a játékot – várjuk, hogy újra elkezdje ({time})",
 "join_refused_key": "Ez a meghívó lejárt. Kérj új linket tőle: {host}.",
 "join_refused_full": "A játék megtelt: már négy játékos van bent.",
 "join_refused_denied": "{host} most nem engedett be.",

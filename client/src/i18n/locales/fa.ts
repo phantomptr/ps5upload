@@ -7322,6 +7322,7 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
 "join_guide_ok": "متوجه شدم",
 "join_reconnecting": "در حال اتصال دوباره…",
 "join_reconnecting_left": "جای شما تا {time} نگه داشته می‌شود.",
+"join_host_away": "میزبان بازی را متوقف کرد — در انتظار شروع دوباره ({time})",
 "join_refused_key": "این دعوت منقضی شده است. از {host} پیوند جدید بخواهید.",
 "join_refused_full": "بازی پر است: چهار بازیکن از قبل هستند.",
 "join_refused_denied": "{host} این بار اجازهٔ ورود نداد.",

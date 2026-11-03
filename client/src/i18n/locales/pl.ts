@@ -7278,6 +7278,7 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
 "join_guide_ok": "Rozumiem",
 "join_reconnecting": "Ponowne łączenie…",
 "join_reconnecting_left": "Twoje miejsce czeka jeszcze {time}.",
+"join_host_away": "Gospodarz przestał grać — czekamy, aż zacznie znowu ({time})",
 "join_refused_key": "To zaproszenie wygasło. Poproś {host} o nowy link.",
 "join_refused_full": "Gra jest pełna: gra już czterech graczy.",
 "join_refused_denied": "{host} tym razem cię nie wpuścił.",

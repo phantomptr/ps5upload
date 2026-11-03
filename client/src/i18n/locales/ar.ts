@@ -7030,6 +7030,7 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
 "join_guide_ok": "فهمت",
 "join_reconnecting": "جارٍ إعادة الاتصال…",
 "join_reconnecting_left": "مكانك محفوظ لمدة {time}.",
+"join_host_away": "توقف المضيف عن اللعب — بانتظار أن يبدأ من جديد ({time})",
 "join_refused_key": "انتهت صلاحية هذه الدعوة. اطلب من {host} رابطًا جديدًا.",
 "join_refused_full": "اللعبة ممتلئة: يوجد أربعة لاعبين بالفعل.",
 "join_refused_denied": "لم يسمح لك {host} بالدخول هذه المرة.",

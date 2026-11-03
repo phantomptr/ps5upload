@@ -101,6 +101,7 @@ describe("engine messages", () => {
     });
     expect(readServerMessage('{"bye":"kicked"}')).toEqual({ kind: "bye", why: "kicked" });
     expect(readServerMessage('{"bye":"host_stopped"}')).toEqual({ kind: "bye", why: "host_stopped" });
+    expect(readServerMessage('{"stage":"waiting","why":"host_stopped"}')).toEqual({ kind: "waiting" });
     expect(readServerMessage('{"bye":"other"}')).toEqual({ kind: "bye", why: "closed" });
     expect(readServerMessage('{"pong":12.5}')).toEqual({ kind: "pong", t: 12.5 });
     expect(readServerMessage("nope")).toBeNull();

@@ -7038,6 +7038,7 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
 "join_guide_ok": "Verstanden",
 "join_reconnecting": "Verbinde neu…",
 "join_reconnecting_left": "Dein Platz wird {time} lang freigehalten.",
+"join_host_away": "Der Gastgeber hat aufgehört zu spielen – wir warten, bis er wieder anfängt ({time})",
 "join_refused_key": "Diese Einladung ist abgelaufen. Bitte {host} um einen neuen Link.",
 "join_refused_full": "Das Spiel ist voll: Es sind schon vier Spieler da.",
 "join_refused_denied": "{host} hat dich diesmal nicht reingelassen.",

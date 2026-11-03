@@ -78,7 +78,7 @@ const ASK_WAIT: Duration = Duration::from_secs(90);
 /// A guest must say hello this soon after connecting.
 const HELLO_WAIT: Duration = Duration::from_secs(10);
 /// How long the helper may take to make a guest's pad.
-const OPEN_WAIT: Duration = Duration::from_secs(5);
+const OPEN_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 5 });
 /// How often a guest hears its status (and the engine pings it).
 const STATUS_EVERY: Duration = Duration::from_secs(1);
 /// Pictures queued for a player before it skips to the next keyframe (the host page's queue).
@@ -90,6 +90,17 @@ const PICKING_GRACE: Duration = Duration::from_secs(60);
 const LEFT_SHOWN: Duration = Duration::from_secs(30);
 /// Guest connects per address per minute.
 const CONNECTS_PER_MIN: usize = 10;
+/// This computer's own guest sockets per minute (its browser, its tests): more, but not unbounded.
+const LOOPBACK_CONNECTS_PER_MIN: usize = 120;
+/// The largest message a guest's socket takes. Theirs are a hello (a key, a token, a name), a
+/// ping, a leave and pad frames (at most 51 bytes): all well under 1 KiB. The host's way out
+/// (pictures, sound, status) is not limited by it.
+pub(crate) const GUEST_MSG_MAX: usize = 4096;
+/// A guest's pad frames reach the helper link at most this many a second on average (a pad
+/// sends 60-120), with bursts of [`PAD_BURST`] (frames bunched up by the network); more are
+/// folded into the latest, never queued.
+const PAD_RATE: f64 = 250.0;
+const PAD_BURST: f64 = 32.0;
 /// How often each open Play Together checks the host's session, expiries and resumes.
 const WATCH_EVERY: Duration = Duration::from_millis(250);
 /// Guest → engine binary kind: one pad state.
@@ -98,16 +109,25 @@ pub(crate) const KIND_PAD: u8 = 0x01;
 const PAD_MOTION: u8 = 0x02;
 /// Spectator ids for players (pad_link's phones count up from 1).
 const SPECTATOR_BASE: u64 = 1 << 62;
+/// A guest's gyro is held to this (rad/s: a DualSense reads up to 2000 deg/s, 34.9 rad/s).
+const GYRO_MAX: f32 = 40.0;
+/// A guest's accelerometer is held to this (g: a DualSense reads up to 8 g).
+const ACCEL_MAX: f32 = 16.0;
+/// Motion beyond this is no reading at all: the motion block is dropped.
+const MOTION_ABSURD: f32 = 1e5;
 
 // ── Guest pad frames ─────────────────────────────────────────────────────────────────────────────
 
 /// A guest's binary pad frame: `[0x01][u32 LE seq][u32 LE buttons][u8 lx ly rx ry l2 r2]
 /// [u8 ntouch][ntouch × (u8 id, u16 LE x, u16 LE y)]` and optionally `[0x02][6 × f32 LE: gyro
 /// x y z, accel x y z]`. None when malformed (more than two fingers, a short or long frame,
-/// motion that is not a finite number). `buttons` are the apps' bits (`PadButton`, the same as
-/// Remote Play's), turned into the helper's (libScePad's, `vpad::from_app`); sticks 0-255 (128 at
-/// rest), touch in 1920 × 1080, gyro in rad/s, accel in g. `seq` is the guest's (it may start
-/// anywhere): the link numbers what it sends to the helper itself.
+/// motion that is not a finite number). Motion beyond [`MOTION_ABSURD`] is dropped (the frame's
+/// buttons, sticks and touch still count); the rest is held to what a DualSense reads
+/// ([`GYRO_MAX`], [`ACCEL_MAX`]), so the helper never refuses a state for it. `buttons` are the
+/// apps' bits (`PadButton`, the same as Remote Play's), turned into the helper's (libScePad's,
+/// `vpad::from_app`); sticks 0-255 (128 at rest), touch in 1920 × 1080, gyro in rad/s, accel in
+/// g. `seq` is the guest's (it may start anywhere): the link numbers what it sends to the helper
+/// itself.
 pub(crate) fn parse_pad(b: &[u8]) -> Option<(u32, PadState)> {
     if b.len() < 16 || b[0] != KIND_PAD {
         return None;
@@ -148,10 +168,17 @@ pub(crate) fn parse_pad(b: &[u8]) -> Option<(u32, PadState)> {
             if v.iter().any(|x| !x.is_finite()) {
                 return None;
             }
-            Some(Motion {
-                gyro: [v[0], v[1], v[2]],
-                accel: [v[3], v[4], v[5]],
-            })
+            if v.iter().any(|x| x.abs() > MOTION_ABSURD) {
+                // no sensor reads that: the motion block goes, the rest of the frame stays
+                None
+            } else {
+                let g = |x: f32| x.clamp(-GYRO_MAX, GYRO_MAX);
+                let a = |x: f32| x.clamp(-ACCEL_MAX, ACCEL_MAX);
+                Some(Motion {
+                    gyro: [g(v[0]), g(v[1]), g(v[2])],
+                    accel: [a(v[3]), a(v[4]), a(v[5])],
+                })
+            }
         }
         _ => return None,
     };
@@ -869,11 +896,13 @@ fn spawn_watch(key: String) {
 static CONNECTS: Mutex<Option<HashMap<IpAddr, VecDeque<Instant>>>> = Mutex::new(None);
 
 /// At most [`CONNECTS_PER_MIN`] guest sockets per address per minute (this computer itself,
-/// which has the host API anyway, is not counted).
+/// which has the host API anyway, [`LOOPBACK_CONNECTS_PER_MIN`]).
 fn connect_allowed(ip: IpAddr, now: Instant) -> bool {
-    if ip.is_loopback() {
-        return true;
-    }
+    let limit = if ip.is_loopback() {
+        LOOPBACK_CONNECTS_PER_MIN
+    } else {
+        CONNECTS_PER_MIN
+    };
     let mut g = CONNECTS.lock().unwrap_or_else(|e| e.into_inner());
     let m = g.get_or_insert_with(HashMap::new);
     let minute = Duration::from_secs(60);
@@ -884,7 +913,7 @@ fn connect_allowed(ip: IpAddr, now: Instant) -> bool {
         !q.is_empty()
     });
     let q = m.entry(ip).or_default();
-    if q.len() >= CONNECTS_PER_MIN {
+    if q.len() >= limit {
         return false;
     }
     q.push_back(now);
@@ -905,7 +934,10 @@ pub async fn ws(
             .into_response();
     }
     let ip = peer.ip();
-    upgrade.on_upgrade(move |s| guest_session(s, ip))
+    upgrade
+        .max_message_size(GUEST_MSG_MAX)
+        .max_frame_size(GUEST_MSG_MAX)
+        .on_upgrade(move |s| guest_session(s, ip))
 }
 
 #[derive(serde::Deserialize)]
@@ -929,7 +961,12 @@ pub async fn relay(
     let Some(target) = crate::pad_link::lan_ws_target(&q.url, "api/join/ws") else {
         return bad(StatusCode::BAD_REQUEST, "address");
     };
-    upgrade.on_upgrade(move |s| async move { crate::pad_link::relay_to(s, &target).await })
+    // What the guest sends is held to a guest socket's limit; the host's pictures coming back
+    // are read by the relay's own client socket, which keeps its large one.
+    upgrade
+        .max_message_size(GUEST_MSG_MAX)
+        .max_frame_size(GUEST_MSG_MAX)
+        .on_upgrade(move |s| async move { crate::pad_link::relay_to(s, &target).await })
 }
 
 /// `GET /join`: the guest page.
@@ -989,6 +1026,8 @@ async fn read_hello(socket: &mut WebSocket) -> Option<Hello> {
                 Some(Ok(Message::Text(t))) => {
                     return serde_json::from_str::<HelloMsg>(t.as_str()).ok().map(|h| h.hello);
                 }
+                // nothing binary comes before the hello (pad frames start once in)
+                Some(Ok(Message::Binary(_))) => return None,
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return None,
                 _ => {}
             },
@@ -1182,10 +1221,23 @@ async fn open_slot(console: &str, slot: u8, token: &str) -> link::OpenResult {
             reply: tx,
         },
     );
-    match tokio::time::timeout(OPEN_WAIT, rx).await {
+    let r = match tokio::time::timeout(OPEN_WAIT, rx).await {
         Ok(Ok(r)) => r,
         _ => link::OpenResult::Failed("timeout".into()),
+    };
+    if !matches!(r, link::OpenResult::Ok | link::OpenResult::Busy) {
+        // Not ours to play: a pad the link still makes (a slow helper) or has goes again, so it
+        // is not kept alive by heartbeats with nobody on it. Only while `token` owns the slot (a
+        // busy slot is another owner's).
+        link::send(
+            console,
+            link::Cmd::Abandon {
+                slot,
+                token: token.to_string(),
+            },
+        );
     }
+    r
 }
 
 /// A new guest with an invite: checks, asks the host, makes their pad. None when the socket
@@ -1325,6 +1377,66 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
     }
 }
 
+/// Holds a guest's pad frames to [`PAD_RATE`] (bursts of [`PAD_BURST`]): one over it waits as the
+/// latest (a newer one replaces it), so a flooding guest costs the link what a normal one does.
+struct PadPacer<T> {
+    tokens: f64,
+    at: Instant,
+    held: Option<T>,
+}
+
+impl<T> PadPacer<T> {
+    fn new(now: Instant) -> Self {
+        PadPacer {
+            tokens: PAD_BURST,
+            at: now,
+            held: None,
+        }
+    }
+
+    fn refill(&mut self, now: Instant) {
+        let dt = now.saturating_duration_since(self.at).as_secs_f64();
+        self.tokens = (self.tokens + dt * PAD_RATE).min(PAD_BURST);
+        self.at = now;
+    }
+
+    /// A frame: back to send now, or None (it is held as the latest).
+    fn offer(&mut self, now: Instant, v: T) -> Option<T> {
+        self.refill(now);
+        if self.held.is_none() && self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            return Some(v);
+        }
+        self.held = Some(v);
+        None
+    }
+
+    /// When the held frame may go.
+    fn due(&self) -> Option<Instant> {
+        self.held.as_ref()?;
+        let wait = ((1.0 - self.tokens).max(0.0) / PAD_RATE).min(1.0);
+        Some(self.at + Duration::from_secs_f64(wait))
+    }
+
+    /// The held frame, once it may go.
+    fn take(&mut self, now: Instant) -> Option<T> {
+        self.refill(now);
+        if self.held.is_some() && self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            return self.held.take();
+        }
+        None
+    }
+}
+
+/// A guest's pad state to their pad (PS and Create taken while they play).
+fn forward_pad(key: &str, console: &str, id: u64, mut st: PadState) {
+    if let Some((slot, strip)) = with_party(key, |p| p.strip_mask(id)).flatten() {
+        st.buttons &= !strip;
+        link::send(console, link::Cmd::State { slot, state: st });
+    }
+}
+
 fn now_ms() -> u64 {
     static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     T0.get_or_init(Instant::now).elapsed().as_millis() as u64
@@ -1364,6 +1476,7 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
         .is_err();
     let mut tick = tokio::time::interval(STATUS_EVERY);
     let mut left = false;
+    let mut pacer = PadPacer::new(Instant::now());
     loop {
         if ended {
             break; // the joined message could not go: the socket is gone
@@ -1379,13 +1492,22 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
                 }
                 None => break,
             },
+            _ = async {
+                match pacer.due() {
+                    Some(t) => tokio::time::sleep_until(t.into()).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Some(st) = pacer.take(Instant::now()) {
+                    forward_pad(&key, &console, id, st);
+                }
+            },
             inc = socket.recv() => match inc {
                 Some(Ok(Message::Binary(b))) => {
-                    if let Some((_seq, mut st)) = parse_pad(&b) {
+                    if let Some((_seq, st)) = parse_pad(&b) {
                         stats.pad_frames.fetch_add(1, Ordering::Relaxed);
-                        if let Some((slot, strip)) = with_party(&key, |p| p.strip_mask(id)).flatten() {
-                            st.buttons &= !strip;
-                            link::send(&console, link::Cmd::State { slot, state: st });
+                        if let Some(st) = pacer.offer(Instant::now(), st) {
+                            forward_pad(&key, &console, id, st);
                         }
                     }
                 }
@@ -1859,6 +1981,8 @@ pub(crate) mod link {
     pub(crate) const HOLD: Duration = Duration::from_millis(16);
     /// A link with no slots ends after this long.
     const IDLE_END: Duration = Duration::from_secs(5);
+    /// Commands taken before the link does what is due (states, heartbeats).
+    const CMDS_PER_ROUND: usize = 64;
     /// Helper failures wait this long, doubling up to [`BACKOFF_MAX`].
     const BACKOFF_MIN: Duration = Duration::from_millis(250);
     const BACKOFF_MAX: Duration = Duration::from_secs(4);
@@ -1868,6 +1992,17 @@ pub(crate) mod link {
     const OUTPUT_IDLE: Duration = Duration::from_millis(250);
     /// After a change of rumble or light, reading stays fast this long.
     const OUTPUT_FAST_FOR: Duration = Duration::from_secs(1);
+
+    /// The helper's answer to a body it could not read.
+    const ERR_BAD_REQUEST: &str = "bad_request";
+
+    /// A refusal about one pad (not the helper as a whole).
+    fn slot_refusal(err: Option<&str>) -> bool {
+        matches!(
+            err,
+            Some("vpad_not_open") | Some("vpad_not_owner") | Some(ERR_BAD_REQUEST)
+        )
+    }
 
     /// The helper (a test seam).
     pub(crate) trait Port: Send + Sync + 'static {
@@ -1953,6 +2088,8 @@ pub(crate) mod link {
         Neutral { slot: u8 },
         /// Remove the pad.
         Close { slot: u8 },
+        /// Remove the pad if `token` still owns it (an open its guest stopped waiting for).
+        Abandon { slot: u8, token: String },
     }
 
     /// What the link tells join.rs.
@@ -2160,14 +2297,21 @@ pub(crate) mod link {
                         s.live = false;
                     }
                 }
-                Cmd::Close { slot } => {
-                    if let Some(s) = self.slots.remove(&slot) {
-                        for w in s.waiters {
-                            let _ = w.send(OpenResult::Failed("closed".into()));
-                        }
-                        self.closing.push((slot, s.token));
+                Cmd::Close { slot } => self.remove(slot),
+                Cmd::Abandon { slot, token } => {
+                    if self.slots.get(&slot).is_some_and(|s| s.token == token) {
+                        self.remove(slot);
                     }
                 }
+            }
+        }
+
+        fn remove(&mut self, slot: u8) {
+            if let Some(s) = self.slots.remove(&slot) {
+                for w in s.waiters {
+                    let _ = w.send(OpenResult::Failed("closed".into()));
+                }
+                self.closing.push((slot, s.token));
             }
         }
 
@@ -2222,10 +2366,18 @@ pub(crate) mod link {
                             s.io.sent = PadState::NEUTRAL;
                             s.io.force = true;
                         }
+                        let waited = !s.waiters.is_empty();
+                        let mut told = false;
                         for w in s.waiters.drain(..) {
-                            let _ = w.send(OpenResult::Ok);
+                            told |= w.send(OpenResult::Ok).is_ok();
                         }
                         self.ok();
+                        if waited && !told {
+                            // made after its guest stopped waiting (a slow helper): nobody will
+                            // play it, so it goes rather than being kept alive by heartbeats
+                            self.remove(slot);
+                            continue;
+                        }
                         if reopened {
                             (self.events)(Event::Reopened { slot });
                         }
@@ -2295,18 +2447,25 @@ pub(crate) mod link {
                     Ok(Some(a)) if a.ok => {
                         self.ok();
                         for it in items {
-                            let Some(s) = self.slots.get_mut(&it.slot) else {
-                                continue;
-                            };
-                            if a.failed.iter().any(|f| f.slot == it.slot) {
-                                // not open there (the helper restarted) or not ours: open it
-                                // again (the state goes once it is)
-                                s.opened = false;
-                                continue;
-                            }
-                            s.seq = it.seq;
-                            s.io.commit(it.state, now);
-                            s.last_call = now;
+                            let err = a.failed.iter().find(|f| f.slot == it.slot);
+                            self.sent(it, err.map(|f| f.err.as_str()), now);
+                        }
+                    }
+                    Ok(Some(a)) if a.err.as_deref() == Some(ERR_BAD_REQUEST) => {
+                        // The helper could not read one item and refused the batch: that is
+                        // no lost link (no backoff, no reopening, heartbeats go on). Each goes
+                        // alone, so one guest's state cannot hold back the others'.
+                        self.ok();
+                        if !self.one_by_one(items, now) {
+                            self.fail(now);
+                            return;
+                        }
+                    }
+                    Ok(Some(a)) if items.len() == 1 && slot_refusal(a.err.as_deref()) => {
+                        // one state (`vpad.state`) refused for its pad alone
+                        self.ok();
+                        if let Some(it) = items.into_iter().next() {
+                            self.sent(it, a.err.as_deref(), now);
                         }
                     }
                     Ok(Some(_)) | Ok(None) => {
@@ -2334,6 +2493,14 @@ pub(crate) mod link {
                     Ok(Some(a)) if a.ok => {
                         self.ok();
                         if let Some(s) = self.slots.get_mut(&slot) {
+                            s.last_call = now;
+                        }
+                    }
+                    Ok(Some(a)) if slot_refusal(a.err.as_deref()) => {
+                        // this one pad (not the helper): open it again, the others go on
+                        self.ok();
+                        if let Some(s) = self.slots.get_mut(&slot) {
+                            s.opened = false;
                             s.last_call = now;
                         }
                     }
@@ -2377,6 +2544,65 @@ pub(crate) mod link {
                     }
                 }
             }
+        }
+
+        /// The helper's answer for one state: `err` its refusal of that item (None: taken).
+        fn sent(&mut self, it: StateItem, err: Option<&str>, now: Instant) {
+            let Some(s) = self.slots.get_mut(&it.slot) else {
+                return;
+            };
+            match err {
+                None => {
+                    s.seq = it.seq;
+                    s.io.commit(it.state, now);
+                    s.last_call = now;
+                }
+                Some(e) if e == ERR_BAD_REQUEST => {
+                    // a state it cannot read is let go (the guest's next change goes) rather
+                    // than sent again and again; the pad itself is fine
+                    s.seq = it.seq;
+                    s.io.commit(it.state, now);
+                }
+                Some(_) => {
+                    // not open there (the helper restarted) or not ours: open it again (the
+                    // state goes once it is)
+                    s.opened = false;
+                }
+            }
+        }
+
+        /// A batch the helper refused: each state alone (one it still cannot read goes once more
+        /// without its motion, then is let go). False when the helper could not be reached.
+        fn one_by_one(&mut self, items: Vec<StateItem>, now: Instant) -> bool {
+            for it in items {
+                let mut it = it;
+                let mut tries = 0;
+                loop {
+                    tries += 1;
+                    self.calls += 1;
+                    match self.port.states(&self.host, std::slice::from_ref(&it)) {
+                        Ok(Some(a)) if a.ok => {
+                            let err = a.failed.iter().find(|f| f.slot == it.slot);
+                            let err = err.map(|f| f.err.clone());
+                            self.sent(it, err.as_deref(), now);
+                        }
+                        Ok(Some(a)) if a.err.as_deref() == Some(ERR_BAD_REQUEST) => {
+                            if tries == 1 && it.state.motion.is_some() {
+                                it.state.motion = None;
+                                continue;
+                            }
+                            self.sent(it, Some(ERR_BAD_REQUEST), now);
+                        }
+                        Ok(Some(a)) => {
+                            let err = a.err.unwrap_or_else(|| "refused".into());
+                            self.sent(it, Some(&err), now);
+                        }
+                        Ok(None) | Err(_) => return false,
+                    }
+                    break;
+                }
+            }
+            true
         }
 
         fn drop_slot(&mut self, slot: u8, res: OpenResult, first: bool) {
@@ -2452,9 +2678,14 @@ pub(crate) mod link {
             match rx.recv_timeout(st.wait(Instant::now())) {
                 Ok(c) => {
                     st.on_cmd(c, Instant::now());
-                    // Everything already waiting goes in the same round (latest wins).
-                    while let Ok(c) = rx.try_recv() {
-                        st.on_cmd(c, Instant::now());
+                    // What is already waiting goes in the same round (latest wins), but no more
+                    // than CMDS_PER_ROUND: a busy channel never holds off the states and
+                    // heartbeats of the others.
+                    for _ in 1..CMDS_PER_ROUND {
+                        match rx.try_recv() {
+                            Ok(c) => st.on_cmd(c, Instant::now()),
+                            Err(_) => break,
+                        }
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
@@ -2572,9 +2803,45 @@ mod tests {
         f.push(9);
         assert!(parse_pad(&f).is_none());
         assert!(parse_pad(&frame(1, 0, &[], Some([f32::NAN, 0., 0., 0., 0., 0.]))).is_none());
+        assert!(parse_pad(&frame(1, 0, &[], Some([f32::INFINITY, 0., 0., 0., 0., 0.]))).is_none());
         let mut f = frame(1, 0, &[], None);
         f[0] = 8;
         assert!(parse_pad(&f).is_none());
+    }
+
+    #[test]
+    fn out_of_range_motion_is_held_to_a_real_pads_or_dropped_never_the_whole_frame() {
+        let cross = vpad::app_button::CROSS;
+        // beyond what a DualSense reads: held to its range
+        let (_, s) = parse_pad(&frame(
+            1,
+            cross,
+            &[],
+            Some([500.0, -500.0, 1.0, 99.0, -99.0, 0.5]),
+        ))
+        .unwrap();
+        let m = s.motion.unwrap();
+        assert_eq!(m.gyro, [GYRO_MAX, -GYRO_MAX, 1.0]);
+        assert_eq!(m.accel, [ACCEL_MAX, -ACCEL_MAX, 0.5]);
+        // no reading at all (the helper refuses beyond 1e6): the motion goes, the press stays
+        for bad in [1e6_f32, -2e5, 3.4e38] {
+            let (_, s) = parse_pad(&frame(
+                2,
+                cross,
+                &[(0, 5, 6)],
+                Some([0.0, 0.0, 0.0, 0.0, bad, 0.0]),
+            ))
+            .unwrap();
+            assert!(s.motion.is_none(), "{bad}");
+            assert_eq!(s.buttons & vpad::button::CROSS, vpad::button::CROSS);
+            assert_eq!(s.touch.len(), 1);
+        }
+        // everything that reaches the helper is well inside its own limit
+        for x in [-1e5_f32, 1e5, 12345.0] {
+            let (_, s) = parse_pad(&frame(3, 0, &[], Some([x; 6]))).unwrap();
+            let m = s.motion.unwrap();
+            assert!(m.gyro.iter().chain(m.accel.iter()).all(|v| v.abs() <= 40.0));
+        }
     }
 
     // ── short codes ──
@@ -2619,6 +2886,54 @@ mod tests {
         }
         assert!(!connect_allowed(ip, t));
         assert!(connect_allowed(ip, t + Duration::from_secs(61)));
+    }
+
+    #[test]
+    fn this_computer_may_connect_more_often_but_not_without_end() {
+        let ip: IpAddr = "127.0.0.2".parse().unwrap();
+        let t = Instant::now();
+        for _ in 0..LOOPBACK_CONNECTS_PER_MIN {
+            assert!(connect_allowed(ip, t));
+        }
+        assert!(!connect_allowed(ip, t));
+        assert!(connect_allowed(ip, t + Duration::from_secs(61)));
+        assert!(LOOPBACK_CONNECTS_PER_MIN > CONNECTS_PER_MIN);
+    }
+
+    #[test]
+    fn a_flood_of_pad_frames_is_held_to_the_rate_and_the_latest_is_kept() {
+        let t = Instant::now();
+        let mut p = PadPacer::new(t);
+        // a burst goes at once, the rest is folded into the latest
+        let sent: Vec<u32> = (0..1000).filter_map(|i| p.offer(t, i)).collect();
+        assert_eq!(sent.len(), PAD_BURST as usize);
+        let due = p.due().unwrap();
+        assert!(
+            due > t && due <= t + Duration::from_millis(5),
+            "{:?}",
+            due - t
+        );
+        assert_eq!(p.take(t), None, "not before it is due");
+        assert_eq!(p.take(due), Some(999), "the latest, never an older one");
+        assert_eq!(p.due(), None);
+        // a second of flooding at 10 000 a second passes about PAD_RATE of them
+        let mut n = 0;
+        for i in 1..=10_000u32 {
+            let now = t + Duration::from_micros(100 * i as u64);
+            if p.offer(now, i).is_some() {
+                n += 1;
+            }
+            if p.due().is_some_and(|d| d <= now) && p.take(now).is_some() {
+                n += 1;
+            }
+        }
+        assert!((240..=260).contains(&n), "{n}");
+        // a normal pad (120 a second) is never held
+        let mut p = PadPacer::new(t);
+        for i in 0..1200u32 {
+            let now = t + Duration::from_micros(8333 * i as u64);
+            assert_eq!(p.offer(now, i), Some(i));
+        }
     }
 
     #[test]
@@ -2957,6 +3272,10 @@ mod tests {
         busy: Mutex<Vec<u8>>,
         /// states answer this slot as not open
         not_open: Mutex<Option<u8>>,
+        /// states refuse a whole batch holding this slot (an item it cannot read)
+        unreadable: Mutex<Option<u8>>,
+        /// opens take this long (a slow helper)
+        open_delay: Mutex<Duration>,
         out: Mutex<Output>,
     }
 
@@ -2978,6 +3297,10 @@ mod tests {
     impl Port for FakeHelper {
         fn open(&self, _h: &str, slot: u8, _t: &str) -> anyhow::Result<Option<Opened>> {
             self.up()?;
+            let delay = *self.open_delay.lock().unwrap();
+            if !delay.is_zero() {
+                std::thread::sleep(delay);
+            }
             self.log.lock().unwrap().push(format!("open{slot}"));
             if self.old.load(Ordering::Relaxed) {
                 return Ok(None);
@@ -3008,6 +3331,18 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("states{}", items.len()));
+            if let Some(u) = *self.unreadable.lock().unwrap() {
+                if items
+                    .iter()
+                    .any(|it| it.slot == u && it.state.motion.is_some())
+                {
+                    return Ok(Some(Ack {
+                        ok: false,
+                        err: Some("bad_request".into()),
+                        ..Default::default()
+                    }));
+                }
+            }
             let bad = *self.not_open.lock().unwrap();
             let mut failed = Vec::new();
             for it in items {
@@ -3334,6 +3669,152 @@ mod tests {
     }
 
     #[test]
+    fn one_unreadable_state_does_not_stop_the_others_or_the_heartbeats() {
+        let f = Arc::new(FakeHelper::default());
+        let (mut st, ev) = link_with(&f);
+        let t = Instant::now();
+        open_slot_t(&mut st, 2, "a", t);
+        open_slot_t(&mut st, 3, "b", t);
+        open_slot_t(&mut st, 4, "c", t);
+        // Player 2's state is one the helper refuses the whole batch for
+        *f.unreadable.lock().unwrap() = Some(2);
+        let mut odd = st_(0x20);
+        odd.motion = Some(vpad::Motion {
+            gyro: [1.0, 0.0, 0.0],
+            accel: [0.0, 1.0, 0.0],
+        });
+        st.on_cmd(
+            Cmd::State {
+                slot: 2,
+                state: odd,
+            },
+            t,
+        );
+        st.on_cmd(
+            Cmd::State {
+                slot: 3,
+                state: st_(0x40),
+            },
+            t,
+        );
+        st.on_cmd(
+            Cmd::State {
+                slot: 4,
+                state: st_(0x80),
+            },
+            t,
+        );
+        st.tick(t);
+        // no backoff, nothing reopened: the others' states went, Player 2's press without motion
+        assert!(st.wait(t) < Duration::from_millis(250));
+        let got: Vec<(u8, u32, bool)> = f
+            .states()
+            .iter()
+            .map(|s| (s.slot, s.state.buttons, s.state.motion.is_some()))
+            .collect();
+        assert!(got.contains(&(3, 0x40, false)), "{got:?}");
+        assert!(got.contains(&(4, 0x80, false)), "{got:?}");
+        assert!(got.contains(&(2, 0x20, false)), "{got:?}");
+        let log = f.log();
+        assert_eq!(
+            log.iter().filter(|l| l.starts_with("open")).count(),
+            3,
+            "{log:?}"
+        );
+        assert_eq!(reopens(&ev), 0);
+        // the odd guest keeps sending it: still no backoff, the heartbeats go on
+        for i in 1..=4u32 {
+            let ti = t + vpad::HEARTBEAT * i;
+            let mut odd = st_(if i % 2 == 0 { 0x20 } else { 0 });
+            odd.motion = Some(vpad::Motion {
+                gyro: [2.0, 0.0, 0.0],
+                accel: [0.0, 1.0, 0.0],
+            });
+            st.on_cmd(
+                Cmd::State {
+                    slot: 2,
+                    state: odd,
+                },
+                ti,
+            );
+            st.tick(ti);
+        }
+        let log = f.log();
+        assert!(log.iter().any(|l| l == "hb3live"), "{log:?}");
+        assert!(log.iter().any(|l| l == "hb4live"), "{log:?}");
+        assert_eq!(
+            log.iter().filter(|l| l.starts_with("open")).count(),
+            3,
+            "{log:?}"
+        );
+    }
+
+    #[test]
+    fn a_pad_made_after_its_guest_stopped_waiting_is_removed() {
+        let f = Arc::new(FakeHelper::default());
+        let (mut st, _ev) = link_with(&f);
+        let t = Instant::now();
+        let (tx, rx) = oneshot::channel();
+        st.on_cmd(
+            Cmd::Open {
+                slot: 2,
+                token: "a".into(),
+                reply: tx,
+            },
+            t,
+        );
+        drop(rx); // open_slot gave up
+        st.tick(t);
+        st.tick(t);
+        assert_eq!(f.log(), vec!["open2", "close2"]);
+        assert!(st.idle());
+        st.tick(t + vpad::HEARTBEAT * 3);
+        assert!(
+            !f.log().iter().any(|l| l.starts_with("hb")),
+            "{:?}",
+            f.log()
+        );
+        // an abandon only removes the pad its token owns
+        open_slot_t(&mut st, 3, "b", t);
+        st.on_cmd(
+            Cmd::Abandon {
+                slot: 3,
+                token: "someone-else".into(),
+            },
+            t,
+        );
+        st.tick(t);
+        assert!(!st.idle());
+        st.on_cmd(
+            Cmd::Abandon {
+                slot: 3,
+                token: "b".into(),
+            },
+            t,
+        );
+        st.tick(t);
+        assert!(st.idle() && f.log().contains(&"close3".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_slow_open_is_given_up_and_its_pad_never_lives_on() {
+        let console = "10.77.0.9";
+        let f = Arc::new(FakeHelper::default());
+        *f.open_delay.lock().unwrap() = OPEN_WAIT + Duration::from_millis(700);
+        set_helper(console, f.clone());
+        let r = open_slot(console, 2, "0123456789abcdef0123456789abcdef").await;
+        assert_eq!(r, OpenResult::Failed("timeout".into()));
+        until("the late pad to be removed", || {
+            f.log().contains(&"close2".to_string())
+        })
+        .await;
+        tokio::time::sleep(vpad::HEARTBEAT * 3).await;
+        let log = f.log();
+        assert!(!log.iter().any(|l| l.starts_with("hb")), "{log:?}");
+        assert_eq!(log, vec!["open2", "close2"]);
+    }
+
+    #[test]
     fn closing_removes_the_pad() {
         let f = Arc::new(FakeHelper::default());
         let (mut st, _ev) = link_with(&f);
@@ -3353,6 +3834,10 @@ mod tests {
     type Guest_ = tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >;
+
+    /// The tests that open Play Together take turns: parties are engine-wide, and a "Playing
+    /// nearby" join only goes through while exactly one is open.
+    static PARTY_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     fn set_live(console: &str, session: u64) {
         FAKE_LIVE
@@ -3475,6 +3960,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn guests_join_play_come_back_and_are_let_go() {
+        let _turn = PARTY_TESTS.lock().await;
         let console = "10.77.0.1";
         let f = Arc::new(FakeHelper::default());
         set_helper(console, f.clone());
@@ -3698,7 +4184,137 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_huge_or_binary_hello_is_refused_at_once() {
+        let url = serve().await;
+        // a message over the guest limit: the socket ends now, not after the hello wait
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let big = format!(
+            r#"{{"hello":{{"name":"{}"}}}}"#,
+            "x".repeat(GUEST_MSG_MAX * 4)
+        );
+        let _ = ws.send(TMsg::Text(big.into())).await;
+        let v = next(&mut ws).await;
+        assert!(v["why"] == "hello" || v.get("closed").is_some(), "{v}");
+        // a binary message before the hello
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        ws.send(TMsg::Binary(vec![1u8; 64].into())).await.unwrap();
+        let v = next(&mut ws).await;
+        assert!(v["why"] == "hello" || v.get("closed").is_some(), "{v}");
+        // a hello of the largest real size is fine
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let hello = serde_json::json!({"hello": {
+            "invite": "0".repeat(64), "resume": "", "code": "ABC-DEF", "name": "é".repeat(32)
+        }});
+        assert!(hello.to_string().len() < 1024);
+        ws.send(TMsg::Text(hello.to_string().into())).await.unwrap();
+        let v = next(&mut ws).await;
+        assert!(v["stage"] == "refused" && v["why"] != "hello", "{v}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_flooding_guest_does_not_hold_up_another_or_the_heartbeats() {
+        let _turn = PARTY_TESTS.lock().await;
+        let console = "10.77.0.11";
+        let f = Arc::new(FakeHelper::default());
+        set_helper(console, f.clone());
+        set_live(console, 1);
+        let url = serve().await;
+        let (ci, h) = local();
+        let s = body(
+            open(
+                ci,
+                h,
+                Json(AddrBody {
+                    addr: console.into(),
+                }),
+            )
+            .await,
+        )
+        .await;
+        let key = s["invite"]["key"].as_str().unwrap().to_string();
+        let join = |name: &'static str| {
+            let url = url.clone();
+            let key = key.clone();
+            async move {
+                let mut g = guest(
+                    &url,
+                    serde_json::json!({"hello": {"invite": key, "name": name}}),
+                )
+                .await;
+                assert_eq!(next(&mut g).await["stage"], "asking");
+                allow_next(console, true).await;
+                let j = next(&mut g).await;
+                assert_eq!(j["stage"], "joined", "{j}");
+                g
+            }
+        };
+        let flood = join("Flood").await;
+        let mut kim = join("Kim").await;
+        // Flood sends pad frames as fast as the socket takes them
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop2 = stop.clone();
+        let flooder = tokio::spawn(async move {
+            let mut flood = flood;
+            let mut n = 0u32;
+            while !stop2.load(Ordering::Relaxed) {
+                n += 1;
+                let b = (n % 2) * vpad::app_button::CROSS;
+                if flood
+                    .send(TMsg::Binary(frame(n, b, &[], None).into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            (flood, n)
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let start = Instant::now();
+        let before = f.states().iter().filter(|s| s.slot == 2).count();
+        // Kim's press reaches the console promptly, and keeps being heartbeat
+        kim.send(TMsg::Binary(
+            frame(1, vpad::app_button::CIRCLE, &[], None).into(),
+        ))
+        .await
+        .unwrap();
+        until("Kim's press", || {
+            f.states()
+                .iter()
+                .any(|s| s.slot == 3 && s.state.buttons & vpad::button::CIRCLE != 0)
+        })
+        .await;
+        let took = start.elapsed();
+        assert!(took < Duration::from_millis(500), "{took:?}");
+        let hbs = || f.log().iter().filter(|l| l.starts_with("hb3")).count();
+        let h0 = hbs();
+        until("Kim's heartbeats", || hbs() >= h0 + 3).await;
+        stop.store(true, Ordering::Relaxed);
+        let (mut flood, sent) = flooder.await.unwrap();
+        let secs = start.elapsed().as_secs_f64();
+        let got = f.states().iter().filter(|s| s.slot == 2).count() - before;
+        // far fewer than were sent reached the helper: at most the pad rate (and a burst)
+        assert!(sent as usize > got, "{sent} sent, {got} reached");
+        assert!(
+            (got as f64) <= PAD_RATE * (secs + 0.1) + PAD_BURST,
+            "{got} in {secs}s"
+        );
+        let _ = flood.close(None).await;
+        let _ = kim.close(None).await;
+        let (ci, h) = local();
+        close(
+            ci,
+            h,
+            Json(AddrBody {
+                addr: console.into(),
+            }),
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_older_helper_is_said_before_the_host_is_asked() {
+        let _turn = PARTY_TESTS.lock().await;
         let console = "10.77.0.2";
         let f = Arc::new(FakeHelper::default());
         f.old.store(true, Ordering::Relaxed);

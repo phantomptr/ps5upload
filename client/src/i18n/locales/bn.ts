@@ -7030,6 +7030,7 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
 "join_guide_ok": "বুঝেছি",
 "join_reconnecting": "আবার সংযোগ হচ্ছে…",
 "join_reconnecting_left": "আপনার জায়গা {time} ধরে রাখা থাকবে।",
+"join_host_away": "হোস্ট খেলা বন্ধ করেছে — আবার শুরু করার অপেক্ষায় ({time})",
 "join_refused_key": "এই আমন্ত্রণের মেয়াদ শেষ। {host}-এর কাছে নতুন লিংক চান।",
 "join_refused_full": "গেম পূর্ণ: ইতিমধ্যে চারজন খেলছে।",
 "join_refused_denied": "{host} এবার আপনাকে ঢুকতে দেয়নি।",

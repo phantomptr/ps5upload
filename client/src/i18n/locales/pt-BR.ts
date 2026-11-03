@@ -7045,6 +7045,7 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
 "join_guide_ok": "Entendi",
 "join_reconnecting": "Reconectando…",
 "join_reconnecting_left": "Seu lugar fica guardado por {time}.",
+"join_host_away": "O anfitrião parou de jogar — esperando ele começar de novo ({time})",
 "join_refused_key": "Este convite expirou. Peça um novo link a {host}.",
 "join_refused_full": "O jogo está cheio: já tem quatro jogadores.",
 "join_refused_denied": "{host} não deixou você entrar desta vez.",

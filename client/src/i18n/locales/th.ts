@@ -7037,6 +7037,7 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
 "join_guide_ok": "เข้าใจแล้ว",
 "join_reconnecting": "กำลังเชื่อมต่อใหม่…",
 "join_reconnecting_left": "ที่ของคุณจะถูกเก็บไว้ {time}",
+"join_host_away": "เจ้าของเกมหยุดเล่นแล้ว — กำลังรอให้เริ่มเล่นอีกครั้ง ({time})",
 "join_refused_key": "คำเชิญนี้หมดอายุแล้ว ขอลิงก์ใหม่จาก {host}",
 "join_refused_full": "เกมเต็มแล้ว: มีผู้เล่นครบสี่คน",
 "join_refused_denied": "{host} ไม่ได้ให้คุณเข้าในครั้งนี้",
