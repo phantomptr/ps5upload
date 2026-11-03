@@ -86,7 +86,9 @@ const CONSOLE_FILTERS: ConsoleFilter[] = [
 
 /** A console filter by name, for links: the old `update` and `dlc` are `addons` now; anything
  *  unknown is null. */
-export function consoleFilterOf(v: string | null | undefined): ConsoleFilter | null {
+export function consoleFilterOf(
+  v: string | null | undefined,
+): ConsoleFilter | null {
   if (v === "update" || v === "dlc") return "addons";
   return CONSOLE_FILTERS.find((f) => f === v) ?? null;
 }
@@ -169,7 +171,8 @@ export function consoleCounts(
       if (matchesConsole(g, "drives", states, consoleFw, ctx)) out.drives += 1;
   if (!states) return out;
   for (const g of games)
-    if (matchesConsole(g, "unplayed", states, consoleFw, ctx)) out.unplayed += 1;
+    if (matchesConsole(g, "unplayed", states, consoleFw, ctx))
+      out.unplayed += 1;
   for (const g of games) {
     if (matchesConsole(g, "installed", states)) out.installed += 1;
     if (matchesConsole(g, "missing", states)) out.missing += 1;
@@ -287,14 +290,36 @@ export function addOnCount(g: CollectionGame): number {
   ).length;
 }
 
-/** A game's full copies beyond its largest: what "Reclaimable" counts (never an add-on). */
+/** A game's full copies beyond the largest of each release: what "Reclaimable" counts (never
+ *  an add-on). Copies are one release only when they carry the same content ID, as the
+ *  engine decides: a package under the game's ID with another content ID (a DLC read as a
+ *  game) is never offered for the Trash (#638). A copy with no content ID (an archive) is
+ *  counted with the largest release, as the engine does. */
 export function extraCopies(
   g: Pick<CollectionGame, "locations">,
 ): CollectionLocation[] {
-  const copies = g.locations
-    .filter((l) => l.pkg?.kind !== "patch" && l.pkg?.kind !== "dlc")
-    .sort((a, b) => b.size_bytes - a.size_bytes);
-  return copies.slice(1);
+  const sets = new Map<string, CollectionLocation[]>();
+  const unknown: CollectionLocation[] = [];
+  for (const l of g.locations) {
+    if (l.pkg?.kind === "patch" || l.pkg?.kind === "dlc") continue;
+    const cid = (l.pkg?.content_id ?? "").trim().toUpperCase();
+    if (!cid) unknown.push(l);
+    else sets.set(cid, [...(sets.get(cid) ?? []), l]);
+  }
+  const groups = [...sets.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([, ls]) => ls);
+  if (unknown.length) {
+    let largest = -1;
+    groups.forEach((ls, i) => {
+      if (largest < 0 || ls.length > groups[largest].length) largest = i;
+    });
+    if (largest < 0) groups.push(unknown);
+    else groups[largest] = groups[largest].concat(unknown);
+  }
+  return groups.flatMap((ls) =>
+    [...ls].sort((a, b) => b.size_bytes - a.size_bytes).slice(1),
+  );
 }
 
 /** `1.5 GB`, `0 B`: the same as the engine's exports. */

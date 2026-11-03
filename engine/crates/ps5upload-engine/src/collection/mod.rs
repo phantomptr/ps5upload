@@ -188,7 +188,7 @@ pub struct PkgCacheEntry {
 }
 
 /// Raised whenever identification changes, so cached identities are read again.
-pub const IDENTIFY_VERSION: u32 = 5;
+pub const IDENTIFY_VERSION: u32 = 6;
 
 /// The whole index, written to `<data dir>/collection/index.json`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
