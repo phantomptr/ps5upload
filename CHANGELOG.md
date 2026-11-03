@@ -34,6 +34,33 @@ What's new in ps5upload, written for humans.
   always needs your Allow, and repeated wrong codes are slowed down.
 - **Play Together needs the updated helper (For #641).** With an older helper on the PS5, the app
   says "Update the helper to play together" instead of failing quietly.
+- **Play Together: friends play your PS5 as Player 2, 3 and 4 (For #641).** While you play, the
+  new people button on the Play bar (or **⋯ › Play Together** on a phone) opens a panel with three
+  steps: share the invite (a QR code, the link with Copy, your phone's Share sheet, or a short code
+  like K7M-2QX), allow your friend when their name pops up over the picture, and they press PS and
+  pick **Quick Play** on the TV. Each friend gets a card with what they're doing (asking, picking a
+  user on the TV, playing, reconnecting with a countdown, left), their delay in colour, and a
+  Remove button. PS and Create are blocked for friends unless you turn that off (they can still
+  press PS once to pick a user). If a friend's delay is high, the panel suggests a lower Play
+  quality. An older helper on the PS5 says to update it, with the button to send the new one.
+  The phone controller and watch features are one click away in the same panel.
+- **Your friend needs no app.** The link opens a page in any browser, in their own language: they
+  type a name, wait for your yes, and play with a controller connected to their device or with the
+  on-screen controls on a phone. The picture stays within about 150 ms of the console, rumble
+  plays on their controller, a "You are Player 2" chip shows the light-bar colour, and a short
+  network drop reconnects on its own and keeps their place for 60 seconds.
+- **Join a friend from the app.** Play now has two choices: **Play my PS5** and **Join a friend**.
+  Paste a link, type the short code, scan the QR code (where the device's camera can), or pick a
+  friend from **Playing nearby**: other PS5Upload apps on your network that have Play Together
+  open. In the app the picture uses the lower-delay decoder, and full screen turns a phone
+  sideways with the on-screen controls.
+- **One stream at a time, and it always asks.** Joining a friend while you play your own PS5,
+  starting Play while you're in a friend's game, joining a second friend, or stopping Play while
+  friends are playing each asks first. Friends see "The host stopped playing" when you stop.
+- **Playing with someone who isn't home?** Both of you join the same Tailscale network, then share
+  the link.
+
+---
 
 ## 10.7.6
 

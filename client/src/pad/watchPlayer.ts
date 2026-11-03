@@ -9,10 +9,34 @@ import { hevcCodecString, spsVisibleRect } from "../lib/rpSps";
 
 export type WatchProblem = "no_hevc" | "decode";
 
+/** How far behind the live picture a page may fall. A watcher can sit half a second back; a
+ *  player (Play Together, #641) wants the picture within ~150 ms of the console, so a backlog is
+ *  skipped (to the next keyframe) or caught up (seek, a slightly faster playback) at once. */
+export type Latency = "watch" | "player";
+
+/** Frames waiting to be decoded before a page skips to the next keyframe. */
+export const BACKLOG_LIMIT: Record<Latency, number> = { watch: 30, player: 4 };
+
+/** Seconds behind the end of what MSE has buffered: past `seek` jump to the edge, past `speed`
+ *  play a little faster until caught up. */
+export const MSE_EDGE: Record<Latency, { seek: number; speed: number; target: number }> = {
+  watch: { seek: 0.5, speed: Infinity, target: 0.05 },
+  player: { seek: 0.15, speed: 0.06, target: 0.02 },
+};
+
+/** What a page whose picture is `lag` s behind the buffered end does: seek to `to`, play at
+ *  `rate`, or nothing. */
+export function edgeAction(lag: number, end: number, latency: Latency): { seekTo: number | null; rate: number } {
+  const e = MSE_EDGE[latency];
+  if (lag > e.seek) return { seekTo: end - e.target, rate: 1 };
+  if (lag > e.speed) return { seekTo: null, rate: 1.1 };
+  return { seekTo: null, rate: 1 };
+}
+
 /** WebCodecs exists only on a secure page (https or localhost); the watch link is plain http
  *  on the LAN, so phones go through Media Source Extensions instead (MsePlayer). */
-export function makeWatchPlayer(onProblem: (p: WatchProblem) => void): WatchPlayer | MsePlayer {
-  return typeof VideoDecoder !== "undefined" ? new WatchPlayer(onProblem) : new MsePlayer(onProblem);
+export function makeWatchPlayer(onProblem: (p: WatchProblem) => void, latency: Latency = "watch"): WatchPlayer | MsePlayer {
+  return typeof VideoDecoder !== "undefined" ? new WatchPlayer(onProblem, latency) : new MsePlayer(onProblem, latency);
 }
 
 export class WatchPlayer {
@@ -32,7 +56,10 @@ export class WatchPlayer {
   private nextAt = 0;
   private soundOn = false;
 
-  constructor(private onProblem: (p: WatchProblem) => void) {
+  constructor(
+    private onProblem: (p: WatchProblem) => void,
+    private latency: Latency = "watch",
+  ) {
     this.canvas.className = "block h-full w-full object-contain";
     this.canvas.dataset.testid = "watch-canvas";
   }
@@ -110,7 +137,7 @@ export class WatchPlayer {
     const key = isKeyframe(au, this.hevc);
     if (!this.sawKey && !key) return;
     // Behind: a watcher wants now, not the backlog. Wait for the next keyframe.
-    if (!key && v.decodeQueueSize > 30) {
+    if (!key && v.decodeQueueSize > BACKLOG_LIMIT[this.latency]) {
       this.sawKey = false;
       return;
     }
@@ -167,7 +194,8 @@ export class WatchPlayer {
     src.connect(ctx.destination);
     // A small cushion; far behind (a stall) starts again from now.
     const now = ctx.currentTime;
-    if (this.nextAt < now + 0.02 || this.nextAt > now + 0.5) this.nextAt = now + 0.06;
+    const far = this.latency === "player" ? 0.2 : 0.5;
+    if (this.nextAt < now + 0.02 || this.nextAt > now + far) this.nextAt = now + (this.latency === "player" ? 0.04 : 0.06);
     src.start(this.nextAt);
     this.nextAt += buf.duration;
   }
@@ -203,6 +231,7 @@ class MseTrack {
   constructor(
     readonly el: HTMLMediaElement,
     private onError: () => void,
+    private latency: Latency = "watch",
   ) {}
 
   /** (Re)starts the element on a new init segment. */
@@ -262,7 +291,9 @@ class MseTrack {
     if (sb.buffered.length) {
       const end = sb.buffered.end(sb.buffered.length - 1);
       const start = sb.buffered.start(0);
-      if (end - el.currentTime > 0.5) el.currentTime = Math.max(start, end - 0.05);
+      const act = edgeAction(end - el.currentTime, end, this.latency);
+      if (act.seekTo !== null) el.currentTime = Math.max(start, act.seekTo);
+      if (el.playbackRate !== act.rate) el.playbackRate = act.rate;
       if (el.currentTime - start > 10) {
         try {
           sb.remove(start, el.currentTime - 3);
@@ -314,7 +345,10 @@ export class MsePlayer {
   private aHeader: Uint8Array | null = null;
   private soundOn = false;
 
-  constructor(private onProblem: (p: WatchProblem) => void) {
+  constructor(
+    private onProblem: (p: WatchProblem) => void,
+    private latency: Latency = "watch",
+  ) {
     const v = document.createElement("video");
     v.muted = true;
     v.autoplay = true;
@@ -324,8 +358,8 @@ export class MsePlayer {
     const a = document.createElement("audio");
     this.wrap.className = "h-full w-full";
     this.wrap.append(v, a);
-    this.video = new MseTrack(v, () => this.onProblem("decode"));
-    this.audio = new MseTrack(a, () => {});
+    this.video = new MseTrack(v, () => this.onProblem("decode"), latency);
+    this.audio = new MseTrack(a, () => {}, latency);
   }
 
   get element(): HTMLElement {
@@ -380,7 +414,7 @@ export class MsePlayer {
     const key = isKeyframe(au, this.hevc);
     if (!this.sawKey && !key) return;
     // Behind: skip to the next keyframe rather than play the backlog.
-    if (!key && this.video.backlog > 30) {
+    if (!key && this.video.backlog > BACKLOG_LIMIT[this.latency]) {
       this.sawKey = false;
       return;
     }

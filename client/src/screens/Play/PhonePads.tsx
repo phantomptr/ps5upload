@@ -114,14 +114,16 @@ export const padControl = (id: number, on: boolean) =>
 export const watchUrl = (padUrl: string) => `${padUrl}&w=1`;
 
 /** A QR code as an SVG path: crisp at any size, no canvas. */
-function QrCode({
+export function QrCode({
   text,
   label,
   size = 192,
+  testId = "rp-pad-qr",
 }: {
   text: string;
   label: string;
   size?: number;
+  testId?: string;
 }) {
   const { path, n } = useMemo(() => {
     const qr = qrcode(0, "M");
@@ -141,7 +143,7 @@ function QrCode({
       height={size}
       role="img"
       aria-label={label}
-      data-testid="rp-pad-qr"
+      data-testid={testId}
       className="rounded-md bg-white"
     >
       <path d={path} fill="#000" shapeRendering="crispEdges" />

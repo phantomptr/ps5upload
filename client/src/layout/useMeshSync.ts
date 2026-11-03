@@ -19,6 +19,8 @@ import {
   useMeshStore,
 } from "../state/mesh";
 import { useRemotePlayStore } from "../state/remotePlay";
+import type { MeshJoin } from "../api/mesh";
+import { joinApi, presenceJoin, setOwnJoinWs } from "../screens/Play/playTogetherState";
 import { useTaskStore } from "../state/tasks";
 import { useToastStore } from "../state/toasts";
 
@@ -49,6 +51,24 @@ function padOf(h: string): { pad?: string } {
       .catch(() => padWs.delete(h));
   }
   return known ? { pad: known } : {};
+}
+
+/** Play Together on a console (#641): friends nearby see it and may ask to join. Read from the
+ *  engine at most every 5 s, published with the Remote Play presence. */
+const joinCache = new Map<string, { at: number; join: MeshJoin | null }>();
+function joinOf(h: string, consoleName: string): { join?: MeshJoin } {
+  const c = joinCache.get(h);
+  if (!c || Date.now() - c.at > 5000) {
+    joinCache.set(h, { at: Date.now(), join: c?.join ?? null });
+    void joinApi.read(h).then((s) => {
+      const me = useMeshStore.getState().me;
+      const join = s ? presenceJoin(s, me?.name || "PS5Upload", consoleName) : null;
+      joinCache.set(h, { at: Date.now(), join });
+      setOwnJoinWs(join?.ws ?? null);
+    });
+  }
+  const join = c?.join;
+  return join ? { join } : {};
 }
 
 /**
@@ -129,7 +149,10 @@ export function useMeshSync() {
         const rt = conn.runtimeByHost[h];
         if (rt && rt.payloadStatus !== "up") continue;
         const items = presenceItems(tasks, h);
-        void publishPresence(h, h === rpHost ? [{ kind: RP_ACTIVITY, ...padOf(h) }, ...items] : items);
+        void publishPresence(
+          h,
+          h === rpHost ? [{ kind: RP_ACTIVITY, ...padOf(h), ...joinOf(h, rp.target?.name ?? "") }, ...items] : items,
+        );
       }
     }, PRESENCE_MS);
     return () => window.clearInterval(id);
