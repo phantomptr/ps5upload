@@ -191,10 +191,10 @@ fn publish_urls_per_site() {
 #[test]
 fn the_key_hint_shows_only_the_last_four() {
     let s = Secret {
-        key: "live_123456_abcdWXYZ".into(),
+        key: "live_test_test_key".into(),
         url: String::new(),
     };
-    assert_eq!(key_hint(&s), "…WXYZ");
+    assert_eq!(key_hint(&s), "…_key");
     let short = Secret {
         key: "abcdefg".into(),
         url: String::new(),

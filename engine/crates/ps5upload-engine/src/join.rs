@@ -4014,7 +4014,8 @@ mod tests {
     }
 
     async fn until(what: &str, f: impl Fn() -> bool) {
-        for _ in 0..200 {
+        // 10 s: some waits outlast a 5 s grace in the code under test, on a slow CI runner too.
+        for _ in 0..400 {
             if f() {
                 return;
             }

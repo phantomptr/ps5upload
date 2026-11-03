@@ -20,8 +20,9 @@
 //! the face buttons by position, with one exception: the xpad driver (and controllers that copy
 //! it) reports Xbox X (left) as BTN_X, the code the spec calls BTN_NORTH, as SDL also knows.
 
-// The readers are Linux and Windows only; elsewhere only the mappings (and tests) remain.
-#![cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+// The evdev reader is Linux-only and the HID reader Windows-only; elsewhere only the mappings
+// (and their tests) remain.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use serde::Serialize;
 
@@ -189,6 +190,7 @@ pub fn standard_state(
 /// `PS5StatePacket_t`); Bluetooth's short report 0x01 (10 bytes, the mode a pad starts in)
 /// has the sticks, buttons and triggers in another order (`PS5SimpleStatePacket_t`). None for
 /// anything else.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn dualsense_standard(buf: &[u8]) -> Option<Standard> {
     // lx, ly, rx, ry, l2, r2, and the three button bytes (hat + face, shoulders, PS).
     let (sticks, l2, r2, b) = match buf.first()? {

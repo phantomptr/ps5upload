@@ -145,9 +145,9 @@ test("Stream panel: download ffmpeg, add Twitch, go live, see the chip, stop; OB
   await panel.getByTestId("golive-add-save").click();
   await expect(panel).toContainText("Paste the stream key from the site.");
   expect(added).toHaveLength(0);
-  await panel.getByTestId("golive-key").fill("live_123456789_abcdWXYZ");
+  await panel.getByTestId("golive-key").fill("live_test_test_test_key");
   await panel.getByTestId("golive-add-save").click();
-  await expect.poll(() => added).toEqual([{ preset: "twitch", key: "live_123456789_abcdWXYZ", bandwidth_test: true }]);
+  await expect.poll(() => added).toEqual([{ preset: "twitch", key: "live_test_test_test_key", bandwidth_test: true }]);
   // Only the key's end ever shows again, with Twitch's bitrate limit and the restart offer.
   const row = panel.getByTestId("golive-dest");
   await expect(row).toContainText("…WXYZ");
