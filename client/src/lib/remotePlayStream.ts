@@ -378,6 +378,9 @@ export function canStream(): boolean {
 }
 
 export interface StreamStats {
+  /** The browser holds the sound back until the page is clicked or a key pressed (autoplay
+   *  rules: the session started without a click right before it). */
+  soundBlocked?: boolean;
   fps: number;
   mbps: number;
   decodeMs: number;
@@ -602,6 +605,8 @@ export class RemotePlayStream {
   private worklet: AudioWorkletNode | null = null;
   /** The worklet's module is still loading: decoded sound is left out until it is ready. */
   private workletLoading = false;
+  /** Stops listening for the click that starts held-back sound (watchSoundBlocked). */
+  private soundUnlockOff: (() => void) | null = null;
   /** The sound decoded on the page (no decoding worker here), made at the first header. */
   private audioPipe: OpusPipe | null = null;
   /** The sound decoded in a worker that feeds the worklet itself (rpAudioWorker.ts). */
@@ -987,6 +992,7 @@ export class RemotePlayStream {
       this.audioCtx = new AudioContext({ latencyHint: "interactive" });
     }
     void this.audioCtx.resume();
+    this.watchSoundBlocked(this.audioCtx);
     this.gainNode = this.audioCtx.createGain();
     this.gainNode.gain.value = this.volume;
     this.gainNode.connect(this.audioCtx.destination);
@@ -1031,6 +1037,7 @@ export class RemotePlayStream {
     let lastBytes = 0;
     this.statsTimer = window.setInterval(() => {
       this.o.onStats({
+        soundBlocked: this.soundBlocked(),
         fps: this.decoded - lastDecoded,
         mbps: ((this.bytes - lastBytes) * 8) / 1e6,
         decodeMs: this.decodeMs,
@@ -1054,6 +1061,59 @@ export class RemotePlayStream {
         log.info("remote-play", `latency: ${this.linkLogText()}; ${this.audioLogLine()}`);
       }
     }, 1000);
+  }
+
+  /** Whether the browser holds the sound back (the context is not running). */
+  soundBlocked(): boolean {
+    const st = this.audioCtx?.state as string | undefined;
+    return !!st && st !== "running" && st !== "closed";
+  }
+
+  /** Ask for the sound again: from a click or key press (which autoplay rules require). */
+  resumeSound(): void {
+    const actx = this.audioCtx;
+    if (actx && this.soundBlocked()) void actx.resume().catch(() => {});
+  }
+
+  /** The browser may refuse to start the sound when the session did not start right after a
+   *  click (a launch that first woke the console or started the game, a session rejoined after
+   *  a reload), or stop it later (another app took the sound device, an incoming call on a
+   *  phone). Then the next click or key press anywhere in the app starts it again, and the
+   *  stream shows a "Click for sound" button meanwhile (StreamStats.soundBlocked). */
+  private watchSoundBlocked(actx: AudioContext): void {
+    const wake = () => {
+      if (this.audioCtx !== actx || this.ended) return off();
+      if (actx.state === "running") return off();
+      void actx.resume().catch(() => {});
+    };
+    const events = ["pointerdown", "keydown", "touchend"] as const;
+    let armed = false;
+    const on = () => {
+      if (armed) return;
+      armed = true;
+      for (const ev of events) window.addEventListener(ev, wake, { capture: true });
+    };
+    const off = () => {
+      if (!armed) return;
+      armed = false;
+      for (const ev of events) window.removeEventListener(ev, wake, { capture: true });
+    };
+    actx.addEventListener("statechange", () => {
+      if (this.audioCtx !== actx || actx.state === "closed") return off();
+      if (actx.state === "running") off();
+      else {
+        log.info("remote-play", `sound: the browser holds it back (${actx.state}); the next click or key starts it`);
+        on();
+      }
+    });
+    // A context made outside a click starts suspended without a statechange.
+    window.setTimeout(() => {
+      if (this.audioCtx === actx && !this.ended && actx.state !== "running" && actx.state !== "closed") {
+        log.info("remote-play", `sound: the browser holds it back (${actx.state}); the next click or key starts it`);
+        on();
+      }
+    }, 0);
+    this.soundUnlockOff = off;
   }
 
   /** The sound's player: the worklet's ring buffer (rpAudioWorklet.js), fed by a decoding
@@ -1180,6 +1240,8 @@ export class RemotePlayStream {
    *  this whole stream, its canvas and WebGL context alive: an AudioWorkletNode outlives its
    *  closed context while its port listens). */
   private closeAudio(): void {
+    this.soundUnlockOff?.();
+    this.soundUnlockOff = null;
     const w = this.audioWorker;
     this.audioWorker = null;
     if (w) {

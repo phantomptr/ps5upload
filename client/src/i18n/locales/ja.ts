@@ -6323,6 +6323,7 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_phase_reconnecting": "再接続中…",
 "rp_stats_audio": "音声 {ms} ms",
 "rp_stats_audio_gaps": "途切れ {n} 回",
+"rp_sound_blocked": "音声をオンにする",
 "rp_set_picture": "映像",
 "rp_fps": "フレームレート",
 "rp_fps_60": "60 fps（なめらか）",

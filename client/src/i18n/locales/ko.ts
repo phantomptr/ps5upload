@@ -6321,6 +6321,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_phase_reconnecting": "다시 연결 중…",
 "rp_stats_audio": "소리 {ms} ms",
 "rp_stats_audio_gaps": "끊김 {n}회",
+"rp_sound_blocked": "소리 켜기",
 "rp_set_picture": "화면",
 "rp_fps": "프레임 레이트",
 "rp_fps_60": "60 fps (부드러움)",

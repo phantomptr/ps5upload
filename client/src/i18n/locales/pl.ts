@@ -6552,6 +6552,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_phase_reconnecting": "Ponowne łączenie…",
 "rp_stats_audio": "dźwięk {ms} ms",
 "rp_stats_audio_gaps": "przerwy: {n}",
+"rp_sound_blocked": "Włącz dźwięk",
 "rp_set_picture": "Obraz",
 "rp_fps": "Liczba klatek",
 "rp_fps_60": "60 fps (płynnie)",

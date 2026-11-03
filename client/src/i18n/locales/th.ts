@@ -6311,6 +6311,7 @@ library_compressed_hint: "อิมเมจที่บีบอัดต้อ
 "rp_phase_reconnecting": "กำลังเชื่อมต่อใหม่…",
 "rp_stats_audio": "เสียง {ms} ms",
 "rp_stats_audio_gaps": "สะดุด {n} ครั้ง",
+"rp_sound_blocked": "เปิดเสียง",
 "rp_set_picture": "ภาพ",
 "rp_fps": "อัตราเฟรม",
 "rp_fps_60": "60 fps (ลื่นไหล)",
