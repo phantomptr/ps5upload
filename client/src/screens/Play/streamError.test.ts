@@ -21,6 +21,7 @@ describe("streamErrorMessage", () => {
   it("says what to check when the PS5 refuses with a code we don't know", () => {
     const m = streamErrorMessage(tr, { code: "refused", detail: "session init refused (HTTP 403): 80108b26" });
     expect(m).toContain("refused to start Remote Play");
+    expect(m).toContain("Restart the PS5");
   });
 
   it("says a passcode start was cancelled or timed out, not that it cannot be done", () => {

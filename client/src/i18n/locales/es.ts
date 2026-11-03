@@ -6181,7 +6181,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_err_other": "La transmisión se detuvo.",
 "rp_err_lost": "La conexión con la PS5 se cortó durante la transmisión. Vuelve a iniciarla; si sigue pasando, conecta la PS5 o este dispositivo por cable.",
 "rp_err_rp_off": "Remote Play está desactivado en la PS5. En la consola, abre Ajustes › Sistema › Juego remoto y activa Habilitar Juego remoto (si ya aparece activado, desactívalo y vuelve a activarlo); luego pulsa Iniciar.",
-"rp_err_refused": "La PS5 rechazó iniciar Remote Play. En la consola, revisa Ajustes › Sistema › Juego remoto › Habilitar Juego remoto (desactívalo y actívalo), pulsa Permitir en Play › Configurar o vuelve a vincular. El código de abajo indica qué rechazo fue.",
+"rp_err_refused": "La PS5 rechazó iniciar Remote Play. En la consola, revisa Ajustes › Sistema › Juego remoto › Habilitar Juego remoto (desactívalo y actívalo), pulsa Permitir en Play › Configurar o vuelve a vincular. El código de abajo indica qué rechazo fue. ¿Sigue rechazando? Reinicia la PS5: una consola encendida mucho tiempo puede rechazar hasta reiniciarse.",
 "web_update_how_docker": "Para actualizar, ejecuta esto en la carpeta de tu archivo compose (Watchtower también puede hacerlo por ti):",
 "web_update_how_app": "Esta página viene de PS5Upload en otro ordenador. Actualiza la app allí y esta página se actualizará con ella.",
 "rp_err_unreachable": "La PS5 no responde en la red. Comprueba que está encendida, en la misma red y que Remote Play está activado en sus ajustes.",

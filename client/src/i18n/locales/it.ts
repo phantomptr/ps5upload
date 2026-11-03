@@ -6181,7 +6181,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_err_other": "Lo stream si è interrotto.",
 "rp_err_lost": "La connessione alla PS5 si è interrotta durante lo stream. Riavvialo; se succede ancora, collega la PS5 o questo dispositivo via cavo.",
 "rp_err_rp_off": "Riproduzione remota è disattivata sulla PS5. Sulla console apri Impostazioni › Sistema › Riproduzione remota e attiva Abilita Riproduzione remota (se risulta già attiva, disattivala e riattivala), poi premi Avvia.",
-"rp_err_refused": "La PS5 ha rifiutato di avviare Riproduzione remota. Sulla console controlla Impostazioni › Sistema › Riproduzione remota › Abilita Riproduzione remota (disattivala e riattivala), premi Consenti in Play › Configura, oppure associa di nuovo. Il codice qui sotto dice quale rifiuto era.",
+"rp_err_refused": "La PS5 ha rifiutato di avviare Riproduzione remota. Sulla console controlla Impostazioni › Sistema › Riproduzione remota › Abilita Riproduzione remota (disattivala e riattivala), premi Consenti in Play › Configura, oppure associa di nuovo. Il codice qui sotto dice quale rifiuto era. Ancora rifiutato? Riavvia la PS5: una console accesa da molto può rifiutare finché non si riavvia.",
 "web_update_how_docker": "Per aggiornare, esegui questo nella cartella del tuo file compose (anche Watchtower può farlo per te):",
 "web_update_how_app": "Questa pagina viene da PS5Upload su un altro computer. Aggiorna l'app lì e questa pagina si aggiornerà con essa.",
 "rp_err_unreachable": "La PS5 non risponde in rete. Controlla che sia accesa, sulla stessa rete e che Remote Play sia attivo nelle sue impostazioni.",

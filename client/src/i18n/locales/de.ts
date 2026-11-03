@@ -6236,7 +6236,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_err_other": "Der Stream wurde beendet.",
 "rp_err_lost": "Die Verbindung zur PS5 ist während des Streams abgebrochen. Starte ihn erneut; passiert das öfter, verbinde die PS5 oder dieses Gerät per Kabel.",
 "rp_err_rp_off": "Remote Play ist auf der PS5 ausgeschaltet. Öffne auf der Konsole Einstellungen › System › Remote Play und schalte „Remote Play aktivieren“ ein (wenn es schon an ist, aus- und wieder einschalten), dann drücke Start.",
-"rp_err_refused": "Die PS5 hat den Start von Remote Play abgelehnt. Prüfe auf der Konsole Einstellungen › System › Remote Play › Remote Play aktivieren (aus- und wieder einschalten), drücke Erlauben unter Play › Einrichten oder kopple erneut. Der Code unten sagt, welche Ablehnung es war.",
+"rp_err_refused": "Die PS5 hat den Start von Remote Play abgelehnt. Prüfe auf der Konsole Einstellungen › System › Remote Play › Remote Play aktivieren (aus- und wieder einschalten), drücke Erlauben unter Play › Einrichten oder kopple erneut. Der Code unten sagt, welche Ablehnung es war. Immer noch abgelehnt? Starte die PS5 neu: Eine Konsole, die lange läuft, kann bis zum Neustart ablehnen.",
 "web_update_how_docker": "Zum Aktualisieren führe das im Ordner mit deiner Compose-Datei aus (Watchtower kann das auch für dich erledigen):",
 "web_update_how_app": "Diese Seite kommt von PS5Upload auf einem anderen Computer. Aktualisiere die App dort, dann aktualisiert sich diese Seite mit.",
 "rp_err_unreachable": "Die PS5 antwortet nicht im Netzwerk. Prüfe, ob sie eingeschaltet und im selben Netzwerk ist und ob Remote Play in ihren Einstellungen aktiviert ist.",

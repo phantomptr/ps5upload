@@ -6534,7 +6534,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_err_other": "A stream leállt.",
 "rp_err_lost": "A kapcsolat a PS5-tel megszakadt a stream közben. Indítsd újra; ha többször előfordul, csatlakoztasd a PS5-öt vagy ezt az eszközt kábellel.",
 "rp_err_rp_off": "A Remote Play ki van kapcsolva a PS5-ön. A konzolon nyisd meg a Beállítások › Rendszer › Távoli játék menüt, és kapcsold be a Távoli játék engedélyezése opciót (ha már be van kapcsolva, kapcsold ki és vissza), majd nyomd meg a Start gombot.",
-"rp_err_refused": "A PS5 nem engedte elindítani a Remote Playt. A konzolon nézd meg: Beállítások › Rendszer › Távoli játék › Távoli játék engedélyezése (kapcsold ki, majd be), nyomd meg az Engedélyezés gombot a Play › Beállítás alatt, vagy párosíts újra. Az alábbi kód mutatja, milyen elutasítás volt.",
+"rp_err_refused": "A PS5 nem engedte elindítani a Remote Playt. A konzolon nézd meg: Beállítások › Rendszer › Távoli játék › Távoli játék engedélyezése (kapcsold ki, majd be), nyomd meg az Engedélyezés gombot a Play › Beállítás alatt, vagy párosíts újra. Az alábbi kód mutatja, milyen elutasítás volt. Még mindig elutasítja? Indítsd újra a PS5-öt: a sokáig bekapcsolt konzol újraindításig elutasíthat.",
 "web_update_how_docker": "A frissítéshez futtasd ezt a compose-fájlod mappájában (a Watchtower is megteheti helyetted):",
 "web_update_how_app": "Ez az oldal egy másik gépen futó PS5Uploadtól jön. Ott frissítsd az alkalmazást, és ez az oldal vele együtt frissül.",
 "rp_err_unreachable": "A PS5 nem válaszol a hálózaton. Ellenőrizd, hogy be van-e kapcsolva, ugyanazon a hálózaton van-e, és hogy a Remote Play be van-e kapcsolva a beállításaiban.",
