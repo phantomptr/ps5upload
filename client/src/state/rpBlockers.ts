@@ -1,6 +1,6 @@
 // Remote Play blockers around a stream (lib/rpBlockers.ts): checked before a stream starts,
-// paused for it when the user says so (or always, by the setting), and turned back on when
-// the stream ends.
+// waited out when one gets out of the way by itself (Hush's hold mode), paused for it when the
+// user says so (or always, by the setting), and turned back on when the stream ends.
 
 import { create } from "zustand";
 
@@ -8,7 +8,8 @@ import {
   RP_BLOCKERS,
   blockerById,
   blockerCtx,
-  detectBlockers,
+  checkBlockers,
+  type BlockerStatus,
   type RpBlocker,
 } from "../lib/rpBlockers";
 import { hostOf } from "../lib/addr";
@@ -20,10 +21,19 @@ import { useRemotePlayStore } from "./remotePlay";
 
 const AUTO_PAUSE_KEY = "ps5upload.rp_pause_blockers";
 
-/** A start held back: what is on, and the stream start to run once the user chose. */
+/** A blocker a pause cannot help, and what clears it (i18n key and English). */
+export interface StuckBlocker {
+  id: string;
+  key: string;
+  text: string;
+}
+
+/** A start held back: what is on (pausable, and stuck), and the stream start to run once the
+ *  user chose. */
 interface Held {
   host: string;
   ids: string[];
+  stuck: StuckBlocker[];
   go: () => Promise<void>;
 }
 
@@ -35,6 +45,8 @@ interface RpBlockersState {
   held: Held | null;
   /** Blockers being paused before a stream (the start waits for them). */
   pausing: { host: string; ids: string[] } | null;
+  /** Blockers a start waits out (they get out of the way by themselves, within `maxS`). */
+  waiting: { host: string; ids: string[]; maxS: number; cancel: () => void } | null;
   /** Per console (host): blockers this app paused for the stream now running. */
   paused: Record<string, string[]>;
   /** Per console: blockers that were on when its last stream started (paused or not), so a
@@ -58,6 +70,7 @@ export const useRpBlockers = create<RpBlockersState>((set) => ({
   },
   held: null,
   pausing: null,
+  waiting: null,
   paused: {},
   onAtStart: {},
 }));
@@ -77,9 +90,13 @@ export function blockerNames(ids: readonly string[]): string {
   return ids.map((id) => blockerById(id)?.name ?? id).join(", ");
 }
 
+type Found = { blocker: RpBlocker; status: Exclude<BlockerStatus, { kind: "off" }> };
+
 /**
- * Before a stream starts on `host`: look for blockers, then start (`go`) when there are none,
- * pause them first when the setting says always, or hold the start for the user's choice.
+ * Before a stream starts on `host`: look for blockers, wait out the ones that get out of the
+ * way by themselves, then start (`go`) when none is left, pause them first when the setting
+ * says always, or hold the start for the user's choice. A blocker a pause cannot help always
+ * holds the start, with what clears it.
  */
 export async function beforeRemotePlay(
   host: string,
@@ -87,19 +104,61 @@ export async function beforeRemotePlay(
   list: readonly RpBlocker[] = RP_BLOCKERS,
 ): Promise<void> {
   const k = key(host);
-  // A pause in progress starts the stream itself when it is done.
-  if (useRpBlockers.getState().pausing) return;
-  const found = await withTimeout(
-    detectBlockers(blockerCtx(host), list).catch(() => []),
-    CHECK_TIMEOUT_MS,
-    [] as RpBlocker[],
+  // A pause or wait in progress starts the stream itself when it is done.
+  const s0 = useRpBlockers.getState();
+  if (s0.pausing || s0.waiting) return;
+  const ctx = blockerCtx(host);
+  let found = await withTimeout(checkBlockers(ctx, list).catch(() => [] as Found[]), CHECK_TIMEOUT_MS, [] as Found[]);
+  const waits = found.filter((f) => f.status.kind === "wait");
+  if (waits.length) {
+    found = found.filter((f) => f.status.kind !== "wait");
+    const stillOn = await waitOut(host, waits);
+    if (stillOn === null) return;
+    found.push(...stillOn);
+  }
+  const ids = found.filter((f) => f.status.kind === "on").map((f) => f.blocker.id);
+  const stuck = found.flatMap((f) =>
+    f.status.kind === "stuck" ? [{ id: f.blocker.id, key: f.status.key, text: f.status.text }] : [],
   );
-  const ids = found.map((b) => b.id);
-  useRpBlockers.setState((s) => ({ onAtStart: { ...s.onAtStart, [k]: ids }, held: null }));
-  if (ids.length === 0) return go();
-  log.info("remote-play", `blockers on ${k}: ${ids.join(", ")}`);
-  if (useRpBlockers.getState().autoPause) return pauseThenStart(host, ids, go);
-  useRpBlockers.setState({ held: { host, ids, go } });
+  const all = found.map((f) => f.blocker.id);
+  useRpBlockers.setState((s) => ({ onAtStart: { ...s.onAtStart, [k]: all }, held: null }));
+  if (all.length === 0) return go();
+  log.info("remote-play", `blockers on ${k}: ${all.join(", ")}${stuck.length ? ` (stuck: ${stuck.map((x) => x.id).join(", ")})` : ""}`);
+  if (useRpBlockers.getState().autoPause && stuck.length === 0) return pauseThenStart(host, ids, go);
+  useRpBlockers.setState({ held: { host, ids, stuck, go } });
+}
+
+/** Wait for these blockers to get out of the way by themselves. Resolves with the ones still
+ *  in the way when their time ran out (they count as on from then), or null when the user
+ *  cancelled the start. */
+async function waitOut(host: string, waits: readonly Found[]): Promise<Found[] | null> {
+  const k = key(host);
+  const ctx = blockerCtx(host);
+  const ac = new AbortController();
+  const maxMs = Math.max(...waits.map((w) => (w.status.kind === "wait" ? w.status.maxMs : 0)));
+  const ids = waits.map((w) => w.blocker.id);
+  useRpBlockers.setState({ waiting: { host, ids, maxS: Math.ceil(maxMs / 1000), cancel: () => ac.abort() } });
+  log.info("remote-play", `waiting for ${ids.join(", ")} on ${k} (up to ${Math.ceil(maxMs / 1000)} s)`);
+  try {
+    const outcomes = await Promise.all(
+      waits.map((w) =>
+        (w.blocker.waitClear?.(ctx, w.status.kind === "wait" ? w.status.maxMs : 0, { signal: ac.signal }) ??
+          Promise.resolve("timeout" as const)
+        ).catch(() => "timeout" as const),
+      ),
+    );
+    if (ac.signal.aborted) {
+      log.info("remote-play", `start on ${k} cancelled while waiting for ${ids.join(", ")}`);
+      return null;
+    }
+    const left = waits.filter((_, i) => outcomes[i] !== "clear");
+    for (const w of waits) {
+      log.info("remote-play", `${w.blocker.name} on ${k}: ${left.includes(w) ? "still in the way" : "out of the way"}`);
+    }
+    return left.map((w) => ({ blocker: w.blocker, status: { kind: "on" } as const }));
+  } finally {
+    useRpBlockers.setState({ waiting: null });
+  }
 }
 
 /** "Pause … while I play": pause what is on, then start. */
