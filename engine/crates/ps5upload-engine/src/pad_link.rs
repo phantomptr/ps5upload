@@ -135,14 +135,14 @@ fn with_link<R>(f: impl FnOnce(&mut Link) -> R) -> R {
     f(g.get_or_insert_with(Link::default))
 }
 
-fn random_key() -> Option<String> {
+pub(crate) fn random_key() -> Option<String> {
     let mut b = [0u8; 16];
     getrandom::fill(&mut b).ok()?;
     Some(b.iter().map(|x| format!("{x:02x}")).collect())
 }
 
 /// Equal without leaking where the first difference is.
-fn same_key(a: &str, b: &str) -> bool {
+pub(crate) fn same_key(a: &str, b: &str) -> bool {
     a.len() == b.len()
         && a.bytes()
             .zip(b.bytes())
@@ -161,7 +161,7 @@ fn lan_ip_toward(toward: &str) -> Option<std::net::IpAddr> {
 }
 
 /// The port this engine answers on, from the request the computer's page made to it.
-fn port_of(headers: &HeaderMap) -> u16 {
+pub(crate) fn port_of(headers: &HeaderMap) -> u16 {
     headers
         .get("host")
         .and_then(|h| h.to_str().ok())
@@ -180,7 +180,7 @@ fn is_home_lan(ip: std::net::IpAddr) -> bool {
 /// phones usually are), then on the network the default route goes out on. A computer on two
 /// networks (the PS5 on one, the phone's Wi-Fi on the other) needs the second: the QR code
 /// carried only the first, which the phone could not reach.
-fn lan_ips(console: Option<&str>) -> Vec<std::net::IpAddr> {
+pub(crate) fn lan_ips(console: Option<&str>) -> Vec<std::net::IpAddr> {
     let toward = console
         .map(str::to_string)
         .or_else(crate::rp_stream_api::live_host);
@@ -620,9 +620,16 @@ pub struct RelayQuery {
 
 /// Only another engine's pad socket on the LAN may be relayed to.
 fn relay_target(url: &str) -> Option<String> {
+    lan_ws_target(url, "api/pad/ws")
+}
+
+/// `url` as `ws://<private address>[:port]/<path>` (the query dropped), when it is exactly another
+/// engine's socket `path` on the LAN (a home network, link-local, or a Tailscale-style shared
+/// 100.64/10 address): never a name, a public address, or another route.
+pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
     let rest = url.strip_prefix("ws://")?;
     let (authority, path) = rest.split_once('/')?;
-    if path.split('?').next() != Some("api/pad/ws") {
+    if path.split('?').next() != Some(want) {
         return None;
     }
     let host = authority
@@ -631,12 +638,16 @@ fn relay_target(url: &str) -> Option<String> {
         .unwrap_or(authority);
     let ip: std::net::IpAddr = host.trim_matches(['[', ']']).parse().ok()?;
     let private = match ip {
-        std::net::IpAddr::V4(v) => v.is_private() || v.is_link_local(),
+        std::net::IpAddr::V4(v) => {
+            v.is_private()
+                || v.is_link_local()
+                || (v.octets()[0] == 100 && (v.octets()[1] & 0xc0) == 64)
+        }
         std::net::IpAddr::V6(v) => {
             (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80
         }
     };
-    private.then(|| format!("ws://{authority}/api/pad/ws"))
+    private.then(|| format!("ws://{authority}/{want}"))
 }
 
 /// `GET /api/ps5/rp/pad-relay?url=ws://<computer>/api/pad/ws&name=` (loopback only): the phone
@@ -646,8 +657,6 @@ pub async fn relay(upgrade: WebSocketUpgrade, Query(q): Query<RelayQuery>) -> Re
 }
 
 async fn relay_session(mut socket: WebSocket, q: RelayQuery) {
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message as TMsg;
     let Some(target) = relay_target(&q.url) else {
         let _ = socket
             .send(say(
@@ -670,9 +679,18 @@ async fn relay_session(mut socket: WebSocket, q: RelayQuery) {
             })
             .collect::<String>()
     );
+    relay_to(socket, &url).await;
+}
+
+/// Connects to `url` (another engine's socket, already checked) and passes every text and binary
+/// message both ways unchanged until either side closes; `{"stage": "refused", "why":
+/// "unreachable"}` when it cannot connect.
+pub(crate) async fn relay_to(mut socket: WebSocket, url: &str) {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as TMsg;
     let far = match tokio::time::timeout(
         Duration::from_secs(5),
-        tokio_tungstenite::connect_async(url.as_str()),
+        tokio_tungstenite::connect_async(url),
     )
     .await
     {
@@ -792,6 +810,18 @@ mod tests {
         assert_eq!(relay_target("ws://8.8.8.8:19113/api/pad/ws"), None);
         assert_eq!(relay_target("wss://192.168.1.20/api/pad/ws"), None);
         assert_eq!(relay_target("ws://example.com/api/pad/ws"), None);
+        assert_eq!(
+            lan_ws_target("ws://100.101.2.3:19113/api/join/ws", "api/join/ws").as_deref(),
+            Some("ws://100.101.2.3:19113/api/join/ws")
+        );
+        assert_eq!(
+            lan_ws_target("ws://100.128.0.1:1/api/join/ws", "api/join/ws"),
+            None
+        );
+        assert_eq!(
+            lan_ws_target("ws://10.0.0.2:1/api/pad/ws", "api/join/ws"),
+            None
+        );
     }
 
     #[test]

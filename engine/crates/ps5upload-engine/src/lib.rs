@@ -76,6 +76,7 @@ mod image_browse;
 mod image_build;
 mod inspect;
 mod install;
+mod join;
 mod link;
 mod link_lz4;
 mod local_fs;
@@ -837,6 +838,10 @@ fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str
         // QR code's key or waits for the computer to allow it.
         || path == "/pad"
         || path == "/api/pad/ws"
+        // A friend joining Play Together (join.rs): the guest page and its socket, which checks
+        // the invite or the resume token itself. The rest of /api/join is the host's.
+        || path == "/join"
+        || path == "/api/join/ws"
         || peer.is_loopback()
         || allow_rules_contain(&cfg.allowed_ips, peer)
 }
@@ -11418,6 +11423,18 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/rp-player", get(rp_stream_api::player))
         .route("/pad", get(pad_link::page))
         .route("/api/pad/ws", get(pad_link::ws))
+        // Play Together (#641): guests as Players 2-4 (join.rs).
+        .route("/join", get(join::page))
+        .route("/api/join/ws", get(join::ws))
+        .route("/api/join/relay", get(join::relay))
+        .route("/api/join", get(join::get_state))
+        .route("/api/join/open", post(join::open))
+        .route("/api/join/close", post(join::close))
+        .route("/api/join/invite", post(join::invite))
+        .route("/api/join/decide", post(join::decide))
+        .route("/api/join/kick", post(join::kick))
+        .route("/api/join/playing", post(join::playing))
+        .route("/api/join/settings", post(join::set_settings))
         .route(
             "/api/ps5/rp/pad-link",
             get(pad_link::get_status).post(pad_link::set_open),
@@ -12128,6 +12145,33 @@ mod loopback_guard_tests {
         ] {
             assert!(!loopback_allows(&c, ip("192.168.1.30"), p), "{p}");
         }
+    }
+
+    #[test]
+    fn a_friend_reaches_only_the_join_page_and_socket() {
+        let c = cfg(&[]);
+        assert!(loopback_allows(&c, ip("192.168.1.30"), "/join"));
+        assert!(loopback_allows(&c, ip("192.168.1.30"), "/api/join/ws"));
+        // The host's side of Play Together stays on this computer.
+        for p in [
+            "/api/join",
+            "/api/join/open",
+            "/api/join/close",
+            "/api/join/invite",
+            "/api/join/decide",
+            "/api/join/kick",
+            "/api/join/playing",
+            "/api/join/settings",
+            "/api/join/relay",
+            "/api/join/ws/x",
+            "/api/join/wsx",
+            "/join/../api/join/open",
+            "/joinx",
+            "/join/x",
+        ] {
+            assert!(!loopback_allows(&c, ip("192.168.1.30"), p), "{p}");
+        }
+        assert!(loopback_allows(&c, ip("127.0.0.1"), "/api/join/open"));
     }
 
     #[test]

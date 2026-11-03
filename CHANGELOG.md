@@ -4,6 +4,30 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.8.0
+
+- **Play Together: friends join your Remote Play as Player 2, 3 and 4 (For #641).** While you
+  play, open Play Together and share the link (or the short code, like K7M-2QX). A friend on your
+  network opens it in any browser, you click Allow, and they get their own controller on the PS5
+  plus your picture and sound. On the TV they press PS and pick Quick Play (or their user). Up to
+  three friends; you can let anyone go at any time.
+- **A friend's Wi-Fi blip doesn't cost them their spot (For #641).** If a friend's connection
+  drops, their controller lets go of everything at once (no runaway buttons) and their player
+  waits for them for a minute: they come back as the same player, still signed in on the TV,
+  without asking again. If you stop playing, friends are told, and they can come back if you
+  start again within a minute.
+- **Friends can't open the PS5's menus by default (For #641).** Once a friend is in, their PS and
+  Create buttons are switched off so a stray press doesn't pull everyone out of the game. They
+  keep PS for the first minute so they can answer "Who's using this controller?", and you can
+  turn the blocking off.
+- **Quick taps always count (For #641).** A friend's button press that is shorter than a network
+  round trip still reaches the game as a press and a release.
+- **Nearby apps see your game (For #641).** While Play Together is open, other PS5Upload apps
+  that use the same PS5 list it, and a friend can ask to join from there. Joining with a code
+  always needs your Allow, and repeated wrong codes are slowed down.
+- **Play Together needs the updated helper (For #641).** With an older helper on the PS5, the app
+  says "Update the helper to play together" instead of failing quietly.
+
 ## 10.7.6
 
 - **Saved cheats and patches are applied the moment a game starts (For #627).** Some patches only
