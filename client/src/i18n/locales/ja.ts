@@ -7057,6 +7057,8 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
 "join_refused_old_helper": "「いっしょにプレイ」を使うには、{host}さんのPS5のヘルパーを更新する必要があります。",
 "join_refused_not_playing": "{host}さんは今プレイしていません。先に{host}さんにプレイを始めてもらってください。",
 "join_refused_other": "{host}さんに参加を許可されませんでした。",
+"join_refused_unreachable": "{host}さんのコンピューターがPS5に接続できませんでした。少ししてからもう一度お試しください。",
+"join_refused_slow_down": "間違ったコードが多すぎます。1分待ってからもう一度お試しください。",
 "join_ended_kicked": "{host}さんにゲームから外されました。",
 "join_ended_closed": "{host}さんが「いっしょにプレイ」を終了しました。",
 "join_ended_host_stopped": "ホストがプレイをやめました。",

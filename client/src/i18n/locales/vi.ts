@@ -7040,6 +7040,8 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
 "join_refused_old_helper": "PS5 của {host} cần cập nhật trình hỗ trợ để Chơi cùng nhau.",
 "join_refused_not_playing": "{host} hiện không chơi. Hãy nhờ {host} bắt đầu Chơi trước.",
 "join_refused_other": "{host} không cho bạn vào.",
+"join_refused_unreachable": "Máy tính của {host} không kết nối được với PS5. Hãy thử lại sau giây lát.",
+"join_refused_slow_down": "Nhập sai mã quá nhiều lần. Hãy đợi một phút rồi thử lại.",
 "join_ended_kicked": "{host} đã mời bạn ra khỏi trò chơi.",
 "join_ended_closed": "{host} đã đóng Chơi cùng nhau.",
 "join_ended_host_stopped": "Chủ phòng đã dừng chơi.",

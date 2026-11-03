@@ -6991,6 +6991,8 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
 "join_refused_old_helper": "La PS5 de {host} necesita un ayudante actualizado para Jugar juntos.",
 "join_refused_not_playing": "{host} no está jugando ahora. Pide a {host} que inicie Jugar primero.",
 "join_refused_other": "{host} no te dejó entrar.",
+"join_refused_unreachable": "El ordenador de {host} no pudo conectar con su PS5. Inténtalo de nuevo en un momento.",
+"join_refused_slow_down": "Demasiados códigos incorrectos. Espera un minuto y vuelve a intentarlo.",
 "join_ended_kicked": "{host} te sacó de la partida.",
 "join_ended_closed": "{host} cerró Jugar juntos.",
 "join_ended_host_stopped": "El anfitrión dejó de jugar.",

@@ -36,6 +36,10 @@ export function endText(tr: Tr, stage: JoinStage, host: string): string {
         return tr("join_refused_old_helper", { host }, `${host}'s PS5 needs an updated helper for Play Together.`);
       case "not_playing":
         return tr("join_refused_not_playing", { host }, `${host} isn't playing right now. Ask ${host} to start Play first.`);
+      case "unreachable":
+        return tr("join_refused_unreachable", { host }, `${host}'s computer couldn't reach their PS5. Try again in a moment.`);
+      case "slow_down":
+        return tr("join_refused_slow_down", undefined, "Too many wrong codes. Wait a minute, then try again.");
       default:
         return tr("join_refused_other", { host }, `${host} didn't let you in.`);
     }

@@ -7286,6 +7286,8 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
 "join_refused_old_helper": "PS5 {host} potrzebuje zaktualizowanego helpera do Graj razem.",
 "join_refused_not_playing": "{host} teraz nie gra. Poproś {host}, żeby najpierw uruchomił Graj.",
 "join_refused_other": "{host} cię nie wpuścił.",
+"join_refused_unreachable": "Komputer {host} nie mógł połączyć się z PS5. Spróbuj ponownie za chwilę.",
+"join_refused_slow_down": "Zbyt wiele błędnych kodów. Odczekaj minutę i spróbuj ponownie.",
 "join_ended_kicked": "{host} usunął cię z gry.",
 "join_ended_closed": "{host} zamknął Graj razem.",
 "join_ended_host_stopped": "Gospodarz przestał grać.",

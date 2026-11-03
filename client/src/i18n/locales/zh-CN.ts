@@ -6997,6 +6997,8 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
 "join_refused_old_helper": "{host} 的 PS5 需要更新助手才能一起畅玩。",
 "join_refused_not_playing": "{host} 现在没在玩。请让 {host} 先开始畅玩。",
 "join_refused_other": "{host} 没有让你加入。",
+"join_refused_unreachable": "{host} 的电脑无法连接到其 PS5。请稍后再试。",
+"join_refused_slow_down": "错误的代码太多。请等一分钟后再试。",
 "join_ended_kicked": "{host} 已将你移出游戏。",
 "join_ended_closed": "{host} 已关闭一起畅玩。",
 "join_ended_host_stopped": "主机玩家已停止游戏。",

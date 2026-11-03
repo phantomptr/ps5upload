@@ -7045,6 +7045,8 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
 "join_refused_old_helper": "Birlikte Oyna için {host} adlı kişinin PS5'inde yardımcının güncellenmesi gerekiyor.",
 "join_refused_not_playing": "{host} şu anda oynamıyor. Önce Oyna'yı başlatmasını {host} kullanıcısından iste.",
 "join_refused_other": "{host} seni içeri almadı.",
+"join_refused_unreachable": "{host} adlı kişinin bilgisayarı PS5'e ulaşamadı. Biraz sonra tekrar dene.",
+"join_refused_slow_down": "Çok fazla yanlış kod. Bir dakika bekle, sonra tekrar dene.",
 "join_ended_kicked": "{host} seni oyundan çıkardı.",
 "join_ended_closed": "{host}, Birlikte Oyna'yı kapattı.",
 "join_ended_host_stopped": "Oyunun sahibi oynamayı bıraktı.",

@@ -7046,6 +7046,8 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
 "join_refused_old_helper": "Die PS5 von {host} braucht einen aktuellen Helfer für „Zusammen spielen“.",
 "join_refused_not_playing": "{host} spielt gerade nicht. Bitte {host}, zuerst Spielen zu starten.",
 "join_refused_other": "{host} hat dich nicht reingelassen.",
+"join_refused_unreachable": "Der Computer von {host} hat die PS5 nicht erreicht. Versuch es gleich noch einmal.",
+"join_refused_slow_down": "Zu viele falsche Codes. Warte eine Minute und versuch es dann noch einmal.",
 "join_ended_kicked": "{host} hat dich aus dem Spiel genommen.",
 "join_ended_closed": "{host} hat „Zusammen spielen“ beendet.",
 "join_ended_host_stopped": "Der Gastgeber hat aufgehört zu spielen.",

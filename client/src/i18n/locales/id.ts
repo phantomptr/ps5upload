@@ -7047,6 +7047,8 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
 "join_refused_old_helper": "PS5 milik {host} perlu helper terbaru untuk Main Bareng.",
 "join_refused_not_playing": "{host} sedang tidak main. Minta {host} memulai Main dulu.",
 "join_refused_other": "{host} tidak mengizinkan Anda masuk.",
+"join_refused_unreachable": "Komputer {host} tidak bisa menjangkau PS5-nya. Coba lagi sebentar lagi.",
+"join_refused_slow_down": "Terlalu banyak kode yang salah. Tunggu satu menit, lalu coba lagi.",
 "join_ended_kicked": "{host} mengeluarkan Anda dari game.",
 "join_ended_closed": "{host} menutup Main Bareng.",
 "join_ended_host_stopped": "Host berhenti main.",

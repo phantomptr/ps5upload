@@ -7330,6 +7330,8 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
 "join_refused_old_helper": "PS5 {host} برای «بازی با هم» به دستیار به‌روز نیاز دارد.",
 "join_refused_not_playing": "{host} الان بازی نمی‌کند. از {host} بخواهید اول بازی را شروع کند.",
 "join_refused_other": "{host} اجازهٔ ورود نداد.",
+"join_refused_unreachable": "رایانهٔ {host} به PS5 دسترسی پیدا نکرد. کمی بعد دوباره امتحان کنید.",
+"join_refused_slow_down": "تعداد کدهای اشتباه زیاد است. یک دقیقه صبر کنید و دوباره امتحان کنید.",
 "join_ended_kicked": "{host} شما را از بازی بیرون کرد.",
 "join_ended_closed": "{host} «بازی با هم» را بست.",
 "join_ended_host_stopped": "میزبان بازی را متوقف کرد.",

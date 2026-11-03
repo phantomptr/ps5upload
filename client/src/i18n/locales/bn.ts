@@ -7038,6 +7038,8 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
 "join_refused_old_helper": "\"একসাথে খেলুন\"-এর জন্য {host}-এর PS5-এ আপডেট করা হেল্পার দরকার।",
 "join_refused_not_playing": "{host} এখন খেলছে না। {host}-কে আগে খেলা শুরু করতে বলুন।",
 "join_refused_other": "{host} আপনাকে ঢুকতে দেয়নি।",
+"join_refused_unreachable": "{host}-এর কম্পিউটার তাদের PS5-এ পৌঁছাতে পারেনি। একটু পরে আবার চেষ্টা করুন।",
+"join_refused_slow_down": "অনেক বেশি ভুল কোড। এক মিনিট অপেক্ষা করে আবার চেষ্টা করুন।",
 "join_ended_kicked": "{host} আপনাকে গেম থেকে বের করে দিয়েছে।",
 "join_ended_closed": "{host} \"একসাথে খেলুন\" বন্ধ করেছে।",
 "join_ended_host_stopped": "হোস্ট খেলা বন্ধ করেছে।",

@@ -7344,6 +7344,8 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
 "join_refused_old_helper": "{host} PS5-jének frissített segédprogram kell a Közös játékhoz.",
 "join_refused_not_playing": "{host} most nem játszik. Kérd meg, hogy előbb indítsa el a Játékot ({host}).",
 "join_refused_other": "{host} nem engedett be.",
+"join_refused_unreachable": "{host} számítógépe nem érte el a PS5-öt. Próbáld újra egy kicsit később.",
+"join_refused_slow_down": "Túl sok hibás kód. Várj egy percet, aztán próbáld újra.",
 "join_ended_kicked": "{host} kivett a játékból.",
 "join_ended_closed": "{host} bezárta a Közös játékot.",
 "join_ended_host_stopped": "A házigazda abbahagyta a játékot.",

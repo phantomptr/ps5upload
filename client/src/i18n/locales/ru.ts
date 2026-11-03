@@ -6991,6 +6991,8 @@ helper_mismatch_boot_copy: "PS5 запустила старую копию по�
 "join_refused_old_helper": "Для «Совместной игры» на PS5 {host} нужен обновлённый помощник.",
 "join_refused_not_playing": "{host} сейчас не играет. Попросите {host} сначала запустить Игру.",
 "join_refused_other": "{host} вас не впустил.",
+"join_refused_unreachable": "Компьютер {host} не смог связаться с PS5. Попробуйте ещё раз чуть позже.",
+"join_refused_slow_down": "Слишком много неверных кодов. Подождите минуту и попробуйте снова.",
 "join_ended_kicked": "{host} убрал вас из игры.",
 "join_ended_closed": "{host} закрыл «Совместную игру».",
 "join_ended_host_stopped": "Хозяин перестал играть.",

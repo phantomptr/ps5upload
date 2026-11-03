@@ -7054,6 +7054,8 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
 "join_refused_old_helper": "La PS5 de {host} a besoin d'un assistant à jour pour Jouer ensemble.",
 "join_refused_not_playing": "{host} ne joue pas en ce moment. Demandez d'abord à {host} de lancer Jouer.",
 "join_refused_other": "{host} ne vous a pas laissé entrer.",
+"join_refused_unreachable": "L'ordinateur de {host} n'a pas pu joindre sa PS5. Réessayez dans un instant.",
+"join_refused_slow_down": "Trop de codes erronés. Attendez une minute, puis réessayez.",
 "join_ended_kicked": "{host} vous a retiré de la partie.",
 "join_ended_closed": "{host} a fermé Jouer ensemble.",
 "join_ended_host_stopped": "L'hôte a arrêté de jouer.",

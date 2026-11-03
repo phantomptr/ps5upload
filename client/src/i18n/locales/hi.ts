@@ -7052,6 +7052,8 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
 "join_refused_old_helper": "'साथ खेलें' के लिए {host} के PS5 को अपडेटेड हेल्पर चाहिए।",
 "join_refused_not_playing": "{host} अभी नहीं खेल रहे हैं। {host} से पहले खेलें शुरू करने को कहें।",
 "join_refused_other": "{host} ने आपको अंदर नहीं आने दिया।",
+"join_refused_unreachable": "{host} का कंप्यूटर उनके PS5 तक नहीं पहुँच सका। थोड़ी देर में फिर कोशिश करें।",
+"join_refused_slow_down": "बहुत सारे गलत कोड। एक मिनट रुकें, फिर कोशिश करें।",
 "join_ended_kicked": "{host} ने आपको गेम से हटा दिया।",
 "join_ended_closed": "{host} ने 'साथ खेलें' बंद कर दिया।",
 "join_ended_host_stopped": "होस्ट ने खेलना बंद कर दिया।",

@@ -7045,6 +7045,8 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
 "join_refused_old_helper": "PS5 ของ {host} ต้องอัปเดตตัวช่วยเพื่อเล่นด้วยกัน",
 "join_refused_not_playing": "ตอนนี้ {host} ไม่ได้เล่นอยู่ ขอให้ {host} เริ่มเล่นก่อน",
 "join_refused_other": "{host} ไม่ได้ให้คุณเข้า",
+"join_refused_unreachable": "คอมพิวเตอร์ของ {host} เชื่อมต่อกับ PS5 ไม่ได้ ลองใหม่อีกครั้งในอีกสักครู่",
+"join_refused_slow_down": "ใส่รหัสผิดหลายครั้งเกินไป รอหนึ่งนาทีแล้วลองใหม่",
 "join_ended_kicked": "{host} นำคุณออกจากเกม",
 "join_ended_closed": "{host} ปิดเล่นด้วยกันแล้ว",
 "join_ended_host_stopped": "เจ้าของเกมหยุดเล่นแล้ว",

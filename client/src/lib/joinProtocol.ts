@@ -8,7 +8,16 @@
 import type { PadState } from "./remotePlayStream";
 
 /** Why the host's engine did not let a guest in. Anything else reads as "refused". */
-export type RefuseWhy = "key" | "full" | "denied" | "closed" | "old_helper" | "not_playing" | "refused";
+export type RefuseWhy =
+  | "key"
+  | "full"
+  | "denied"
+  | "closed"
+  | "old_helper"
+  | "not_playing"
+  | "unreachable"
+  | "slow_down"
+  | "refused";
 
 /** How a joined guest's game ended, from the engine (`{"bye": …}`). */
 export type ByeWhy = "kicked" | "closed" | "host_stopped";
@@ -36,7 +45,7 @@ export type ServerMessage =
   | { kind: "bye"; why: ByeWhy }
   | { kind: "pong"; t: number };
 
-const REFUSE: ReadonlySet<string> = new Set(["key", "full", "denied", "closed", "old_helper", "not_playing"]);
+const REFUSE: ReadonlySet<string> = new Set(["key", "full", "denied", "closed", "old_helper", "not_playing", "unreachable", "slow_down"]);
 const GUEST_STATES: ReadonlySet<string> = new Set(["asking", "picking_user", "playing", "reconnecting", "left"]);
 
 const byte = (v: unknown) => Math.max(0, Math.min(255, Math.round(Number(v) || 0)));
@@ -58,7 +67,8 @@ export function readServerMessage(text: string): ServerMessage | null {
     return { kind: "joined", player: v.player, token: v.token, hevc: v.hevc === true };
   }
   if (v.stage === "refused") {
-    const why = String(v.why ?? "");
+    // "expired" (an invite or a kept place that ran out) reads as an expired invite.
+    const why = v.why === "expired" ? "key" : String(v.why ?? "");
     return { kind: "refused", why: REFUSE.has(why) ? (why as RefuseWhy) : "refused" };
   }
   if (typeof v.bye === "string") {

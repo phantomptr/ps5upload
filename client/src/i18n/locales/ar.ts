@@ -7038,6 +7038,8 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
 "join_refused_old_helper": "يحتاج PS5 الخاص بـ {host} إلى مساعد محدّث لميزة العب معًا.",
 "join_refused_not_playing": "{host} لا يلعب الآن. اطلب من {host} أن يبدأ اللعب أولًا.",
 "join_refused_other": "لم يسمح لك {host} بالدخول.",
+"join_refused_unreachable": "لم يتمكن حاسوب {host} من الوصول إلى جهاز PS5. حاول مرة أخرى بعد قليل.",
+"join_refused_slow_down": "رموز خاطئة كثيرة جدًا. انتظر دقيقة ثم حاول مرة أخرى.",
 "join_ended_kicked": "أخرجك {host} من اللعبة.",
 "join_ended_closed": "أغلق {host} العب معًا.",
 "join_ended_host_stopped": "توقف المضيف عن اللعب.",
