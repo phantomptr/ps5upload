@@ -186,7 +186,7 @@ pub fn judge(figures: &SpaceFigures, room: &Room, promised_elsewhere: u64) -> Re
     }
     m.push_str(&format!("); short by {} bytes.", need - avail));
     if room.free_bytes == 0 {
-        m.push_str(" ");
+        m.push(' ');
         m.push_str(FULL_IMAGE_SENTENCE);
     }
     let kept = figures.job_bytes.saturating_sub(need);
