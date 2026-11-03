@@ -7083,6 +7083,8 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
 "join_scan": "QR 스캔",
 "join_scan_hint": "친구 화면의 QR 코드에 카메라를 맞추세요.",
 "join_scan_failed": "카메라가 열리지 않았어요. 대신 링크를 붙여 넣으세요.",
+"join_scan_denied": "코드를 스캔하려면 PS5Upload에 카메라가 필요합니다. 다시 시도를 눌러 허용하거나, 설정에서 카메라를 켜세요.",
+"join_scan_settings": "설정 열기",
 "join_nearby_title": "근처에서 플레이 중",
 "join_nearby_none": "지금 이 네트워크에서 함께 플레이를 호스트 중인 사람이 없어요.",
 "join_nearby_host": "{name} 님의 {console}",

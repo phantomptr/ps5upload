@@ -7019,6 +7019,8 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
 "join_scan": "Escanear QR",
 "join_scan_hint": "Apunta la cámara al código QR de la pantalla de tu amigo.",
 "join_scan_failed": "No se pudo abrir la cámara. Pega el enlace en su lugar.",
+"join_scan_denied": "PS5Upload necesita la cámara para escanear el código. Pulsa Reintentar y permítela, o activa la cámara en los ajustes.",
+"join_scan_settings": "Abrir ajustes",
 "join_nearby_title": "Partidas cerca",
 "join_nearby_none": "Ahora mismo nadie en esta red está organizando Jugar juntos.",
 "join_nearby_host": "{console} de {name}",

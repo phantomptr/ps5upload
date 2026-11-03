@@ -7314,6 +7314,8 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
 "join_scan": "Skanuj QR",
 "join_scan_hint": "Skieruj aparat na kod QR na ekranie znajomego.",
 "join_scan_failed": "Nie udało się otworzyć aparatu. Wklej zamiast tego link.",
+"join_scan_denied": "PS5Upload potrzebuje aparatu, aby zeskanować kod. Naciśnij Spróbuj ponownie i zezwól albo włącz aparat w ustawieniach.",
+"join_scan_settings": "Otwórz ustawienia",
 "join_nearby_title": "Gry w pobliżu",
 "join_nearby_none": "Nikt w tej sieci nie hostuje teraz Graj razem.",
 "join_nearby_host": "{console} – {name}",

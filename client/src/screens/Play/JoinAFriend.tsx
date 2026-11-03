@@ -344,6 +344,25 @@ export function scanAvailable(): boolean {
   );
 }
 
+/** getUserMedia's error for a refused permission (as opposed to no camera, or a busy one). */
+export function cameraRefused(e: unknown): boolean {
+  const name = (e as { name?: unknown } | null)?.name;
+  return name === "NotAllowedError" || name === "SecurityError" || name === "PermissionDeniedError";
+}
+
+/** Opens the app's settings (the Android app), for a camera the user turned off; else null. */
+function cameraSettings(): (() => void) | null {
+  const b = (window as unknown as { PS5UploadCamera?: { openSettings(): void } }).PS5UploadCamera;
+  if (!b) return null;
+  return () => {
+    try {
+      b.openSettings();
+    } catch {
+      // Nothing to do: Try again is still there.
+    }
+  };
+}
+
 /** The camera, until it sees a Play Together QR code. */
 function QrScanner({ onFound, onClose }: { onFound: (link: string) => void; onClose: () => void }) {
   // The latest callback, without restarting the camera when the parent re-renders.
@@ -353,7 +372,9 @@ function QrScanner({ onFound, onClose }: { onFound: (link: string) => void; onCl
   }, [onFound]);
   const tr = useTr();
   const video = useRef<HTMLVideoElement>(null);
-  const [failed, setFailed] = useState(false);
+  // "denied": the camera permission was refused (ask again, or the app's settings).
+  const [failed, setFailed] = useState<false | "denied" | "other">(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let stream: MediaStream | null = null;
     let timer = 0;
@@ -380,8 +401,8 @@ function QrScanner({ onFound, onClose }: { onFound: (link: string) => void; onCl
           timer = window.setTimeout(() => void look(), 250);
         };
         void look();
-      } catch {
-        if (alive) setFailed(true);
+      } catch (e) {
+        if (alive) setFailed(cameraRefused(e) ? "denied" : "other");
       }
     })();
     return () => {
@@ -389,10 +410,30 @@ function QrScanner({ onFound, onClose }: { onFound: (link: string) => void; onCl
       window.clearTimeout(timer);
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, []);
+  }, [attempt]);
+  const settings = cameraSettings();
   return (
     <div className="fixed inset-0 z-[70] flex flex-col items-center justify-center gap-3 bg-black/90 p-4 text-white" data-testid="join-scanner">
-      {failed ? (
+      {failed === "denied" ? (
+        <>
+          <p className="max-w-sm text-center text-sm" data-testid="join-scan-denied">
+            {tr("join_scan_denied", undefined, "PS5Upload needs the camera to scan the code. Press Try again and allow it, or turn on the camera in settings.")}
+          </p>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => {
+                setFailed(false);
+                setAttempt((n) => n + 1);
+              }}>
+              {tr("join_retry", undefined, "Try again")}
+            </Button>
+            {settings && (
+              <Button size="sm" variant="secondary" onClick={settings}>
+                {tr("join_scan_settings", undefined, "Open settings")}
+              </Button>
+            )}
+          </div>
+        </>
+      ) : failed ? (
         <p className="max-w-sm text-center text-sm">{tr("join_scan_failed", undefined, "The camera didn't open. Paste the link instead.")}</p>
       ) : (
         <>

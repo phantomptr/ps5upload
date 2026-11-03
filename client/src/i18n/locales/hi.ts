@@ -7080,6 +7080,8 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
 "join_scan": "QR स्कैन करें",
 "join_scan_hint": "कैमरे को अपने दोस्त की स्क्रीन पर दिख रहे QR कोड की ओर करें।",
 "join_scan_failed": "कैमरा नहीं खुला। इसके बजाय लिंक पेस्ट करें।",
+"join_scan_denied": "कोड स्कैन करने के लिए PS5Upload को कैमरे की ज़रूरत है। फिर कोशिश करें दबाकर अनुमति दें, या सेटिंग्स में कैमरा चालू करें।",
+"join_scan_settings": "सेटिंग्स खोलें",
 "join_nearby_title": "आस-पास खेल रहे हैं",
 "join_nearby_none": "इस नेटवर्क पर अभी कोई साथ खेलें होस्ट नहीं कर रहा।",
 "join_nearby_host": "{name} का {console}",

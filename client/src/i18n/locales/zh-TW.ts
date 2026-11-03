@@ -7019,6 +7019,8 @@ helper_mismatch_boot_copy: "你的 PS5 啟動了為開機保留的舊版助手�
 "join_scan": "掃描 QR 碼",
 "join_scan_hint": "將相機對準好友螢幕上的 QR 碼。",
 "join_scan_failed": "相機無法開啟。請改為貼上連結。",
+"join_scan_denied": "PS5Upload 需要使用相機來掃描 QR 碼。請按「重試」並允許，或在設定中開啟相機權限。",
+"join_scan_settings": "開啟設定",
 "join_nearby_title": "附近正在玩",
 "join_nearby_none": "目前這個網路中沒有人在主持一起暢玩。",
 "join_nearby_host": "{name} 的 {console}",

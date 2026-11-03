@@ -64,6 +64,8 @@
 #     (PackageInstaller), plus REQUEST_INSTALL_PACKAGES. See step (11) below.
 # 12) Remote Play in Android's picture in picture (#637): leaving the app while a stream
 #     plays keeps the picture floating over other apps. See step (12) below.
+# 13) The camera for Play Together's Scan QR, and PS5UploadCamera so the page can
+#     open the app's settings once Android stops asking. See step (13) below.
 
 
 set -euo pipefail
@@ -1512,6 +1514,64 @@ brace = src.index("{", src.index("class MainActivity"))
 src = src[:brace + 1] + members + src[brace + 1:]
 open(path, "w", encoding="utf-8").write(src)
 print("patched MainActivity.kt for Remote Play in picture in picture (PS5UploadPip)")
+PY
+fi
+
+# --- (13) camera for Play Together's Scan QR ----------------------------
+# Join a friend › Scan QR calls getUserMedia in the WebView. As with the mic (step 10),
+# wry turns the page's VIDEO_CAPTURE request into Android's CAMERA prompt, but only for a
+# permission the manifest declares; undeclared, the page's request is denied without a
+# prompt ("The camera didn't open"). uses-feature required=false keeps the app installable
+# on devices with no camera. PS5UploadCamera.openSettings() opens the app's settings for
+# when the user has said "Don't allow" and Android no longer shows the prompt.
+python3 - "$manifest" <<'PY'
+import re, sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+lines = []
+if 'android:name="android.permission.CAMERA"' not in src:
+    lines.append('<uses-permission android:name="android.permission.CAMERA" />')
+if 'android:name="android.hardware.camera"' not in src:
+    lines.append('<uses-feature android:name="android.hardware.camera" android:required="false" />')
+if lines:
+    block = "".join(f"\n    {l}" for l in lines)
+    new = re.sub(r"(<manifest\b[^>]*>)", lambda m: m.group(1) + block, src, count=1)
+    if new == src:
+        sys.exit("::error::could not find <manifest> tag to add the camera permission")
+    open(path, "w", encoding="utf-8").write(new)
+    print("added camera permission")
+else:
+    print("camera permission already present — skipping")
+PY
+
+if [ -n "$mainactivity" ]; then
+  python3 - "$mainactivity" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if "PS5UploadCamera" in src:
+    print("MainActivity.kt already exposes PS5UploadCamera — skipping")
+    sys.exit(0)
+anchor = "    super.onWebViewCreate(webView)\n"
+if anchor not in src:
+    sys.exit("::error::onWebViewCreate not found in MainActivity.kt")
+src = src.replace(anchor, anchor + """    // Scan QR: the app's settings, for a camera the user turned off.
+    webView.addJavascriptInterface(object {
+      @android.webkit.JavascriptInterface
+      fun openSettings() {
+        runOnUiThread {
+          startActivity(
+            android.content.Intent(
+              android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+              android.net.Uri.fromParts("package", packageName, null),
+            ),
+          )
+        }
+      }
+    }, "PS5UploadCamera")
+""", 1)
+open(path, "w", encoding="utf-8").write(src)
+print("patched MainActivity.kt to expose PS5UploadCamera")
 PY
 fi
 

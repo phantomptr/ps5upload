@@ -7066,6 +7066,8 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
 "join_scan": "مسح رمز QR",
 "join_scan_hint": "وجّه الكاميرا إلى رمز QR على شاشة صديقك.",
 "join_scan_failed": "لم تُفتح الكاميرا. الصق الرابط بدلًا من ذلك.",
+"join_scan_denied": "يحتاج PS5Upload إلى الكاميرا لمسح الرمز. اضغط «حاول مجددًا» واسمح بها، أو شغّل الكاميرا من الإعدادات.",
+"join_scan_settings": "فتح الإعدادات",
 "join_nearby_title": "يلعبون بالقرب منك",
 "join_nearby_none": "لا أحد على هذه الشبكة يستضيف العب معًا الآن.",
 "join_nearby_host": "{console} الخاص بـ {name}",

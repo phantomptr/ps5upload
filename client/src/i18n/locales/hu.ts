@@ -7372,6 +7372,8 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
 "join_scan": "QR beolvasása",
 "join_scan_hint": "Irányítsd a kamerát a barátod képernyőjén lévő QR-kódra.",
 "join_scan_failed": "A kamera nem nyílt meg. Illeszd be inkább a linket.",
+"join_scan_denied": "A PS5Uploadnak kamera kell a kód beolvasásához. Nyomd meg az Újra gombot és engedélyezd, vagy kapcsold be a kamerát a beállításokban.",
+"join_scan_settings": "Beállítások megnyitása",
 "join_nearby_title": "Játék a közelben",
 "join_nearby_none": "Most senki sem hosztol Közös játékot ezen a hálózaton.",
 "join_nearby_host": "{name} {console} konzolja",

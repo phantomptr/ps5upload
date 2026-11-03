@@ -7068,6 +7068,8 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
 "join_scan": "Quét QR",
 "join_scan_hint": "Hướng camera vào mã QR trên màn hình của bạn bè.",
 "join_scan_failed": "Không mở được camera. Hãy dán liên kết thay thế.",
+"join_scan_denied": "PS5Upload cần máy ảnh để quét mã. Nhấn Thử lại và cho phép, hoặc bật máy ảnh trong cài đặt.",
+"join_scan_settings": "Mở cài đặt",
 "join_nearby_title": "Đang chơi gần đây",
 "join_nearby_none": "Hiện không ai trong mạng này đang tổ chức Chơi cùng nhau.",
 "join_nearby_host": "{console} của {name}",

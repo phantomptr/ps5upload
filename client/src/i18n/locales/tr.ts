@@ -7073,6 +7073,8 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
 "join_scan": "QR tara",
 "join_scan_hint": "Kamerayı arkadaşının ekranındaki QR koduna tut.",
 "join_scan_failed": "Kamera açılmadı. Bunun yerine bağlantıyı yapıştır.",
+"join_scan_denied": "PS5Upload'ın kodu taraması için kamera gerekiyor. Tekrar dene'ye basıp izin ver veya kamerayı ayarlardan aç.",
+"join_scan_settings": "Ayarları aç",
 "join_nearby_title": "Yakında oynananlar",
 "join_nearby_none": "Şu anda bu ağda Birlikte oyna açan kimse yok.",
 "join_nearby_host": "{name} adlı kişinin {console} cihazı",

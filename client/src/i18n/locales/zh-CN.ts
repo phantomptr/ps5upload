@@ -7025,6 +7025,8 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
 "join_scan": "扫描 QR 码",
 "join_scan_hint": "将相机对准好友屏幕上的 QR 码。",
 "join_scan_failed": "相机未能打开。请改为粘贴链接。",
+"join_scan_denied": "PS5Upload 需要使用相机来扫描二维码。请点“重试”并允许，或在设置中打开相机权限。",
+"join_scan_settings": "打开设置",
 "join_nearby_title": "附近正在玩",
 "join_nearby_none": "目前此网络中没有人在主持一起畅玩。",
 "join_nearby_host": "{name} 的 {console}",

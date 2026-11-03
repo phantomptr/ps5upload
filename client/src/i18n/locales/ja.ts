@@ -7085,6 +7085,8 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
 "join_scan": "QRをスキャン",
 "join_scan_hint": "フレンドの画面に表示されたQRコードにカメラを向けてください。",
 "join_scan_failed": "カメラを開けませんでした。代わりにリンクを貼り付けてください。",
+"join_scan_denied": "コードを読み取るにはカメラが必要です。「再試行」を押して許可するか、設定でカメラをオンにしてください。",
+"join_scan_settings": "設定を開く",
 "join_nearby_title": "近くでプレイ中",
 "join_nearby_none": "このネットワークで今「いっしょにプレイ」をホストしている人はいません。",
 "join_nearby_host": "{name}さんの{console}",

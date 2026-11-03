@@ -7074,6 +7074,8 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
 "join_scan": "QR scannen",
 "join_scan_hint": "Richte die Kamera auf den QR-Code auf dem Bildschirm deines Freundes.",
 "join_scan_failed": "Die Kamera ließ sich nicht öffnen. Füge stattdessen den Link ein.",
+"join_scan_denied": "PS5Upload braucht die Kamera, um den Code zu scannen. Tippe auf „Erneut versuchen“ und erlaube sie, oder schalte die Kamera in den Einstellungen ein.",
+"join_scan_settings": "Einstellungen öffnen",
 "join_nearby_title": "In der Nähe wird gespielt",
 "join_nearby_none": "Gerade hostet niemand in diesem Netzwerk „Zusammen spielen“.",
 "join_nearby_host": "{console} von {name}",

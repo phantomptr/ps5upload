@@ -7073,6 +7073,8 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
 "join_scan": "สแกน QR",
 "join_scan_hint": "หันกล้องไปที่ QR โค้ดบนหน้าจอของเพื่อน",
 "join_scan_failed": "เปิดกล้องไม่ได้ วางลิงก์แทน",
+"join_scan_denied": "PS5Upload ต้องใช้กล้องเพื่อสแกนโค้ด กดลองอีกครั้งแล้วอนุญาต หรือเปิดกล้องในการตั้งค่า",
+"join_scan_settings": "เปิดการตั้งค่า",
 "join_nearby_title": "กำลังเล่นอยู่ใกล้ๆ",
 "join_nearby_none": "ตอนนี้ไม่มีใครในเครือข่ายนี้เป็นโฮสต์เล่นด้วยกัน",
 "join_nearby_host": "{console} ของ {name}",
