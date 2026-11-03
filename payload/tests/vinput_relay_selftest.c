@@ -619,13 +619,20 @@ static void test_relay(void) {
     }
 }
 
+/* Waited for, not a fixed nap: the launch attempt runs on its own thread, and a busy CI runner
+ * took longer than 200 ms (the checks below failed there, never locally). */
+static int caps_needs_loader(void) {
+    vinput_caps_json(g_out, sizeof g_out);
+    return has("\"companion\":\"unavailable\"") && has("\"reason\":\"vinput_needs_loader\"") &&
+           has("\"mouse\":false");
+}
+static int second_launch(void) { return launches() == 2; }
+
 static void test_relay_no_loader(void) {
     relay_setup(1);
     session("{\"op\":\"open\",\"id\":7,\"mouse\":true,\"keyboard\":true}");
     CHECK(has("vinput_starting"));
-    nap(200);
-    CHECK(vinput_caps_json(g_out, sizeof g_out) > 0);
-    CHECK(has("\"companion\":\"unavailable\"") && has("\"reason\":\"vinput_needs_loader\"") && has("\"mouse\":false"));
+    CHECK(wait_for(caps_needs_loader, 3000));
     session("{\"op\":\"open\",\"id\":7,\"mouse\":true,\"keyboard\":true}");
     CHECK(has("\"err\":\"vinput_needs_loader\""));
     CHECK(launches() == 1);
@@ -633,8 +640,7 @@ static void test_relay_no_loader(void) {
     nap(350);
     session("{\"op\":\"open\",\"id\":7,\"mouse\":true,\"keyboard\":true}");
     CHECK(has("vinput_starting"));
-    nap(200);
-    CHECK(launches() == 2);
+    CHECK(wait_for(second_launch, 3000));
 }
 
 /* A companion that never gets through Init (mode 2: the loader took it, nothing answers; on an

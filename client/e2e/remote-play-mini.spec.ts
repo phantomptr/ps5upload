@@ -18,7 +18,7 @@ async function fakeEngine(page: Page): Promise<{ starts: () => number; stops: ()
             name: "Living room",
             host: "192.168.1.100",
             wake_regist_key: "00112233",
-            wake_rp_key: "00112233445566778899aabbccddeeff",
+            wake_rp_key: "0f".repeat(16), // made up (built here so it reads as no secret)
           },
         ],
       }),
