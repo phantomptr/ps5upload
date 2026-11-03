@@ -107,6 +107,7 @@ import {
 } from "../../lib/uploadQueueItem";
 import { validateBatch } from "../../lib/uploadBatch";
 import { archiveDefault } from "../../lib/archiveDefault";
+import { archiveKindOf } from "../../state/rarPackages";
 import { scanChildren } from "../../lib/folderScan";
 import {
   useUploadBatch,
@@ -265,8 +266,17 @@ export default function UploadScreen({
     path: string;
     mode: ArchiveMode;
   } | null>(null);
+  // A part of a multi-part set (`Game.part2.zip`) unpacks: one part's listing need not show
+  // the game, and the parts only make sense together.
+  const archiveIsPart =
+    source?.kind === "archive" &&
+    !!parseArchivePart(source.path.split(/[\\/]/).pop() ?? "");
   const archiveSuggestion =
-    source?.kind === "archive" ? archiveDefault(source.zipInfo) : null;
+    source?.kind !== "archive"
+      ? null
+      : archiveIsPart
+        ? "unpack"
+        : archiveDefault(source.zipInfo);
   const archiveExtractMode: ArchiveMode | null =
     source?.kind !== "archive"
       ? null
@@ -512,6 +522,8 @@ export default function UploadScreen({
    */
   const handleQueueAllParts = (paths: string[]) => {
     if (!host?.trim() || paths.length === 0) return;
+    // Nothing chosen yet: never unpack (or send) the set without the user's say.
+    if (source?.kind === "archive" && !archiveExtractMode) return;
     const addr = consoleAddr(host);
     for (const partPath of paths) {
       // Sent as they are, the parts are plain files, each under its own name.
@@ -1532,7 +1544,7 @@ function Step2Options(props: {
                     variant="secondary"
                     size="sm"
                     className="mt-2"
-                    disabled={inFlight || queueRunning}
+                    disabled={inFlight || queueRunning || archiveUndecided}
                     onClick={() => onQueueAllParts(partSet.paths)}
                   >
                     {tr(
@@ -1683,6 +1695,14 @@ function Step2Options(props: {
           mode={archiveExtractMode}
           detecting={detecting}
           canUnpack={!detectError}
+          // A rar volume (`Game.part1.rar`) is only part of the archive: sent as it is, the
+          // other volumes would stay behind.
+          canSendAsIs={
+            !(
+              archiveKindOf(source.path) === "rar" &&
+              !!parseArchivePart(source.path.split(/[\\/]/).pop() ?? "")
+            )
+          }
           onChange={onSetArchiveExtractMode}
           destinationVolume={destinationVolume}
           destinationSubpath={destinationSubpath}
@@ -1969,6 +1989,7 @@ function Step2Options(props: {
           />
         </div>
       )}
+      {!archiveUndecided && (
       <MirrorToRosterButton
         sourceKind={asIs ? "file" : source.kind}
         srcPath={source.path}
@@ -1977,6 +1998,7 @@ function Step2Options(props: {
         destinationSubpath={destinationSubpath}
         excludes={excludes.filter((e) => e.enabled).map((e) => e.pattern)}
       />
+      )}
     </>
   );
 }
@@ -2025,8 +2047,11 @@ function MirrorToRosterButton({
         startTransferDir,
         startTransferFile,
         startTransferZip,
+        startTransfer7z,
+        startTransferRar,
         waitForJob,
       } = await import("../../api/ps5");
+      const kind = archiveKindOf(srcPath);
       // Same path rule as the one-shot upload, so a mirror lands exactly
       // where the primary PS5 got it — including the archive subfolder /
       // flat-extract choice.
@@ -2050,7 +2075,11 @@ function MirrorToRosterButton({
             sourceKind === "file"
               ? await startTransferFile(srcPath, dest, addr)
               : sourceKind === "archive"
-                ? await startTransferZip(srcPath, dest, addr, null, excludes)
+                ? kind === "7z"
+                  ? await startTransfer7z(srcPath, dest, addr, null, excludes)
+                  : kind === "rar"
+                    ? await startTransferRar(srcPath, dest, addr, null, null, excludes)
+                    : await startTransferZip(srcPath, dest, addr, null, excludes)
                 : await startTransferDir(srcPath, dest, addr, null, excludes);
           await waitForJob(jobId);
           pushNotification("info", `Mirrored to ${p.name}`, {
@@ -3467,6 +3496,7 @@ function ArchiveExtractModeCard({
   mode,
   detecting = false,
   canUnpack = true,
+  canSendAsIs = true,
   onChange,
   destinationVolume,
   destinationSubpath,
@@ -3477,6 +3507,8 @@ function ArchiveExtractModeCard({
   detecting?: boolean;
   /** False when the archive couldn't be read: it can only be sent as it is. */
   canUnpack?: boolean;
+  /** False for a volume of a multi-volume rar: alone it is not the archive. */
+  canSendAsIs?: boolean;
   onChange: (m: ArchiveMode) => void;
   destinationVolume: string | null;
   destinationSubpath: string;
@@ -3580,7 +3612,8 @@ function ArchiveExtractModeCard({
       <div className="flex flex-col gap-2">
         {options.map((opt) => {
           const selected = mode === opt.value;
-          const disabled = !canUnpack && opt.value !== "as-is";
+          const disabled =
+            (!canUnpack && opt.value !== "as-is") || (!canSendAsIs && opt.value === "as-is");
           return (
             <button
               key={opt.value}

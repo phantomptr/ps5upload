@@ -4,8 +4,9 @@
  *  machine and has no native shell: it cannot keep a computer awake, has no local
  *  settings file, no OS notifications, and its rest-mode reconnect loop never runs
  *  (AppShell returns early there). Pointing it at another engine URL would cut the
- *  page off from the engine that served it. The desktop and phone apps run their own
- *  engine on loopback and can use a self-hosted one (a NAS, Docker) instead. */
+ *  page off from the engine that served it. The phone apps link their engine in-process: their
+ *  native commands always reach it (engine_mobile.rs) and Android allows plain http to loopback
+ *  only, so a self-hosted engine there needs more than this field (not yet). */
 export interface SettingsPlatform {
   /** The desktop or Android shell (isTauriEnv). */
   tauri: boolean;
@@ -25,7 +26,7 @@ export interface SettingsVisibility {
 
 export function settingsVisibility(p: SettingsPlatform): SettingsVisibility {
   return {
-    engineUrl: p.tauri,
+    engineUrl: p.tauri && !p.mobile,
     // The browser build keeps the screen on (a page cannot hold the computer awake).
     keepDeviceAwake: true,
     settingsFile: p.tauri,

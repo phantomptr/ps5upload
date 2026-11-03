@@ -99,11 +99,9 @@ What's new in ps5upload, written for humans.
   as before, anything else (payloads, a jailbreak update, saves) is sent as it is, and when it
   can't tell, nothing is picked and Upload waits for your choice. With several sources, each
   archive in the list has its own Unpack / Send as it is choice. (For #645.)
-- **The phone apps can use your self-hosted engine.** Settings › Engine URL is now in the Android
-  and iPhone apps too: point it at an engine on a NAS or in Docker and the app works through
-  that one (files are then picked from that computer). Leave it as it is to use the engine built
-  into the app. On a computer, a self-hosted engine chosen in Settings is no longer replaced by
-  the app's own engine when it starts.
+- **A self-hosted engine chosen in Settings stays chosen.** On a computer pointed at an engine on
+  a NAS or in Docker (Settings › Engine URL), the app's own engine starting up could take some of
+  the app back to itself. It no longer does.
 
 
 ## 10.7.6

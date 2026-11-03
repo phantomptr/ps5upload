@@ -37,9 +37,9 @@ describe("settingsVisibility", () => {
     expect(Object.values(settingsVisibility({ tauri: true, mobile: false }))).not.toContain(false);
   });
 
-  it("shows the engine URL on the phone apps too (a self-hosted engine)", () => {
+  it("hides the engine URL on the phone apps, whose engine is built in", () => {
     const v = settingsVisibility({ tauri: true, mobile: true });
-    expect(v.engineUrl).toBe(true);
+    expect(v.engineUrl).toBe(false);
     expect(v.keepDeviceAwake).toBe(true);
     expect(v.appUpdates).toBe(true);
   });
@@ -68,9 +68,9 @@ describe("Settings screen per platform", () => {
     expect(html).not.toContain("pull the new Docker image");
   });
 
-  it("Android has the engine URL, for a self-hosted engine", () => {
+  it("Android has no engine URL", () => {
     const html = render({ tauri: true, mobile: true });
-    expect(html).toContain("Engine URL");
+    expect(html).not.toContain("Engine URL");
     expect(html).toContain("Keep screen on");
   });
 
