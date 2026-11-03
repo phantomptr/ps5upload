@@ -29,7 +29,21 @@
  *
  * An XML patch whose pattern is not found while part of its module could not be read waits (the
  * code may not be loaded yet), but only for CHEATS_SESSION_SCAN_WAITS tries or
- * CHEATS_SESSION_SCAN_WAIT_MS: then it fails as not in the game's code. */
+ * CHEATS_SESSION_SCAN_WAIT_MS: then it fails as not in the game's code.
+ *
+ * Start-time patches (#627 follow-up). Some games read a setting once in their first seconds (Red
+ * Dead Redemption 2 reads its frame-rate mode once), so a patch written 3-9 s after launch reads
+ * back as applied and does nothing. When the watcher sees a game start (its exec, or a look that
+ * found no game just before), cheats_session_launch() opens a start-up window of
+ * CHEATS_SESSION_FAST_MS: while any cheat still waits for the game's code, a fast pass
+ * (cheats_session_fast_pass) tries only the waiting ones every CHEATS_SESSION_FAST_EVERY_MS,
+ * without listing the cheat files again. Full passes (list, verify, self-heal) keep their
+ * CHEATS_SESSION_FULL_EVERY_MS cadence; cheats_sched_next() says which pass is due.
+ *
+ * Each cheat's first automatic apply records how long after the launch it landed (and when its
+ * code was first ready). Later than CHEATS_SESSION_LATE_MS, or with the launch not seen (the helper
+ * or the engine started mid-game), it is marked late: a start-time patch may have come too late
+ * and the game has to be restarted with it on. */
 
 #include <stddef.h>
 #include <stdint.h>
@@ -47,6 +61,11 @@
 #define CHEATS_SESSION_SCAN_WAITS     20      /* pattern not found in a partly readable module */
 #define CHEATS_SESSION_SCAN_WAIT_MS   60000u  /* ... waits at most this many tries / this long */
 #define CHEATS_SESSION_SCAN_FAILED    "pattern not found in the game's code"
+#define CHEATS_SESSION_FAST_MS        60000u  /* after a launch: fast passes at most this long */
+#define CHEATS_SESSION_FAST_EVERY_MS  5u      /* ... this far apart while a cheat waits */
+#define CHEATS_SESSION_FULL_EVERY_MS  3000u   /* list, verify, put back: this often */
+#define CHEATS_SESSION_IDLE_EVERY_MS  500u    /* engine on, no game: look for one this often */
+#define CHEATS_SESSION_LATE_MS        3000u   /* applied later than this after launch: late */
 
 enum {
     CHEATS_ST_NONE = 0,
@@ -95,6 +114,11 @@ typedef struct {
     int      seen;
     int      scan_waits;                   /* CHEATS_OUT_WAITING_SCAN results */
     uint64_t scan_since;                   /* the first of them */
+    int      attempts;                     /* apply attempts, fast passes included */
+    int      timed;                        /* its first automatic apply was timed: */
+    int64_t  after_ms;                     /*   ms from launch to applied, -1 launch not seen */
+    int64_t  ready_ms;                     /*   ms from launch to the attempt that applied it */
+    int      late;                         /*   may have come too late for a start-time patch */
 } cheats_entry_t;
 
 typedef struct cheats_session cheats_session_t;
@@ -120,6 +144,8 @@ typedef struct {
     /* 1 while the crash guard watches a window for `title` running as `pid` (its marker is
      * written). NULL: never. */
     int (*guard_watching)(void *ctx, const char *title, int pid);
+    /* The clock now, for the timing of an apply (an apply can take a while). NULL: the pass's. */
+    uint64_t (*now_ms)(void *ctx);
 } cheats_session_ops_t;
 
 struct cheats_session {
@@ -137,6 +163,15 @@ struct cheats_session {
     int      announce;        /* first applies not yet announced */
     uint64_t announce_since;
     const cheats_session_ops_t *ops;
+    /* The launch (cheats_session_launch). */
+    uint64_t launch_ms;       /* when the game started (0: not seen) */
+    int      launch_seen;
+    uint64_t fast_until;      /* the start-up window ends (0: none) */
+    int      listed;          /* a full pass has looked at its cheats (listed, or paused) */
+    int      in_fast;         /* the pass running now is a fast pass */
+    int      fast_passes;
+    int      fast_over;       /* the window's end was logged */
+    int      wrote;           /* the attempt running now wrote (cheats_session_before_write) */
 };
 
 /* Forget everything (no game, a new game, the engine off). */
@@ -151,6 +186,44 @@ void cheats_session_begin(cheats_session_t *s, int pid, const char *title);
  * Returns how many cheats were applied for the first time this pass. */
 int cheats_session_pass(cheats_session_t *s, int pid, const char *title, uint64_t now_ms,
                         int force, const cheats_session_ops_t *ops);
+
+/* The watcher saw `pid` start running `title` (its exec, or a look that found it right after one
+ * that found no game): a new session whose launch was at `at_ms`, with `seen` 0 when the start was
+ * not seen (`at_ms` is then ignored). `fast` opens the start-up window (cheats_session_fast). A
+ * second exec of the same process starts over too: its code is new. */
+void cheats_session_launch(cheats_session_t *s, int pid, const char *title, uint64_t at_ms,
+                           int seen, int fast, uint64_t now_ms);
+
+/* A fast pass: only the cheats still waiting for the game's code (not a pattern scan, which is
+ * costly and bounded by tries) are tried, nothing is listed or re-read. Call it when
+ * cheats_sched_next() says so. Returns how many were applied for the first time. */
+int cheats_session_fast_pass(cheats_session_t *s, uint64_t now_ms,
+                             const cheats_session_ops_t *ops);
+
+/* 1 while the start-up window is open and a cheat still waits (or nothing is listed yet). */
+int cheats_session_fast(const cheats_session_t *s, uint64_t now_ms);
+
+/* The watcher's clock: when it last ran a full and a fast pass (0: never). */
+typedef struct {
+    uint64_t last_full_ms;
+    uint64_t last_fast_ms;
+} cheats_sched_t;
+
+enum {
+    CHEATS_NEXT_WAIT = 0, /* nothing due: wait *wait_ms (an exec event may come sooner) */
+    CHEATS_NEXT_FAST,     /* a fast pass */
+    CHEATS_NEXT_FULL,     /* a full pass (and, with no game, a look for one) */
+};
+
+/* Which pass is due now. Full: every CHEATS_SESSION_FULL_EVERY_MS, or CHEATS_SESSION_IDLE_EVERY_MS
+ * while the engine is on and no game is known. Fast: CHEATS_SESSION_FAST_EVERY_MS after the last
+ * fast pass ended, while cheats_session_fast(). */
+int cheats_sched_next(const cheats_sched_t *k, const cheats_session_t *s, int engine_on,
+                      uint64_t now_ms, uint64_t *wait_ms);
+
+/* The timing of the mod at flat index `flat`'s first automatic apply: 1 with *after_ms (-1 when
+ * the launch was not seen) and *late set, 0 when it was not timed (not applied, by hand). */
+int cheats_session_timing(const cheats_session_t *s, int flat, int64_t *after_ms, int *late);
 
 /* Called by ops->apply right before it writes. Writes the crash-guard marker when this is a
  * cheat's first automatic apply and no guard window is running, once per pass. */

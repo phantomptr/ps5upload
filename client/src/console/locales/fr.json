@@ -2,6 +2,8 @@
   "cw_actions": "Actions",
   "cw_cheats_applied_changed": "Le jeu a modifié ceci ; laissé tel quel",
   "cw_cheats_applied_failed": "Impossible d'appliquer : {reason}",
+  "cw_cheats_applied_late": "Appliqué {seconds} s après le lancement du jeu — s'il n'a aucun effet, laissez-le activé et relancez le jeu.",
+  "cw_cheats_applied_late_unseen": "Appliqué alors que le jeu était déjà lancé — s'il n'a aucun effet, laissez-le activé et relancez le jeu.",
   "cw_cheats_applied_ok": "Appliqué ✓",
   "cw_cheats_applied_waiting": "En attente du chargement du jeu…",
   "cw_cheats_apply": "Appliquer",

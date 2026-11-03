@@ -73,6 +73,16 @@ pub struct CheatMod {
     /// Why, for "waiting", "failed" and "changed".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub applied_reason: Option<String>,
+    /// For "applied" by the helper on its own: how many ms after the game started it landed.
+    /// Absent when the helper did not see the game start, when it was switched on by hand, and
+    /// from helpers before 10.7.6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_after_ms: Option<u64>,
+    /// It landed late (more than ~3 s after the game started, or the start was not seen): a patch
+    /// the game only reads at start may have come too late, and the game has to be restarted with
+    /// it on (#627).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub applied_late: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1173,6 +1183,33 @@ mod tests {
         assert!(out.contains(r#""applied":"failed","applied_reason":"this patch"#));
         assert!(out.contains(r#""applied":"waiting"}"#));
         assert_eq!(out.matches("applied\"").count(), 2);
+    }
+
+    #[test]
+    fn cheats_get_passes_on_when_it_applied() {
+        let json = r#"{"title_id":"CUSA03041","mods":[
+            {"index":0,"name":"Unlock FPS (01.32)","desc":"","type":"checkbox","on":true,
+             "format":"xml","applied":"applied","applied_after_ms":180},
+            {"index":1,"name":"B","desc":"","type":"checkbox","on":true,"applied":"applied",
+             "applied_after_ms":6400,"applied_late":true},
+            {"index":2,"name":"C","desc":"","type":"checkbox","on":true,"applied":"applied",
+             "applied_late":true},
+            {"index":3,"name":"D","desc":"","type":"checkbox","on":true,"applied":"applied"}
+        ]}"#;
+        let resp: CheatsGetResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.mods[0].applied_after_ms, Some(180));
+        assert!(!resp.mods[0].applied_late);
+        assert_eq!(resp.mods[1].applied_after_ms, Some(6400));
+        assert!(resp.mods[1].applied_late);
+        assert_eq!(resp.mods[2].applied_after_ms, None);
+        assert!(resp.mods[2].applied_late);
+        assert_eq!(resp.mods[3].applied_after_ms, None);
+        assert!(!resp.mods[3].applied_late);
+        let out = serde_json::to_string(&resp.mods).unwrap();
+        assert!(out.contains(r#""applied":"applied","applied_after_ms":180}"#));
+        assert!(out.contains(r#""applied_after_ms":6400,"applied_late":true}"#));
+        assert_eq!(out.matches("applied_late").count(), 2);
+        assert_eq!(out.matches("applied_after_ms").count(), 2);
     }
 
     #[test]

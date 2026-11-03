@@ -2336,6 +2336,15 @@ Cheats); it shows what happened in the running game, not only the saved switch. 
   tried again until the game restarts, or you switch it Off and On.
 - **The game changed this; not touched**: the game wrote something else there, so the helper leaves
   it alone.
+- **Applied N s after the game started — if it has no effect, restart the game with it on** (from
+  10.7.6): it is applied, but late. Some patches change a setting the game reads only once, in its
+  first seconds: Red Dead Redemption 2's "Unlock FPS" is one. Written after that read, the patch
+  reads back as applied and does nothing, and switching it Off and On can't help, because the game
+  doesn't read the setting again. Leave it On and restart the game: the helper hears the game start
+  and writes saved cheats as soon as the game's code is loaded, usually well under a second in.
+  Before 10.7.6 it looked only every 3 seconds, so such a patch landed 3 to 9 seconds in and worked
+  only by luck. The line also says this when the helper didn't see the game start (it was sent, or
+  the cheat engine turned on, while the game was already running).
 
 While the game runs, the helper also re-reads what it applied. If the game puts its original code
 back (a loading screen, coming back from rest mode), the cheat is applied again; if that keeps

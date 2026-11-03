@@ -9,9 +9,12 @@
  *   - Memory reads/writes through the game's physical pages (page-table
  *     walk + kernel direct map), applied all-or-nothing per cheat. See
  *     "Game memory access" below for why not ptrace + kernel_mprotect.
- *   - A background watcher thread polls every 3s and applies "patches"
- *     (always-on) + the switched-on cheats to the running game once it is
- *     ready for them, then keeps them applied (cheats_session.h, #627).
+ *   - A background watcher thread applies "patches" (always-on) + the
+ *     switched-on cheats to the running game once it is ready for them,
+ *     then keeps them applied (cheats_session.h, #627). It hears each game
+ *     launch (a kqueue on SceSysCore) and tries every few ms in the game's
+ *     first minute, so start-time patches land before the game reads them;
+ *     otherwise it runs every 3 s ("Game launches" below).
  *   - Toggle state persisted to sidecar JSON files so it survives payload
  *     redeploy.
  *
@@ -42,7 +45,9 @@
 #include <strings.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/event.h>
 #include <sys/sysctl.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "notif.h"
@@ -1315,6 +1320,10 @@ static char *state_read(const char *title_id) {
 static pthread_mutex_t g_offs_lock = PTHREAD_MUTEX_INITIALIZER;
 static cheats_offs_t g_offs;
 
+/* Bumped whenever a saved switch (or an unsaved off) changes, so the watcher's start-up window
+ * need not read the sidecar on every try (still_on_pass). */
+static atomic_uint g_switch_gen;
+
 static int offs_has(const char *title_id, int flat) {
     pthread_mutex_lock(&g_offs_lock);
     int r = cheats_offs_has(&g_offs, title_id, flat);
@@ -1364,7 +1373,9 @@ static int state_set(const char *title_id, int flat, int value) {
         unlink(tmp);
         return -1;
     }
-    return rename(tmp, path) == 0 ? 0 : -1;
+    int rc = rename(tmp, path) == 0 ? 0 : -1;
+    atomic_fetch_add(&g_switch_gen, 1);
+    return rc;
 }
 
 /* ── Core: apply a single mod ────────────────────────────────────── */
@@ -1480,6 +1491,26 @@ static void game_versions(const char *title, game_ver_t *v) {
     json_str(buf, "contentVersion", v->content, sizeof v->content);
 }
 
+/* game_versions for a running game process: its version does not change while it runs, and the
+ * watcher's start-up window would otherwise query appinfo.db every few ms. Under g_apply_lock. */
+static struct {
+    pid_t      pid;
+    char       title[MAX_TITLE_ID];
+    game_ver_t v;
+} g_gv_cache;
+
+static void game_versions_of(pid_t pid, const char *title, game_ver_t *v) {
+    if (pid > 0 && g_gv_cache.pid == pid && strcmp(g_gv_cache.title, title) == 0) {
+        *v = g_gv_cache.v;
+        return;
+    }
+    game_versions(title, v);
+    if (pid <= 0 || (!v->content[0] && !v->app[0])) return; /* not read: ask again next time */
+    g_gv_cache.pid = pid;
+    snprintf(g_gv_cache.title, sizeof g_gv_cache.title, "%s", title);
+    g_gv_cache.v = *v;
+}
+
 /* What an applied entry wrote, so it can be put back: an entry's pattern lines cannot be found
  * again once their bytes are patched. Kept per game session (pid); under g_apply_lock. Turning an
  * entry off that is not here means it was never applied to this session, so there is nothing to
@@ -1520,6 +1551,12 @@ static xml_applied_t *xml_applied_find(pid_t pid, const char *path, int entry) {
         if (a->rec && a->entry == entry && strcmp(a->path, path) == 0) return a;
     }
     return NULL;
+}
+
+/* A process that exec'd again: what was applied to its old code is gone with it. */
+static void xml_applied_forget(pid_t pid) {
+    for (int i = 0; i < XML_APPLIED_MAX; i++)
+        if (g_xml_applied[i].rec && g_xml_applied[i].pid == pid) xml_applied_free(&g_xml_applied[i]);
 }
 
 static int xml_applied_add(pid_t pid, const char *path, int entry, const cheat_loc_t *locs, int n,
@@ -1682,11 +1719,44 @@ static char *xml_load_text(const char *path) {
  * only because the game is not ready yet (code or module not loaded, a page not readable), so
  * it is tried again rather than given up; before_write runs right before the first write (the
  * crash-guard marker). A switch flipped by hand passes NULL and behaves as before. */
+typedef struct xml_prep xml_prep_t;
+
 typedef struct {
     cheats_session_t *s;
     int               wait;
     int               scan; /* waiting: a pattern not in the readable part of its module */
+    const char       *title; /* the game the watcher is applying to (no running-game lookup) */
+    xml_prep_t       *prep;  /* an XML entry's parsed file, kept by the watcher (xml_prep_t) */
 } apply_hook_t;
+
+/* An XML patch entry as its file has it: parsed once per watcher session instead of on every try
+ * (the start-up window tries every few ms). Freed with the session's cheat list. */
+struct xml_prep {
+    int        state;  /* 0 not loaded, 1 loaded, -1 the file or entry cannot be read */
+    gp_meta_t  m;
+    gp_line_t *lines;
+    int        nl;     /* <= 0: lines_err says why */
+    char       lines_err[160];
+};
+
+static void xml_prep_free(xml_prep_t *p) {
+    if (!p) return;
+    free(p->lines);
+    memset(p, 0, sizeof *p);
+}
+
+static void xml_prep_load(const cheat_mod_t *mod, xml_prep_t *p) {
+    memset(p, 0, sizeof *p);
+    char *x = xml_load_text(mod->xml_path);
+    if (!x || gp_meta(x, mod->xml_entry, &p->m) != 0) {
+        free(x);
+        p->state = -1;
+        return;
+    }
+    p->nl = gp_lines(x, mod->xml_entry, &p->lines, p->lines_err, sizeof p->lines_err);
+    free(x);
+    p->state = 1;
+}
 
 static void hook_wait(apply_hook_t *hk) {
     if (hk) hk->wait = 1;
@@ -1733,6 +1803,16 @@ static int xml_record_current(pid_t pid, const xml_applied_t *a) {
     return 1;
 }
 
+/* 1 when every byte is zero: a code page read before the game has loaded it. */
+static int all_zero(const uint8_t *b, int len) {
+    for (int i = 0; i < len; i++)
+        if (b[i]) return 0;
+    return 1;
+}
+
+static int xml_apply_on(pid_t pid, const char *title, cheat_mod_t *mod, const xml_prep_t *p,
+                        apply_hook_t *hk, char *err, size_t err_cap);
+
 /* Turn an XML game patch entry on or off: every line or none (cheat_plan_apply), only for the
  * game version and executable it names, only inside its module. Call with g_apply_lock held. */
 static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const cheat_range_t *keep,
@@ -1758,23 +1838,49 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
     }
 
     char title[MAX_TITLE_ID] = "";
-    intptr_t b0 = 0;
-    if (get_running_game_cached(title, sizeof title, &b0) != pid) {
-        if (err) snprintf(err, err_cap, "no game is currently running");
-        hook_wait(hk); /* gone, or not seen yet: the next pass knows */
-        return -1;
+    if (hk && hk->title && hk->title[0]) {
+        /* The watcher knows the game it is applying to (a launch is seen before the 2 s
+         * running-game cache would list it). */
+        snprintf(title, sizeof title, "%s", hk->title);
+    } else {
+        intptr_t b0 = 0;
+        if (get_running_game_cached(title, sizeof title, &b0) != pid) {
+            if (err) snprintf(err, err_cap, "no game is currently running");
+            hook_wait(hk); /* gone, or not seen yet: the next pass knows */
+            return -1;
+        }
     }
-    char *x = xml_load_text(mod->xml_path);
-    gp_meta_t m;
-    if (!x || gp_meta(x, mod->xml_entry, &m) != 0) {
-        free(x);
+    xml_prep_t *own = NULL;
+    const xml_prep_t *pp = hk ? hk->prep : NULL;
+    if (pp && !pp->state) xml_prep_load(mod, hk->prep);
+    if (!pp) {
+        own = (xml_prep_t *)malloc(sizeof *own);
+        if (!own) {
+            if (err) snprintf(err, err_cap, "out of memory");
+            return -1;
+        }
+        xml_prep_load(mod, own);
+        pp = own;
+    }
+    int rc = xml_apply_on(pid, title, mod, pp, hk, err, err_cap);
+    xml_prep_free(own);
+    free(own);
+    return rc;
+}
+
+/* Turning an XML entry on (xml_apply_locked): from its parsed file `p`. */
+static int xml_apply_on(pid_t pid, const char *title, cheat_mod_t *mod, const xml_prep_t *p,
+                        apply_hook_t *hk, char *err, size_t err_cap) {
+    game_mem_ctx_t ctx = { .pid = pid };
+    cheat_mem_ops_t ops = { .ctx = &ctx, .write = game_mem_write, .alive = game_alive };
+    if (p->state != 1) {
         if (err) snprintf(err, err_cap, "the patch file cannot be read");
         return -1;
     }
+    const gp_meta_t m = p->m;
     game_ver_t gv;
-    game_versions(title, &gv);
+    game_versions_of(pid, title, &gv);
     if (!gp_version_ok(m.app_ver, gv.content, gv.app)) {
-        free(x);
         if (err) {
             if (gv.content[0] || gv.app[0])
                 snprintf(err, err_cap, "this patch is for game version %s; the game is %s",
@@ -1789,29 +1895,28 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
     uint64_t mbase = 0, msize = 0;
     (void)module_info(pid, 0, &mbase, &msize, exe, sizeof exe);
     if (!gp_elf_is_module(m.app_elf) && !gp_elf_ok(m.app_elf, exe)) {
-        free(x);
         const char *b = strrchr(exe, '/');
         if (err) snprintf(err, err_cap, "this patch is for %s; the game runs %s", m.app_elf, b ? b + 1 : exe);
         return -1;
     }
     uint32_t handle = 0;
     if (gp_elf_is_module(m.app_elf) && (locked_dynlib_handle(pid, m.app_elf, &handle) != 0 || !handle)) {
-        free(x);
         if (err) snprintf(err, err_cap, "%s is not loaded by the game", m.app_elf);
         hook_wait(hk);
         return -1;
     }
     if (module_info(pid, handle, &mbase, &msize, NULL, 0) != 0 || !mbase || !msize) {
-        free(x);
         if (err) snprintf(err, err_cap, "the game's code is not loaded yet; try again");
         hook_wait(hk);
         return -1;
     }
 
-    gp_line_t *lines = NULL;
-    int nl = gp_lines(x, mod->xml_entry, &lines, err, err_cap);
-    free(x);
-    if (nl <= 0) return -1;
+    const gp_line_t *lines = p->lines;
+    int nl = p->nl;
+    if (nl <= 0) {
+        if (err) snprintf(err, err_cap, "%s", p->lines_err[0] ? p->lines_err : "patch has no lines");
+        return -1;
+    }
     int64_t *site = (int64_t *)malloc((size_t)nl * sizeof(int64_t));
     int64_t *tgt = (int64_t *)malloc((size_t)nl * sizeof(int64_t));
     cheat_loc_t *locs = NULL;
@@ -1877,7 +1982,6 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
     free(cave_b);
     free(site);
     free(tgt);
-    free(lines);
 
     for (int i = 0; i < n && rc == 0; i++) {
         cheat_loc_t *l = &locs[i];
@@ -1906,6 +2010,21 @@ static int xml_apply_locked(pid_t pid, cheat_mod_t *mod, int turn_on, const chea
             break;
         }
         memcpy(l->off, l->cur, (size_t)l->len); /* the original is whatever is there now */
+    }
+    if (rc == 0 && hk && n > 0) {
+        /* Every location reads zero where the patch writes code: a page the game has not loaded
+         * yet. Written now, the load would overwrite it (an XML patch names no original bytes to
+         * check, so this is the only sign). The watcher tries again. */
+        int zero = 1, value = 0;
+        for (int i = 0; i < n && zero; i++) {
+            if (!all_zero(locs[i].cur, locs[i].len)) zero = 0;
+            if (!all_zero(locs[i].on, locs[i].len)) value = 1;
+        }
+        if (zero && value) {
+            if (err) snprintf(err, err_cap, "the game's code is not loaded yet; try again");
+            hook_wait(hk);
+            rc = -1;
+        }
     }
     if (rc == 0 && n == 0) {
         if (err) snprintf(err, err_cap, "patch has no lines");
@@ -1961,13 +2080,6 @@ static int xml_reapply_locked(pid_t pid, cheat_mod_t *mod, apply_hook_t *hk, cha
     return rc;
 }
 
-/* 1 when every byte is zero: a code page read before the game has loaded it. */
-static int all_zero(const uint8_t *b, int len) {
-    for (int i = 0; i < len; i++)
-        if (b[i]) return 0;
-    return 1;
-}
-
 /* Apply or remove one cheat, all of its locations or none of them (cheat_plan_apply does the
  * checking, ordering and rollback). `keep` lists the locations of the title's other enabled
  * cheats, so turning this one off leaves a code cave they share alone.
@@ -1995,6 +2107,23 @@ static int apply_mod_locked(pid_t pid, intptr_t base, cheat_mod_t *mod, int turn
     int n = resolve_mod_locs(pid, base, mod, locs, err, err_cap);
     int rc = n > 0 ? 0 : -1;
     if (n == -2) hook_wait(hk);
+
+    /* The watcher: is the game's code there yet? Only reads, before the module-list walk each
+     * location's write check costs (phys_write_allowed): the start-up window asks every few ms. */
+    for (int i = 0; i < n && rc == 0 && hk && write_on; i++) {
+        cheat_loc_t *l = &locs[i];
+        if (game_mem_read(pid, l->addr, l->cur, (size_t)l->len) != 0) {
+            if (err) snprintf(err, err_cap, "location %d (0x%lx) cannot be read",
+                              i + 1, (unsigned long)l->addr);
+            hook_wait(hk);
+            rc = -1;
+        } else if (cheat_loc_state(l) == CHEAT_LOC_MISMATCH && all_zero(l->cur, l->len) &&
+                   !all_zero(l->off, l->len)) {
+            if (err) snprintf(err, err_cap, "the game's code is not loaded yet; try again");
+            hook_wait(hk);
+            rc = -1;
+        }
+    }
 
     for (int i = 0; i < n && rc == 0; i++) {
         cheat_loc_t *l = &locs[i];
@@ -2119,6 +2248,9 @@ typedef struct {
     uint64_t     key;
     int          flat;      /* index in the mod list; -1 for an always-on patch */
     int          from_file; /* switched on by the cheat file itself (_sonic_enabled) */
+    xml_prep_t  *prep;      /* an XML entry, parsed at its first try */
+    unsigned     on_gen;    /* still_on() was read at this g_switch_gen ... */
+    int          on_known;  /* ... (1) and said on */
 } sess_slot_t;
 
 /* The running game's switched-on cheats, loaded again only when a cheat file or the saved
@@ -2136,6 +2268,7 @@ typedef struct {
     intptr_t base;
     char     title[MAX_TITLE_ID];
     int      force;
+    int      fast;  /* a start-up window pass: the switches are read again only when they change */
 } pass_ctx_t;
 
 static void sig_mix(uint64_t *h, const void *p, size_t n) {
@@ -2174,7 +2307,11 @@ static uint64_t files_sig(const char *title) {
 }
 
 static void slots_free(void) {
-    for (int i = 0; i < g_nslots; i++) free(g_slots[i].mod);
+    for (int i = 0; i < g_nslots; i++) {
+        free(g_slots[i].mod);
+        xml_prep_free(g_slots[i].prep);
+        free(g_slots[i].prep);
+    }
     memset(g_slots, 0, sizeof g_slots);
     g_nslots = 0;
 }
@@ -2274,16 +2411,29 @@ static int still_on(const char *title, const sess_slot_t *sl) {
     return on;
 }
 
+/* still_on for the start-up window's passes: the switches are read again only after a toggle
+ * changed them (g_switch_gen); a full pass always reads them. Call with g_apply_lock held. */
+static int still_on_pass(const pass_ctx_t *c, sess_slot_t *sl) {
+    unsigned gen = atomic_load(&g_switch_gen);
+    if (c->fast && sl->on_known && sl->on_gen == gen) return 1;
+    int on = still_on(c->title, sl);
+    sl->on_known = on;
+    sl->on_gen = gen;
+    return on;
+}
+
 static int sess_apply(void *vctx, cheats_session_t *s, const cheats_item_t *it, int reapply,
                       char *why, size_t why_cap) {
     pass_ctx_t *c = (pass_ctx_t *)vctx;
     sess_slot_t *sl = slot_of(it);
     if (!sl) return CHEATS_OUT_GONE;
     cheat_mod_t *mod = sl->mod;
-    apply_hook_t hk = { .s = s, .wait = 0 };
+    apply_hook_t hk = { .s = s, .wait = 0, .title = c->title };
+    if (mod->xml_path[0] && !sl->prep) sl->prep = (xml_prep_t *)calloc(1, sizeof *sl->prep);
+    hk.prep = sl->prep; /* NULL (out of memory): parsed on each try, as a toggle does */
     int rc;
     pthread_mutex_lock(&g_apply_lock);
-    if ((!c->force && !atomic_load(&g_engine_enabled)) || !still_on(c->title, sl)) {
+    if ((!c->force && !atomic_load(&g_engine_enabled)) || !still_on_pass(c, sl)) {
         pthread_mutex_unlock(&g_apply_lock);
         return CHEATS_OUT_GONE;
     }
@@ -2394,9 +2544,12 @@ static void sess_log(void *ctx, const char *msg) {
 /* What the mod list shows: the session's statuses, copied after each pass. Switches flipped by
  * hand reach the session through the mailbox (the toggle must not wait for a pass). */
 typedef struct {
-    int  flat;
-    int  status;
-    char reason[CHEATS_SESSION_REASON_MAX];
+    int     flat;
+    int     status;
+    char    reason[CHEATS_SESSION_REASON_MAX];
+    int     timed;    /* applied automatically: how long after the game started */
+    int64_t after_ms; /* -1: the start was not seen */
+    int     late;
 } snap_ent_t;
 
 #define SESS_MAIL_MAX 64
@@ -2425,6 +2578,9 @@ static void publish_snapshot(void) {
         d->flat = e->item.flat;
         d->status = e->status;
         snprintf(d->reason, sizeof d->reason, "%s", e->reason);
+        d->after_ms = -1;
+        d->late = 0;
+        d->timed = cheats_session_timing(&g_sess, e->item.flat, &d->after_ms, &d->late);
     }
     pthread_mutex_unlock(&g_sess_lock);
 }
@@ -2447,13 +2603,21 @@ static void sess_manual(pid_t pid, uint64_t key, int flat, int on) {
             g_snap.e[i].flat = flat;
             g_snap.e[i].status = CHEATS_ST_APPLIED;
             g_snap.e[i].reason[0] = '\0';
+            g_snap.e[i].timed = 0; /* by hand: the player chose when */
         }
     }
     pthread_mutex_unlock(&g_sess_lock);
 }
 
-/* One pass for the game running now. Call with g_pass_lock held. */
-static void run_pass_locked(pid_t pid, intptr_t base, const char *title, int force) {
+static uint64_t sess_now(void *ctx) {
+    (void)ctx;
+    return mono_ms();
+}
+
+/* One pass for the game running now. Call with g_pass_lock held. `fast` is a start-up window pass
+ * (cheats_session_fast_pass): only the cheats still waiting are tried; a switch flipped by hand
+ * since the last pass makes it a full one. */
+static void run_pass_locked(pid_t pid, intptr_t base, const char *title, int force, int fast) {
     struct {
         uint64_t key;
         int      on;
@@ -2464,6 +2628,7 @@ static void run_pass_locked(pid_t pid, intptr_t base, const char *title, int for
     g_nmail = 0;
     pthread_mutex_unlock(&g_sess_lock);
 
+    if (nm) fast = 0;
     if (pid > 0) {
         cheats_session_begin(&g_sess, (int)pid, title);
         if (nm) g_slots_sig = 0; /* the saved switches changed: list them again */
@@ -2474,6 +2639,7 @@ static void run_pass_locked(pid_t pid, intptr_t base, const char *title, int for
     c.pid = pid;
     c.base = base;
     c.force = force;
+    c.fast = fast;
     snprintf(c.title, sizeof c.title, "%s", title ? title : "");
     const cheats_session_ops_t ops = {
         .ctx = &c,
@@ -2488,13 +2654,294 @@ static void run_pass_locked(pid_t pid, intptr_t base, const char *title, int for
         .notify = sess_notify,
         .log = sess_log,
         .guard_watching = sess_guard_watching,
+        .now_ms = sess_now,
     };
-    (void)cheats_session_pass(&g_sess, (int)pid, c.title, mono_ms(), force, &ops);
+    if (fast)
+        (void)cheats_session_fast_pass(&g_sess, mono_ms(), &ops);
+    else
+        (void)cheats_session_pass(&g_sess, (int)pid, c.title, mono_ms(), force, &ops);
     if (g_sess.pid <= 0) {
         slots_free();
         g_slots_sig = 0;
     }
     publish_snapshot();
+}
+
+/* ── Game launches (#627 follow-up) ──────────────────────────────────
+ *
+ * Some games read a setting once in their first seconds (Red Dead Redemption 2 reads its
+ * frame-rate mode once), so a patch for it has to be written before that code runs. The watcher
+ * used to look every 3 s through a 2 s cached game lookup, so it landed 3-9 s in: read back as
+ * applied, and no effect.
+ *
+ * Now it hears each launch. SceSysCore starts every app; a kqueue tracking it
+ * (EVFILT_PROC NOTE_FORK|NOTE_EXEC|NOTE_TRACK, as fakelib_overlay.c does) reports a game's exec
+ * the moment it happens and wakes the watcher, which opens the session's start-up window
+ * (cheats_session.h): the cheats still waiting for the game's code are tried every few ms. This is
+ * the watcher's own kqueue, not the fakelib overlay's thread: that thread runs for every launch
+ * too (fakelibs or not), but it spends up to 3 s per exec looking for a fakelib folder
+ * (resolve_paths), so a second exec of the same launch reaches it seconds late, and it keeps
+ * only the last child it saw. Without the kqueue (or for an exec it missed) a new game is still
+ * found by the look the watcher makes every 500 ms while the engine is on and no game runs. */
+
+/* A look found the game within this long of a look that found none: its start counts as seen,
+ * at the earlier look (the time from launch is then an upper bound). */
+#define LAUNCH_LOOK_MS     1500u
+/* After a launch, how long to wait for the game's own executable (dynlib handle 0, eboot.bin)
+ * before applying to whatever is loaded. */
+#define LAUNCH_EXE_WAIT_MS 5000u
+
+static int launch_watch_open(pid_t *syscore) {
+    *syscore = proc_find_pid_by_name("SceSysCore.elf");
+    if (*syscore <= 0) return -1;
+    int kq = kqueue();
+    if (kq < 0) return -1;
+    struct kevent ev;
+    EV_SET(&ev, (uintptr_t)*syscore, EVFILT_PROC, EV_ADD | EV_ENABLE | EV_CLEAR,
+           NOTE_FORK | NOTE_EXEC | NOTE_TRACK, 0, NULL);
+    if (kevent(kq, &ev, 1, NULL, 0, NULL) != 0) {
+        close(kq);
+        return -1;
+    }
+    return kq;
+}
+
+/* 1 with its title id when the process runs a game (an app that is not a system app, the same
+ * test as find_running_game). */
+static int game_title_of(pid_t pid, char *title, size_t cap) {
+    app_info_t info;
+    char tid[10];
+    memset(&info, 0, sizeof info);
+    if (sceKernelGetAppInfo(pid, &info) != 0 || info.app_id == 0 ||
+        !app_info_title_id(&info, tid, sizeof tid) || strncmp(tid, "NPXS", 4) == 0)
+        return 0;
+    snprintf(title, cap, "%s", tid);
+    return 1;
+}
+
+typedef struct {
+    pid_t    pid; /* a game exec'd (0: none) */
+    char     title[MAX_TITLE_ID];
+    uint64_t at;
+    int      exited; /* the watched game exited */
+} launch_ev_t;
+
+/* Wait up to `wait_ms` for a launch (or the watched game's exit). */
+static void launch_wait(int *kq, pid_t syscore, uint64_t wait_ms, pid_t watched, launch_ev_t *ev) {
+    memset(ev, 0, sizeof *ev);
+    struct timespec ts = { (time_t)(wait_ms / 1000u), (long)(wait_ms % 1000u) * 1000000L };
+    if (*kq < 0) {
+        nanosleep(&ts, NULL);
+        return;
+    }
+    struct kevent evs[8];
+    int n = kevent(*kq, NULL, 0, evs, 8, &ts);
+    uint64_t at = mono_ms();
+    if (n < 0) {
+        if (errno == EINTR) return;
+        fprintf(stderr, "[cheats] the launch watch failed (errno %d); looking for new games every %u ms\n",
+                errno, CHEATS_SESSION_IDLE_EVERY_MS);
+        close(*kq);
+        *kq = -1;
+        nanosleep(&ts, NULL);
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        const struct kevent *e = &evs[i];
+        if ((e->flags & EV_ERROR) || e->ident == (uintptr_t)syscore) continue;
+        pid_t pid = (pid_t)e->ident;
+        if ((e->fflags & NOTE_EXIT) || (e->flags & EV_EOF)) {
+            if (pid == watched) ev->exited = 1;
+            continue;
+        }
+        char t[MAX_TITLE_ID];
+        if (!(e->fflags & NOTE_EXEC) || !game_title_of(pid, t, sizeof t)) continue;
+        ev->pid = pid;
+        snprintf(ev->title, sizeof ev->title, "%s", t);
+        ev->at = at;
+    }
+}
+
+static int title_has_cheats(const char *title) {
+    found_file_t files[16];
+    return find_cheat_files(title, files, 16, 0) > 0 || find_cheat_files(title, files, 16, 1) > 0;
+}
+
+static void rg_cache_store(pid_t pid, const char *title, intptr_t base) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    pthread_mutex_lock(&g_rg_lock);
+    g_rg_cache.valid = 1;
+    g_rg_cache.pid = pid;
+    snprintf(g_rg_cache.title, sizeof g_rg_cache.title, "%s", pid > 0 ? title : "");
+    g_rg_cache.base = base;
+    g_rg_cache.ts = now;
+    pthread_mutex_unlock(&g_rg_lock);
+}
+
+/* The watcher's view of the session's process; under g_pass_lock. */
+static pid_t g_gate_pid;     /* its executable is loaded (or the wait for it is over) */
+static int g_gate_told;      /* "waiting for eboot.bin" was logged */
+static pid_t g_base_pid;
+static intptr_t g_base;      /* its eboot's load address (0: not yet) */
+
+/* Applies to a launch wait for the game's own executable: a game execs more than once per launch
+ * (fakelib_overlay.c), and code read before its eboot.bin is there is someone else's. */
+static int exe_gate_locked(uint64_t now) {
+    pid_t pid = g_sess.pid;
+    if (pid <= 0) return 0;
+    if (g_gate_pid == pid) return 1;
+    if (!g_sess.launch_seen) {
+        g_gate_pid = pid;
+        return 1;
+    }
+    uint64_t mb = 0, ms = 0;
+    char path[256] = "";
+    int loaded = module_info(pid, 0, &mb, &ms, path, sizeof path) == 0 && mb && ms;
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    unsigned long long in = now >= g_sess.launch_ms ? (unsigned long long)(now - g_sess.launch_ms) : 0;
+    if (loaded && (!base[0] || strcasecmp(base, "eboot.bin") == 0)) {
+        fprintf(stderr, "[cheats] %s: %s loaded %llu ms after launch\n", g_sess.title,
+                base[0] ? base : "its executable", in);
+    } else if (in >= LAUNCH_EXE_WAIT_MS) {
+        fprintf(stderr, "[cheats] %s: no eboot.bin %llu ms after launch (%s); applying anyway\n",
+                g_sess.title, in, loaded ? path : "nothing loaded");
+    } else {
+        if (loaded && !g_gate_told) {
+            fprintf(stderr, "[cheats] %s: runs %s %llu ms after launch; waiting for eboot.bin\n",
+                    g_sess.title, path, in);
+            g_gate_told = 1;
+        }
+        return 0;
+    }
+    g_gate_pid = pid;
+    return 1;
+}
+
+static intptr_t pass_base(pid_t pid) {
+    if (g_base_pid != pid || g_base <= 0) {
+        g_base = locked_mapbase(pid, 0);
+        g_base_pid = pid;
+    }
+    return g_base > 0 ? g_base : 0;
+}
+
+/* A new session for `pid` (an exec event, or a look that found a game the session is not
+ * for). Call with g_pass_lock held. */
+static void launch_locked(pid_t pid, const char *title, uint64_t at, int seen, const char *how) {
+    uint64_t now = mono_ms();
+    int again = g_sess.pid == (int)pid && strcmp(g_sess.title, title) == 0;
+    int has = seen && title_has_cheats(title);
+    /* A second exec of the same process: what was applied went with its old code. */
+    pthread_mutex_lock(&g_apply_lock);
+    xml_applied_forget(pid);
+    pthread_mutex_unlock(&g_apply_lock);
+    cheats_session_launch(&g_sess, (int)pid, title, at, seen, has, now);
+    g_gate_pid = 0;
+    g_gate_told = 0;
+    g_base_pid = 0;
+    g_base = 0;
+    if (seen)
+        fprintf(stderr, "[cheats] %s started (pid %d, %s%s, %llu ms ago): %s\n", title, (int)pid, how,
+                again ? ", again" : "", (unsigned long long)(now >= at ? now - at : 0),
+                has ? "start-up watch on (fast tries for up to 60 s)" : "no cheat or patch files");
+    else
+        fprintf(stderr, "[cheats] %s is running (pid %d); its start was not seen (the helper or the "
+                        "cheat engine started mid-game): what applies now is late\n",
+                title, (int)pid);
+}
+
+/* An exec event: a game started. Call with g_pass_lock held. */
+static void on_launch_locked(const launch_ev_t *ev, cheats_sched_t *k) {
+    if (!atomic_load(&g_engine_enabled)) {
+        fprintf(stderr, "[cheats] %s started (pid %d); the cheat engine is off\n", ev->title,
+                (int)ev->pid);
+        return;
+    }
+    invalidate_rg_cache();
+    launch_locked(ev->pid, ev->title, ev->at, 1, "exec event");
+    k->last_full_ms = 0; /* a full pass now (once its eboot.bin is there) */
+    k->last_fast_ms = 0;
+}
+
+/* A full pass: the game running now (the session's game while it runs, else a look for one),
+ * the crash guard, and the session's full pass. Call with g_pass_lock held. */
+static void full_pass_locked(uint64_t *none_ms) {
+    uint64_t now = mono_ms();
+    if (!atomic_load(&g_engine_enabled)) {
+        if (g_guard.title[0]) { /* turned off mid-window: nothing is being watched any more */
+            g_guard.title[0] = '\0';
+            cheats_marker_clear(CHEATS_ROOT);
+        }
+        if (g_sess.pid) run_pass_locked(0, 0, "", 0, 0); /* forget the session */
+        *none_ms = 0; /* a game found once it is on was not seen starting */
+        return;
+    }
+
+    char title[MAX_TITLE_ID] = "";
+    pid_t pid = 0;
+    if (g_sess.pid > 0 && game_title_of(g_sess.pid, title, sizeof title) &&
+        strcmp(title, g_sess.title) == 0) {
+        pid = g_sess.pid; /* still running: no process walk */
+    } else {
+        title[0] = '\0';
+        pid = find_running_game(title, sizeof title, NULL);
+    }
+    intptr_t base = pid > 0 ? pass_base(pid) : 0;
+    rg_cache_store(pid, title, base);
+    if (pid > 0 && (g_sess.pid != (int)pid || strcmp(g_sess.title, title) != 0)) {
+        int seen = *none_ms && now - *none_ms <= LAUNCH_LOOK_MS;
+        launch_locked(pid, title, *none_ms, seen, "found by a look; no exec event");
+        base = pass_base(pid);
+    }
+    *none_ms = pid > 0 ? 0 : now;
+
+    guard_step(&g_guard, pid);
+    /* Offs not saved hold for the run they were made in (not across an engine off/on). */
+    pthread_mutex_lock(&g_offs_lock);
+    cheats_offs_session(&g_offs, (int)pid, title);
+    pthread_mutex_unlock(&g_offs_lock);
+
+    /* Not before the game's own executable is there (a launch execs more than once). */
+    if (pid > 0 && !exe_gate_locked(now)) return;
+
+    /* Each pass, for as long as the game runs: apply what is switched on once the game is
+     * ready for it, re-read what was applied and put back what the game undid, and tell the
+     * player once (cheats_session.h). One notification when the session's cheats applied,
+     * one per cheat that could not be applied or that the game changed. */
+    run_pass_locked(pid, base, title, 0, 0);
+}
+
+/* A start-up window pass. 1 when the game is gone (a full pass is due). Under g_pass_lock. */
+static int fast_pass_locked(void) {
+    uint64_t now = mono_ms();
+    pid_t pid = g_sess.pid;
+    if (pid <= 0) return 1;
+    if (kill(pid, 0) != 0 && errno == ESRCH) return 1;
+    if (!exe_gate_locked(now)) return 0;
+    char title[MAX_TITLE_ID];
+    snprintf(title, sizeof title, "%s", g_sess.title);
+    /* Its cheats not listed yet (the eboot.bin just arrived): a full session pass lists them. */
+    run_pass_locked(pid, pass_base(pid), title, 0, g_sess.listed);
+    return 0;
+}
+
+/* The start-up window closed: say how it went, once. Under g_pass_lock. */
+static void fast_over_locked(void) {
+    uint64_t now = mono_ms();
+    if (g_sess.pid <= 0 || !g_sess.fast_until || g_sess.fast_over || !g_sess.listed ||
+        cheats_session_fast(&g_sess, now))
+        return;
+    g_sess.fast_over = 1;
+    int st[5] = { 0, 0, 0, 0, 0 };
+    for (int i = 0; i < g_sess.n; i++)
+        if (g_sess.e[i].status >= 0 && g_sess.e[i].status < 5) st[g_sess.e[i].status]++;
+    fprintf(stderr,
+            "[cheats] %s: start-up watch over %llu ms after launch (%d fast passes): %d applied, "
+            "%d waiting, %d failed, %d changed by the game\n",
+            g_sess.title, (unsigned long long)(now - g_sess.launch_ms), g_sess.fast_passes,
+            st[CHEATS_ST_APPLIED], st[CHEATS_ST_WAITING], st[CHEATS_ST_FAILED], st[CHEATS_ST_CHANGED]);
 }
 
 static void *watcher_thread(void *arg) {
@@ -2504,36 +2951,36 @@ static void *watcher_thread(void *arg) {
     proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     (void)arg;
 
+    pid_t syscore = 0;
+    int kq = launch_watch_open(&syscore);
+    if (kq >= 0)
+        fprintf(stderr, "[cheats] watching game launches (SceSysCore pid %d)\n", (int)syscore);
+    else
+        fprintf(stderr, "[cheats] cannot watch game launches; looking for a new game every %u ms\n",
+                CHEATS_SESSION_IDLE_EVERY_MS);
+
+    cheats_sched_t k = { 0, 0 };
+    uint64_t none_ms = 0; /* when the last look found no game (0: it found one) */
+    launch_ev_t ev;
+    memset(&ev, 0, sizeof ev);
     while (1) {
-        sleep(3);
+        uint64_t wait = CHEATS_SESSION_FULL_EVERY_MS;
         pthread_mutex_lock(&g_pass_lock);
-
-        if (!atomic_load(&g_engine_enabled)) {
-            if (g_guard.title[0]) { /* turned off mid-window: nothing is being watched any more */
-                g_guard.title[0] = '\0';
-                cheats_marker_clear(CHEATS_ROOT);
-            }
-            if (g_sess.pid) run_pass_locked(0, 0, "", 0); /* forget the session */
-            pthread_mutex_unlock(&g_pass_lock);
-            continue;
+        if (ev.pid > 0) on_launch_locked(&ev, &k);
+        if (ev.exited) k.last_full_ms = 0; /* the game closed: end its session now */
+        memset(&ev, 0, sizeof ev);
+        int next = cheats_sched_next(&k, &g_sess, atomic_load(&g_engine_enabled), mono_ms(), &wait);
+        if (next == CHEATS_NEXT_FULL) {
+            full_pass_locked(&none_ms);
+            k.last_full_ms = mono_ms();
+        } else if (next == CHEATS_NEXT_FAST) {
+            if (fast_pass_locked()) k.last_full_ms = 0;
+            k.last_fast_ms = mono_ms(); /* the gap counts from the end: other work gets its turn */
         }
-
-        char title[MAX_TITLE_ID] = "";
-        intptr_t base = 0;
-        pid_t pid = get_running_game_cached(title, sizeof(title), &base);
-
-        guard_step(&g_guard, pid);
-        /* Offs not saved hold for the run they were made in (not across an engine off/on). */
-        pthread_mutex_lock(&g_offs_lock);
-        cheats_offs_session(&g_offs, (int)pid, title);
-        pthread_mutex_unlock(&g_offs_lock);
-
-        /* Each pass, for as long as the game runs: apply what is switched on once the game is
-         * ready for it, re-read what was applied and put back what the game undid, and tell the
-         * player once (cheats_session.h). One notification when the session's cheats applied,
-         * one per cheat that could not be applied or that the game changed. */
-        run_pass_locked(pid, base, title, 0);
+        fast_over_locked();
+        pid_t watched = g_sess.pid;
         pthread_mutex_unlock(&g_pass_lock);
+        if (next == CHEATS_NEXT_WAIT) launch_wait(&kq, syscore, wait, watched, &ev);
     }
     return NULL;
 }
@@ -2724,6 +3171,12 @@ int cheats_list_mods(const char *title_id, char *buf, size_t cap,
                     jb_str(&jb, snap[k].reason);
                     jb_raw(&jb, "\"");
                 }
+                /* When an automatic apply landed (start-time patches, #627): after the game
+                 * started, in ms (absent when the start was not seen), and late when it may have
+                 * come too late to take effect. */
+                if (snap[k].timed && snap[k].after_ms >= 0)
+                    JB_PRINTF(&jb, ",\"applied_after_ms\":%lld", (long long)snap[k].after_ms);
+                if (snap[k].timed && snap[k].late) jb_raw(&jb, ",\"applied_late\":true");
             }
             jb_raw(&jb, "}");
             flat++;
@@ -2925,6 +3378,7 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
         else
             cheats_offs_del(&g_offs, title_id, mod_index);
         pthread_mutex_unlock(&g_offs_lock);
+        atomic_fetch_add(&g_switch_gen, 1);
         if (save_failed)
             fprintf(stderr, "[cheats] could not record %s #%d as %s\n", title_id, mod_index,
                     turn_on ? "on" : "off");
@@ -2994,6 +3448,7 @@ int cheats_delete(const char *title_id, char *err, size_t err_cap) {
     char path[MAX_CHEAT_FILEPATH];
     state_path(title_id, path, sizeof(path));
     unlink(path);
+    atomic_fetch_add(&g_switch_gen, 1);
 
     return 0;
 }
@@ -3014,7 +3469,7 @@ int cheats_reload(char *err, size_t err_cap) {
 
     pthread_mutex_lock(&g_pass_lock);
     g_slots_sig = 0; /* read the cheat files again */
-    run_pass_locked(pid, base, title, 1);
+    run_pass_locked(pid, base, title, 1, 0);
     pthread_mutex_unlock(&g_pass_lock);
     return 0;
 }

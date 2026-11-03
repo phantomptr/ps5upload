@@ -890,8 +890,8 @@ int webui_cheats_mods_to_json(const char *json, size_t n, char *out, size_t cap,
     for (;;) {
         const char *el, *end;
         size_t l;
-        uint64_t idx;
-        int on = 0, other = 0;
+        uint64_t idx, after = 0;
+        int on = 0, other = 0, late = 0, timed = 0;
         q = ws(q, e);
         if (q >= e) {
             truncated = 1; /* cut before the closing ']' */
@@ -920,6 +920,11 @@ int webui_cheats_mods_to_json(const char *json, size_t n, char *out, size_t cap,
                  strcmp(st, "changed") != 0))
                 st[0] = '\0';
             if (!st[0] || webui_json_str(el, l, "applied_reason", why, sizeof why) != 1) why[0] = '\0';
+            /* when it landed after the game started, and whether that may be too late for a patch
+             * the game reads only at start (#627) */
+            timed = strcmp(st, "applied") == 0 &&
+                    webui_json_u64(el, l, "applied_after_ms", &after) == 1 && after <= 86400000u;
+            if (strcmp(st, "applied") != 0 || webui_json_bool(el, l, "applied_late", &late) != 1) late = 0;
             memset(&w, 0, sizeof w);
             w.out = out + pos;
             w.cap = cap - pos - CHEATS_TAIL_ROOM + 1; /* pos + entry stays CHEATS_TAIL_ROOM short of cap */
@@ -939,6 +944,12 @@ int webui_cheats_mods_to_json(const char *json, size_t n, char *out, size_t cap,
                     esc(&w, why, strlen(why));
                     put(&w, "\"", 1);
                 }
+                if (timed) {
+                    char num[40];
+                    int nl = snprintf(num, sizeof num, ",\"applied_after_ms\":%llu", (unsigned long long)after);
+                    put(&w, num, (size_t)nl);
+                }
+                if (late) put(&w, ",\"applied_late\":true", 20);
             }
             put(&w, on ? ",\"on\":true}" : ",\"on\":false}", on ? 11 : 12);
             if (w.full) {

@@ -1087,7 +1087,8 @@ button {
   color: var(--color-good);
 }
 .cw-cheat-applied.is-failed,
-.cw-cheat-applied.is-changed {
+.cw-cheat-applied.is-changed,
+.cw-cheat-applied.is-late {
   color: var(--color-warn);
 }
 .cw-cheat .cw-tag {

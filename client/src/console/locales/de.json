@@ -2,6 +2,8 @@
   "cw_actions": "Aktionen",
   "cw_cheats_applied_changed": "Das Spiel hat dies geändert; nicht angetastet",
   "cw_cheats_applied_failed": "Konnte nicht angewendet werden: {reason}",
+  "cw_cheats_applied_late": "Angewendet {seconds} s nach dem Spielstart – falls es nichts bewirkt, lass es eingeschaltet und starte das Spiel neu.",
+  "cw_cheats_applied_late_unseen": "Angewendet, als das Spiel schon lief – falls es nichts bewirkt, lass es eingeschaltet und starte das Spiel neu.",
   "cw_cheats_applied_ok": "Angewendet ✓",
   "cw_cheats_applied_waiting": "Wartet, bis das Spiel geladen ist…",
   "cw_cheats_apply": "Anwenden",

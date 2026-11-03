@@ -35,6 +35,10 @@ export interface CheatMod {
   applied?: CheatApplied;
   /** Why, for waiting / failed / changed (the helper's own words). */
   appliedReason?: string;
+  /** Applied by the helper on its own: ms after the game started (absent: start not seen). */
+  appliedAfterMs?: number;
+  /** Applied late: a patch the game reads only at start may have missed it (#627). */
+  appliedLate?: boolean;
 }
 
 export type CheatApplied = "applied" | "waiting" | "failed" | "changed";
@@ -45,8 +49,12 @@ const APPLIED: readonly string[] = ["applied", "waiting", "failed", "changed"];
 export function appliedText(mod: CheatMod): string | null {
   if (!mod.on || mod.button || !mod.applied) return null;
   switch (mod.applied) {
-    case "applied":
-      return t("cw_cheats_applied_ok");
+    case "applied": {
+      if (!mod.appliedLate) return t("cw_cheats_applied_ok");
+      const ms = mod.appliedAfterMs;
+      if (typeof ms !== "number" || !(ms >= 0)) return t("cw_cheats_applied_late_unseen");
+      return t("cw_cheats_applied_late", { seconds: Math.max(1, Math.round(ms / 1000)) });
+    }
     case "waiting":
       return t("cw_cheats_applied_waiting");
     case "failed":
@@ -164,6 +172,10 @@ export function readList(title: string, r: unknown): CheatList {
         ...(typeof m.applied === "string" && APPLIED.includes(m.applied)
           ? { applied: m.applied as CheatApplied, ...(str(m.applied_reason) ? { appliedReason: str(m.applied_reason) } : {}) }
           : {}),
+        ...(m.applied === "applied" && typeof m.applied_after_ms === "number" && Number.isFinite(m.applied_after_ms) && m.applied_after_ms >= 0
+          ? { appliedAfterMs: m.applied_after_ms }
+          : {}),
+        ...(m.applied === "applied" && m.applied_late === true ? { appliedLate: true } : {}),
       });
     }
   }
@@ -250,7 +262,7 @@ export function createCheatsController(onChange: (s: CheatsState) => void): Chea
         const done = r && typeof r.on === "boolean" ? r.on : on;
         // A switch that went through applied it (or took it off): its status starts over.
         const next = (m: CheatMod): CheatMod => {
-          const { applied: _a, appliedReason: _r, ...rest } = m;
+          const { applied: _a, appliedReason: _r, appliedAfterMs: _t, appliedLate: _l, ...rest } = m;
           return done ? { ...rest, on: true, applied: "applied" } : { ...rest, on: false };
         };
         set({ list: { ...s.list, mods: s.list.mods.map((m) => (m.index === mod.index ? next(m) : m)) } });

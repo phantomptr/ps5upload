@@ -2,6 +2,8 @@
   "cw_actions": "การทำงาน",
   "cw_cheats_applied_changed": "เกมเปลี่ยนส่วนนี้แล้ว จึงไม่แตะต้อง",
   "cw_cheats_applied_failed": "ใช้ไม่ได้: {reason}",
+  "cw_cheats_applied_late": "ใช้แล้ว {seconds} วินาทีหลังเกมเริ่ม — หากไม่มีผล ให้เปิดไว้แล้วเริ่มเกมใหม่",
+  "cw_cheats_applied_late_unseen": "ใช้หลังจากเกมเริ่มไปแล้ว — หากไม่มีผล ให้เปิดไว้แล้วเริ่มเกมใหม่",
   "cw_cheats_applied_ok": "ใช้แล้ว ✓",
   "cw_cheats_applied_waiting": "กำลังรอให้เกมโหลด…",
   "cw_cheats_apply": "ใช้",

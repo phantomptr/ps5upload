@@ -2,6 +2,8 @@
   "cw_actions": "操作",
   "cw_cheats_applied_changed": "ゲームが変更したため、触れていません",
   "cw_cheats_applied_failed": "適用できませんでした: {reason}",
+  "cw_cheats_applied_late": "ゲーム開始から {seconds} 秒後に適用 — 効果がない場合は、オンのままゲームを再起動してください。",
+  "cw_cheats_applied_late_unseen": "ゲームの開始後に適用 — 効果がない場合は、オンのままゲームを再起動してください。",
   "cw_cheats_applied_ok": "適用済み ✓",
   "cw_cheats_applied_waiting": "ゲームの読み込みを待っています…",
   "cw_cheats_apply": "適用",

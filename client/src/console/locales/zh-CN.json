@@ -2,6 +2,8 @@
   "cw_actions": "操作",
   "cw_cheats_applied_changed": "游戏已更改此处；未作改动",
   "cw_cheats_applied_failed": "无法应用：{reason}",
+  "cw_cheats_applied_late": "在游戏启动 {seconds} 秒后应用——如果没有效果，请保持开启并重新启动游戏。",
+  "cw_cheats_applied_late_unseen": "在游戏启动之后才应用——如果没有效果，请保持开启并重新启动游戏。",
   "cw_cheats_applied_ok": "已应用 ✓",
   "cw_cheats_applied_waiting": "正在等待游戏加载…",
   "cw_cheats_apply": "应用",
