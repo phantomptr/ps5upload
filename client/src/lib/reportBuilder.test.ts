@@ -199,3 +199,20 @@ describe("buildReport", () => {
     expect(r.missing).toContainEqual({ source: "console_logs", reason: expect.stringContaining("refused") });
   });
 });
+
+describe("scrubUrls", () => {
+  it("keeps a link's host and path, never its query or fragment", async () => {
+    const { scrubUrls } = await import("./reportBuilder");
+    const stored = JSON.stringify([
+      "https://cdn.example.com/game.pkg?X-Amz-Signature=abc123&token=zz",
+      "http://192.168.1.20:19113/join#i=0f0f0f0f0f0f0f0f",
+      "http://10.0.0.5:19113/pad#t=deadbeefdeadbeef&w=1",
+      "https://example.com/plain/path",
+    ]);
+    const out = scrubUrls(stored);
+    for (const secret of ["abc123", "zz", "0f0f0f0f0f0f0f0f", "deadbeefdeadbeef"]) expect(out).not.toContain(secret);
+    expect(out).toContain("https://cdn.example.com/game.pkg?<removed>");
+    expect(out).toContain("http://192.168.1.20:19113/join#<removed>");
+    expect(out).toContain("https://example.com/plain/path");
+  });
+});

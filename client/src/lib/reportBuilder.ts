@@ -116,6 +116,15 @@ export function meshStateSummary(raw: string | null): string {
   }
 }
 
+/** Links kept in settings (recent install links, a friend's invite) keep their host and path
+ *  only: a query string or #fragment can hold a signed download's token, an invite key (#i=) or
+ *  a phone link key (#t=). Exported for tests. */
+export function scrubUrls(text: string): string {
+  return text.replace(/\b(https?:\/\/[^\s"'?#\\]+)([?#][^\s"'\\]*)/gi, (_m, base: string, rest: string) =>
+    `${base}${rest[0]}<removed>`,
+  );
+}
+
 /** The app's stored settings for settings.json. Exported for tests. */
 export function settingsSnapshot(): Record<string, string> {
   const out: Record<string, string> = {};
@@ -133,7 +142,7 @@ export function settingsSnapshot(): Record<string, string> {
         out[k] = meshStateSummary(localStorage.getItem(k));
         continue;
       }
-      out[k] = localStorage.getItem(k) ?? "";
+      out[k] = scrubUrls(localStorage.getItem(k) ?? "");
     }
   } catch {
     // storage unavailable: an empty settings file says so
