@@ -76,7 +76,15 @@ async function consoleHalfSetUp(page: Page, opts: { paired?: boolean } = {}): Pr
       // Hush's files and its process (elfldr lists it as payload.elf; pid.lock names it).
       if (path === "/api/ps5/list-dir") {
         const dir = new URL(req.url()).searchParams.get("path");
-        body = { entries: c.hush && dir === "/data" ? [{ name: "hush" }] : [] };
+        // While Hush is on its patch is in place: state.txt is there (#651).
+        body = {
+          entries:
+            c.hush && dir === "/data"
+              ? [{ name: "hush" }]
+              : c.hush?.enabled && dir === "/data/hush"
+                ? [{ name: "state.txt" }]
+                : [],
+        };
       }
       if (path === "/api/ps5/fs/read-preview") {
         const file = (req.postDataJSON() as { path: string }).path;
@@ -85,7 +93,9 @@ async function consoleHalfSetUp(page: Page, opts: { paired?: boolean } = {}): Pr
             ? `# hush\nenabled=${c.hush.enabled ? 1 : 0}\nmode=apply\n`
             : c.hush && file === "/data/hush/pid.lock"
               ? "142\n"
-              : null;
+              : c.hush?.enabled && file === "/data/hush/state.txt"
+                ? "pid=60\n"
+                : null;
         if (text === null) {
           await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "not found" }) });
           return;

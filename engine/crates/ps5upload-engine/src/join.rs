@@ -3223,7 +3223,10 @@ mod tests {
             &token,
             &pad_token,
         ] {
-            assert!(!text.contains(secret.as_str()), "{secret} in {text}");
+            assert!(
+                !text.contains(secret.as_str()),
+                "a key, code or token is in the summary"
+            );
         }
         assert!(!text.contains("Zelda"), "a guest's name in {text}");
         assert!(!text.contains("Desk"), "the host's name in {text}");
