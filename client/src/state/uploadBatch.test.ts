@@ -63,4 +63,37 @@ describe("the Upload batch", () => {
     useUploadBatch.getState().remove(useUploadBatch.getState().rows[0].id);
     expect(useUploadBatch.getState().rows).toHaveLength(0);
   });
+
+  it("gives each archive the default its listing says, and asks when it can't tell (#645)", async () => {
+    const zipInfo = (names: string[] | null) => ({
+      file_count: 0, total_uncompressed: 0, compressed_size: 0, title: null, title_id: null,
+      content_id: null, application_category_type: null, game_root: null,
+      entry_names: names, entry_names_complete: true,
+    });
+    setBatchInspector(async (path) => ({
+      kind: "archive",
+      path,
+      meta: null,
+      wrappedHint: null,
+      zipInfo: path.includes("y2jb")
+        ? zipInfo(["y2jb/payload.js", "y2jb/main.elf"])
+        : path.includes("game")
+          ? zipInfo(["PPSA01234/sce_sys/icon0.png", "PPSA01234/eboot.bin"])
+          : null,
+    }));
+    useUploadBatch.getState().add([
+      { path: "/dl/y2jb.zip", isDir: false },
+      { path: "/dl/game.7z", isDir: false },
+      { path: "/dl/unknown.zip", isDir: false },
+    ]);
+    await flush();
+    const choice = () => useUploadBatch.getState().rows.map((r) => r.archiveChoice);
+    expect(choice()).toEqual(["as-is", "unpack", null]);
+    // The user's answer stays, also through a later re-inspection.
+    const unknown = useUploadBatch.getState().rows[2];
+    useUploadBatch.getState().setArchiveChoice(unknown.id, "as-is");
+    useUploadBatch.getState().setPassword(unknown.id, "pw");
+    await flush();
+    expect(choice()).toEqual(["as-is", "unpack", "as-is"]);
+  });
 });

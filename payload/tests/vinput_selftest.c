@@ -105,7 +105,7 @@ static void test_stub(void) {
     vinput_set_backend(NULL);
     CHECK(strcmp(vinput_backend()->name, "stub") == 0);
     CHECK(vinput_caps_json(g_out, sizeof g_out) > 0);
-    CHECK(strcmp(g_out, "{\"mouse\":false,\"keyboard\":false,\"open\":false,\"backend\":\"stub\","
+    CHECK(strcmp(g_out, "{\"mouse\":false,\"keyboard\":false,\"open\":false,\"backend\":\"stub\",\"vpad\":3,"
                         "\"reason\":\"vinput_unsupported\"}") == 0);
     CHECK(session("{\"op\":\"open\",\"id\":7,\"mouse\":true,\"keyboard\":true}", 0) > 0);
     CHECK(strcmp(g_out, "{\"ok\":false,\"open\":false,\"mouse\":false,\"keyboard\":false,"

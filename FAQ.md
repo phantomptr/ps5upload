@@ -112,7 +112,7 @@ running.
    page). A `.pkg` goes in the same drop zone: choose **Stream & install** or **Upload &
    install** on its card. If it will not launch, see "My uploaded game won't launch".
 
-## Short guides: phone, away from home, TV, delay
+## Short guides: phone, away from home, friends, TV, delay
 
 **Q: How do I use PS5Upload from my phone?**
 Three ways, easiest first:
@@ -155,6 +155,25 @@ tested it through a subnet router), so leave it on or wake it before you go. Pla
 well as your home connection's upload speed allows; if it keeps dropping frames, take 720p. We
 haven't tested Play over Tailscale ourselves.
 
+**Q: How do I play with a friend as Player 2?**
+With **Play Together** (11.0.0). Your friend uses their own phone, tablet or computer, on your
+network, and plays your PS5 as Player 2, 3 or 4 while you play as Player 1.
+
+1. **Invite.** Start Play, then press the people button on the picture's bar (on a phone:
+   **⋯ › Play Together**). Your friend scans the QR code with their phone's camera, or you send
+   the link (Copy, or Share on a phone). With the PS5Upload app they can instead type the short
+   code (like `K7M-2QX`) in **Play › Join a friend**, or pick you from **Playing nearby**. No app?
+   The link opens a page in any browser.
+2. **Allow.** Their name pops up over your picture: press **Allow**.
+3. **On the TV**, your friend presses **PS** on their controller and picks **Quick Play** (or
+   their own user) under "Who's using this controller?".
+
+They play with a controller connected to their device, or the on-screen controls on a phone. PS
+and Create are blocked for friends unless you turn that off in the panel. Up to three friends at
+once; stopping Play ends it for them, and the app asks first. If a friend's delay shows red, a
+lower Play quality (720p or 30 fps) makes it smoother for everyone. **Playing from somewhere
+else?** Both of you join the same Tailscale network, then share the link.
+
 **Q: Can the app wake the PS5 without turning on the TV?**
 Yes. The TV comes on because of HDMI-CEC: a PS5 that wakes up tells the TV to turn on and switch
 to it. Turn that off on either side:
@@ -183,6 +202,42 @@ measured honestly), and your TV or monitor's own delay (use its game mode). A bi
 the network: a cable for the PS5 and 5 GHz Wi-Fi help most. A big **decode** means the device is
 slow to decode; 720p eases it. **Play › Settings › Low latency** trims the queue and the sound
 buffer (see "How much delay does Remote Play have, and what does Low latency do?").
+
+**Q: How do I stream to YouTube or Twitch?**
+Start Play, then press **Stream** (the round button with a red dot on the picture's bar). Two
+ways, on a computer (the desktop app, or the web UI, where it runs on the engine's computer;
+not in the phone apps yet):
+
+- **Go live**: PS5Upload sends the stream to the site itself, no other program needed. Add a
+  site (**YouTube**, **Twitch**, **Kick**, **Facebook**, or **Custom** for any `rtmp://`,
+  `rtmps://` or `srt://` server) and paste its **stream key**: each site's form says where the
+  key is. Keys are kept encrypted on the engine's computer and never shown again (only their
+  last four characters). Tick one or more sites and press **Go live**. A **LIVE** badge with the
+  time and bitrate shows on the picture; **Stop streaming** ends it. The first time, it asks to
+  download a free helper (ffmpeg, 30 to 90 MB depending on the system) that turns the PS5's
+  sound into the format the sites take; the picture is sent as the PS5 made it, nothing is
+  re-encoded. If the connection drops, it reconnects by itself while you keep playing.
+- **OBS**: the stream goes into OBS on the same computer (for your own scenes, overlays, or to
+  record). Copy the link from the **OBS** tab, then in OBS: Sources › **+** › **Media Source**,
+  untick **Local file**, paste the link into **Input**, set **Input format** to `mpegts`, tick
+  **Restart playback when source becomes active**, and set **Network Buffering** to its lowest.
+  OBS then streams at the bitrate set in OBS.
+
+Things to know:
+
+- **Upload speed.** Go live sends the Remote Play video as it is: about 15 Mbps at 1080p unless
+  you lower **Bitrate** in Play › Settings › Picture, and each site you stream to at once needs
+  that again. Your internet upload has to keep up; the panel says roughly how much is needed.
+- **Each site's limits.** Twitch takes H.264 at up to about 6 Mbps, Kick H.264 up to 8 Mbps,
+  Facebook H.264 up to about 9 Mbps; YouTube also takes HEVC. When a site needs something
+  else, the panel says so and offers to restart Play in H.264 at the right bitrate (the game
+  keeps running; the picture comes back in a few seconds). HDR can't be streamed.
+- **YouTube** turns live streaming on for a channel the first time you ask, which can take up to
+  24 hours. To try it privately, set the stream to Unlisted or Private in YouTube Studio.
+- **Twitch**: **Test without going public** (on by default when you add Twitch) sends a
+  bandwidth test that nobody sees. Turn it off to go live for real.
+- **A refused key**: "refused the stream" almost always means the key is wrong or was reset
+  on the site: copy it again.
 
 ---
 
@@ -1344,6 +1399,13 @@ the part not sent yet; meanwhile the progress reads "Skipping data the console a
 - **`.rar` needs the desktop app.** The Android build and the web UI say so. `.zip` and `.7z` work
   on Android; no archive format works in the browser.
 
+**Q: I want the `.zip` itself on the PS5, not unpacked (a jailbreak or payload update).**
+Upload asks what to do with each archive: **unpack it** (into a new folder, or straight into the
+destination) or **send it as it is**. It picks for you from what is inside: an archive holding a
+game or packages is unpacked; anything else (payloads, a jailbreak update such as Y2JB's, saves)
+is sent as the file. When it can't tell, nothing is picked and it asks before uploading. Copying
+a file into a folder in **Files** never unpacks it.
+
 **Q: Does an archive upload need free space on my PC?**
 No. The archive is decompressed and sent at the same time, so you only need room for the archive
 you already have. The `PS5UPLOAD_ARCHIVE_STAGE_MB` and `PS5UPLOAD_ZIP_RAM_THRESHOLD_MB` variables
@@ -2385,6 +2447,13 @@ still looks wrong, set Play › Settings › **Video decoding** to **Software** 
 **Q: Does my phone controller (Backbone, Razer Kishi, GameSir, Scuf Nomad...) work with Remote Play?**
 Yes. Phone controllers, USB-C or Bluetooth, are game controllers to the phone, so Remote Play reads them like any other: connect it, press a button, and it plays (the on-screen controller hides). If the browser doesn't recognise one, it still plays in the usual layout; if a button is wrong, open Play › Settings › Controllers › **Map buttons** and press each button as asked (any step can be skipped). **Set an extra button** gives a back button or paddle any PS5 button. Mappings are saved per controller. In the Android app the app also hands controllers to the page itself, for phones whose system browser misses them; on iPhone the app makes sure the page has the focus controllers need.
 
+**Q: Windows: my DualSense works in Windows but Play says "No controller seen yet".**
+Some Windows setups never hand a DualSense (often over Bluetooth) to the app's web view. The
+Windows app now reads a DualSense itself whenever the web view sees no controller, over USB or
+Bluetooth, and lists it under Play › Settings › Controllers with "(app)" after its name. Close
+DSX, DS4Windows or Steam Input if one of them hides the pad. Other controllers still come
+through the web view as before.
+
 **Q: What is the Game panel in Remote Play?**
 The **Game** button on the stream bar (or **Game** in the phone's **⋯** menu) opens a panel over
 the picture; the game keeps playing. **Game** shows what is running and has **Snapshot save now**
@@ -3176,6 +3245,15 @@ can't grow without bound. Use **Open logs folder** on the Bug report or
 Logs page to find them.
 
 ---
+
+## Supporting PS5Upload
+
+**Q: How can I support PS5Upload?**
+Open **Thanks & Support** (in the sidebar, under Bug Report), or the same section on the
+website. It has Ko-fi (card or PayPal, once or monthly) and Bitcoin, Ethereum, Solana and XRP
+addresses straight to my wallet, each with a QR code and the one network to send it on. Everyone
+who supports it is thanked there by the name they gave on Ko-fi, most support first; amounts are
+never shown. Want your name changed or taken off? Say so on Discord.
 
 ## Disclaimer
 

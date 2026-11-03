@@ -46,7 +46,8 @@ lz4_flex = { version = "0.14", default-features = false, features = ["std", "saf
 rust-embed = { version = "8", optional = true }
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+# "process": Go live runs ffmpeg (rp_golive.rs).
+tokio = { workspace = true, features = ["process"] }
 tokio-stream.workspace = true
 # Phone-as-controller relay (pad_link.rs): the phone app's engine opens a plain ws:// to the
 # computer's. Already in the tree through axum's WebSocket support; "connect" adds the client.
@@ -59,6 +60,9 @@ suppaftp = { version = "12", default-features = false, features = ["tokio-rustls
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 sha2 = "0.11"
+# Unpacks the pinned ffmpeg for Linux (BtbN's .tar.xz) for Go live (ffmpeg_tool.rs). Already in
+# the tree through sevenz-rust2; "xz" adds its .xz reader.
+lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz"] }
 # Mesh Drive passwords (Argon2id).
 argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
 russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
@@ -66,7 +70,7 @@ russh-sftp = "3"
 # Install-from-a-link fetches the package over many HTTP range connections at
 # once (remote_pkg.rs); also link downloads, HTTP remote sources and online
 # metadata. rustls + ring, as suppaftp/russh above, so Android builds it too.
-ureq = { version = "3", features = ["rustls"] }
+ureq = { version = "3.5", features = ["rustls"] }  # 3.5: timeout_per_read (ffmpeg_tool.rs)
 
 # The Collection's "Move to Trash": the OS trash on macOS, Windows and Linux desktops.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

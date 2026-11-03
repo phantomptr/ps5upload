@@ -388,6 +388,7 @@ pub fn build_record(
             "lanes_max",
             "chunk_avg_kib",
             "history",
+            "rate_history",
             "slow_drive_switch",
             "settle_ms",
             "unswept_peak",

@@ -21,6 +21,7 @@ import {
   Settings2,
   Smartphone,
   Square,
+  Users,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -70,6 +71,11 @@ import { fitName, PlayMenu, VolumeSlider } from "./PlayMenu";
 import { rpBrowserAdvice } from "./browserAdvice";
 import { motionAvailable, startMotion } from "../../lib/motion";
 import { PadAsks, PhonePadsPanel, usePadLink } from "./PhonePads";
+import { JoinAsks, PlayTogetherPanel } from "./PlayTogether";
+import { friendsIn, useJoinHost } from "./playTogetherState";
+import { okToStartPlay } from "./JoinAFriend";
+import { useConfirm } from "../../components/ConfirmDialog";
+import { GoLiveBarIcon, GoLiveChip, GoLivePanel, goLiveAvailable, useGoLivePolling } from "./GoLivePanel";
 import { GamePanel } from "./game/GamePanel";
 import { LaunchStatus } from "./game/LaunchStatus";
 import { DropChoice, DropZone, useStreamDropZone } from "./game/DropToInstall";
@@ -476,6 +482,11 @@ export function StreamPanel() {
   /** The Game panel over the picture (or under it, on a phone's page). */
   const [gameOpen, setGameOpen] = useState(false);
   const [phonesOpen, setPhonesOpen] = useState(false);
+  /** Play Together (#641): friends as Player 2–4. */
+  const [togetherOpen, setTogetherOpen] = useState(false);
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  /** The Stream panel (Go live, OBS; #635). */
+  const [goLiveOpen, setGoLiveOpen] = useState(false);
   const [full, setFull] = useState(false);
   const [chrome, setChrome] = useState(true);
   const [fitOpen, setFitOpen] = useState(false);
@@ -519,6 +530,19 @@ export function StreamPanel() {
   const running = streaming && !!profile && target?.host === profile.host;
   // Phones playing along as controllers, and phones asking to (pad_link.rs).
   const [padLink, setPadLink] = usePadLink(running, target?.host ?? null);
+  // Play Together on the console streaming (whichever it is): its friends, asks and invite.
+  const [joinHost, setJoinHost] = useJoinHost(streaming, target?.host ?? null);
+  const friendsPlaying = friendsIn(joinHost).length;
+  /** Stopping Play ends Play Together: ask first while friends are in. */
+  const okToStop = useCallback(async () => {
+    const n = friendsIn(joinHost).length;
+    if (!n) return true;
+    return confirm({
+      title: tr("pt_confirm_stop", { n }, `Stopping Play ends Play Together for ${n} friend(s). Continue?`),
+      confirmLabel: tr("join_confirm_continue", undefined, "Continue"),
+      destructive: true,
+    });
+  }, [joinHost, confirm, tr]);
   const otherStream = streaming && !running ? target : null;
   const otherProfile = otherStream ? profiles.find((p) => p.host === otherStream.host) ?? null : null;
   // The iOS app hands controllers to the page only while it has the focus: take it on show and
@@ -538,6 +562,8 @@ export function StreamPanel() {
     };
   }, [running, prefs.motion]);
   const playing = running && phase === "playing";
+  const goLive = goLiveAvailable({ mobile: isMobile() });
+  useGoLivePolling(running && goLive, goLiveOpen);
   // Play a title on the stream (from a game's page, or the Game panel): stream, helper, launch.
   const launcher = useGameLaunch();
   // The running game, for its controls (turbo, mouse aim, macros): from the shared running-games
@@ -816,6 +842,8 @@ export function StreamPanel() {
     async (attach = false, host?: string) => {
       const p = host ? profiles.find((x) => x.host === host) : profile;
       if (!p?.wake_regist_key || !p.wake_rp_key) return;
+      // One thing at a time: a friend's game this app joined is left first (asked).
+      if (!(await okToStartPlay(tr, confirm))) return;
       const go = async () => {
         await startStream(
           { host: p.host, name: p.name, registKey: p.wake_regist_key!, rpKey: p.wake_rp_key! },
@@ -828,18 +856,19 @@ export function StreamPanel() {
       if (attach) await go();
       else await beforeRemotePlay(p.host, go);
     },
-    [profile, profiles, startStream, compact],
+    [profile, profiles, startStream, compact, tr, confirm],
   );
 
   // Another console is streaming: stop it, wait for it to end (the store takes one stream at a
   // time), then start the selected one.
   const switchHere = useCallback(async () => {
+    if (!(await okToStop())) return;
     stopStream();
     for (let i = 0; i < 50 && useRemotePlayStore.getState().stream; i++) {
       await new Promise((r) => window.setTimeout(r, 100));
     }
     if (!useRemotePlayStore.getState().stream) await start();
-  }, [start, stopStream]);
+  }, [start, stopStream, okToStop]);
 
   useStreamLaunchRunner({
     playingHost: playing && profile ? hostOf(profile.host) : null,
@@ -1051,7 +1080,7 @@ export function StreamPanel() {
   const stopHere = () => {
     if (full) exitFull();
     setMenuOpen(false);
-    stopStream();
+    void okToStop().then((ok) => ok && stopStream());
   };
   const menuProps = {
     pipKind,
@@ -1063,6 +1092,11 @@ export function StreamPanel() {
     },
     onSettings: openSettings,
     onStop: stopHere,
+    onTogether: () => {
+      setMenuOpen(false);
+      if (full) exitFull();
+      setTogetherOpen(true);
+    },
     onGame: () => {
       setMenuOpen(false);
       setSettingsOpen(false);
@@ -1179,6 +1213,7 @@ export function StreamPanel() {
           )}
           {playing && kbm.toast && !pip && <KbmToast key={kbm.toast.n} mode={kbm.toast.mode} captured={kbm.toast.captured} />}
           {running && <PadAsks pending={padLink.pending} />}
+          {running && <JoinAsks addr={target?.host ?? null} asks={joinHost.asks} />}
           {running && <RpKeyboardBox />}
           {running && <RpPasscodeBox />}
           {running && pip && (
@@ -1289,11 +1324,39 @@ export function StreamPanel() {
                   active={phonesOpen || padLink.pads.length > 0}
                   onClick={() => {
                     if (full) exitFull();
+                    setTogetherOpen(false);
                     setPhonesOpen((v) => !v);
                   }}
                   testId="rp-phones"
                 >
                   <Smartphone size={16} />
+                </BarButton>
+              )}
+              {!compact && (
+                <BarButton
+                  label={tr("pt_button", undefined, "Play Together")}
+                  active={togetherOpen || friendsPlaying > 0}
+                  onClick={() => {
+                    if (full) exitFull();
+                    setPhonesOpen(false);
+                    setTogetherOpen((v) => !v);
+                  }}
+                  testId="rp-together"
+                >
+                  <Users size={16} />
+                </BarButton>
+              )}
+              {!compact && goLive && (
+                <BarButton
+                  label={tr("golive_title", undefined, "Stream")}
+                  active={goLiveOpen}
+                  onClick={() => {
+                    if (full) exitFull();
+                    setGoLiveOpen((v) => !v);
+                  }}
+                  testId="rp-golive"
+                >
+                  <GoLiveBarIcon />
                 </BarButton>
               )}
               {playing && <KbmBarButton mode={kbm.mode} title={controlsTitle} onCycle={kbm.cycle} captured={kbm.captured} />}
@@ -1344,7 +1407,7 @@ export function StreamPanel() {
                 onClick={(e) => {
                   e.stopPropagation();
                   if (full) exitFull();
-                  stopStream();
+                  void okToStop().then((ok) => ok && stopStream());
                 }}
                 className="flex h-9 items-center gap-1.5 rounded-full bg-[var(--color-danger,#dc2626)] px-3 text-sm font-medium text-white hover:brightness-110"
                 data-testid="rp-stop"
@@ -1355,6 +1418,7 @@ export function StreamPanel() {
             </div>
           )}
           {running && <CaptureOverlay />}
+          {running && goLive && <GoLiveChip />}
           <QualityNotice />
           {touchHere && touchpadOn && (
             <TouchpadOverlay
@@ -1528,7 +1592,7 @@ export function StreamPanel() {
                   {tr("rp_show_it", undefined, "Show it")}
                 </Button>
               )}
-              <Button size="sm" onClick={() => stopStream()}>
+              <Button size="sm" onClick={() => void okToStop().then((ok) => ok && stopStream())}>
                 {tr("rp_stop", undefined, "Stop")}
               </Button>
             </div>
@@ -1680,6 +1744,20 @@ export function StreamPanel() {
         </Callout>
       )}
 
+      {togetherOpen && running && target && (
+        <PlayTogetherPanel
+          addr={target.host}
+          state={joinHost}
+          onState={setJoinHost}
+          onClose={() => setTogetherOpen(false)}
+          onPhones={() => {
+            setTogetherOpen(false);
+            setPhonesOpen(true);
+          }}
+        />
+      )}
+      {confirmDialog}
+
       {phonesOpen && running && (
         <PhonePadsPanel
           consoleHost={target?.host ?? null}
@@ -1688,6 +1766,8 @@ export function StreamPanel() {
           onClose={() => setPhonesOpen(false)}
         />
       )}
+
+      {goLiveOpen && running && goLive && <GoLivePanel onClose={() => setGoLiveOpen(false)} />}
 
       {!full && settingsDrawer}
 

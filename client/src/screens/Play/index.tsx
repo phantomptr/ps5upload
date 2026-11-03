@@ -1,8 +1,8 @@
-import { ListChecks, MonitorPlay } from "lucide-react";
-import { useEffect } from "react";
+import { ListChecks, MonitorPlay, Users } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
-import { Button, PageHeader } from "../../components";
+import { Button, PageHeader, SegmentedControl } from "../../components";
 import { useTr } from "../../state/lang";
 import "../../state/playSetup";
 import { useRemotePlayStore } from "../../state/remotePlay";
@@ -12,6 +12,8 @@ import { useStreamLaunch } from "./game/streamLaunch";
 import { usePlaySetup } from "./setup/usePlaySetup";
 import { COMPACT_QUERY, useMedia } from "./immersive";
 import { StreamPanel } from "./StreamPanel";
+import { JoinAFriend } from "./JoinAFriend";
+import { useJoinStore } from "../../state/joinSession";
 
 /**
  * Play (was "Remote Play" before 10.0.0): a console's screen streamed into the app, played with a
@@ -25,11 +27,23 @@ export default function PlayScreen() {
   const streaming = useRemotePlayStore(
     (s) => !!s.stream && s.phase !== null && s.phase !== "ended",
   );
+  // Play Together (#641): Play my PS5 (Remote Play) or Join a friend's game, one at a time.
+  const joined = useJoinStore((s) => !!s.session);
   // /play?launch=<TITLE>[&name=…] (search, links): start that game and stream it; a console not
   // set up for Play goes to its setup instead.
   const [params, setParams] = useSearchParams();
   const launch = params.get("launch")?.trim().toUpperCase() ?? "";
   const launchName = params.get("name")?.trim() ?? "";
+  // /play?join=<a friend's Play Together link>: Join a friend, with that link.
+  const joinParam = params.get("join")?.trim() || null;
+  const [mode, setMode] = useState<"mine" | "friend">(() => (joined || joinParam ? "friend" : "mine"));
+  const [pendingJoin, setPendingJoin] = useState<string | null>(joinParam);
+  useEffect(() => {
+    if (!joinParam) return;
+    setPendingJoin(joinParam);
+    setMode("friend");
+    setParams({}, { replace: true });
+  }, [joinParam, setParams]);
   const host = useConnectionStore((s) => s.host)?.trim() ?? "";
   const paired = useRosterStore((s) => {
     const p = s.profiles.find((x) => x.host === host);
@@ -48,8 +62,9 @@ export default function PlayScreen() {
     useStreamLaunch.getState().request(host, { titleId: launch, titleName: launchName || launch });
   }, [launch, launchName, host, paired, navigate, setParams]);
   // On a phone the picture and its controller need the height: while playing, the header is
-  // just the title.
-  const lean = compact && streaming;
+  // just the title. Only while the stream on screen is the one running: on Join a friend with
+  // your own Play running (a link opened, then the switch declined), the switch stays to go back.
+  const lean = compact && ((streaming && mode === "mine") || (joined && mode === "friend"));
   return (
     <div className="app-page space-y-4">
       <PageHeader
@@ -79,7 +94,22 @@ export default function PlayScreen() {
           </Button>
         }
       />
-      <StreamPanel />
+      {!lean && (
+        <SegmentedControl
+          ariaLabel={tr("play_mode_label", undefined, "What to play")}
+          value={mode}
+          onChange={(v) => setMode(v as "mine" | "friend")}
+          segments={[
+            { value: "mine", label: tr("play_mode_mine", undefined, "Play my PS5"), icon: MonitorPlay },
+            { value: "friend", label: tr("play_mode_friend", undefined, "Join a friend"), icon: Users },
+          ]}
+        />
+      )}
+      {mode === "friend" ? (
+        <JoinAFriend pending={pendingJoin} onPendingDone={() => setPendingJoin(null)} />
+      ) : (
+        <StreamPanel />
+      )}
     </div>
   );
 }

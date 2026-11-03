@@ -72,7 +72,7 @@ describe("the sidebar's sections", () => {
     expect(paths(groups)).not.toContain(HOME_NAV_ITEM.to);
     expect(paths(groups)).not.toContain("/bug-report");
     expect(paths(groups)).not.toContain("/play");
-    expect(FIXED_NAV_ITEMS.map((i) => i.to)).toEqual(["/home", "/play", "/bug-report"]);
+    expect(FIXED_NAV_ITEMS.map((i) => i.to)).toEqual(["/home", "/play", "/bug-report", "/thanks"]);
   });
 
   it("leaves hidden screens out", () => {

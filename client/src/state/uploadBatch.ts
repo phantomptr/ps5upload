@@ -11,6 +11,7 @@ import {
   zipInspectStream,
 } from "../api/ps5";
 import { remoteApi } from "../api/remote";
+import { archiveDefault, type ArchiveChoice } from "../lib/archiveDefault";
 import { invoke } from "../lib/invokeLogged";
 import { isInstallPackagePath } from "../lib/pkgDropDedupe";
 import { isRemotePath } from "../lib/remotePath";
@@ -32,6 +33,9 @@ export interface BatchRow {
   error: string | null;
   /** An encrypted .rar's password; memory only. */
   password: string | null;
+  /** An archive: unpack it or send it as it is (#645). Null until the user chooses, when its
+   *  listing could not tell; such a row holds the list back. Unused for other kinds. */
+  archiveChoice: ArchiveChoice | null;
 }
 
 export interface BatchEntry {
@@ -113,6 +117,7 @@ interface BatchState {
   remove: (id: string) => void;
   setInclude: (id: string, include: boolean) => void;
   setPassword: (id: string, password: string) => void;
+  setArchiveChoice: (id: string, choice: ArchiveChoice) => void;
   clear: () => void;
 }
 
@@ -131,7 +136,15 @@ export const useUploadBatch = create<BatchState>((set, get) => {
       void inspector(row.path, row.isDir, row.password)
         .then((source) => {
           if (generation.get(id) !== gen) return;
-          patch(id, { status: "ready", source, error: null });
+          // A choice the user made stays; otherwise the archive's listing picks one.
+          const chosen = get().rows.find((r) => r.id === id)?.archiveChoice ?? null;
+          patch(id, {
+            status: "ready",
+            source,
+            error: null,
+            archiveChoice:
+              source.kind === "archive" ? chosen ?? archiveDefault(source.zipInfo) : null,
+          });
         })
         .catch((e: unknown) => {
           if (generation.get(id) !== gen) return;
@@ -175,6 +188,7 @@ export const useUploadBatch = create<BatchState>((set, get) => {
           source: null,
           error: null,
           password: null,
+          archiveChoice: null,
         });
       }
       if (!fresh.length) return;
@@ -186,6 +200,7 @@ export const useUploadBatch = create<BatchState>((set, get) => {
       set({ rows: get().rows.filter((r) => r.id !== id) });
     },
     setInclude: (id, include) => patch(id, { include }),
+    setArchiveChoice: (id, archiveChoice) => patch(id, { archiveChoice }),
     setPassword: (id, password) => {
       patch(id, { password, status: "inspecting", error: null });
       inspect(id);

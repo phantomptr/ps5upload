@@ -6,6 +6,7 @@ import {
   Scaling,
   Settings2,
   Square,
+  Users,
   Volume2,
   VolumeX,
   X,
@@ -108,6 +109,7 @@ export function PlayMenu({
   onSettings,
   onStop,
   onGame,
+  onTogether,
 }: {
   inFull: boolean;
   pipKind: unknown;
@@ -118,6 +120,8 @@ export function PlayMenu({
   onStop: () => void;
   /** The Game panel (the running game, its cheats, the console). */
   onGame: () => void;
+  /** Play Together (#641): friends as Player 2–4. */
+  onTogether?: () => void;
 }) {
   const tr = useTr();
   const prefs = useRemotePlayStore((s) => s.prefs);
@@ -183,6 +187,14 @@ export function PlayMenu({
           onClick={onGame}
           testId="rp-menu-game"
         />
+        {onTogether && !inFull && (
+          <Tile
+            label={tr("pt_button", undefined, "Play Together")}
+            icon={<Users size={18} />}
+            onClick={onTogether}
+            testId="rp-menu-together"
+          />
+        )}
         <Tile
           label={tr("rp_settings", undefined, "Settings")}
           icon={<Settings2 size={18} />}

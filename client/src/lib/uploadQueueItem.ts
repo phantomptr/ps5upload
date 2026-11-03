@@ -11,6 +11,8 @@ export interface UploadItemOptions {
   destinationVolume: string | null;
   destinationSubpath: string;
   archiveIntoSubfolder: boolean;
+  /** An archive is uploaded as the file it is, not unpacked (#645). */
+  sendArchiveAsIs?: boolean;
   reconcileMode: AddQueueItem["reconcileMode"];
   strategy: "overwrite" | "resume";
   excludes: string[];
@@ -44,10 +46,15 @@ function estimatedBytesFor(source: PickedSource): number {
 }
 
 export function buildUploadQueueItem(
-  source: PickedSource,
+  picked: PickedSource,
   rarPassword: string | null,
   o: UploadItemOptions,
 ): AddQueueItem {
+  // Sent as it is, an archive is a plain file: it lands at <destination>/<its name>.
+  const source: PickedSource =
+    picked.kind === "archive" && o.sendArchiveAsIs
+      ? { ...picked, kind: "file", zipInfo: null }
+      : picked;
   // A package stages into the package library and the queue's finisher installs it.
   if (source.kind === "pkg") {
     const info = source.pkgInfo ?? null;

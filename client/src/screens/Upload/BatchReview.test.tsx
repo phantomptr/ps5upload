@@ -83,4 +83,20 @@ describe("the Upload review list", () => {
     expect(out).not.toContain("batch-stream-install");
     expect(out).not.toContain("uploads as usual");
   });
+
+  it("lets each archive be unpacked or sent as it is, and asks when nothing is chosen (#645)", () => {
+    const arc = (id: string, archiveChoice: "unpack" | "as-is" | null) =>
+      row(id, {
+        path: `/dl/${id}.zip`,
+        isDir: false,
+        archiveChoice,
+        source: { kind: "archive", path: `/dl/${id}.zip`, meta: null, wrappedHint: null, zipInfo: null },
+      });
+    const out = renderToStaticMarkup(
+      <BatchReview {...props({ rows: [arc("A", "as-is"), arc("B", null)], onArchiveChoice: () => {} })} />,
+    );
+    expect(out.match(/data-testid="batch-archive-as-is"/g)).toHaveLength(2);
+    expect(out).toMatch(/aria-checked="true"[^>]*data-testid="batch-archive-as-is"/);
+    expect(out).toContain("Choose: unpack it, or send it as it is");
+  });
 });

@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "proc_identity.h"
+#include "vpad.h"
 #include "webui_codec.h"
 
 /* ── The built-in backend: a stub ─────────────────────────────────────────────────────────────
@@ -225,8 +226,9 @@ int vinput_caps_json(char *out, size_t cap) {
     g_be->caps(&mouse, &keyboard);
     if (g_be->status) status = g_be->status(&reason);
     if (!reason && !mouse && !keyboard) reason = "vinput_unsupported";
-    n = snprintf(out, cap, "{\"mouse\":%s,\"keyboard\":%s,\"open\":%s,\"backend\":\"%s\"%s%s%s%s%s%s}",
-                 mouse ? "true" : "false", keyboard ? "true" : "false", g_owner ? "true" : "false", g_be->name,
+    /* "vpad": how many Play Together controllers (vpad.h) this helper can make; absent from older ones. */
+    n = snprintf(out, cap, "{\"mouse\":%s,\"keyboard\":%s,\"open\":%s,\"backend\":\"%s\",\"vpad\":%d%s%s%s%s%s%s}",
+                 mouse ? "true" : "false", keyboard ? "true" : "false", g_owner ? "true" : "false", g_be->name, VPAD_SLOTS,
                  status ? ",\"companion\":\"" : "", status ? status : "", status ? "\"" : "",
                  reason ? ",\"reason\":\"" : "", reason ? reason : "", reason ? "\"" : "");
     pthread_mutex_unlock(&g_lock);

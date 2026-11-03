@@ -107,6 +107,8 @@ const MIC_QUEUE: usize = 50;
 
 #[path = "rp_automation.rs"]
 pub(crate) mod automation;
+#[path = "rp_live.rs"]
+pub(crate) mod live_feed;
 
 /// Session ids: each session the engine starts gets the next one, so a client naming an old
 /// session is refused rather than steered into its replacement.
@@ -278,6 +280,8 @@ struct Live {
     passcode_answer: Mutex<Option<Passcode>>,
     /// A local automation client's frame requests and held input (rp_automation.rs).
     auto: automation::AutoState,
+    /// The live feed's readers (rp_live.rs, OBS).
+    feed: Arc<live_feed::LiveFeed>,
 }
 
 /// A watcher's queue. `need_key`: it cannot use a frame until the next keyframe (it just
@@ -286,6 +290,33 @@ struct Spectator {
     id: u64,
     tx: mpsc::Sender<Message>,
     need_key: bool,
+    /// A player's (join.rs, Play Together) own shallow video queue: the codec header and the
+    /// pictures go there, sound and the rest on `tx`. None for a watcher (everything on `tx`).
+    video: Option<mpsc::Sender<Message>>,
+    /// The codec header could not be queued: it goes again ahead of the next keyframe.
+    need_header: bool,
+    /// Pictures skipped to the next keyframe because the queue was full (players' health).
+    skipped: Option<Arc<AtomicU64>>,
+}
+
+impl Spectator {
+    fn watcher(id: u64, tx: mpsc::Sender<Message>) -> Self {
+        Spectator {
+            id,
+            tx,
+            need_key: true,
+            video: None,
+            need_header: false,
+            skipped: None,
+        }
+    }
+}
+
+/// A player's picture and sound (join.rs): the shallow video queue, everything else.
+pub(crate) struct PlayerFeed {
+    pub video: mpsc::Receiver<Message>,
+    pub other: mpsc::Receiver<Message>,
+    pub hevc: bool,
 }
 
 /// Frames queued for a watcher before it is skipped to the next keyframe (about 2 s at 60 fps).
@@ -322,22 +353,43 @@ pub(crate) fn push_pad_kbm(v: serde_json::Value) {
 pub(crate) fn add_spectator(id: u64) -> Option<mpsc::Receiver<Message>> {
     let l = live()?;
     let (tx, rx) = mpsc::channel(SPECTATOR_QUEUE);
-    let vh = l.video_header.lock().ok().and_then(|g| g.clone());
-    let ah = l.audio_header.lock().ok().and_then(|g| g.clone());
-    let _ = tx.try_send(text(serde_json::json!({ "watch": { "hevc": l.hevc } })));
-    if let Some(h) = vh {
-        let _ = tx.try_send(bin(0, &h));
-    }
-    if let Some(h) = ah {
-        let _ = tx.try_send(bin(3, &h));
-    }
-    l.spectators.lock().ok()?.push(Spectator {
-        id,
-        tx,
-        need_key: true,
-    });
-    l.want_key.store(true, Ordering::Relaxed);
+    l.add_spectator(Spectator::watcher(id, tx), None);
     Some(rx)
+}
+
+/// A player joins (join.rs, Play Together) the session on `host`: like a watcher, but pictures
+/// go through a queue of `video_queue` frames (a watcher's holds about 2 s), so a player is
+/// never far behind: a full queue skips to the next keyframe (counted in `skipped`) instead of
+/// adding delay. None when no session runs for `host`.
+pub(crate) fn add_player(
+    id: u64,
+    host: &str,
+    video_queue: usize,
+    skipped: Arc<AtomicU64>,
+) -> Option<PlayerFeed> {
+    let l = live()
+        .filter(|l| crate::vinput_api::host_key(&l.host) == crate::vinput_api::host_key(host))?;
+    let (tx, other) = mpsc::channel(SPECTATOR_QUEUE);
+    let (vtx, video) = mpsc::channel(video_queue.max(2));
+    let sp = Spectator {
+        video: Some(vtx.clone()),
+        skipped: Some(skipped),
+        ..Spectator::watcher(id, tx)
+    };
+    l.add_spectator(sp, Some(&vtx));
+    Some(PlayerFeed {
+        video,
+        other,
+        hevc: l.hevc,
+    })
+}
+
+/// The session running for `host`: its id (a new id is a new session), or None.
+pub(crate) fn live_session(host: &str) -> Option<u64> {
+    let key = crate::vinput_api::host_key(host);
+    live()
+        .filter(|l| crate::vinput_api::host_key(&l.host) == key && !l.stop.load(Ordering::Relaxed))
+        .map(|l| l.session)
 }
 
 /// A watcher left.
@@ -411,6 +463,26 @@ fn is_keyframe(au: &[u8], hevc: bool) -> bool {
 }
 
 impl Live {
+    /// A watcher or player joins: the codec headers first (a player's video header on its video
+    /// queue), then a keyframe is asked for.
+    fn add_spectator(&self, sp: Spectator, video: Option<&mpsc::Sender<Message>>) {
+        let vh = self.video_header.lock().ok().and_then(|g| g.clone());
+        let ah = self.audio_header.lock().ok().and_then(|g| g.clone());
+        let _ = sp
+            .tx
+            .try_send(text(serde_json::json!({ "watch": { "hevc": self.hevc } })));
+        if let Some(h) = vh {
+            let _ = video.unwrap_or(&sp.tx).try_send(bin(0, &h));
+        }
+        if let Some(h) = ah {
+            let _ = sp.tx.try_send(bin(3, &h));
+        }
+        if let Ok(mut g) = self.spectators.lock() {
+            g.push(sp);
+        }
+        self.want_key.store(true, Ordering::Relaxed);
+    }
+
     /// Every watcher gets `kind`'s message; a video access unit only from a keyframe on, and a
     /// watcher that fell behind skips to the next keyframe (it never slows the session).
     fn to_spectators(&self, kind: u8, data: &[u8], key: bool) {
@@ -422,6 +494,38 @@ impl Live {
         }
         let mut lagging = false;
         for sp in g.iter_mut() {
+            if let Some(v) = sp.video.as_ref().filter(|_| kind <= 1) {
+                // A player: header and pictures on the shallow queue.
+                if kind == 0 {
+                    if v.try_send(bin(0, data)).is_err() {
+                        sp.need_header = true;
+                        sp.need_key = true;
+                    }
+                    continue;
+                }
+                if sp.need_key && !key {
+                    continue;
+                }
+                if sp.need_header {
+                    let h = self.video_header.lock().ok().and_then(|g| g.clone());
+                    match h {
+                        Some(h) if v.try_send(bin(0, &h)).is_err() => {
+                            lagging = true;
+                            continue;
+                        }
+                        _ => sp.need_header = false,
+                    }
+                }
+                sp.need_key = false;
+                if let Err(mpsc::error::TrySendError::Full(_)) = v.try_send(bin(1, data)) {
+                    sp.need_key = true;
+                    lagging = true;
+                    if let Some(c) = &sp.skipped {
+                        c.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                continue;
+            }
             if kind == 1 {
                 if sp.need_key && !key {
                     continue;
@@ -495,6 +599,7 @@ impl Live {
             passcode_ask: Mutex::new(None),
             passcode_answer: Mutex::new(None),
             auto: Default::default(),
+            feed: Arc::new(live_feed::LiveFeed::new(hevc)),
         }
     }
 
@@ -743,6 +848,7 @@ impl StreamSink for Sink {
             if let Ok(mut h) = live.video_header.lock() {
                 *h = Some(au.to_vec());
             }
+            live.feed.video_header(au);
             live.send_ctl(bin(0, au));
             live.to_spectators(0, au, false);
             return true;
@@ -780,12 +886,24 @@ impl StreamSink for Sink {
         }
         true
     }
+    fn video_frame(&mut self, au: &[u8], index: u16) -> bool {
+        // The live feed (OBS) first: it needs the frame index, the rest of the fan-out does not.
+        self.live
+            .feed
+            .video(au, index, is_keyframe(au, self.live.hevc), Instant::now());
+        self.video(au, false)
+    }
+    fn video_lost(&mut self, _from: u16, _to: u16) {
+        self.live.feed.lost();
+    }
     fn audio(&mut self, frame: &[u8], header: bool) -> bool {
         if header {
             if let Ok(mut h) = self.live.audio_header.lock() {
                 *h = Some(frame.to_vec());
             }
+            self.live.feed.audio_header(frame);
         } else {
+            self.live.feed.audio(frame, Instant::now());
             self.live.record(
                 crate::rp_replay::KIND_AUDIO,
                 self.t0.elapsed().as_micros() as u64,
@@ -851,7 +969,9 @@ impl StreamSink for Sink {
             .ok()
             .and_then(|g| g.as_ref().map(|r| r.wants_keyframe(now)))
             .unwrap_or(false);
-        page || replay
+        // The live feed (OBS): a reader joining, catching up or after a loss, and every 2 s.
+        let feed = self.live.feed.wants_keyframe(Instant::now());
+        page || replay || feed
     }
     fn mic(&mut self) -> Option<MicInput> {
         self.live.mic.lock().ok()?.pop_front()
@@ -994,6 +1114,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
     live.mic_enabled.store(cfg.mic, Ordering::Relaxed);
     live.keyboard.enabled.store(cfg.keyboard, Ordering::Relaxed);
     live.set_replay(start.replay_s);
+    live.feed.set_config(cfg);
     let l = live.clone();
     tokio::task::spawn_blocking(move || {
         let mut sink = Sink {
@@ -1040,6 +1161,8 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         crate::log_info!("rp_stream: {end}");
         // A fan boost for this console ends with its session.
         crate::fan_boost::session_ended(&l.host);
+        // The live feed's readers reach the end of their stream.
+        l.feed.close();
         if let Ok(mut g) = LIVE.lock() {
             if g.as_ref().is_some_and(|x| Arc::ptr_eq(x, &l)) {
                 *g = None;
@@ -1293,9 +1416,8 @@ mod tests {
         // A watcher (watch party): it never gets the prompt.
         let (stx, mut srx) = mpsc::channel(8);
         live.spectators.lock().unwrap().push(Spectator {
-            id: 77,
-            tx: stx,
             need_key: true,
+            ..Spectator::watcher(77, stx)
         });
         let mut sink = Sink {
             live: Arc::new(live),
@@ -1356,16 +1478,8 @@ mod tests {
         let (fast_tx, mut fast) = mpsc::channel(8);
         let (slow_tx, mut slow) = mpsc::channel(1);
         live.spectators.lock().unwrap().extend([
-            Spectator {
-                id: 1,
-                tx: fast_tx,
-                need_key: true,
-            },
-            Spectator {
-                id: 2,
-                tx: slow_tx,
-                need_key: true,
-            },
+            Spectator::watcher(1, fast_tx),
+            Spectator::watcher(2, slow_tx),
         ]);
         // A delta frame before any keyframe is useless to a new watcher: not sent.
         live.to_spectators(1, b"delta", false);
@@ -1388,6 +1502,52 @@ mod tests {
         assert!(slow.try_recv().is_err());
         live.to_spectators(1, b"key2", true);
         assert!(slow.try_recv().is_ok());
+    }
+
+    #[test]
+    fn a_player_has_a_shallow_picture_queue_that_skips_to_a_keyframe() {
+        let live = Live::new("10.0.0.9".into(), false, Duration::from_secs(60));
+        *live.video_header.lock().unwrap() = Some(b"hdr".to_vec());
+        let (tx, mut other) = mpsc::channel(SPECTATOR_QUEUE);
+        let (vtx, mut video) = mpsc::channel(2);
+        let skipped = Arc::new(AtomicU64::new(0));
+        live.add_spectator(
+            Spectator {
+                video: Some(vtx.clone()),
+                skipped: Some(skipped.clone()),
+                ..Spectator::watcher(7, tx)
+            },
+            Some(&vtx),
+        );
+        // the header waits on the video queue, the rest on the other
+        assert_eq!(kinds(&mut video), vec!["bin0"]);
+        assert!(kinds(&mut other)[0].contains("watch"));
+        live.to_spectators(1, b"delta", false);
+        assert!(video.try_recv().is_err(), "no picture before a keyframe");
+        live.to_spectators(1, b"key", true);
+        live.to_spectators(4, b"opus", false);
+        live.to_spectators(1, b"d1", false);
+        // full (2): the next picture is skipped, counted, and a keyframe asked for
+        live.want_key.store(false, Ordering::Relaxed);
+        live.to_spectators(1, b"d2", false);
+        assert_eq!(skipped.load(Ordering::Relaxed), 1);
+        assert!(live.want_key.load(Ordering::Relaxed));
+        assert_eq!(kinds(&mut video), vec!["bin1", "bin1"]);
+        assert_eq!(
+            kinds(&mut other),
+            vec!["bin4"],
+            "sound is not held up by pictures"
+        );
+        live.to_spectators(1, b"d3", false);
+        assert!(video.try_recv().is_err());
+        // a header that did not fit goes again ahead of the next keyframe
+        let _ = vtx.try_send(Message::Binary(Bytes::from_static(b"x")));
+        let _ = vtx.try_send(Message::Binary(Bytes::from_static(b"x")));
+        live.to_spectators(0, b"hdr2", false);
+        let _ = kinds(&mut video);
+        *live.video_header.lock().unwrap() = Some(b"hdr2".to_vec());
+        live.to_spectators(1, b"key2", true);
+        assert_eq!(kinds(&mut video), vec!["bin0", "bin1"]);
     }
 
     const KEY: &[u8] = &[0, 0, 0, 1, 0x65, 1, 2]; // H.264 IDR slice
@@ -1491,9 +1651,8 @@ mod tests {
         live.attach(vt, ct, true);
         let (st, mut sr) = mpsc::channel(8);
         live.spectators.lock().unwrap().push(Spectator {
-            id: 9,
-            tx: st,
             need_key: false,
+            ..Spectator::watcher(9, st)
         });
         let before = engine_us();
         assert!(sink.video(KEY, false));

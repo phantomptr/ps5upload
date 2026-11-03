@@ -99,6 +99,10 @@ export interface ZipInspect {
   application_category_type: number | null;
   /** Path inside the zip that holds `sce_sys/` (the game root), or null. */
   game_root: string | null;
+  /** The archive's file paths, at most 5000 (#645). Absent from an older engine. */
+  entry_names?: string[] | null;
+  /** True when `entry_names` is the whole archive. */
+  entry_names_complete?: boolean;
 }
 
 /** Inspect a `.zip` without extracting it. Reads only the central directory
@@ -4382,6 +4386,10 @@ export interface JobSnapshot {
   /** Reconcile-mode skip counts. 0 for plain uploads. */
   skipped_files?: number;
   skipped_bytes?: number;
+  /** A running resumed upload: the bytes the console already held when the job opened (files
+   *  in place plus the durable part of an unfinished file). Already counted in `bytes_sent`;
+   *  take it off for this run's speed. Absent on a fresh upload and on older engines. */
+  resumed_bytes?: number;
   /** Files read from the source so far (running multi-file uploads): one bump
    *  per source file as the sender takes it up. Smoother than deriving a file
    *  count from bytes_sent, which jumps in large steps on folders of many

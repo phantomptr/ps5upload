@@ -1,4 +1,5 @@
-//! Controllers read natively on Linux, for a WebKitGTK without a Gamepad API that sees them.
+//! Controllers read natively on Linux, for a WebKitGTK without a Gamepad API that sees them,
+//! and a DualSense on Windows, for a WebView2 that sees none (#643, `hid_reader`).
 //!
 //! WebKitGTK reports controllers only when it is built with libmanette, and some distributions
 //! ship it without (Ubuntu 26.04's libwebkit2gtk-4.1 2.52, for one): there the Gamepad API
@@ -19,7 +20,8 @@
 //! the face buttons by position, with one exception: the xpad driver (and controllers that copy
 //! it) reports Xbox X (left) as BTN_X, the code the spec calls BTN_NORTH, as SDL also knows.
 
-// The reader is Linux-only; elsewhere only the mapping (and its tests) remain.
+// The evdev reader is Linux-only and the HID reader Windows-only; elsewhere only the mappings
+// (and their tests) remain.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use serde::Serialize;
@@ -179,6 +181,238 @@ pub fn standard_state(
     Standard {
         buttons,
         axes: vec![axis(ABS_X), axis(ABS_Y), axis(rsx), axis(rsy)],
+    }
+}
+
+/// A DualSense input report, report id first, in the W3C standard layout (#643: the Windows
+/// app reads the pad itself when WebView2's Gamepad API sees none). USB report 0x01 (64 bytes)
+/// and Bluetooth's full report 0x31 (78) carry the state one byte apart (SDL's
+/// `PS5StatePacket_t`); Bluetooth's short report 0x01 (10 bytes, the mode a pad starts in)
+/// has the sticks, buttons and triggers in another order (`PS5SimpleStatePacket_t`). None for
+/// anything else.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn dualsense_standard(buf: &[u8]) -> Option<Standard> {
+    // lx, ly, rx, ry, l2, r2, and the three button bytes (hat + face, shoulders, PS).
+    let (sticks, l2, r2, b) = match buf.first()? {
+        // Bluetooth's short report: 10 bytes, or 78 where Windows pads every read to the pad's
+        // longest report (as SDL tells them apart). USB's 0x01 is 64.
+        0x01 if buf.len() == 10 || buf.len() == 78 => {
+            (&buf[1..5], buf[8], buf[9], [buf[5], buf[6], buf[7]])
+        }
+        0x01 if buf.len() >= 64 => (&buf[1..5], buf[5], buf[6], [buf[8], buf[9], buf[10]]),
+        0x31 if buf.len() >= 78 => (&buf[2..6], buf[6], buf[7], [buf[9], buf[10], buf[11]]),
+        _ => return None,
+    };
+    let range = AbsRange {
+        min: 0,
+        max: 255,
+        flat: 0,
+    };
+    let bit = |byte: u8, mask: u8| if byte & mask != 0 { 1.0 } else { 0.0 };
+    // The d-pad is a hat: 0 up, then clockwise in eighths; 8 (or more) is none.
+    let hat = b[0] & 0x0f;
+    let dir = |set: [u8; 3]| if set.contains(&hat) { 1.0 } else { 0.0 };
+    let trig = |v: u8| f64::from(v) / 255.0;
+    Some(Standard {
+        buttons: vec![
+            bit(b[0], 0x20), // cross
+            bit(b[0], 0x40), // circle
+            bit(b[0], 0x10), // square
+            bit(b[0], 0x80), // triangle
+            bit(b[1], 0x01), // L1
+            bit(b[1], 0x02), // R1
+            trig(l2).max(bit(b[1], 0x04)),
+            trig(r2).max(bit(b[1], 0x08)),
+            bit(b[1], 0x10), // Create
+            bit(b[1], 0x20), // Options
+            bit(b[1], 0x40), // L3
+            bit(b[1], 0x80), // R3
+            dir([7, 0, 1]),
+            dir([3, 4, 5]),
+            dir([5, 6, 7]),
+            dir([1, 2, 3]),
+            bit(b[2], 0x01), // PS
+        ],
+        axes: sticks.iter().map(|&v| stick(range, i32::from(v))).collect(),
+    })
+}
+
+/// The Windows app's DualSense reader (#643): WebView2's Gamepad API saw no controller for
+/// some players while Windows listed the pad as working (a Bluetooth DualSense, with no DSX or
+/// Steam running). The pad is read here with hidapi, as the touchpad reader already does, and
+/// handed to the page in the standard layout, which uses it only while the browser itself sees
+/// no controller (lib/nativePad.ts), so a WebView2 that does see it is never read twice. The
+/// device is opened shared and never written to, so the pad stays in the report mode it is in
+/// and everything else keeps reading it.
+#[cfg(target_os = "windows")]
+pub mod hid_reader {
+    use super::*;
+    use crate::commands::pad_touchpad::reader::host;
+    use crate::commands::pad_touchpad::{DUALSENSE_PIDS, SONY_VID};
+    use std::ffi::CString;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    const EMIT_EVERY: Duration = Duration::from_millis(4);
+    const RESCAN_EVERY: Duration = Duration::from_secs(2);
+    /// Each pad is read for at most this long a round, so several share the thread.
+    const READ_WAIT_MS: i32 = 4;
+
+    static RUNNING: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+    static RESEND: AtomicBool = AtomicBool::new(false);
+
+    struct Pad {
+        path: CString,
+        dev: hidapi::HidDevice,
+        slot: u32,
+        id: String,
+        state: Option<Standard>,
+        sent: Option<Standard>,
+        last_emit: Option<Instant>,
+    }
+
+    /// DualSense game pad collections not open yet: (path, name).
+    fn find(open: &[Pad]) -> Vec<(CString, String, hidapi::HidDevice)> {
+        let known: Vec<CString> = open.iter().map(|p| p.path.clone()).collect();
+        host::with_api(move |api| {
+            let _ = api.reset_devices();
+            let _ = api.add_devices(SONY_VID, 0);
+            let found: Vec<(CString, String)> = api
+                .device_list()
+                .filter(|d| {
+                    DUALSENSE_PIDS.contains(&d.product_id())
+                        && (d.usage_page() == 0 || (d.usage_page() == 1 && d.usage() == 5))
+                        && !known.iter().any(|k| k.as_c_str() == d.path())
+                })
+                .map(|d| {
+                    let name = d
+                        .product_string()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("DualSense Wireless Controller")
+                        .to_string();
+                    let bus = match d.bus_type() {
+                        hidapi::BusType::Bluetooth => " (Bluetooth)",
+                        hidapi::BusType::Usb => " (USB)",
+                        _ => "",
+                    };
+                    (d.path().to_owned(), format!("{name}{bus}"))
+                })
+                .collect();
+            found
+                .into_iter()
+                .filter_map(|(path, name)| {
+                    let dev = api.open_path(&path).ok()?;
+                    Some((path, name, dev))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn run(stop: &AtomicBool, mut emit: impl FnMut(&NativePadEvent)) {
+        let mut pads: Vec<Pad> = Vec::new();
+        let mut next_scan = Instant::now();
+        let mut buf = [0u8; 128];
+        while !stop.load(Ordering::Relaxed) {
+            if Instant::now() >= next_scan {
+                for (path, id, dev) in find(&pads) {
+                    let slot = (0..)
+                        .find(|s| !pads.iter().any(|p| p.slot == *s))
+                        .unwrap_or(0);
+                    eprintln!("[pad-native] reading {id}");
+                    pads.push(Pad {
+                        path,
+                        dev,
+                        slot,
+                        id,
+                        state: None,
+                        sent: None,
+                        last_emit: None,
+                    });
+                }
+                next_scan = Instant::now() + RESCAN_EVERY;
+            }
+            if RESEND.swap(false, Ordering::Relaxed) {
+                for p in &mut pads {
+                    p.sent = None;
+                }
+            }
+            if pads.is_empty() {
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            let mut gone = Vec::new();
+            for (i, p) in pads.iter_mut().enumerate() {
+                // Everything waiting, the newest wins.
+                let mut wait = READ_WAIT_MS;
+                loop {
+                    match p.dev.read_timeout(&mut buf, wait) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if let Some(st) = dualsense_standard(&buf[..n]) {
+                                p.state = Some(st);
+                            }
+                            wait = 0;
+                        }
+                        Err(_) => {
+                            gone.push(i);
+                            break;
+                        }
+                    }
+                }
+                let now = Instant::now();
+                if let Some(st) = &p.state {
+                    let due = p.last_emit.map_or(true, |t| now >= t + EMIT_EVERY);
+                    if p.sent.as_ref() != Some(st) && due {
+                        emit(&NativePadEvent {
+                            slot: p.slot,
+                            id: p.id.clone(),
+                            connected: true,
+                            buttons: st.buttons.clone(),
+                            axes: st.axes.clone(),
+                        });
+                        p.sent = Some(st.clone());
+                        p.last_emit = Some(now);
+                    }
+                }
+            }
+            for i in gone.into_iter().rev() {
+                let p = pads.remove(i);
+                eprintln!("[pad-native] {} gone", p.id);
+                emit(&NativePadEvent {
+                    slot: p.slot,
+                    id: p.id,
+                    connected: false,
+                    buttons: Vec::new(),
+                    axes: Vec::new(),
+                });
+            }
+        }
+    }
+
+    pub fn start(app: tauri::AppHandle) {
+        use tauri::Emitter;
+        RESEND.store(true, Ordering::Relaxed);
+        let mut cur = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+        if cur.is_some() {
+            return;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        *cur = Some(stop.clone());
+        let spawned = std::thread::Builder::new()
+            .name("pad-native".into())
+            .spawn(move || run(&stop, |ev| drop(app.emit("pad-native", ev))));
+        if let Err(e) = spawned {
+            eprintln!("[pad-native] could not start: {e}");
+            *cur = None;
+        }
+    }
+
+    pub fn stop() {
+        if let Some(stop) = RUNNING.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            stop.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -501,7 +735,12 @@ pub fn pad_native_start(app: tauri::AppHandle) -> bool {
         reader::start(app);
         true
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        hid_reader::start(app);
+        true
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = app;
         false
@@ -512,11 +751,65 @@ pub fn pad_native_start(app: tauri::AppHandle) -> bool {
 pub fn pad_native_stop_on_exit() {
     #[cfg(target_os = "linux")]
     reader::stop();
+    #[cfg(target_os = "windows")]
+    hid_reader::stop();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A DualSense report: USB 0x01 (64 bytes) / Bluetooth 0x31 (78) with the state at 1 / 2,
+    /// or Bluetooth's short 0x01 (10 bytes).
+    fn ds_full(id: u8, lx: u8, ly: u8, l2: u8, b0: u8, b1: u8, b2: u8) -> Vec<u8> {
+        let (len, at) = if id == 0x31 { (78, 2) } else { (64, 1) };
+        let mut v = vec![0u8; len];
+        v[0] = id;
+        v[at..at + 4].copy_from_slice(&[lx, ly, 128, 128]);
+        v[at + 4] = l2;
+        v[at + 7] = b0;
+        v[at + 8] = b1;
+        v[at + 9] = b2;
+        v
+    }
+
+    #[test]
+    fn a_dualsense_report_reads_as_the_standard_layout() {
+        // Cross held, d-pad up-right (hat 1), L1, Create, PS; left stick full left; L2 half.
+        for id in [0x01, 0x31] {
+            let st =
+                dualsense_standard(&ds_full(id, 0, 128, 128, 0x20 | 1, 0x01 | 0x10, 0x01)).unwrap();
+            assert_eq!(st.buttons.len(), 17);
+            assert_eq!(st.buttons[0], 1.0, "cross");
+            assert_eq!(st.buttons[1], 0.0);
+            assert_eq!(st.buttons[4], 1.0, "L1");
+            assert!((st.buttons[6] - 128.0 / 255.0).abs() < 1e-9, "L2 analog");
+            assert_eq!(st.buttons[8], 1.0, "Create");
+            assert_eq!(st.buttons[16], 1.0, "PS");
+            assert_eq!(&st.buttons[12..16], &[1.0, 0.0, 0.0, 1.0], "up and right");
+            assert_eq!(st.axes[0], -1.0);
+            assert_eq!(st.axes[1], 0.0, "centre reads as 0");
+        }
+        // Bluetooth's short report: sticks, then buttons, then triggers; as read on most
+        // systems (10 bytes) and as Windows pads it (78).
+        let short = [0x01, 255, 128, 128, 128, 0x80 | 8, 0x20, 0x00, 0, 255];
+        let mut padded = short.to_vec();
+        padded.resize(78, 0);
+        for buf in [&short[..], &padded[..]] {
+            let st = dualsense_standard(buf).unwrap();
+            assert_eq!(st.buttons[3], 1.0, "triangle");
+            assert_eq!(st.buttons[0], 0.0, "not cross");
+            assert_eq!(st.buttons[9], 1.0, "Options");
+            assert_eq!(st.buttons[6], 0.0, "L2 at rest");
+            assert_eq!(st.buttons[7], 1.0, "R2");
+            assert_eq!(&st.buttons[12..16], &[0.0; 4], "hat 8 is no direction");
+            assert_eq!(st.axes[0], 1.0);
+        }
+        // Anything else is not a state report.
+        assert_eq!(dualsense_standard(&[0x05; 41]), None);
+        assert_eq!(dualsense_standard(&[0x01; 4]), None);
+        assert_eq!(dualsense_standard(&[]), None);
+    }
     use std::collections::HashMap;
 
     /// hid-playstation's DualSense: sticks and triggers 0-255, the hat for the d-pad.

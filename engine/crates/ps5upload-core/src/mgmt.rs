@@ -192,6 +192,13 @@ methods! {
     (VINPUT_CAPS, 185, "VINPUT_CAPS"),
     (VINPUT_SESSION, 186, "VINPUT_SESSION"),
     (VINPUT_REPORT, 187, "VINPUT_REPORT"),
+    (VPAD_OPEN, 188, "VPAD_OPEN"),
+    (VPAD_STATE, 189, "VPAD_STATE"),
+    (VPAD_STATES, 190, "VPAD_STATES"),
+    (VPAD_HB, 191, "VPAD_HB"),
+    (VPAD_CLOSE, 192, "VPAD_CLOSE"),
+    (VPAD_OUTPUT, 193, "VPAD_OUTPUT"),
+    (VPAD_STATUS, 194, "VPAD_STATUS"),
 }
 
 /// A management call the payload refused.

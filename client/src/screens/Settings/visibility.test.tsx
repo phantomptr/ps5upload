@@ -37,7 +37,7 @@ describe("settingsVisibility", () => {
     expect(Object.values(settingsVisibility({ tauri: true, mobile: false }))).not.toContain(false);
   });
 
-  it("hides the engine URL on Android, where the engine is built in", () => {
+  it("hides the engine URL on the phone apps, whose engine is built in", () => {
     const v = settingsVisibility({ tauri: true, mobile: true });
     expect(v.engineUrl).toBe(false);
     expect(v.keepDeviceAwake).toBe(true);

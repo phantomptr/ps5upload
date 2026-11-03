@@ -37,11 +37,12 @@ describe("TabNav groups follow the sidebar's sections", () => {
 
   it("covers pinned items, redirects and sub-routes", () => {
     for (const item of FIXED_NAV_ITEMS) expect(tabForPath(item.to), item.to).not.toBeNull();
-    expect(FIXED_NAV_ITEMS.map((i) => i.to)).toEqual(["/home", "/play", "/bug-report"]);
+    expect(FIXED_NAV_ITEMS.map((i) => i.to)).toEqual(["/home", "/play", "/bug-report", "/thanks"]);
     expect(tabForPath("/games/PPSA01234")).toBe("games");
     expect(tabForPath("/activity")).toBeNull();
     expect(tabForPath("/play")).toBe("play");
     expect(tabForPath("/bug-report")).toBe("home");
+    expect(tabForPath("/thanks")).toBe("home");
     expect(tabForPath("/file-system")).toBe("files");
     expect(tabForPath("/more")).toBeNull();
   });

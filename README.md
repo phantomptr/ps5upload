@@ -24,7 +24,8 @@
 ## What it does
 
 - **Fast, resumable uploads** of games, folders, disk images and `.zip` / `.7z` / `.rar`
-  archives (unpacked on the way, nothing extracted to your disk). Everything runs over
+  archives (unpacked on the way with nothing extracted to your disk, or sent as they are: a
+  game archive unpacks, anything else is sent as the file, and you can choose either). Everything runs over
   **AVA1**, one encrypted connection on port 9120. Every file is verified, and an upload
   continues after a dropped connection, a helper restart or rest mode. A job that will not
   fit is refused up front, counting what is already on the console. Queue, live speed and ETA;
@@ -69,6 +70,13 @@
   - A step-by-step setup (Play › Set up) that checks each requirement on the console and fixes
     what it can (sign-in, account ID, Remote Play switches, pairing, or pairing with the PIN the
     PS5 shows), plus a PIN for Sony's PS Remote Play app or chiaki-ng if you prefer those.
+  - **Play Together:** friends join your game as Player 2, 3 and 4, each with their own
+    controller on the PS5, from any browser or the app. Share a QR code, a link or a short
+    code, allow each friend, and they pick Quick Play on the TV. A short drop keeps their
+    place.
+  - **Go live** to YouTube, Twitch, Kick, Facebook or any RTMP/SRT server, several at once,
+    straight from Play (desktop apps and the web UI), or add the stream to **OBS** for your own
+    scenes and overlays.
   - A local automation API lets a script or AI agent on the engine's computer watch and play a
     running session ([AUTOMATION.md](AUTOMATION.md)).
 - **Cheats, fan curve, hardware view,** payload sender with a catalogue and playlists, and
@@ -480,6 +488,7 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 * [elf-arsenal](https://git.etawen.dev/soniciso/elf-arsenal) (soniciso and contributors) — the cheat engine (`payload/src/cheats.c`), the drive sensors (`drive_sensors.c`) and the Remote Play account-id lookup (`remoteplay.c`); the wake watchdog adapts its algorithm, and its launch and jailbreak code was a reference for ours
 * [ampr_emu](https://github.com/drakmor/ampr_emu) (drakmor) — the LZ4 asset packer is a Rust port of its `ampr_pack.py`, and "Measure how it plays" of `ampr_pack_profile.py`; the index writer follows the format `build_ampr_index.py` writes
 * [playactor](https://github.com/dhleong/playactor) (Daniel Leong) — Remote Play registration (with its key tables) and the control session that wakes a console and signs its user in, ported to Rust in `engine/crates/ps5upload-core/src/rp_regist*.rs` and `rp_session.rs`
+* [ProsperoSunshine](https://github.com/Darkatek7/ProsperoSunshine) (Darkatek7, from ps5-mcp's RemoteEye) — the `/dev/hid` requests that make Play Together's virtual controllers (add, insert, delete, output, and the state block layout), written anew in `payload/src/vpad.c` (GPL-3.0-only, as its source)
 * [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng) (Streetpea and the Chiaki authors) — Remote Play streaming: its session, control, Takion, crypto, FEC, video and audio receiving code, ported to Rust in `engine/crates/ps5upload-core/src/rp_stream/`
 
 **Libraries:**
@@ -558,3 +567,28 @@ If you find this tool useful, consider buying me a coffee!
 * Support me on Ko-fi: [https://ko-fi.com/B0B81S0WUA](https://ko-fi.com/B0B81S0WUA)
 
 [![Support me on Ko-fi](https://storage.ko-fi.com/cdn/kofi3.png?v=3)](https://ko-fi.com/B0B81S0WUA)
+
+**Crypto**, straight to my hardware wallet. Send each coin only on its own network; anything
+else can't be recovered.
+
+| Coin | Network | Address |
+| --- | --- | --- |
+| BTC | Bitcoin | `bc1q36gxkvd3wfxy9azm8hft3rru9m6m9hjvn7u20n` |
+| ETH | Ethereum | `0x2e787654db543B69FB011E16995C274dFAfc2286` |
+| SOL | Solana | `G1q5XCCn3mePYpcx7uY17CwDsUaAZTcty56huUDvVqjG` |
+| XRP | XRP Ledger | `rEVq3si3sm9NuWNuZiUZFKsUtwC3w9SrjR` (no destination tag needed) |
+
+QR codes for each are on [the website](https://ps5upload.phantomptr.com/#thanks) and in the app
+under **Thanks & Support**.
+
+### Thank you
+
+Thank you to everyone who has supported PS5Upload. Every coffee keeps it going. (The app and
+the website list you too, under Thanks & Support.)
+
+<!-- supporters:start (scripts/supporters.mjs) -->
+BigPapii420 · clincher · Ice · Marv530e · San · Dennis · gabuscus · Slappula · b1ackcoffee · drsam · f0d · John Malpas · kheops · LEO · Lucky · MagneTo · Peejay571 · Ronnie K. · B3aver08 · Beetle · David Rabilero · Florian · hernanr1993 · Joe Szymkowicz · Joey Lam · kuttenkop de kutjelikker · Mehmet · Niko · StrijderNL · Ferko · GerardoPTC · Griffdaddy · here · Mayankk! · Rubén · Turcan Vadim · Zeiko
+
+…and 8 anonymous supporters. Thank you all! 💛
+
+<!-- supporters:end -->

@@ -38,3 +38,7 @@ ada593623350800054c841b1f8cdbaf1fabcc608:client/src/i18n/locales/pl.ts:generic-a
 3f2c3db30017d3ef95f200a6f47e55fa238b2620:client/e2e/remote-play-hush.spec.ts:generic-api-key:42
 410cdd60967b834f97492239ae7631d9c8b4cbdf:client/e2e/remote-play-settings.spec.ts:generic-api-key:23
 dfc09e9eded4aabb2729290c3bc3ed10fc7aa38d:client/e2e/remote-play-mini.spec.ts:generic-api-key:21
+# 11.0.0 PR branch: made-up test keys (an invite key, two fake stream keys), since replaced by low-entropy fakes
+a7f6919cf47a2f33d631c74de56bbeecd02a37af:client/src/screens/Play/playTogetherState.test.ts:generic-api-key:15
+028d6a0d99767dee2afb6cea8bb0587b685cdc3a:client/e2e/remote-play-golive.spec.ts:generic-api-key:150
+028d6a0d99767dee2afb6cea8bb0587b685cdc3a:engine/crates/ps5upload-engine/src/golive_dest_tests.rs:generic-api-key:194

@@ -248,7 +248,16 @@ fn soft_io_error(e: &std::io::Error) -> bool {
             | K::HostUnreachable
             | K::NetworkUnreachable
             | K::NetworkDown
-    ) || matches!(e.raw_os_error(), Some(code) if is_no_buffer_space(code))
+    ) || matches!(e.raw_os_error(), Some(code) if is_no_buffer_space(code) || is_io_pending(code))
+}
+
+/// Windows' ERROR_IO_PENDING (997) and ERROR_IO_INCOMPLETE (996): an overlapped operation still
+/// under way, not a failure. Some network filter drivers (VPNs, firewalls, packet capture) let
+/// it out of a plain blocking receive; it ended Remote Play with "os error 997" (#643). The
+/// next receive carries on, and a console that really went quiet is noticed by the stream's
+/// own silence timeout.
+fn is_io_pending(code: i32) -> bool {
+    cfg!(windows) && (code == 997 || code == 996)
 }
 
 /// ENOBUFS (55 on macOS/BSD, 105 on Linux) or WSAENOBUFS (10055).

@@ -64,6 +64,7 @@
 #include "files_handoff.h"
 #include "vinput.h"
 #include "vinput_ps5.h"
+#include "vpad.h"
 #include "focus_probe.h"
 #include "proc_list.h"
 #include "proc_identity.h"
@@ -340,6 +341,21 @@
 #define MGMT_FRAME_VINPUT_SESSION_ACK 343u
 #define MGMT_FRAME_VINPUT_REPORT 344u
 #define MGMT_FRAME_VINPUT_REPORT_ACK 345u
+/* Play Together: virtual controllers for Players 2-4 (vpad.c) */
+#define MGMT_FRAME_VPAD_OPEN 346u
+#define MGMT_FRAME_VPAD_OPEN_ACK 347u
+#define MGMT_FRAME_VPAD_STATE 348u
+#define MGMT_FRAME_VPAD_STATE_ACK 349u
+#define MGMT_FRAME_VPAD_STATES 350u
+#define MGMT_FRAME_VPAD_STATES_ACK 351u
+#define MGMT_FRAME_VPAD_HB 352u
+#define MGMT_FRAME_VPAD_HB_ACK 353u
+#define MGMT_FRAME_VPAD_CLOSE 354u
+#define MGMT_FRAME_VPAD_CLOSE_ACK 355u
+#define MGMT_FRAME_VPAD_OUTPUT 356u
+#define MGMT_FRAME_VPAD_OUTPUT_ACK 357u
+#define MGMT_FRAME_VPAD_STATUS 358u
+#define MGMT_FRAME_VPAD_STATUS_ACK 359u
 #define MGMT_FRAME_SDK_SCAN 214u
 #define MGMT_FRAME_SDK_SCAN_ACK 215u
 #define MGMT_FRAME_SDK_PATCH 216u
@@ -8243,6 +8259,69 @@ static int handle_vinput_report(runtime_state_t *state, const char *body, uint64
     n = vinput_report_json(body ? body : "", (size_t)body_len, vinput_now_ms(), out, sizeof out);
     if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
     return mgmt_reply(MGMT_FRAME_VINPUT_REPORT_ACK, out, (uint64_t)n);
+}
+
+/* ── Play Together: virtual controllers for Players 2-4 (vpad.c) ───────────────────────────
+ * Like vinput.*, a refusal ({"ok":false,"err":..}) is kept as the answer (mgmt_call_text_keep). */
+
+/* Who a new pad is for: the foreground user (a sceUserService call, so under sony_api_lock), else
+ * the first user in /user/home. The console ignores a pad made for user 0. */
+static uint32_t vpad_pick_user(void) {
+    uint32_t uid;
+    pthread_mutex_lock(&sony_api_lock);
+    sceUserServiceInitialize(NULL); /* idempotent */
+    uid = profile_foreground_user(NULL, 0);
+    pthread_mutex_unlock(&sony_api_lock);
+    return uid ? uid : vpad_home_user("/user/home");
+}
+
+static int handle_vpad_open(runtime_state_t *state, const char *body, uint64_t body_len) {
+    char out[VPAD_OUT_MAX];
+    int n;
+    if (!state || body_len > VPAD_REQ_MAX) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    n = vpad_open_json(body ? body : "", (size_t)body_len, vpad_now_ms(), vpad_pick_user, out, sizeof out);
+    if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    return mgmt_reply(MGMT_FRAME_VPAD_OPEN_ACK, out, (uint64_t)n);
+}
+
+typedef int (*vpad_call_fn)(const char *body, size_t n, long long now_ms, char *out, size_t cap);
+
+static int vpad_reply(runtime_state_t *state, vpad_call_fn fn, uint32_t ack, const char *body, uint64_t body_len) {
+    char out[VPAD_OUT_MAX];
+    int n;
+    if (!state || body_len > VPAD_REQ_MAX) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    n = fn(body ? body : "", (size_t)body_len, vpad_now_ms(), out, sizeof out);
+    if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    return mgmt_reply(ack, out, (uint64_t)n);
+}
+
+static int handle_vpad_state(runtime_state_t *state, const char *body, uint64_t body_len) {
+    return vpad_reply(state, vpad_state_json, MGMT_FRAME_VPAD_STATE_ACK, body, body_len);
+}
+
+static int handle_vpad_states(runtime_state_t *state, const char *body, uint64_t body_len) {
+    return vpad_reply(state, vpad_states_json, MGMT_FRAME_VPAD_STATES_ACK, body, body_len);
+}
+
+static int handle_vpad_hb(runtime_state_t *state, const char *body, uint64_t body_len) {
+    return vpad_reply(state, vpad_hb_json, MGMT_FRAME_VPAD_HB_ACK, body, body_len);
+}
+
+static int handle_vpad_close(runtime_state_t *state, const char *body, uint64_t body_len) {
+    return vpad_reply(state, vpad_close_json, MGMT_FRAME_VPAD_CLOSE_ACK, body, body_len);
+}
+
+static int handle_vpad_output(runtime_state_t *state, const char *body, uint64_t body_len) {
+    return vpad_reply(state, vpad_output_json, MGMT_FRAME_VPAD_OUTPUT_ACK, body, body_len);
+}
+
+static int handle_vpad_status(runtime_state_t *state) {
+    char out[VPAD_OUT_MAX];
+    int n;
+    if (!state) return -1;
+    n = vpad_status_json(vpad_now_ms(), out, sizeof out);
+    if (n < 0) return mgmt_reply(MGMT_FRAME_ERROR, "internal", 8);
+    return mgmt_reply(MGMT_FRAME_VPAD_STATUS_ACK, out, (uint64_t)n);
 }
 
 static int handle_minion_tile(runtime_state_t *state, const char *body, uint64_t body_len) {

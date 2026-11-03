@@ -2,10 +2,12 @@
  *
  * Three management methods (protocol/ps5upload-ava1/MGMT_METHODS.md, app.toml 185-187):
  *
- *   vinput.caps     {} -> {"mouse":B,"keyboard":B,"open":B,"backend":"<name>"[,"companion":"<status>"]
+ *   vinput.caps     {} -> {"mouse":B,"keyboard":B,"open":B,"backend":"<name>","vpad":3[,"companion":"<status>"]
  *                          [,"reason":"<token>"]}
  *                   what this console can create (B = true/false), and whether a session is open;
  *                   "companion" is the device process's state (vinput_backend_t.status).
+ *                   "vpad" is how many Play Together controllers this helper can make (vpad.h;
+ *                   absent from helpers without the vpad.* methods).
  *   vinput.session  {"op":"open","id":N,"mouse":B,"keyboard":B} | {"op":"hb","id":N} | {"op":"close","id":N}
  *                   -> {"ok":B,"open":B,"mouse":B,"keyboard":B[,"err":"<token>"]}
  *                   err "vinput_starting": the device process is starting (open again shortly); on

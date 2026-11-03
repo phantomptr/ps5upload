@@ -115,6 +115,8 @@ fn is_read_only(method: u16) -> bool {
             | gen::METHOD_MESH_DOC_GET
             | gen::METHOD_PROFILE_NP_STATE
             | gen::METHOD_VINPUT_CAPS
+            | gen::METHOD_VPAD_OUTPUT
+            | gen::METHOD_VPAD_STATUS
     )
 }
 

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import type { RemotePlayStream } from "../lib/remotePlayStream";
-import { useRemotePlayStore } from "./remotePlay";
+import { useRemotePlayStore, type RpPrefs } from "./remotePlay";
 
 /** Sessions the lower quality was already offered for (once each, taken or not). */
 const offered = new WeakSet<RemotePlayStream>();
@@ -21,6 +21,7 @@ interface QualityState {
   offer: (s: RemotePlayStream) => void;
   dismiss: () => void;
   switchTo720: () => Promise<void>;
+  restartWith: (prefs: Partial<RpPrefs>) => Promise<void>;
   cancelSwitch: () => void;
 }
 
@@ -45,15 +46,23 @@ export const useRpQualityStore = create<QualityState>((set, get) => ({
     set({ offerFor: null });
   },
 
-  /** Stop the stream and start it again at 720p. The resolution is fixed for a session, and the
-   *  PS5 keeps its one Remote Play slot for ~12 s after a session ends: the engine answers
-   *  "busy, try in N s" without asking the console, and this waits that long and tries again. */
+  /** Stop the stream and start it again at 720p (see restartWith). */
   async switchTo720() {
+    if (!useRemotePlayStore.getState().stream || get().switching) return;
+    set({ offerFor: null });
+    await get().restartWith({ res: "1280x720" });
+  },
+
+  /** Stop the stream and start it again with `prefs` (720p, or H.264 at a site's bitrate for
+   *  Go live). Resolution, codec and bitrate are fixed for a session, and the PS5 keeps its one
+   *  Remote Play slot for ~12 s after a session ends: the engine answers "busy, try in N s"
+   *  without asking the console, and this waits that long and tries again. */
+  async restartWith(prefs) {
     const rp = useRemotePlayStore.getState();
     const t = rp.target;
     if (!t || !rp.stream || get().switching) return;
-    set({ offerFor: null, switching: { retryAt: null } });
-    rp.setPrefs({ res: "1280x720" });
+    set({ switching: { retryAt: null } });
+    rp.setPrefs(prefs);
     rp.stop();
     await until(() => !useRemotePlayStore.getState().stream, 10_000);
     const deadline = Date.now() + SWITCH_FOR_MS;

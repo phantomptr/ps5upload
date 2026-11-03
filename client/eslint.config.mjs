@@ -40,6 +40,7 @@ export default tseslint.config(
       "dist/**",
       "dist-console/**",
       "dist-pad/**",
+      "dist-join/**",
       "node_modules/**",
       "src-tauri/**",
       "coverage/**",

@@ -3,11 +3,14 @@
 // commands/pad_native.rs) and sends each change as a `pad-native` event, which goes into the
 // same bridge the Android app uses (lib/nativePad.ts). The bridge offers them only while the
 // browser sees no controller itself, so a WebKitGTK that does see them is never read twice.
+//
+// The Windows app does the same for a DualSense (#643): WebView2 saw none for some players
+// while Windows listed the pad as working, so the app reads it over HID itself.
 
 import { listen } from "@tauri-apps/api/event";
 
 import { invoke } from "./invokeLogged";
-import { isLinuxDesktop } from "./platform";
+import { isLinuxDesktop, isWindows } from "./platform";
 
 interface NativePadEvent {
   slot: number;
@@ -19,10 +22,11 @@ interface NativePadEvent {
 
 let started = false;
 
-/** On Linux: listen for the app's controllers, then ask it to read them (it sends each one
- *  again, so a reloaded page has them at once). Elsewhere nothing: the Gamepad API is used. */
+/** On Linux and Windows: listen for the app's controllers, then ask it to read them (it sends
+ *  each one again, so a reloaded page has them at once). Elsewhere nothing: the Gamepad API is
+ *  used. */
 export async function startNativePads(): Promise<void> {
-  if (started || !isLinuxDesktop()) return;
+  if (started || !(isLinuxDesktop() || isWindows())) return;
   started = true;
   try {
     await listen<NativePadEvent>("pad-native", (e) => window.__ps5uNativePad?.(e.payload));

@@ -85,6 +85,13 @@ fn the_ids_the_gate_and_the_converters_key_on_are_the_schema_numbers() {
     assert_eq!(m::VINPUT_CAPS.id, gen::METHOD_VINPUT_CAPS);
     assert_eq!(m::VINPUT_SESSION.id, gen::METHOD_VINPUT_SESSION);
     assert_eq!(m::VINPUT_REPORT.id, gen::METHOD_VINPUT_REPORT);
+    assert_eq!(m::VPAD_OPEN.id, gen::METHOD_VPAD_OPEN);
+    assert_eq!(m::VPAD_STATE.id, gen::METHOD_VPAD_STATE);
+    assert_eq!(m::VPAD_STATES.id, gen::METHOD_VPAD_STATES);
+    assert_eq!(m::VPAD_HB.id, gen::METHOD_VPAD_HB);
+    assert_eq!(m::VPAD_CLOSE.id, gen::METHOD_VPAD_CLOSE);
+    assert_eq!(m::VPAD_OUTPUT.id, gen::METHOD_VPAD_OUTPUT);
+    assert_eq!(m::VPAD_STATUS.id, gen::METHOD_VPAD_STATUS);
     assert_eq!(m::CLEANUP_SCAN.id, gen::METHOD_CLEANUP_SCAN);
     assert_eq!(m::CLEANUP_STATUS.id, gen::METHOD_CLEANUP_STATUS);
     assert_eq!(m::CLEANUP_APPLY.id, gen::METHOD_CLEANUP_APPLY);

@@ -4,6 +4,106 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.0.0
+
+- **Play Together: friends play your PS5 as Player 2, 3 and 4 (For #641).** While you play, the
+  new people button on the Play bar (or **⋯ › Play Together** on a phone) opens a panel with three
+  steps: share the invite (a QR code, the link with Copy, your phone's Share sheet, or a short code
+  like K7M-2QX), allow your friend when their name pops up over the picture, and on the TV they
+  press PS and pick **Quick Play** (or their own user). Each friend gets their own controller on
+  the PS5, a separate player, plus your picture and sound. Up to three friends. Each has a card
+  with what they're doing (asking, picking a user on the TV, playing, reconnecting with a
+  countdown, left), their delay in colour, and a Remove button; if a friend's delay is high, the
+  panel suggests a lower Play quality. The phone controller and watch features are one click away
+  in the same panel. On the PS5's home screen only you drive the menus; in games, friends play.
+- **Your friend needs no app.** The link opens a page in any browser, in their own language: they
+  type a name, wait for your yes, and play with a controller connected to their device or with the
+  on-screen controls on a phone. The picture stays within about 150 ms of the console, rumble
+  plays on their controller, and a "You are Player 2" chip shows the light-bar colour.
+- **Join a friend from the app.** Play now has two choices: **Play my PS5** and **Join a friend**.
+  Paste a link, type the short code, scan the QR code (where the device's camera can), or pick a
+  friend from **Playing nearby**: other PS5Upload apps on your network that have Play Together
+  open. In the app the picture uses the lower-delay decoder, and full screen turns a phone
+  sideways with the on-screen controls.
+- **A friend's Wi-Fi blip doesn't cost them their spot.** If a friend's connection drops, their
+  controller lets go of everything within half a second (no runaway sticks or buttons) and their
+  player waits for them for a minute: they come back as the same player, still signed in on the
+  TV, without asking again. If you stop playing, friends see "The host stopped playing" and can
+  come back if you start again within a minute. A friend's button tap shorter than a network
+  round trip still reaches the game as a press and a release.
+- **Friends can't open the PS5's menus by default.** Once a friend is in, their PS and Create
+  buttons are switched off so a stray press doesn't pull everyone out of the game. They keep PS
+  for the first minute to answer "Who's using this controller?", and you can turn blocking off.
+- **One stream at a time, and it always asks.** Joining a friend while you play your own PS5,
+  starting Play while you're in a friend's game, joining a second friend, or stopping Play while
+  friends are playing each asks first.
+- **Safe to open to your network.** Only the join page and its connection are reachable from
+  other devices. Joining with a code always needs your Allow, repeated wrong codes are slowed
+  down, and a friend can only send their controller. With an older helper on the PS5, the panel
+  says "Update the helper to play together" with the button to send the new one.
+- **Playing with someone who isn't home?** Both of you join the same Tailscale network, then share
+  the link.
+- **Stream your PS5 to YouTube, Twitch, Kick or Facebook, straight from Play (For #635).** A new
+  **Stream** button on the Play bar (the one with the red dot) opens **Go live**: add a site,
+  paste its stream key (each site's form says where to find it), and press Go live. Several
+  sites at once work too, and **Custom** takes any RTMP, RTMPS or SRT server. The picture is
+  sent exactly as the PS5 made it, so it costs this computer almost nothing; only the sound is
+  converted (sites don't take the PS5's Opus sound), by ffmpeg, which is downloaded the first
+  time (30 to 90 MB) and checked against a fixed fingerprint before it is ever run. While live,
+  a **LIVE** badge on the picture shows the time and bitrate. If the connection drops, it
+  reconnects by itself (after 2, 4, 8, 15, then every 30 seconds) while you keep playing; if one
+  of several sites fails, the others keep going. A refused key, a site that's unreachable, or a
+  video format the site doesn't take each get a plain explanation. Stream keys are kept
+  encrypted on the engine's computer and only their last four characters are ever shown. Desktop
+  apps and the web UI; not in the phone apps yet.
+- **Each site's limits are checked before you go live.** Twitch, Kick and Facebook take H.264
+  only and cap the bitrate (about 6, 8 and 9 Mbps); when Play sends HEVC or more than a site
+  takes, the panel says so and offers to restart Play in H.264 at the right bitrate. Twitch has
+  a **Test without going public** switch (on by default) to try it first.
+- **Stream with OBS instead.** The Stream panel's **OBS** tab gives a link to the live stream on
+  this computer, with the four steps to add it in OBS as a Media Source, for your own scenes and
+  overlays. The stream starts at a keyframe and has one every 2 seconds (the interval streaming
+  sites ask for), and damaged frames after a network loss are held back until the picture is
+  clean again. Scripts can read it too: `GET /api/ps5/rp/live.ts` (see AUTOMATION.md).
+- **Play › Settings › Picture › Bitrate.** Choose the video bitrate the PS5 streams at (Auto is
+  15 Mbps at 1080p, as before): lower it for a busy network, or for a streaming site's limit.
+- **Uploads keep their speed after a hiccup, and resumed uploads are no longer slow.** When the
+  upload tried one more connection and it didn't help, closing that connection was counted as a
+  failure, which closed another, and so on: one try could take an upload down to a single
+  connection and small pieces, and on Wi-Fi it stayed there. Measured on a shared 12 MB/s link, a
+  fresh upload went from 9.4 to 12.1 MB/s and a resumed one from 8.0 to 11.5 MB/s. (AVA1 1.0.6.)
+- **A resumed upload shows what was already on the PS5,** and its time left counts only what's
+  still to send.
+- **A DualSense works in the Windows app even when Windows' web view doesn't see it (For
+  #643).** Some players' Bluetooth DualSense showed as working in Windows but never reached
+  Play ("No controller seen yet"). The app now reads a DualSense itself, over USB or Bluetooth,
+  whenever the web view sees no controller, and shows it under Controllers. A controller the web
+  view does see is used as before, never twice.
+- **Remote Play on Windows no longer stops with "os error 997" (For #643).** Some network
+  drivers (VPNs, firewalls, capture tools) report a receive as "still under way"; the stream took
+  that as the end. It now just reads again.
+- **Add files on iPhone and iPad opens the Files sheet (For #644).** Pick from iCloud Drive, On
+  My iPhone, your downloads or any other app's folder, not only PS5Upload's own folder. Folders
+  are still picked with the app's own browser.
+- **Thanks & Support, in the sidebar under Bug Report.** A thank-you to everyone who has
+  supported PS5Upload: a wall of names, most support first (no amounts shown or kept), with the
+  anonymous ones counted. And the ways to support it: Ko-fi (card or PayPal), or Bitcoin,
+  Ethereum, Solana or XRP straight to my wallet, each with its QR code, a Copy button and the one
+  network to send it on. In the apps, the web UI, on the website and in the README. Home's heart
+  button opens it.
+- **Send an archive as it is, without unpacking it.** A .zip, .7z or .rar dropped on Upload was
+  always unpacked onto the PS5, which broke anything that wanted the archive itself, such as a
+  jailbreak update. The archive card now asks what should happen to it: unpack it into a folder,
+  unpack it straight into the destination, or **Send the archive as it is**, which shows where the
+  file lands. The app picks for you from what the archive holds: a game or packages are unpacked
+  as before, anything else (payloads, a jailbreak update, saves) is sent as it is, and when it
+  can't tell, nothing is picked and Upload waits for your choice. With several sources, each
+  archive in the list has its own Unpack / Send as it is choice. (For #645.)
+- **A self-hosted engine chosen in Settings stays chosen.** On a computer pointed at an engine on
+  a NAS or in Docker (Settings › Engine URL), the app's own engine starting up could take some of
+  the app back to itself. It no longer does.
+
+
 ## 10.7.6
 
 - **Saved cheats and patches are applied the moment a game starts (For #627).** Some patches only

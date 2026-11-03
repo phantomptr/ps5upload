@@ -57,6 +57,8 @@ pub struct TouchReport {
 /// the tracking id below it, then 12-bit x and y packed into three bytes.
 pub fn parse_dualsense_report(buf: &[u8]) -> Option<TouchReport> {
     let state = match buf.first()? {
+        // Bluetooth's short report, which Windows pads to the pad's longest (78): no touchpad.
+        0x01 if buf.len() == 78 => return None,
         0x01 if buf.len() >= 64 => &buf[1..],
         0x31 if buf.len() >= 78 => &buf[2..],
         _ => return None,
@@ -91,6 +93,8 @@ pub struct RawMotion {
 /// The state bytes of a full report: USB 0x01 (64 bytes) or Bluetooth 0x31 (78 bytes).
 fn full_state(buf: &[u8]) -> Option<&[u8]> {
     match buf.first()? {
+        // Bluetooth's short report padded to 78 by Windows: no motion either.
+        0x01 if buf.len() == 78 => None,
         0x01 if buf.len() >= 64 => Some(&buf[1..]),
         0x31 if buf.len() >= 78 => Some(&buf[2..]),
         _ => None,
@@ -261,7 +265,7 @@ impl Follower {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-mod reader {
+pub(crate) mod reader {
     use super::*;
     use crate::commands::pad_dualsense::{self, Transport};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -320,7 +324,7 @@ mod reader {
     /// on a reader thread (which ends with each stream) or on a command thread, the next scan
     /// touched a freed run loop and the app crashed (EXC_BREAKPOINT in
     /// IOHIDDeviceScheduleWithRunLoop, 10.2.0 on a Mac with a DualSense attached).
-    mod host {
+    pub(crate) mod host {
         use std::sync::mpsc;
         use std::sync::{Mutex, OnceLock};
 
@@ -658,6 +662,11 @@ mod tests {
         // The short Bluetooth report (no touchpad), a truncated report, other ids, nothing.
         assert_eq!(parse_dualsense_report(&[0x01; 10]), None);
         assert_eq!(parse_dualsense_report(&[0x31; 40]), None);
+        // Windows pads Bluetooth's short report to 78 bytes: still no touchpad, no motion.
+        let mut padded = vec![0u8; 78];
+        padded[0] = 0x01;
+        assert_eq!(parse_dualsense_report(&padded), None);
+        assert!(parse_dualsense_motion(&padded).is_none());
         assert_eq!(parse_dualsense_report(&[0x02; 64]), None);
         assert_eq!(parse_dualsense_report(&[]), None);
     }

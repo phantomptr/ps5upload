@@ -28,8 +28,8 @@ pub struct VideoStats {
 /// What the assembler has to say after a unit.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Output {
-    /// A complete Annex-B access unit.
-    Frame(Vec<u8>),
+    /// A complete Annex-B access unit, with its frame index.
+    Frame { index: u16, au: Vec<u8> },
     /// Frames `from..=to` will never be complete: tell the console (it
     /// re-references or sends a keyframe).
     Lost { from: u16, to: u16 },
@@ -207,7 +207,7 @@ impl FrameAssembler {
         }
         self.stats.frames += 1;
         self.stats.bytes += frame.len() as u64;
-        out.push(Output::Frame(frame));
+        out.push(Output::Frame { index, au: frame });
     }
 
     fn give_up(&mut self, index: u16, out: &mut Vec<Output>) {
@@ -242,7 +242,7 @@ mod tests {
     fn frames(o: Vec<Output>) -> Vec<Vec<u8>> {
         o.into_iter()
             .filter_map(|x| match x {
-                Output::Frame(f) => Some(f),
+                Output::Frame { au, .. } => Some(au),
                 _ => None,
             })
             .collect()
@@ -310,6 +310,6 @@ mod tests {
         a.push(&unit(1, 0, 1, 0, &[0, 0, 1]));
         let out = a.push(&unit(3, 0, 1, 0, &[0, 0, 3]));
         assert_eq!(out[0], Output::Lost { from: 2, to: 2 });
-        assert!(matches!(out[1], Output::Frame(_)));
+        assert!(matches!(out[1], Output::Frame { index: 3, .. }));
     }
 }

@@ -528,6 +528,35 @@ value = 186
 name = "METHOD_VINPUT_REPORT"
 ty = "u16"
 value = 187
+# Play Together: virtual controllers for Players 2-4 (payload/include/vpad.h; MGMT_METHODS.md)
+[[const]]
+name = "METHOD_VPAD_OPEN"
+ty = "u16"
+value = 188
+[[const]]
+name = "METHOD_VPAD_STATE"
+ty = "u16"
+value = 189
+[[const]]
+name = "METHOD_VPAD_STATES"
+ty = "u16"
+value = 190
+[[const]]
+name = "METHOD_VPAD_HB"
+ty = "u16"
+value = 191
+[[const]]
+name = "METHOD_VPAD_CLOSE"
+ty = "u16"
+value = 192
+[[const]]
+name = "METHOD_VPAD_OUTPUT"
+ty = "u16"
+value = 193
+[[const]]
+name = "METHOD_VPAD_STATUS"
+ty = "u16"
+value = 194
 [[const]]
 name = "JOB_OP_DELETE"
 ty = "u8"

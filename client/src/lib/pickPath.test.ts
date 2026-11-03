@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the three boundaries pickPath dispatches across: platform
 // detection, the in-app picker (Android), and the native dialog (desktop).
-const { mockIsAndroid, mockIsTauri, mockPickLocal, mockPickLocalMany, mockOpenDialog } = vi.hoisted(() => ({
+const { mockIsAndroid, mockIsIOS, mockIsTauri, mockPickLocal, mockPickLocalMany, mockOpenDialog } = vi.hoisted(() => ({
   mockIsAndroid: vi.fn(),
+  mockIsIOS: vi.fn(),
   mockIsTauri: vi.fn(),
   mockPickLocal: vi.fn(),
   mockPickLocalMany: vi.fn(),
@@ -11,7 +12,10 @@ const { mockIsAndroid, mockIsTauri, mockPickLocal, mockPickLocalMany, mockOpenDi
 }));
 
 // isMobile: Android or iOS both browse in-app (the mock stands for either).
-vi.mock("./platform", () => ({ isMobile: () => mockIsAndroid() }));
+vi.mock("./platform", () => ({
+  isMobile: () => mockIsAndroid() || mockIsIOS(),
+  isIOS: () => mockIsIOS(),
+}));
 vi.mock("./tauriEnv", () => ({ isTauriEnv: () => mockIsTauri() }));
 vi.mock("../state/localPicker", () => ({
   pickLocalPath: (...a: unknown[]) => mockPickLocal(...a),
@@ -25,6 +29,7 @@ import { pickPath, pickPaths } from "./pickPath";
 
 beforeEach(() => {
   mockIsAndroid.mockReset();
+  mockIsIOS.mockReset().mockReturnValue(false);
   mockIsTauri.mockReset().mockReturnValue(true);
   mockPickLocal.mockReset();
   mockPickLocalMany.mockReset();
@@ -159,5 +164,40 @@ describe("pickPaths: several at once", () => {
     mockPickLocalMany.mockResolvedValue([]);
     expect(await pickPaths({ mode: "folder" })).toEqual([]);
     expect(mockOpenDialog).not.toHaveBeenCalled();
+  });
+});
+
+describe("pickPath on iOS (#644)", () => {
+  beforeEach(() => mockIsIOS.mockReturnValue(true));
+
+  it("picks files with the system Files sheet and hands back real paths", async () => {
+    mockOpenDialog.mockResolvedValue([
+      "file:///private/var/mobile/Containers/Data/Application/X/tmp/app-Inbox/My%20Game.zip",
+      "/private/var/mobile/Containers/Data/Application/X/tmp/app-Inbox/a.pkg",
+    ]);
+    const p = await pickPaths({ title: "Pick" });
+    expect(p).toEqual([
+      "/private/var/mobile/Containers/Data/Application/X/tmp/app-Inbox/My Game.zip",
+      "/private/var/mobile/Containers/Data/Application/X/tmp/app-Inbox/a.pkg",
+    ]);
+    expect(mockOpenDialog).toHaveBeenCalledWith(expect.objectContaining({ multiple: true }));
+    expect(mockPickLocalMany).not.toHaveBeenCalled();
+  });
+
+  it("a single file too; cancelling is null", async () => {
+    mockOpenDialog.mockResolvedValue("file:///tmp/a.pkg");
+    expect(await pickPath({ mode: "file" })).toBe("/tmp/a.pkg");
+    mockOpenDialog.mockResolvedValue(null);
+    expect(await pickPath({ mode: "file" })).toBeNull();
+    expect(mockPickLocal).not.toHaveBeenCalled();
+  });
+
+  it("folders, a saved server and a failed sheet browse in-app", async () => {
+    mockPickLocal.mockResolvedValue("/x");
+    await pickPath({ mode: "folder" });
+    await pickPath({ mode: "file", source: { connectionId: "s1" } });
+    mockOpenDialog.mockRejectedValue(new Error("no sheet"));
+    await pickPath({ mode: "file" });
+    expect(mockPickLocal).toHaveBeenCalledTimes(3);
   });
 });

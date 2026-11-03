@@ -63,10 +63,13 @@ mod engine_update;
 mod event_journal;
 mod fakelibs_api;
 mod fan_boost;
+mod ffmpeg_tool;
 mod folder_build;
 mod fpkg_api;
 mod fpkg_firmware;
 mod games_api;
+mod golive_dest;
+mod golive_ffmpeg;
 mod hearbridge_api;
 mod helper_copies_api;
 mod helper_mirror;
@@ -76,6 +79,7 @@ mod image_browse;
 mod image_build;
 mod inspect;
 mod install;
+mod join;
 mod link;
 mod link_lz4;
 mod local_fs;
@@ -96,7 +100,9 @@ mod ps2_saves;
 mod remote;
 mod remote_download;
 mod remote_pkg;
+mod rp_golive;
 mod rp_keyboard;
+mod rp_live_ts;
 mod rp_replay;
 mod rp_stream_api;
 mod save_backup;
@@ -837,6 +843,10 @@ fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str
         // QR code's key or waits for the computer to allow it.
         || path == "/pad"
         || path == "/api/pad/ws"
+        // A friend joining Play Together (join.rs): the guest page and its socket, which checks
+        // the invite or the resume token itself. The rest of /api/join is the host's.
+        || path == "/join"
+        || path == "/api/join/ws"
         || peer.is_loopback()
         || allow_rules_contain(&cfg.allowed_ips, peer)
 }
@@ -1460,6 +1470,14 @@ pub(crate) fn live_notes_for(job_id: Uuid) -> Arc<ps5upload_core::transfer::Live
     notes
 }
 
+/// Threads `job_id`'s live notes into `cfg`, with the counter the transfer writes the bytes
+/// a resume found already on the console into (served as `resumed_bytes`).
+fn attach_live_notes(cfg: &mut TransferConfig, job_id: Uuid) {
+    let notes = live_notes_for(job_id);
+    cfg.progress_bytes_resumed = Some(notes.resumed_bytes.clone());
+    cfg.progress_live = Some(notes);
+}
+
 /// Adds a running job's live notes to its snapshot JSON: `phase` (`"skipping"` with
 /// `skip_done_bytes` / `skip_total_bytes`), `bottleneck` (AVA1's word) and `settling`. Fields
 /// that do not apply are absent, so the client shows nothing for them. A snapshot that is not
@@ -1485,6 +1503,12 @@ pub(crate) fn merge_live_notes(
             "skip_total_bytes".into(),
             n.skip_total_bytes.load(Relaxed).into(),
         );
+    }
+    // What the console already held when the job first opened (a resume). `bytes_sent`
+    // counts it, so a client takes it off for this run's speed and time left.
+    let resumed = n.resumed_bytes.load(std::sync::atomic::Ordering::Acquire);
+    if resumed > 0 {
+        o.insert("resumed_bytes".into(), resumed.into());
     }
     let bn = n.bottleneck.load(Relaxed);
     if bn != 0 {
@@ -6460,7 +6484,7 @@ async fn transfer_file_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, bandwidth_cap);
 
         if fail_job_unless_console_ready(&jobs, &events_tx, job_id, started_at_ms, &addr) {
@@ -6815,7 +6839,7 @@ async fn transfer_dir_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         crate::log_info!("transfer_dir: job={job_id} protocol=ava1");
         if skip_existing.is_some() {
@@ -7362,7 +7386,7 @@ async fn transfer_zip_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // Resume is by job_id (the sender reopens with JobOpen); retries live in the
         // adapter's loop. An archive AVA1 cannot read (encryption, an unsupported method, a
@@ -8850,7 +8874,7 @@ async fn transfer_7z_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         if fail_job_unless_console_ready(&jobs, &events_tx, job_id, started_at_ms, &addr) {
             fail_guard.mark_succeeded();
@@ -9076,7 +9100,7 @@ async fn transfer_rar_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // The password stays in this request for the job's lifetime and is never logged;
         // resume passes reuse it from the RarSource. An archive AVA1 cannot read is a failure
@@ -9449,7 +9473,7 @@ async fn link_download_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         let remote = Arc::new(crate::remote_pkg::RemoteSource::new_with_options(
             url, packed, insecure,
@@ -9731,7 +9755,7 @@ async fn transfer_file_list_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         crate::log_info!("transfer_file_list: job={job_id} protocol=ava1");
         // Resume is by job_id (the sender reopens with JobOpen); retries live in the adapter's
@@ -11413,11 +11437,45 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             "/api/ps5/rp/input/release",
             post(rp_stream_api::automation::release),
         )
+        // The live feed for OBS (#635), this computer only.
+        .route(
+            "/api/ps5/rp/live.ts",
+            get(rp_stream_api::live_feed::live_ts),
+        )
+        .route(
+            "/api/ps5/rp/live/status",
+            get(rp_stream_api::live_feed::status),
+        )
+        // Go live (#635): the Remote Play stream to YouTube, Twitch, Kick, Facebook, custom.
+        .route("/api/stream/status", get(rp_golive::status))
+        .route("/api/stream/start", post(rp_golive::start))
+        .route("/api/stream/stop", post(rp_golive::stop))
+        .route("/api/stream/destinations", post(rp_golive::add_destination))
+        .route(
+            "/api/stream/destinations/{id}",
+            post(rp_golive::update_destination).delete(rp_golive::remove_destination),
+        )
+        .route(
+            "/api/stream/tools/ffmpeg/install",
+            post(rp_golive::install_ffmpeg),
+        )
         .route("/api/ps5/vinput/caps", get(vinput_api::caps))
         .route("/api/ps5/vinput/ws", get(vinput_api::ws))
         .route("/rp-player", get(rp_stream_api::player))
         .route("/pad", get(pad_link::page))
         .route("/api/pad/ws", get(pad_link::ws))
+        // Play Together (#641): guests as Players 2-4 (join.rs).
+        .route("/join", get(join::page))
+        .route("/api/join/ws", get(join::ws))
+        .route("/api/join/relay", get(join::relay))
+        .route("/api/join", get(join::get_state))
+        .route("/api/join/open", post(join::open))
+        .route("/api/join/close", post(join::close))
+        .route("/api/join/invite", post(join::invite))
+        .route("/api/join/decide", post(join::decide))
+        .route("/api/join/kick", post(join::kick))
+        .route("/api/join/playing", post(join::playing))
+        .route("/api/join/settings", post(join::set_settings))
         .route(
             "/api/ps5/rp/pad-link",
             get(pad_link::get_status).post(pad_link::set_open),
@@ -12122,12 +12180,41 @@ mod loopback_guard_tests {
             "/api/ps5/rp/frame",
             "/api/ps5/rp/input",
             "/api/ps5/rp/input/release",
+            "/api/ps5/rp/live.ts",
+            "/api/ps5/rp/live/status",
             "/pad/../api/jobs",
             "/padx",
             "/api/pad/ws/x",
         ] {
             assert!(!loopback_allows(&c, ip("192.168.1.30"), p), "{p}");
         }
+    }
+
+    #[test]
+    fn a_friend_reaches_only_the_join_page_and_socket() {
+        let c = cfg(&[]);
+        assert!(loopback_allows(&c, ip("192.168.1.30"), "/join"));
+        assert!(loopback_allows(&c, ip("192.168.1.30"), "/api/join/ws"));
+        // The host's side of Play Together stays on this computer.
+        for p in [
+            "/api/join",
+            "/api/join/open",
+            "/api/join/close",
+            "/api/join/invite",
+            "/api/join/decide",
+            "/api/join/kick",
+            "/api/join/playing",
+            "/api/join/settings",
+            "/api/join/relay",
+            "/api/join/ws/x",
+            "/api/join/wsx",
+            "/join/../api/join/open",
+            "/joinx",
+            "/join/x",
+        ] {
+            assert!(!loopback_allows(&c, ip("192.168.1.30"), p), "{p}");
+        }
+        assert!(loopback_allows(&c, ip("127.0.0.1"), "/api/join/open"));
     }
 
     #[test]
@@ -12871,6 +12958,23 @@ mod helpers_tests {
             ),
             (Some(12), Some(50))
         );
+        let done = serde_json::json!({"status": "done"});
+        assert_eq!(merge_live_notes(Some(&n), done.clone()), done);
+    }
+
+    #[test]
+    fn a_resumed_running_snapshot_says_what_the_console_already_had() {
+        use ps5upload_core::transfer::LiveNotes;
+        use std::sync::atomic::Ordering::Relaxed;
+        let n = LiveNotes::default();
+        let running = serde_json::json!({"status": "running", "bytes_sent": 70});
+        // A fresh upload: no note.
+        assert!(merge_live_notes(Some(&n), running.clone())
+            .get("resumed_bytes")
+            .is_none());
+        n.resumed_bytes.store(60, Relaxed);
+        let v = merge_live_notes(Some(&n), running);
+        assert_eq!(v["resumed_bytes"].as_u64(), Some(60));
         let done = serde_json::json!({"status": "done"});
         assert_eq!(merge_live_notes(Some(&n), done.clone()), done);
     }

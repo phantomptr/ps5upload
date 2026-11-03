@@ -14,6 +14,7 @@
  */
 import type { LucideIcon } from "lucide-react";
 import {
+  Heart,
   Cable,
   Send as SendIcon,
   Gamepad2,
@@ -241,8 +242,16 @@ export const BUG_REPORT_NAV_ITEM: NavItem = {
   icon: Bug,
 };
 
+/** Thanks & Support: right under Bug report, never hidden: the supporters, and Ko-fi and crypto. */
+export const THANKS_NAV_ITEM: NavItem = {
+  to: "/thanks",
+  key: "thanks_nav",
+  fallback: "Thanks & Support",
+  icon: Heart,
+};
+
 /** Above every section, in this order; none can be hidden. */
-export const FIXED_NAV_ITEMS: readonly NavItem[] = [HOME_NAV_ITEM, PLAY_NAV_ITEM, BUG_REPORT_NAV_ITEM];
+export const FIXED_NAV_ITEMS: readonly NavItem[] = [HOME_NAV_ITEM, PLAY_NAV_ITEM, BUG_REPORT_NAV_ITEM, THANKS_NAV_ITEM];
 
 /** Whether a screen is pinned (never hidden, never counted as hidden). */
 export function isFixedNav(to: string): boolean {

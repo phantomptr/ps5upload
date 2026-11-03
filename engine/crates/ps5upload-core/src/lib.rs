@@ -60,4 +60,5 @@ pub mod units;
 pub mod users;
 pub mod vinput;
 pub mod volumes;
+pub mod vpad;
 pub mod zip_cd;

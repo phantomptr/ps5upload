@@ -327,9 +327,9 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "ava1"
-version = "1.0.5"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f762bd455e4ff5629b42fdf23d0184d026635d2368affe3f97cf6dd708ce4ded"
+checksum = "6e0a5f35087af001218eec0f179fd9be77d6d9621396b0aa79572d3065805c9d"
 dependencies = [
  "blake2 0.11.0",
  "blake3",
@@ -3211,6 +3211,9 @@ name = "lzma-rust2"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fde178a3caf126c440fa15628147772d8ee590a39477d711353fbe2e58a73a5b"
+dependencies = [
+ "sha2 0.11.0",
+]
 
 [[package]]
 name = "mac-notification-sys"
@@ -4405,7 +4408,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-pfs"
-version = "10.7.6"
+version = "11.0.0"
 dependencies = [
  "flate2",
  "ps5upload-fpkg",
@@ -4413,7 +4416,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-ufs2"
-version = "10.7.6"
+version = "11.0.0"
 dependencies = [
  "ps5upload-fpkg",
  "unicode-normalization",
@@ -4421,7 +4424,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ava1"
-version = "10.7.6"
+version = "11.0.0"
 dependencies = [
  "anyhow",
  "ava1",
@@ -4440,7 +4443,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "10.7.6"
+version = "11.0.0"
 dependencies = [
  "aes 0.9.2",
  "aes-gcm 0.11.0",
@@ -4464,7 +4467,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-desktop"
-version = "10.7.6"
+version = "11.0.0"
 dependencies = [
  "anyhow",
  "ava1",
@@ -4506,7 +4509,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "10.7.6"
+version = "11.0.0"
 dependencies = [
  "aes-gcm 0.11.0",
  "anyhow",
@@ -4520,6 +4523,7 @@ dependencies = [
  "getrandom 0.4.3",
  "image",
  "lz4_flex 0.14.0",
+ "lzma-rust2",
  "ps5-dump-forge-pfs",
  "ps5-dump-forge-ufs2",
  "ps5upload-ava1",
@@ -4549,7 +4553,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "10.7.6"
+version = "11.0.0"
 dependencies = [
  "aes 0.9.2",
  "crc32fast",
@@ -4571,7 +4575,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "10.7.6"
+version = "11.0.0"
 dependencies = [
  "aes 0.9.2",
  "blake3",
@@ -6925,11 +6929,11 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ureq"
-version = "3.3.0"
+version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dea7109cdcd5864d4eeb1b58a1648dc9bf520360d7af16ec26d0a9354bafcfc0"
+checksum = "cde93ff05758a36a851a398a772b0b79a82fbe3c186a46f2696baaeaf84c966b"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "flate2",
  "log",
  "percent-encoding",
@@ -6942,11 +6946,11 @@ dependencies = [
 
 [[package]]
 name = "ureq-proto"
-version = "0.6.0"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e994ba84b0bd1b1b0cf92878b7ef898a5c1760108fe7b6010327e274917a808c"
+checksum = "841583fc36089d7d59419568ae157f43a5a03a2e5a81ba87c77d1596ef46e922"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "http",
  "httparse",
  "log",

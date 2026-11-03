@@ -509,6 +509,9 @@ export interface StreamOptions {
   /** "h264": never ask for HEVC; "hdr": the console's HDR stream where it can be shown in HDR
    *  here (Settings › Video format). */
   codec?: CodecPref;
+  /** The video bitrate to ask the console for, kbit/s (Settings › Picture); absent = the
+   *  engine's default for the resolution. */
+  bitrateKbps?: number;
   /** The picture tools' GPU pass turned itself off (no WebGL, or the device lags). */
   onPictureOff?: (why: "failed" | "slow" | "linux") => void;
   /** HDR was asked for and did not work here (`started`: the session is in HDR, shown as SDR). */
@@ -1313,6 +1316,7 @@ export class RemotePlayStream {
           height,
           fps: this.o.fps,
           codec: this.codecChoice,
+          ...(this.o.bitrateKbps ? { bitrate_kbps: this.o.bitrateKbps } : {}),
           keep_alive_s: this.o.keepAliveS,
           attach_only: attachOnly,
           low_latency: !!this.o.lowLatency,
