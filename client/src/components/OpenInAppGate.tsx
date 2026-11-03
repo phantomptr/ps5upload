@@ -11,6 +11,24 @@ import { useTr } from "../state/lang";
 
 /** Where this device's remembered choice lives ("app" or "browser"). */
 export const OPEN_IN_KEY = "ps5upload.openIn";
+/** This tab already carried on in the browser: a reload (a controller mid-game) doesn't ask again. */
+const TAB_KEY = "ps5upload.openIn.tab";
+
+function tabInBrowser(): boolean {
+  try {
+    return sessionStorage.getItem(TAB_KEY) === "browser";
+  } catch {
+    return false;
+  }
+}
+
+function markTabInBrowser(): void {
+  try {
+    sessionStorage.setItem(TAB_KEY, "browser");
+  } catch {
+    // No storage: a reload asks again.
+  }
+}
 
 type Phase = "ask" | "opening" | "browser";
 
@@ -21,7 +39,9 @@ export function startPhase(saved: string | null): Phase {
 
 export function OpenInAppGate({ appLink, children }: { appLink: string; children: ReactNode }) {
   const tr = useTr();
-  const [phase, setPhase] = useState<Phase>(() => startPhase(safeGetItem(OPEN_IN_KEY)));
+  const [phase, setPhase] = useState<Phase>(() =>
+    tabInBrowser() ? "browser" : startPhase(safeGetItem(OPEN_IN_KEY)),
+  );
   const [remember, setRemember] = useState(false);
 
   // A remembered "app": straight to it, once.
@@ -43,6 +63,7 @@ export function OpenInAppGate({ appLink, children }: { appLink: string; children
     // remembered "app", so the next link asks again.
     if (phase === "ask" && remember) safeSetItem(OPEN_IN_KEY, "browser");
     else if (phase === "opening" && safeGetItem(OPEN_IN_KEY) === "app") safeRemoveItem(OPEN_IN_KEY);
+    markTabInBrowser();
     setPhase("browser");
   };
 

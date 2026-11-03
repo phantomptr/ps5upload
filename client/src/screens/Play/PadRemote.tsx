@@ -1,7 +1,9 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
 import { PadApp } from "../../pad/PadApp";
+import { Button } from "../../components";
+import { useTr } from "../../state/lang";
 import { getEngineUrl } from "../../state/engine";
 import { focusForControllers, holdPageStill, lockLandscape, setWindowFullscreen, unlockOrientation } from "./immersive";
 
@@ -18,6 +20,44 @@ export function relayUrl(engineUrl: string, target: string, link?: { key: string
  *  sideways. With a link's key (a QR code or link opened in the app) it is in without asking;
  *  with w=1 it watches. */
 export default function PadRemote() {
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const tr = useTr();
+  const key = params.get("t");
+  const computer = params.get("name") ?? "";
+  const watch = params.get("w") === "1";
+  // A link opened in the app (a ps5upload:// link from a page or message) connects only once the
+  // user says so: the link could come from anyone on the network.
+  const [confirmed, setConfirmed] = useState(!key);
+  if (!confirmed) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center p-6" data-testid="pad-link-confirm">
+        <div className="w-full max-w-sm space-y-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-5">
+          <h2 className="text-base font-semibold">
+            {tr("pad_link_confirm_title", { host: computer }, `Connect to ${computer}?`)}
+          </h2>
+          <p className="text-sm text-[var(--color-muted)]">
+            {watch
+              ? tr("pad_link_confirm_watch", { host: computer }, `This device watches the PS5 that ${computer} is playing.`)
+              : tr("pad_link_confirm_play", { host: computer }, `This device becomes a controller for the PS5 that ${computer} is playing.`)}
+          </p>
+          <div className="flex gap-2">
+            <Button variant="primary" onClick={() => setConfirmed(true)} data-testid="pad-link-connect">
+              {tr("pad_link_connect", undefined, "Connect")}
+            </Button>
+            <Button variant="secondary" onClick={() => navigate("/play")}>
+              {tr("join_cancel", undefined, "Cancel")}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return <PadRemoteLive />;
+}
+
+/** The controller itself, once connecting is agreed. */
+function PadRemoteLive() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const target = params.get("url") ?? "";

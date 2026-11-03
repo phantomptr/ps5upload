@@ -227,6 +227,16 @@ test("a friend's browser asks first: the PS5Upload app, or carry on in the brows
   await expect(page.getByTestId("open-in-gate")).toHaveCount(0);
 });
 
+test("a browser that carried on without remembering isn't asked again on a reload", async ({ page }) => {
+  await serveJoinPage(page, { ask: true });
+  await page.goto(`/join#i=${INVITE}&n=Ann`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("open-in-browser").click();
+  await expect(page.getByTestId("join-name-step")).toBeVisible();
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("join-name-step")).toBeVisible();
+  await expect(page.getByTestId("open-in-gate")).toHaveCount(0);
+});
+
 /** One second of 320x240 H.264 as the engine forwards it (kind 0 header, kind 1 frames). */
 async function makeStream(page: Page): Promise<number[][]> {
   return page.evaluate(async () => {
