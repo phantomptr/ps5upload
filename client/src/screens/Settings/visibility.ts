@@ -4,8 +4,8 @@
  *  machine and has no native shell: it cannot keep a computer awake, has no local
  *  settings file, no OS notifications, and its rest-mode reconnect loop never runs
  *  (AppShell returns early there). Pointing it at another engine URL would cut the
- *  page off from the engine that served it. Android bundles its own engine on
- *  loopback, so the URL is not the user's to change there either. */
+ *  page off from the engine that served it. The desktop and phone apps run their own
+ *  engine on loopback and can use a self-hosted one (a NAS, Docker) instead. */
 export interface SettingsPlatform {
   /** The desktop or Android shell (isTauriEnv). */
   tauri: boolean;
@@ -25,7 +25,7 @@ export interface SettingsVisibility {
 
 export function settingsVisibility(p: SettingsPlatform): SettingsVisibility {
   return {
-    engineUrl: p.tauri && !p.mobile,
+    engineUrl: p.tauri,
     // The browser build keeps the screen on (a page cannot hold the computer awake).
     keepDeviceAwake: true,
     settingsFile: p.tauri,

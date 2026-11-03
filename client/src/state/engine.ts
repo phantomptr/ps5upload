@@ -72,7 +72,12 @@ export function setLiveEngineUrl(url: string): void {
  *  The live override wins when present so direct fetches follow a
  *  fallback port; otherwise the persisted preference is used. */
 export function getEngineUrl(): string {
-  return liveEngineUrl ?? useEngineStore.getState().engineUrl;
+  const preferred = useEngineStore.getState().engineUrl;
+  // The live override is where THIS device's own engine bound. It only applies while the
+  // preference is this device's engine: with a self-hosted engine chosen (a NAS, Docker), the
+  // app's own engine still starts and reports its port, which must not take the user's
+  // choice over.
+  return liveEngineUrl && isLoopbackUrl(preferred) ? liveEngineUrl : preferred;
 }
 
 /** True for a URL whose host is this device's loopback. */
