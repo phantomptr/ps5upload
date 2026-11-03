@@ -74,6 +74,18 @@ What's new in ps5upload, written for humans.
   fresh upload went from 9.4 to 12.1 MB/s and a resumed one from 8.0 to 11.5 MB/s. (AVA1 1.0.6.)
 - **A resumed upload shows what was already on the PS5,** and its time left counts only what's
   still to send.
+- **A DualSense works in the Windows app even when Windows' web view doesn't see it (For
+  #643).** Some players' Bluetooth DualSense showed as working in Windows but never reached
+  Play ("No controller seen yet"). The app now reads a DualSense itself, over USB or Bluetooth,
+  whenever the web view sees no controller, and shows it under Controllers. A controller the web
+  view does see is used as before, never twice.
+- **Remote Play on Windows no longer stops with "os error 997" (For #643).** Some network
+  drivers (VPNs, firewalls, capture tools) report a receive as "still under way"; the stream took
+  that as the end. It now just reads again.
+- **Add files on iPhone and iPad opens the Files sheet (For #644).** Pick from iCloud Drive, On
+  My iPhone, your downloads or any other app's folder, not only PS5Upload's own folder. Folders
+  are still picked with the app's own browser.
+
 
 ## 10.7.6
 

@@ -261,7 +261,7 @@ impl Follower {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-mod reader {
+pub(crate) mod reader {
     use super::*;
     use crate::commands::pad_dualsense::{self, Transport};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -320,7 +320,7 @@ mod reader {
     /// on a reader thread (which ends with each stream) or on a command thread, the next scan
     /// touched a freed run loop and the app crashed (EXC_BREAKPOINT in
     /// IOHIDDeviceScheduleWithRunLoop, 10.2.0 on a Mac with a DualSense attached).
-    mod host {
+    pub(crate) mod host {
         use std::sync::mpsc;
         use std::sync::{Mutex, OnceLock};
 
