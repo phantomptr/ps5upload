@@ -1474,8 +1474,9 @@ members = '''
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
     // Android 8 to 11: the home button or gesture while a stream plays (12+ enters by itself).
-    val sdk = android.os.Build.VERSION.SDK_INT
-    if (!pipActive || sdk < 26 || sdk >= 31 || !pipSupported()) return
+    if (!pipActive || !pipSupported()) return
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O ||
+        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) return
     try {
       enterPictureInPictureMode(pipParams())
     } catch (e: Exception) {
