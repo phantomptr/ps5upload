@@ -84,7 +84,11 @@ export class JoinSession {
 
   /** The picture's player, made on first use (needs a document). */
   picture(): WatchPlayer | MsePlayer {
-    if (!this.player) this.player = makeWatchPlayer((problem) => this.set({ problem }), "player");
+    if (!this.player) this.player = makeWatchPlayer(
+        (problem) => this.set({ problem }),
+        "player",
+        () => this.client.askKeyframe(),
+      );
     return this.player;
   }
 

@@ -397,6 +397,15 @@ export class JoinClient {
     this.setStage(s);
   }
 
+  /** The picture waits for a keyframe (#648): ask the host's engine to get one from the PS5.
+   *  The player spaces these out; the engine does too. */
+  askKeyframe(): void {
+    const ws = this.ws;
+    if (ws && ws.readyState === this.WS.OPEN && this.stage.kind === "joined") {
+      ws.send(JSON.stringify({ keyframe: true }));
+    }
+  }
+
   /** Leave: let go of the pad, say so, and forget the place. */
   leave(): void {
     const ws = this.ws;

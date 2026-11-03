@@ -1457,6 +1457,29 @@ fn forward_pad(key: &str, console: &str, id: u64, gen: u64, mut st: PadState) {
     }
 }
 
+/// The least time between a guest's keyframe requests that reach the console.
+const KEY_ASK_GAP: Duration = Duration::from_millis(1000);
+
+/// A guest's keyframe requests, at most one per KEY_ASK_GAP.
+#[derive(Default)]
+struct KeyAsk {
+    last: Option<Instant>,
+}
+
+impl KeyAsk {
+    /// True when a request now may go to the console.
+    fn take(&mut self, now: Instant) -> bool {
+        if self
+            .last
+            .is_some_and(|t| now.saturating_duration_since(t) < KEY_ASK_GAP)
+        {
+            return false;
+        }
+        self.last = Some(now);
+        true
+    }
+}
+
 fn now_ms() -> u64 {
     static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     T0.get_or_init(Instant::now).elapsed().as_millis() as u64
@@ -1497,6 +1520,7 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
     let mut tick = tokio::time::interval(STATUS_EVERY);
     let mut left = false;
     let mut pacer = PadPacer::new(Instant::now());
+    let mut key_ask = KeyAsk::default();
     loop {
         if ended {
             break; // the joined message could not go: the socket is gone
@@ -1536,11 +1560,17 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
                     struct In {
                         #[serde(default)] ping: Option<serde_json::Value>,
                         #[serde(default)] leave: Option<serde_json::Value>,
+                        #[serde(default)] keyframe: bool,
                     }
                     if let Ok(m) = serde_json::from_str::<In>(t.as_str()) {
                         if m.leave.is_some() {
                             left = true;
                             break;
+                        }
+                        // The guest's picture waits for a keyframe (#648): ask the console, at
+                        // most once a KEY_ASK_GAP so a guest can't flood the host's stream.
+                        if m.keyframe && key_ask.take(Instant::now()) {
+                            crate::rp_stream_api::request_keyframe(&console);
                         }
                         if let Some(p) = m.ping {
                             if socket.send(say(serde_json::json!({"pong": p}))).await.is_err() {
@@ -2790,6 +2820,17 @@ pub(crate) mod link {
 mod tests {
     use super::link::{Cmd, Event, LinkState, OpenResult, Port, SlotIo, HOLD};
     use super::*;
+
+    #[test]
+    fn guest_keyframe_asks_are_spaced() {
+        let t0 = Instant::now();
+        let mut k = KeyAsk::default();
+        assert!(k.take(t0));
+        assert!(!k.take(t0 + Duration::from_millis(400)));
+        assert!(!k.take(t0 + KEY_ASK_GAP - Duration::from_millis(1)));
+        assert!(k.take(t0 + KEY_ASK_GAP));
+        assert!(!k.take(t0 + KEY_ASK_GAP + Duration::from_millis(10)));
+    }
     use ps5upload_core::vpad::{Ack, Opened, Output, SlotFailure, StateItem};
     use std::sync::atomic::{AtomicBool, AtomicI64};
 

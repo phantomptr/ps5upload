@@ -392,6 +392,17 @@ pub(crate) fn live_session(host: &str) -> Option<u64> {
         .map(|l| l.session)
 }
 
+/// A Play Together player's picture is waiting for a keyframe (it skipped frames it could not
+/// keep up with, or a decode failed; join.rs): ask the console for one, as the host page does.
+pub(crate) fn request_keyframe(host: &str) {
+    let key = crate::vinput_api::host_key(host);
+    if let Some(l) = live()
+        .filter(|l| crate::vinput_api::host_key(&l.host) == key && !l.stop.load(Ordering::Relaxed))
+    {
+        l.want_key.store(true, Ordering::Relaxed);
+    }
+}
+
 /// A watcher left.
 pub(crate) fn remove_spectator(id: u64) {
     if let Some(l) = live() {
