@@ -5,24 +5,38 @@ import { nearbyJoins } from "../../state/mesh";
 import type { MeshDevice } from "../../api/mesh";
 import { guestStatusText } from "./PlayTogether";
 
+// The engine's GET /api/join (join.rs state_json), field for field.
 const engine = {
   open: true,
-  invite: { url: "http://192.168.1.9:19113/join#i=00112233445566778899aabbccddeeff", code: "4821", expires_ms: 1800000 },
+  console: "192.168.1.100",
+  playing: true,
+  host_away_s: null,
+  invite: {
+    key: "00112233445566778899aabbccddeeff",
+    code: "4821",
+    code_display: "4821",
+    url: "http://192.168.1.9:19113/join#i=00112233445566778899aabbccddeeff",
+    urls: ["http://192.168.1.9:19113/join#i=00112233445566778899aabbccddeeff"],
+    expires_in_s: 1800,
+  },
+  players_in: 2,
   guests: [
-    { id: 7, name: "Ben", player: 3, status: "reconnecting", reconnecting_left_s: 42, rtt_ms: 30, connected: false },
-    { id: 5, name: "Ann", player: 2, status: "playing", rtt_ms: 180, connected: true },
-    { id: 9, name: "Cy", player: 4, status: "left", rtt_ms: 10, connected: false },
+    { id: 7, name: "Ben", player: 3, state: "reconnecting", connected: false, reconnect_left_s: 42, rtt_ms: 30, queue: 0, skipped: 0, since_s: 60, why: null },
+    { id: 5, name: "Ann", player: 2, state: "playing", connected: true, reconnect_left_s: null, rtt_ms: 180, queue: 0, skipped: 0, since_s: 90, why: null },
+    { id: 9, name: "Cy", player: 4, state: "left", connected: false, reconnect_left_s: null, rtt_ms: 10, queue: 0, skipped: 0, since_s: 30, why: "left" },
   ],
-  asks: [{ id: 11, name: "Dee" }],
+  pending: [{ id: 11, name: "Dee", state: "asking" }],
   settings: { block_system_buttons: false, max_players: 3 },
-  helper_ok: true,
+  max_guests: 3,
+  ws: "ws://192.168.1.9:19113/api/join/ws",
 };
 
 describe("Play Together host state", () => {
   it("reads the engine's answer, players in order", () => {
     const s = readJoinState(engine);
     expect(s.open).toBe(true);
-    expect(s.invite).toEqual({ url: engine.invite.url, code: "4821", expiresMs: 1800000, urls: [] });
+    expect(s.invite).toEqual({ url: engine.invite.url, code: "4821", expiresMs: 1800000, urls: engine.invite.urls });
+    expect(s.ws).toBe(engine.ws);
     expect(s.guests.map((g) => g.name)).toEqual(["Ann", "Ben", "Cy"]);
     expect(s.guests[1]).toMatchObject({ status: "reconnecting", reconnectingLeftS: 42, connected: false });
     expect(s.asks).toEqual([{ id: 11, name: "Dee" }]);
@@ -37,7 +51,10 @@ describe("Play Together host state", () => {
     ]);
     expect(s.settings.blockSystemButtons).toBe(true);
     expect(readJoinState(null).helperOk).toBe(true);
-    expect(readJoinState({ helper_ok: false, reason: "old_helper" })).toMatchObject({ helperOk: false, reason: "old_helper" });
+    // An older engine's names still read.
+    const old = readJoinState({ asks: [{ id: 2, name: "Eve" }], guests: [{ id: 3, player: 2, status: "reconnecting", reconnecting_left_s: 9 }] });
+    expect(old.asks).toEqual([{ id: 2, name: "Eve" }]);
+    expect(old.guests[0]).toMatchObject({ status: "reconnecting", reconnectingLeftS: 9 });
   });
 
   it("counts the friends stopping Play would end (not asks, not those who left)", () => {

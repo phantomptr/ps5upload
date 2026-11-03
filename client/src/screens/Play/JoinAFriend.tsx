@@ -346,6 +346,11 @@ export function scanAvailable(): boolean {
 
 /** The camera, until it sees a Play Together QR code. */
 function QrScanner({ onFound, onClose }: { onFound: (link: string) => void; onClose: () => void }) {
+  // The latest callback, without restarting the camera when the parent re-renders.
+  const onFoundRef = useRef(onFound);
+  useEffect(() => {
+    onFoundRef.current = onFound;
+  }, [onFound]);
   const tr = useTr();
   const video = useRef<HTMLVideoElement>(null);
   const [failed, setFailed] = useState(false);
@@ -368,7 +373,7 @@ function QrScanner({ onFound, onClose }: { onFound: (link: string) => void; onCl
           try {
             const found = await det.detect(v);
             const hit = found.map((f) => f.rawValue).find((r) => !!parseJoinLink(r));
-            if (hit) return onFound(hit);
+            if (hit) return onFoundRef.current(hit);
           } catch {
             // The next frame.
           }
@@ -384,7 +389,7 @@ function QrScanner({ onFound, onClose }: { onFound: (link: string) => void; onCl
       window.clearTimeout(timer);
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, [onFound]);
+  }, []);
   return (
     <div className="fixed inset-0 z-[70] flex flex-col items-center justify-center gap-3 bg-black/90 p-4 text-white" data-testid="join-scanner">
       {failed ? (

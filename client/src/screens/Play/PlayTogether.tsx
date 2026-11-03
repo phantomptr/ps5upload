@@ -163,6 +163,8 @@ export function PlayTogetherPanel({
 }) {
   const tr = useTr();
   const [failed, setFailed] = useState(false);
+  // Why opening failed (`old_helper` shows the update callout; others are named in the text).
+  const [why, setWhy] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
 
@@ -170,14 +172,18 @@ export function PlayTogetherPanel({
   useEffect(() => {
     let alive = true;
     void (async () => {
-      const opened = await joinApi.open(addr);
+      const reply = await joinApi.open(addr);
       if (!alive) return;
-      if (!opened) {
-        setFailed(true);
+      if (!reply.state) {
+        setWhy(reply.error);
+        setFailed(reply.error !== "old_helper");
         return;
       }
+      const opened = reply.state;
+      setWhy(null);
+      setFailed(false);
       onState(opened);
-      if (!opened.invite && opened.helperOk) {
+      if (!opened.invite) {
         const s = await joinApi.invite(addr);
         if (alive && s) onState(s);
       }
@@ -187,6 +193,7 @@ export function PlayTogetherPanel({
     };
   }, [addr, onState]);
 
+  const helperOk = why !== "old_helper";
   const invite = state.invite;
   const addresses = invite?.urls ?? [];
   const link = invite ? (picked ? inviteOn(invite.url, picked) : invite.url) : null;
@@ -244,7 +251,7 @@ export function PlayTogetherPanel({
         )}
       </p>
 
-      {!state.helperOk && (
+      {!helperOk && (
         <div data-testid="pt-helper-old">
           <Callout
             tone="warn"
@@ -262,11 +269,11 @@ export function PlayTogetherPanel({
       {failed && (
         <p className="text-sm text-[var(--color-warn)]" data-testid="pt-failed">
           {tr("pt_unavailable", undefined, "Play Together could not start. Check that the engine is up to date.")}
-          {state.reason ? ` (${state.reason})` : ""}
+          {why ? ` (${why})` : ""}
         </p>
       )}
 
-      {state.helperOk && !failed && (
+      {helperOk && !failed && (
         <div className="flex flex-col gap-3 lg:flex-row">
           <Step n={1} title={tr("pt_step_invite", undefined, "Invite")}>
             {link ? (
@@ -380,7 +387,7 @@ export function PlayTogetherPanel({
         </div>
       )}
 
-      {state.helperOk && !failed && (
+      {helperOk && !failed && (
         <ul className="flex flex-wrap gap-2" data-testid="pt-players">
           {playerSlots(state).map(({ player, guest }) => (
             <PlayerCard key={player} addr={addr} player={player} guest={guest} />
@@ -407,7 +414,7 @@ export function PlayTogetherPanel({
         </div>
       )}
 
-      {state.helperOk && !failed && (
+      {helperOk && !failed && (
         <div data-testid="pt-block">
           <Toggle
             checked={state.settings.blockSystemButtons}
@@ -439,7 +446,7 @@ export function PlayTogetherPanel({
             size="sm"
             variant="secondary"
             onClick={() => {
-              void joinApi.close(addr).then((s) => s && onState(s));
+              void joinApi.close(addr).then((r) => r.state && onState(r.state));
               onClose();
             }}
             data-testid="pt-close"

@@ -335,6 +335,11 @@ export class JoinClient {
       this.giveUp();
       return;
     }
+    if (!this.stopped && this.stage.kind === "reconnecting" && this.now() >= this.deadline + HOST_WAIT_SLACK_MS) {
+      // A socket came back but the engine never answered it: the place is gone by now.
+      this.giveUp();
+      return;
+    }
     const ws = this.ws;
     if (!ws || ws.readyState !== this.WS.OPEN) return;
     if (this.stage.kind === "joined" && this.now() - this.lastHeard > SILENCE_MS) {

@@ -135,8 +135,10 @@ fn keyframes_every_two_seconds_only_while_someone_reads() {
     let (id, _rx, _) = f.add("test".into(), false).unwrap();
     assert!(f.wants_keyframe(t)); // joined
     f.video(KEY, 1, true, t);
-    assert!(!f.wants_keyframe(t + Duration::from_millis(1900)));
-    assert!(f.wants_keyframe(t + KEYFRAME_EVERY));
+    // Asked for 1 s early: the console takes about a second to answer, so keyframes land
+    // every 2 s (see the_periodic_keyframe_is_asked_for_early_and_once).
+    assert!(!f.wants_keyframe(t + Duration::from_millis(900)));
+    assert!(f.wants_keyframe(t + KEYFRAME_EVERY - Duration::from_millis(1000)));
     f.remove(id);
     assert!(!f.wants_keyframe(t + Duration::from_secs(10)));
 }

@@ -74,19 +74,41 @@ test("the host invites, allows a friend, sees their delay and removes them", asy
           if (path === "/api/join/decide") phase = "playing";
           if (path === "/api/join/kick") phase = "kicked";
         }
-        body = {
-          open: true,
-          invite: { url: LINK, code: "K7M2QX", expires_ms: 1_800_000, urls: [LINK, `http://100.64.0.7:19113/join#i=${INVITE}&n=Ann`] },
-          guests:
-            phase === "playing"
-              ? [{ id: 4, name: "Ben", player: 2, status: "playing", rtt_ms: 180, connected: true }]
-              : phase === "kicked"
-                ? [{ id: 4, name: "Ben", player: 2, status: "left", rtt_ms: null, connected: false }]
-                : [],
-          asks: phase === "asked" ? [{ id: 4, name: "Ben" }] : [],
-          settings: { block_system_buttons: true, max_players: 3 },
-          helper_ok: true,
+        // What the engine answers (join.rs): GET, open and close the whole state; invite the
+        // invite; decide and kick {ok}; settings {settings}.
+        const invite = {
+          key: INVITE,
+          code: "K7M2QX",
+          code_display: "K7M-2QX",
+          url: LINK,
+          urls: [LINK, `http://100.64.0.7:19113/join#i=${INVITE}&n=Ann`],
+          expires_in_s: 1800,
         };
+        const guest = (state: string) => ({
+          id: 4, name: "Ben", player: 2, state, connected: state !== "left", reconnect_left_s: null,
+          rtt_ms: state === "left" ? null : 180, queue: 0, skipped: 0, since_s: 5, why: state === "left" ? "kicked" : null,
+        });
+        const whole = {
+          open: true,
+          console: "192.168.1.100",
+          playing: true,
+          host_away_s: null,
+          invite,
+          players_in: phase === "playing" ? 1 : 0,
+          guests: phase === "playing" ? [guest("playing")] : phase === "kicked" ? [guest("left")] : [],
+          pending: phase === "asked" ? [{ id: 4, name: "Ben", state: "asking" }] : [],
+          settings: { block_system_buttons: true, max_players: 3 },
+          max_guests: 3,
+          ws: "ws://192.168.1.50:19113/api/join/ws",
+        };
+        body =
+          path === "/api/join/invite"
+            ? invite
+            : path === "/api/join/decide" || path === "/api/join/kick"
+              ? { ok: true }
+              : path === "/api/join/settings"
+                ? { settings: whole.settings }
+                : whole;
       }
       await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
     },
@@ -161,7 +183,12 @@ test("an old helper is pointed at the update", async ({ page }) => {
       let body: unknown = {};
       if (path === "/api/version") body = { version: "10.8.0", caps: {} };
       if (path === "/api/ps5/rp/session") body = { host: null };
-      if (path.startsWith("/api/join")) body = { open: false, invite: null, guests: [], asks: [], helper_ok: false, reason: "old_helper" };
+      // The engine refuses to open with 409 {"error":"old_helper"}; the state stays closed.
+      if (path === "/api/join/open") {
+        await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "old_helper" }) });
+        return;
+      }
+      if (path.startsWith("/api/join")) body = { open: false };
       await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
     },
   );

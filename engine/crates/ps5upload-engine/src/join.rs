@@ -617,6 +617,14 @@ impl Party {
         }
     }
 
+    /// Is socket `gen` still this guest's? A replaced socket whose "replaced" notice was lost
+    /// (its queue full on a stalled connection) must not drive the pad or hear the status.
+    fn is_current(&self, id: u64, gen: u64) -> bool {
+        self.guests
+            .iter()
+            .any(|g| g.id == id && g.conn.as_ref().is_some_and(|c| c.gen == gen))
+    }
+
     /// The bits to take from the guest's input now (None: they are not in).
     fn strip_mask(&self, id: u64) -> Option<(u8, u32)> {
         let g = self.guests.iter().find(|g| g.id == id && g.active())?;
@@ -1192,13 +1200,21 @@ async fn resume(socket: &mut WebSocket, token: &str) -> Option<Admit> {
         match open_slot(&console, player, &token).await {
             link::OpenResult::Ok => {
                 let now = Instant::now();
-                with_party(&key, |p| {
-                    if let Some(g) = p.guest_mut(id) {
+                // Still in? A kick or a loss while the pad was made means nobody will close
+                // it later, so it goes now.
+                let ok = with_party(&key, |p| {
+                    p.guest_mut(id).filter(|g| g.active()).map(|g| {
                         g.slot_open = true;
                         g.playing = false;
                         g.picking_since = now;
-                    }
-                });
+                    })
+                })
+                .flatten()
+                .is_some();
+                if !ok {
+                    link::send(&console, link::Cmd::Close { slot: player });
+                    return Some(Admit::Refused("expired"));
+                }
             }
             r => {
                 let now = Instant::now();
@@ -1353,7 +1369,8 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
         let now = Instant::now();
         if r == link::OpenResult::Ok {
             let ok = with_party(&key, |p| {
-                p.guest_mut(gid).map(|g| {
+                // Still in: a kick while the pad was made leaves nobody to close it.
+                p.guest_mut(gid).filter(|g| g.active()).map(|g| {
                     g.slot_open = true;
                     g.picking_since = now;
                     g.joined_at = now;
@@ -1430,8 +1447,11 @@ impl<T> PadPacer<T> {
 }
 
 /// A guest's pad state to their pad (PS and Create taken while they play).
-fn forward_pad(key: &str, console: &str, id: u64, mut st: PadState) {
-    if let Some((slot, strip)) = with_party(key, |p| p.strip_mask(id)).flatten() {
+fn forward_pad(key: &str, console: &str, id: u64, gen: u64, mut st: PadState) {
+    let mask = with_party(key, |p| {
+        p.is_current(id, gen).then(|| p.strip_mask(id)).flatten()
+    });
+    if let Some((slot, strip)) = mask.flatten() {
         st.buttons &= !strip;
         link::send(console, link::Cmd::State { slot, state: st });
     }
@@ -1499,7 +1519,7 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
                 }
             } => {
                 if let Some(st) = pacer.take(Instant::now()) {
-                    forward_pad(&key, &console, id, st);
+                    forward_pad(&key, &console, id, gen, st);
                 }
             },
             inc = socket.recv() => match inc {
@@ -1507,7 +1527,7 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
                     if let Some((_seq, st)) = parse_pad(&b) {
                         stats.pad_frames.fetch_add(1, Ordering::Relaxed);
                         if let Some(st) = pacer.offer(Instant::now(), st) {
-                            forward_pad(&key, &console, id, st);
+                            forward_pad(&key, &console, id, gen, st);
                         }
                     }
                 }
@@ -1565,9 +1585,24 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
             },
             _ = tick.tick() => {
                 let _ = socket.send(Message::Ping(now_ms().to_le_bytes().to_vec().into())).await;
-                match with_party(&key, |p| p.guest_status(id)).flatten() {
+                let status = with_party(&key, |p| {
+                    p.is_current(id, gen).then(|| p.guest_status(id)).flatten()
+                });
+                match status.flatten() {
                     Some(v) => if socket.send(say(v)).await.is_err() { break },
-                    None => break,
+                    None => {
+                        // Let go (kicked, closed, replaced): the notice saying why is sent
+                        // just after, outside the lock, so give it a moment to arrive.
+                        let until = tokio::time::Instant::now() + Duration::from_secs(1);
+                        while let Ok(Some(out)) = tokio::time::timeout_at(until, rx.recv()).await {
+                            if let Out::Bye(why) = out {
+                                let _ = socket.send(say(serde_json::json!({"bye": why}))).await;
+                                let _ = socket.send(Message::Close(None)).await;
+                                break;
+                            }
+                        }
+                        break;
+                    }
                 }
             },
         }
@@ -2336,6 +2371,12 @@ pub(crate) mod link {
                 return;
             }
             self.wake_at = None;
+            // Closes first (best effort): a slot let go and taken by a new guest in the same
+            // round is free on the helper before the new pad is opened.
+            for (slot, token) in std::mem::take(&mut self.closing) {
+                self.calls += 1;
+                let _ = self.port.close(&self.host, slot, &token);
+            }
             // Opens.
             let to_open: Vec<(u8, String)> = self
                 .slots
@@ -2353,7 +2394,8 @@ pub(crate) mod link {
                 match r {
                     Ok(Some(o)) if o.ok => {
                         // a new pad where we had one: the helper restarted (or dropped it)
-                        let reopened = s.handle.is_some()
+                        let had = s.handle.is_some();
+                        let reopened = had
                             && (o.resumed == Some(false)
                                 || (o.resumed.is_none() && s.handle != Some(o.handle)));
                         s.opened = true;
@@ -2362,8 +2404,12 @@ pub(crate) mod link {
                         // every open (and resume) starts the helper's seq for the slot again
                         s.seq = 0;
                         if reopened {
-                            // a new pad starts neutral: it gets the latest at once
+                            // a new pad starts neutral
                             s.io.sent = PadState::NEUTRAL;
+                        }
+                        if reopened || (had && o.resumed == Some(true)) {
+                            // It gets the latest at once: a new pad starts neutral, and a
+                            // resumed one may have been let go by the watchdog in the gap.
                             s.io.force = true;
                         }
                         let waited = !s.waiters.is_empty();
@@ -2409,11 +2455,6 @@ pub(crate) mod link {
                         return;
                     }
                 }
-            }
-            // Closes (best effort).
-            for (slot, token) in std::mem::take(&mut self.closing) {
-                self.calls += 1;
-                let _ = self.port.close(&self.host, slot, &token);
             }
             // Guest silence: the helper keeps a pad we heartbeat, so a guest that went quiet is
             // let go here.
@@ -2494,6 +2535,12 @@ pub(crate) mod link {
                         self.ok();
                         if let Some(s) = self.slots.get_mut(&slot) {
                             s.last_call = now;
+                            if a.neutral == Some(true) {
+                                // The helper let go after a gap (this thread was held up by
+                                // another call or the network): what the guest still holds
+                                // (a stick, R2) goes again, though it hasn't changed.
+                                s.io.force = true;
+                            }
                         }
                     }
                     Ok(Some(a)) if slot_refusal(a.err.as_deref()) => {
@@ -3277,6 +3324,8 @@ mod tests {
         /// opens take this long (a slow helper)
         open_delay: Mutex<Duration>,
         out: Mutex<Output>,
+        /// the next heartbeat says the watchdog let the pad go
+        rested: AtomicBool,
     }
 
     impl FakeHelper {
@@ -3369,6 +3418,7 @@ mod tests {
                 .push(format!("hb{slot}{}", if live { "live" } else { "" }));
             Ok(Some(Ack {
                 ok: true,
+                neutral: Some(self.rested.swap(false, Ordering::Relaxed)),
                 ..Default::default()
             }))
         }
@@ -3498,6 +3548,47 @@ mod tests {
             buttons,
             ..PadState::NEUTRAL
         }
+    }
+
+    #[test]
+    fn a_held_stick_goes_again_after_the_helper_let_the_pad_go() {
+        let f = Arc::new(FakeHelper::default());
+        let (mut st, _ev) = link_with(&f);
+        let t = Instant::now();
+        open_slot_t(&mut st, 2, "a", t);
+        let held = ps(0, 255);
+        st.on_cmd(
+            Cmd::State {
+                slot: 2,
+                state: held.clone(),
+            },
+            t,
+        );
+        st.tick(t);
+        let sent = |f: &FakeHelper| f.states().iter().filter(|i| i.state == held).count();
+        assert_eq!(sent(&f), 1);
+        // the link was held up past 400 ms: the helper rested the pad and says so
+        f.rested.store(true, Ordering::Relaxed);
+        let t2 = t + vpad::HEARTBEAT;
+        st.on_cmd(
+            Cmd::State {
+                slot: 2,
+                state: held.clone(),
+            },
+            t2,
+        );
+        st.tick(t2);
+        assert_eq!(sent(&f), 1, "nothing new yet: a heartbeat");
+        let t3 = t2 + Duration::from_millis(20);
+        st.on_cmd(
+            Cmd::State {
+                slot: 2,
+                state: held.clone(),
+            },
+            t3,
+        );
+        st.tick(t3);
+        assert_eq!(sent(&f), 2, "the unchanged stick goes again");
     }
 
     #[test]
@@ -3991,6 +4082,14 @@ mod tests {
         )
         .await;
         assert_eq!(s["open"], true);
+        // The names the app's panel reads (client/src/screens/Play/playTogetherState.ts and
+        // its test's copy of this answer): renaming one here breaks the panel.
+        for k in ["pending", "guests", "settings", "ws", "playing"] {
+            assert!(!s[k].is_null(), "{k} missing: {s}");
+        }
+        for k in ["url", "urls", "code", "expires_in_s"] {
+            assert!(!s["invite"][k].is_null(), "invite.{k} missing: {s}");
+        }
         let key = s["invite"]["key"].as_str().unwrap().to_string();
         let code = s["invite"]["code"].as_str().unwrap().to_string();
         assert_eq!(code.len(), CODE_LEN);

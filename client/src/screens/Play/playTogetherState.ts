@@ -44,6 +44,8 @@ export const EMPTY_JOIN: JoinHostState = {
 
 const STATES: ReadonlySet<string> = new Set(["asking", "picking_user", "playing", "reconnecting", "left"]);
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+/** A guest's state; an unknown one counts as in the game (never hides a friend). */
+const stateOf = (v: unknown): GuestState => (typeof v === "string" && STATES.has(v) ? v : "playing") as GuestState;
 
 /** The engine's answer, checked field by field (an older or odd one never breaks the page). */
 export function readJoinState(v: unknown): JoinHostState {
@@ -54,7 +56,8 @@ export function readJoinState(v: unknown): JoinHostState {
       ? {
           url: inv.url,
           code: typeof inv.code === "string" ? inv.code : "",
-          expiresMs: num(inv.expires_ms),
+          // The engine says seconds left (`expires_in_s`).
+          expiresMs: num(inv.expires_in_s) != null ? num(inv.expires_in_s)! * 1000 : num(inv.expires_ms),
           // Every address of this computer a friend may reach, best first (multi-network).
           urls: Array.isArray(inv.urls) ? inv.urls.filter((u): u is string => typeof u === "string") : [],
         }
@@ -66,13 +69,15 @@ export function readJoinState(v: unknown): JoinHostState {
       id: Number(g.id),
       name: typeof g.name === "string" && g.name ? g.name : "?",
       player: num(g.player) ?? 0,
-      status: (typeof g.status === "string" && STATES.has(g.status) ? g.status : "playing") as GuestState,
-      reconnectingLeftS: num(g.reconnecting_left_s),
+      // The engine's field is `state` (`status` kept for an older one).
+      status: stateOf(g.state ?? g.status),
+      reconnectingLeftS: num(g.reconnect_left_s) ?? num(g.reconnecting_left_s),
       rttMs: num(g.rtt_ms),
       connected: g.connected !== false,
     }))
     .sort((a, b) => a.player - b.player);
-  const asks = (Array.isArray(o.asks) ? o.asks : [])
+  // Friends asking to join: the engine's `pending` (`asks` kept for an older one).
+  const asks = (Array.isArray(o.pending) ? o.pending : Array.isArray(o.asks) ? o.asks : [])
     .filter((a): a is { id: number; name: string } => !!a && typeof a.id === "number")
     .map((a) => ({ id: a.id, name: typeof a.name === "string" && a.name ? a.name : "?" }));
   const s = (o.settings ?? {}) as Record<string, unknown>;
@@ -163,30 +168,71 @@ export function inviteOn(url: string, address: string): string {
   }
 }
 
-async function call(path: string, body?: object): Promise<JoinHostState | null> {
+/** A call's answer: the state, or the engine's reason it said no (`old_helper`, `not_playing`…). */
+export type JoinReply = { state: JoinHostState; error?: undefined } | { state?: undefined; error: string };
+
+async function request(path: string, body?: object): Promise<{ ok: boolean; json: unknown }> {
+  const r = await fetch(`${getEngineUrl()}${path}`, {
+    method: body ? "POST" : "GET",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await r.text();
+  let json: unknown;
   try {
-    const r = await fetch(`${getEngineUrl()}${path}`, {
-      method: body ? "POST" : "GET",
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!r.ok) return null;
-    const text = await r.text();
-    return readJoinState(text ? JSON.parse(text) : {});
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = {};
+  }
+  return { ok: r.ok, json };
+}
+
+const errorOf = (json: unknown): string => {
+  const e = (json as { error?: unknown } | null)?.error;
+  return typeof e === "string" && e ? e : "engine";
+};
+
+/** GET /api/join: the whole state. */
+async function read(addr: string): Promise<JoinHostState | null> {
+  try {
+    const r = await request(`/api/join?addr=${encodeURIComponent(addr)}`);
+    return r.ok ? readJoinState(r.json) : null;
   } catch {
     return null;
   }
 }
 
+/** open and close answer with the whole state. */
+async function whole(path: string, addr: string): Promise<JoinReply> {
+  try {
+    const r = await request(path, { addr });
+    return r.ok ? { state: readJoinState(r.json) } : { error: errorOf(r.json) };
+  } catch {
+    return { error: "engine" };
+  }
+}
+
+/** The other calls answer with just their part (`{ok}`, the invite, the settings): the whole
+ *  state is read after, so the panel never flashes an empty one. */
+async function change(path: string, addr: string, body: object): Promise<JoinHostState | null> {
+  try {
+    const r = await request(path, { addr, ...body });
+    if (!r.ok) return null;
+  } catch {
+    return null;
+  }
+  return read(addr);
+}
+
 export const joinApi = {
-  read: (addr: string) => call(`/api/join?addr=${encodeURIComponent(addr)}`),
-  open: (addr: string) => call("/api/join/open", { addr }),
-  close: (addr: string) => call("/api/join/close", { addr }),
-  invite: (addr: string) => call("/api/join/invite", { addr }),
-  decide: (addr: string, id: number, allow: boolean) => call("/api/join/decide", { addr, id, allow }),
-  kick: (addr: string, player: number) => call("/api/join/kick", { addr, player }),
+  read,
+  open: (addr: string) => whole("/api/join/open", addr),
+  close: (addr: string) => whole("/api/join/close", addr),
+  invite: (addr: string) => change("/api/join/invite", addr, {}),
+  decide: (addr: string, id: number, allow: boolean) => change("/api/join/decide", addr, { id, allow }),
+  kick: (addr: string, player: number) => change("/api/join/kick", addr, { player }),
   settings: (addr: string, s: { block_system_buttons?: boolean; max_players?: number }) =>
-    call("/api/join/settings", { addr, ...s }),
+    change("/api/join/settings", addr, s),
 };
 
 /** The engine's Play Together state for a console: every second while it is open (the delays

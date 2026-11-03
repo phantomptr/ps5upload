@@ -225,6 +225,16 @@ describe("join client", () => {
     expect(storage.getItem(tokenKey("INVITE"))).toBeNull();
   });
 
+  it("gives up when a reconnect socket opens but the engine never answers", () => {
+    const c = client();
+    joinNow(c);
+    last().drop();
+    advance(250);
+    last().open(); // up, but no answer ever comes
+    for (let i = 0; i < 80 && kind() === "reconnecting"; i++) advance(1000);
+    expect(stages[stages.length - 1]).toEqual({ kind: "ended", why: "gave_up" });
+  });
+
   it("treats a silent link as dropped", () => {
     const c = client();
     joinNow(c);

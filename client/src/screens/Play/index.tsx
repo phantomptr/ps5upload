@@ -62,8 +62,9 @@ export default function PlayScreen() {
     useStreamLaunch.getState().request(host, { titleId: launch, titleName: launchName || launch });
   }, [launch, launchName, host, paired, navigate, setParams]);
   // On a phone the picture and its controller need the height: while playing, the header is
-  // just the title.
-  const lean = compact && (streaming || joined);
+  // just the title. Only while the stream on screen is the one running: on Join a friend with
+  // your own Play running (a link opened, then the switch declined), the switch stays to go back.
+  const lean = compact && ((streaming && mode === "mine") || (joined && mode === "friend"));
   return (
     <div className="app-page space-y-4">
       <PageHeader
