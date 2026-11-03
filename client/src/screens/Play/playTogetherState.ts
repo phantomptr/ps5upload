@@ -21,7 +21,14 @@ export interface JoinGuest {
 
 export interface JoinHostState {
   open: boolean;
-  invite: { url: string; code: string; expiresMs: number | null; urls: string[] } | null;
+  invite: {
+    url: string;
+    code: string;
+    expiresMs: number | null;
+    urls: string[];
+    /** This computer's Tailscale address (one of `urls`), while Tailscale is connected. */
+    tailscale: string | null;
+  } | null;
   guests: JoinGuest[];
   asks: Array<{ id: number; name: string }>;
   settings: { blockSystemButtons: boolean; maxPlayers: number };
@@ -60,6 +67,7 @@ export function readJoinState(v: unknown): JoinHostState {
           expiresMs: num(inv.expires_in_s) != null ? num(inv.expires_in_s)! * 1000 : num(inv.expires_ms),
           // Every address of this computer a friend may reach, best first (multi-network).
           urls: Array.isArray(inv.urls) ? inv.urls.filter((u): u is string => typeof u === "string") : [],
+          tailscale: typeof inv.tailscale === "string" ? inv.tailscale : null,
         }
       : null;
   const guests = (Array.isArray(o.guests) ? o.guests : [])

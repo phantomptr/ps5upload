@@ -15,8 +15,8 @@ import {
   type LogEntry,
   type LogLevel,
 } from "../../state/logs";
-import { useDiagSettingsStore, LOG_LEVELS } from "../../state/diagSettings";
-import { EmptyState, Button, Callout } from "../../components";
+import { useDiagSettingsStore, LOG_LEVELS, detailedActive } from "../../state/diagSettings";
+import { EmptyState, Button, Callout, Toggle } from "../../components";
 import { useTr } from "../../state/lang";
 import { writeClipboard } from "../../lib/clipboard";
 import { isTauriEnv } from "../../lib/tauriEnv";
@@ -78,6 +78,9 @@ export default function AppLogsPanel() {
   const clearLogs = useLogsStore((s) => s.clear);
   const logLevel = useDiagSettingsStore((s) => s.logLevel);
   const setLogLevel = useDiagSettingsStore((s) => s.setLogLevel);
+  const detailedUntil = useDiagSettingsStore((s) => s.detailedUntil);
+  const setDetailed = useDiagSettingsStore((s) => s.setDetailed);
+  const detailedOn = detailedActive(detailedUntil);
 
   // Transient button feedback. A silent success looked identical to a silent
   // failure, which is why Copy/Download read as "not working".
@@ -235,6 +238,26 @@ export default function AppLogsPanel() {
         >
           {tr("clear", undefined, "Clear")}
         </Button>
+      </div>
+
+      {/* "Detailed logs": extra engine lines for the hard-to-diagnose paths (Remote Play
+          start-up, Play Together) and debug lines recorded, for a day at most (lib/detailedLogs).
+          Every platform: it changes what the engine writes, which the browser build reads too. */}
+      <div className="mb-3 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 py-2.5 text-xs shadow-[var(--edge-highlight)]">
+        <Toggle
+          checked={detailedOn}
+          onChange={(on) => setDetailed(on)}
+          label={tr("logs_detailed", undefined, "Detailed logs")}
+          hint={
+            detailedOn && detailedUntil !== null
+              ? tr("logs_detailed_on_until", { time: new Date(detailedUntil).toLocaleString() }, "On until {time}. Turns itself off then.")
+              : tr(
+                  "logs_detailed_hint",
+                  undefined,
+                  "Records extra detail about Remote Play start-up and Play Together to help find a problem. Never keys, codes or passwords. Turns itself off after 24 hours.",
+                )
+          }
+        />
       </div>
 
       {/* Persistent disk-log controls. These logs are written to

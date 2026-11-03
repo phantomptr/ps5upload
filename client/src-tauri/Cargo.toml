@@ -1,10 +1,10 @@
 [package]
 name = "ps5upload-desktop"
-version = "11.0.0"
+version = "11.0.1"
 description = "The all-in-one PS5 companion app."
 license = "GPL-3.0-or-later"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.87"  # is_multiple_of (engine crates it links); CI builds on stable
 
 [lib]
 name = "ps5upload_desktop_lib"
@@ -33,7 +33,7 @@ tauri-plugin-notification = "2"
 # the second-launch argv, so we can focus its window and let the
 # duplicate exit cleanly. Desktop-only — mobile targets don't ship
 # this path.
-tauri-plugin-single-instance = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 # HTTP client for both the localhost engine sidecar (no TLS) and the
 # public GitHub update manifest/asset downloads (needs TLS via
@@ -102,6 +102,7 @@ mdns-sd = { version = "0.21", default-features = false, features = ["async"] }
 # cross-compile story intact.
 if-addrs = "0.15"
 tauri-plugin-opener = "2"
+tauri-plugin-deep-link = "2"
 
 # libc for `statvfs` in the USB autoloader's drive enumeration
 # (commands/usb_autoloader.rs). Already pulled in transitively via

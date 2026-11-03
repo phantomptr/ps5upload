@@ -212,12 +212,18 @@ export function HushPanel({
         </dd>
         <dt className="text-[var(--color-muted)]">{tr("hush_interval", undefined, "Checks every")}</dt>
         <dd>{`${c.intervalS} s`}</dd>
+        <dt className="text-[var(--color-muted)]">{tr("hush_hold", undefined, "Blocks recording")}</dt>
+        <dd>
+          {c.holdS > 0
+            ? tr("hush_hold_s", { n: c.holdS }, `For ${c.holdS} s after a game starts`)
+            : tr("hush_hold_session", undefined, "For the whole session")}
+        </dd>
       </dl>
       <p className="text-xs text-[var(--color-muted)]">
         {tr(
           "hush_rp_note",
           undefined,
-          "Remote Play uses the same video encoder, so while Hush is on a stream has no picture. Play pauses Hush for a stream when you ask it to, and turns it back on afterwards.",
+          "Remote Play uses the same video encoder, so while Hush blocks it a stream has no picture. With hold_s set, Play waits for the block to end before it starts. Otherwise it pauses Hush for a stream when you ask it to, and turns it back on afterwards.",
         )}
       </p>
       <div className="space-y-1">

@@ -340,6 +340,25 @@ pub(crate) async fn test_form(r: &Remote, body: ConnectionBody) -> Response {
     try_connection(r, &conn, &secret).await
 }
 
+/// Saved connections (SMB shares, FTP, SFTP, WebDAV) for a bug report: protocol, server and share
+/// names, whether a user and a password are saved. Never the password, user name or paths.
+pub(crate) fn diag_summary() -> serde_json::Value {
+    match global() {
+        Ok(r) => json!({
+            "connections": r.store.list().iter().map(|v| json!({
+                "protocol": v.conn.protocol,
+                "host": v.conn.host,
+                "port": v.conn.port,
+                "share": v.conn.share,
+                "has_user": !v.conn.user.is_empty(),
+                "has_secret": v.has_secret,
+                "insecure_tls": v.conn.insecure_tls,
+            })).collect::<Vec<_>>(),
+        }),
+        Err(e) => json!({ "error": e.to_string() }),
+    }
+}
+
 // ─── axum handlers over the engine's store ──────────────────────────────────
 
 macro_rules! with_remote {

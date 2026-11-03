@@ -145,6 +145,49 @@ describe("buildReport", () => {
     expect(settings).not.toContain("wake_rp_key");
   });
 
+  it("settings.json summarizes the mesh state, whose console fields hold the wake keys", async () => {
+    // The mesh keeps each console field as "c:<address>:<field>", out of reach of the
+    // key-name redaction: copied as is, a console's Remote Play keys went out in settings.json.
+    const mesh = JSON.stringify({
+      device: "d1",
+      clock: { t: 1, c: 0 },
+      m: {
+        "c:192.168.0.100": { v: 1, h: {} },
+        "c:192.168.0.100:wake_regist_key": { v: "FAKEREGISTKEY0123", h: {} },
+        "c:192.168.0.100:wake_rp_key": { v: "FAKERPKEY4567", h: {} },
+        "p:ps5upload.theme": { v: "dark", h: {} },
+      },
+    });
+    const mem = new Map([
+      ["ps5upload.mesh_state.v2", mesh],
+      ["ps5upload.detailed_logs_until", "1800000000000"],
+    ]);
+    vi.stubGlobal("localStorage", {
+      get length() {
+        return mem.size;
+      },
+      key: (i: number) => [...mem.keys()][i] ?? null,
+      getItem: (k: string) => mem.get(k) ?? null,
+    });
+    const r = await buildReport(opts({ sources: new Set<SourceId>(["settings"]) }));
+    const settings = r.entries.find((e) => e.path === "settings.json")?.text ?? "";
+    expect(settings).not.toContain("FAKEREGISTKEY");
+    expect(settings).not.toContain("FAKERPKEY");
+    expect(JSON.parse(settings)["ps5upload.mesh_state.v2"]).toBe("<summary: 4 entries, 1 consoles>");
+    // Whether Detailed logs were on rides along with the other settings.
+    expect(settings).toContain("ps5upload.detailed_logs_until");
+  });
+
+  it("report.json carries the engine's feature summary and, on desktop, the link status", async () => {
+    const features = { play_together: { parties: [{ open: true, players_in: 1 }] } };
+    engineDiag.mockResolvedValue({ jobs: [], features });
+    const r = await buildReport(opts({ platform: "desktop", sources: new Set<SourceId>(["jobs"]) }));
+    const report = JSON.parse(r.entries.find((e) => e.path === "report.json")?.text ?? "{}");
+    expect(report.engine.features).toEqual(features);
+    // The diagnostic mock has no app_links: the shell's status is then simply not added.
+    expect(report.diagnostic).toEqual({ schema: 3 });
+  });
+
   it("reads the console the report is about, not the selected tab", async () => {
     await buildReport(opts({ consoles: ["192.168.86.99"], sources: new Set<SourceId>(["console_logs"]) }));
     expect(snapshot).toHaveBeenCalledWith(expect.objectContaining({ host: "192.168.86.99" }));
@@ -154,5 +197,22 @@ describe("buildReport", () => {
     snapshot.mockResolvedValue({ snapshot: { errors: { connect: "refused" } }, klog: null, syslog: null, payload_logs: [] });
     const r = await buildReport(opts({ sources: new Set<SourceId>(["console_logs"]) }));
     expect(r.missing).toContainEqual({ source: "console_logs", reason: expect.stringContaining("refused") });
+  });
+});
+
+describe("scrubUrls", () => {
+  it("keeps a link's host and path, never its query or fragment", async () => {
+    const { scrubUrls } = await import("./reportBuilder");
+    const stored = JSON.stringify([
+      "https://cdn.example.com/game.pkg?X-Amz-Signature=abc123&token=zz",
+      "http://192.168.1.20:19113/join#i=0f0f0f0f0f0f0f0f",
+      "http://10.0.0.5:19113/pad#t=deadbeefdeadbeef&w=1",
+      "https://example.com/plain/path",
+    ]);
+    const out = scrubUrls(stored);
+    for (const secret of ["abc123", "zz", "0f0f0f0f0f0f0f0f", "deadbeefdeadbeef"]) expect(out).not.toContain(secret);
+    expect(out).toContain("https://cdn.example.com/game.pkg?<removed>");
+    expect(out).toContain("http://192.168.1.20:19113/join#<removed>");
+    expect(out).toContain("https://example.com/plain/path");
   });
 });

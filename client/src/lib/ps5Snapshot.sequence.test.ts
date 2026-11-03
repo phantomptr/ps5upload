@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./invokeLogged", () => ({ invoke: vi.fn() }));
+// The console's saved shares come over the engine's HTTP API, not the helper bridge.
+vi.mock("../api/consoleShares", () => ({
+  listConsoleShares: vi.fn(async () => [
+    { id: "1", name: "NAS", host: "nas.local", port: 445, share: "Games", user: "me", domain: "", start_path: "", has_password: true },
+  ]),
+}));
 
 import { invoke } from "./invokeLogged";
 import { useConnectionStore } from "../state/connection";
@@ -42,8 +48,10 @@ describe("bug report collection order", () => {
   /* The helper's own logs are the one thing a crash report cannot do without,
    * so they are read before anything that might take the helper down. */
   it("reads the helper's logs before asking it anything else", async () => {
-    const calls = fakeHelper();
+    const all = fakeHelper();
     await buildPs5Snapshot({ redact: true });
+    // The add-ons (Hush's files) are read last of all, after the Sony-API reads.
+    const calls = all.slice(0, all.indexOf("ps5_focus"));
     // Reading the logs is a directory listing per log folder plus one read per file.
     const isLogRead = (c: string) => c === "ps5_list_dir" || c === "fs_read_preview";
     const firstOther = calls.findIndex((c) => !isLogRead(c));
@@ -93,6 +101,31 @@ describe("bug report collection order", () => {
     fakeHelper();
     const { snapshot } = await buildPs5Snapshot({ redact: true });
     expect(snapshot.helper_lost_during).toBeNull();
-    expect(snapshot.helper_last_answered).toBe("focus");
+    expect(snapshot.helper_last_answered).toBe("console_shares");
+  });
+
+  /* The add-ons (Hush, cheats, the console's shares) come after everything else, and a dead
+   * helper stops them too. A share is its server and name, never its user or password. */
+  it("reads the add-ons last, as counts and states", async () => {
+    const calls = fakeHelper();
+    const { snapshot } = await buildPs5Snapshot({ redact: true });
+    expect(calls.indexOf("cheats_status")).toBeGreaterThan(calls.indexOf("ps5_focus"));
+    // No /data/hush on this console: said, and nothing more is read for it.
+    expect(snapshot.features?.hush).toEqual({
+      installed: false,
+      enabled: null,
+      mode: null,
+      hold_s: null,
+      state_txt_present: false,
+    });
+    expect(snapshot.features?.console_shares).toEqual([
+      { host: "nas.local", share: "Games", has_user: true, has_password: true },
+    ]);
+    expect(JSON.stringify(snapshot.features)).not.toContain('"me"');
+
+    const dead = fakeHelper({ killOn: "ps5_hw_info" });
+    const after = await buildPs5Snapshot({ redact: true });
+    expect(dead).not.toContain("cheats_status");
+    expect(after.snapshot.errors.cheats).toMatch(/^skipped: /);
   });
 });

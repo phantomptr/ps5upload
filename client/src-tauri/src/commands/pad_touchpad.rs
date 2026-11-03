@@ -494,7 +494,7 @@ pub(crate) mod reader {
             if let Some(m) = parse_dualsense_motion(&buf[..n]) {
                 let cal = *cal.get_or_insert_with(|| calibration(dev));
                 let t = clock.us(m.ticks);
-                if motion_at.map_or(true, |at| at.elapsed() >= MOTION_EVERY) {
+                if motion_at.is_none_or(|at| at.elapsed() >= MOTION_EVERY) {
                     let (gyro, accel) = cal.apply(&m);
                     let _ = app.emit("pad-motion", Some(MotionEvent { gyro, accel, t }));
                     motion_at = Some(Instant::now());

@@ -127,6 +127,17 @@ describe("join client", () => {
     expect(last().frames.length).toBe(1);
   });
 
+  it("asks for a keyframe only once joined (#648)", () => {
+    const c = client();
+    c.start();
+    last().open();
+    c.askKeyframe();
+    expect(last().texts.some((t) => "keyframe" in t)).toBe(false);
+    last().say({ stage: "joined", player: 2, token: "TOK", hevc: false });
+    c.askKeyframe();
+    expect(last().texts.filter((t) => t.keyframe === true).length).toBe(1);
+  });
+
   it("sends nothing before it is joined", () => {
     const c = client();
     c.start();

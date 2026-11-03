@@ -197,6 +197,105 @@ pub(crate) fn lan_ips(console: Option<&str>) -> Vec<std::net::IpAddr> {
     out
 }
 
+/// Tailscale's shared range (100.64.0.0/10), where every tailnet address is.
+fn in_tailnet_range(ip: std::net::IpAddr) -> bool {
+    matches!(ip, std::net::IpAddr::V4(v4) if v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64)
+}
+
+/// The address `via` (what reaches Tailscale's own 100.100.100.100) is this computer's tailnet
+/// address when it is in Tailscale's range and is not simply the default route's address too
+/// (a carrier's CGNAT can hand a computer a 100.64/10 address of its own).
+fn tailnet_choice(
+    via: Option<std::net::IpAddr>,
+    default: Option<std::net::IpAddr>,
+) -> Option<std::net::IpAddr> {
+    via.filter(|ip| in_tailnet_range(*ip) && default != Some(*ip))
+}
+
+/// This computer's Tailscale address, while the Tailscale app is connected: friends on Tailscale
+/// (this computer shared with them) reach the engine there. The system picks the interface
+/// toward Tailscale's 100.100.100.100, which only the Tailscale interface routes; nothing is sent.
+pub(crate) fn tailscale_ip() -> Option<std::net::IpAddr> {
+    tailnet_choice(lan_ip_toward("100.100.100.100"), lan_ip_toward("1.1.1.1"))
+}
+
+/// Virtual adapters nobody joins through (containers, virtual machines): their addresses would
+/// only be noise among the choices.
+fn virtual_adapter(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    [
+        "docker",
+        "br-",
+        "veth",
+        "vethernet",
+        "vmnet",
+        "vboxnet",
+        "virbr",
+        "lxc",
+        "lxd",
+        "cni",
+        "flannel",
+        "podman",
+        "vmware",
+        "virtualbox",
+        "hyper-v",
+        "default switch",
+        "wsl",
+        "bridge10",
+    ]
+    .iter()
+    .any(|p| n.starts_with(p) || n.contains(&format!("({p}")))
+}
+
+/// A private address someone could reach this computer on through a VPN of their own
+/// (WireGuard, OpenVPN, ZeroTier…): home-network ranges and the shared 100.64/10 range.
+fn vpn_reachable(ip: std::net::Ipv4Addr) -> bool {
+    ip.is_private() || (ip.octets()[0] == 100 && (ip.octets()[1] & 0xc0) == 64)
+}
+
+/// This computer's other private addresses, from its network interfaces: a WireGuard (or other
+/// VPN) interface a friend reaches it on. Not loopback, not link-local, not virtual adapters, and
+/// not `skip` (the addresses already offered).
+fn other_private_ips(skip: &[std::net::IpAddr]) -> Vec<std::net::IpAddr> {
+    let Ok(ifaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    let mut out: Vec<std::net::IpAddr> = Vec::new();
+    for i in ifaces {
+        let std::net::IpAddr::V4(v4) = i.ip() else {
+            continue;
+        };
+        let ip = std::net::IpAddr::V4(v4);
+        if i.is_loopback()
+            || v4.is_link_local()
+            || !vpn_reachable(v4)
+            || virtual_adapter(&i.name)
+            || skip.contains(&ip)
+            || out.contains(&ip)
+        {
+            continue;
+        }
+        out.push(ip);
+    }
+    out
+}
+
+/// Every address of this computer a phone or friend may use, best first: the home network's
+/// (`lan_ips`), then other private ones (a VPN such as WireGuard), then Tailscale's last.
+pub(crate) fn reach_ips(
+    console: Option<&str>,
+) -> (Vec<std::net::IpAddr>, Option<std::net::IpAddr>) {
+    let mut ips = lan_ips(console);
+    let tailscale = tailscale_ip();
+    let mut skip = ips.clone();
+    skip.extend(tailscale);
+    ips.extend(other_private_ips(&skip));
+    if let Some(ip) = tailscale.filter(|ip| !ips.contains(ip)) {
+        ips.push(ip);
+    }
+    (ips, tailscale)
+}
+
 /// Where phones reach this engine, toward the console being played (or `console`).
 fn base_url(headers: &HeaderMap, console: Option<&str>) -> Option<String> {
     let ip = *lan_ips(console).first()?;
@@ -206,7 +305,8 @@ fn base_url(headers: &HeaderMap, console: Option<&str>) -> Option<String> {
 fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
     let base = base_url(headers, console);
     let port = port_of(headers);
-    let ips = lan_ips(console);
+    // Home network first (the QR code's), then a VPN's, Tailscale's last: the host picks.
+    let (ips, tailscale) = reach_ips(console);
     with_link(|l| {
         serde_json::json!({
             "open": l.key.is_some(),
@@ -214,6 +314,8 @@ fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
                 (Some(b), Some(k)) => serde_json::Value::String(format!("{b}/pad#t={k}")),
                 _ => serde_json::Value::Null,
             },
+            // This computer's Tailscale address (one of `urls`), for the page to label.
+            "tailscale": tailscale.map(|ip| ip.to_string()),
             // Every address, best first (the first is `url`): for a computer on two networks.
             "urls": match &l.key {
                 Some(k) => ips
@@ -227,6 +329,24 @@ fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
             "pads": l.pads.iter().map(|p| serde_json::json!({"id": p.id, "name": p.name, "since_ms": p.since_ms, "watch": p.watch, "control": p.control})).collect::<Vec<_>>(),
             "pending": l.pending.iter().map(|p| serde_json::json!({"id": p.id, "name": p.name})).collect::<Vec<_>>(),
         })
+    })
+}
+
+/// Phone controllers and the watch party for a bug report: counts and switches, never the link's
+/// key, an address or a phone's name. `tailscale` says only whether a Tailscale address exists.
+pub(crate) fn diag_summary() -> serde_json::Value {
+    let tailscale = tailscale_ip().is_some();
+    with_link(|l| diag_of(l, tailscale))
+}
+
+fn diag_of(l: &Link, tailscale: bool) -> serde_json::Value {
+    serde_json::json!({
+        "open": l.key.is_some(),
+        "phones": l.pads.iter().filter(|p| !p.watch).count(),
+        "watchers": l.pads.iter().filter(|p| p.watch).count(),
+        "watchers_in_control": l.pads.iter().filter(|p| p.watch && p.control).count(),
+        "asking": l.pending.len(),
+        "tailscale_ip_present": tailscale,
     })
 }
 
@@ -616,6 +736,37 @@ pub struct RelayQuery {
     url: String,
     #[serde(default)]
     name: Option<String>,
+    /// The computer's link key (a QR code or link opened in the app): in without asking.
+    #[serde(default)]
+    t: Option<String>,
+    /// `w=1`: join to watch.
+    #[serde(default)]
+    w: Option<u8>,
+}
+
+/// The pad socket's query for a relayed phone: its name, then the link's key and watch flag when
+/// it came from a link. A key is passed only when it looks like one (hex, as `random_key` makes).
+fn relay_query(name: &str, t: Option<&str>, watch: bool) -> String {
+    let mut q = format!(
+        "?name={}",
+        name.bytes()
+            .map(|b| if b.is_ascii_alphanumeric() {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            })
+            .collect::<String>()
+    );
+    if let Some(t) =
+        t.filter(|t| (8..=128).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        q.push_str("&t=");
+        q.push_str(t);
+    }
+    if watch {
+        q.push_str("&w=1");
+    }
+    q
 }
 
 /// Only another engine's pad socket on the LAN may be relayed to.
@@ -704,14 +855,8 @@ async fn relay_session(mut socket: WebSocket, q: RelayQuery) {
         q.name.unwrap_or_else(crate::mesh_api::device_name).as_str(),
     ));
     let url = format!(
-        "{target}?name={}",
-        name.bytes()
-            .map(|b| if b.is_ascii_alphanumeric() {
-                (b as char).to_string()
-            } else {
-                format!("%{b:02X}")
-            })
-            .collect::<String>()
+        "{target}{}",
+        relay_query(&name, q.t.as_deref(), q.w == Some(1))
     );
     relay_to(socket, &url).await;
 }
@@ -763,6 +908,118 @@ pub(crate) async fn relay_to(mut socket: WebSocket, url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vpn_addresses_are_private_and_not_virtual_adapters() {
+        let v4 = |s: &str| s.parse::<std::net::Ipv4Addr>().unwrap();
+        assert!(vpn_reachable(v4("10.8.0.1"))); // WireGuard's usual server address
+        assert!(vpn_reachable(v4("172.16.5.1")));
+        assert!(vpn_reachable(v4("100.64.0.7")));
+        assert!(!vpn_reachable(v4("8.8.8.8")));
+        assert!(!vpn_reachable(v4("100.128.0.1")));
+        for name in [
+            "docker0",
+            "br-1a2b",
+            "veth9f",
+            "vEthernet (WSL)",
+            "vmnet8",
+            "vboxnet0",
+            "virbr0",
+            "bridge100",
+        ] {
+            assert!(virtual_adapter(name), "{name}");
+        }
+        for name in [
+            "wg0",
+            "utun4",
+            "WireGuard Tunnel",
+            "tun0",
+            "en0",
+            "Ethernet",
+            "Wi-Fi",
+        ] {
+            assert!(!virtual_adapter(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn this_computer_lists_its_addresses_without_repeats() {
+        let (ips, _) = reach_ips(Some("127.0.0.1"));
+        let mut seen = ips.clone();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), ips.len());
+        assert!(ips.iter().all(|ip| !ip.is_loopback()));
+    }
+
+    /// A bug report gets the link's counts, never its key or a phone's name.
+    #[test]
+    fn the_bug_report_summary_has_no_key_or_names() {
+        let (tx, _rx) = mpsc::channel(1);
+        let l = Link {
+            key: Some("a1b2c3d4e5f60718a1b2c3d4e5f60718".into()),
+            pads: vec![
+                Pad {
+                    id: 1,
+                    name: "Ann's phone".into(),
+                    since_ms: 0,
+                    tx: tx.clone(),
+                    watch: false,
+                    control: false,
+                },
+                Pad {
+                    id: 2,
+                    name: "Bob's tablet".into(),
+                    since_ms: 0,
+                    tx,
+                    watch: true,
+                    control: true,
+                },
+            ],
+            pending: Vec::new(),
+        };
+        let v = diag_of(&l, true);
+        let text = v.to_string();
+        assert!(!text.contains("a1b2c3d4"), "{text}");
+        assert!(!text.contains("Ann") && !text.contains("Bob"), "{text}");
+        assert_eq!(v["open"], true);
+        assert_eq!(v["phones"], 1);
+        assert_eq!(v["watchers"], 1);
+        assert_eq!(v["watchers_in_control"], 1);
+        assert_eq!(v["tailscale_ip_present"], true);
+    }
+
+    #[test]
+    fn relayed_link_passes_its_key_and_watch_flag_only_when_sound() {
+        assert_eq!(
+            relay_query("Ann's phone", None, false),
+            "?name=Ann%27s%20phone"
+        );
+        assert_eq!(
+            relay_query("A", Some("0f0f0f0f0f0f0f0f"), true),
+            "?name=A&t=0f0f0f0f0f0f0f0f&w=1"
+        );
+        // not a key: dropped (the computer then asks, as for any unkeyed phone)
+        assert_eq!(relay_query("A", Some("0f0f&w=1"), false), "?name=A");
+        assert_eq!(relay_query("A", Some("short"), false), "?name=A");
+    }
+
+    #[test]
+    fn tailnet_address_only_when_tailscale_routes_it() {
+        let ip = |s: &str| Some(s.parse::<std::net::IpAddr>().unwrap());
+        // Tailscale up: 100.100.100.100 goes out on the tailnet address, the default route on Wi-Fi.
+        assert_eq!(
+            tailnet_choice(ip("100.101.102.103"), ip("192.168.1.20")),
+            ip("100.101.102.103")
+        );
+        // Tailscale off: both go out on Wi-Fi.
+        assert_eq!(tailnet_choice(ip("192.168.1.20"), ip("192.168.1.20")), None);
+        // A carrier's CGNAT address on the computer itself is not Tailscale.
+        assert_eq!(tailnet_choice(ip("100.70.1.2"), ip("100.70.1.2")), None);
+        // Outside 100.64/10 (100.128.x is not shared space).
+        assert_eq!(tailnet_choice(ip("100.128.0.1"), ip("192.168.1.20")), None);
+        assert_eq!(tailnet_choice(None, ip("192.168.1.20")), None);
+    }
 
     #[test]
     fn a_phone_is_offered_home_network_addresses_only() {

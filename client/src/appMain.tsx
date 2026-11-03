@@ -54,6 +54,8 @@ void import("./lib/appJournal").then(({ recordAppEvent }) =>
 // command errors) only reaches the dev terminal during `tauri dev` —
 // packaged users would see nothing when something goes wrong.
 installEngineLogBridge();
+// "Detailed logs" (Logs tab): tell the engine, and turn it off when its time is up.
+void import("./lib/detailedLogs").then((m) => m.installDetailedLogs());
 
 // Start mirroring stores to ~/.ps5upload/settings.json on every change,
 // and then hydrate from that file (asynchronously) if the user has a

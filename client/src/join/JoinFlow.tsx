@@ -4,6 +4,8 @@ import { Users } from "lucide-react";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useTr } from "../state/lang";
 import { tokenKey } from "../lib/joinClient";
+import { joinAppLink } from "../lib/joinProtocol";
+import { OpenInAppGate } from "../components/OpenInAppGate";
 import { JoinView } from "./JoinView";
 import { JoinSession } from "./session";
 
@@ -88,7 +90,7 @@ export function JoinFlow({ url, invite, host }: { url: string; invite: string | 
   }
 
   const shownHost = host ?? tr("join_host_fallback", undefined, "your friend");
-  return (
+  const nameStep = (
     <div className="flex min-h-[100dvh] items-center justify-center bg-black px-6 text-white" data-testid="join-name-step">
       <form
         className="w-full max-w-sm space-y-4 rounded-2xl border border-white/10 bg-neutral-900 p-6"
@@ -129,4 +131,6 @@ export function JoinFlow({ url, invite, host }: { url: string; invite: string | 
       </form>
     </div>
   );
+  // A link opened in a browser: offer the app first (Slack-style); a typed code has no link.
+  return invite ? <OpenInAppGate appLink={joinAppLink(location.href)}>{nameStep}</OpenInAppGate> : nameStep;
 }

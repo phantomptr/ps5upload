@@ -175,7 +175,7 @@ mod output {
                 continue;
             };
             // Fewest channels (4 when offered), f32 when both are.
-            let better = best.as_ref().map_or(true, |b| {
+            let better = best.as_ref().is_none_or(|b| {
                 c.channels() < b.channels()
                     || (c.channels() == b.channels()
                         && c.sample_format() == cpal::SampleFormat::F32)

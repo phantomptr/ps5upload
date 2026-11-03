@@ -17,6 +17,7 @@ import {
   smbParts,
   smbSegments,
   smbUp,
+  splitShare,
   transferItems,
   watchSmbJob,
   type SmbJob,
@@ -321,5 +322,16 @@ describe("words", () => {
     expect(smbErrorText(new ApiError(503, "smb_loader_unavailable"))).toBe(t("cw_files_smb_err_loader"));
     expect(smbErrorText(new ApiError(404, "not_found"))).toBeNull();
     expect(smbErrorText(new Error("x"))).toBeNull();
+  });
+});
+
+describe("splitShare", () => {
+  it("takes the share's own name and moves typed folders into the start folder", () => {
+    expect(splitShare("Media", "Games")).toEqual({ share: "Media", start_path: "Games" });
+    expect(splitShare(" Media/Games/PS5 ", "")).toEqual({ share: "Media", start_path: "Games/PS5" });
+    expect(splitShare("Media/Games", "PS5/New")).toEqual({ share: "Media", start_path: "Games/PS5/New" });
+    expect(splitShare("\\\\nas\\Media\\Games", "")).toEqual({ share: "Media", start_path: "Games" });
+    expect(splitShare("//nas/Media", "x")).toEqual({ share: "Media", start_path: "x" });
+    expect(splitShare("/Media/", "")).toEqual({ share: "Media", start_path: "" });
   });
 });

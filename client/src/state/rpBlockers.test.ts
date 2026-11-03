@@ -4,13 +4,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // watch: whether a stream runs, and for which console.
 const h = vi.hoisted(() => {
   const calls: string[] = [];
-  const state = { on: true };
+  type Status =
+    | { kind: "off" }
+    | { kind: "on" }
+    | { kind: "wait"; maxMs: number }
+    | { kind: "stuck"; key: string; text: string };
+  const state: { status: Status; waitOutcome: "clear" | "timeout"; waitGate: Promise<void> | null } = {
+    status: { kind: "on" },
+    waitOutcome: "clear",
+    waitGate: null,
+  };
   const fake = {
     id: "hush",
     name: "Hush",
     reasonKey: "rp_blocker_hush_reason",
     reason: "Hush is on.",
-    detect: async () => state.on,
+    status: async () => state.status,
+    waitClear: async (_ctx: unknown, maxMs: number, opts?: { signal?: AbortSignal }) => {
+      calls.push(`wait ${maxMs}`);
+      if (state.waitGate) await state.waitGate;
+      return opts?.signal?.aborted ? ("timeout" as const) : state.waitOutcome;
+    },
     pause: async () => {
       calls.push("pause");
       return "restored" as const;
@@ -26,7 +40,10 @@ vi.mock("../lib/rpBlockers", () => ({
   RP_BLOCKERS: [h.fake],
   blockerById: (id: string) => (id === "hush" ? h.fake : null),
   blockerCtx: (host: string) => ({ host, addr: host, procs: async () => [] }),
-  detectBlockers: async () => ((await h.fake.detect()) ? [h.fake] : []),
+  checkBlockers: async () => {
+    const status = await h.fake.status();
+    return status.kind === "off" ? [] : [{ blocker: h.fake, status }];
+  },
 }));
 vi.mock("./logs", () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("./notifications", () => ({ pushNotification: vi.fn() }));
@@ -60,15 +77,17 @@ const go = vi.fn(async () => {
 
 beforeEach(() => {
   calls.length = 0;
-  h.state.on = true;
+  h.state.status = { kind: "on" };
+  h.state.waitOutcome = "clear";
+  h.state.waitGate = null;
   go.mockClear();
-  useRpBlockers.setState({ autoPause: false, held: null, pausing: null, paused: {}, onAtStart: {} });
+  useRpBlockers.setState({ autoPause: false, held: null, pausing: null, waiting: null, paused: {}, onAtStart: {} });
   rp.setState({ stream: null, target: null } as never);
 });
 
 describe("Remote Play blockers around a stream", () => {
   it("starts at once when nothing blocks", async () => {
-    h.state.on = false;
+    h.state.status = { kind: "off" };
     await beforeRemotePlay(HOST, go);
     expect(calls).toEqual(["start"]);
     expect(useRpBlockers.getState().onAtStart[HOST]).toEqual([]);
@@ -114,5 +133,57 @@ describe("Remote Play blockers around a stream", () => {
       calls.push("start");
     });
     expect(calls).toEqual(["pause", "start", "resume"]);
+  });
+
+  it("waits out a hold, then starts without pausing Hush", async () => {
+    h.state.status = { kind: "wait", maxMs: 50_000 };
+    let open!: () => void;
+    h.state.waitGate = new Promise<void>((r) => (open = r));
+    const started = beforeRemotePlay(HOST, go);
+    await vi.waitFor(() => expect(useRpBlockers.getState().waiting).toMatchObject({ ids: ["hush"], maxS: 50 }));
+    // A second press while waiting does not start a second wait.
+    await beforeRemotePlay(HOST, go);
+    open();
+    await started;
+    expect(calls).toEqual(["wait 50000", "start"]);
+    expect(useRpBlockers.getState().waiting).toBeNull();
+    expect(useRpBlockers.getState().onAtStart[HOST]).toEqual([]);
+    expect(useRpBlockers.getState().paused[HOST]).toBeUndefined();
+  });
+
+  it("treats a hold that outlasts its bound as on: asks, as before", async () => {
+    h.state.status = { kind: "wait", maxMs: 50_000 };
+    h.state.waitOutcome = "timeout";
+    await beforeRemotePlay(HOST, go);
+    expect(go).not.toHaveBeenCalled();
+    expect(useRpBlockers.getState().held?.ids).toEqual(["hush"]);
+    await pauseHeldAndStart();
+    expect(calls).toEqual(["wait 50000", "pause", "start"]);
+  });
+
+  it("does not start when the wait is cancelled", async () => {
+    h.state.status = { kind: "wait", maxMs: 50_000 };
+    let open!: () => void;
+    h.state.waitGate = new Promise<void>((r) => (open = r));
+    const started = beforeRemotePlay(HOST, go);
+    await vi.waitFor(() => expect(useRpBlockers.getState().waiting).not.toBeNull());
+    useRpBlockers.getState().waiting!.cancel();
+    open();
+    await started;
+    expect(calls).toEqual(["wait 50000"]);
+    expect(useRpBlockers.getState().waiting).toBeNull();
+    expect(useRpBlockers.getState().held).toBeNull();
+  });
+
+  it("holds the start for a stuck Hush even with Always pause on, and never pauses it", async () => {
+    useRpBlockers.getState().setAutoPause(true);
+    h.state.status = { kind: "stuck", key: "rp_blocker_hush_leftover_restart", text: "Restart the PS5 to clear it." };
+    await beforeRemotePlay(HOST, go);
+    const held = useRpBlockers.getState().held;
+    expect(held?.ids).toEqual([]);
+    expect(held?.stuck).toEqual([{ id: "hush", key: "rp_blocker_hush_leftover_restart", text: "Restart the PS5 to clear it." }]);
+    expect(useRpBlockers.getState().onAtStart[HOST]).toEqual(["hush"]);
+    await startHeldAnyway();
+    expect(calls).toEqual(["start"]);
   });
 });

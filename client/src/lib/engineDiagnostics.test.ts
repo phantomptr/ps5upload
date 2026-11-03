@@ -83,3 +83,30 @@ describe("collectEngineDiagnostics — job summaries (review 009 #4)", () => {
     expect(Object.keys(d.errors)).toContain("job_summaries");
   });
 });
+
+describe("collectEngineDiagnostics — feature summary", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("carries the engine's feature summary", async () => {
+    const features = {
+      detailed_logs: { detailed: true, until_ms: 1 },
+      remote_play: { live: null, last_session: { end: { stage: "error", code: "refused" } } },
+      play_together: { parties: [] },
+    };
+    const calls = stubFetch({
+      "/api/jobs": [],
+      "/api/pkg/install/sessions": [],
+      "/api/diag/features": features,
+    });
+    const d = await collectEngineDiagnostics({ redact: false });
+    expect(d.features).toEqual(features);
+    expect(calls).toContain("http://engine.test/api/diag/features");
+  });
+
+  it("an older engine without it is named, not silently empty", async () => {
+    stubFetch({ "/api/jobs": [], "/api/pkg/install/sessions": [] });
+    const d = await collectEngineDiagnostics({ redact: false });
+    expect(d.features).toBeNull();
+    expect(d.errors.features).toMatch(/404/);
+  });
+});

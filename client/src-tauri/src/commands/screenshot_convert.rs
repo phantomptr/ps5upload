@@ -412,7 +412,7 @@ mod desktop {
             .map_err(|e| format!("jxr format: {e:?}"))?;
         let info = PixelInfo::from_format(format);
         let bpp = info.bits_per_pixel();
-        if bpp == 0 || bpp % 8 != 0 {
+        if bpp == 0 || !bpp.is_multiple_of(8) {
             return Err(format!("unsupported jxr packing: {format:?} ({bpp} bpp)"));
         }
         let stride = w * (bpp / 8);
@@ -443,7 +443,7 @@ mod desktop {
             .map_err(|e| format!("jxr format: {e:?}"))?;
         let info = PixelInfo::from_format(format);
         let bpp = info.bits_per_pixel();
-        if bpp == 0 || bpp % 8 != 0 {
+        if bpp == 0 || !bpp.is_multiple_of(8) {
             // Sub-byte / unusual packings (e.g. RGB555/565) aren't produced
             // by PS5 captures; reject rather than silently mangle.
             return Err(format!("unsupported jxr packing: {format:?} ({bpp} bpp)"));

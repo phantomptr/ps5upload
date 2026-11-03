@@ -14,6 +14,7 @@ import {
   fsPathExists,
   fsReadPreview,
   fsWriteText,
+  fetchHwPower,
   payloadsDownload,
   payloadsLocalPath,
   payloadsRelease,
@@ -26,10 +27,14 @@ import {
   HUSH_DIR,
   HUSH_LOCK_PATH,
   HUSH_LOG_PATH,
+  HUSH_STATE_PATH,
+  hushBlock,
+  hushHoldWaitMs,
   hushLockPid,
   hushPauseWaitMs,
   hushProcess,
   hushRevertDone,
+  hushStatePid,
   newLogLines,
   parseHushConfig,
   setHushEnabled,
@@ -51,17 +56,45 @@ export interface BlockerCtx {
   /** The helper's address. */
   addr: string;
   procs: () => Promise<ProcessInfo[]>;
+  /** The helper cut the process list short (a process missing from it may still run). */
+  procsTruncated?: () => Promise<boolean>;
 }
 
 export function blockerCtx(host: string): BlockerCtx {
   const addr = mgmtAddr(host.trim());
-  let list: Promise<ProcessInfo[]> | null = null;
+  let list: ReturnType<typeof processList> | null = null;
+  const read = () => (list ??= processList(addr));
   return {
     host: host.trim(),
     addr,
-    procs: () => (list ??= processList(addr).then((r) => r.processes)),
+    procs: () => read().then((r) => r.processes),
+    procsTruncated: () => read().then((r) => r.truncated),
   };
 }
+
+/**
+ * What a payload means for a stream right now:
+ * - "off": not in the way.
+ * - "on": in the way until paused.
+ * - "wait": in the way for at most `maxMs`, then out of it by itself; wait, do not pause.
+ * - "stuck": in the way, and pausing cannot help; `key`/`text` say how to clear it.
+ */
+export type BlockerStatus =
+  | { kind: "off" }
+  | { kind: "on" }
+  | { kind: "wait"; maxMs: number }
+  | { kind: "stuck"; key: string; text: string };
+
+/** How a wait went: out of the way, or still in it when the time ran out. */
+export type WaitOutcome = "clear" | "timeout";
+
+type PollOpts = {
+  pollMs?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  /** Stops a wait early (it resolves as a timeout). */
+  signal?: AbortSignal;
+};
 
 /** How a pause went: the payload gave the encoder back, or the wait ran out first. */
 export type PauseOutcome = "restored" | "timeout";
@@ -77,11 +110,14 @@ export interface RpBlocker {
   /** Why it blocks Remote Play (i18n key and English). */
   reasonKey: string;
   reason: string;
-  /** On and in a stream's way. Reads as little as it can; any read error counts as no. */
-  detect(ctx: BlockerCtx): Promise<boolean>;
+  /** Whether, and how, it is in a stream's way. Reads as little as it can; any read error
+   *  counts as off. */
+  status(ctx: BlockerCtx): Promise<BlockerStatus>;
+  /** For a "wait" status: resolves once it is out of the way, or after `maxMs`. */
+  waitClear?(ctx: BlockerCtx, maxMs: number, opts?: PollOpts): Promise<WaitOutcome>;
   /** Switch it off for a stream and leave our marker; resolves once it is out of the way or
    *  the wait ran out. */
-  pause(ctx: BlockerCtx, opts?: { pollMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void> }): Promise<PauseOutcome>;
+  pause(ctx: BlockerCtx, opts?: PollOpts): Promise<PauseOutcome>;
   /** Switch it back on (loading it again when it exited), and clear our marker. */
   resume(ctx: BlockerCtx): Promise<ResumeOutcome>;
 }
@@ -127,23 +163,93 @@ const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Hush log reads cover the whole log (rotated at 64 KB). */
 const HUSH_LOG_MAX = 72 * 1024;
 
+/** Whether state.txt was last written before the console booted (both times on the console's
+ *  clock, so a console clock that is off doesn't matter), or null when either is unknown. */
+export async function hushStateBeforeBoot(addr: string): Promise<boolean | null> {
+  try {
+    const [power, entries] = await Promise.all([fetchHwPower(addr), fsListDir(addr, HUSH_DIR)]);
+    const mtime = entries.find((e) => e.name === "state.txt")?.mtime ?? 0;
+    return stateOlderThanBoot(mtime, power.boot_time_sec ?? 0);
+  } catch {
+    return null;
+  }
+}
+
+/** state.txt's time against the boot's (seconds, console clock); null when either is missing. */
+export function stateOlderThanBoot(stateMtimeSec: number, bootTimeSec: number): boolean | null {
+  if (!(stateMtimeSec > 0) || !(bootTimeSec > 0)) return null;
+  return stateMtimeSec < bootTimeSec;
+}
+
 export const HUSH_BLOCKER: RpBlocker = {
   id: "hush",
   name: "Hush",
   reasonKey: "rp_blocker_hush_reason",
   reason: "Hush is on. It blocks Remote Play's picture.",
 
-  async detect(ctx) {
-    // The setup guide asks every few seconds: on a console without Hush, reading its config
-    // fails each time (and logs it), so look for the folder first.
-    if (!(await fsPathExists(ctx.addr, HUSH_DIR))) return false;
-    const cfg = await readConsoleText(ctx.addr, HUSH_CONFIG_PATH);
-    if (cfg === null || !parseHushConfig(cfg).enabled) return false;
+  async status(ctx) {
+    const off = { kind: "off" } as const;
+    // The setup guide asks every few seconds: on a console without Hush, reading its files
+    // fails each time (and logs it), so look for the folder first. state.txt is there only
+    // while Hush's patch is in place (hushConfig.ts), and absent most of the time in hold mode.
+    if (!(await fsPathExists(ctx.addr, HUSH_DIR))) return off;
+    if (!(await fsPathExists(ctx.addr, HUSH_STATE_PATH))) return off;
+    const cfg = parseHushConfig((await readConsoleText(ctx.addr, HUSH_CONFIG_PATH)) ?? "");
     const lock = await readConsoleText(ctx.addr, HUSH_LOCK_PATH, 64);
+    const statePid = hushStatePid(await readConsoleText(ctx.addr, HUSH_STATE_PATH, 4096));
+    let procs: ProcessInfo[];
+    let truncated: boolean;
     try {
-      return hushProcess(await ctx.procs(), hushLockPid(lock)) !== null;
+      procs = await ctx.procs();
+      truncated = (await ctx.procsTruncated?.()) ?? false;
     } catch {
-      return false;
+      return off;
+    }
+    const statePidAlive =
+      statePid === null ? null : procs.some((p) => p.pid === statePid) ? true : truncated ? null : false;
+    const running = hushProcess(procs, hushLockPid(lock)) !== null;
+    // Only needed when Hush isn't running: is state.txt from before this boot?
+    const stateBeforeBoot = running ? null : await hushStateBeforeBoot(ctx.addr);
+    const block = hushBlock({
+      running,
+      statePresent: true,
+      stateBeforeBoot,
+      statePidAlive,
+      holdS: cfg.holdS,
+    });
+    switch (block) {
+      case "clear":
+        return off;
+      case "patched":
+        return { kind: "on" };
+      case "hold":
+        return { kind: "wait", maxMs: hushHoldWaitMs(cfg) };
+      case "leftover_reload":
+        return {
+          kind: "stuck",
+          key: "rp_blocker_hush_leftover_reload",
+          text: "Hush stopped, but its block on the video encoder is still in place, so Remote Play has no picture. Send Hush to the PS5 again: it clears the block it left.",
+        };
+      case "leftover_restart":
+        return {
+          kind: "stuck",
+          key: "rp_blocker_hush_leftover_restart",
+          text: "Hush stopped, but its block on the video encoder is still in place, so Remote Play has no picture. Restart the PS5 to clear it.",
+        };
+    }
+  },
+
+  async waitClear(ctx, maxMs, opts = {}) {
+    const now = opts.now ?? Date.now;
+    const sleep = opts.sleep ?? sleepMs;
+    const pollMs = opts.pollMs ?? 1000;
+    const deadline = now() + maxMs;
+    for (;;) {
+      // A read that fails counts as still there: the wait is bounded either way.
+      const there = await fsPathExists(ctx.addr, HUSH_STATE_PATH).catch(() => true);
+      if (!there) return "clear";
+      if (now() >= deadline || opts.signal?.aborted) return "timeout";
+      await sleep(pollMs);
     }
   },
 
@@ -192,10 +298,23 @@ export function blockerById(id: string): RpBlocker | null {
   return RP_BLOCKERS.find((b) => b.id === id) ?? null;
 }
 
-/** The blockers on for this console (each check on its own; one failing is a no). */
+/** The blockers in the way on this console, and how (each check on its own; one failing is
+ *  off). */
+export async function checkBlockers(
+  ctx: BlockerCtx,
+  list: readonly RpBlocker[] = RP_BLOCKERS,
+): Promise<{ blocker: RpBlocker; status: Exclude<BlockerStatus, { kind: "off" }> }[]> {
+  const off: BlockerStatus = { kind: "off" };
+  const st = await Promise.all(list.map((b) => b.status(ctx).catch(() => off)));
+  return list.flatMap((blocker, i) => {
+    const status = st[i];
+    return status.kind === "off" ? [] : [{ blocker, status }];
+  });
+}
+
+/** The blockers in the way on this console. */
 export async function detectBlockers(ctx: BlockerCtx, list: readonly RpBlocker[] = RP_BLOCKERS): Promise<RpBlocker[]> {
-  const on = await Promise.all(list.map((b) => b.detect(ctx).catch(() => false)));
-  return list.filter((_, i) => on[i]);
+  return (await checkBlockers(ctx, list)).map((x) => x.blocker);
 }
 
 export async function markPaused(addr: string, id: string): Promise<void> {

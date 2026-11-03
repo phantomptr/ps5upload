@@ -5,6 +5,7 @@ import { Smartphone, X } from "lucide-react";
 import { Button } from "../../components";
 import { getEngineUrl } from "../../state/engine";
 import { useTr } from "../../state/lang";
+import { NetworkChoice } from "./NetworkChoice";
 
 /** The phones link of this engine's Remote Play session (pad_link.rs). */
 export interface PadLinkState {
@@ -13,6 +14,8 @@ export interface PadLinkState {
   url: string | null;
   /** Every address of this computer a phone may reach, best first (`url` is the first). */
   urls: string[];
+  /** This computer's Tailscale address (one of `urls`), while Tailscale is connected. */
+  tailscale: string | null;
   /** What the phone app connects to (it asks; this computer allows). */
   pad_ws: string | null;
   pads: Array<{ id: number; name: string; watch?: boolean; control?: boolean }>;
@@ -23,6 +26,7 @@ const EMPTY: PadLinkState = {
   open: false,
   url: null,
   urls: [],
+  tailscale: null,
   pad_ws: null,
   pads: [],
   pending: [],
@@ -57,6 +61,7 @@ export function readPadLink(v: unknown): PadLinkState {
     urls: Array.isArray(o.urls)
       ? o.urls.filter((u): u is string => typeof u === "string")
       : [],
+    tailscale: typeof o.tailscale === "string" ? o.tailscale : null,
     pad_ws: typeof o.pad_ws === "string" ? o.pad_ws : null,
     pads: list(o.pads),
     pending: list(o.pending),
@@ -179,13 +184,6 @@ export function PhonePadsPanel({
   const best =
     picked && urls.includes(picked) ? picked : (link.url ?? urls[0] ?? null);
   const shown = best && mode === "watch" ? watchUrl(best) : best;
-  const hostOf = (u: string) => {
-    try {
-      return new URL(u).hostname;
-    } catch {
-      return u;
-    }
-  };
 
   return (
     <div
@@ -270,31 +268,19 @@ export function PhonePadsPanel({
               >
                 {shown}
               </p>
-              {urls.length > 1 && (
-                <div className="space-y-1" data-testid="rp-pad-addresses">
-                  <p className="text-xs text-[var(--color-muted)]">
-                    {tr(
-                      "rp_phone_other_network",
-                      undefined,
-                      "Nothing opens on the phone? This computer is on more than one network: pick the one the phone's Wi-Fi is on.",
-                    )}
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {urls.map((u) => (
-                      <button
-                        key={u}
-                        type="button"
-                        aria-pressed={u === shown}
-                        onClick={() => setPicked(u)}
-                        className="chip min-h-8 px-3 font-mono text-xs"
-                        data-testid="rp-pad-address"
-                      >
-                        {hostOf(u)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <NetworkChoice
+                urls={urls}
+                tailscale={link.tailscale}
+                current={best}
+                onPick={setPicked}
+                otherNetwork={tr(
+                  "rp_phone_other_network",
+                  undefined,
+                  "Nothing opens on the phone? This computer is on more than one network: pick the one the phone's Wi-Fi is on.",
+                )}
+                testId="rp-pad-addresses"
+                addressTestId="rp-pad-address"
+              />
               <p className="text-xs text-[var(--color-muted)]" data-testid="rp-pad-android-lan">
                 {tr(
                   "rp_phone_android_lan",

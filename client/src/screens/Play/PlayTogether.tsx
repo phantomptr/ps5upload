@@ -14,6 +14,7 @@ import {
   type JoinGuest,
   type JoinHostState,
 } from "./playTogetherState";
+import { NetworkChoice } from "./NetworkChoice";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -198,13 +199,6 @@ export function PlayTogetherPanel({
   const addresses = invite?.urls ?? [];
   const link = invite ? (picked ? inviteOn(invite.url, picked) : invite.url) : null;
   const slow = slowFriend(state);
-  const hostOf = (u: string) => {
-    try {
-      return new URL(u.includes("://") ? u : `http://${u}`).hostname;
-    } catch {
-      return u;
-    }
-  };
   // The system share sheet (Messages, WhatsApp…), where the device has one: phones mostly.
   const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
   const share = async () => {
@@ -325,27 +319,15 @@ export function PlayTogetherPanel({
                     </p>
                   </div>
                 )}
-                {addresses.length > 1 && (
-                  <div className="space-y-1" data-testid="pt-addresses">
-                    <p className="text-xs text-[var(--color-muted)]">
-                      {tr("pt_other_network", undefined, "This computer is on more than one network: pick the one your friend is on.")}
-                    </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {addresses.map((u) => (
-                        <button
-                          key={u}
-                          type="button"
-                          aria-pressed={hostOf(u) === hostOf(link)}
-                          onClick={() => setPicked(u)}
-                          className="chip min-h-8 px-3 font-mono text-xs"
-                          data-testid="pt-address"
-                        >
-                          {hostOf(u)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <NetworkChoice
+                  urls={addresses}
+                  tailscale={invite?.tailscale ?? null}
+                  current={link}
+                  onPick={setPicked}
+                  otherNetwork={tr("pt_other_network", undefined, "This computer is on more than one network: pick the one your friend is on.")}
+                  testId="pt-addresses"
+                  addressTestId="pt-address"
+                />
               </div>
             ) : (
               <p className="text-xs text-[var(--color-muted)]">…</p>

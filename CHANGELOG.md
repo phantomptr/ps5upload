@@ -4,6 +4,56 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.0.1
+
+- **Friends away from home can play together, over Tailscale.** While the Tailscale app is
+  connected on the computer that plays, Play Together's invite and the phone controller / watch
+  panel offer **This network | Tailscale** above the QR code; the Tailscale link reaches your
+  computer from anywhere your friend's Tailscale does (sign them in to your tailnet, or share just
+  this computer with them). No PS5 payload needed. See the FAQ.
+- **WireGuard and other VPNs too.** The invite and phone controller panels also list the computer's
+  VPN addresses (a WireGuard server on it, say), so a friend on that VPN gets a link that works.
+- **Links open in the PS5Upload app.** A Play Together invite, a phone controller link or a watch
+  link opened in a browser first asks **Open in the PS5Upload app?**, the way Slack and Zoom links
+  do: the app opens with the invite filled in (Play › Join a friend) or as that computer's
+  controller, or you carry on in the browser, and can have it remember. Works on Windows, macOS,
+  Linux, Android and iOS (`ps5upload://` links).
+- **A friend's frozen picture comes back by itself (For #648).** A guest whose connection hiccuped
+  could be left on a still picture until they reloaded the page: their player skipped to the next
+  keyframe but had no way to ask for one. It now asks (at most once a second), and the host's
+  engine passes the request to the PS5.
+- **Scan QR asks for the camera.** Join a friend's **Scan QR** on Android said "The camera didn't
+  open": the app never asked for the camera. It asks now, and if the camera is turned off it says
+  so with **Try again** and **Open settings**.
+- **Hush 1.1.0's hold mode works with Play (For #651).** Play no longer warns "Hush is on" while
+  Hush isn't holding the video encoder, and no longer turns game recording back on by pausing
+  Hush: in hold mode it waits for Hush to let go (a few seconds after a game starts). A patch Hush
+  left behind is named, with what clears it.
+- **Pairing says what to check (For #642).** When the PS5 doesn't answer pairing, the message now
+  names the two usual causes: Remote Play is off on the PS5, or the PIN didn't come from the PS5's
+  own Link Device screen (PINs from other tools don't work).
+- **Detailed logs.** A new switch in the Logs tab records much more about Remote Play's start
+  (the console's replies, each step's timing, retries) and Play Together (each guest's join,
+  resume and keyframe requests), for the hard cases like a console that keeps refusing. It turns
+  itself off after 24 hours, and never records keys, codes, tokens or passwords.
+- **Bug reports cover every feature.** A report now says what Remote Play, Play Together, phone
+  controllers and watch parties, Go live, saved connections, Hush, the cheats engine and
+  `ps5upload://` links were doing (counts and states only), whether Detailed logs were on, and
+  how the last Remote Play start ended. It also no longer copies the Remote Play wake keys kept in
+  the mesh's console list, or the token part of links saved in settings.
+- **No more "1e+218h left".** During a long step that moves no bytes (a conversion's hashing pass),
+  the status bar's speed faded towards zero and showed nonsense like "2.2e-211 B/s · 1.4e+218h
+  left". A job that isn't moving bytes now shows no speed, and no time left over 30 days.
+- **"No space" on a game's disk image says why.** Changing files of a game run from an image
+  (.exfat, .ffpfs, .ffpkg) was refused with "only 0 bytes are safely allocatable" and nothing
+  more. The message now says the image is exactly as big as the game and how to change its files.
+- **A NAS share typed with its folders works on the PS5's Shared Folders too.** Typing the share
+  as `Media/Games/PS5` (or pasting `\\nas\Media\Games`), as other PS5 tools take it, was refused as
+  "not a share name". The share is now the first name and the folders become the start folder,
+  as the app's own SMB sources already did.
+- The desktop app's declared minimum Rust version is now the one its code needs (1.87), so the
+  build's lints match.
+
 ## 11.0.0
 
 - **Play Together: friends play your PS5 as Player 2, 3 and 4 (For #641).** While you play, the

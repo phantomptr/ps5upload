@@ -2014,10 +2014,14 @@ export class RemotePlayStream {
         this.frameWaiters.delete(done);
         resolve(true);
       };
-      const t = window.setTimeout(() => {
-        this.frameWaiters.delete(done);
-        resolve(false);
-      }, ms);
+      // The wait comes from a request (rpSnapshot): never longer than 10 s.
+      const t = window.setTimeout(
+        () => {
+          this.frameWaiters.delete(done);
+          resolve(false);
+        },
+        Math.min(Math.max(0, ms), 10_000),
+      );
       this.frameWaiters.add(done);
     });
   }

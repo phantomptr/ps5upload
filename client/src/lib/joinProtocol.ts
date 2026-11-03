@@ -194,6 +194,27 @@ export function parseJoinLink(text: string): JoinLink | null {
   return { origin: u.origin, invite, name, code: null };
 }
 
+/** "Open in the PS5Upload app": an invite link as the ps5upload:// link the app opens. */
+export function joinAppLink(link: string): string {
+  return `ps5upload://join?link=${encodeURIComponent(link)}`;
+}
+
+/** The invite link inside a `ps5upload://join?link=…` link, or null when it isn't one. */
+export function joinLinkFromAppLink(url: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(url.trim());
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "ps5upload:") return null;
+  // "join" is the host as written; a system that hands it over as `ps5upload:/join` has it as the path.
+  const what = (u.host || u.pathname.replace(/^\/+/, "")).replace(/\/+$/, "").toLowerCase();
+  if (what !== "join") return null;
+  const link = (u.searchParams.get("link") ?? "").trim();
+  return parseJoinLink(link) ? link : null;
+}
+
 /** A short code as typed ("k7m 2qx", "K7M-2QX") → "K7M2QX"; null when it can't be one. */
 export function normalizeCode(text: string): string | null {
   const c = text.toUpperCase().replace(/[\s-]/g, "");

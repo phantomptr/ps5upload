@@ -148,7 +148,7 @@ export function streamErrorMessage(tr: Tr, e: StreamError): string {
       return tr(
         "rp_err_refused",
         undefined,
-        "The PS5 refused to start Remote Play. On the console, check Settings › System › Remote Play › Enable Remote Play (turn it off and on again), press Allow in Play › Set up, or pair again. The code below says which refusal it was.",
+        "The PS5 refused to start Remote Play. On the console, check Settings › System › Remote Play › Enable Remote Play (turn it off and on again), press Allow in Play › Set up, or pair again. The code below says which refusal it was. Still refused? Restart the PS5: a console on for a long time can refuse until it restarts.",
       );
     case "rp_off":
       return tr(

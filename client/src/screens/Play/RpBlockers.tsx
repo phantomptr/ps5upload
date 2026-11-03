@@ -1,5 +1,5 @@
 // Play's side of the Remote Play blockers (state/rpBlockers.ts): the question when a start
-// finds one on, the phase while one is paused, the hint under a stream error it may have
+// finds one on, the phase while one is waited out or paused, the hint under a stream error it may have
 // caused, and the setting to always pause them.
 
 import { useNavigate } from "react-router";
@@ -15,6 +15,7 @@ import {
   pauseHeldAndStart,
   startHeldAnyway,
   useRpBlockers,
+  type StuckBlocker,
 } from "../../state/rpBlockers";
 import { blockerById } from "../../lib/rpBlockers";
 import { payloadCardLink } from "../Payloads/payloadTabs";
@@ -58,6 +59,7 @@ export function RpBlockerNotice({
   return (
     <RpBlockerNoticeView
       heldIds={held?.ids ?? null}
+      heldStuck={held?.stuck ?? []}
       autoPause={autoPause}
       onAtStart={onAtStart ?? []}
       paused={paused ?? []}
@@ -70,14 +72,17 @@ export function RpBlockerNotice({
 /** What RpBlockerNotice shows, from the blockers' state for one console. */
 export function RpBlockerNoticeView({
   heldIds,
+  heldStuck = [],
   autoPause,
   onAtStart,
   paused,
   error,
   running,
 }: {
-  /** A start held for the user's choice: the blockers it found. */
+  /** A start held for the user's choice: the blockers it found that a pause helps. */
   heldIds: readonly string[] | null;
+  /** …and the ones a pause cannot help, with what clears them. */
+  heldStuck?: readonly StuckBlocker[];
   autoPause: boolean;
   onAtStart: readonly string[];
   paused: readonly string[];
@@ -90,16 +95,29 @@ export function RpBlockerNoticeView({
 
   if (heldIds) {
     const names = blockerNames(heldIds);
+    const stuckIds = heldStuck.map((x) => x.id);
+    const stuckNames = blockerNames(stuckIds);
     return (
       <Callout
         tone="warn"
-        title={reasons(tr, heldIds)}
+        title={
+          heldIds.length
+            ? reasons(tr, heldIds)
+            : tr("rp_blocker_stuck_title", { name: stuckNames }, `${stuckNames} left Remote Play without a picture`)
+        }
         onDismiss={dropHeld}
         action={
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="primary" leftIcon={<PauseCircle size={14} />} onClick={() => void pauseHeldAndStart()} data-testid="rp-blocker-pause">
-              {tr("rp_blocker_pause", { name: names }, `Pause ${names} while I play`)}
-            </Button>
+            {heldIds.length > 0 && (
+              <Button size="sm" variant="primary" leftIcon={<PauseCircle size={14} />} onClick={() => void pauseHeldAndStart()} data-testid="rp-blocker-pause">
+                {tr("rp_blocker_pause", { name: names }, `Pause ${names} while I play`)}
+              </Button>
+            )}
+            {stuckIds.length > 0 && (
+              <Button size="sm" variant="secondary" onClick={() => navigate(payloadCardLink(stuckIds[0]))} data-testid="rp-blocker-open-stuck">
+                {tr("rp_blocker_open_card", { name: stuckNames }, `Open ${stuckNames}`)}
+              </Button>
+            )}
             <Button size="sm" variant="ghost" onClick={() => void startHeldAnyway()} data-testid="rp-blocker-anyway">
               {tr("rp_blocker_anyway", undefined, "Start anyway")}
             </Button>
@@ -107,18 +125,27 @@ export function RpBlockerNoticeView({
         }
       >
         <div className="space-y-2">
-          <p>
-            {tr(
-              "rp_blocker_body",
-              { name: names },
-              `${names} turns off the console's video encoder, and Remote Play needs it. Paused, ${names} goes back on when the stream ends.`,
-            )}
-          </p>
-          <Toggle
-            checked={autoPause}
-            onChange={setAutoPause}
-            label={tr("rp_blocker_always", undefined, "Always pause Hush for Remote Play")}
-          />
+          {heldStuck.map((x) => (
+            <p key={x.id} data-testid="rp-blocker-stuck">
+              {tr(x.key, undefined, x.text)}
+            </p>
+          ))}
+          {heldIds.length > 0 && (
+            <>
+              <p>
+                {tr(
+                  "rp_blocker_body",
+                  { name: names },
+                  `${names} turns off the console's video encoder, and Remote Play needs it. Paused, ${names} goes back on when the stream ends.`,
+                )}
+              </p>
+              <Toggle
+                checked={autoPause}
+                onChange={setAutoPause}
+                label={tr("rp_blocker_always", undefined, "Always pause Hush for Remote Play")}
+              />
+            </>
+          )}
         </div>
       </Callout>
     );
@@ -160,22 +187,45 @@ export function RpBlockerNoticeView({
   return null;
 }
 
-/** Over the picture while a blocker is paused before the stream starts. */
+/** Over the picture while a blocker is waited out or paused before the stream starts. */
 export function RpBlockerPhase({ host }: { host: string | null }) {
   const pausing = useRpBlockers((s) => (same(s.pausing?.host, host) ? s.pausing : null));
+  const waiting = useRpBlockers((s) => (same(s.waiting?.host, host) ? s.waiting : null));
+  if (waiting) return <RpBlockerPhaseView ids={waiting.ids} waitS={waiting.maxS} onCancel={waiting.cancel} />;
   return pausing ? <RpBlockerPhaseView ids={pausing.ids} /> : null;
 }
 
-export function RpBlockerPhaseView({ ids }: { ids: readonly string[] }) {
+export function RpBlockerPhaseView({
+  ids,
+  waitS,
+  onCancel,
+}: {
+  ids: readonly string[];
+  /** Set while waiting for them to get out of the way by themselves: at most this long. */
+  waitS?: number;
+  onCancel?: () => void;
+}) {
   const tr = useTr();
   const names = blockerNames(ids);
+  const waiting = waitS !== undefined;
   return (
     <div
-      className="absolute inset-0 z-20 flex items-center justify-center gap-2 bg-black/60 text-sm text-white/85"
-      data-testid="rp-blocker-pausing"
+      className="absolute inset-0 z-20 flex flex-wrap items-center justify-center gap-2 bg-black/60 px-4 text-center text-sm text-white/85"
+      data-testid={waiting ? "rp-blocker-waiting" : "rp-blocker-pausing"}
     >
       <Spinner size={16} tone="inherit" />
-      {tr("rp_phase_pausing", { name: names }, `Pausing ${names} (about 20 s)…`)}
+      {waiting
+        ? tr(
+            "rp_phase_waiting",
+            { name: names, s: waitS },
+            `Waiting for ${names} to give back the video encoder (up to ${waitS} s)…`,
+          )
+        : tr("rp_phase_pausing", { name: names }, `Pausing ${names} (about 20 s)…`)}
+      {waiting && onCancel && (
+        <Button size="sm" variant="ghost" onClick={onCancel} data-testid="rp-blocker-wait-cancel">
+          {tr("rp_phase_wait_cancel", undefined, "Cancel")}
+        </Button>
+      )}
     </div>
   );
 }

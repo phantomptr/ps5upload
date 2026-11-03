@@ -35,8 +35,36 @@ export function edgeAction(lag: number, end: number, latency: Latency): { seekTo
 
 /** WebCodecs exists only on a secure page (https or localhost); the watch link is plain http
  *  on the LAN, so phones go through Media Source Extensions instead (MsePlayer). */
-export function makeWatchPlayer(onProblem: (p: WatchProblem) => void, latency: Latency = "watch"): WatchPlayer | MsePlayer {
-  return typeof VideoDecoder !== "undefined" ? new WatchPlayer(onProblem, latency) : new MsePlayer(onProblem, latency);
+export function makeWatchPlayer(
+  onProblem: (p: WatchProblem) => void,
+  latency: Latency = "watch",
+  onNeedKey?: () => void,
+): WatchPlayer | MsePlayer {
+  return typeof VideoDecoder !== "undefined"
+    ? new WatchPlayer(onProblem, latency, onNeedKey)
+    : new MsePlayer(onProblem, latency, onNeedKey);
+}
+
+/** The least time between two "send a keyframe" asks from one player. */
+export const KEY_ASK_GAP_MS = 1000;
+
+/** Asks for a keyframe while the picture waits for one (#648): a Play Together guest that
+ *  skipped frames it could not keep up with has no other way to get the picture back, since
+ *  the console sends a keyframe only when asked. At most one ask per KEY_ASK_GAP_MS. */
+export class KeyAsker {
+  private last = -Infinity;
+  constructor(
+    private ask: (() => void) | undefined,
+    private now: () => number = () => performance.now(),
+  ) {}
+  /** The picture is waiting for a keyframe. */
+  waiting(): void {
+    if (!this.ask) return;
+    const t = this.now();
+    if (t - this.last < KEY_ASK_GAP_MS) return;
+    this.last = t;
+    this.ask();
+  }
 }
 
 export class WatchPlayer {
@@ -50,6 +78,7 @@ export class WatchPlayer {
   private video: VideoDecoder | null = null;
   private opening = false;
   private sawKey = false;
+  private keyAsk: KeyAsker;
   private ts = 0;
   private audio: AudioDecoder | null = null;
   private actx: AudioContext | null = null;
@@ -59,7 +88,9 @@ export class WatchPlayer {
   constructor(
     private onProblem: (p: WatchProblem) => void,
     private latency: Latency = "watch",
+    onNeedKey?: () => void,
   ) {
+    this.keyAsk = new KeyAsker(onNeedKey);
     this.canvas.className = "block h-full w-full object-contain";
     this.canvas.dataset.testid = "watch-canvas";
   }
@@ -135,11 +166,11 @@ export class WatchPlayer {
     const v = this.video;
     if (!v || v.state !== "configured") return;
     const key = isKeyframe(au, this.hevc);
-    if (!this.sawKey && !key) return;
+    if (!this.sawKey && !key) return this.keyAsk.waiting();
     // Behind: a watcher wants now, not the backlog. Wait for the next keyframe.
     if (!key && v.decodeQueueSize > BACKLOG_LIMIT[this.latency]) {
       this.sawKey = false;
-      return;
+      return this.keyAsk.waiting();
     }
     this.sawKey = true;
     let data = au;
@@ -228,6 +259,9 @@ class MseTrack {
   private seq = 1;
   ready = false;
 
+  /** A segment could not be added: the frames after it can't play until a keyframe. */
+  dropped = false;
+
   constructor(
     readonly el: HTMLMediaElement,
     private onError: () => void,
@@ -309,6 +343,7 @@ class MseTrack {
       sb.appendBuffer(seg as BufferSource);
     } catch {
       // Quota or a closed source: drop it, the next keyframe starts clean.
+      this.dropped = true;
     }
     if (el.paused) void el.play().catch(() => {});
   }
@@ -339,6 +374,7 @@ export class MsePlayer {
   private hevc = false;
   private header: Uint8Array | null = null;
   private sawKey = false;
+  private keyAsk: KeyAsker;
   private vTime = 0;
   private vLast = 0;
   private aTime = 0;
@@ -348,7 +384,9 @@ export class MsePlayer {
   constructor(
     private onProblem: (p: WatchProblem) => void,
     private latency: Latency = "watch",
+    onNeedKey?: () => void,
   ) {
+    this.keyAsk = new KeyAsker(onNeedKey);
     const v = document.createElement("video");
     v.muted = true;
     v.autoplay = true;
@@ -412,11 +450,15 @@ export class MsePlayer {
   private onVideo(au: Uint8Array): void {
     if (!this.video.ready && !this.video.backlog) return;
     const key = isKeyframe(au, this.hevc);
-    if (!this.sawKey && !key) return;
+    if (this.video.dropped) {
+      this.video.dropped = false;
+      this.sawKey = false;
+    }
+    if (!this.sawKey && !key) return this.keyAsk.waiting();
     // Behind: skip to the next keyframe rather than play the backlog.
     if (!key && this.video.backlog > BACKLOG_LIMIT[this.latency]) {
       this.sawKey = false;
-      return;
+      return this.keyAsk.waiting();
     }
     this.sawKey = true;
     // Times from arrival, so a 30 or 60 fps stream both play at their pace.

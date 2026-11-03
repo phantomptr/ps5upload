@@ -14,6 +14,7 @@ import { buildPs5Snapshot } from "./ps5Snapshot";
 import { reportMarkdown, type ReportForm } from "./reportOutputs";
 import { fetchTimeline, filterCats, formatLine } from "./reportTimeline";
 import { getEngineUrl } from "../state/engine";
+import { invoke } from "./invokeLogged";
 
 export type SourceId =
   | "app_journal"
@@ -100,15 +101,48 @@ function consoleDir(_host: string): string {
   return "console";
 }
 
-function settingsSnapshot(): Record<string, string> {
+/** Stored copies of the mesh state (lib/meshShare.ts): summarized, never copied. */
+const MESH_STATE_KEYS = new Set(["ps5upload.mesh_state.v2"]);
+
+/** "<summary: N entries, M consoles>" for a stored mesh state. */
+export function meshStateSummary(raw: string | null): string {
+  try {
+    const p = JSON.parse(raw ?? "null") as { m?: Record<string, unknown> } | null;
+    const keys = Object.keys(p?.m ?? {});
+    const consoles = keys.filter((k) => k.startsWith("c:") && !k.slice(2).includes(":")).length;
+    return `<summary: ${keys.length} entries, ${consoles} consoles>`;
+  } catch {
+    return "<summary: unreadable>";
+  }
+}
+
+/** Links kept in settings (recent install links, a friend's invite) keep their host and path
+ *  only: a query string or #fragment can hold a signed download's token, an invite key (#i=) or
+ *  a phone link key (#t=). Exported for tests. */
+export function scrubUrls(text: string): string {
+  return text.replace(/\b(https?:\/\/[^\s"'?#\\]+)([?#][^\s"'\\]*)/gi, (_m, base: string, rest: string) =>
+    `${base}${rest[0]}<removed>`,
+  );
+}
+
+/** The app's stored settings for settings.json. Exported for tests. */
+export function settingsSnapshot(): Record<string, string> {
   const out: Record<string, string> = {};
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       // Report drafts are the form itself, already in report.json; the console list holds the
       // Remote Play wake keys (report.json's diagnostic carries it without them).
-      if (k && k.startsWith("ps5upload.") && !k.startsWith("ps5upload.bugReportDraft.") && !k.startsWith("ps5upload.roster."))
-        out[k] = localStorage.getItem(k) ?? "";
+      if (!k || !k.startsWith("ps5upload.") || k.startsWith("ps5upload.bugReportDraft.") || k.startsWith("ps5upload.roster."))
+        continue;
+      if (MESH_STATE_KEYS.has(k)) {
+        // The mesh's copy of the console list keeps each console field under
+        // "c:<address>:<field>", the Remote Play wake keys among them, where the key-name
+        // redaction cannot see them. Its size says enough; the shared settings are here anyway.
+        out[k] = meshStateSummary(localStorage.getItem(k));
+        continue;
+      }
+      out[k] = scrubUrls(localStorage.getItem(k) ?? "");
     }
   } catch {
     // storage unavailable: an empty settings file says so
@@ -120,7 +154,14 @@ const README = `ps5upload bug report
 ====================
 
 report.md         What happened, in the reporter's words, and the environment.
-report.json       The same, machine-readable, plus engine and console state.
+report.json       The same, machine-readable, plus engine and console state, and what each
+                  feature was doing: engine.features (Remote Play: the session running and
+                  the last one's start, stages and end; Play Together: guests' stages,
+                  round trip, skipped pictures; phone controllers and watch party; Go live
+                  destinations as service + host; saved remote connections; the mesh),
+                  ps5.features (Hush, the cheats engine, the console's network shares),
+                  diagnostic.app_links (ps5upload:// links) and whether Detailed logs
+                  were on (diagnostic.settings.detailed_logs).
 timeline.txt      App, engine and PS5 helper events for the chosen time range, oldest first.
 timeline.jsonl    The same events, one JSON object per line.
 MISSING.txt       Everything that was asked for but could not be read, and why.
@@ -130,6 +171,8 @@ screenshots/      Pictures the reporter attached.
 
 Addresses, MAC addresses, home folders and serials are replaced when redaction is on
 (<ip-1> is the same console in every file); pairing keys and tokens are always removed.
+Feature states are counts and names only: never stream keys or URLs, invite keys or codes,
+resume tokens, phone link keys, passcodes, share passwords or user names.
 `;
 
 export async function buildReport(o: BuildOptions): Promise<BuiltReport> {
@@ -250,6 +293,13 @@ export async function buildReport(o: BuildOptions): Promise<BuiltReport> {
     }),
   );
 
+  const diagnostic = buildDiagnosticBundle({ appVersion: o.form.appVersion, redact: false, logLimit: 200 });
+  if (o.platform === "desktop" && diagnostic.app_links) {
+    // The shell's side of ps5upload:// links: the scheme's registration, what arrived.
+    diagnostic.app_links.shell = await withTimeout(invoke<unknown>("open_links_status"), 2_000, "open_links_status").catch(
+      (e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }),
+    );
+  }
   const manifest = {
     schema: 2,
     kind: "ps5upload-bug-report",
@@ -259,7 +309,7 @@ export async function buildReport(o: BuildOptions): Promise<BuiltReport> {
     categories: [...o.cats],
     sources: [...o.sources],
     dropped,
-    diagnostic: buildDiagnosticBundle({ appVersion: o.form.appVersion, redact: false, logLimit: 200 }),
+    diagnostic,
     engine,
     ps5,
   };

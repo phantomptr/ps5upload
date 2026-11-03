@@ -1318,6 +1318,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "image"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2056,7 +2066,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-pfs"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "flate2",
  "ps5-dump-forge-ufs2",
@@ -2065,7 +2075,7 @@ dependencies = [
 
 [[package]]
 name = "ps5-dump-forge-ufs2"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "ps5upload-fpkg",
  "ps5upload-pkg",
@@ -2074,7 +2084,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ava1"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2095,7 +2105,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "aes 0.9.3",
  "aes-gcm 0.11.1",
@@ -2119,7 +2129,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ctest"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2135,7 +2145,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "aes-gcm 0.11.1",
  "anyhow",
@@ -2147,6 +2157,7 @@ dependencies = [
  "blake3",
  "futures-util",
  "getrandom 0.4.3",
+ "if-addrs",
  "image",
  "lz4_flex 0.14.0",
  "lzma-rust2",
@@ -2182,7 +2193,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "aes 0.9.3",
  "blake3",
@@ -2205,7 +2216,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-lab"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2223,7 +2234,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "aes 0.9.3",
  "blake3",
@@ -2235,7 +2246,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tests"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2253,7 +2264,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-unrar"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "serde",
  "serde_json",

@@ -22,6 +22,8 @@ async function hushConsole(page: Page): Promise<Console> {
       ["/data/hush/config.ini", CONFIG],
       ["/data/hush/pid.lock", "142\n"],
       ["/data/hush/log.txt", LOG],
+      // Hush's patch is in place (#651: Hush blocks only while state.txt is there).
+      ["/data/hush/state.txt", "pid=60\n"],
     ]),
     running: true,
     writes: [],
@@ -87,6 +89,7 @@ async function hushConsole(page: Page): Promise<Console> {
             `${LOG}2026-10-31 10:00:20 sceVencStartEncode restored in 4 slot(s)\n2026-10-31 10:00:20 disabled in config, exiting\n`,
           );
           c.files.delete("/data/hush/pid.lock");
+          c.files.delete("/data/hush/state.txt");
           c.running = false;
         }
         body = { ok: true, size: text.length };

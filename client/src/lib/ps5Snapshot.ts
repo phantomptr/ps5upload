@@ -4,6 +4,7 @@ import { useConnectionStore } from "../state/connection";
 import { hostOf, mgmtAddr, transferAddr } from "./addr";
 import { redactHost } from "./diagnosticBundle";
 import { blackBoxFor, recordBlackBox } from "./payloadBlackBox";
+import { collectConsoleFeatures, type ConsoleFeatures } from "./consoleFeatures";
 import {
   fetchHwInfo,
   fetchHwTemps,
@@ -93,6 +94,9 @@ export interface Ps5Snapshot {
    *  value so "not foreground" is never confused with "cannot tell" — on
    *  FW 9.60 no direct foreground-app-id getter exists at all. */
   focus: unknown | null;
+  /** The console's add-ons: Hush (installed, hold mode, state.txt present), the cheats engine,
+   *  the console's saved network shares (server and share names only). See consoleFeatures.ts. */
+  features: ConsoleFeatures | null;
   /** Names of the payload's on-PS5 black-box files we pulled (the file bodies
    *  ride alongside in `Ps5SnapshotResult.payload_logs`, not in this JSON). */
   payload_log_files: string[];
@@ -363,6 +367,7 @@ export async function buildPs5Snapshot(opts: {
     smp_status: null,
     smp_checkout: null,
     focus: null,
+    features: null,
     payload_log_files: [],
     payload_logs_source: "none",
     payload_logs_captured_at: null,
@@ -465,6 +470,9 @@ export async function buildPs5Snapshot(opts: {
   const focus = await step("focus", () =>
     invoke<unknown>("ps5_focus", { addr: maddr }),
   );
+  // The add-ons last of all: Hush's files, the cheats engine's status, the shares list. Each is
+  // its own step, so a failure is named and the helper's death stops the rest.
+  const features = await collectConsoleFeatures(host, maddr, taddr, step);
 
   // 5. Plain TCP connects, never an RPC, so they run whatever happened above
   // — and after a helper death, which ports are still open is the point.
@@ -511,6 +519,7 @@ export async function buildPs5Snapshot(opts: {
   base.smp_status = smp;
   base.smp_checkout = checkout;
   base.focus = focus;
+  base.features = features;
   base.payload_log_files = payloadLogsRes.files.map((f) => f.name);
   Object.assign(errors, payloadLogsRes.errors);
   let payloadLogs = payloadLogsRes.files;

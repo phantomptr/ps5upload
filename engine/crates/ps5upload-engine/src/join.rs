@@ -775,6 +775,53 @@ impl Party {
             "skipped": g.stats.skipped.load(Ordering::Relaxed),
         }}))
     }
+
+    /// What a bug report carries: counts, stages and health, never a name, invite key, code or
+    /// token (the guests' names are the host's friends; a report is posted in public).
+    fn diag(&self, now: Instant) -> serde_json::Value {
+        let guests: Vec<_> = self
+            .guests
+            .iter()
+            .map(|g| {
+                let s = &g.stats;
+                let n = s.rtt_n.load(Ordering::Relaxed);
+                serde_json::json!({
+                    "player": g.player,
+                    "state": g.state(),
+                    "why": g.left.map(|(_, w)| w),
+                    "since_s": now.duration_since(g.joined_at).as_secs(),
+                    "rtt_ms": s.rtt_now(),
+                    "rtt_avg_ms": s.rtt_sum.load(Ordering::Relaxed).checked_div(n),
+                    "rtt_max_ms": s.rtt_max.load(Ordering::Relaxed),
+                    "queue": s.queue.load(Ordering::Relaxed),
+                    "skipped_pictures": s.skipped.load(Ordering::Relaxed),
+                    "pad_frames": s.pad_frames.load(Ordering::Relaxed),
+                    "slot_open": g.slot_open,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "open": true,
+            "host_playing": self.host_gone.is_none(),
+            "host_away_s": self.host_gone.map(|t| now.duration_since(t).as_secs()),
+            "invite_open": self.current_invite(now).is_some(),
+            "players_in": self.guests_in(),
+            "asking": self.pending.len(),
+            "guests": guests,
+            "settings": self.settings,
+            "reach_web_host": self.reach.web_host.is_some(),
+        })
+    }
+}
+
+/// Play Together on every console, for a bug report (`/api/diag/features`): see [`Party::diag`].
+pub(crate) fn diag_summary() -> serde_json::Value {
+    let now = Instant::now();
+    let parties: Vec<_> = with_parties(|m| m.values().map(|p| p.diag(now)).collect());
+    serde_json::json!({
+        "parties": parties,
+        "settings": settings(),
+    })
 }
 
 /// Play Together, by console (`host_key`).
@@ -1109,6 +1156,14 @@ async fn guest_session(mut socket: WebSocket, ip: IpAddr) {
         return;
     };
     let name = clean_name(hello.name.as_deref());
+    let t0 = Instant::now();
+    // What the guest came with, never the credential itself.
+    crate::log_detail!(
+        "join: guest {ip} ({name}) says hello: resume={} invite={} code={}",
+        hello.resume.as_deref().is_some_and(|t| !t.is_empty()),
+        hello.invite.as_deref().is_some_and(|k| !k.is_empty()),
+        hello.code.as_deref().is_some_and(|c| !c.trim().is_empty()),
+    );
     let mut admit = None;
     if let Some(tok) = hello.resume.as_deref().filter(|t| !t.is_empty()) {
         admit = resume(&mut socket, tok).await;
@@ -1138,12 +1193,21 @@ async fn guest_session(mut socket: WebSocket, ip: IpAddr) {
             None => Admit::Refused("key"),
         },
     };
+    let ms = t0.elapsed().as_millis();
     let (console, id) = match admit {
         Admit::Refused(why) => {
+            crate::log_detail!("join: guest {ip} ({name}) refused: {why} after {ms} ms");
             let _ = socket.send(refused(why)).await;
             return;
         }
-        Admit::Resume(c, id) | Admit::New(c, id) => (c, id),
+        Admit::Resume(c, id) => {
+            crate::log_detail!("join: guest {ip} ({name}) resumed on {c} after {ms} ms");
+            (c, id)
+        }
+        Admit::New(c, id) => {
+            crate::log_detail!("join: guest {ip} ({name}) let in on {c} after {ms} ms");
+            (c, id)
+        }
     };
     play(socket, console, id).await;
 }
@@ -1157,10 +1221,14 @@ async fn resume(socket: &mut WebSocket, token: &str) -> Option<Admit> {
         })
     });
     let Some((key, console, id)) = found else {
+        crate::log_detail!("join: a resume matched no guest (expired or never issued)");
         return Some(Admit::Refused("expired"));
     };
     // While the host restarts Play, the guest waits here.
     if with_party(&key, |p| p.host_gone.is_some()).unwrap_or(false) {
+        crate::log_detail!(
+            "join: guest {id} resumes on {console}; waiting for the host to play again"
+        );
         if socket
             .send(say(
                 serde_json::json!({"stage": "waiting", "why": "host_stopped"}),
@@ -1197,6 +1265,9 @@ async fn resume(socket: &mut WebSocket, token: &str) -> Option<Admit> {
     if !open {
         // The pad was removed while the host was away: make it again (the console asks who
         // they are again).
+        crate::log_detail!(
+            "join: guest {id} resumes on {console}: making Player {player}'s pad again"
+        );
         match open_slot(&console, player, &token).await {
             link::OpenResult::Ok => {
                 let now = Instant::now();
@@ -1237,10 +1308,15 @@ async fn open_slot(console: &str, slot: u8, token: &str) -> link::OpenResult {
             reply: tx,
         },
     );
+    let t0 = Instant::now();
     let r = match tokio::time::timeout(OPEN_WAIT, rx).await {
         Ok(Ok(r)) => r,
         _ => link::OpenResult::Failed("timeout".into()),
     };
+    crate::log_detail!(
+        "join: helper pad for Player {slot} on {console}: {r:?} in {} ms",
+        t0.elapsed().as_millis()
+    );
     if !matches!(r, link::OpenResult::Ok | link::OpenResult::Busy) {
         // Not ours to play: a pad the link still makes (a slow helper) or has goes again, so it
         // is not kept alive by heartbeats with nobody on it. Only while `token` owns the slot (a
@@ -1342,6 +1418,15 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
         _ = closed(socket) => { gave_up = true; Some(Decision::Deny) }
     };
     with_party(&key, |p| p.pending.retain(|a| a.id != id));
+    crate::log_detail!(
+        "join: {name}'s ask on {console}: {} after {} ms",
+        if gave_up {
+            "the guest gave up".to_string()
+        } else {
+            format!("{d:?}")
+        },
+        now.elapsed().as_millis()
+    );
     if gave_up {
         return None;
     }
@@ -1388,7 +1473,12 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
         // Not made: this guest record goes (quietly: they never played).
         with_party(&key, |p| p.guests.retain(|g| g.id != gid));
         match r {
-            link::OpenResult::Busy => tried.push(player),
+            link::OpenResult::Busy => {
+                crate::log_detail!(
+                    "join: Player {player} on {console} is held elsewhere; trying the next"
+                );
+                tried.push(player)
+            }
             r => return Some(Admit::Refused(r.why())),
         }
     }
@@ -1457,6 +1547,29 @@ fn forward_pad(key: &str, console: &str, id: u64, gen: u64, mut st: PadState) {
     }
 }
 
+/// The least time between a guest's keyframe requests that reach the console.
+const KEY_ASK_GAP: Duration = Duration::from_millis(1000);
+
+/// A guest's keyframe requests, at most one per KEY_ASK_GAP.
+#[derive(Default)]
+struct KeyAsk {
+    last: Option<Instant>,
+}
+
+impl KeyAsk {
+    /// True when a request now may go to the console.
+    fn take(&mut self, now: Instant) -> bool {
+        if self
+            .last
+            .is_some_and(|t| now.saturating_duration_since(t) < KEY_ASK_GAP)
+        {
+            return false;
+        }
+        self.last = Some(now);
+        true
+    }
+}
+
 fn now_ms() -> u64 {
     static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     T0.get_or_init(Instant::now).elapsed().as_millis() as u64
@@ -1484,6 +1597,14 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
     let feed =
         crate::rp_stream_api::add_player(spect, &console, PLAYER_QUEUE, stats.skipped.clone());
     let hevc = feed.as_ref().map(|f| f.hevc).unwrap_or(false);
+    crate::log_detail!(
+        "join: Player {player} on {console} connected (socket {gen}): picture {}, hevc {hevc}",
+        if feed.is_some() {
+            "on"
+        } else {
+            "none (no session)"
+        }
+    );
     let (mut video, mut other) = match feed {
         Some(f) => (Some(f.video), Some(f.other)),
         None => (None, None),
@@ -1497,6 +1618,7 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
     let mut tick = tokio::time::interval(STATUS_EVERY);
     let mut left = false;
     let mut pacer = PadPacer::new(Instant::now());
+    let mut key_ask = KeyAsk::default();
     loop {
         if ended {
             break; // the joined message could not go: the socket is gone
@@ -1536,11 +1658,25 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
                     struct In {
                         #[serde(default)] ping: Option<serde_json::Value>,
                         #[serde(default)] leave: Option<serde_json::Value>,
+                        #[serde(default)] keyframe: bool,
                     }
                     if let Ok(m) = serde_json::from_str::<In>(t.as_str()) {
                         if m.leave.is_some() {
                             left = true;
                             break;
+                        }
+                        // The guest's picture waits for a keyframe (#648): ask the console, at
+                        // most once a KEY_ASK_GAP so a guest can't flood the host's stream.
+                        if m.keyframe {
+                            if key_ask.take(Instant::now()) {
+                                crate::log_detail!(
+                                    "join: Player {player} on {console} asks for a keyframe ({} pictures skipped so far)",
+                                    stats.skipped.load(Ordering::Relaxed)
+                                );
+                                crate::rp_stream_api::request_keyframe(&console);
+                            } else {
+                                crate::log_detail!("join: Player {player} on {console}: keyframe ask held back (one a second)");
+                            }
                         }
                         if let Some(p) = m.ping {
                             if socket.send(say(serde_json::json!({"pong": p}))).await.is_err() {
@@ -1608,6 +1744,13 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
         }
     }
     crate::rp_stream_api::remove_spectator(spect);
+    crate::log_detail!(
+        "join: Player {player} on {console} socket {gen} closed ({}): rtt now {:?} ms, {} pictures skipped, {} pad frames",
+        if left { "left" } else { "disconnected" },
+        stats.rtt_now(),
+        stats.skipped.load(Ordering::Relaxed),
+        stats.pad_frames.load(Ordering::Relaxed),
+    );
     let now = Instant::now();
     let fx = with_party(&key, |p| {
         if left {
@@ -1658,7 +1801,8 @@ fn bases(console: &str, reach: &Reach) -> Vec<String> {
         .iter()
         .map(|h| format!("http://{h}"))
         .collect();
-    for ip in crate::pad_link::lan_ips(Some(console)) {
+    // Home network, then a VPN's (WireGuard…), then Tailscale's (pad_link::reach_ips).
+    for ip in crate::pad_link::reach_ips(Some(console)).0 {
         let b = match ip {
             IpAddr::V6(v6) => format!("http://[{v6}]:{}", reach.port),
             IpAddr::V4(v4) => format!("http://{v4}:{}", reach.port),
@@ -1695,6 +1839,8 @@ fn invite_json(
         "code_display": code_display(&inv.code),
         "url": urls.first(),
         "urls": urls,
+        // This computer's Tailscale address (one of `urls`), for the page to label.
+        "tailscale": crate::pad_link::tailscale_ip().map(|ip| ip.to_string()),
         "expires_in_s": inv.until.saturating_duration_since(now).as_secs(),
     })
 }
@@ -2790,6 +2936,17 @@ pub(crate) mod link {
 mod tests {
     use super::link::{Cmd, Event, LinkState, OpenResult, Port, SlotIo, HOLD};
     use super::*;
+
+    #[test]
+    fn guest_keyframe_asks_are_spaced() {
+        let t0 = Instant::now();
+        let mut k = KeyAsk::default();
+        assert!(k.take(t0));
+        assert!(!k.take(t0 + Duration::from_millis(400)));
+        assert!(!k.take(t0 + KEY_ASK_GAP - Duration::from_millis(1)));
+        assert!(k.take(t0 + KEY_ASK_GAP));
+        assert!(!k.take(t0 + KEY_ASK_GAP + Duration::from_millis(10)));
+    }
     use ps5upload_core::vpad::{Ack, Opened, Output, SlotFailure, StateItem};
     use std::sync::atomic::{AtomicBool, AtomicI64};
 
@@ -3041,6 +3198,43 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// A bug report gets counts, stages and health, never the invite key or code, a guest's
+    /// resume or pad token, or a guest's name.
+    #[test]
+    fn the_bug_report_summary_has_no_keys_tokens_or_names() {
+        let mut p = party();
+        let t = Instant::now();
+        let inv = p.invite(false, t).unwrap();
+        let id = admit(&mut p, "Zelda Friend", t);
+        p.guests[0].stats.rtt(42);
+        p.guests[0].stats.skipped.fetch_add(3, Ordering::Relaxed);
+        let (token, pad_token) = {
+            let g = p.guest_mut(id).unwrap();
+            (g.token.clone(), g.pad_token.clone())
+        };
+        let v = p.diag(t);
+        let text = v.to_string();
+        for secret in [
+            &inv.key,
+            &inv.code,
+            &code_display(&inv.code),
+            &token,
+            &pad_token,
+        ] {
+            assert!(
+                !text.contains(secret.as_str()),
+                "a key, code or token is in the summary"
+            );
+        }
+        assert!(!text.contains("Zelda"), "a guest's name in {text}");
+        assert!(!text.contains("Desk"), "the host's name in {text}");
+        assert_eq!(v["invite_open"], true);
+        assert_eq!(v["players_in"], 1);
+        assert_eq!(v["guests"][0]["state"], "reconnecting");
+        assert_eq!(v["guests"][0]["rtt_ms"], 42);
+        assert_eq!(v["guests"][0]["skipped_pictures"], 3);
     }
 
     #[test]
@@ -3993,6 +4187,18 @@ mod tests {
         ws
     }
 
+    /// The next message that has `key` (other messages, such as the host's light or a stage
+    /// change racing ahead, are skipped), within 5 s each.
+    async fn next_with(ws: &mut Guest_, key: &str) -> serde_json::Value {
+        for _ in 0..20 {
+            let v = next(ws).await;
+            if v.get(key).is_some() {
+                return v;
+            }
+        }
+        panic!("no message with {key}");
+    }
+
     /// The next text message that is not a status, within 5 s.
     async fn next(ws: &mut Guest_) -> serde_json::Value {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -4165,7 +4371,7 @@ mod tests {
 
         // Ping is answered with its own value.
         sam.send(TMsg::Text(r#"{"ping":42}"#.into())).await.unwrap();
-        assert_eq!(next(&mut sam).await["pong"], 42);
+        assert_eq!(next_with(&mut sam, "pong").await["pong"], 42);
 
         // A code join (any case, with a dash) always asks; the host says no.
         let typed = format!("{}-{}", &code[..3], &code[3..]).to_lowercase();
@@ -4215,11 +4421,11 @@ mod tests {
         // A second socket with the same token replaces the first.
         let mut sam2 = guest(&url, serde_json::json!({"hello": {"resume": token}})).await;
         assert_eq!(next(&mut sam2).await["stage"], "joined");
-        assert_eq!(next(&mut sam).await["bye"], "replaced");
+        assert_eq!(next_with(&mut sam, "bye").await["bye"], "replaced");
 
         // The host stops: Sam is told; then plays again within the minute and Sam comes back.
         set_live(console, 0);
-        assert_eq!(next(&mut sam2).await["bye"], "host_stopped");
+        assert_eq!(next_with(&mut sam2, "bye").await["bye"], "host_stopped");
         let s = host_state(console).await;
         assert_eq!(
             (s["playing"].as_bool(), s["players_in"].as_u64()),
@@ -4256,7 +4462,7 @@ mod tests {
         )
         .await;
         assert_eq!(r["ok"], true);
-        assert_eq!(next(&mut sam3).await["bye"], "kicked");
+        assert_eq!(next_with(&mut sam3, "bye").await["bye"], "kicked");
         until("pad closed", || {
             f.log().iter().filter(|l| *l == "close2").count() > n_close
         })

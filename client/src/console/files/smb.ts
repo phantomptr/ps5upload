@@ -111,9 +111,26 @@ export interface ShareForm {
   start_path: string;
 }
 
+/**
+ * A share typed with folders after it (`Media/Games/PS5`, or a pasted `\\nas\Media\Games`): the
+ * share is the first name and the folders go in front of the start folder. The server only knows
+ * the share's own name, and the helper refuses anything else as "not a share name" (other PS5
+ * tools take the whole path in one box, so people type it that way). The engine's SMB sources
+ * do the same (remote/api.rs split_share).
+ */
+export function splitShare(share: string, startPath: string): { share: string; start_path: string } {
+  const raw = share.trim();
+  const unc = raw.startsWith("\\\\") || raw.startsWith("//");
+  const segs = raw.split(/[\\/]/).filter((x) => x.trim() !== "");
+  if (unc && segs.length >= 2) segs.shift();
+  if (segs.length <= 1) return { share: (segs[0] ?? raw).trim(), start_path: startPath };
+  const start = startPath.split(/[\\/]/).filter((x) => x !== "");
+  return { share: segs[0].trim(), start_path: [...segs.slice(1), ...start].join("/") };
+}
+
 /** Sign in, open the folder, then save. The share as saved (the helper never sends a password back). */
 export async function saveShare(f: ShareForm): Promise<{ share: SmbShare; dialect: string }> {
-  return call<{ share: SmbShare; dialect: string }>("/api/smb/save", f);
+  return call<{ share: SmbShare; dialect: string }>("/api/smb/save", { ...f, ...splitShare(f.share, f.start_path) });
 }
 
 export async function removeShare(id: string): Promise<void> {

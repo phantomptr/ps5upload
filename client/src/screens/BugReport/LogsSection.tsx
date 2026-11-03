@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { useTr } from "../../state/lang";
+import { detailedActive, useDiagSettingsStore } from "../../state/diagSettings";
 import { RANGE_KEYS, type RangeKey, type ReportDraft } from "./draft";
 import Chips from "./Chips";
 
@@ -20,6 +21,7 @@ export default function LogsSection({
 }) {
   const tr = useTr();
   const [latest] = useState(() => toLocalInput(Date.now()));
+  const detailedOn = detailedActive(useDiagSettingsStore((s) => s.detailedUntil));
   const label: Record<RangeKey, string> = {
     "15m": tr("br_range_15m", undefined, "Last 15 minutes"),
     "1h": tr("br_range_1h", undefined, "Last hour"),
@@ -56,6 +58,15 @@ export default function LogsSection({
           undefined,
           "Everything the app, the engine and the PS5 recorded in that time goes in: connections, the helper's log, installs, transfers, errors and crashes. IP addresses, serials, home folders and keys are removed.",
         )}
+      </p>
+      <p className="text-xs leading-relaxed text-[var(--color-muted)]">
+        {detailedOn
+          ? tr("br_detailed_on", undefined, "Detailed logs are on: this report includes the extra detail.")
+          : tr(
+              "br_detailed_off",
+              undefined,
+              "For a Remote Play or Play Together problem, turn on Detailed logs in the Logs tab, try again, then make the report.",
+            )}
       </p>
     </div>
   );

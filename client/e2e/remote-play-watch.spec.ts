@@ -125,12 +125,21 @@ async function makeStream(page: Page): Promise<number[][]> {
   });
 }
 
+test("a controller link opened in a browser asks about the PS5Upload app first", async ({ page }) => {
+  const html = await readFile(new URL("../../engine/crates/ps5upload-engine/src/pad_page.html", import.meta.url), "utf8");
+  await page.route("**/pad", (route) => route.fulfill({ contentType: "text/html", body: html }));
+  await page.goto("/pad#t=0f0f0f0f0f0f0f0f", { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("open-in-gate")).toContainText("Open in the PS5Upload app?");
+});
+
 test.describe("a phone watching", () => {
   test.use({ viewport: { width: 844, height: 390 }, hasTouch: true, isMobile: true });
 
   test("shows the picture, and plays once it is handed the controller", async ({ page }) => {
     // The engine's own pad page (npm run build:pad), served as the engine serves it.
     const html = await readFile(new URL("../../engine/crates/ps5upload-engine/src/pad_page.html", import.meta.url), "utf8");
+    // This browser already chose to stay in the browser (OpenInAppGate).
+    await page.addInitScript(() => localStorage.setItem("ps5upload.openIn", "browser"));
     await page.route("**/pad", (route) => route.fulfill({ contentType: "text/html", body: html }));
     let wsUrl = "";
     const pads: Array<{ buttons: number }> = [];

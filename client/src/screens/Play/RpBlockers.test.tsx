@@ -27,6 +27,22 @@ describe("Play's Remote Play blocker notices", () => {
     expect(html(<RpBlockerPhaseView ids={["hush"]} />)).toContain("Pausing Hush (about 20 s)…");
   });
 
+  it("shows a wait for a hold as a phase, with a way out", () => {
+    const out = html(<RpBlockerPhaseView ids={["hush"]} waitS={50} onCancel={() => undefined} />);
+    expect(out).toContain("Waiting for Hush to give back the video encoder (up to 50 s)…");
+    expect(out).toContain("Cancel");
+  });
+
+  it("says what clears a stuck Hush, and offers no pause", () => {
+    const stuck = [{ id: "hush", key: "rp_blocker_hush_leftover_restart", text: "x" }];
+    const out = html(<RpBlockerNoticeView {...base} heldIds={[]} heldStuck={stuck} onAtStart={["hush"]} />);
+    expect(out).toContain("Hush left Remote Play without a picture");
+    expect(out).toContain("Restart the PS5 to clear it.");
+    expect(out).toContain("Open Hush");
+    expect(out).toContain("Start anyway");
+    expect(out).not.toContain("Pause Hush while I play");
+  });
+
   it("names Hush as the cause of a stream that failed while it was on", () => {
     const busy = html(<RpBlockerNoticeView {...base} onAtStart={["hush"]} error={{ code: "busy", detail: "" }} />);
     expect(busy).toContain("Hush was on when this stream started");

@@ -325,6 +325,62 @@ const SPECTATOR_QUEUE: usize = 120;
 /// The console serves one Remote Play session at a time; so do we.
 static LIVE: Mutex<Option<Arc<Live>>> = Mutex::new(None);
 
+/// The last session's start: what was asked, each handshake stage with its time, and how it
+/// ended. For a bug report (`/api/diag/features`): a refusal like 80108b26 is gone from the page
+/// once it is closed. No key, no address (the console is named by the report's own fields).
+static LAST_SESSION: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+
+/// Most handshake stages kept in [`LAST_SESSION`] (a session has about eight).
+const LAST_STAGES: usize = 16;
+
+fn note_last(f: impl FnOnce(&mut serde_json::Value)) {
+    if let Ok(mut g) = LAST_SESSION.lock() {
+        if let Some(v) = g.as_mut() {
+            f(v);
+        }
+    }
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Remote Play for a bug report: the session running now (counts and switches) and the last
+/// session's start and end. Never keys, the passcode, or the console's address.
+pub(crate) fn diag_summary() -> serde_json::Value {
+    let live = live().map(|l| {
+        let spectators = l.spectators.lock().map(|g| g.len()).unwrap_or(0);
+        let players = l
+            .spectators
+            .lock()
+            .map(|g| g.iter().filter(|s| s.video.is_some()).count())
+            .unwrap_or(0);
+        serde_json::json!({
+            "session": l.session,
+            "hevc": l.hevc,
+            "playing": l.playing.load(Ordering::Relaxed),
+            "page_attached": l.viewer.lock().map(|g| g.is_some()).unwrap_or(false),
+            "alone_s": l.alone_since.lock().ok().and_then(|g| g.map(|t| t.elapsed().as_secs())),
+            "keep_alive_s": l.keep_alive.as_secs(),
+            "watchers": spectators - players,
+            "players": players,
+            "ws_dropped": l.dropped.load(Ordering::Relaxed),
+            "mic_enabled": l.mic_enabled.load(Ordering::Relaxed),
+            "mic_on": l.mic_on.load(Ordering::Relaxed),
+            "replay_on": l.replay.lock().map(|g| g.is_some()).unwrap_or(false),
+            "live_feed_readers": l.feed.readers(),
+            "passcode_waiting": l.passcode_ask.lock().map(|g| g.is_some()).unwrap_or(false),
+        })
+    });
+    serde_json::json!({
+        "live": live,
+        "last_session": LAST_SESSION.lock().ok().and_then(|g| g.clone()),
+    })
+}
+
 /// The page's controller among the session's controllers (phones are 1 and up).
 const PAGE_SOURCE: u64 = 0;
 
@@ -390,6 +446,17 @@ pub(crate) fn live_session(host: &str) -> Option<u64> {
     live()
         .filter(|l| crate::vinput_api::host_key(&l.host) == key && !l.stop.load(Ordering::Relaxed))
         .map(|l| l.session)
+}
+
+/// A Play Together player's picture is waiting for a keyframe (it skipped frames it could not
+/// keep up with, or a decode failed; join.rs): ask the console for one, as the host page does.
+pub(crate) fn request_keyframe(host: &str) {
+    let key = crate::vinput_api::host_key(host);
+    if let Some(l) = live()
+        .filter(|l| crate::vinput_api::host_key(&l.host) == key && !l.stop.load(Ordering::Relaxed))
+    {
+        l.want_key.store(true, Ordering::Relaxed);
+    }
 }
 
 /// A watcher left.
@@ -839,6 +906,17 @@ impl StreamSink for Sink {
                 serde_json::json!({"stage": "first_frame", "ms": ms, "bytes": n})
             }
         };
+        if v["stage"] != "stats" {
+            crate::log_detail!("rp_stream: {}: stage {v}", self.live.host);
+            let stage = v.clone();
+            note_last(|l| {
+                if let Some(a) = l["stages"].as_array_mut() {
+                    if a.len() < LAST_STAGES {
+                        a.push(stage);
+                    }
+                }
+            });
+        }
         self.live.send_ctl(text(v));
     }
     fn video(&mut self, au: &[u8], header: bool) -> bool {
@@ -1102,6 +1180,29 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
     cfg.mic = start.mic;
     cfg.dualsense = start.dualsense;
     cfg.keyboard = start.keyboard;
+    let asked = serde_json::json!({
+        "width": cfg.width,
+        "height": cfg.height,
+        "fps": cfg.fps,
+        "bitrate_kbps": cfg.bitrate_kbps,
+        "codec": format!("{:?}", cfg.codec),
+        "mic": cfg.mic,
+        "dualsense": cfg.dualsense,
+        "keyboard": cfg.keyboard,
+        "wake": cfg.wake,
+        "keep_alive_s": start.keep_alive_s,
+        "replay_s": start.replay_s,
+        "low_latency": start.low_latency,
+    });
+    crate::log_detail!("rp_stream: {}: starting a session: {asked}", start.host);
+    if let Ok(mut g) = LAST_SESSION.lock() {
+        *g = Some(serde_json::json!({
+            "started_unix_ms": unix_ms(),
+            "asked": asked,
+            "stages": [],
+            "end": null,
+        }));
+    }
     let live = Arc::new(Live::new(
         start.host.clone(),
         cfg.codec.is_hevc(),
@@ -1159,6 +1260,11 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
             Err(e) => error_status(&e),
         };
         crate::log_info!("rp_stream: {end}");
+        let end_note = end.clone();
+        note_last(|v| {
+            v["end"] = end_note;
+            v["ended_unix_ms"] = unix_ms().into();
+        });
         // A fan boost for this console ends with its session.
         crate::fan_boost::session_ended(&l.host);
         // The live feed's readers reach the end of their stream.
@@ -1206,6 +1312,19 @@ async fn session(mut socket: WebSocket) {
     let (ctl_tx, mut ctl_rx) = mpsc::channel::<Message>(CTL_QUEUE);
 
     let running = LIVE.lock().ok().and_then(|g| g.clone());
+    crate::log_detail!(
+        "rp_stream: {}: a page connects (attach_only {}, a session running: {})",
+        start.host,
+        start.attach_only,
+        running
+            .as_ref()
+            .map(|l| if l.host == start.host {
+                "this console's"
+            } else {
+                "another console's"
+            })
+            .unwrap_or("none")
+    );
     let live = match running {
         Some(l) if l.host == start.host => l,
         Some(l) => {
@@ -1277,6 +1396,7 @@ async fn session(mut socket: WebSocket) {
     let pong_tx = ctl_tx.clone();
     let kbm_tx = ctl_tx.clone();
     let id = live.attach(video_tx, ctl_tx, start.timing);
+    crate::log_detail!("rp_stream: {}: page {id} shows the session", live.host);
 
     let mut reason = "ended";
     loop {
@@ -1314,6 +1434,7 @@ async fn session(mut socket: WebSocket) {
                             live.push_pad(PAGE_SOURCE, Some(p));
                         }
                         if m.keyframe {
+                            crate::log_detail!("rp_stream: {}: page {id} asks for a keyframe", live.host);
                             live.need_key.store(true, Ordering::Relaxed);
                             live.want_key.store(true, Ordering::Relaxed);
                         }
@@ -1361,6 +1482,7 @@ async fn session(mut socket: WebSocket) {
                 }
                 // The page left: the session waits for it (or another).
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
+                    crate::log_detail!("rp_stream: {}: page {id} left; the session waits", live.host);
                     live.detach(id);
                     crate::vinput_api::off(&live.host, crate::vinput_api::Owner::Page(id), "left");
                     return;
@@ -1369,6 +1491,10 @@ async fn session(mut socket: WebSocket) {
             },
         }
     }
+    crate::log_detail!(
+        "rp_stream: {}: page {id} off the session ({reason})",
+        live.host
+    );
     live.detach(id);
     // Whatever ended it (stop, the session over, another page): this page's keys and buttons go.
     crate::vinput_api::off(&live.host, crate::vinput_api::Owner::Page(id), "left");

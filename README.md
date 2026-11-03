@@ -73,7 +73,8 @@
   - **Play Together:** friends join your game as Player 2, 3 and 4, each with their own
     controller on the PS5, from any browser or the app. Share a QR code, a link or a short
     code, allow each friend, and they pick Quick Play on the TV. A short drop keeps their
-    place.
+    place. Friends away from home join over Tailscale, and a link opens in the PS5Upload app
+    when they have it.
   - **Go live** to YouTube, Twitch, Kick, Facebook or any RTMP/SRT server, several at once,
     straight from Play (desktop apps and the web UI), or add the stream to **OBS** for your own
     scenes and overlays.
@@ -587,7 +588,7 @@ Thank you to everyone who has supported PS5Upload. Every coffee keeps it going. 
 the website list you too, under Thanks & Support.)
 
 <!-- supporters:start (scripts/supporters.mjs) -->
-BigPapii420 · clincher · Ice · Marv530e · San · Dennis · gabuscus · Slappula · b1ackcoffee · drsam · f0d · John Malpas · kheops · LEO · Lucky · MagneTo · Peejay571 · Ronnie K. · B3aver08 · Beetle · David Rabilero · Florian · hernanr1993 · Joe Szymkowicz · Joey Lam · kuttenkop de kutjelikker · Mehmet · Niko · StrijderNL · Ferko · GerardoPTC · Griffdaddy · here · Mayankk! · Rubén · Turcan Vadim · Zeiko
+BigPapii420 · clincher · Ice · Marv530e · San · Dennis · gabuscus · Slappula · b1ackcoffee · drsam · f0d · John Malpas · kheops · LEO · Lucky · MagneTo · Peejay571 · Ronnie K. · B3aver08 · Beetle · David Rabilero · Florian · hernanr1993 · JB · Joe Szymkowicz · Joey Lam · kuttenkop de kutjelikker · Mehmet · Niko · StrijderNL · Ferko · GerardoPTC · Griffdaddy · here · Mayankk! · Rubén · Turcan Vadim · Zeiko
 
 …and 8 anonymous supporters. Thank you all! 💛
 

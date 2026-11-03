@@ -1793,6 +1793,9 @@ export interface HwPower {
   operating_time_sec: number;
   operating_time_hours: number;
   operating_time_minutes: number;
+  /** When the console booted, seconds since the epoch on the console's own clock (compare
+   *  with file times there); 0 or absent from an older helper. */
+  boot_time_sec?: number;
   boot_count: number;
   power_consumption_mw: number;
   /** System load average (1, 5, 15 minute windows). Same shape as

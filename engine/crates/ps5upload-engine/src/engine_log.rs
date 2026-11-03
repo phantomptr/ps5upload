@@ -203,6 +203,19 @@ macro_rules! log_debug {
     ($($arg:tt)*) => { $crate::engine_log::record("debug", format!($($arg)*)) };
 }
 
+/// A detailed-logs line: debug level, written only while the user has "Detailed logs" on
+/// (`/api/diag/log-level`, which turns itself off after at most a day). For the paths that are
+/// hard to diagnose from the default log (the Remote Play handshake, Play Together). The
+/// arguments are not formatted while it is off. Never put a key, token or passcode in one.
+#[macro_export]
+macro_rules! log_detail {
+    ($($arg:tt)*) => {
+        if ps5upload_core::log::verbose() {
+            $crate::engine_log::record("debug", format!($($arg)*))
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

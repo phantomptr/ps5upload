@@ -226,3 +226,14 @@ describe("failureText", () => {
     expect(failureText("some_unknown_token")).toBe("some_unknown_token");
   });
 });
+
+describe("shownEta", () => {
+  it("shows a real time left, never one from a vanishing speed", async () => {
+    const { shownEta } = await import("./ActivitySummary");
+    expect(shownEta(90)).toBe(true);
+    expect(shownEta(1.42e218 * 3600)).toBe(false);
+    expect(shownEta(Infinity)).toBe(false);
+    expect(shownEta(0)).toBe(false);
+    expect(shownEta(undefined)).toBe(false);
+  });
+});

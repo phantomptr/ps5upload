@@ -4,6 +4,8 @@
 import { createRoot } from "react-dom/client";
 import "../index.css";
 import { PadApp } from "./PadApp";
+import { OpenInAppGate } from "../components/OpenInAppGate";
+import { padAppLink } from "../lib/padLink";
 
 const hash = new URLSearchParams(location.hash.slice(1));
 const key = hash.get("t") ?? "";
@@ -16,4 +18,9 @@ const name = /iPhone|iPad/.test(navigator.userAgent)
     : "Phone";
 const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/pad/ws?t=${encodeURIComponent(key)}&name=${encodeURIComponent(name)}${watch ? "&w=1" : ""}`;
 
-createRoot(document.getElementById("root")!).render(<PadApp url={url} computer={location.hostname} watch={watch} />);
+// A link opened in a browser: offer the PS5Upload app first (Slack-style).
+createRoot(document.getElementById("root")!).render(
+  <OpenInAppGate appLink={padAppLink(location.href)}>
+    <PadApp url={url} computer={location.hostname} watch={watch} />
+  </OpenInAppGate>,
+);

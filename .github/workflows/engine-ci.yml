@@ -723,7 +723,8 @@ jobs:
   client-frontend:
     name: client (ts + vite)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Typecheck, lint, ~4900 unit tests, the build and ~200 browser tests: 15 min ran out in 11.0.1.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
