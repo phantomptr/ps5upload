@@ -37,7 +37,20 @@ class FakeAudioContext {
   constructor() {
     ctxs.push(this);
   }
+  resumes = 0;
+  /** As a browser that holds sound back until a click: resume() only works when allowed. */
+  allowResume = true;
+  private listeners: Array<() => void> = [];
+  addEventListener(_t: string, f: () => void) {
+    this.listeners.push(f);
+  }
+  setState(st: string) {
+    this.state = st;
+    for (const f of this.listeners) f();
+  }
   resume() {
+    this.resumes++;
+    if (this.allowResume && this.state !== "closed") this.setState("running");
     return Promise.resolve();
   }
   createGain() {
@@ -109,7 +122,12 @@ function fakeCanvas() {
 }
 
 beforeEach(() => {
+  // Events too: held-back sound waits for a click or key on the window.
+  const events = new EventTarget();
   vi.stubGlobal("window", {
+    addEventListener: events.addEventListener.bind(events),
+    removeEventListener: events.removeEventListener.bind(events),
+    dispatchEvent: events.dispatchEvent.bind(events),
     setTimeout,
     clearTimeout,
     setInterval,
@@ -219,5 +237,36 @@ describe("RemotePlayStream at its end", () => {
     s.stop();
     await flush();
     expect(ctxs[0].closed).toBe(1);
+  });
+
+  it("starts held-back sound on the next click and stops listening at the end", async () => {
+    vi.stubGlobal(
+      "AudioContext",
+      class extends FakeAudioContext {
+        state = "suspended";
+        allowResume = false;
+      },
+    );
+    const s = new RemotePlayStream(options());
+    await s.start();
+    await flush();
+    const ctx = ctxs[0];
+    expect(s.soundBlocked()).toBe(true);
+    // A click anywhere in the app: the browser now allows it.
+    ctx.allowResume = true;
+    window.dispatchEvent(new Event("pointerdown"));
+    expect(ctx.state).toBe("running");
+    expect(s.soundBlocked()).toBe(false);
+    // Stopped later (another app took the sound device): a key starts it again.
+    ctx.setState("suspended");
+    expect(s.soundBlocked()).toBe(true);
+    window.dispatchEvent(new Event("keydown"));
+    expect(s.soundBlocked()).toBe(false);
+    // Ended: a click does nothing to the closed context.
+    s.stop();
+    await flush();
+    const before = ctx.resumes;
+    window.dispatchEvent(new Event("pointerdown"));
+    expect(ctx.resumes).toBe(before);
   });
 });

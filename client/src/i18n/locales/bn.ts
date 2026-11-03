@@ -6300,6 +6300,7 @@ library_compressed_hint: "সংকুচিত ইমেজ চালাতে 
 "rp_phase_reconnecting": "পুনরায় সংযোগ হচ্ছে…",
 "rp_stats_audio": "শব্দ {ms} ms",
 "rp_stats_audio_gaps": "{n}টি বিরতি",
+"rp_sound_blocked": "শব্দ চালু করুন",
 "rp_set_picture": "ছবি",
 "rp_fps": "ফ্রেম রেট",
 "rp_fps_60": "60 fps (মসৃণ)",

@@ -6253,6 +6253,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_phase_reconnecting": "Reconectando…",
 "rp_stats_audio": "sonido {ms} ms",
 "rp_stats_audio_gaps": "{n} cortes",
+"rp_sound_blocked": "Activar el sonido",
 "rp_set_picture": "Imagen",
 "rp_fps": "Velocidad de fotogramas",
 "rp_fps_60": "60 fps (fluido)",

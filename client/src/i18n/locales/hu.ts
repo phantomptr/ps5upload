@@ -6606,6 +6606,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_phase_reconnecting": "Újracsatlakozás…",
 "rp_stats_audio": "hang {ms} ms",
 "rp_stats_audio_gaps": "{n} kihagyás",
+"rp_sound_blocked": "Hang bekapcsolása",
 "rp_set_picture": "Kép",
 "rp_fps": "Képkockasebesség",
 "rp_fps_60": "60 fps (folyamatos)",

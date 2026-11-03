@@ -1170,6 +1170,18 @@ export function StreamPanel() {
               {tr("rp_capture_hint", undefined, "Click the picture to capture the mouse")}
             </div>
           )}
+          {/* The browser held the sound back (no click right before the session started): any
+              click or key starts it; this button says so and is one. */}
+          {playing && stats?.soundBlocked && !settingsOpen && !pip && (
+            <button
+              type="button"
+              className={`absolute right-3 z-20 rounded-full bg-black/70 px-3 py-1 text-xs text-white/90 hover:bg-black/80 ${showBar && !compact ? "top-16" : "top-3"}`}
+              data-testid="rp-sound-blocked"
+              onClick={() => stream?.resumeSound()}
+            >
+              🔇 {tr("rp_sound_blocked", undefined, "Turn on sound")}
+            </button>
+          )}
           {playing && kbm.pointerHeld && prefs.kbmChip && !settingsOpen && !pip && !kbm.hint && (
             <KbmReleaseChip low={showBar && !compact} />
           )}
