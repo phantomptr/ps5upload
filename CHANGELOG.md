@@ -6,62 +6,43 @@ What's new in ps5upload, written for humans.
 
 ## 10.8.0
 
-- **The helper can add controllers for Players 2, 3 and 4 (For #641).** This is the console half
-  of Play Together, where friends join your Remote Play and play along: the helper makes a
-  virtual controller for each friend, so the PS5 sees them as extra players. When a friend
-  presses PS, the TV asks "Who's using this controller?" and they pick Quick Play to play as a
-  guest. A friend whose connection drops has their controller let go within half a second (no
-  stuck stick or button), keeps their place for a while if they come back, and their controller
-  is removed after 90 seconds without them. The app side comes in a later change.
-- **Play Together: friends join your Remote Play as Player 2, 3 and 4 (For #641).** While you
-  play, open Play Together and share the link (or the short code, like K7M-2QX). A friend on your
-  network opens it in any browser, you click Allow, and they get their own controller on the PS5
-  plus your picture and sound. On the TV they press PS and pick Quick Play (or their user). Up to
-  three friends; you can let anyone go at any time.
-- **A friend's Wi-Fi blip doesn't cost them their spot (For #641).** If a friend's connection
-  drops, their controller lets go of everything at once (no runaway buttons) and their player
-  waits for them for a minute: they come back as the same player, still signed in on the TV,
-  without asking again. If you stop playing, friends are told, and they can come back if you
-  start again within a minute.
-- **Friends can't open the PS5's menus by default (For #641).** Once a friend is in, their PS and
-  Create buttons are switched off so a stray press doesn't pull everyone out of the game. They
-  keep PS for the first minute so they can answer "Who's using this controller?", and you can
-  turn the blocking off.
-- **Quick taps always count (For #641).** A friend's button press that is shorter than a network
-  round trip still reaches the game as a press and a release.
-- **Nearby apps see your game (For #641).** While Play Together is open, other PS5Upload apps
-  that use the same PS5 list it, and a friend can ask to join from there. Joining with a code
-  always needs your Allow, and repeated wrong codes are slowed down.
-- **Play Together needs the updated helper (For #641).** With an older helper on the PS5, the app
-  says "Update the helper to play together" instead of failing quietly.
 - **Play Together: friends play your PS5 as Player 2, 3 and 4 (For #641).** While you play, the
   new people button on the Play bar (or **⋯ › Play Together** on a phone) opens a panel with three
   steps: share the invite (a QR code, the link with Copy, your phone's Share sheet, or a short code
-  like K7M-2QX), allow your friend when their name pops up over the picture, and they press PS and
-  pick **Quick Play** on the TV. Each friend gets a card with what they're doing (asking, picking a
-  user on the TV, playing, reconnecting with a countdown, left), their delay in colour, and a
-  Remove button. PS and Create are blocked for friends unless you turn that off (they can still
-  press PS once to pick a user). If a friend's delay is high, the panel suggests a lower Play
-  quality. An older helper on the PS5 says to update it, with the button to send the new one.
-  The phone controller and watch features are one click away in the same panel.
+  like K7M-2QX), allow your friend when their name pops up over the picture, and on the TV they
+  press PS and pick **Quick Play** (or their own user). Each friend gets their own controller on
+  the PS5, a separate player, plus your picture and sound. Up to three friends. Each has a card
+  with what they're doing (asking, picking a user on the TV, playing, reconnecting with a
+  countdown, left), their delay in colour, and a Remove button; if a friend's delay is high, the
+  panel suggests a lower Play quality. The phone controller and watch features are one click away
+  in the same panel. On the PS5's home screen only you drive the menus; in games, friends play.
 - **Your friend needs no app.** The link opens a page in any browser, in their own language: they
   type a name, wait for your yes, and play with a controller connected to their device or with the
   on-screen controls on a phone. The picture stays within about 150 ms of the console, rumble
-  plays on their controller, a "You are Player 2" chip shows the light-bar colour, and a short
-  network drop reconnects on its own and keeps their place for 60 seconds.
+  plays on their controller, and a "You are Player 2" chip shows the light-bar colour.
 - **Join a friend from the app.** Play now has two choices: **Play my PS5** and **Join a friend**.
   Paste a link, type the short code, scan the QR code (where the device's camera can), or pick a
   friend from **Playing nearby**: other PS5Upload apps on your network that have Play Together
   open. In the app the picture uses the lower-delay decoder, and full screen turns a phone
   sideways with the on-screen controls.
+- **A friend's Wi-Fi blip doesn't cost them their spot.** If a friend's connection drops, their
+  controller lets go of everything within half a second (no runaway sticks or buttons) and their
+  player waits for them for a minute: they come back as the same player, still signed in on the
+  TV, without asking again. If you stop playing, friends see "The host stopped playing" and can
+  come back if you start again within a minute. A friend's button tap shorter than a network
+  round trip still reaches the game as a press and a release.
+- **Friends can't open the PS5's menus by default.** Once a friend is in, their PS and Create
+  buttons are switched off so a stray press doesn't pull everyone out of the game. They keep PS
+  for the first minute to answer "Who's using this controller?", and you can turn blocking off.
 - **One stream at a time, and it always asks.** Joining a friend while you play your own PS5,
   starting Play while you're in a friend's game, joining a second friend, or stopping Play while
-  friends are playing each asks first. Friends see "The host stopped playing" when you stop.
+  friends are playing each asks first.
+- **Safe to open to your network.** Only the join page and its connection are reachable from
+  other devices. Joining with a code always needs your Allow, repeated wrong codes are slowed
+  down, and a friend can only send their controller. With an older helper on the PS5, the panel
+  says "Update the helper to play together" with the button to send the new one.
 - **Playing with someone who isn't home?** Both of you join the same Tailscale network, then share
   the link.
-
----
-- A resumed upload shows what was already on the PS5, and its time left counts only what's still to send.
 - **Stream your PS5 to YouTube, Twitch, Kick or Facebook, straight from Play (For #635).** A new
   **Stream** button on the Play bar (the one with the red dot) opens **Go live**: add a site,
   paste its stream key (each site's form says where to find it), and press Go live. Several
@@ -81,11 +62,18 @@ What's new in ps5upload, written for humans.
   a **Test without going public** switch (on by default) to try it first.
 - **Stream with OBS instead.** The Stream panel's **OBS** tab gives a link to the live stream on
   this computer, with the four steps to add it in OBS as a Media Source, for your own scenes and
-  overlays. The feed starts at a keyframe, asks the PS5 for one every 2 seconds while OBS reads
-  it, and holds back damaged frames after a network loss until the picture is clean again.
-  Scripts can read it too: `GET /api/ps5/rp/live.ts` (see AUTOMATION.md).
+  overlays. The stream starts at a keyframe and has one every 2 seconds (the interval streaming
+  sites ask for), and damaged frames after a network loss are held back until the picture is
+  clean again. Scripts can read it too: `GET /api/ps5/rp/live.ts` (see AUTOMATION.md).
 - **Play › Settings › Picture › Bitrate.** Choose the video bitrate the PS5 streams at (Auto is
   15 Mbps at 1080p, as before): lower it for a busy network, or for a streaming site's limit.
+- **Uploads keep their speed after a hiccup, and resumed uploads are no longer slow.** When the
+  upload tried one more connection and it didn't help, closing that connection was counted as a
+  failure, which closed another, and so on: one try could take an upload down to a single
+  connection and small pieces, and on Wi-Fi it stayed there. Measured on a shared 12 MB/s link, a
+  fresh upload went from 9.4 to 12.1 MB/s and a resumed one from 8.0 to 11.5 MB/s. (AVA1 1.0.6.)
+- **A resumed upload shows what was already on the PS5,** and its time left counts only what's
+  still to send.
 
 ## 10.7.6
 
