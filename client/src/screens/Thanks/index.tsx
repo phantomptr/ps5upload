@@ -1,8 +1,7 @@
 // Thanks & Support (/thanks, in the sidebar under Bug Report): a thank-you to everyone who
 // supported PS5Upload, and the ways to support it (Ko-fi, or crypto straight to the owner's
 // wallet). The supporters list comes from scripts/supporters.mjs, run on the owner's computer
-// over a Ko-fi export: only names and a tier are kept (no amounts, emails or messages), and the
-// tiers are told apart by colour alone.
+// over a Ko-fi export: only the names are kept, most first (no amounts, emails or messages).
 
 import { useMemo, useState } from "react";
 import qrcode from "qrcode-generator";
@@ -14,18 +13,9 @@ import supporters from "../../data/supporters.json";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { useTr } from "../../state/lang";
 
-export type Tier = "champion" | "hero" | "friend" | "supporter";
-
-/** Highest first; each tier's colour (its card's edge and glow, and its names' tint). */
-export const TIERS: ReadonlyArray<{ id: Tier; key: string; fallback: string; color: string }> = [
-  { id: "champion", key: "thanks_tier_champion", fallback: "Tier 4", color: "#e0a91b" },
-  { id: "hero", key: "thanks_tier_hero", fallback: "Tier 3", color: "#9b6bdf" },
-  { id: "friend", key: "thanks_tier_friend", fallback: "Tier 2", color: "#3d8fe0" },
-  { id: "supporter", key: "thanks_tier_supporter", fallback: "Tier 1", color: "#3fae6a" },
-];
-
 export interface SupporterList {
-  tiers: Partial<Record<Tier, string[]>>;
+  /** Most first (scripts/supporters.mjs keeps only the order). */
+  names: string[];
   anonymous: number;
 }
 
@@ -35,8 +25,7 @@ const KOFI = "Ko-fi";
 
 export default function ThanksScreen({ list = supporters as SupporterList }: { list?: SupporterList }) {
   const tr = useTr();
-  const shown = TIERS.map((t) => ({ ...t, names: list.tiers[t.id] ?? [] })).filter((t) => t.names.length > 0);
-  const named = shown.reduce((n, t) => n + t.names.length, 0);
+  const named = list.names.length;
   return (
     <div className="app-page mx-auto max-w-5xl space-y-8 pb-10" data-testid="thanks">
       {/* Hero: the thank-you first, the counts (people, never money). */}
@@ -81,16 +70,21 @@ export default function ThanksScreen({ list = supporters as SupporterList }: { l
         </div>
       </section>
 
-      {/* The wall: a card per tier. */}
-      <section aria-labelledby="thanks-wall" className="space-y-3">
+      {/* The wall: everyone, most first, one list. */}
+      <section aria-labelledby="thanks-wall" className="space-y-4">
         <SectionTitle id="thanks-wall" icon={<Heart size={16} />}>
           {tr("thanks_wall_title", undefined, "Wall of thanks")}
         </SectionTitle>
-        <div className="grid gap-4 md:grid-cols-2">
-          {shown.map((t) => (
-            <TierCard key={t.id} id={t.id} title={tr(t.key, undefined, t.fallback)} color={t.color} names={t.names} />
+        <ul className="flex flex-wrap justify-center gap-2" data-testid="thanks-names">
+          {list.names.map((name) => (
+            <li
+              key={name}
+              className="rounded-full border border-[color-mix(in_srgb,#ff3d6e_35%,transparent)] bg-[color-mix(in_srgb,#ff3d6e_8%,transparent)] px-3.5 py-1.5 text-sm"
+            >
+              {name}
+            </li>
           ))}
-        </div>
+        </ul>
         {list.anonymous > 0 && (
           <p className="pt-2 text-center text-sm text-[var(--color-muted)]" data-testid="thanks-anonymous">
             {tr(
@@ -302,43 +296,5 @@ function Qr({ text, label }: { text: string; label: string }) {
     <svg viewBox={`0 0 ${n} ${n}`} role="img" aria-label={label} className="block h-36 w-36 rounded-xl bg-white" shapeRendering="crispEdges">
       <path d={path} fill="#111" />
     </svg>
-  );
-}
-
-function TierCard({ id, title, color, names }: { id: Tier; title: string; color: string; names: string[] }) {
-  return (
-    <section
-      aria-label={title}
-      data-testid={`thanks-${id}`}
-      className={`relative overflow-hidden rounded-[var(--radius-panel)] border bg-[var(--color-surface-raised)] p-5 shadow-[var(--edge-highlight),var(--shadow-1)] ${id === "champion" ? "md:col-span-2" : ""}`}
-      style={{ borderColor: `color-mix(in srgb, ${color} 45%, var(--color-border))` }}
-    >
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 h-24"
-        style={{ background: `linear-gradient(180deg, color-mix(in srgb, ${color} 16%, transparent), transparent)` }}
-      />
-      <div className="relative mb-3 flex items-center gap-2">
-        <span className="h-3 w-3 rounded-full" style={{ background: color, boxShadow: `0 0 12px ${color}` }} aria-hidden />
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <span className="ms-auto rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ color, background: `color-mix(in srgb, ${color} 14%, transparent)` }}>
-          {names.length}
-        </span>
-      </div>
-      <ul className="relative flex flex-wrap gap-2">
-        {names.map((name) => (
-          <li
-            key={name}
-            className={`rounded-full border px-3 py-1 ${id === "champion" ? "text-base font-semibold" : "text-sm"}`}
-            style={{
-              borderColor: `color-mix(in srgb, ${color} 55%, transparent)`,
-              background: `color-mix(in srgb, ${color} 12%, transparent)`,
-            }}
-          >
-            {name}
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }

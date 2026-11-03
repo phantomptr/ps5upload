@@ -1126,35 +1126,13 @@ code {
   user-select: all;
 }
 .coin-warn { color: var(--warn); font-size: 13px; }
-.thanks-wall { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-@media (max-width: 760px) { .thanks-wall { grid-template-columns: 1fr; } }
-.tier {
-  position: relative;
-  overflow: hidden;
-  padding: 18px 20px;
-  border: 1px solid color-mix(in srgb, var(--tier) 45%, var(--line));
-  border-radius: var(--radius-big);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--tier) 14%, transparent), transparent 96px), var(--card);
-}
-.tier-champion { grid-column: 1 / -1; }
-.tier h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 15px; }
-.tier .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--tier); box-shadow: 0 0 12px var(--tier); }
-.tier .count {
-  margin-inline-start: auto;
-  padding: 1px 8px;
+.thanks-wall ul { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.thanks-wall li {
+  padding: 6px 14px;
+  border: 1px solid rgb(255 61 110 / 0.35);
   border-radius: 999px;
-  font-size: 12px;
-  color: var(--tier);
-  background: color-mix(in srgb, var(--tier) 14%, transparent);
-}
-.tier ul { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.tier li {
-  padding: 4px 12px;
-  border: 1px solid color-mix(in srgb, var(--tier) 55%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--tier) 12%, transparent);
+  background: rgb(255 61 110 / 0.08);
   font-size: 14px;
 }
-.tier-champion li { font-size: 16px; font-weight: 600; }
 .thanks-anon { margin-top: 18px; text-align: center; }
 .thanks-note { text-align: center; }

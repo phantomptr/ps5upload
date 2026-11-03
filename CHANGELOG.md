@@ -86,8 +86,8 @@ What's new in ps5upload, written for humans.
   My iPhone, your downloads or any other app's folder, not only PS5Upload's own folder. Folders
   are still picked with the app's own browser.
 - **Thanks & Support, in the sidebar under Bug Report.** A thank-you to everyone who has
-  supported PS5Upload: a wall of names by tier (each its own colour, no amounts shown or kept),
-  with the anonymous ones counted. And the ways to support it: Ko-fi (card or PayPal), or Bitcoin,
+  supported PS5Upload: a wall of names, most support first (no amounts shown or kept), with the
+  anonymous ones counted. And the ways to support it: Ko-fi (card or PayPal), or Bitcoin,
   Ethereum, Solana or XRP straight to my wallet, each with its QR code, a Copy button and the one
   network to send it on. In the apps, the web UI, on the website and in the README. Home's heart
   button opens it.

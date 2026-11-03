@@ -378,12 +378,6 @@ const CRYPTO = [
   { id: "sol", coin: "SOL", name: "Solana", network: "Solana", color: "#9945ff", address: "G1q5XCCn3mePYpcx7uY17CwDsUaAZTcty56huUDvVqjG" },
   { id: "xrp", coin: "XRP", name: "XRP", network: "XRP Ledger", color: "#2a9df4", address: "rEVq3si3sm9NuWNuZiUZFKsUtwC3w9SrjR" },
 ];
-const TIERS = [
-  ["champion", () => t("thanks.tier.champion", "Tier 4"), "#e0a91b"],
-  ["hero", () => t("thanks.tier.hero", "Tier 3"), "#9b6bdf"],
-  ["friend", () => t("thanks.tier.friend", "Tier 2"), "#3d8fe0"],
-  ["supporter", () => t("thanks.tier.supporter", "Tier 1"), "#3fae6a"],
-];
 
 function showCoin(id) {
   const c = CRYPTO.find((x) => x.id === id) ?? CRYPTO[0];
@@ -430,22 +424,15 @@ function setupThanks() {
   });
 }
 
-/** The wall, from supporters.json (names and a tier only: scripts/supporters.mjs). */
+/** The wall, from supporters.json (names only, most first: scripts/supporters.mjs). */
 async function loadSupporters() {
   try {
     const res = await fetch("supporters.json", { cache: "no-cache" });
     if (!res.ok) return;
     const list = await res.json();
-    const shown = TIERS.map(([id, label, color]) => ({ id, label, color, names: list.tiers?.[id] ?? [] })).filter((x) => x.names.length);
-    const named = shown.reduce((n, x) => n + x.names.length, 0);
-    document.getElementById("thanks-wall").innerHTML = shown
-      .map(
-        (x) => `<section class="tier tier-${x.id}" style="--tier:${x.color}">
-          <h4><span class="dot"></span>${esc(x.label())}<span class="count">${x.names.length}</span></h4>
-          <ul>${x.names.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>
-        </section>`,
-      )
-      .join("");
+    const names = Array.isArray(list.names) ? list.names : [];
+    const named = names.length;
+    document.getElementById("thanks-wall").innerHTML = `<ul>${names.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`;
     const anon = Number(list.anonymous) || 0;
     document.getElementById("thanks-counts").innerHTML =
       `<span>♥ ${esc(t("thanks.count_named", "{n} supporters", { n: named }))}</span>` +

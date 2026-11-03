@@ -3,10 +3,10 @@ import { expect, test } from "@playwright/test";
 
 const supporters = JSON.parse(
   readFileSync(new URL("../src/data/supporters.json", import.meta.url), "utf8"),
-) as { tiers: Record<string, string[]>; anonymous: number };
+) as { names: string[]; anonymous: number };
 
-// Help › Thank you: every supporter by tier, the anonymous ones counted, never an amount.
-test("the Thank you tab lists supporters by tier, without amounts", async ({ page }) => {
+// Thanks & Support: every supporter, most first, the anonymous ones counted, never an amount.
+test("Thanks & Support lists supporters most first, without amounts", async ({ page }) => {
   await page.route(
     (url) => url.pathname.startsWith("/api/"),
     (route) => route.fulfill({ contentType: "application/json", body: "{}" }),
@@ -14,10 +14,8 @@ test("the Thank you tab lists supporters by tier, without amounts", async ({ pag
   await page.goto("/thanks", { waitUntil: "domcontentloaded" });
   const thanks = page.getByTestId("thanks");
   await expect(thanks).toBeVisible({ timeout: 30_000 });
-  for (const [tier, names] of Object.entries(supporters.tiers)) {
-    if (!names.length) continue;
-    await expect(page.getByTestId(`thanks-${tier}`)).toContainText(names[0]);
-  }
+  // Everyone, most first.
+  await expect(page.getByTestId("thanks-names").locator("li")).toHaveText(supporters.names);
   await expect(page.getByTestId("thanks-anonymous")).toContainText(String(supporters.anonymous));
   await expect(thanks).not.toContainText(/\$|USD|€|\d+\.\d\d/);
   // Crypto: each coin's address, a copy button and its network.
