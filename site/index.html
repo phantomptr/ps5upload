@@ -83,9 +83,10 @@
         <a href="#guide" data-i18n="nav.guide">Guide</a>
         <a href="#download" data-i18n="nav.download">Download</a>
         <a href="#news" data-i18n="nav.news">News</a>
+        <a href="#thanks" data-i18n="nav.thanks">Thanks &amp; Support</a>
       </nav>
       <div class="top-actions">
-        <a class="btn small coffee" href="https://ko-fi.com/B0B81S0WUA" data-i18n-attr="title:nav.coffee_title" title="PS5Upload is free. A coffee for me, or tokens for the AI that writes the code, keeps it going.">☕ <span data-i18n="nav.coffee">Coffee or tokens</span></a>
+        <a class="btn small coffee" href="#thanks" data-i18n-attr="title:nav.coffee_title" title="PS5Upload is free. A coffee for me, or tokens for the AI that writes the code, keeps it going.">☕ <span data-i18n="nav.coffee">Coffee or tokens</span></a>
         <label class="lang" data-i18n-attr="title:nav.language" title="Language">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm-9-9h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3Z"/></svg>
           <select id="lang" data-i18n-attr="aria-label:nav.language" aria-label="Language"></select>
@@ -582,6 +583,59 @@
       </div>
     </section>
 
+    <section class="section" id="thanks" aria-labelledby="thanks-title">
+      <div class="wrap">
+        <div class="thanks-hero">
+          <span class="thanks-heart" aria-hidden="true">♥</span>
+          <h2 id="thanks-title" data-i18n="thanks.title">Thank you</h2>
+          <p class="section-lead" data-i18n="thanks.intro">PS5Upload is free, and it keeps getting better because of the people below. Every coffee pays for test hardware, late nights and the next release. Thank you, all of you.</p>
+          <div class="thanks-counts" id="thanks-counts"></div>
+        </div>
+
+        <h3 class="thanks-sub" data-i18n="thanks.support">Support PS5Upload</h3>
+        <div class="thanks-ways">
+          <div class="card thanks-kofi">
+            <div class="thanks-way-head">
+              <span class="thanks-icon kofi" aria-hidden="true">☕</span>
+              <div>
+                <h3>Ko-fi</h3>
+                <p class="muted" data-i18n="thanks.kofi_sub">Card or PayPal, once or monthly</p>
+              </div>
+            </div>
+            <p data-i18n="thanks.kofi_body">The easiest way: a coffee, or whatever you like. Your name joins the wall with the next release (or stay anonymous).</p>
+            <a class="btn coffee-btn" href="https://ko-fi.com/B0B81S0WUA">♥ <span data-i18n="nav.coffee">Coffee or tokens</span></a>
+          </div>
+          <div class="card thanks-crypto">
+            <div class="thanks-way-head">
+              <div>
+                <h3 data-i18n="thanks.crypto_title">Crypto</h3>
+                <p class="muted" data-i18n="thanks.crypto_sub">Straight to my hardware wallet</p>
+              </div>
+              <div class="coin-tabs" role="tablist" id="coin-tabs"></div>
+            </div>
+            <div class="coin-panel" role="tabpanel">
+              <img id="coin-qr" class="coin-qr" src="assets/donate/btc.svg" width="148" height="148" alt="QR code">
+              <div class="coin-info">
+                <p class="coin-name" id="coin-name">Bitcoin</p>
+                <p class="muted small" id="coin-network">Network: Bitcoin</p>
+                <div class="coin-address-row">
+                  <code id="coin-address" class="coin-address">bc1q36gxkvd3wfxy9azm8hft3rru9m6m9hjvn7u20n</code>
+                  <button type="button" class="btn small" id="coin-copy" data-i18n="thanks.copy">Copy</button>
+                </div>
+                <p class="coin-warn" id="coin-warn">Send only BTC on the Bitcoin network. Anything else can't be recovered.</p>
+                <p class="muted small" id="coin-note" hidden data-i18n="thanks.xrp_no_tag">No destination tag needed: this is my own wallet, not an exchange.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <h3 class="thanks-sub" data-i18n="thanks.wall">Wall of thanks</h3>
+        <div class="thanks-wall" id="thanks-wall"></div>
+        <p class="muted thanks-anon" id="thanks-anon"></p>
+        <p class="muted small thanks-note" data-i18n="thanks.note">Names are shown as you gave them on Ko-fi, and the list grows with each release. Want yours changed or taken off? Just say so on Discord.</p>
+      </div>
+    </section>
+
     <section class="section alt" id="community" aria-labelledby="community-title">
       <div class="wrap">
         <h2 id="community-title" data-i18n="community.title">Community</h2>
@@ -598,7 +652,7 @@
             <h3>X</h3>
             <p data-i18n="community.x">Follow @phantomptr for releases.</p>
           </a>
-          <a class="card link-card" href="https://ko-fi.com/B0B81S0WUA">
+          <a class="card link-card" href="#thanks">
             <h3 data-i18n="community.coffee.title">Coffee or tokens</h3>
             <p data-i18n="community.coffee.text">PS5Upload is free. If it saves you time, a coffee for me or AI tokens for the code keeps it going, and please support the people behind the other tools you use too.</p>
           </a>

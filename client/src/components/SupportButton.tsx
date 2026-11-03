@@ -23,14 +23,14 @@ export function SupportButton({ className = "" }: { className?: string }) {
   );
 }
 
-/** The same warm button, to Help › Thank you (where the Ko-fi button lives): on Home. */
+/** The same warm button, to Thanks & Support (where Ko-fi and crypto live): on Home. */
 export function ThanksButton({ className = "" }: { className?: string }) {
   const tr = useTr();
   const navigate = useNavigate();
   return (
     <button
       type="button"
-      onClick={() => navigate("/faq?tab=thanks")}
+      onClick={() => navigate("/thanks")}
       className={`support-button inline-flex min-h-9 items-center gap-1.5 whitespace-nowrap rounded-full px-4 text-xs font-semibold ${className}`}
     >
       <Heart size={13} aria-hidden fill="currentColor" className="support-heart shrink-0" />

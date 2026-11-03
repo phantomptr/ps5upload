@@ -368,10 +368,102 @@ function renderNews(list) {
       : "");
 }
 
+// ── Thanks & Support ──────────────────────────────────────────────────────
+
+// Public receiving addresses (the owner's hardware wallet), the same as the app's
+// client/src/data/donate.ts. QR codes are assets/donate/<id>.svg.
+const CRYPTO = [
+  { id: "btc", coin: "BTC", name: "Bitcoin", network: "Bitcoin", color: "#f7931a", address: "bc1q36gxkvd3wfxy9azm8hft3rru9m6m9hjvn7u20n" },
+  { id: "eth", coin: "ETH", name: "Ethereum", network: "Ethereum", color: "#627eea", address: "0x2e787654db543B69FB011E16995C274dFAfc2286" },
+  { id: "sol", coin: "SOL", name: "Solana", network: "Solana", color: "#9945ff", address: "G1q5XCCn3mePYpcx7uY17CwDsUaAZTcty56huUDvVqjG" },
+  { id: "xrp", coin: "XRP", name: "XRP", network: "XRP Ledger", color: "#2a9df4", address: "rEVq3si3sm9NuWNuZiUZFKsUtwC3w9SrjR" },
+];
+const TIERS = [
+  ["champion", () => t("thanks.tier.champion", "Champions"), "#e0a91b"],
+  ["hero", () => t("thanks.tier.hero", "Heroes"), "#9b6bdf"],
+  ["friend", () => t("thanks.tier.friend", "Friends"), "#3d8fe0"],
+  ["supporter", () => t("thanks.tier.supporter", "Supporters"), "#3fae6a"],
+];
+
+function showCoin(id) {
+  const c = CRYPTO.find((x) => x.id === id) ?? CRYPTO[0];
+  document.querySelectorAll("#coin-tabs button").forEach((b) => {
+    const on = b.dataset.coin === c.id;
+    b.setAttribute("aria-selected", String(on));
+    b.style.background = on ? c.color : "";
+    b.style.color = on ? "#fff" : "";
+  });
+  const qr = document.getElementById("coin-qr");
+  qr.src = `assets/donate/${c.id}.svg`;
+  qr.alt = `${c.name} ${t("thanks.qr", "QR code")}`;
+  qr.style.borderColor = c.color;
+  const name = document.getElementById("coin-name");
+  name.textContent = c.name;
+  name.style.color = c.color;
+  document.getElementById("coin-network").textContent = t("thanks.network", "Network: {network}", { network: c.network });
+  document.getElementById("coin-address").textContent = c.address;
+  document.getElementById("coin-warn").textContent = t(
+    "thanks.network_only",
+    "Send only {coin} on the {network} network. Anything else can't be recovered.",
+    { coin: c.coin, network: c.network },
+  );
+  document.getElementById("coin-note").hidden = c.id !== "xrp";
+}
+
+function setupThanks() {
+  const tabs = document.getElementById("coin-tabs");
+  tabs.innerHTML = CRYPTO.map((c) => `<button type="button" role="tab" data-coin="${c.id}">${c.coin}</button>`).join("");
+  tabs.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-coin]");
+    if (b) showCoin(b.dataset.coin);
+  });
+  showCoin("btc");
+  const copy = document.getElementById("coin-copy");
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(document.getElementById("coin-address").textContent);
+      copy.textContent = t("thanks.copied", "Copied");
+      setTimeout(() => (copy.textContent = t("thanks.copy", "Copy")), 1500);
+    } catch {
+      /* the address is on screen to copy by hand */
+    }
+  });
+}
+
+/** The wall, from supporters.json (names and a tier only: scripts/supporters.mjs). */
+async function loadSupporters() {
+  try {
+    const res = await fetch("supporters.json", { cache: "no-cache" });
+    if (!res.ok) return;
+    const list = await res.json();
+    const shown = TIERS.map(([id, label, color]) => ({ id, label, color, names: list.tiers?.[id] ?? [] })).filter((x) => x.names.length);
+    const named = shown.reduce((n, x) => n + x.names.length, 0);
+    document.getElementById("thanks-wall").innerHTML = shown
+      .map(
+        (x) => `<section class="tier tier-${x.id}" style="--tier:${x.color}">
+          <h4><span class="dot"></span>${esc(x.label())}<span class="count">${x.names.length}</span></h4>
+          <ul>${x.names.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>
+        </section>`,
+      )
+      .join("");
+    const anon = Number(list.anonymous) || 0;
+    document.getElementById("thanks-counts").innerHTML =
+      `<span>♥ ${esc(t("thanks.count_named", "{n} supporters", { n: named }))}</span>` +
+      (anon ? `<span>✦ ${esc(t("thanks.count_anonymous", "+{n} anonymous", { n: anon }))}</span>` : "");
+    document.getElementById("thanks-anon").textContent = anon
+      ? t("thanks.anonymous", "…and {n} more who chose to stay anonymous. Thank you too.", { n: anon })
+      : "";
+  } catch {
+    /* the support ways still show */
+  }
+}
+
 (async () => {
   await loadWords();
   translatePage();
   root.classList.remove("i18n-wait");
+  setupThanks();
+  void loadSupporters();
   try {
     const list = await loadReleases();
     if (!list.length) throw new Error("no releases");

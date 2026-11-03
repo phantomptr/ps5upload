@@ -1,17 +1,16 @@
-import { Heart, HelpCircle, Info, Sparkles } from "lucide-react";
+import { HelpCircle, Info, Sparkles } from "lucide-react";
 
 import TabbedShell, { type TabbedShellTab } from "../../layout/TabbedShell";
 import { useTr } from "../../state/lang";
 import AboutScreen from "../About";
 import ChangelogScreen from "../Changelog";
 import FAQScreen from "../FAQ";
-import ThanksScreen from "./Thanks";
 
-type TabId = "faq" | "about" | "whats-new" | "thanks";
+type TabId = "faq" | "about" | "whats-new";
 
 /**
- * Help (/faq): the FAQ, About, the full release notes and Thank you as four tabs
- * (`?tab=faq|about|whats-new|thanks`). Each tab is the old screen's body, unchanged; this header
+ * Help (/faq): the FAQ, About and the full release notes as three tabs
+ * (`?tab=faq|about|whats-new`). Each tab is the old screen's body, unchanged; this header
  * replaces theirs. The FAQ's own links (`?q=`, `?topic=`, `?item=`) open the FAQ tab.
  */
 export default function HelpScreen() {
@@ -40,7 +39,6 @@ export default function HelpScreen() {
         "Release notes for every ps5upload version up to this one, bundled with the app. Newer releases and their downloads are on GitHub.",
       ),
     },
-    { id: "thanks", icon: Heart, key: "thanks_tab", fallback: "Thank you" },
   ];
 
   return (
@@ -55,8 +53,6 @@ export default function HelpScreen() {
           <AboutScreen embedded />
         ) : id === "whats-new" ? (
           <ChangelogScreen embedded />
-        ) : id === "thanks" ? (
-          <ThanksScreen />
         ) : (
           <FAQScreen embedded />
         )

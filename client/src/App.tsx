@@ -64,6 +64,7 @@ const CleanupScreen = lazyWithReload(() => import("./screens/Cleanup"));
 const HelpScreen = lazyWithReload(() => import("./screens/Help"));
 const ActivityLogsScreen = lazyWithReload(() => import("./screens/ActivityLogs"));
 const BugReportScreen = lazyWithReload(() => import("./screens/BugReport"));
+const ThanksScreen = lazyWithReload(() => import("./screens/Thanks"));
 
 /**
  * Suspense fallback. Deliberately minimal — a spinner would
@@ -541,6 +542,14 @@ function AppRoutes({ location }: { location: Location }) {
         <Route path="/logs" element={<LogsToTasks />} />
         <Route path="/audit-log" element={<Navigate to="/tasks?tab=audit" replace />} />
         <Route path="/about" element={<Navigate to="/faq?tab=about" replace />} />
+        <Route
+          path="/thanks"
+          element={
+            <Suspense fallback={<ScreenLoader />}>
+              <ThanksScreen />
+            </Suspense>
+          }
+        />
         <Route
           path="/bug-report"
           element={

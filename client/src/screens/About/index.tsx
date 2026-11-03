@@ -101,7 +101,7 @@ export default function AboutScreen({ embedded = false }: { embedded?: boolean }
         </div>
         <button
           type="button"
-          onClick={() => navigate("/faq?tab=thanks")}
+          onClick={() => navigate("/thanks")}
           className="mt-3 text-xs text-[var(--color-muted)] underline-offset-2 hover:text-[var(--color-text)] hover:underline"
           data-testid="about-thanks"
         >

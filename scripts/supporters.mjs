@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The Thank you page's list (Help › Thank you, and README's Supporters section) from a Ko-fi
+// The Thanks & Support page's list (the app, the website and README) from a Ko-fi
 // transactions export. Run it on your own computer:
 //
 //   node scripts/supporters.mjs ~/Downloads/Transaction_All.csv
@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "client/src/data/supporters.json");
+const SITE_OUT = join(ROOT, "site/supporters.json");
 const README = join(ROOT, "README.md");
 const OWNER = "phantomptr";
 const ANONYMOUS = new Set(["", "ko-fi supporter", "supporter", "someone", "anonymous"]);
@@ -99,7 +100,9 @@ for (const [name, total] of totals) {
 }
 for (const t of Object.keys(tiers)) tiers[t].sort((a, b) => a.localeCompare(b, "en", { sensitivity: "base" }));
 
-writeFileSync(OUT, `${JSON.stringify({ tiers, anonymous }, null, 2)}\n`);
+const json = `${JSON.stringify({ tiers, anonymous }, null, 2)}\n`;
+writeFileSync(OUT, json);
+writeFileSync(SITE_OUT, json);
 
 // README: the same names between the markers.
 const lines = ["<!-- supporters:start (scripts/supporters.mjs) -->"];
@@ -115,4 +118,4 @@ if (!block.test(readme)) throw new Error("README.md has no supporters markers");
 writeFileSync(README, readme.replace(block, lines.join("\n")));
 
 const n = Object.values(tiers).reduce((a, l) => a + l.length, 0);
-console.log(`${n} named supporters, ${anonymous} anonymous tips → client/src/data/supporters.json and README.md`);
+console.log(`${n} named supporters, ${anonymous} anonymous tips → client/src/data/supporters.json, site/supporters.json and README.md`);

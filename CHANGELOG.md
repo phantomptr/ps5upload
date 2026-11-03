@@ -85,9 +85,12 @@ What's new in ps5upload, written for humans.
 - **Add files on iPhone and iPad opens the Files sheet (For #644).** Pick from iCloud Drive, On
   My iPhone, your downloads or any other app's folder, not only PS5Upload's own folder. Folders
   are still picked with the app's own browser.
-- **Help › Thank you.** Everyone who has supported PS5Upload on Ko-fi, by tier (each its own
-  colour), and the ones who chose to stay anonymous counted. No amounts are shown or kept. The
-  same list is in the README.
+- **Thanks & Support, in the sidebar under Bug Report.** A thank-you to everyone who has
+  supported PS5Upload: a wall of names by tier (each its own colour, no amounts shown or kept),
+  with the anonymous ones counted. And the ways to support it: Ko-fi (card or PayPal), or Bitcoin,
+  Ethereum, Solana or XRP straight to my wallet, each with its QR code, a Copy button and the one
+  network to send it on. In the apps, the web UI, on the website and in the README. Home's heart
+  button opens it.
 - **Send an archive as it is, without unpacking it.** A .zip, .7z or .rar dropped on Upload was
   always unpacked onto the PS5, which broke anything that wanted the archive itself, such as a
   jailbreak update. The archive card now asks what should happen to it: unpack it into a folder,

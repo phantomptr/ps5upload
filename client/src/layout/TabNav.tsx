@@ -51,7 +51,7 @@ const TAB_DEFS: TabDef[] = [
     icon: LayoutDashboard,
     to: "/home",
     sections: ["nav_section_connect", "nav_section_app"],
-    extra: ["/home", "/dashboard", "/first-run", "/bug-report"],
+    extra: ["/home", "/dashboard", "/first-run", "/bug-report", "/thanks"],
   },
   {
     id: "games",

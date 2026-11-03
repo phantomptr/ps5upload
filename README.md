@@ -560,10 +560,23 @@ If you find this tool useful, consider buying me a coffee!
 
 [![Support me on Ko-fi](https://storage.ko-fi.com/cdn/kofi3.png?v=3)](https://ko-fi.com/B0B81S0WUA)
 
+**Crypto**, straight to my hardware wallet. Send each coin only on its own network; anything
+else can't be recovered.
+
+| Coin | Network | Address |
+| --- | --- | --- |
+| BTC | Bitcoin | `bc1q36gxkvd3wfxy9azm8hft3rru9m6m9hjvn7u20n` |
+| ETH | Ethereum | `0x2e787654db543B69FB011E16995C274dFAfc2286` |
+| SOL | Solana | `G1q5XCCn3mePYpcx7uY17CwDsUaAZTcty56huUDvVqjG` |
+| XRP | XRP Ledger | `rEVq3si3sm9NuWNuZiUZFKsUtwC3w9SrjR` (no destination tag needed) |
+
+QR codes for each are on [the website](https://ps5upload.phantomptr.com/#thanks) and in the app
+under **Thanks & Support**.
+
 ### Thank you
 
-Thank you to everyone who has supported PS5Upload. Every coffee keeps it going. (The app lists
-you too, under Help › Thank you.)
+Thank you to everyone who has supported PS5Upload. Every coffee keeps it going. (The app and
+the website list you too, under Thanks & Support.)
 
 <!-- supporters:start (scripts/supporters.mjs) -->
 **🟡 Champions:** BigPapii420 · clincher · Ice · Marv530e · San
