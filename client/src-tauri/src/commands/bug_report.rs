@@ -785,6 +785,19 @@ diagnostics to help debug an issue — no games or app data.\n\
                        safety reserve, the installed title list, and which\n\
                        service ports (loader :9021, DPI :9040, ours) were\n\
                        answering.\n\
+                       Also what each feature was doing (engine.features):\n\
+                       Remote Play (the session running and the last one's\n\
+                       start, stages and end, e.g. a refused 80108b26), Play\n\
+                       Together (open, guests' stages, round trip, skipped\n\
+                       pictures), phone controllers and watch party (counts,\n\
+                       whether a Tailscale address exists), Go live (service\n\
+                       and server host per destination), saved remote\n\
+                       connections (protocol, server, share), the mesh; the\n\
+                       console's add-ons (ps5.features: Hush, cheats engine,\n\
+                       the console's network shares); ps5upload:// links\n\
+                       (diagnostic.app_links: registered?, the last kind);\n\
+                       and whether Detailed logs were on\n\
+                       (diagnostic.settings.detailed_logs).\n\
   logs/app.jsonl       The app's unified log for the selected time window\n\
                        (one JSON object per line: ts, level, source, message).\n\
   logs/engine.log      Full transfer-engine log (crash-survivable).\n\
@@ -802,7 +815,10 @@ diagnostics to help debug an issue — no games or app data.\n\
 \n\
 IP addresses (numbered, the same number in every file), MAC addresses, home\n\
 folders and the console serial are redacted by default; pairing keys, tokens\n\
-and account ids are always removed. Review screenshots before sharing.\n";
+and account ids are always removed. Feature states are counts and names only:\n\
+never stream keys or stream URLs, invite keys or codes, resume tokens, phone\n\
+link keys, passcodes, share passwords or user names. Review screenshots before\n\
+sharing.\n";
 
 #[cfg(test)]
 mod tests {

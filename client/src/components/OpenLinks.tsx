@@ -10,6 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { appLinkRoute } from "../lib/appLinks";
+import { noteAppLinks } from "../lib/appLinkDiag";
 
 /** Where an opened link leads in the app, or null for one it doesn't know (lib/appLinks). */
 export const openLinkRoute = appLinkRoute;
@@ -23,6 +24,7 @@ export function OpenLinks(): null {
       invoke<string[]>("open_links_take")
         .then((links) => {
           if (!alive) return;
+          noteAppLinks(links);
           // The newest one wins when several arrived at once.
           const route = links.map(openLinkRoute).filter((r): r is string => !!r).pop();
           if (route) navigate(route);

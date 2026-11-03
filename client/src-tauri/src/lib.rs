@@ -221,8 +221,12 @@ pub fn run() {
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 #[cfg(any(windows, target_os = "linux"))]
-                if let Err(e) = app.deep_link().register_all() {
-                    eprintln!("[tauri] could not register ps5upload:// links: {e}");
+                match app.deep_link().register_all() {
+                    Ok(()) => open_links::set_registration(Ok(())),
+                    Err(e) => {
+                        eprintln!("[tauri] could not register ps5upload:// links: {e}");
+                        open_links::set_registration(Err(e.to_string()));
+                    }
                 }
                 if let Ok(Some(urls)) = app.deep_link().get_current() {
                     open_links::push(&urls);
@@ -708,6 +712,7 @@ pub fn run() {
             opened_files::opened_files_take,
             // ── ps5upload:// links (Play Together invites) ───────────
             open_links::open_links_take,
+            open_links::open_links_status,
         ])
         .build(tauri::generate_context!())
         .expect("tauri runtime failed to build");

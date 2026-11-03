@@ -7,7 +7,8 @@ import { useConnectionStore } from "../state/connection";
 import { useInstallSettingsStore } from "../state/installSettings";
 import { usePlayTimeStore } from "../state/playTime";
 import { useUploadSettingsStore } from "../state/uploadSettings";
-import { useDiagSettingsStore } from "../state/diagSettings";
+import { detailedActive, useDiagSettingsStore } from "../state/diagSettings";
+import { appLinkDiag, type AppLinkDiag } from "./appLinkDiag";
 import { useThemeStore } from "../state/theme";
 import { useEditSessionStore } from "../state/editSession";
 
@@ -124,8 +125,16 @@ export interface DiagnosticBundle {
     auto_redeploy_on_wake: boolean;
     system_file_read: boolean;
     log_level: string;
+    /** "Detailed logs" (Logs tab) when the report was made: on, and until when (ISO). While
+     *  on, the engine writes its Remote Play handshake and Play Together detail and debug lines
+     *  are recorded, so a report without them may simply not have that detail. */
+    detailed_logs: { on: boolean; until: string | null };
     theme: string;
   };
+  /** ps5upload:// links (a Play Together invite's or a phone link's "Open in the app"): what
+   *  the page did with the links it was handed. The shell's side (was the scheme registered,
+   *  how many arrived) is added as `shell` by the report builder on desktop. Never a link. */
+  app_links: AppLinkDiag & { shell?: unknown };
   schedules_count: number;
   play_time_titles: number;
   recent_activity: Array<{
@@ -194,7 +203,7 @@ export function buildDiagnosticBundle(opts: {
     typeof b === "number" ? Math.round(b / 1048576) : null;
 
   return {
-    schema: 3,
+    schema: 4,
     generated_at: new Date().toISOString(),
     app_version: opts.appVersion,
     user_agent: typeof navigator !== "undefined" ? navigator.userAgent : "n/a",
@@ -275,8 +284,16 @@ export function buildDiagnosticBundle(opts: {
       auto_redeploy_on_wake: uploadSettings.autoRedeployOnWake,
       system_file_read: uploadSettings.systemFileRead,
       log_level: diagSettings.logLevel,
+      detailed_logs: {
+        on: detailedActive(diagSettings.detailedUntil),
+        until:
+          detailedActive(diagSettings.detailedUntil) && diagSettings.detailedUntil !== null
+            ? new Date(diagSettings.detailedUntil).toISOString()
+            : null,
+      },
       theme: theme.theme,
     },
+    app_links: appLinkDiag(),
     schedules_count: schedules.length,
     // Count distinct (host, title) pairs tracked across all consoles.
     play_time_titles: Object.values(playTimesByHost).reduce(

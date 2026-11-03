@@ -3,6 +3,8 @@ import {
   buildDiagnosticBundle,
   redactHost,
 } from "./diagnosticBundle";
+import { useDiagSettingsStore } from "../state/diagSettings";
+import { noteAppLinks, resetAppLinkDiag } from "./appLinkDiag";
 
 /**
  * Privacy-critical: a regression here would let LAN topology leak
@@ -53,7 +55,7 @@ describe("buildDiagnosticBundle (crash-report enrichment)", () => {
       redact: true,
       trigger: "uncaught-error: boom",
     });
-    expect(b.schema).toBe(3);
+    expect(b.schema).toBe(4);
     expect(b.app_version).toBe("9.9.9");
     expect(b.redacted).toBe(true);
     expect(b.trigger).toBe("uncaught-error: boom");
@@ -137,5 +139,37 @@ describe("buildDiagnosticBundle (schema 3 triage fields)", () => {
   it("reports no edit session when nothing is checked out", () => {
     const b = buildDiagnosticBundle({ appVersion: "1.0.0", redact: true });
     expect(b.edit_session).toBeNull();
+  });
+});
+
+describe("buildDiagnosticBundle (schema 4: detailed logs, app links)", () => {
+  it("says whether Detailed logs were on, and until when", () => {
+    useDiagSettingsStore.setState({ detailedUntil: null });
+    expect(buildDiagnosticBundle({ appVersion: "1", redact: true }).settings.detailed_logs).toEqual({
+      on: false,
+      until: null,
+    });
+    const until = Date.now() + 60_000;
+    useDiagSettingsStore.setState({ detailedUntil: until });
+    const b = buildDiagnosticBundle({ appVersion: "1", redact: true });
+    expect(b.schema).toBe(4);
+    expect(b.settings.detailed_logs).toEqual({ on: true, until: new Date(until).toISOString() });
+    // An end time already past reads as off.
+    useDiagSettingsStore.setState({ detailedUntil: Date.now() - 1 });
+    expect(buildDiagnosticBundle({ appVersion: "1", redact: true }).settings.detailed_logs.on).toBe(false);
+    useDiagSettingsStore.setState({ detailedUntil: null });
+  });
+
+  it("names the kind of ps5upload:// link taken, never the link or its key", () => {
+    resetAppLinkDiag();
+    noteAppLinks([
+      "ps5upload://pad?link=" + encodeURIComponent("http://192.168.1.20:19113/pad#t=0123456789abcdef0123456789abcdef"),
+      "ps5upload://nonsense",
+    ]);
+    const b = buildDiagnosticBundle({ appVersion: "1", redact: true });
+    expect(b.app_links).toMatchObject({ taken: 2, last_kind: "unknown" });
+    expect(JSON.stringify(b.app_links)).not.toContain("0123456789abcdef");
+    expect(JSON.stringify(b.app_links)).not.toContain("ps5upload://");
+    resetAppLinkDiag();
   });
 });

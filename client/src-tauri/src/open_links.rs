@@ -22,6 +22,68 @@ const MAX_HELD: usize = 8;
 
 static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// For a bug report: how the scheme was registered and what arrived (never a link itself).
+#[derive(Clone, Default, serde::Serialize)]
+pub struct LinkStatus {
+    /// "bundle" (the installer or the OS registered it), "registered" (at run time, Windows and
+    /// Linux), or "failed: <why>".
+    pub registration: String,
+    /// ps5upload:// links the system handed over since start.
+    pub received: u64,
+    /// What the last one asked for ("join", "pad", or "other"), and when (Unix ms).
+    pub last_kind: Option<String>,
+    pub last_at_ms: Option<u64>,
+}
+
+static STATUS: Mutex<Option<LinkStatus>> = Mutex::new(None);
+
+fn with_status<R>(f: impl FnOnce(&mut LinkStatus) -> R) -> R {
+    let mut g = STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    f(g.get_or_insert_with(|| LinkStatus {
+        registration: "bundle".into(),
+        ..LinkStatus::default()
+    }))
+}
+
+/// How the scheme registration at start went (Windows and Linux register at run time).
+#[cfg(any(windows, target_os = "linux", test))]
+pub fn set_registration(r: Result<(), String>) {
+    with_status(|s| {
+        s.registration = match r {
+            Ok(()) => "registered".into(),
+            Err(e) => format!("failed: {e}"),
+        }
+    });
+}
+
+/// What a link asks for, by its host part: `ps5upload://join?...` is "join".
+fn kind_of(u: &tauri::Url) -> &'static str {
+    match u.host_str().unwrap_or("").to_ascii_lowercase().as_str() {
+        "join" => "join",
+        "pad" => "pad",
+        _ => "other",
+    }
+}
+
+/// A link of ours arrived: counted with its kind and time.
+fn note_received(u: &tauri::Url) {
+    let kind = kind_of(u);
+    with_status(|s| {
+        s.received += 1;
+        s.last_kind = Some(kind.into());
+        s.last_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis() as u64);
+    });
+}
+
+/// The scheme registration and the links received, for a bug report.
+#[tauri::command]
+pub fn open_links_status() -> LinkStatus {
+    with_status(|s| s.clone())
+}
+
 fn pending() -> std::sync::MutexGuard<'static, Vec<String>> {
     PENDING.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -40,6 +102,7 @@ pub fn push<'a>(urls: impl IntoIterator<Item = &'a tauri::Url>) -> bool {
         }
         held.push(text.to_string());
         added = true;
+        note_received(u);
     }
     added
 }
@@ -90,5 +153,23 @@ mod tests {
         let held = take();
         assert_eq!(held.len(), MAX_HELD);
         assert!(held[0].ends_with("n=2"));
+    }
+
+    /// The status says what kind of link came, never the link.
+    #[test]
+    fn the_status_names_the_kind_never_the_link() {
+        // Not through push(): the held links are another test's.
+        let pad =
+            url("ps5upload://pad?link=http%3A%2F%2F10.0.0.2%3A19113%2Fpad%23t%3Dsecretkey0123");
+        note_received(&pad);
+        let st = open_links_status();
+        assert_eq!(st.last_kind.as_deref(), Some("pad"));
+        assert!(st.received >= 1);
+        let text = serde_json::to_string(&st).unwrap();
+        assert!(!text.contains("secretkey"), "{text}");
+        set_registration(Err("no xdg-mime".into()));
+        assert_eq!(open_links_status().registration, "failed: no xdg-mime");
+        assert_eq!(kind_of(&url("ps5upload://join?link=x")), "join");
+        assert_eq!(kind_of(&url("ps5upload://elsewhere")), "other");
     }
 }

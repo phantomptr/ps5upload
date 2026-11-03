@@ -26,6 +26,16 @@ import { redactHost } from "./diagnosticBundle";
  *                 disk, so a failure from before this session still rides
  *                 along. An array, not a host-keyed map: redaction turns every
  *                 IPv4 into the same `<IPv4>`, which would collapse consoles.
+ *  - `features` — what the engine's features are doing (`/api/diag/features`):
+ *                 Remote Play (the running session and the last one's start,
+ *                 stages and end, e.g. a refused 80108b26), Play Together
+ *                 (open, guests' stages, rtt, skipped pictures), phone
+ *                 controllers and the watch party (counts; whether a Tailscale
+ *                 address exists), Go live (service + server host per
+ *                 destination), saved remote connections (protocol, server,
+ *                 share), the mesh, and whether Detailed logs are on. The
+ *                 engine builds it without keys, codes, tokens, names,
+ *                 passwords or stream URLs.
  */
 
 /** Per-request budget. The engine is loopback and answers from memory; a
@@ -61,6 +71,9 @@ export interface EngineDiagnostics {
   /** The newest per-job telemetry records, newest first: where each job's time went and how it
    *  ended. Local to the engine, holding no address or path (a hash names the console). */
   job_summaries: unknown[] | null;
+  /** The engine's feature summary (see above); null when it could not be read (an older
+   *  engine answers 404, named in `errors`). */
+  features: Record<string, unknown> | null;
   /** Per-probe failures, so "not collected" is never read as "nothing there". */
   errors: Record<string, string>;
 }
@@ -77,13 +90,14 @@ export async function collectEngineDiagnostics(
       return null;
     }
   }
-  const [jobs, sessions, summaries] = await Promise.all([
+  const [jobs, sessions, summaries, features] = await Promise.all([
     probe<unknown[]>("jobs", "/api/jobs"),
     probe<unknown[]>("install_sessions", "/api/pkg/install/sessions"),
     probe<{ summaries?: unknown[] }>(
       "job_summaries",
       `/api/jobs/summaries?limit=${BUNDLE_JOB_SUMMARIES}`,
     ),
+    probe<Record<string, unknown>>("features", "/api/diag/features"),
   ]);
   // One probe per distinct console (host:port and bare-host forms are the
   // same console to the engine's history store).
@@ -105,6 +119,7 @@ export async function collectEngineDiagnostics(
     install_sessions: sessions,
     install_history,
     job_summaries: Array.isArray(summaries?.summaries) ? summaries.summaries : null,
+    features: features && typeof features === "object" ? features : null,
     errors,
   };
 }
