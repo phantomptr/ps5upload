@@ -35,7 +35,7 @@ describe("Play Together host state", () => {
   it("reads the engine's answer, players in order", () => {
     const s = readJoinState(engine);
     expect(s.open).toBe(true);
-    expect(s.invite).toEqual({ url: engine.invite.url, code: "4821", expiresMs: 1800000, urls: engine.invite.urls });
+    expect(s.invite).toEqual({ url: engine.invite.url, code: "4821", expiresMs: 1800000, urls: engine.invite.urls, tailscale: null });
     expect(s.ws).toBe(engine.ws);
     expect(s.guests.map((g) => g.name)).toEqual(["Ann", "Ben", "Cy"]);
     expect(s.guests[1]).toMatchObject({ status: "reconnecting", reconnectingLeftS: 42, connected: false });

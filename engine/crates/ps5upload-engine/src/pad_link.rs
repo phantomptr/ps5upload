@@ -197,6 +197,28 @@ pub(crate) fn lan_ips(console: Option<&str>) -> Vec<std::net::IpAddr> {
     out
 }
 
+/// Tailscale's shared range (100.64.0.0/10), where every tailnet address is.
+fn in_tailnet_range(ip: std::net::IpAddr) -> bool {
+    matches!(ip, std::net::IpAddr::V4(v4) if v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64)
+}
+
+/// The address `via` (what reaches Tailscale's own 100.100.100.100) is this computer's tailnet
+/// address when it is in Tailscale's range and is not simply the default route's address too
+/// (a carrier's CGNAT can hand a computer a 100.64/10 address of its own).
+fn tailnet_choice(
+    via: Option<std::net::IpAddr>,
+    default: Option<std::net::IpAddr>,
+) -> Option<std::net::IpAddr> {
+    via.filter(|ip| in_tailnet_range(*ip) && default != Some(*ip))
+}
+
+/// This computer's Tailscale address, while the Tailscale app is connected: friends on Tailscale
+/// (this computer shared with them) reach the engine there. The system picks the interface
+/// toward Tailscale's 100.100.100.100, which only the Tailscale interface routes; nothing is sent.
+pub(crate) fn tailscale_ip() -> Option<std::net::IpAddr> {
+    tailnet_choice(lan_ip_toward("100.100.100.100"), lan_ip_toward("1.1.1.1"))
+}
+
 /// Where phones reach this engine, toward the console being played (or `console`).
 fn base_url(headers: &HeaderMap, console: Option<&str>) -> Option<String> {
     let ip = *lan_ips(console).first()?;
@@ -206,7 +228,12 @@ fn base_url(headers: &HeaderMap, console: Option<&str>) -> Option<String> {
 fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
     let base = base_url(headers, console);
     let port = port_of(headers);
-    let ips = lan_ips(console);
+    let mut ips = lan_ips(console);
+    // The Tailscale address last: the QR code shows the home network's unless the host picks it.
+    let tailscale = tailscale_ip();
+    if let Some(ip) = tailscale.filter(|ip| !ips.contains(ip)) {
+        ips.push(ip);
+    }
     with_link(|l| {
         serde_json::json!({
             "open": l.key.is_some(),
@@ -214,6 +241,8 @@ fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
                 (Some(b), Some(k)) => serde_json::Value::String(format!("{b}/pad#t={k}")),
                 _ => serde_json::Value::Null,
             },
+            // This computer's Tailscale address (one of `urls`), for the page to label.
+            "tailscale": tailscale.map(|ip| ip.to_string()),
             // Every address, best first (the first is `url`): for a computer on two networks.
             "urls": match &l.key {
                 Some(k) => ips
@@ -763,6 +792,23 @@ pub(crate) async fn relay_to(mut socket: WebSocket, url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tailnet_address_only_when_tailscale_routes_it() {
+        let ip = |s: &str| Some(s.parse::<std::net::IpAddr>().unwrap());
+        // Tailscale up: 100.100.100.100 goes out on the tailnet address, the default route on Wi-Fi.
+        assert_eq!(
+            tailnet_choice(ip("100.101.102.103"), ip("192.168.1.20")),
+            ip("100.101.102.103")
+        );
+        // Tailscale off: both go out on Wi-Fi.
+        assert_eq!(tailnet_choice(ip("192.168.1.20"), ip("192.168.1.20")), None);
+        // A carrier's CGNAT address on the computer itself is not Tailscale.
+        assert_eq!(tailnet_choice(ip("100.70.1.2"), ip("100.70.1.2")), None);
+        // Outside 100.64/10 (100.128.x is not shared space).
+        assert_eq!(tailnet_choice(ip("100.128.0.1"), ip("192.168.1.20")), None);
+        assert_eq!(tailnet_choice(None, ip("192.168.1.20")), None);
+    }
 
     #[test]
     fn a_phone_is_offered_home_network_addresses_only() {

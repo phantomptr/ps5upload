@@ -1697,6 +1697,13 @@ fn bases(console: &str, reach: &Reach) -> Vec<String> {
             out.push(b);
         }
     }
+    // Last: this computer's Tailscale address, for friends it is shared with (the host picks it).
+    if let Some(IpAddr::V4(v4)) = crate::pad_link::tailscale_ip() {
+        let b = format!("http://{v4}:{}", reach.port);
+        if !out.contains(&b) {
+            out.push(b);
+        }
+    }
     out
 }
 
@@ -1725,6 +1732,8 @@ fn invite_json(
         "code_display": code_display(&inv.code),
         "url": urls.first(),
         "urls": urls,
+        // This computer's Tailscale address (one of `urls`), for the page to label.
+        "tailscale": crate::pad_link::tailscale_ip().map(|ip| ip.to_string()),
         "expires_in_s": inv.until.saturating_duration_since(now).as_secs(),
     })
 }
