@@ -1,9 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-// Coffee or tokens sits right under the connection badge on Home, on a wide window and a phone.
+// Thank you sits right under the connection badge on Home, on a wide window and a phone, and
+// leads to Help › Thank you, where the Ko-fi button is.
 
 for (const [name, width] of [["desktop", 1280], ["phone", 390]] as const)
-  test(`Home shows Coffee or tokens under the connection badge (${name})`, async ({ page }) => {
+  test(`Home shows Thank you under the connection badge (${name})`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.addInitScript(() => {
       window.localStorage.setItem("ps5upload.host", "192.168.86.100");
@@ -24,11 +25,13 @@ for (const [name, width] of [["desktop", 1280], ["phone", 390]] as const)
     await page.goto("/", { waitUntil: "domcontentloaded" });
     const main = page.getByRole("main");
     const badge = main.getByTestId("home-connection-badge");
-    const coffee = main.getByRole("button", { name: "Coffee or tokens" });
+    const coffee = main.getByRole("button", { name: "Thank you" });
     await expect(coffee).toBeVisible({ timeout: 30_000 });
     const [b, c] = [await badge.boundingBox(), await coffee.boundingBox()];
     expect(c!.y).toBeGreaterThan(b!.y + b!.height - 1);
     await coffee.click();
+    await expect(page.getByTestId("thanks")).toBeVisible();
+    await page.getByTestId("thanks").getByRole("button", { name: "Coffee or tokens" }).click();
     await expect
       .poll(() => page.evaluate(() => (window as unknown as { __opened: string[] }).__opened))
       .toEqual(["https://ko-fi.com/B0B81S0WUA"]);

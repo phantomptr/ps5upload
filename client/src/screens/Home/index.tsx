@@ -28,7 +28,7 @@ import { useSensors } from "../../state/sensors";
 import { Badge, Card, ConsoleChip, Sparkline, Spinner } from "../../components";
 import { SendHelperButton } from "../../components/SendHelperButton";
 import { useTr } from "../../state/lang";
-import { SupportButton } from "../../components/SupportButton";
+import { ThanksButton } from "../../components/SupportButton";
 import { ServersCard } from "./ServersCard";
 import { HealthCard } from "./HealthCard";
 import { LowSpaceCard } from "./LowSpaceCard";
@@ -155,8 +155,8 @@ export default function HomeScreen() {
             )}
           </p>
         </div>
-        {/* The connection badge, and Buy me a coffee right under it: right-aligned on a wide
-            window, under the title on a phone. */}
+        {/* The connection badge, and Thank you right under it (the supporters, and the Ko-fi
+            button): right-aligned on a wide window, under the title on a phone. */}
         <div className="flex flex-col items-start gap-2 sm:items-end">
           <span data-testid="home-connection-badge">
             <Badge tone={connected ? "good" : resting ? "accent" : "warn"} size="md" dot>
@@ -167,7 +167,7 @@ export default function HomeScreen() {
                   : tr("v5_home_setup_required", "Setup required")}
             </Badge>
           </span>
-          <SupportButton />
+          <ThanksButton />
         </div>
       </header>
 

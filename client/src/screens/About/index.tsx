@@ -9,7 +9,6 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { openExternalUrl as openExternal } from "../../lib/openExternalUrl";
 import { COFFEE_URL } from "../../lib/supportLinks";
-import { SupportButton } from "../../components/SupportButton";
 import { getAppVersion } from "../../lib/appVersion";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { visibleFeatures } from "./features";
@@ -99,7 +98,6 @@ export default function AboutScreen({ embedded = false }: { embedded?: boolean }
             label="Discord"
             onClick={() => openExternal(URLS.discord)}
           />
-          <SupportButton className="min-h-10 px-5 text-sm" />
         </div>
         <button
           type="button"
