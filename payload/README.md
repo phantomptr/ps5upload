@@ -39,12 +39,32 @@ the helper), self-escalates, and answers a JSON-lines protocol
 Sony's installer over a 127.0.0.1 HTTP URL. The engine sends it automatically
 when nothing is listening on :9115.
 
+### Play Together controllers (`src/vpad.c`)
+
+Friends who join a Remote Play session (Play Together, #641) play as Players
+2-4 on virtual DualSense controllers the helper itself makes with ioctls on
+`/dev/hid`; no companion process. The engine drives them over the `vpad.*`
+management methods (`include/vpad.h` has the contract, buttons and block
+layout): each slot belongs to a guest's 128-bit token, a pad is made for the
+foreground user so the console asks "Who's using this controller?" (the guest
+picks Quick Play), states carry a `seq` so old ones are ignored, and a
+watchdog puts a silent pad at rest after 400 ms and removes one with no
+heartbeat for 90 s. Pads go when the helper stops. `vinput.caps` reports
+`"vpad":3` so the engine can tell a helper that has them.
+`tests/vpad_selftest.c` drives all of it over a fake `/dev/hid`.
+
 ### Prior art
 
 The installer daemon is our own implementation. Its design was informed, as
 behavioural references only (no code or names are carried into the daemon),
 by cy33hc's ps5-ezremote-dpi, etaHEN and elf-arsenal's DPI payloads, and
 itsPLK's on-console PKG Manager (the loopback-serving + cacheability rules).
+
+The `/dev/hid` requests behind the Play Together controllers (add, insert,
+delete and output, and their block layouts) are from Darkatek7's
+[ProsperoSunshine](https://github.com/Darkatek7/ProsperoSunshine)
+(`src/platform/ps5/pad.c`, GPL-3.0-only, itself derived from ps5-mcp's
+RemoteEye), written anew in `src/vpad.c`.
 
 ## Build
 

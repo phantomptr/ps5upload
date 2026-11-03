@@ -26,4 +26,4 @@ License texts kept next to the code:
 | `third_party/sevenz-rust2/LICENSE` | Apache-2.0 |
 | `third_party/unrar/LICENSE-MIT`, `LICENSE-APACHE` | MIT or Apache-2.0 (the Rust wrapper) |
 | `third_party/ava1/LICENSE-MIT`, `LICENSE-APACHE` | MIT or Apache-2.0 |
-| Source file headers | ps5-app-dumper, PS5 Dump Forge, ampr_emu and elf-arsenal ports (GPL-3.0-or-later / GPL-3.0); FreeBSD `newfs` portions (BSD-3-Clause) |
+| Source file headers | ps5-app-dumper, PS5 Dump Forge, ampr_emu and elf-arsenal ports (GPL-3.0-or-later / GPL-3.0); the ProsperoSunshine `/dev/hid` pad requests in `payload/src/vpad.c` (GPL-3.0-only, Darkatek7); FreeBSD `newfs` portions (BSD-3-Clause) |

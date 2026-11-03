@@ -4,6 +4,16 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.8.0
+
+- **The helper can add controllers for Players 2, 3 and 4 (For #641).** This is the console half
+  of Play Together, where friends join your Remote Play and play along: the helper makes a
+  virtual controller for each friend, so the PS5 sees them as extra players. When a friend
+  presses PS, the TV asks "Who's using this controller?" and they pick Quick Play to play as a
+  guest. A friend whose connection drops has their controller let go within half a second (no
+  stuck stick or button), keeps their place for a while if they come back, and their controller
+  is removed after 90 seconds without them. The app side comes in a later change.
+
 ## 10.7.6
 
 - **Saved cheats and patches are applied the moment a game starts (For #627).** Some patches only

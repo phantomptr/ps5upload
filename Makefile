@@ -1126,6 +1126,13 @@ test-payload: payload
 		$(PAYLOAD_DIR)/src/webui_codec.c $(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) /tmp/ps5upload-vinput-relay-selftest
 	@echo "✓ the companion takes only its token and one helper; the relay starts it, kills a silent one, starts it again with the devices, and never restarts one that did not get through Init on its own"
+	@echo "Running the Play Together controllers (vpad) self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o /tmp/ps5upload-vpad-selftest \
+		$(PAYLOAD_DIR)/tests/vpad_selftest.c $(PAYLOAD_DIR)/src/vpad.c \
+		$(PAYLOAD_DIR)/src/webui_codec.c $(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) /tmp/ps5upload-vpad-selftest
+	@echo "✓ pads open, resume and refuse another owner; old states are ignored; a silent pad rests once, an abandoned one goes; close, output and a stop remove them"
 	@echo "Running webui settings + tile self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -DWEBUI_TILE_HOST_TEST -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
 		-o /tmp/ps5upload-webui-settings-selftest \

@@ -174,7 +174,18 @@ fn find_method(id: u16) -> Result<Method> {
     // The console's keyboard and mouse take input only from the page that owns the Remote Play
     // session, or from this engine's own machine (ps5upload-engine vinput_api.rs): never through a
     // generic passthrough that other admitted peers can reach.
-    if id == mgmt::m::VINPUT_SESSION.id || id == mgmt::m::VINPUT_REPORT.id {
+    // Play Together's controllers (Players 2-4) likewise take input only from the engine's own
+    // guest link: a passthrough peer must not open, drive or close a guest's pad.
+    const INPUT_ONLY: [u16; 7] = [
+        mgmt::m::VINPUT_SESSION.id,
+        mgmt::m::VINPUT_REPORT.id,
+        mgmt::m::VPAD_OPEN.id,
+        mgmt::m::VPAD_STATE.id,
+        mgmt::m::VPAD_STATES.id,
+        mgmt::m::VPAD_HB.id,
+        mgmt::m::VPAD_CLOSE.id,
+    ];
+    if INPUT_ONLY.contains(&id) {
         return Err(anyhow!(
             "management method {id} is not available through the passthrough"
         ));
@@ -320,18 +331,32 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_and_mouse_input_never_goes_through_the_passthrough() {
-        for m in [mgmt::m::VINPUT_SESSION, mgmt::m::VINPUT_REPORT] {
+    fn keyboard_mouse_and_guest_pad_input_never_goes_through_the_passthrough() {
+        for m in [
+            mgmt::m::VINPUT_SESSION,
+            mgmt::m::VINPUT_REPORT,
+            mgmt::m::VPAD_OPEN,
+            mgmt::m::VPAD_STATE,
+            mgmt::m::VPAD_STATES,
+            mgmt::m::VPAD_HB,
+            mgmt::m::VPAD_CLOSE,
+        ] {
             let e = execute_with(Arc::new(Echo), call_req(m.id))
                 .into_result()
                 .unwrap_err();
             assert!(e.to_string().contains("not available"), "{e}");
         }
         // what the console can make is only a read: it reaches the console (Echo refuses it)
-        let e = execute_with(Arc::new(Echo), call_req(mgmt::m::VINPUT_CAPS.id))
-            .into_result()
-            .unwrap_err();
-        assert!(e.downcast_ref::<MgmtError>().is_some(), "{e}");
+        for m in [
+            mgmt::m::VINPUT_CAPS,
+            mgmt::m::VPAD_STATUS,
+            mgmt::m::VPAD_OUTPUT,
+        ] {
+            let e = execute_with(Arc::new(Echo), call_req(m.id))
+                .into_result()
+                .unwrap_err();
+            assert!(e.downcast_ref::<MgmtError>().is_some(), "{e}");
+        }
     }
 
     #[test]
