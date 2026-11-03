@@ -20,14 +20,15 @@ const SITE_OUT = join(ROOT, "site/supporters.json");
 const README = join(ROOT, "README.md");
 const OWNER = "phantomptr";
 const ANONYMOUS = new Set(["", "ko-fi supporter", "supporter", "someone", "anonymous"]);
-/** Tiers by a person's total, highest first (the amounts stay in this script only). */
+/** Tiers by a person's total, highest first (the amounts stay in this script only). Tier 1 is
+ *  the first step and the numbers go up with support, so a higher tier can be added on top. */
 const TIERS = [
   ["champion", 20],
   ["hero", 10],
   ["friend", 5],
   ["supporter", 0],
 ];
-const TIER_TITLES = { champion: "Tier 1", hero: "Tier 2", friend: "Tier 3", supporter: "Tier 4" };
+const TIER_TITLES = { champion: "Tier 4", hero: "Tier 3", friend: "Tier 2", supporter: "Tier 1" };
 const TIER_DOTS = { champion: "🟡", hero: "🟣", friend: "🔵", supporter: "🟢" };
 
 /** RFC 4180 CSV: quoted fields may hold commas, quotes ("") and line breaks. */

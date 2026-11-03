@@ -379,10 +379,10 @@ const CRYPTO = [
   { id: "xrp", coin: "XRP", name: "XRP", network: "XRP Ledger", color: "#2a9df4", address: "rEVq3si3sm9NuWNuZiUZFKsUtwC3w9SrjR" },
 ];
 const TIERS = [
-  ["champion", () => t("thanks.tier.champion", "Tier 1"), "#e0a91b"],
-  ["hero", () => t("thanks.tier.hero", "Tier 2"), "#9b6bdf"],
-  ["friend", () => t("thanks.tier.friend", "Tier 3"), "#3d8fe0"],
-  ["supporter", () => t("thanks.tier.supporter", "Tier 4"), "#3fae6a"],
+  ["champion", () => t("thanks.tier.champion", "Tier 4"), "#e0a91b"],
+  ["hero", () => t("thanks.tier.hero", "Tier 3"), "#9b6bdf"],
+  ["friend", () => t("thanks.tier.friend", "Tier 2"), "#3d8fe0"],
+  ["supporter", () => t("thanks.tier.supporter", "Tier 1"), "#3fae6a"],
 ];
 
 function showCoin(id) {

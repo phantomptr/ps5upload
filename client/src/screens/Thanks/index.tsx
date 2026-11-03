@@ -18,10 +18,10 @@ export type Tier = "champion" | "hero" | "friend" | "supporter";
 
 /** Highest first; each tier's colour (its card's edge and glow, and its names' tint). */
 export const TIERS: ReadonlyArray<{ id: Tier; key: string; fallback: string; color: string }> = [
-  { id: "champion", key: "thanks_tier_champion", fallback: "Tier 1", color: "#e0a91b" },
-  { id: "hero", key: "thanks_tier_hero", fallback: "Tier 2", color: "#9b6bdf" },
-  { id: "friend", key: "thanks_tier_friend", fallback: "Tier 3", color: "#3d8fe0" },
-  { id: "supporter", key: "thanks_tier_supporter", fallback: "Tier 4", color: "#3fae6a" },
+  { id: "champion", key: "thanks_tier_champion", fallback: "Tier 4", color: "#e0a91b" },
+  { id: "hero", key: "thanks_tier_hero", fallback: "Tier 3", color: "#9b6bdf" },
+  { id: "friend", key: "thanks_tier_friend", fallback: "Tier 2", color: "#3d8fe0" },
+  { id: "supporter", key: "thanks_tier_supporter", fallback: "Tier 1", color: "#3fae6a" },
 ];
 
 export interface SupporterList {
