@@ -63,10 +63,13 @@ mod engine_update;
 mod event_journal;
 mod fakelibs_api;
 mod fan_boost;
+mod ffmpeg_tool;
 mod folder_build;
 mod fpkg_api;
 mod fpkg_firmware;
 mod games_api;
+mod golive_dest;
+mod golive_ffmpeg;
 mod hearbridge_api;
 mod helper_copies_api;
 mod helper_mirror;
@@ -96,7 +99,9 @@ mod ps2_saves;
 mod remote;
 mod remote_download;
 mod remote_pkg;
+mod rp_golive;
 mod rp_keyboard;
+mod rp_live_ts;
 mod rp_replay;
 mod rp_stream_api;
 mod save_backup;
@@ -11413,6 +11418,28 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             "/api/ps5/rp/input/release",
             post(rp_stream_api::automation::release),
         )
+        // The live feed for OBS (#635), this computer only.
+        .route(
+            "/api/ps5/rp/live.ts",
+            get(rp_stream_api::live_feed::live_ts),
+        )
+        .route(
+            "/api/ps5/rp/live/status",
+            get(rp_stream_api::live_feed::status),
+        )
+        // Go live (#635): the Remote Play stream to YouTube, Twitch, Kick, Facebook, custom.
+        .route("/api/stream/status", get(rp_golive::status))
+        .route("/api/stream/start", post(rp_golive::start))
+        .route("/api/stream/stop", post(rp_golive::stop))
+        .route("/api/stream/destinations", post(rp_golive::add_destination))
+        .route(
+            "/api/stream/destinations/{id}",
+            post(rp_golive::update_destination).delete(rp_golive::remove_destination),
+        )
+        .route(
+            "/api/stream/tools/ffmpeg/install",
+            post(rp_golive::install_ffmpeg),
+        )
         .route("/api/ps5/vinput/caps", get(vinput_api::caps))
         .route("/api/ps5/vinput/ws", get(vinput_api::ws))
         .route("/rp-player", get(rp_stream_api::player))
@@ -12122,6 +12149,8 @@ mod loopback_guard_tests {
             "/api/ps5/rp/frame",
             "/api/ps5/rp/input",
             "/api/ps5/rp/input/release",
+            "/api/ps5/rp/live.ts",
+            "/api/ps5/rp/live/status",
             "/pad/../api/jobs",
             "/padx",
             "/api/pad/ws/x",

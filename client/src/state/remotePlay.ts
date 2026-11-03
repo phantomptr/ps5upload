@@ -87,6 +87,9 @@ export interface RpPrefs {
   /** The video format asked of the console: HEVC where this device decodes it (auto), always
    *  H.264, or HDR (HEVC Main10) where this device can show it in HDR (lib/rpHdr.ts). */
   codec: CodecPref;
+  /** The video bitrate asked of the console, kbit/s; 0 = Auto (15 Mbps at 1080p, 10 at 720p).
+   *  Go live sends the console's video on as it is, so this is what a streaming site gets. */
+  bitrateKbps: number;
   /** What each controller button sends (lib/rpButtonMap.ts); empty = each sends itself. */
   buttonMap: ButtonMap;
   /** While the PS5 has the keyboard and mouse, a small "⌃ ⌥ to release" over the picture. */
@@ -128,6 +131,7 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   toPhotos: true,
   decoding: "auto",
   codec: "auto",
+  bitrateKbps: 0,
   buttonMap: DEFAULT_BUTTON_MAP,
   kbmChip: true,
   escHoldRelease: true,
@@ -147,6 +151,9 @@ export function audioBufferFor(p: Pick<RpPrefs, "lowLatency" | "audioBufferMs">)
 
 const PREFS_KEY = "ps5upload.rp_prefs.v1";
 
+/** The bitrates Settings › Picture offers (kbit/s; 0 = Auto). */
+export const RP_BITRATES: readonly number[] = [0, 15000, 12000, 10000, 8000, 6000, 4500, 3000];
+
 export function loadRpPrefs(): RpPrefs {
   try {
     const raw = safeGetItem(PREFS_KEY);
@@ -154,9 +161,11 @@ export function loadRpPrefs(): RpPrefs {
     const codec: CodecPref = p.codec === "h264" || p.codec === "hdr" ? p.codec : "auto";
     const touchMode = p.touchMode === "touchpad" ? "touchpad" : "controller";
     const touchpadSpeed = Number.isFinite(p.touchpadSpeed) ? Math.min(4, Math.max(0.5, p.touchpadSpeed)) : 1.5;
+    const bitrateKbps = RP_BITRATES.includes(p.bitrateKbps) ? p.bitrateKbps : 0;
     return {
       ...p,
       codec,
+      bitrateKbps,
       touchMode,
       touchpadSpeed,
       picture: readPicture(p.picture),
@@ -333,6 +342,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       picture: prefs.picture,
       decoding: prefs.decoding,
       codec: prefs.codec,
+      bitrateKbps: prefs.bitrateKbps || undefined,
       onPictureOff: (why) =>
         pushNotification(
           "warning",

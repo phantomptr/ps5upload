@@ -184,6 +184,42 @@ the network: a cable for the PS5 and 5 GHz Wi-Fi help most. A big **decode** mea
 slow to decode; 720p eases it. **Play › Settings › Low latency** trims the queue and the sound
 buffer (see "How much delay does Remote Play have, and what does Low latency do?").
 
+**Q: How do I stream to YouTube or Twitch?**
+Start Play, then press **Stream** (the round button with a red dot on the picture's bar). Two
+ways, on a computer (the desktop app, or the web UI, where it runs on the engine's computer;
+not in the phone apps yet):
+
+- **Go live**: PS5Upload sends the stream to the site itself, no other program needed. Add a
+  site (**YouTube**, **Twitch**, **Kick**, **Facebook**, or **Custom** for any `rtmp://`,
+  `rtmps://` or `srt://` server) and paste its **stream key**: each site's form says where the
+  key is. Keys are kept encrypted on the engine's computer and never shown again (only their
+  last four characters). Tick one or more sites and press **Go live**. A **LIVE** badge with the
+  time and bitrate shows on the picture; **Stop streaming** ends it. The first time, it asks to
+  download a free helper (ffmpeg, 30 to 90 MB depending on the system) that turns the PS5's
+  sound into the format the sites take; the picture is sent as the PS5 made it, nothing is
+  re-encoded. If the connection drops, it reconnects by itself while you keep playing.
+- **OBS**: the stream goes into OBS on the same computer (for your own scenes, overlays, or to
+  record). Copy the link from the **OBS** tab, then in OBS: Sources › **+** › **Media Source**,
+  untick **Local file**, paste the link into **Input**, set **Input format** to `mpegts`, tick
+  **Restart playback when source becomes active**, and set **Network Buffering** to its lowest.
+  OBS then streams at the bitrate set in OBS.
+
+Things to know:
+
+- **Upload speed.** Go live sends the Remote Play video as it is: about 15 Mbps at 1080p unless
+  you lower **Bitrate** in Play › Settings › Picture, and each site you stream to at once needs
+  that again. Your internet upload has to keep up; the panel says roughly how much is needed.
+- **Each site's limits.** Twitch takes H.264 at up to about 6 Mbps, Kick H.264 up to 8 Mbps,
+  Facebook H.264 up to about 9 Mbps; YouTube also takes HEVC. When a site needs something
+  else, the panel says so and offers to restart Play in H.264 at the right bitrate (the game
+  keeps running; the picture comes back in a few seconds). HDR can't be streamed.
+- **YouTube** turns live streaming on for a channel the first time you ask, which can take up to
+  24 hours. To try it privately, set the stream to Unlisted or Private in YouTube Studio.
+- **Twitch**: **Test without going public** (on by default when you add Twitch) sends a
+  bandwidth test that nobody sees. Turn it off to go live for real.
+- **A refused key**: "refused the stream" almost always means the key is wrong or was reset
+  on the site: copy it again.
+
 ---
 
 ## Getting started

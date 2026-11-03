@@ -642,6 +642,14 @@ pub trait StreamSink {
     fn progress(&mut self, _p: Progress) {}
     /// One Annex-B access unit (`header` = codec parameter sets). False stops.
     fn video(&mut self, au: &[u8], header: bool) -> bool;
+    /// One whole frame's access unit with the console's 16-bit frame index (it wraps). A sink
+    /// that has no use for the index keeps this default. False stops.
+    fn video_frame(&mut self, au: &[u8], _index: u16) -> bool {
+        self.video(au, false)
+    }
+    /// Frames `from..=to` (16-bit, wrapping) will never come: the frames after them may show
+    /// damage until the next keyframe, which the stream asks the console for.
+    fn video_lost(&mut self, _from: u16, _to: u16) {}
     /// One audio frame: its frame index (u16 BE) then one Opus packet; or, with
     /// `header`, the 14-byte audio header (channels, bits, rate, frame size).
     /// False stops.
@@ -1138,16 +1146,17 @@ pub fn run_stream(
         for p in reorder.pull(Instant::now()) {
             for out in assembler.push(&p) {
                 match out {
-                    video::Output::Frame(frame) => {
+                    video::Output::Frame { index, au: frame } => {
                         if first_frame {
                             first_frame = false;
                             sink.progress(Progress::FirstFrame(frame.len()));
                         }
-                        if !sink.video(&frame, false) {
+                        if !sink.video_frame(&frame, index) {
                             stop = true;
                         }
                     }
                     video::Output::Lost { from, to } => {
+                        sink.video_lost(from, to);
                         // Tell the console which frames are gone, and ask for a
                         // keyframe so the picture repairs itself quickly.
                         takion.send_message(2, &proto::corrupt_frame(from, to))?;

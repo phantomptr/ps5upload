@@ -107,6 +107,8 @@ const MIC_QUEUE: usize = 50;
 
 #[path = "rp_automation.rs"]
 pub(crate) mod automation;
+#[path = "rp_live.rs"]
+pub(crate) mod live_feed;
 
 /// Session ids: each session the engine starts gets the next one, so a client naming an old
 /// session is refused rather than steered into its replacement.
@@ -278,6 +280,8 @@ struct Live {
     passcode_answer: Mutex<Option<Passcode>>,
     /// A local automation client's frame requests and held input (rp_automation.rs).
     auto: automation::AutoState,
+    /// The live feed's readers (rp_live.rs, OBS).
+    feed: Arc<live_feed::LiveFeed>,
 }
 
 /// A watcher's queue. `need_key`: it cannot use a frame until the next keyframe (it just
@@ -495,6 +499,7 @@ impl Live {
             passcode_ask: Mutex::new(None),
             passcode_answer: Mutex::new(None),
             auto: Default::default(),
+            feed: Arc::new(live_feed::LiveFeed::new(hevc)),
         }
     }
 
@@ -743,6 +748,7 @@ impl StreamSink for Sink {
             if let Ok(mut h) = live.video_header.lock() {
                 *h = Some(au.to_vec());
             }
+            live.feed.video_header(au);
             live.send_ctl(bin(0, au));
             live.to_spectators(0, au, false);
             return true;
@@ -780,12 +786,24 @@ impl StreamSink for Sink {
         }
         true
     }
+    fn video_frame(&mut self, au: &[u8], index: u16) -> bool {
+        // The live feed (OBS) first: it needs the frame index, the rest of the fan-out does not.
+        self.live
+            .feed
+            .video(au, index, is_keyframe(au, self.live.hevc), Instant::now());
+        self.video(au, false)
+    }
+    fn video_lost(&mut self, _from: u16, _to: u16) {
+        self.live.feed.lost();
+    }
     fn audio(&mut self, frame: &[u8], header: bool) -> bool {
         if header {
             if let Ok(mut h) = self.live.audio_header.lock() {
                 *h = Some(frame.to_vec());
             }
+            self.live.feed.audio_header(frame);
         } else {
+            self.live.feed.audio(frame, Instant::now());
             self.live.record(
                 crate::rp_replay::KIND_AUDIO,
                 self.t0.elapsed().as_micros() as u64,
@@ -851,7 +869,9 @@ impl StreamSink for Sink {
             .ok()
             .and_then(|g| g.as_ref().map(|r| r.wants_keyframe(now)))
             .unwrap_or(false);
-        page || replay
+        // The live feed (OBS): a reader joining, catching up or after a loss, and every 2 s.
+        let feed = self.live.feed.wants_keyframe(Instant::now());
+        page || replay || feed
     }
     fn mic(&mut self) -> Option<MicInput> {
         self.live.mic.lock().ok()?.pop_front()
@@ -994,6 +1014,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
     live.mic_enabled.store(cfg.mic, Ordering::Relaxed);
     live.keyboard.enabled.store(cfg.keyboard, Ordering::Relaxed);
     live.set_replay(start.replay_s);
+    live.feed.set_config(cfg);
     let l = live.clone();
     tokio::task::spawn_blocking(move || {
         let mut sink = Sink {
@@ -1040,6 +1061,8 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         crate::log_info!("rp_stream: {end}");
         // A fan boost for this console ends with its session.
         crate::fan_boost::session_ended(&l.host);
+        // The live feed's readers reach the end of their stream.
+        l.feed.close();
         if let Ok(mut g) = LIVE.lock() {
             if g.as_ref().is_some_and(|x| Arc::ptr_eq(x, &l)) {
                 *g = None;

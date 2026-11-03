@@ -198,6 +198,45 @@ blindly: take a frame first and decide from what the screen shows.
 - One automation controller per session: two scripts at once share it (the latest input wins).
 - The engine's own access rules are unchanged: nothing here is reachable from the network.
 
+## The live feed (OBS, ffmpeg)
+
+Added in 10.8.0 for [#635](https://github.com/phantomptr/ps5upload/issues/635). Same rules as
+above: this computer only, addressed as localhost.
+
+### `GET /api/ps5/rp/live.ts`: the running stream as MPEG-TS
+
+The Remote Play session's picture and sound, as the console sent them (nothing re-encoded):
+H.264 (stream type `0x1B`) or HEVC (`0x24`) video and Opus sound (stream type `0x06` with the
+`Opus` registration descriptor, as ffmpeg writes it), for as long as the reader stays. Any
+ffmpeg-based player reads it, for example OBS's Media Source (Input format `mpegts`) or
+
+```sh
+ffmpeg -i http://127.0.0.1:19113/api/ps5/rp/live.ts -c copy recording.ts
+```
+
+- It starts at a keyframe, and while anyone reads, the console is asked for one every 2 s.
+- After a lost frame, the damaged frames that follow are held back until the next keyframe
+  (asked for at once); the sound keeps going.
+- A reader that falls behind skips to the next keyframe instead of building a backlog; it never
+  slows the session or the app's own picture.
+- Timestamps follow the console's frame numbers (one per frame at the session's frame rate,
+  10 ms per sound frame), smoothed against arrival times, and always move forward.
+- `?addr=<console>`: only that console's session. No session (or another console's):
+  `503 {"error": "no_session"}` at once, so a player's own reconnect picks it up later.
+- Up to 8 readers at once (`429 {"error": "too_many_readers"}` beyond that). The stream ends when
+  the session does.
+
+### `GET /api/ps5/rp/live/status`
+
+```json
+{"running": true, "host": "192.168.1.100", "consumers": 1, "go_live": 0, "codec": "h264",
+ "width": 1920, "height": 1080, "fps": 60, "bitrate_kbps": 15000, "since_keyframe_s": 0.8,
+ "frames_held_after_loss": 0, "losses": 0, "keyframe_every_s": 2, "readers": [ … ]}
+```
+
+`consumers` counts players reading `live.ts`; `go_live` is the app's own Go live, which reads
+the same feed inside the engine. `{"running": false, "consumers": 0}` when nothing streams.
+
 ## An MCP adapter
 
 These endpoints map directly to tools an MCP (Model Context Protocol) server could expose:
