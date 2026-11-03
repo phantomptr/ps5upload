@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Expand, Gamepad2, LogOut, Minimize, RotateCw, Users, Volume2 } from "lucide-react";
+import { Expand, Gamepad2, LogOut, Minimize, RotateCw, Users, Volume2, VolumeX } from "lucide-react";
 
 import type { JoinStage } from "../lib/joinClient";
 import { delayTone, playerColor } from "../lib/joinProtocol";
@@ -176,6 +176,19 @@ export function JoinView({
     return () => el.remove();
   }, [live, session]);
 
+  // Sound needs a tap (#657): the first touch, click or key anywhere in the game starts it, as
+  // the "Tap for sound" button does. Captured, so the on-screen controller's touches count too;
+  // these are the events a browser lets start sound (a touch's pointerdown is not one).
+  useEffect(() => {
+    if (!live || snap.sound) return;
+    const unlock = () => session.startSound();
+    const evs = ["pointerup", "touchend", "click", "keydown"] as const;
+    for (const e of evs) window.addEventListener(e, unlock, true);
+    return () => {
+      for (const e of evs) window.removeEventListener(e, unlock, true);
+    };
+  }, [live, snap.sound, session]);
+
   useEffect(() => {
     const update = () => setPortrait(window.innerHeight > window.innerWidth);
     window.addEventListener("resize", update);
@@ -313,6 +326,12 @@ export function JoinView({
               {tr("join_sound", undefined, "Tap for sound")}
             </button>
           )}
+          {snap.noSound && (
+            <span className="flex items-center gap-1 rounded-full bg-black/60 px-2.5 py-1 text-white/80" data-testid="join-no-sound">
+              <VolumeX size={13} />
+              {tr("join_no_sound", undefined, "No sound in this browser")}
+            </span>
+          )}
           {(inApp || (typeof document !== "undefined" && !!document.documentElement.requestFullscreen)) && (
             <button
               type="button"
@@ -346,13 +365,20 @@ export function JoinView({
         {showTouch && <TouchControls stream={session} layout="overlay" />}
 
         {!showTouch && !reconnecting && (
-          <div className="absolute bottom-3 left-3 z-20 flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-xs" data-testid="join-pad">
+          <div className="absolute bottom-3 left-3 z-20 flex items-center gap-2 rounded-2xl bg-black/70 px-3 py-1.5 text-xs" data-testid="join-pad">
             <Gamepad2 size={14} style={{ color: pad.pressed ? `rgb(${light[0]},${light[1]},${light[2]})` : undefined }} />
             {pad.ready
               ? tr("join_pad_ready", undefined, "Your controller is ready")
               : coarse && inApp && !full
                 ? tr("join_full_to_play", undefined, "Tap full screen to play with the on-screen controller.")
-                : tr("join_pad_none", undefined, "Connect a controller (USB or Bluetooth) and press any button.")}
+                : (
+                  <span className="flex flex-col">
+                    <span>{tr("join_pad_none", undefined, "Connect a controller (USB or Bluetooth) and press any button.")}</span>
+                    <span className="text-white/60" data-testid="join-pad-keys">
+                      {tr("join_pad_keys", undefined, "Or use the keyboard: WASD move, arrows D-pad, Enter ✕, Backspace ○, Q □, E △, Tab Options.")}
+                    </span>
+                  </span>
+                )}
           </div>
         )}
 

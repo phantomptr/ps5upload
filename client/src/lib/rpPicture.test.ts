@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  chromaBlank,
   DEFAULT_PICTURE,
   PicturePass,
   cropRect,
@@ -193,5 +194,22 @@ describe("PicturePass.release", () => {
     // Twice is harmless (a stream that ends after its canvas was replaced).
     pass.release();
     expect(calls.filter((c) => c === "loseContext")).toHaveLength(1);
+  });
+});
+
+describe("chromaBlank (#656 green picture)", () => {
+  const frame = (format: "NV12" | "I420", fill: number) => {
+    const { layout, size } = planeLayout(format, 64, 36);
+    const data = new Uint8Array(size);
+    data.fill(fill, layout[1].offset);
+    return { format, w: 64, h: 36, data, layout, colorSpace: null };
+  };
+  it("is true when the copy left the chroma at zero", () => {
+    expect(chromaBlank(frame("NV12", 0))).toBe(true);
+    expect(chromaBlank(frame("I420", 0))).toBe(true);
+  });
+  it("is false for a real (even black) picture", () => {
+    expect(chromaBlank(frame("NV12", 128))).toBe(false);
+    expect(chromaBlank(frame("I420", 128))).toBe(false);
   });
 });

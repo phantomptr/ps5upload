@@ -176,6 +176,23 @@ export class PlaneReader {
   }
 }
 
+/** Whether a copy came back empty: every sampled chroma byte 0, which draws as solid green.
+ *  Real pictures (black ones too) sit around 128 in chroma, so a run of these means the
+ *  copy out isn't giving us the frame (#656: a Linux PC's WebKitGTK decoder). */
+export function chromaBlank(p: Planes): boolean {
+  const l = p.layout[1];
+  if (!l) return false;
+  const cw = Math.ceil(p.w / 2);
+  const ch = Math.ceil(p.h / 2);
+  const rowBytes = p.format === "NV12" ? cw * 2 : cw;
+  for (let i = 0; i < 64; i++) {
+    const row = Math.floor(((i % 8) + 0.5) * (ch / 8));
+    const col = Math.floor((Math.floor(i / 8) + 0.5) * (rowBytes / 8));
+    if (p.data[l.offset + row * l.stride + col] !== 0) return false;
+  }
+  return true;
+}
+
 /** YUV → RGB for a frame's colour space: rgb = m · (yuv − off), m column-major (GLSL mat3).
  *  BT.709 unless the frame says BT.601 or BT.2020; limited range unless it says full. */
 export function yuvToRgb(cs: Planes["colorSpace"]): { m: number[]; off: [number, number, number] } {

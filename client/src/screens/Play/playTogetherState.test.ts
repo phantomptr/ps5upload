@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { friendsIn, inviteOn, playerSlots, presenceJoin, readJoinState, slowFriend } from "./playTogetherState";
+import { friendsIn, inviteOn, joinApi, playerSlots, presenceJoin, readJoinState, slowFriend } from "./playTogetherState";
 import { nearbyJoins } from "../../state/mesh";
 import type { MeshDevice } from "../../api/mesh";
 import { guestStatusText } from "./PlayTogether";
@@ -140,5 +140,42 @@ describe("playing nearby", () => {
     } as never;
     expect(nearbyJoins(state, "ws://10.0.0.9:19113/api/join/ws").map((x) => x.device.id)).toEqual(["ann"]);
     expect(nearbyJoins(null)).toEqual([]);
+  });
+});
+
+describe("New link (#657)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** The engine's answers, and what each call sent. */
+  function engine() {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+        const json = url.includes("/api/join/invite") ? { key: "k2" } : { open: true, invite: { url: "http://192.0.2.1:19113/join#i=k2", code: "ABCD" } };
+        return new Response(JSON.stringify(json), { status: 200 });
+      }),
+    );
+    return calls;
+  }
+
+  it("asks the engine for a new invite (without `new` it hands back the same one)", async () => {
+    const calls = engine();
+    const s = await joinApi.invite("192.0.2.9", true);
+    expect(calls[0].url).toContain("/api/join/invite");
+    expect(calls[0].body).toEqual({ addr: "192.0.2.9", new: true });
+    expect(s?.invite?.url).toContain("i=k2");
+  });
+
+  it("opening the panel keeps the open invite", async () => {
+    const calls = engine();
+    await joinApi.invite("192.0.2.9");
+    expect(calls[0].body).toEqual({ addr: "192.0.2.9" });
+  });
+
+  it("an engine that says no is a null, for the panel to show", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "closed" }), { status: 409 })));
+    expect(await joinApi.invite("192.0.2.9", true)).toBeNull();
   });
 });

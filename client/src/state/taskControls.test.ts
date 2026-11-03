@@ -23,6 +23,8 @@ vi.mock("./transfer", () => ({
 vi.mock("./fsBulkOp", () => ({
   useFsBulkOpStore: { getState: () => owners.bulk },
 }));
+const invoke = vi.hoisted(() => vi.fn(async () => ({})));
+vi.mock("../lib/invokeLogged", () => ({ invoke }));
 vi.mock("./uploadQueue", () => ({
   useUploadQueueStore: { getState: () => owners.queue },
 }));
@@ -86,5 +88,14 @@ describe("real task controls", () => {
     });
     expect(await commandTask(current, "retry")).toBe(false);
     expect(owners.queue.startHost).not.toHaveBeenCalled();
+  });
+
+  it("cancels a running NAS copy through the engine's job cancel", async () => {
+    invoke.mockClear();
+    const current = task({ owner: "remote-fetch", jobId: "j-9" });
+    expect(taskCapabilities(current).canCancel).toBe(true);
+    expect(await commandTask(current, "cancel")).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("job_cancel", { jobId: "j-9" });
+    expect(taskCapabilities(task({ owner: "remote-fetch", jobId: "j-9" }, "done")).canCancel).toBe(false);
   });
 });

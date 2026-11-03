@@ -72,7 +72,7 @@ describe("per-game controls", () => {
   it("reads a stored profile safely", () => {
     expect(readControls(null)).toEqual(DEFAULT_CONTROLS);
     const r = readControls({ turboHz: 999, mouseSens: -1, macros: [{ key: "KeyE", steps: [{ buttons: 1, ms: 1 }] }, { nope: 1 }] });
-    expect(r.turboHz).toBe(30);
+    expect(r.turboHz).toBe(10);
     expect(r.mouseSens).toBe(0.1);
     expect(r.macros).toEqual([{ key: "KeyE", steps: [{ buttons: 1, ms: 16 }] }]);
   });

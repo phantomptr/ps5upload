@@ -7,6 +7,7 @@ import {
   L2_BIT,
   R2_BIT,
   TURBO_BUTTONS,
+  TURBO_MAX_HZ,
   type GameControls,
   type Macro,
 } from "../../../lib/gameControls";
@@ -80,7 +81,7 @@ export function ControlsTab({ name }: { name: (id: string) => string }) {
           <input
             type="range"
             min={2}
-            max={30}
+            max={TURBO_MAX_HZ}
             value={c.turboHz}
             onChange={(e) => set({ turboHz: Number(e.target.value) })}
             className="flex-1 accent-white"

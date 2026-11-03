@@ -103,6 +103,12 @@ describe("Home", () => {
     expect(mine).toContain(t("cw_task_from_console"));
   });
 
+  it("names what a network-share copy copies", () => {
+    const row = renderToStaticMarkup(<TaskRow job={job({ job: "smb:3", name: "PPSA01234" })} onCancel={() => {}} />);
+    expect(row).toContain(" · PPSA01234");
+    expect(renderToStaticMarkup(<TaskRow job={job({})} onCancel={() => {}} />)).not.toContain("PPSA01234");
+  });
+
   it("cancel_asks_confirm_then_calls_api", async () => {
     const running = job({ mine: false });
     // Cancel on the row only asks.

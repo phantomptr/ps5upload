@@ -31,6 +31,7 @@ pub mod guard;
 pub mod keyboard;
 pub mod mic;
 pub mod orientation;
+pub mod pad_pace;
 pub mod proto;
 pub mod takion;
 pub mod video;
@@ -76,8 +77,6 @@ const RTT_MS: u32 = 1;
 const TAKION_VERSION_PS5: u32 = 12;
 
 const CTRL_SESSION_ID: u16 = 0x0033;
-/// The shortest a button press lasts on the console (about three frames).
-const MIN_HOLD: Duration = Duration::from_millis(50);
 /// Tries at the ctrl connection for one nonce, a second apart.
 const CTRL_ATTEMPTS: u32 = 8;
 const CTRL_HEARTBEAT_REQ: u16 = 0x00fe;
@@ -1002,9 +1001,7 @@ pub fn run_stream(
     let started = Instant::now();
     let mut last_heartbeat = Instant::now();
     let mut feedback = FeedbackSender::new();
-    let mut pad_queue: std::collections::VecDeque<ControllerState> = Default::default();
-    let mut applied = ControllerState::default();
-    let mut last_press = Instant::now();
+    let mut pads = pad_pace::PadPacer::new();
     let mut reorder = VideoReorder::default();
     let mut last_congestion = Instant::now();
     let mut last_stats = Instant::now();
@@ -1038,27 +1035,13 @@ pub fn run_stream(
             last_heartbeat = Instant::now();
             takion.send_message(1, &proto::bare(proto::kind::HEARTBEAT))?;
         }
-        // Every pad state, in order. A press is held for at least MIN_HOLD before
-        // its release is applied: the console reads the pad about once a frame,
-        // and a tap whose press and release land in one frame never registers
-        // (seen: 3 quick taps moved the home screen 1 tile).
+        // Every pad state, in order, paced so the console sees each press and release
+        // (pad_pace.rs).
         while let Some(pad) = sink.input() {
-            pad_queue.push_back(pad);
+            pads.push(pad);
         }
-        while let Some(next) = pad_queue.front().copied() {
-            let releases = applied.buttons & !next.buttons != 0
-                || (applied.touch.is_some() && next.touch.is_none());
-            if releases && last_press.elapsed() < MIN_HOLD {
-                break;
-            }
-            if next.buttons & !applied.buttons != 0
-                || (applied.touch.is_none() && next.touch.is_some())
-            {
-                last_press = Instant::now();
-            }
+        while let Some(next) = pads.next(Instant::now()) {
             feedback.set(next);
-            applied = next;
-            pad_queue.pop_front();
         }
         // The microphone (chiaki StreamSession::ToggleMute and the audio
         // sender): CONNECT once, then unmute/mute; frames only while live.

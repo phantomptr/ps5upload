@@ -136,7 +136,9 @@ export type TaskControlRef =
   // through this computer"). Cancel stops the engine's download.
   | { owner: "link-download"; downloadId: string }
   // A Convert or .ffpfsc run; Cancel stops its build job.
-  | { owner: "fpkg-convert" };
+  | { owner: "fpkg-convert" }
+  // A copy from a saved server (NAS) to this computer: Cancel stops the engine's fetch job.
+  | { owner: "remote-fetch"; jobId: string };
 
 /** Per-kind specifics. Kept loose (record of string→unknown) so each
  *  feature can store what it needs without forcing a union. The typed
