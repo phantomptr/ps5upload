@@ -5970,6 +5970,10 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "cw_cheats_applied_failed": "적용할 수 없음: {reason}",
 "cheats_applied_changed": "게임이 이 부분을 바꿔서 건드리지 않았습니다",
 "cw_cheats_applied_changed": "게임이 이 부분을 바꿔서 건드리지 않았습니다",
+"cheats_applied_late": "게임 시작 {seconds}초 후에 적용됨 — 효과가 없으면 켜 둔 채로 게임을 다시 시작하세요.",
+"cw_cheats_applied_late": "게임 시작 {seconds}초 후에 적용됨 — 효과가 없으면 켜 둔 채로 게임을 다시 시작하세요.",
+"cheats_applied_late_unseen": "게임이 이미 시작된 뒤에 적용됨 — 효과가 없으면 켜 둔 채로 게임을 다시 시작하세요.",
+"cw_cheats_applied_late_unseen": "게임이 이미 시작된 뒤에 적용됨 — 효과가 없으면 켜 둔 채로 게임을 다시 시작하세요.",
 "cheats_import_hint_xml": "PS-Game-Patch .xml 형식의 게임 패치도 쓸 수 있습니다. 타이틀 ID로 이름을 지정하세요(예: PPSA01339.xml).",
 "cw_cheats_other_version": "다른 게임 버전용",
 "cw_cheats_err_version": "이 패치는 가지고 있는 게임 버전용이 아닙니다. 사용 중인 버전용 패치를 고르세요.",
@@ -6317,6 +6321,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_phase_reconnecting": "다시 연결 중…",
 "rp_stats_audio": "소리 {ms} ms",
 "rp_stats_audio_gaps": "끊김 {n}회",
+"rp_sound_blocked": "소리 켜기",
 "rp_set_picture": "화면",
 "rp_fps": "프레임 레이트",
 "rp_fps_60": "60 fps (부드러움)",
@@ -6961,6 +6966,12 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "update_open_log": "업데이트 로그 열기",
   "update_no_log": "아직 업데이트 로그가 없습니다.",
   "update_open_log_failed": "업데이트 로그를 열 수 없습니다: {message}",
+  "rp_mini_back": "플레이로 돌아가기: {name}",
+  "rp_mini_close": "미니 플레이어 숨기기(스트림은 계속됨)",
+  "rp_mini_setting": "다른 화면에서 미니 플레이어",
+  "rp_mini_setting_hint": "앱의 다른 화면을 사용하는 동안 화면이 작은 창에 표시되며, 원하는 모서리로 끌어 놓을 수 있습니다. 탭하면 여기로 돌아옵니다.",
+  "rp_system_pip_setting": "앱을 나가도 화면을 띄워 두기",
+  "rp_system_pip_setting_hint": "플레이 중 홈 화면으로 가면 화면이 다른 앱 위에 작은 창으로 표시됩니다. 탭하면 돌아옵니다.",
 };
 
 export default ko;

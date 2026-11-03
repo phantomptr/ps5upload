@@ -6201,6 +6201,10 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "cw_cheats_applied_failed": "Nie udało się zastosować: {reason}",
 "cheats_applied_changed": "Gra to zmieniła; pozostawiono bez zmian",
 "cw_cheats_applied_changed": "Gra to zmieniła; pozostawiono bez zmian",
+"cheats_applied_late": "Zastosowano {seconds} s po uruchomieniu gry — jeśli nie działa, zostaw włączone i uruchom grę ponownie.",
+"cw_cheats_applied_late": "Zastosowano {seconds} s po uruchomieniu gry — jeśli nie działa, zostaw włączone i uruchom grę ponownie.",
+"cheats_applied_late_unseen": "Zastosowano, gdy gra już działała — jeśli nie działa, zostaw włączone i uruchom grę ponownie.",
+"cw_cheats_applied_late_unseen": "Zastosowano, gdy gra już działała — jeśli nie działa, zostaw włączone i uruchom grę ponownie.",
 "cheats_import_hint_xml": "Działa też łatka gry w formacie .xml z PS-Game-Patch. Nazwij ją identyfikatorem tytułu, np. PPSA01339.xml.",
 "cw_cheats_other_version": "Do innej wersji gry",
 "cw_cheats_err_version": "Ta łatka nie jest do twojej wersji gry. Wybierz łatkę do swojej wersji.",
@@ -6548,6 +6552,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_phase_reconnecting": "Ponowne łączenie…",
 "rp_stats_audio": "dźwięk {ms} ms",
 "rp_stats_audio_gaps": "przerwy: {n}",
+"rp_sound_blocked": "Włącz dźwięk",
 "rp_set_picture": "Obraz",
 "rp_fps": "Liczba klatek",
 "rp_fps_60": "60 fps (płynnie)",
@@ -7192,6 +7197,12 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "update_open_log": "Otwórz dziennik aktualizacji",
   "update_no_log": "Nie ma jeszcze dziennika aktualizacji.",
   "update_open_log_failed": "Nie udało się otworzyć dziennika aktualizacji: {message}",
+  "rp_mini_back": "Wróć do gry: {name}",
+  "rp_mini_close": "Ukryj miniodtwarzacz (strumień trwa dalej)",
+  "rp_mini_setting": "Miniodtwarzacz na innych ekranach",
+  "rp_mini_setting_hint": "Gdy korzystasz z innych ekranów aplikacji, obraz zostaje w małym oknie, które możesz przeciągnąć do dowolnego rogu. Dotknij go, aby tu wrócić.",
+  "rp_system_pip_setting": "Obraz unosi się po wyjściu z aplikacji",
+  "rp_system_pip_setting_hint": "Gdy podczas gry przejdziesz do ekranu głównego, obraz zostaje w małym oknie nad innymi aplikacjami. Dotknij go, aby wrócić.",
 };
 
 export default pl;

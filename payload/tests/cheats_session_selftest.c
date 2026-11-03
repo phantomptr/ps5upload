@@ -28,6 +28,7 @@ typedef struct {
     int write_fails;
     int scan_partial; /* until loaded: its pattern is not in the readable part of the module */
     int moved;        /* its module moved since it was applied: a re-apply must not write */
+    uint64_t ready_at; /* its code is not loaded before this time (0: by passes only) */
 } fake_cheat_t;
 
 typedef struct {
@@ -38,11 +39,14 @@ typedef struct {
     fake_cheat_t c[4];
     int applies, writes, marker_sets, marker_clears, guard_calls, notes, warn_notes;
     int guard_strikes, guard_holds, reapply_writes;
+    int write_cost;   /* ms a write takes */
     char last_note[256];
+    char last_log[320];
 } fake_t;
 
 static fake_t F;
 static cheats_guard_t G;
+static uint64_t now_ms;
 
 static int f_engine(void *ctx) { return ((fake_t *)ctx)->engine; }
 static int f_held(void *ctx, const char *title) { (void)title; return ((fake_t *)ctx)->held; }
@@ -70,7 +74,7 @@ static int f_apply(void *ctx, cheats_session_t *s, const cheats_item_t *it, int 
     (void)reapply;
     f->applies++;
     if (!c->on || !f->engine) return CHEATS_OUT_GONE;
-    if (f->passes < c->load_after) {
+    if (f->passes < c->load_after || (c->ready_at && now_ms < c->ready_at)) {
         if (c->scan_partial) {
             snprintf(why, cap, "line 1: its pattern is not in the readable part of the game yet");
             return CHEATS_OUT_WAITING_SCAN;
@@ -91,6 +95,7 @@ static int f_apply(void *ctx, cheats_session_t *s, const cheats_item_t *it, int 
     }
     cheats_session_before_write(s);
     f->writes++;
+    now_ms += (uint64_t)f->write_cost;
     if (reapply) f->reapply_writes++;
     if (c->write_fails) {
         snprintf(why, cap, "write failed");
@@ -123,15 +128,17 @@ static void f_notify(void *ctx, const char *msg, int warn) {
     if (warn) f->warn_notes++;
     snprintf(f->last_note, sizeof f->last_note, "%s", msg);
 }
-static void f_log(void *ctx, const char *msg) { (void)ctx; (void)msg; }
+static void f_log(void *ctx, const char *msg) {
+    snprintf(((fake_t *)ctx)->last_log, sizeof ((fake_t *)ctx)->last_log, "%s", msg);
+}
+static uint64_t f_now(void *ctx) { (void)ctx; return now_ms; }
 
 static const cheats_session_ops_t OPS = {
     &F, f_engine, f_held, f_list, f_apply, f_verify, f_marker_set, f_marker_clear, f_guard,
-    f_notify, f_log, f_guard_watching,
+    f_notify, f_log, f_guard_watching, f_now,
 };
 
 static cheats_session_t S;
-static uint64_t now_ms;
 
 static void setup(int n) {
     memset(&F, 0, sizeof F);
@@ -570,7 +577,202 @@ static void test_loc_still_ours(void) {
     CHECK(cheats_loc_still_ours(&was, &same, 0x400100, 0) == 0);
 }
 
+
+/* ── The start-up window (#627 follow-up: Red Dead Redemption 2's frame-rate patch) ── */
+
+typedef struct {
+    int full, fast;
+} drive_t;
+
+/* The watcher's loop on a fake clock, until `until`: whatever pass cheats_sched_next says is due,
+ * else wait what it says. Each fast pass is followed by its gap, as the watcher does. */
+static drive_t drive(cheats_sched_t *k, uint64_t until) {
+    drive_t d = { 0, 0 };
+    while (now_ms < until) {
+        uint64_t wait = 0;
+        int next = cheats_sched_next(k, &S, F.engine, now_ms, &wait);
+        if (next == CHEATS_NEXT_FULL) {
+            (void)cheats_guard_tick(&G, 106, now_ms);
+            cheats_session_pass(&S, 106, "CUSA03041", now_ms, 0, &OPS);
+            k->last_full_ms = now_ms;
+            d.full++;
+            F.passes++;
+        } else if (next == CHEATS_NEXT_FAST) {
+            cheats_session_fast_pass(&S, now_ms, &OPS);
+            k->last_fast_ms = now_ms;
+            d.fast++;
+        } else {
+            CHECK(wait > 0 && wait <= CHEATS_SESSION_FULL_EVERY_MS);
+            now_ms += wait;
+        }
+    }
+    return d;
+}
+
+static int64_t after_of(int flat, int *late) {
+    int64_t a = -2;
+    if (!cheats_session_timing(&S, flat, &a, late)) return -2;
+    return a;
+}
+
+/* The launch is seen and the code arrives 150 ms in: applied within a fast-pass gap of it. */
+static void test_fast_applies_at_start(void) {
+    setup(1);
+    uint64_t t0 = now_ms;
+    F.c[0].ready_at = t0 + 150;
+    F.write_cost = 2;
+    cheats_session_launch(&S, 106, "CUSA03041", t0, 1, 1, now_ms);
+    cheats_sched_t k = { 0, 0 };
+    drive_t d = drive(&k, t0 + 1000);
+    CHECK(status(0) == CHEATS_ST_APPLIED);
+    int late = -1;
+    int64_t a = after_of(0, &late);
+    CHECK(a >= 150 && a <= 150 + (int64_t)CHEATS_SESSION_FAST_EVERY_MS + 2);
+    CHECK(late == 0);
+    CHECK(d.full == 1);                                 /* only the first: the rest are fast */
+    CHECK(d.fast >= 20 && d.fast <= 150 / (int)CHEATS_SESSION_FAST_EVERY_MS + 2);
+    CHECK(S.e[0].attempts == d.full + d.fast);           /* tried on every pass */
+    CHECK(F.writes == 1 && F.marker_sets == 1 && F.guard_calls == 1);
+    CHECK(F.notes == 1 && strstr(F.last_note, "1 cheat applied") == F.last_note);
+    CHECK(strstr(F.last_log, "applied ") && strstr(F.last_log, "ms after launch (code ready at"));
+    CHECK(!strstr(F.last_log, "LATE"));
+    /* all applied: back to the full passes' pace, no fast pass */
+    CHECK(!cheats_session_fast(&S, now_ms));
+    uint64_t w = 0;
+    CHECK(cheats_sched_next(&k, &S, 1, now_ms, &w) != CHEATS_NEXT_FAST);
+    d = drive(&k, t0 + 30000);
+    CHECK(d.fast == 0 && d.full >= 9 && d.full <= 10);
+    CHECK(F.writes == 1 && F.notes == 1 && F.guard_calls == 1);
+}
+
+/* Nothing switched on: the window closes at the first pass. */
+static void test_fast_nothing_on(void) {
+    setup(1);
+    F.c[0].on = 0;
+    cheats_session_launch(&S, 106, "CUSA03041", now_ms, 1, 1, now_ms);
+    CHECK(cheats_session_fast(&S, now_ms)); /* not listed yet */
+    cheats_sched_t k = { 0, 0 };
+    drive_t d = drive(&k, now_ms + 10000);
+    CHECK(d.fast == 0 && d.full == 4 && F.applies == 0);
+}
+
+/* A paused game (the crash guard): its first pass tries nothing, so no start-up window. */
+static void test_fast_held(void) {
+    setup(1);
+    F.held = 1;
+    cheats_session_launch(&S, 106, "CUSA03041", now_ms, 1, 1, now_ms);
+    cheats_sched_t k = { 0, 0 };
+    drive_t d = drive(&k, now_ms + 10000);
+    CHECK(d.fast == 0 && F.applies == 0 && F.notes == 1);
+}
+
+/* The code never comes: fast passes for CHEATS_SESSION_FAST_MS, then the full passes' pace, and
+ * the back-off still counts full passes only. */
+static void test_fast_window_capped(void) {
+    setup(1);
+    uint64_t t0 = now_ms;
+    F.c[0].ready_at = t0 + 10 * 60 * 1000;
+    cheats_session_launch(&S, 106, "CUSA03041", t0, 1, 1, now_ms);
+    cheats_sched_t k = { 0, 0 };
+    drive_t d = drive(&k, t0 + CHEATS_SESSION_FAST_MS + 1);
+    CHECK(d.fast > 10000 && d.fast <= (int)(CHEATS_SESSION_FAST_MS / CHEATS_SESSION_FAST_EVERY_MS));
+    CHECK(d.full == (int)(CHEATS_SESSION_FAST_MS / CHEATS_SESSION_FULL_EVERY_MS) + 1);
+    CHECK(status(0) == CHEATS_ST_WAITING);
+    CHECK(!cheats_session_fast(&S, now_ms));
+    /* fast passes are not back-off tries: 20 full passes in a minute reach the slow pace */
+    CHECK(S.e[0].tries == CHEATS_SESSION_FAST_TRIES);
+    d = drive(&k, now_ms + 30000);
+    CHECK(d.fast == 0 && d.full == 10);
+}
+
+/* Code ready 4 s in (a slow disc, say): applied, but marked late. */
+static void test_late_after_launch(void) {
+    setup(1);
+    uint64_t t0 = now_ms;
+    F.c[0].ready_at = t0 + 4000;
+    cheats_session_launch(&S, 106, "CUSA03041", t0, 1, 1, now_ms);
+    cheats_sched_t k = { 0, 0 };
+    drive(&k, t0 + 5000);
+    int late = 0;
+    int64_t a = after_of(0, &late);
+    CHECK(a >= 4000 && a < 4000 + 10 && late == 1);
+    CHECK(strstr(F.last_log, "LATE") != NULL);
+}
+
+/* The helper did not see the start (it started mid-game): written now, so late, time unknown. An
+ * already-on cheat (a helper restart mid-game) is not timed at all. */
+static void test_launch_not_seen(void) {
+    setup(2);
+    F.c[1].bytes = B_ON;
+    pass_pid(106);
+    int late = 0;
+    CHECK(after_of(0, &late) == -1 && late == 1);
+    CHECK(after_of(1, &late) == -2);
+    CHECK(!cheats_session_fast(&S, now_ms));
+}
+
+/* A pattern still being looked for keeps the full passes' pace (it scans the whole module). */
+static void test_fast_skips_scans(void) {
+    setup(2);
+    uint64_t t0 = now_ms;
+    F.c[0].load_after = 1000;
+    F.c[0].scan_partial = 1;
+    F.c[1].ready_at = t0 + 100;
+    cheats_session_launch(&S, 106, "CUSA03041", t0, 1, 1, now_ms);
+    cheats_sched_t k = { 0, 0 };
+    drive(&k, t0 + 2000);
+    CHECK(status(1) == CHEATS_ST_APPLIED && status(0) == CHEATS_ST_WAITING);
+    CHECK(F.applies < 40); /* cheat 0: one try, cheat 1: ~100 ms of fast tries */
+    CHECK(!cheats_session_fast(&S, now_ms));
+}
+
+/* A second exec of the same process: its code is new, so everything starts over. A re-apply from
+ * the app keeps the launch: it is timed (late) from the start. */
+static void test_reexec_and_force(void) {
+    setup(1);
+    uint64_t t0 = now_ms;
+    cheats_session_launch(&S, 106, "CUSA03041", t0, 1, 1, now_ms);
+    cheats_sched_t k = { 0, 0 };
+    drive(&k, t0 + 50);
+    CHECK(status(0) == CHEATS_ST_APPLIED && F.writes == 1);
+    F.c[0].bytes = B_ORIG;
+    uint64_t t1 = now_ms;
+    cheats_session_launch(&S, 106, "CUSA03041", t1, 1, 1, now_ms);
+    CHECK(status(0) == CHEATS_ST_NONE);
+    k.last_full_ms = 0;
+    drive(&k, now_ms + 50);
+    CHECK(status(0) == CHEATS_ST_APPLIED && F.writes == 2);
+    now_ms = t0 + 20000;
+    F.c[0].bytes = B_ORIG;
+    cheats_session_pass(&S, 106, "CUSA03041", now_ms, 1, &OPS);
+    int late = 0;
+    CHECK(after_of(0, &late) == (int64_t)(now_ms - t1) && late == 1);
+}
+
+/* The watcher's pace with no game: look every 500 ms while the engine is on, else every 3 s. */
+static void test_sched_idle(void) {
+    cheats_session_t idle;
+    cheats_session_reset(&idle);
+    cheats_sched_t k = { 1000, 0 };
+    uint64_t w = 0;
+    CHECK(cheats_sched_next(&k, &idle, 1, 1100, &w) == CHEATS_NEXT_WAIT && w == 400);
+    CHECK(cheats_sched_next(&k, &idle, 1, 1500, &w) == CHEATS_NEXT_FULL);
+    CHECK(cheats_sched_next(&k, &idle, 0, 1500, &w) == CHEATS_NEXT_WAIT && w == 2500);
+    CHECK(cheats_sched_next(&k, &idle, 0, 4000, &w) == CHEATS_NEXT_FULL);
+    k.last_full_ms = 0;
+    CHECK(cheats_sched_next(&k, &idle, 0, 4000, &w) == CHEATS_NEXT_FULL);
+}
+
 int main(void) {
+    test_fast_applies_at_start();
+    test_fast_nothing_on();
+    test_fast_held();
+    test_fast_window_capped();
+    test_late_after_launch();
+    test_launch_not_seen();
+    test_fast_skips_scans();
+    test_reexec_and_force();
+    test_sched_idle();
     test_waits_then_applies();
     test_wrong_version();
     test_reverted_is_reapplied();

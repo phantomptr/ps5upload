@@ -37,3 +37,4 @@ ada593623350800054c841b1f8cdbaf1fabcc608:client/src/i18n/locales/pl.ts:generic-a
 8cba16e85e7009db7e6de1431e73c4e1c2c606cf:client/src/i18n/locales/pl.ts:generic-api-key:6069
 3f2c3db30017d3ef95f200a6f47e55fa238b2620:client/e2e/remote-play-hush.spec.ts:generic-api-key:42
 410cdd60967b834f97492239ae7631d9c8b4cbdf:client/e2e/remote-play-settings.spec.ts:generic-api-key:23
+dfc09e9eded4aabb2729290c3bc3ed10fc7aa38d:client/e2e/remote-play-mini.spec.ts:generic-api-key:21

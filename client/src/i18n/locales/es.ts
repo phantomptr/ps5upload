@@ -5906,6 +5906,10 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "cw_cheats_applied_failed": "No se pudo aplicar: {reason}",
 "cheats_applied_changed": "El juego cambió esto; no se tocó",
 "cw_cheats_applied_changed": "El juego cambió esto; no se tocó",
+"cheats_applied_late": "Aplicado {seconds} s después de iniciar el juego: si no tiene efecto, déjalo activado y reinicia el juego.",
+"cw_cheats_applied_late": "Aplicado {seconds} s después de iniciar el juego: si no tiene efecto, déjalo activado y reinicia el juego.",
+"cheats_applied_late_unseen": "Aplicado con el juego ya iniciado: si no tiene efecto, déjalo activado y reinicia el juego.",
+"cw_cheats_applied_late_unseen": "Aplicado con el juego ya iniciado: si no tiene efecto, déjalo activado y reinicia el juego.",
 "cheats_import_hint_xml": "También sirve un parche de juego en formato .xml de PS-Game-Patch. Ponle de nombre su ID de título, por ejemplo PPSA01339.xml.",
 "cw_cheats_other_version": "Hecho para otra versión del juego",
 "cw_cheats_err_version": "Este parche no es para la versión del juego que tienes. Elige uno hecho para tu versión.",
@@ -6253,6 +6257,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_phase_reconnecting": "Reconectando…",
 "rp_stats_audio": "sonido {ms} ms",
 "rp_stats_audio_gaps": "{n} cortes",
+"rp_sound_blocked": "Activar el sonido",
 "rp_set_picture": "Imagen",
 "rp_fps": "Velocidad de fotogramas",
 "rp_fps_60": "60 fps (fluido)",
@@ -6897,6 +6902,12 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
   "update_open_log": "Abrir registro de actualizaciones",
   "update_no_log": "Todavía no hay registro de actualizaciones.",
   "update_open_log_failed": "No se pudo abrir el registro de actualizaciones: {message}",
+  "rp_mini_back": "Volver a Jugar: {name}",
+  "rp_mini_close": "Ocultar el minirreproductor (la transmisión sigue)",
+  "rp_mini_setting": "Minirreproductor en otras pantallas",
+  "rp_mini_setting_hint": "Mientras usas otras pantallas de la app, la imagen se queda en una ventana pequeña que puedes arrastrar a cualquier esquina. Tócala para volver aquí.",
+  "rp_system_pip_setting": "Mantener la imagen flotando al salir de la app",
+  "rp_system_pip_setting_hint": "Si vas a la pantalla de inicio mientras juegas, la imagen se queda en una ventana pequeña sobre otras apps. Tócala para volver.",
 };
 
 export default es;

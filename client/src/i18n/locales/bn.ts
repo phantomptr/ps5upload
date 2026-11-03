@@ -5953,6 +5953,10 @@ library_compressed_hint: "সংকুচিত ইমেজ চালাতে 
 "cw_cheats_applied_failed": "প্রয়োগ করা যায়নি: {reason}",
 "cheats_applied_changed": "গেম এটি বদলে দিয়েছে; ছোঁয়া হয়নি",
 "cw_cheats_applied_changed": "গেম এটি বদলে দিয়েছে; ছোঁয়া হয়নি",
+"cheats_applied_late": "গেম শুরু হওয়ার {seconds} সেকেন্ড পরে প্রয়োগ হয়েছে — কাজ না করলে চালু রেখে গেমটি আবার শুরু করুন।",
+"cw_cheats_applied_late": "গেম শুরু হওয়ার {seconds} সেকেন্ড পরে প্রয়োগ হয়েছে — কাজ না করলে চালু রেখে গেমটি আবার শুরু করুন।",
+"cheats_applied_late_unseen": "গেম আগেই চালু হওয়ার পরে প্রয়োগ হয়েছে — কাজ না করলে চালু রেখে গেমটি আবার শুরু করুন।",
+"cw_cheats_applied_late_unseen": "গেম আগেই চালু হওয়ার পরে প্রয়োগ হয়েছে — কাজ না করলে চালু রেখে গেমটি আবার শুরু করুন।",
 "cheats_import_hint_xml": "PS-Game-Patch .xml ফরম্যাটের গেম প্যাচও চলে। টাইটেল আইডি দিয়ে নাম দিন, যেমন PPSA01339.xml।",
 "cw_cheats_other_version": "অন্য গেম সংস্করণের জন্য তৈরি",
 "cw_cheats_err_version": "এই প্যাচ আপনার গেম সংস্করণের জন্য নয়। আপনার সংস্করণের জন্য তৈরি একটি বেছে নিন।",
@@ -6300,6 +6304,7 @@ library_compressed_hint: "সংকুচিত ইমেজ চালাতে 
 "rp_phase_reconnecting": "পুনরায় সংযোগ হচ্ছে…",
 "rp_stats_audio": "শব্দ {ms} ms",
 "rp_stats_audio_gaps": "{n}টি বিরতি",
+"rp_sound_blocked": "শব্দ চালু করুন",
 "rp_set_picture": "ছবি",
 "rp_fps": "ফ্রেম রেট",
 "rp_fps_60": "60 fps (মসৃণ)",
@@ -6944,6 +6949,12 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
   "update_open_log": "আপডেট লগ খুলুন",
   "update_no_log": "এখনও কোনো আপডেট লগ নেই।",
   "update_open_log_failed": "আপডেট লগ খোলা যায়নি: {message}",
+  "rp_mini_back": "খেলায় ফিরে যান: {name}",
+  "rp_mini_close": "মিনি প্লেয়ার লুকান (স্ট্রিম চলতে থাকবে)",
+  "rp_mini_setting": "অন্য স্ক্রিনে মিনি প্লেয়ার",
+  "rp_mini_setting_hint": "অ্যাপের অন্য স্ক্রিন ব্যবহার করার সময় ছবিটি একটি ছোট উইন্ডোতে থাকে, যা আপনি যেকোনো কোণে টেনে নিতে পারেন। এখানে ফিরতে এতে ট্যাপ করুন।",
+  "rp_system_pip_setting": "অ্যাপ ছেড়ে গেলেও ছবি ভাসমান রাখুন",
+  "rp_system_pip_setting_hint": "খেলার সময় হোম স্ক্রিনে গেলে ছবিটি অন্য অ্যাপের উপরে একটি ছোট উইন্ডোতে থাকে। ফিরে আসতে এতে ট্যাপ করুন।",
 };
 
 export default bn;

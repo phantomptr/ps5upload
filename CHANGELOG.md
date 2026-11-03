@@ -4,6 +4,45 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 10.7.6
+
+- **Saved cheats and patches are applied the moment a game starts (For #627).** Some patches only
+  work if they are in place before the game reads the setting they change, which it does once in
+  its first seconds: Red Dead Redemption 2's "Unlock FPS" patch is one. The helper used to look
+  for a running game every 3 seconds, so it wrote such a patch 3 to 9 seconds in: it read back as
+  applied and did nothing. Now the helper hears the game start and, for its first minute, tries
+  the cheats still waiting for the game's code every few milliseconds, so they land as soon as the
+  code is there. With the engine on and no game running, it also looks for a game every half
+  second, in case it missed a start.
+- **A cheat that landed late says so.** When a saved cheat was applied more than about 3 seconds
+  after the game started, or after a start the helper didn't see (it was sent while the game was
+  already running, or the engine was turned on mid-game), the line under its switch says "Applied
+  N s after the game started — if it has no effect, restart the game with it on." In the apps and
+  on Minion's Cheats page.
+- **Timings in the helper's log**, for a bug report: when the game started, when its eboot.bin
+  loaded, each cheat's waits, and "applied 180 ms after launch (code ready at 150 ms)".
+- **A PS4 game's DLC is no longer listed as a second copy of the game.** For #638. Some DLC
+  packages, mostly the small ones that only unlock something already in the game, have no
+  data of their own, and the library did not recognise that kind of package, so it counted it
+  as the game itself and marked the game as a duplicate. These are now recognised as DLC, a
+  package's own "this is DLC" note is believed even when its header says otherwise, and two
+  items only count as the same game stored twice when they are the same release (the same
+  content ID): a game and its DLC, or two DLCs, never are. Libraries are re-read once, so
+  games marked as duplicates by mistake are cleared on the next scan.
+- **Remote Play keeps showing while you use other screens, and over other apps on Android (For
+  #637).** Leave Play while a stream runs and the picture stays in a small mini player in a
+  corner of the app, on the desktop, phone and tablet apps and in the browser: drag it to any
+  corner (remembered), tap it to go back, mute it, or hide it with ×. The controller and keyboard
+  still play only while Play is in front, so they work the app's menus elsewhere. In the Android
+  app, going to the home screen while you play shrinks the stream into Android's
+  picture-in-picture window, which floats over other apps with its sound; tap it to come back.
+  Both can be turned off in Play › Settings › Session.
+- **Remote Play sound the browser held back starts on the next click or key.** A session that
+  did not start right after a click (a launch that first woke the console or started the game)
+  could play no sound at all, the stats reading "sound 0 ms": the browser holds sound back
+  until you click. Now any click or key in the app starts it, also when the browser stops it
+  later, and the picture shows a **Turn on sound** button meanwhile.
+
 ## 10.7.5
 
 - **Remote Play sound no longer turns to static after the app has been open a long time.** In

@@ -2,6 +2,8 @@
   "cw_actions": "Действия",
   "cw_cheats_applied_changed": "Игра изменила это; не трогаем",
   "cw_cheats_applied_failed": "Не удалось применить: {reason}",
+  "cw_cheats_applied_late": "Применено через {seconds} с после запуска игры — если не действует, оставьте включённым и перезапустите игру.",
+  "cw_cheats_applied_late_unseen": "Применено, когда игра уже была запущена — если не действует, оставьте включённым и перезапустите игру.",
   "cw_cheats_applied_ok": "Применено ✓",
   "cw_cheats_applied_waiting": "Ждём загрузки игры…",
   "cw_cheats_apply": "Применить",

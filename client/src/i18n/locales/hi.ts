@@ -5967,6 +5967,10 @@ library_compressed_hint: "संपीड़ित इमेज चलाने 
 "cw_cheats_applied_failed": "लागू नहीं हो सका: {reason}",
 "cheats_applied_changed": "गेम ने इसे बदल दिया; छुआ नहीं गया",
 "cw_cheats_applied_changed": "गेम ने इसे बदल दिया; छुआ नहीं गया",
+"cheats_applied_late": "गेम शुरू होने के {seconds} सेकंड बाद लागू हुआ — अगर असर न हो, तो इसे चालू रखकर गेम फिर से शुरू करें।",
+"cw_cheats_applied_late": "गेम शुरू होने के {seconds} सेकंड बाद लागू हुआ — अगर असर न हो, तो इसे चालू रखकर गेम फिर से शुरू करें।",
+"cheats_applied_late_unseen": "गेम पहले से चलने के बाद लागू हुआ — अगर असर न हो, तो इसे चालू रखकर गेम फिर से शुरू करें।",
+"cw_cheats_applied_late_unseen": "गेम पहले से चलने के बाद लागू हुआ — अगर असर न हो, तो इसे चालू रखकर गेम फिर से शुरू करें।",
 "cheats_import_hint_xml": "PS-Game-Patch .xml फ़ॉर्मैट का गेम पैच भी चलता है। उसका नाम टाइटल आईडी रखें, जैसे PPSA01339.xml।",
 "cw_cheats_other_version": "दूसरे गेम संस्करण के लिए बना",
 "cw_cheats_err_version": "यह पैच आपके गेम संस्करण के लिए नहीं है। अपने संस्करण के लिए बना पैच चुनें।",
@@ -6314,6 +6318,7 @@ library_compressed_hint: "संपीड़ित इमेज चलाने 
 "rp_phase_reconnecting": "फिर से कनेक्ट हो रहा है…",
 "rp_stats_audio": "ध्वनि {ms} ms",
 "rp_stats_audio_gaps": "{n} रुकावटें",
+"rp_sound_blocked": "आवाज़ चालू करें",
 "rp_set_picture": "चित्र",
 "rp_fps": "फ़्रेम दर",
 "rp_fps_60": "60 fps (सहज)",
@@ -6958,6 +6963,12 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
   "update_open_log": "अपडेट लॉग खोलें",
   "update_no_log": "अभी कोई अपडेट लॉग नहीं है।",
   "update_open_log_failed": "अपडेट लॉग नहीं खुल सका: {message}",
+  "rp_mini_back": "खेलने पर वापस जाएँ: {name}",
+  "rp_mini_close": "मिनी प्लेयर छिपाएँ (स्ट्रीम चलती रहती है)",
+  "rp_mini_setting": "दूसरी स्क्रीन पर मिनी प्लेयर",
+  "rp_mini_setting_hint": "जब आप ऐप की दूसरी स्क्रीन इस्तेमाल करते हैं, तस्वीर एक छोटी विंडो में रहती है जिसे आप किसी भी कोने में खींच सकते हैं। यहाँ लौटने के लिए उस पर टैप करें।",
+  "rp_system_pip_setting": "ऐप छोड़ने पर तस्वीर तैरती रहे",
+  "rp_system_pip_setting_hint": "खेलते समय होम स्क्रीन पर जाने पर तस्वीर दूसरे ऐप के ऊपर एक छोटी विंडो में रहती है। वापस आने के लिए उस पर टैप करें।",
 };
 
 export default hi;

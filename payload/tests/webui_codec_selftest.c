@@ -862,6 +862,22 @@ static void cheats_mods(void) {
     CHECK(strstr(out, "\"applied\":\"failed\",\"applied_reason\":\"this patch is for game version 01.17; the game is \\\"01.18\\\"\",\"on\":true}") != NULL);
     CHECK(strstr(out, "\"name\":\"B\",\"desc\":\"\",\"button\":false,\"applied\":\"waiting\",\"on\":true}") != NULL);
     CHECK(strstr(out, "bogus") == NULL && strstr(out, "\"name\":\"C\",\"desc\":\"\",\"button\":false,\"on\":true}") != NULL);
+    /* when it applied after the game started, and late (#627 start-time patches); only for
+     * "applied" */
+    j = "{\"title_id\":\"CUSA03041\",\"mods\":[{\"index\":0,\"name\":\"Unlock FPS (01.32)\",\"desc\":\"\","
+        "\"type\":\"checkbox\",\"on\":true,\"format\":\"xml\",\"applied\":\"applied\",\"applied_after_ms\":180},"
+        "{\"index\":1,\"name\":\"B\",\"desc\":\"\",\"type\":\"checkbox\",\"on\":true,\"applied\":\"applied\","
+        "\"applied_after_ms\":6400,\"applied_late\":true},"
+        "{\"index\":2,\"name\":\"C\",\"desc\":\"\",\"type\":\"checkbox\",\"on\":true,\"applied\":\"applied\","
+        "\"applied_late\":true},"
+        "{\"index\":3,\"name\":\"D\",\"desc\":\"\",\"type\":\"checkbox\",\"on\":true,\"applied\":\"waiting\","
+        "\"applied_after_ms\":5,\"applied_late\":true}]}";
+    CHECK(webui_cheats_mods_to_json(j, strlen(j), out, sizeof out, err, sizeof err) == 4);
+    CHECK(json_valid(out));
+    CHECK(strstr(out, "\"applied\":\"applied\",\"applied_after_ms\":180,\"on\":true}") != NULL);
+    CHECK(strstr(out, "\"applied\":\"applied\",\"applied_after_ms\":6400,\"applied_late\":true,\"on\":true}") != NULL);
+    CHECK(strstr(out, "\"name\":\"C\",\"desc\":\"\",\"button\":false,\"applied\":\"applied\",\"applied_late\":true,\"on\":true}") != NULL);
+    CHECK(strstr(out, "\"name\":\"D\",\"desc\":\"\",\"button\":false,\"applied\":\"waiting\",\"on\":true}") != NULL);
     /* the helper's "no cheat files" answer: an empty list, not an error */
     j = "{\"mods\":[],\"error\":\"no cheat files found\"}";
     CHECK(webui_cheats_mods_to_json(j, strlen(j), out, sizeof out, err, sizeof err) == 0);

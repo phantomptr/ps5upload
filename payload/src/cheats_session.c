@@ -70,20 +70,63 @@ static void fail(cheats_session_t *s, cheats_entry_t *e, const char *why) {
     tell(s, msg, 1);
 }
 
-static void wait_more(cheats_session_t *s, cheats_entry_t *e, const char *why) {
+static uint64_t clock_now(const cheats_session_t *s, uint64_t pass_now) {
+    return s->ops && s->ops->now_ms ? s->ops->now_ms(s->ops->ctx) : pass_now;
+}
+
+static void wait_more(cheats_session_t *s, cheats_entry_t *e, const char *why, uint64_t now) {
     const char *r = why && why[0] ? why : "the game is not ready yet";
     /* Logged when the reason changes, not on every pass. */
     if (e->status != CHEATS_ST_WAITING || strcmp(e->reason, r) != 0) {
         copy_reason(e, r);
-        log_line(s, e, r);
+        if (s->launch_seen && now >= s->launch_ms) {
+            char line[CHEATS_SESSION_REASON_MAX + 48];
+            snprintf(line, sizeof line, "waiting (%llu ms after launch): %s",
+                     (unsigned long long)(now - s->launch_ms), r);
+            log_line(s, e, line);
+        } else {
+            log_line(s, e, r);
+        }
     }
     e->status = CHEATS_ST_WAITING;
+    /* A fast pass is not one of the watcher's tries: the back-off counts full passes. */
+    if (s->in_fast) return;
     e->tries++;
     e->skip = e->tries >= CHEATS_SESSION_FAST_TRIES ? CHEATS_SESSION_SLOW_EVERY - 1 : 0;
 }
 
-static int applied(cheats_session_t *s, cheats_entry_t *e, int reapply, uint64_t now) {
+/* A cheat's first automatic apply: how long after the launch, said once in the log. */
+static void time_first_apply(cheats_session_t *s, cheats_entry_t *e, uint64_t start, uint64_t done) {
+    char what[200];
+    e->timed = 1;
+    if (s->launch_seen && done >= s->launch_ms) {
+        e->after_ms = (int64_t)(done - s->launch_ms);
+        e->ready_ms = start >= s->launch_ms ? (int64_t)(start - s->launch_ms) : 0;
+        e->late = e->after_ms > (int64_t)CHEATS_SESSION_LATE_MS;
+        snprintf(what, sizeof what,
+                 "applied %lld ms after launch (code ready at %lld ms, %d attempt%s)%s",
+                 (long long)e->after_ms, (long long)e->ready_ms, e->attempts,
+                 e->attempts == 1 ? "" : "s",
+                 e->late ? "; LATE: a start-time patch needs a restart of the game with it on" : "");
+    } else if (s->wrote) {
+        e->after_ms = e->ready_ms = -1;
+        e->late = 1;
+        snprintf(what, sizeof what,
+                 "applied, but the game's start was not seen (it was already running); LATE: a "
+                 "start-time patch needs a restart of the game with it on");
+    } else {
+        /* Already on when first looked at (a helper restarted mid-game): not ours to time. */
+        e->timed = 0;
+        e->after_ms = e->ready_ms = -1;
+        snprintf(what, sizeof what, "already applied (the game's start was not seen)");
+    }
+    log_line(s, e, what);
+}
+
+static int applied(cheats_session_t *s, cheats_entry_t *e, int reapply, uint64_t now,
+                   uint64_t start) {
     int first = 0;
+    if (!reapply && !e->ever_applied) time_first_apply(s, e, start, clock_now(s, now));
     e->status = CHEATS_ST_APPLIED;
     e->reason[0] = '\0';
     e->tries = 0;
@@ -106,6 +149,7 @@ static int applied(cheats_session_t *s, cheats_entry_t *e, int reapply, uint64_t
 }
 
 void cheats_session_before_write(cheats_session_t *s) {
+    if (s) s->wrote = 1;
     if (!s || !s->arming || s->marker_on) return;
     /* A window already running has its marker: the apply refreshes the window. */
     if (s->ops && s->ops->guard_watching && s->ops->guard_watching(s->ops->ctx, s->title, s->pid))
@@ -116,13 +160,16 @@ void cheats_session_before_write(cheats_session_t *s) {
 
 static int try_apply(cheats_session_t *s, cheats_entry_t *e, int reapply, uint64_t now) {
     char why[CHEATS_SESSION_REASON_MAX] = "";
+    uint64_t start = clock_now(s, now);
     s->arming = !reapply && !e->ever_applied && !s->no_guard;
+    s->wrote = 0;
+    e->attempts++;
     int out = s->ops->apply(s->ops->ctx, s, &e->item, reapply, why, sizeof why);
     s->arming = 0;
     switch (out) {
         case CHEATS_OUT_APPLIED:
             if (reapply) log_line(s, e, "the game undid it; applied again");
-            return applied(s, e, reapply, now) ? 1 : 0;
+            return applied(s, e, reapply, now, start) ? 1 : 0;
         case CHEATS_OUT_WAITING_SCAN:
             /* Not found in the part of the module that could be read: maybe not loaded yet, maybe
              * another build. Waiting costs a scan under the apply lock each time, so not forever. */
@@ -132,10 +179,10 @@ static int try_apply(cheats_session_t *s, cheats_entry_t *e, int reapply, uint64
                 fail(s, e, CHEATS_SESSION_SCAN_FAILED);
                 return 0;
             }
-            wait_more(s, e, why);
+            wait_more(s, e, why, start);
             return 0;
         case CHEATS_OUT_WAITING:
-            wait_more(s, e, why);
+            wait_more(s, e, why, start);
             return 0;
         case CHEATS_OUT_GONE:
             return -1; /* the caller drops it */
@@ -156,6 +203,8 @@ static int too_many_reverts(cheats_entry_t *e, uint64_t now) {
     return 0;
 }
 
+static void finish_pass(cheats_session_t *s, uint64_t now, int force);
+
 void cheats_session_begin(cheats_session_t *s, int pid, const char *title) {
     if (s->pid == pid && strcmp(s->title, title ? title : "") == 0) return;
     cheats_session_reset(s);
@@ -173,7 +222,20 @@ int cheats_session_pass(cheats_session_t *s, int pid, const char *title, uint64_
         cheats_session_reset(s);
         return 0;
     }
-    if (force) cheats_session_reset(s);
+    if (force) {
+        /* A fresh session, but the same launch: its applies are timed from the game's start. */
+        int same = s->pid == pid && strcmp(s->title, title) == 0;
+        uint64_t launch = s->launch_ms, until = s->fast_until;
+        int seen = s->launch_seen;
+        cheats_session_reset(s);
+        if (same) {
+            s->pid = pid;
+            snprintf(s->title, sizeof s->title, "%s", title);
+            s->launch_ms = launch;
+            s->launch_seen = seen;
+            s->fast_until = until;
+        }
+    }
     cheats_session_begin(s, pid, title);
     /* An explicit re-apply is a choice, like a switch: the guard does not watch it. */
     s->no_guard = force;
@@ -189,6 +251,7 @@ int cheats_session_pass(cheats_session_t *s, int pid, const char *title, uint64_
             s->held_told = 1;
         }
         s->n = 0;
+        s->listed = 1; /* nothing to try: no start-up window */
         return 0;
     }
     s->held_told = 0;
@@ -197,6 +260,7 @@ int cheats_session_pass(cheats_session_t *s, int pid, const char *title, uint64_
     char game[CHEATS_SESSION_NAME_MAX] = "";
     int ni = ops->list(ops->ctx, title, items, CHEATS_SESSION_MAX_ITEMS, game, sizeof game);
     int listed = ni >= 0;
+    s->listed = 1; /* tried: a list that failed is tried again at the full passes' pace */
     if (!listed) ni = 0; /* could not be listed now: keep what we have */
     else {
         if (game[0]) snprintf(s->game, sizeof s->game, "%s", game);
@@ -261,6 +325,12 @@ int cheats_session_pass(cheats_session_t *s, int pid, const char *title, uint64_
         }
     }
 
+    finish_pass(s, now, force);
+    return fresh;
+}
+
+static void finish_pass(cheats_session_t *s, uint64_t now, int force) {
+    const cheats_session_ops_t *ops = s->ops;
     /* The marker was written for an apply that did not land: nothing to watch. */
     if (s->marker_on && !s->armed_pass && ops->marker_clear) ops->marker_clear(ops->ctx);
     s->marker_on = 0;
@@ -279,7 +349,83 @@ int cheats_session_pass(cheats_session_t *s, int pid, const char *title, uint64_
             s->announce = 0;
         }
     }
+}
+
+void cheats_session_launch(cheats_session_t *s, int pid, const char *title, uint64_t at_ms,
+                           int seen, int fast, uint64_t now) {
+    cheats_session_reset(s);
+    s->pid = pid;
+    snprintf(s->title, sizeof s->title, "%s", title ? title : "");
+    s->launch_seen = seen ? 1 : 0;
+    s->launch_ms = seen ? at_ms : 0;
+    s->fast_until = fast && pid > 0 ? now + CHEATS_SESSION_FAST_MS : 0;
+}
+
+static int waiting_fast(const cheats_entry_t *e) {
+    /* A pattern scan reads the whole module: it keeps the full passes' pace and its own bound. */
+    return e->status == CHEATS_ST_WAITING && e->scan_waits == 0;
+}
+
+int cheats_session_fast(const cheats_session_t *s, uint64_t now) {
+    if (s->pid <= 0 || !s->fast_until || now >= s->fast_until) return 0;
+    if (!s->listed) return 1;
+    for (int i = 0; i < s->n; i++)
+        if (waiting_fast(&s->e[i])) return 1;
+    return 0;
+}
+
+int cheats_session_fast_pass(cheats_session_t *s, uint64_t now, const cheats_session_ops_t *ops) {
+    if (s->pid <= 0 || !s->listed || !ops->engine_on(ops->ctx)) return 0;
+    s->ops = ops;
+    s->no_guard = 0;
+    s->marker_on = 0;
+    s->armed_pass = 0;
+    s->in_fast = 1;
+    s->fast_passes++;
+    int fresh = 0;
+    for (int i = 0; i < s->n; i++) {
+        cheats_entry_t *e = &s->e[i];
+        if (!waiting_fast(e)) continue;
+        int r = try_apply(s, e, 0, now);
+        if (r < 0) {
+            drop(s, i);
+            i--;
+        } else {
+            fresh += r;
+        }
+    }
+    s->in_fast = 0;
+    finish_pass(s, now, 0);
     return fresh;
+}
+
+int cheats_sched_next(const cheats_sched_t *k, const cheats_session_t *s, int engine_on,
+                      uint64_t now, uint64_t *wait_ms) {
+    uint64_t every = engine_on && s->pid <= 0 ? CHEATS_SESSION_IDLE_EVERY_MS
+                                              : CHEATS_SESSION_FULL_EVERY_MS;
+    if (!k->last_full_ms || now < k->last_full_ms || now - k->last_full_ms >= every)
+        return CHEATS_NEXT_FULL;
+    uint64_t wait = every - (now - k->last_full_ms);
+    if (engine_on && cheats_session_fast(s, now)) {
+        uint64_t since = now >= k->last_fast_ms ? now - k->last_fast_ms : 0;
+        if (!k->last_fast_ms || since >= CHEATS_SESSION_FAST_EVERY_MS) return CHEATS_NEXT_FAST;
+        if (CHEATS_SESSION_FAST_EVERY_MS - since < wait) wait = CHEATS_SESSION_FAST_EVERY_MS - since;
+    }
+    if (wait_ms) *wait_ms = wait;
+    return CHEATS_NEXT_WAIT;
+}
+
+int cheats_session_timing(const cheats_session_t *s, int flat, int64_t *after_ms, int *late) {
+    if (flat < 0) return 0;
+    for (int i = 0; i < s->n; i++) {
+        const cheats_entry_t *e = &s->e[i];
+        if (e->item.flat != flat) continue;
+        if (!e->timed || e->status != CHEATS_ST_APPLIED) return 0;
+        if (after_ms) *after_ms = e->after_ms;
+        if (late) *late = e->late;
+        return 1;
+    }
+    return 0;
 }
 
 void cheats_session_manual(cheats_session_t *s, uint64_t key, int on) {

@@ -5968,6 +5968,10 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "cw_cheats_applied_failed": "Não foi possível aplicar: {reason}",
 "cheats_applied_changed": "O jogo alterou isto; não foi mexido",
 "cw_cheats_applied_changed": "O jogo alterou isto; não foi mexido",
+"cheats_applied_late": "Aplicado {seconds} s depois que o jogo começou — se não fizer efeito, deixe ativado e reinicie o jogo.",
+"cw_cheats_applied_late": "Aplicado {seconds} s depois que o jogo começou — se não fizer efeito, deixe ativado e reinicie o jogo.",
+"cheats_applied_late_unseen": "Aplicado com o jogo já em andamento — se não fizer efeito, deixe ativado e reinicie o jogo.",
+"cw_cheats_applied_late_unseen": "Aplicado com o jogo já em andamento — se não fizer efeito, deixe ativado e reinicie o jogo.",
 "cheats_import_hint_xml": "Um patch de jogo no formato .xml do PS-Game-Patch também funciona. Dê a ele o nome do ID do título, por exemplo PPSA01339.xml.",
 "cw_cheats_other_version": "Feito para outra versão do jogo",
 "cw_cheats_err_version": "Este patch não é para a versão do jogo que você tem. Escolha um feito para a sua versão.",
@@ -6315,6 +6319,7 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_phase_reconnecting": "Reconectando…",
 "rp_stats_audio": "som {ms} ms",
 "rp_stats_audio_gaps": "{n} falhas",
+"rp_sound_blocked": "Ativar o som",
 "rp_set_picture": "Imagem",
 "rp_fps": "Taxa de quadros",
 "rp_fps_60": "60 fps (fluido)",
@@ -6959,6 +6964,12 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
   "update_open_log": "Abrir log de atualizações",
   "update_no_log": "Ainda não há log de atualizações.",
   "update_open_log_failed": "Não foi possível abrir o log de atualizações: {message}",
+  "rp_mini_back": "Voltar para Jogar: {name}",
+  "rp_mini_close": "Ocultar o miniplayer (a transmissão continua)",
+  "rp_mini_setting": "Miniplayer em outras telas",
+  "rp_mini_setting_hint": "Enquanto você usa outras telas do app, a imagem fica em uma janela pequena que você pode arrastar para qualquer canto. Toque nela para voltar aqui.",
+  "rp_system_pip_setting": "Manter a imagem flutuando ao sair do app",
+  "rp_system_pip_setting_hint": "Ao ir para a tela inicial enquanto joga, a imagem fica em uma janela pequena sobre outros apps. Toque nela para voltar.",
 };
 
 export default pt_BR;

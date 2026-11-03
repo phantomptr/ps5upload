@@ -77,7 +77,10 @@ function CheatRow({
           {mod.desc ? <span className="cw-dim cw-cheat-desc">{mod.desc}</span> : null}
           {mod.otherVersion ? <span className="cw-dim cw-cheat-desc">{t("cw_cheats_other_version")}</span> : null}
           {status ? (
-            <span className={`cw-cheat-desc cw-cheat-applied is-${mod.applied}`} data-applied={mod.applied}>
+            <span
+              className={`cw-cheat-desc cw-cheat-applied is-${mod.appliedLate ? "late" : mod.applied}`}
+              data-applied={mod.applied}
+            >
               {status}
             </span>
           ) : null}

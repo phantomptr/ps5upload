@@ -818,7 +818,7 @@ pub(crate) async fn inspect_image_handler(
 }
 
 #[cfg(test)]
-mod test_fixtures {
+pub(crate) mod test_fixtures {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -836,7 +836,7 @@ mod test_fixtures {
         d
     }
 
-    fn sfo(pairs: &[(&str, &str)]) -> Vec<u8> {
+    pub fn sfo(pairs: &[(&str, &str)]) -> Vec<u8> {
         let mut keys = Vec::new();
         let mut data = Vec::new();
         let mut index = Vec::new();

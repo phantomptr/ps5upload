@@ -2,6 +2,8 @@
   "cw_actions": "إجراءات",
   "cw_cheats_applied_changed": "غيّرت اللعبة هذا؛ لم يُمَس",
   "cw_cheats_applied_failed": "تعذّر التطبيق: {reason}",
+  "cw_cheats_applied_late": "طُبِّق بعد {seconds} ث من بدء اللعبة — إن لم يكن له أثر، اتركه مفعّلًا وأعد تشغيل اللعبة.",
+  "cw_cheats_applied_late_unseen": "طُبِّق بعد أن كانت اللعبة قد بدأت — إن لم يكن له أثر، اتركه مفعّلًا وأعد تشغيل اللعبة.",
   "cw_cheats_applied_ok": "تم التطبيق ✓",
   "cw_cheats_applied_waiting": "بانتظار تحميل اللعبة…",
   "cw_cheats_apply": "تطبيق",

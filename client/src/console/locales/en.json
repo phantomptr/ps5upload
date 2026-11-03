@@ -2,6 +2,8 @@
   "cw_actions": "Actions",
   "cw_cheats_applied_changed": "The game changed this; not touched",
   "cw_cheats_applied_failed": "Couldn't apply: {reason}",
+  "cw_cheats_applied_late": "Applied {seconds} s after the game started — if it has no effect, restart the game with it on.",
+  "cw_cheats_applied_late_unseen": "Applied after the game had already started — if it has no effect, restart the game with it on.",
   "cw_cheats_applied_ok": "Applied ✓",
   "cw_cheats_applied_waiting": "Waiting for the game to load…",
   "cw_cheats_apply": "Apply",

@@ -27,6 +27,8 @@ import {
 
 import { Button, Callout, Select, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
+import { phaseText } from "../../lib/rpPhaseText";
+import { useAndroidPipStore } from "../../lib/androidPip";
 import { useRosterStore } from "../../state/roster";
 import { deviceName, meshFor, othersRemotePlaying, remotePlayPads, useMeshStore } from "../../state/mesh";
 import { isTauriEnv } from "../../lib/tauriEnv";
@@ -39,7 +41,6 @@ import {
   FIT_ORDER,
   type PictureFit,
   type StreamError,
-  type StreamPhase,
   type StreamStats,
 } from "../../lib/remotePlayStream";
 import {
@@ -203,21 +204,6 @@ export function streamErrorHelp(tr: Tr, e: StreamError, linux = isLinuxDesktop()
     undefined,
     "Use a current Chrome, Edge or Safari, or the desktop app on Windows or macOS.",
   );
-}
-
-export function phaseText(tr: Tr, p: StreamPhase): string {
-  switch (p) {
-    case "connecting":
-      return tr("rp_phase_connecting", undefined, "Connecting…");
-    case "waking":
-      return tr("rp_phase_waking", undefined, "Waking the PS5 (about 20 s)…");
-    case "starting":
-      return tr("rp_phase_starting", undefined, "Starting the stream…");
-    case "reconnecting":
-      return tr("rp_phase_reconnecting", undefined, "Reconnecting…");
-    default:
-      return "";
-  }
 }
 
 function StatsLine({
@@ -481,6 +467,7 @@ export function StreamPanel() {
   const stopStream = useRemotePlayStore((s) => s.stop);
   const setOnScreen = useRemotePlayStore((s) => s.setOnScreen);
   const pip = useRemotePlayStore((s) => s.pip);
+  const androidPip = useAndroidPipStore((s) => s.inPip);
   const switching = useRpQualityStore((s) => !!s.switching);
   const pipKind = useMemo(() => pipSupport(), []);
   const [pipFailed, setPipFailed] = useState(false);
@@ -662,16 +649,17 @@ export function StreamPanel() {
   }, [setOnScreen, stream, running]);
 
   // The stream draws on its own canvas; it is shown here whenever this screen is, unless it is
-  // in a picture-in-picture window (video picture in picture copies it from here).
+  // in a picture-in-picture window (video picture in picture copies it from here) or the
+  // Android app is in picture in picture (layout/RemotePlayMini AndroidPipPicture shows it).
   useEffect(() => {
     const host = canvasHost.current;
-    if (!stream || !host || !running || pip === "popup" || pip === "document") return;
+    if (!stream || !host || !running || pip === "popup" || pip === "document" || androidPip) return;
     host.appendChild(stream.canvas);
     return () => {
       if (stream.canvas.parentElement === host) host.removeChild(stream.canvas);
     };
     // Full screen moves the stage (a portal), so the canvas follows it.
-  }, [stream, full, running, pip]);
+  }, [stream, full, running, pip, androidPip]);
 
   // A stream this page does not show (a reload, another window): offer it here.
   useEffect(() => {
@@ -746,13 +734,14 @@ export function StreamPanel() {
   }, [full, leaveFullLayout]);
   // Turning a phone sideways while playing fills the screen; turning it back (when that is how
   // full screen started) returns to the page. Full screen chosen with the button stays.
+  // Not in Android's picture in picture: its small window is landscape-shaped, not a turn.
   useEffect(() => {
-    if (!playing || pip) return;
+    if (!playing || pip || androidPip) return;
     if (phoneLandscape && !full) enterFull(true);
     else if (!phoneLandscape && full && autoFull.current) exitFull();
     // Only a turn of the phone (or the stream starting) decides this, not every full change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phoneLandscape, playing]);
+  }, [phoneLandscape, playing, androidPip]);
   // The stream ended while full screen: back to the page, where Start is.
   useEffect(() => {
     // Not while switching to 720p: the stream stops and starts again in the same place.
@@ -1169,6 +1158,18 @@ export function StreamPanel() {
             >
               {tr("rp_capture_hint", undefined, "Click the picture to capture the mouse")}
             </div>
+          )}
+          {/* The browser held the sound back (no click right before the session started): any
+              click or key starts it; this button says so and is one. */}
+          {playing && stats?.soundBlocked && !settingsOpen && !pip && (
+            <button
+              type="button"
+              className={`absolute right-3 z-20 rounded-full bg-black/70 px-3 py-1 text-xs text-white/90 hover:bg-black/80 ${showBar && !compact ? "top-16" : "top-3"}`}
+              data-testid="rp-sound-blocked"
+              onClick={() => stream?.resumeSound()}
+            >
+              🔇 {tr("rp_sound_blocked", undefined, "Turn on sound")}
+            </button>
           )}
           {playing && kbm.pointerHeld && prefs.kbmChip && !settingsOpen && !pip && !kbm.hint && (
             <KbmReleaseChip low={showBar && !compact} />

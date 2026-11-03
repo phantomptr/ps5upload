@@ -5962,6 +5962,10 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "cw_cheats_applied_failed": "Tidak dapat diterapkan: {reason}",
 "cheats_applied_changed": "Game mengubah ini; tidak disentuh",
 "cw_cheats_applied_changed": "Game mengubah ini; tidak disentuh",
+"cheats_applied_late": "Diterapkan {seconds} dtk setelah game dimulai — jika tidak berpengaruh, biarkan aktif dan mulai ulang game.",
+"cw_cheats_applied_late": "Diterapkan {seconds} dtk setelah game dimulai — jika tidak berpengaruh, biarkan aktif dan mulai ulang game.",
+"cheats_applied_late_unseen": "Diterapkan saat game sudah berjalan — jika tidak berpengaruh, biarkan aktif dan mulai ulang game.",
+"cw_cheats_applied_late_unseen": "Diterapkan saat game sudah berjalan — jika tidak berpengaruh, biarkan aktif dan mulai ulang game.",
 "cheats_import_hint_xml": "Patch game format .xml PS-Game-Patch juga bisa. Beri nama sesuai ID judulnya, misalnya PPSA01339.xml.",
 "cw_cheats_other_version": "Dibuat untuk versi game lain",
 "cw_cheats_err_version": "Patch ini bukan untuk versi game Anda. Pilih yang dibuat untuk versi Anda.",
@@ -6309,6 +6313,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_phase_reconnecting": "Menyambung ulang…",
 "rp_stats_audio": "suara {ms} ms",
 "rp_stats_audio_gaps": "{n} putus",
+"rp_sound_blocked": "Nyalakan suara",
 "rp_set_picture": "Gambar",
 "rp_fps": "Laju bingkai",
 "rp_fps_60": "60 fps (mulus)",
@@ -6953,6 +6958,12 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "update_open_log": "Buka log pembaruan",
   "update_no_log": "Belum ada log pembaruan.",
   "update_open_log_failed": "Tidak bisa membuka log pembaruan: {message}",
+  "rp_mini_back": "Kembali ke Main: {name}",
+  "rp_mini_close": "Sembunyikan pemutar mini (streaming tetap berjalan)",
+  "rp_mini_setting": "Pemutar mini di layar lain",
+  "rp_mini_setting_hint": "Saat kamu memakai layar lain di aplikasi, gambar tetap di jendela kecil yang bisa kamu seret ke sudut mana pun. Ketuk untuk kembali ke sini.",
+  "rp_system_pip_setting": "Biarkan gambar tetap mengambang saat keluar dari aplikasi",
+  "rp_system_pip_setting_hint": "Saat kamu ke layar beranda sambil bermain, gambar tetap di jendela kecil di atas aplikasi lain. Ketuk untuk kembali.",
 };
 
 export default id;

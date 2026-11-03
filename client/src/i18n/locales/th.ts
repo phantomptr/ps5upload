@@ -5960,6 +5960,10 @@ library_compressed_hint: "อิมเมจที่บีบอัดต้อ
 "cw_cheats_applied_failed": "ใช้ไม่ได้: {reason}",
 "cheats_applied_changed": "เกมเปลี่ยนส่วนนี้แล้ว จึงไม่แตะต้อง",
 "cw_cheats_applied_changed": "เกมเปลี่ยนส่วนนี้แล้ว จึงไม่แตะต้อง",
+"cheats_applied_late": "ใช้แล้ว {seconds} วินาทีหลังเกมเริ่ม — หากไม่มีผล ให้เปิดไว้แล้วเริ่มเกมใหม่",
+"cw_cheats_applied_late": "ใช้แล้ว {seconds} วินาทีหลังเกมเริ่ม — หากไม่มีผล ให้เปิดไว้แล้วเริ่มเกมใหม่",
+"cheats_applied_late_unseen": "ใช้หลังจากเกมเริ่มไปแล้ว — หากไม่มีผล ให้เปิดไว้แล้วเริ่มเกมใหม่",
+"cw_cheats_applied_late_unseen": "ใช้หลังจากเกมเริ่มไปแล้ว — หากไม่มีผล ให้เปิดไว้แล้วเริ่มเกมใหม่",
 "cheats_import_hint_xml": "แพตช์เกมรูปแบบ .xml ของ PS-Game-Patch ก็ใช้ได้ ตั้งชื่อไฟล์ตามรหัสเกม เช่น PPSA01339.xml",
 "cw_cheats_other_version": "ทำมาสำหรับเกมเวอร์ชันอื่น",
 "cw_cheats_err_version": "แพตช์นี้ไม่ใช่สำหรับเวอร์ชันเกมที่คุณมี เลือกแพตช์ที่ทำมาสำหรับเวอร์ชันของคุณ",
@@ -6307,6 +6311,7 @@ library_compressed_hint: "อิมเมจที่บีบอัดต้อ
 "rp_phase_reconnecting": "กำลังเชื่อมต่อใหม่…",
 "rp_stats_audio": "เสียง {ms} ms",
 "rp_stats_audio_gaps": "สะดุด {n} ครั้ง",
+"rp_sound_blocked": "เปิดเสียง",
 "rp_set_picture": "ภาพ",
 "rp_fps": "อัตราเฟรม",
 "rp_fps_60": "60 fps (ลื่นไหล)",
@@ -6951,6 +6956,12 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
   "update_open_log": "เปิดบันทึกการอัปเดต",
   "update_no_log": "ยังไม่มีบันทึกการอัปเดต",
   "update_open_log_failed": "เปิดบันทึกการอัปเดตไม่ได้: {message}",
+  "rp_mini_back": "กลับไปที่เล่น: {name}",
+  "rp_mini_close": "ซ่อนมินิเพลเยอร์ (สตรีมยังทำงานต่อ)",
+  "rp_mini_setting": "มินิเพลเยอร์ในหน้าจออื่น",
+  "rp_mini_setting_hint": "ขณะที่คุณใช้หน้าจออื่นของแอป ภาพจะอยู่ในหน้าต่างเล็กที่ลากไปมุมใดก็ได้ แตะเพื่อกลับมาที่นี่",
+  "rp_system_pip_setting": "ให้ภาพลอยอยู่เมื่อออกจากแอป",
+  "rp_system_pip_setting_hint": "เมื่อไปที่หน้าจอหลักขณะเล่น ภาพจะอยู่ในหน้าต่างเล็กเหนือแอปอื่น แตะเพื่อกลับมา",
 };
 
 export default th;

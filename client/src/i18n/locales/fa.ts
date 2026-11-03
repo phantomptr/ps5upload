@@ -6245,6 +6245,10 @@ library_compressed_hint: "برای اجرای ایمیج فشرده به ShadowM
 "cw_cheats_applied_failed": "اعمال نشد: {reason}",
 "cheats_applied_changed": "بازی این را تغییر داد؛ دست نخورد",
 "cw_cheats_applied_changed": "بازی این را تغییر داد؛ دست نخورد",
+"cheats_applied_late": "{seconds} ثانیه پس از شروع بازی اعمال شد — اگر اثری ندارد، روشن بگذارید و بازی را دوباره اجرا کنید.",
+"cw_cheats_applied_late": "{seconds} ثانیه پس از شروع بازی اعمال شد — اگر اثری ندارد، روشن بگذارید و بازی را دوباره اجرا کنید.",
+"cheats_applied_late_unseen": "پس از شروع بازی اعمال شد — اگر اثری ندارد، روشن بگذارید و بازی را دوباره اجرا کنید.",
+"cw_cheats_applied_late_unseen": "پس از شروع بازی اعمال شد — اگر اثری ندارد، روشن بگذارید و بازی را دوباره اجرا کنید.",
 "cheats_import_hint_xml": "پچ بازی با قالب ‎.xml‎ مخزن PS-Game-Patch هم کار می‌کند. نامش را شناسهٔ عنوان بگذارید، مثلاً PPSA01339.xml.",
 "cw_cheats_other_version": "برای نسخهٔ دیگری از بازی",
 "cw_cheats_err_version": "این پچ برای نسخهٔ بازی شما نیست. پچی را انتخاب کنید که برای نسخهٔ شما ساخته شده است.",
@@ -6592,6 +6596,7 @@ library_compressed_hint: "برای اجرای ایمیج فشرده به ShadowM
 "rp_phase_reconnecting": "در حال اتصال مجدد…",
 "rp_stats_audio": "صدا {ms} ms",
 "rp_stats_audio_gaps": "{n} قطعی",
+"rp_sound_blocked": "روشن کردن صدا",
 "rp_set_picture": "تصویر",
 "rp_fps": "نرخ فریم",
 "rp_fps_60": "60 fps (روان)",
@@ -7236,6 +7241,12 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
   "update_open_log": "باز کردن گزارش به‌روزرسانی",
   "update_no_log": "هنوز گزارش به‌روزرسانی وجود ندارد.",
   "update_open_log_failed": "گزارش به‌روزرسانی باز نشد: {message}",
+  "rp_mini_back": "بازگشت به بازی: {name}",
+  "rp_mini_close": "پنهان کردن پخش‌کنندهٔ کوچک (پخش ادامه دارد)",
+  "rp_mini_setting": "پخش‌کنندهٔ کوچک در صفحه‌های دیگر",
+  "rp_mini_setting_hint": "وقتی از صفحه‌های دیگر برنامه استفاده می‌کنید، تصویر در پنجره‌ای کوچک می‌ماند که می‌توانید آن را به هر گوشه بکشید. برای بازگشت به اینجا روی آن بزنید.",
+  "rp_system_pip_setting": "تصویر هنگام ترک برنامه شناور بماند",
+  "rp_system_pip_setting_hint": "اگر هنگام بازی به صفحهٔ اصلی بروید، تصویر در پنجره‌ای کوچک روی برنامه‌های دیگر می‌ماند. برای بازگشت روی آن بزنید.",
 };
 
 export default fa;

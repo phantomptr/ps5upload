@@ -5953,6 +5953,10 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "cw_cheats_applied_failed": "تعذّر التطبيق: {reason}",
 "cheats_applied_changed": "غيّرت اللعبة هذا؛ لم يُمَس",
 "cw_cheats_applied_changed": "غيّرت اللعبة هذا؛ لم يُمَس",
+"cheats_applied_late": "طُبِّق بعد {seconds} ث من بدء اللعبة — إن لم يكن له أثر، اتركه مفعّلًا وأعد تشغيل اللعبة.",
+"cw_cheats_applied_late": "طُبِّق بعد {seconds} ث من بدء اللعبة — إن لم يكن له أثر، اتركه مفعّلًا وأعد تشغيل اللعبة.",
+"cheats_applied_late_unseen": "طُبِّق بعد أن كانت اللعبة قد بدأت — إن لم يكن له أثر، اتركه مفعّلًا وأعد تشغيل اللعبة.",
+"cw_cheats_applied_late_unseen": "طُبِّق بعد أن كانت اللعبة قد بدأت — إن لم يكن له أثر، اتركه مفعّلًا وأعد تشغيل اللعبة.",
 "cheats_import_hint_xml": "يمكن أيضًا استخدام تصحيح لعبة بتنسيق ‎.xml‎ الخاص بـ PS-Game-Patch. سمِّه باسم معرّف العنوان، مثل PPSA01339.xml.",
 "cw_cheats_other_version": "مصمَّم لإصدار آخر من اللعبة",
 "cw_cheats_err_version": "هذا التصحيح ليس لإصدار اللعبة الذي لديك. اختر تصحيحًا مصممًا لإصدارك.",
@@ -6300,6 +6304,7 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "rp_phase_reconnecting": "جارٍ إعادة الاتصال…",
 "rp_stats_audio": "الصوت {ms} ms",
 "rp_stats_audio_gaps": "{n} انقطاعات",
+"rp_sound_blocked": "تشغيل الصوت",
 "rp_set_picture": "الصورة",
 "rp_fps": "معدل الإطارات",
 "rp_fps_60": "60 fps (سلس)",
@@ -6944,6 +6949,12 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "update_open_log": "فتح سجل التحديثات",
   "update_no_log": "لا يوجد سجل تحديثات بعد.",
   "update_open_log_failed": "تعذّر فتح سجل التحديثات: {message}",
+  "rp_mini_back": "العودة إلى اللعب: {name}",
+  "rp_mini_close": "إخفاء المشغّل المصغّر (يستمر البث)",
+  "rp_mini_setting": "مشغّل مصغّر في الشاشات الأخرى",
+  "rp_mini_setting_hint": "أثناء استخدامك لشاشات أخرى في التطبيق، تبقى الصورة في نافذة صغيرة يمكنك سحبها إلى أي زاوية. انقر عليها للعودة إلى هنا.",
+  "rp_system_pip_setting": "إبقاء الصورة عائمة عند مغادرة التطبيق",
+  "rp_system_pip_setting_hint": "عند الانتقال إلى الشاشة الرئيسية أثناء اللعب، تبقى الصورة في نافذة صغيرة فوق التطبيقات الأخرى. انقر عليها للعودة.",
 };
 
 export default ar;

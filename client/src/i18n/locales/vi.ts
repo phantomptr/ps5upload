@@ -5955,6 +5955,10 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "cw_cheats_applied_failed": "Không thể áp dụng: {reason}",
 "cheats_applied_changed": "Trò chơi đã thay đổi phần này; không đụng vào",
 "cw_cheats_applied_changed": "Trò chơi đã thay đổi phần này; không đụng vào",
+"cheats_applied_late": "Đã áp dụng {seconds} giây sau khi trò chơi khởi động — nếu không có tác dụng, hãy để bật và khởi động lại trò chơi.",
+"cw_cheats_applied_late": "Đã áp dụng {seconds} giây sau khi trò chơi khởi động — nếu không có tác dụng, hãy để bật và khởi động lại trò chơi.",
+"cheats_applied_late_unseen": "Đã áp dụng khi trò chơi đã chạy — nếu không có tác dụng, hãy để bật và khởi động lại trò chơi.",
+"cw_cheats_applied_late_unseen": "Đã áp dụng khi trò chơi đã chạy — nếu không có tác dụng, hãy để bật và khởi động lại trò chơi.",
 "cheats_import_hint_xml": "Bản vá game định dạng .xml của PS-Game-Patch cũng dùng được. Đặt tên theo mã game, ví dụ PPSA01339.xml.",
 "cw_cheats_other_version": "Dành cho phiên bản game khác",
 "cw_cheats_err_version": "Bản vá này không dành cho phiên bản game của bạn. Hãy chọn bản dành cho phiên bản của bạn.",
@@ -6302,6 +6306,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_phase_reconnecting": "Đang kết nối lại…",
 "rp_stats_audio": "âm thanh {ms} ms",
 "rp_stats_audio_gaps": "{n} lần ngắt",
+"rp_sound_blocked": "Bật âm thanh",
 "rp_set_picture": "Hình ảnh",
 "rp_fps": "Tốc độ khung hình",
 "rp_fps_60": "60 fps (mượt)",
@@ -6946,6 +6951,12 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "update_open_log": "Mở nhật ký cập nhật",
   "update_no_log": "Chưa có nhật ký cập nhật.",
   "update_open_log_failed": "Không mở được nhật ký cập nhật: {message}",
+  "rp_mini_back": "Quay lại Chơi: {name}",
+  "rp_mini_close": "Ẩn trình phát mini (luồng vẫn chạy)",
+  "rp_mini_setting": "Trình phát mini ở các màn hình khác",
+  "rp_mini_setting_hint": "Khi bạn dùng các màn hình khác của ứng dụng, hình ảnh vẫn ở trong một cửa sổ nhỏ mà bạn có thể kéo đến bất kỳ góc nào. Chạm vào để quay lại đây.",
+  "rp_system_pip_setting": "Giữ hình ảnh nổi khi rời ứng dụng",
+  "rp_system_pip_setting_hint": "Khi bạn về màn hình chính lúc đang chơi, hình ảnh vẫn ở trong một cửa sổ nhỏ phía trên các ứng dụng khác. Chạm vào để quay lại.",
 };
 
 export default vi;

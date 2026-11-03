@@ -186,6 +186,28 @@ describe("cheats section", () => {
     expect(html).not.toContain("data-applied");
   });
 
+  it("an_applied_cheat_says_when_it_may_have_come_too_late", () => {
+    // #627: a patch the game reads only at start, applied seconds in or with the start not seen.
+    const list = readList(GAME, {
+      mods: [
+        { index: 0, name: "Unlock FPS", on: true, applied: "applied", applied_after_ms: 180 },
+        { index: 1, name: "B", on: true, applied: "applied", applied_after_ms: 6400, applied_late: true },
+        { index: 2, name: "C", on: true, applied: "applied", applied_late: true },
+        { index: 3, name: "D", on: true, applied: "waiting", applied_after_ms: 5, applied_late: true },
+      ],
+    });
+    expect(list.mods[0].appliedAfterMs).toBe(180);
+    expect(list.mods[0].appliedLate).toBeUndefined();
+    expect(list.mods[3].appliedLate).toBeUndefined();
+    expect(list.mods[3].appliedAfterMs).toBeUndefined();
+    expect(appliedText(list.mods[0])).toBe(t("cw_cheats_applied_ok"));
+    expect(appliedText(list.mods[1])).toBe(t("cw_cheats_applied_late", { seconds: 6 }));
+    expect(appliedText(list.mods[1])).toContain("6 s after the game started");
+    expect(appliedText(list.mods[2])).toBe(t("cw_cheats_applied_late_unseen"));
+    const html = view({ status: { engine: true, game: { title_id: GAME } }, list });
+    expect(html).toContain("is-late");
+  });
+
   it("a_waiting_cheat_is_read_again_until_it_applies", async () => {
     let applied = "waiting";
     mockCall.mockImplementation(async (route: string) => {

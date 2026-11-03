@@ -2,6 +2,8 @@
   "cw_actions": "Műveletek",
   "cw_cheats_applied_changed": "A játék megváltoztatta; érintetlenül hagyva",
   "cw_cheats_applied_failed": "Nem sikerült alkalmazni: {reason}",
+  "cw_cheats_applied_late": "Alkalmazva {seconds} mp-cel a játék indulása után — ha nincs hatása, hagyd bekapcsolva, és indítsd újra a játékot.",
+  "cw_cheats_applied_late_unseen": "Alkalmazva, amikor a játék már futott — ha nincs hatása, hagyd bekapcsolva, és indítsd újra a játékot.",
   "cw_cheats_applied_ok": "Alkalmazva ✓",
   "cw_cheats_applied_waiting": "Várakozás a játék betöltésére…",
   "cw_cheats_apply": "Alkalmaz",

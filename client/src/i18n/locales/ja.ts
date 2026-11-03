@@ -5972,6 +5972,10 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "cw_cheats_applied_failed": "適用できませんでした: {reason}",
 "cheats_applied_changed": "ゲームが変更したため、触れていません",
 "cw_cheats_applied_changed": "ゲームが変更したため、触れていません",
+"cheats_applied_late": "ゲーム開始から {seconds} 秒後に適用 — 効果がない場合は、オンのままゲームを再起動してください。",
+"cw_cheats_applied_late": "ゲーム開始から {seconds} 秒後に適用 — 効果がない場合は、オンのままゲームを再起動してください。",
+"cheats_applied_late_unseen": "ゲームの開始後に適用 — 効果がない場合は、オンのままゲームを再起動してください。",
+"cw_cheats_applied_late_unseen": "ゲームの開始後に適用 — 効果がない場合は、オンのままゲームを再起動してください。",
 "cheats_import_hint_xml": "PS-Game-Patch の .xml 形式のゲームパッチも使えます。ファイル名はタイトルID にしてください（例：PPSA01339.xml）。",
 "cw_cheats_other_version": "別のゲームバージョン用",
 "cw_cheats_err_version": "このパッチはお持ちのゲームバージョン用ではありません。お使いのバージョン用のものを選んでください。",
@@ -6319,6 +6323,7 @@ library_compressed_hint: "圧縮イメージのプレイには ShadowMount+ が�
 "rp_phase_reconnecting": "再接続中…",
 "rp_stats_audio": "音声 {ms} ms",
 "rp_stats_audio_gaps": "途切れ {n} 回",
+"rp_sound_blocked": "音声をオンにする",
 "rp_set_picture": "映像",
 "rp_fps": "フレームレート",
 "rp_fps_60": "60 fps（なめらか）",
@@ -6963,6 +6968,12 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "update_open_log": "アップデートログを開く",
   "update_no_log": "アップデートログはまだありません。",
   "update_open_log_failed": "アップデートログを開けませんでした: {message}",
+  "rp_mini_back": "プレイに戻る：{name}",
+  "rp_mini_close": "ミニプレーヤーを隠す（ストリームは続きます）",
+  "rp_mini_setting": "ほかの画面でミニプレーヤー",
+  "rp_mini_setting_hint": "アプリのほかの画面を使っている間も、映像は小さなウィンドウに表示され、好きな隅にドラッグできます。タップするとここに戻ります。",
+  "rp_system_pip_setting": "アプリを離れても映像をフローティング表示",
+  "rp_system_pip_setting_hint": "プレイ中にホーム画面へ移動すると、映像がほかのアプリの上に小さなウィンドウで表示されます。タップすると戻ります。",
 };
 
 export default ja;

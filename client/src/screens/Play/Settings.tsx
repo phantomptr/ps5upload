@@ -5,6 +5,7 @@ import { DEFAULT_PICTURE, type Enhance, type PictureTools } from "../../lib/rpPi
 import { hdrScreen, hdrSupport, type HdrSupport } from "../../lib/rpHdr";
 import { useTr } from "../../state/lang";
 import { isMobile } from "../../lib/platform";
+import { androidPipAvailable } from "../../lib/androidPip";
 import { appSavesToPhotos } from "../../lib/rpCapture";
 import { gameModeKind } from "../../lib/gameMode";
 import { keysFor, rebind, PAD_ACTIONS, type KeyAction } from "../../lib/remotePlayStream";
@@ -427,6 +428,30 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
             )}
           </Hint>
           <GameModeNote />
+        </Section>
+        <Section>
+          <Toggle
+            checked={prefs.miniPlayer !== false}
+            onChange={(v) => setPrefs({ miniPlayer: v })}
+            label={tr("rp_mini_setting", undefined, "Mini player on other screens")}
+            hint={tr(
+              "rp_mini_setting_hint",
+              undefined,
+              "While you use other screens of the app, the picture stays in a small window you can drag to any corner. Tap it to come back here.",
+            )}
+          />
+          {androidPipAvailable() && (
+            <Toggle
+              checked={prefs.systemPip !== false}
+              onChange={(v) => setPrefs({ systemPip: v })}
+              label={tr("rp_system_pip_setting", undefined, "Keep the picture floating when you leave the app")}
+              hint={tr(
+                "rp_system_pip_setting_hint",
+                undefined,
+                "Going to the home screen while you play keeps the picture in a small window over other apps. Tap it to come back.",
+              )}
+            />
+          )}
         </Section>
         <Section>
           <Select

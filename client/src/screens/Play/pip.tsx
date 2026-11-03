@@ -28,7 +28,7 @@ import { isMobile } from "../../lib/platform";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
 import { log } from "../../state/logs";
 import { visibleArea } from "./pipArea";
-import { phaseText } from "./StreamPanel";
+import { phaseText } from "../../lib/rpPhaseText";
 
 const PIP_WIDTH = 480;
 const PIP_HEIGHT = 270;

@@ -5960,6 +5960,10 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "cw_cheats_applied_failed": "Uygulanamadı: {reason}",
 "cheats_applied_changed": "Oyun bunu değiştirdi; dokunulmadı",
 "cw_cheats_applied_changed": "Oyun bunu değiştirdi; dokunulmadı",
+"cheats_applied_late": "Oyun başladıktan {seconds} sn sonra uygulandı — etkisi yoksa açık bırakıp oyunu yeniden başlatın.",
+"cw_cheats_applied_late": "Oyun başladıktan {seconds} sn sonra uygulandı — etkisi yoksa açık bırakıp oyunu yeniden başlatın.",
+"cheats_applied_late_unseen": "Oyun zaten başlamışken uygulandı — etkisi yoksa açık bırakıp oyunu yeniden başlatın.",
+"cw_cheats_applied_late_unseen": "Oyun zaten başlamışken uygulandı — etkisi yoksa açık bırakıp oyunu yeniden başlatın.",
 "cheats_import_hint_xml": "PS-Game-Patch .xml biçimindeki bir oyun yaması da olur. Adını başlık kimliği yap, örneğin PPSA01339.xml.",
 "cw_cheats_other_version": "Başka bir oyun sürümü için",
 "cw_cheats_err_version": "Bu yama sendeki oyun sürümü için değil. Kendi sürümün için yapılmış birini seç.",
@@ -6307,6 +6311,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_phase_reconnecting": "Yeniden bağlanıyor…",
 "rp_stats_audio": "ses {ms} ms",
 "rp_stats_audio_gaps": "{n} kesinti",
+"rp_sound_blocked": "Sesi aç",
 "rp_set_picture": "Görüntü",
 "rp_fps": "Kare hızı",
 "rp_fps_60": "60 fps (akıcı)",
@@ -6951,6 +6956,12 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "update_open_log": "Güncelleme günlüğünü aç",
   "update_no_log": "Henüz güncelleme günlüğü yok.",
   "update_open_log_failed": "Güncelleme günlüğü açılamadı: {message}",
+  "rp_mini_back": "Oyna'ya dön: {name}",
+  "rp_mini_close": "Mini oynatıcıyı gizle (yayın devam eder)",
+  "rp_mini_setting": "Diğer ekranlarda mini oynatıcı",
+  "rp_mini_setting_hint": "Uygulamanın diğer ekranlarını kullanırken görüntü, istediğin köşeye sürükleyebileceğin küçük bir pencerede kalır. Buraya dönmek için dokun.",
+  "rp_system_pip_setting": "Uygulamadan çıkınca görüntü havada kalsın",
+  "rp_system_pip_setting_hint": "Oynarken ana ekrana gidersen görüntü diğer uygulamaların üstünde küçük bir pencerede kalır. Geri dönmek için dokun.",
 };
 
 export default tr;

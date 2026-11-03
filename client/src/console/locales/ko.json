@@ -2,6 +2,8 @@
   "cw_actions": "작업",
   "cw_cheats_applied_changed": "게임이 이 부분을 바꿔서 건드리지 않았습니다",
   "cw_cheats_applied_failed": "적용할 수 없음: {reason}",
+  "cw_cheats_applied_late": "게임 시작 {seconds}초 후에 적용됨 — 효과가 없으면 켜 둔 채로 게임을 다시 시작하세요.",
+  "cw_cheats_applied_late_unseen": "게임이 이미 시작된 뒤에 적용됨 — 효과가 없으면 켜 둔 채로 게임을 다시 시작하세요.",
   "cw_cheats_applied_ok": "적용됨 ✓",
   "cw_cheats_applied_waiting": "게임 로딩을 기다리는 중…",
   "cw_cheats_apply": "적용",

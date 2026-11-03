@@ -5969,6 +5969,10 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "cw_cheats_applied_failed": "Impossible d'appliquer : {reason}",
 "cheats_applied_changed": "Le jeu a modifié ceci ; laissé tel quel",
 "cw_cheats_applied_changed": "Le jeu a modifié ceci ; laissé tel quel",
+"cheats_applied_late": "Appliqué {seconds} s après le lancement du jeu — s'il n'a aucun effet, laissez-le activé et relancez le jeu.",
+"cw_cheats_applied_late": "Appliqué {seconds} s après le lancement du jeu — s'il n'a aucun effet, laissez-le activé et relancez le jeu.",
+"cheats_applied_late_unseen": "Appliqué alors que le jeu était déjà lancé — s'il n'a aucun effet, laissez-le activé et relancez le jeu.",
+"cw_cheats_applied_late_unseen": "Appliqué alors que le jeu était déjà lancé — s'il n'a aucun effet, laissez-le activé et relancez le jeu.",
 "cheats_import_hint_xml": "Un patch de jeu au format .xml de PS-Game-Patch fonctionne aussi. Nommez-le d’après son ID de titre, par exemple PPSA01339.xml.",
 "cw_cheats_other_version": "Prévu pour une autre version du jeu",
 "cw_cheats_err_version": "Ce patch n’est pas pour votre version du jeu. Choisissez-en un prévu pour votre version.",
@@ -6316,6 +6320,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_phase_reconnecting": "Reconnexion…",
 "rp_stats_audio": "son {ms} ms",
 "rp_stats_audio_gaps": "{n} coupures",
+"rp_sound_blocked": "Activer le son",
 "rp_set_picture": "Image",
 "rp_fps": "Fréquence d'images",
 "rp_fps_60": "60 fps (fluide)",
@@ -6960,6 +6965,12 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "update_open_log": "Ouvrir le journal des mises à jour",
   "update_no_log": "Il n'y a pas encore de journal des mises à jour.",
   "update_open_log_failed": "Impossible d'ouvrir le journal des mises à jour : {message}",
+  "rp_mini_back": "Revenir à Jouer : {name}",
+  "rp_mini_close": "Masquer le mini-lecteur (le flux continue)",
+  "rp_mini_setting": "Mini-lecteur sur les autres écrans",
+  "rp_mini_setting_hint": "Pendant que vous utilisez d'autres écrans de l'app, l'image reste dans une petite fenêtre que vous pouvez faire glisser dans n'importe quel coin. Touchez-la pour revenir ici.",
+  "rp_system_pip_setting": "Garder l'image flottante en quittant l'app",
+  "rp_system_pip_setting_hint": "Si vous allez à l'écran d'accueil pendant que vous jouez, l'image reste dans une petite fenêtre au-dessus des autres apps. Touchez-la pour revenir.",
 };
 
 export default fr;

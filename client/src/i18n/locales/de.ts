@@ -5961,6 +5961,10 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "cw_cheats_applied_failed": "Konnte nicht angewendet werden: {reason}",
 "cheats_applied_changed": "Das Spiel hat dies geändert; nicht angetastet",
 "cw_cheats_applied_changed": "Das Spiel hat dies geändert; nicht angetastet",
+"cheats_applied_late": "Angewendet {seconds} s nach dem Spielstart – falls es nichts bewirkt, lass es eingeschaltet und starte das Spiel neu.",
+"cw_cheats_applied_late": "Angewendet {seconds} s nach dem Spielstart – falls es nichts bewirkt, lass es eingeschaltet und starte das Spiel neu.",
+"cheats_applied_late_unseen": "Angewendet, als das Spiel schon lief – falls es nichts bewirkt, lass es eingeschaltet und starte das Spiel neu.",
+"cw_cheats_applied_late_unseen": "Angewendet, als das Spiel schon lief – falls es nichts bewirkt, lass es eingeschaltet und starte das Spiel neu.",
 "cheats_import_hint_xml": "Ein Spiel-Patch im .xml-Format von PS-Game-Patch geht auch. Benenne ihn nach seiner Titel-ID, z. B. PPSA01339.xml.",
 "cw_cheats_other_version": "Für eine andere Spielversion",
 "cw_cheats_err_version": "Dieser Patch ist nicht für deine Spielversion. Wähle einen für deine Version.",
@@ -6308,6 +6312,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_phase_reconnecting": "Verbindung wird wiederhergestellt…",
 "rp_stats_audio": "Ton {ms} ms",
 "rp_stats_audio_gaps": "{n} Aussetzer",
+"rp_sound_blocked": "Ton einschalten",
 "rp_set_picture": "Bild",
 "rp_fps": "Bildrate",
 "rp_fps_60": "60 fps (flüssig)",
@@ -6952,6 +6957,12 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
   "update_open_log": "Update-Protokoll öffnen",
   "update_no_log": "Es gibt noch kein Update-Protokoll.",
   "update_open_log_failed": "Das Update-Protokoll konnte nicht geöffnet werden: {message}",
+  "rp_mini_back": "Zurück zu Spielen: {name}",
+  "rp_mini_close": "Mini-Player ausblenden (der Stream läuft weiter)",
+  "rp_mini_setting": "Mini-Player auf anderen Bildschirmen",
+  "rp_mini_setting_hint": "Während du andere Bildschirme der App nutzt, bleibt das Bild in einem kleinen Fenster, das du in jede Ecke ziehen kannst. Tippe darauf, um hierher zurückzukehren.",
+  "rp_system_pip_setting": "Bild schwebend behalten, wenn du die App verlässt",
+  "rp_system_pip_setting_hint": "Wechselst du beim Spielen zum Startbildschirm, bleibt das Bild in einem kleinen Fenster über anderen Apps. Tippe darauf, um zurückzukehren.",
 };
 
 export default de;

@@ -225,4 +225,39 @@ describe("freeing a duplicate's space", () => {
     expect(extraCopies(g).map((l) => l.path)).toEqual(["small.exfat"]);
     expect(extraCopies(game("CUSA00001", "One"))).toEqual([]);
   });
+
+  it("never offers a package of another release under the same Game ID (#638)", () => {
+    const withCid = (l: CollectionLocation, cid: string, size: number) => ({
+      ...l,
+      size_bytes: size,
+      pkg: { ...l.pkg, content_id: cid },
+    });
+    const gameA = withCid(
+      loc("pkg", "base", "game.pkg"),
+      "EP0700-CUSA12345_00-GAME000000000000",
+      50,
+    );
+    const odd = withCid(
+      loc("pkg", "base", "unlock.pkg"),
+      "EP0700-CUSA12345_00-UNLOCKKEY0000003",
+      1,
+    );
+    const dlc = withCid(
+      loc("pkg", "dlc", "dlc.pkg"),
+      "EP0700-CUSA12345_00-SEASONPASS000001",
+      2,
+    );
+    const g = game("CUSA12345", "Game", { locations: [gameA, odd, dlc] });
+    expect(extraCopies(g)).toEqual([]);
+    const again = withCid(
+      loc("pkg", "base", "again.pkg"),
+      "ep0700-cusa12345_00-game000000000000",
+      40,
+    );
+    const rar = { ...loc("rar", undefined, "g.rar"), size_bytes: 30 };
+    const g2 = game("CUSA12345", "Game", {
+      locations: [gameA, odd, dlc, again, rar],
+    });
+    expect(extraCopies(g2).map((l) => l.path)).toEqual(["again.pkg", "g.rar"]);
+  });
 });

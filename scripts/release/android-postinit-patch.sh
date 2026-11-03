@@ -62,6 +62,8 @@
 # 10) The microphone for Remote Play voice chat (experimental). See step (10) below.
 # 11) In-app updates: AppUpdater.kt hands a downloaded APK to Android's installer
 #     (PackageInstaller), plus REQUEST_INSTALL_PACKAGES. See step (11) below.
+# 12) Remote Play in Android's picture in picture (#637): leaving the app while a stream
+#     plays keeps the picture floating over other apps. See step (12) below.
 
 
 set -euo pipefail
@@ -1358,5 +1360,159 @@ if ".UpdateInstallReceiver" not in src:
     print("declared UpdateInstallReceiver")
 open(path, "w", encoding="utf-8").write(src)
 PY
+
+# --- (12) Remote Play in picture in picture (#637) ----------------------
+# Leaving the app (home button or gesture) while a Remote Play stream plays shrinks it into
+# Android's picture-in-picture window, over other apps; tapping that window restores the app.
+# The page says when a stream plays, and its shape, through window.PS5UploadPip.setActive
+# (client/src/lib/androidPip.ts); the activity enters picture in picture only then (Android
+# 8 to 11 in onUserLeaveHint, Android 12+ by itself with setAutoEnterEnabled) and tells the page
+# on the way in and out with a 'ps5upload-pip' window event, so the page shows only the picture.
+#
+# WryActivity pauses the WebView in onPause (WebView.onPause: the page is hidden and its
+# animation frames stop), and an activity in picture in picture is paused while still on show:
+# the picture would freeze. So the WebView is resumed again while in picture in picture, and
+# paused once the window is closed into the background. The process is not frozen meanwhile: a
+# visible activity keeps it in the foreground. Idempotent via the interface name.
+python3 - "$manifest" <<'PY'
+import re, sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+m = re.search(r'<activity\b[^>]*android:name="\.MainActivity"[^>]*>', src, re.S)
+if not m:
+    sys.exit("::error::MainActivity <activity> not found in AndroidManifest.xml")
+tag = m.group(0)
+new = tag
+for attr in ('android:supportsPictureInPicture="true"', 'android:resizeableActivity="true"'):
+    if attr.split("=")[0] + "=" not in new:
+        new = new.replace("<activity", "<activity\n            " + attr, 1)
+# Going in and out of picture in picture resizes the window: the activity must not be
+# recreated for it (that would reload the page and leave the stream).
+need = ["screenSize", "smallestScreenSize", "screenLayout", "orientation"]
+cm = re.search(r'android:configChanges="([^"]*)"', new)
+if cm:
+    have = cm.group(1).split("|")
+    add = [n for n in need if n not in have]
+    if add:
+        new = new.replace(cm.group(0), 'android:configChanges="' + "|".join(have + add) + '"', 1)
+else:
+    new = new.replace("<activity", '<activity\n            android:configChanges="' + "|".join(need) + '"', 1)
+if new == tag:
+    print("MainActivity already supports picture in picture — skipping")
+else:
+    open(path, "w", encoding="utf-8").write(src.replace(tag, new, 1))
+    print("MainActivity supports picture in picture")
+PY
+
+if [ -n "$mainactivity" ]; then
+  python3 - "$mainactivity" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if "PS5UploadPip" in src:
+    print("MainActivity.kt already exposes PS5UploadPip — skipping")
+    sys.exit(0)
+anchor = "    super.onWebViewCreate(webView)\n"
+if anchor not in src:
+    sys.exit("::error::onWebViewCreate not found in MainActivity.kt (step 3 must run first)")
+src = src.replace(anchor, anchor + '''    // Remote Play in picture in picture (step 12): the page says when a stream plays.
+    pipWebView = webView
+    webView.addJavascriptInterface(object {
+      @android.webkit.JavascriptInterface
+      fun setActive(active: Boolean, aspectW: Int, aspectH: Int) {
+        runOnUiThread { setPipActive(active, aspectW, aspectH) }
+      }
+      @android.webkit.JavascriptInterface
+      fun inPip(): Boolean = pipShown
+      @android.webkit.JavascriptInterface
+      fun supported(): Boolean = pipSupported()
+    }, "PS5UploadPip")
+''', 1)
+members = '''
+  // Remote Play in picture in picture (step 12 of android-postinit-patch.sh).
+  private var pipWebView: android.webkit.WebView? = null
+  // A stream plays (the page says so): leaving the app enters picture in picture.
+  @Volatile private var pipActive = false
+  // In picture in picture now; the page reads it through PS5UploadPip.inPip.
+  @Volatile private var pipShown = false
+  private var pipAspectW = 16
+  private var pipAspectH = 9
+
+  private fun pipSupported(): Boolean =
+    android.os.Build.VERSION.SDK_INT >= 26 &&
+      packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+  @androidx.annotation.RequiresApi(26)
+  private fun pipParams(): android.app.PictureInPictureParams {
+    // Android takes shapes between 1:2.39 and 2.39:1 only.
+    var w = if (pipAspectW > 0) pipAspectW else 16
+    var h = if (pipAspectH > 0) pipAspectH else 9
+    if (w * 100 > h * 239) { w = 239; h = 100 }
+    if (h * 100 > w * 239) { w = 100; h = 239 }
+    val b = android.app.PictureInPictureParams.Builder()
+      .setAspectRatio(android.util.Rational(w, h))
+    if (android.os.Build.VERSION.SDK_INT >= 31) {
+      // Android 12+: the home gesture shrinks a playing stream into the window by itself, with
+      // the system's animation; off again when nothing plays.
+      b.setAutoEnterEnabled(pipActive)
+    }
+    return b.build()
+  }
+
+  private fun setPipActive(active: Boolean, aspectW: Int, aspectH: Int) {
+    pipActive = active
+    pipAspectW = aspectW
+    pipAspectH = aspectH
+    if (android.os.Build.VERSION.SDK_INT < 26 || !pipSupported()) return
+    try {
+      setPictureInPictureParams(pipParams())
+    } catch (e: Exception) {
+      android.util.Log.w("PS5UploadPip", "picture-in-picture settings refused", e)
+    }
+  }
+
+  override fun onUserLeaveHint() {
+    super.onUserLeaveHint()
+    // Android 8 to 11: the home button or gesture while a stream plays (12+ enters by itself).
+    if (!pipActive || !pipSupported()) return
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O ||
+        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) return
+    try {
+      enterPictureInPictureMode(pipParams())
+    } catch (e: Exception) {
+      android.util.Log.w("PS5UploadPip", "could not enter picture in picture", e)
+    }
+  }
+
+  override fun onPause() {
+    super.onPause()
+    // WryActivity paused the WebView; in picture in picture the picture is still on show.
+    if (isInPictureInPictureMode) pipWebView?.onResume()
+  }
+
+  override fun onPictureInPictureModeChanged(
+    isInPictureInPictureMode: Boolean,
+    newConfig: android.content.res.Configuration,
+  ) {
+    super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+    pipShown = isInPictureInPictureMode
+    val w = pipWebView ?: return
+    if (isInPictureInPictureMode) {
+      w.onResume()
+    } else if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+      // Closed rather than expanded: the app is in the background now, paused as WryActivity
+      // leaves it there.
+      w.onPause()
+    }
+    w.evaluateJavascript(
+      "window.dispatchEvent(new CustomEvent('ps5upload-pip',{detail:{inPip:$isInPictureInPictureMode}}))", null)
+  }
+'''
+brace = src.index("{", src.index("class MainActivity"))
+src = src[:brace + 1] + members + src[brace + 1:]
+open(path, "w", encoding="utf-8").write(src)
+print("patched MainActivity.kt for Remote Play in picture in picture (PS5UploadPip)")
+PY
+fi
 
 echo "android post-init patches applied"

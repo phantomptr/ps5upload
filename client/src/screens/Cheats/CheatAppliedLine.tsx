@@ -14,7 +14,15 @@ export function CheatAppliedLine({
   mod,
   className = "",
 }: {
-  mod: Pick<CheatMod, "on" | "type" | "applied" | "applied_reason">;
+  mod: Pick<
+    CheatMod,
+    | "on"
+    | "type"
+    | "applied"
+    | "applied_reason"
+    | "applied_after_ms"
+    | "applied_late"
+  >;
   className?: string;
 }) {
   const tr = useTr();

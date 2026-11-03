@@ -5912,6 +5912,10 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "cw_cheats_applied_failed": "无法应用：{reason}",
 "cheats_applied_changed": "游戏已更改此处；未作改动",
 "cw_cheats_applied_changed": "游戏已更改此处；未作改动",
+"cheats_applied_late": "在游戏启动 {seconds} 秒后应用——如果没有效果，请保持开启并重新启动游戏。",
+"cw_cheats_applied_late": "在游戏启动 {seconds} 秒后应用——如果没有效果，请保持开启并重新启动游戏。",
+"cheats_applied_late_unseen": "在游戏启动之后才应用——如果没有效果，请保持开启并重新启动游戏。",
+"cw_cheats_applied_late_unseen": "在游戏启动之后才应用——如果没有效果，请保持开启并重新启动游戏。",
 "cheats_import_hint_xml": "也可以使用 PS-Game-Patch .xml 格式的游戏补丁。用游戏 ID 命名，例如 PPSA01339.xml。",
 "cw_cheats_other_version": "适用于其他游戏版本",
 "cw_cheats_err_version": "此补丁不适用于你的游戏版本。请选择适用于你的版本的补丁。",
@@ -6259,6 +6263,7 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_phase_reconnecting": "正在重新连接…",
 "rp_stats_audio": "声音 {ms} ms",
 "rp_stats_audio_gaps": "中断 {n} 次",
+"rp_sound_blocked": "打开声音",
 "rp_set_picture": "画面",
 "rp_fps": "帧率",
 "rp_fps_60": "60 fps（流畅）",
@@ -6903,6 +6908,12 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
   "update_open_log": "打开更新日志",
   "update_no_log": "还没有更新日志。",
   "update_open_log_failed": "无法打开更新日志：{message}",
+  "rp_mini_back": "返回畅玩：{name}",
+  "rp_mini_close": "隐藏迷你播放器（串流继续）",
+  "rp_mini_setting": "在其他界面显示迷你播放器",
+  "rp_mini_setting_hint": "在使用应用的其他界面时，画面会保留在一个小窗口中，可拖到任意角落。点按即可回到这里。",
+  "rp_system_pip_setting": "离开应用时画面保持悬浮",
+  "rp_system_pip_setting_hint": "游玩时回到主屏幕，画面会以小窗口悬浮在其他应用上方。点按即可返回。",
 };
 
 export default zh_CN;

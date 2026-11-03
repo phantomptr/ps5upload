@@ -2,6 +2,8 @@
   "cw_actions": "Tindakan",
   "cw_cheats_applied_changed": "Game mengubah ini; tidak disentuh",
   "cw_cheats_applied_failed": "Tidak dapat diterapkan: {reason}",
+  "cw_cheats_applied_late": "Diterapkan {seconds} dtk setelah game dimulai — jika tidak berpengaruh, biarkan aktif dan mulai ulang game.",
+  "cw_cheats_applied_late_unseen": "Diterapkan saat game sudah berjalan — jika tidak berpengaruh, biarkan aktif dan mulai ulang game.",
   "cw_cheats_applied_ok": "Diterapkan ✓",
   "cw_cheats_applied_waiting": "Menunggu game dimuat…",
   "cw_cheats_apply": "Terapkan",

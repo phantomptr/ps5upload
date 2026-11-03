@@ -5530,6 +5530,12 @@ export interface CheatMod {
    *  when the cheat is off, the game is not running, or the helper is older than 10.7.2. */
   applied?: "applied" | "waiting" | "failed" | "changed";
   applied_reason?: string;
+  /** For "applied" by the helper on its own: ms after the game started. Absent when the start
+   *  was not seen, when it was switched on by hand, or the helper is older than 10.7.6. */
+  applied_after_ms?: number;
+  /** It landed late (over ~3 s after the start, or the start was not seen): a patch the game
+   *  reads only at start may have missed it (#627). */
+  applied_late?: boolean;
 }
 
 export interface CheatsGetResponse {

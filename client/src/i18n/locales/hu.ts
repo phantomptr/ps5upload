@@ -6259,6 +6259,10 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "cw_cheats_applied_failed": "Nem sikerült alkalmazni: {reason}",
 "cheats_applied_changed": "A játék megváltoztatta; érintetlenül hagyva",
 "cw_cheats_applied_changed": "A játék megváltoztatta; érintetlenül hagyva",
+"cheats_applied_late": "Alkalmazva {seconds} mp-cel a játék indulása után — ha nincs hatása, hagyd bekapcsolva, és indítsd újra a játékot.",
+"cw_cheats_applied_late": "Alkalmazva {seconds} mp-cel a játék indulása után — ha nincs hatása, hagyd bekapcsolva, és indítsd újra a játékot.",
+"cheats_applied_late_unseen": "Alkalmazva, amikor a játék már futott — ha nincs hatása, hagyd bekapcsolva, és indítsd újra a játékot.",
+"cw_cheats_applied_late_unseen": "Alkalmazva, amikor a játék már futott — ha nincs hatása, hagyd bekapcsolva, és indítsd újra a játékot.",
 "cheats_import_hint_xml": "PS-Game-Patch .xml formátumú játékjavítás is használható. Nevezd el a címazonosítója szerint, például PPSA01339.xml.",
 "cw_cheats_other_version": "Másik játékverzióhoz készült",
 "cw_cheats_err_version": "Ez a javítás nem a te játékverziódhoz készült. Válassz egyet, ami a te verziódhoz való.",
@@ -6606,6 +6610,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "rp_phase_reconnecting": "Újracsatlakozás…",
 "rp_stats_audio": "hang {ms} ms",
 "rp_stats_audio_gaps": "{n} kihagyás",
+"rp_sound_blocked": "Hang bekapcsolása",
 "rp_set_picture": "Kép",
 "rp_fps": "Képkockasebesség",
 "rp_fps_60": "60 fps (folyamatos)",
@@ -7250,6 +7255,12 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "update_open_log": "Frissítési napló megnyitása",
   "update_no_log": "Még nincs frissítési napló.",
   "update_open_log_failed": "A frissítési napló nem nyitható meg: {message}",
+  "rp_mini_back": "Vissza a Játékhoz: {name}",
+  "rp_mini_close": "Minilejátszó elrejtése (a stream fut tovább)",
+  "rp_mini_setting": "Minilejátszó a többi képernyőn",
+  "rp_mini_setting_hint": "Amíg az alkalmazás más képernyőit használod, a kép egy kis ablakban marad, amelyet bármelyik sarokba húzhatsz. Koppints rá, hogy visszatérj ide.",
+  "rp_system_pip_setting": "A kép lebegve marad, ha elhagyod az alkalmazást",
+  "rp_system_pip_setting_hint": "Ha játék közben a kezdőképernyőre lépsz, a kép egy kis ablakban marad a többi alkalmazás felett. Koppints rá a visszatéréshez.",
 };
 
 export default hu;

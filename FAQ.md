@@ -2336,6 +2336,15 @@ Cheats); it shows what happened in the running game, not only the saved switch. 
   tried again until the game restarts, or you switch it Off and On.
 - **The game changed this; not touched**: the game wrote something else there, so the helper leaves
   it alone.
+- **Applied N s after the game started — if it has no effect, restart the game with it on** (from
+  10.7.6): it is applied, but late. Some patches change a setting the game reads only once, in its
+  first seconds: Red Dead Redemption 2's "Unlock FPS" is one. Written after that read, the patch
+  reads back as applied and does nothing, and switching it Off and On can't help, because the game
+  doesn't read the setting again. Leave it On and restart the game: the helper hears the game start
+  and writes saved cheats as soon as the game's code is loaded, usually well under a second in.
+  Before 10.7.6 it looked only every 3 seconds, so such a patch landed 3 to 9 seconds in and worked
+  only by luck. The line also says this when the helper didn't see the game start (it was sent, or
+  the cheat engine turned on, while the game was already running).
 
 While the game runs, the helper also re-reads what it applied. If the game puts its original code
 back (a loading screen, coming back from rest mode), the cheat is applied again; if that keeps
@@ -2562,6 +2571,20 @@ browser's picture-in-picture window. Safari's picture in picture shows the pictu
 keyboard and controller play it while the app's window is in front. Firefox and phones do not
 offer it. A controller keeps playing the small window while another app is in front in the
 Windows app and in Chrome and Edge; in the macOS and Linux apps, click the small window first.
+
+**Q: Can I keep watching the stream while I use other screens, or other apps on Android?**
+Yes. While a stream plays, opening any other screen of PS5Upload (Games, Files, Settings…) keeps
+the picture in a small **mini player** in a corner: drag it to any corner (it stays there next
+time), tap it to go back to Play, use the speaker button to mute, and × to hide it until you open
+Play again (the stream keeps running either way; Stop is on the bar at the top). The controller
+and keyboard play the console only while Play is in front, so they work the app's menus as usual
+on other screens. Turn it off in Play › Settings › Session › **Mini player on other screens**.
+In the **Android app**, going to the home screen while a stream plays shrinks it into Android's
+picture-in-picture window, which floats over other apps with the sound still playing; tap it to
+come back, or drag it away to close it (the stream then waits for you as when you leave the app).
+Turn that off with **Keep the picture floating when you leave the app** in the same place. It
+needs Android 8 or newer, and the phone's own setting for PS5Upload (Settings › Apps › Special
+app access › Picture-in-picture) must allow it.
 
 **Q: How do I change a user's avatar, name or account ID?**
 In **Accounts › Users**. Each user on the PS5 is one row: click the picture to change the avatar
