@@ -7163,6 +7163,16 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
   "rp_bitrate": "Bit hızı",
   "rp_bitrate_hint": "Düşük değer daha az ağ kullanır. Canlı yayın bunu olduğu gibi iletir: Twitch en fazla 6 Mbps, Kick 8 Mbps kabul eder. Bir sonraki başlatmada geçerli olur.",
   "rp_bitrate_auto": "Otomatik (1080p'de 15 Mbps)",
+  "thanks_tab": "Teşekkürler",
+  "thanks_title": "Teşekkürler",
+  "thanks_intro": "PS5Upload ücretsiz ve aşağıdaki insanlar sayesinde gelişmeye devam ediyor. Her kahve test donanımını, uykusuz geceleri ve bir sonraki sürümü karşılıyor. Hepinize teşekkürler.",
+  "thanks_tier_champion": "Şampiyonlar",
+  "thanks_tier_hero": "Kahramanlar",
+  "thanks_tier_friend": "Dostlar",
+  "thanks_tier_supporter": "Destekçiler",
+  "thanks_anonymous": "…ve adının görünmemesini seçen {n} kişi daha. Size de teşekkürler.",
+  "thanks_cta": "Sen de yardım etmek ister misin? Adın bir sonraki sürümde burada görünür.",
+  "about_thanks_link": "PS5Upload'u destekleyen herkese teşekkürler →",
 };
 
 export default tr;

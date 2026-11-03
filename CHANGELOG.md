@@ -85,6 +85,9 @@ What's new in ps5upload, written for humans.
 - **Add files on iPhone and iPad opens the Files sheet (For #644).** Pick from iCloud Drive, On
   My iPhone, your downloads or any other app's folder, not only PS5Upload's own folder. Folders
   are still picked with the app's own browser.
+- **Help › Thank you.** Everyone who has supported PS5Upload on Ko-fi, by tier (each its own
+  colour), and the ones who chose to stay anonymous counted. No amounts are shown or kept. The
+  same list is in the README.
 
 
 ## 10.7.6

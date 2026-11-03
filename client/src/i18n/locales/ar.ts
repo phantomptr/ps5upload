@@ -7156,6 +7156,16 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
   "rp_bitrate": "معدل البت",
   "rp_bitrate_hint": "القيمة الأقل تستهلك شبكة أقل. البث المباشر يعيد إرساله كما هو: Twitch يقبل حتى 6 Mbps، و Kick حتى 8. يُطبَّق عند البدء التالي.",
   "rp_bitrate_auto": "تلقائي (15 Mbps عند 1080p)",
+  "thanks_tab": "شكرًا",
+  "thanks_title": "شكرًا",
+  "thanks_intro": "PS5Upload مجاني، ويتحسن باستمرار بفضل الأشخاص أدناه. كل قهوة تغطي أجهزة الاختبار والسهر والإصدار التالي. شكرًا لكم جميعًا.",
+  "thanks_tier_champion": "الأبطال",
+  "thanks_tier_hero": "النجوم",
+  "thanks_tier_friend": "الأصدقاء",
+  "thanks_tier_supporter": "الداعمون",
+  "thanks_anonymous": "…و{n} آخرون فضّلوا عدم ذكر أسمائهم. شكرًا لكم أيضًا.",
+  "thanks_cta": "تريد المساعدة أيضًا؟ سيظهر اسمك هنا مع الإصدار التالي.",
+  "about_thanks_link": "شكرًا لكل من يدعم PS5Upload ←",
 };
 
 export default ar;

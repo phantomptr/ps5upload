@@ -287,3 +287,8 @@ payload/third_party/sdk-crt/build/
 
 # Website screenshot run output (client/site-shots: the WebP copies go to site/assets/shots).
 client/site-shots/out/
+
+# Ko-fi / payment exports hold supporters' private data: never commit them (scripts/supporters.mjs reads one from outside the repo)
+Transaction_All*.csv
+*ko-fi*.csv
+*kofi*.csv

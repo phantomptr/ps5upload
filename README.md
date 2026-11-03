@@ -559,3 +559,21 @@ If you find this tool useful, consider buying me a coffee!
 * Support me on Ko-fi: [https://ko-fi.com/B0B81S0WUA](https://ko-fi.com/B0B81S0WUA)
 
 [![Support me on Ko-fi](https://storage.ko-fi.com/cdn/kofi3.png?v=3)](https://ko-fi.com/B0B81S0WUA)
+
+### Thank you
+
+Thank you to everyone who has supported PS5Upload. Every coffee keeps it going. (The app lists
+you too, under Help › Thank you.)
+
+<!-- supporters:start (scripts/supporters.mjs) -->
+**🟡 Champions:** BigPapii420 · clincher · Ice · Marv530e · San
+
+**🟣 Heroes:** b1ackcoffee · Dennis · drsam · f0d · gabuscus · John Malpas · kheops · LEO · Lucky · MagneTo · Peejay571 · Ronnie K. · Slappula
+
+**🔵 Friends:** B3aver08 · Beetle · David Rabilero · Florian · hernanr1993 · Joe Szymkowicz · Joey Lam · kuttenkop de kutjelikker · Mehmet · Niko · StrijderNL
+
+**🟢 Supporters:** Ferko · GerardoPTC · Griffdaddy · here · Mayankk! · Rubén · Turcan Vadim · Zeiko
+
+…and 8 anonymous supporters. Thank you all! 💛
+
+<!-- supporters:end -->

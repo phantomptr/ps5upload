@@ -14,6 +14,8 @@ import { getAppVersion } from "../../lib/appVersion";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { visibleFeatures } from "./features";
 
+import { useNavigate } from "react-router";
+
 import { useTr } from "../../state/lang";
 import { Button, Card, Badge } from "../../components";
 
@@ -37,6 +39,7 @@ const URLS = {
 /** `embedded`: shown as the About tab of Help, under that screen's own header. */
 export default function AboutScreen({ embedded = false }: { embedded?: boolean } = {}) {
   const tr = useTr();
+  const navigate = useNavigate();
   const [version, setVersion] = useState<string>("");
 
   useEffect(() => {
@@ -98,6 +101,14 @@ export default function AboutScreen({ embedded = false }: { embedded?: boolean }
           />
           <SupportButton className="min-h-10 px-5 text-sm" />
         </div>
+        <button
+          type="button"
+          onClick={() => navigate("/faq?tab=thanks")}
+          className="mt-3 text-xs text-[var(--color-muted)] underline-offset-2 hover:text-[var(--color-text)] hover:underline"
+          data-testid="about-thanks"
+        >
+          {tr("about_thanks_link", undefined, "Thank you to everyone who supports PS5Upload →")}
+        </button>
       </header>
 
       {/* Features — 2-wide grid on sm+, 3-wide on lg+. Compact icon

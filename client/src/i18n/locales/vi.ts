@@ -7158,6 +7158,16 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
   "rp_bitrate": "Tốc độ bit",
   "rp_bitrate_hint": "Thấp hơn thì dùng ít mạng hơn. Phát trực tiếp gửi đi nguyên mức này: Twitch nhận tối đa 6 Mbps, Kick 8 Mbps. Áp dụng từ lần bắt đầu sau.",
   "rp_bitrate_auto": "Tự động (15 Mbps ở 1080p)",
+  "thanks_tab": "Cảm ơn",
+  "thanks_title": "Cảm ơn",
+  "thanks_intro": "PS5Upload miễn phí, và ngày càng tốt hơn nhờ những người dưới đây. Mỗi ly cà phê trả cho thiết bị thử nghiệm, những đêm thức khuya và bản phát hành tiếp theo. Cảm ơn tất cả các bạn.",
+  "thanks_tier_champion": "Nhà vô địch",
+  "thanks_tier_hero": "Anh hùng",
+  "thanks_tier_friend": "Bạn bè",
+  "thanks_tier_supporter": "Người ủng hộ",
+  "thanks_anonymous": "…và {n} người khác chọn ẩn danh. Cũng cảm ơn các bạn.",
+  "thanks_cta": "Bạn cũng muốn giúp? Tên bạn sẽ hiện ở đây trong bản phát hành tiếp theo.",
+  "about_thanks_link": "Cảm ơn mọi người đã ủng hộ PS5Upload →",
 };
 
 export default vi;

@@ -7170,6 +7170,16 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
   "rp_bitrate": "बिटरेट",
   "rp_bitrate_hint": "कम रखने पर नेटवर्क कम लगता है। लाइव जाने पर यही बिटरेट वैसे ही आगे भेजा जाता है: Twitch 6 Mbps तक लेता है, Kick 8। अगली बार शुरू करने पर लागू होगा।",
   "rp_bitrate_auto": "ऑटो (1080p पर 15 Mbps)",
+  "thanks_tab": "धन्यवाद",
+  "thanks_title": "धन्यवाद",
+  "thanks_intro": "PS5Upload मुफ़्त है, और नीचे दिए लोगों की वजह से लगातार बेहतर हो रहा है। हर कॉफ़ी टेस्ट हार्डवेयर, देर रातों और अगले रिलीज़ का ख़र्च उठाती है। आप सभी का धन्यवाद।",
+  "thanks_tier_champion": "चैंपियन",
+  "thanks_tier_hero": "हीरो",
+  "thanks_tier_friend": "दोस्त",
+  "thanks_tier_supporter": "समर्थक",
+  "thanks_anonymous": "…और {n} और लोग जिन्होंने गुमनाम रहना चुना। आपका भी धन्यवाद।",
+  "thanks_cta": "आप भी मदद करना चाहते हैं? अगले रिलीज़ में आपका नाम यहाँ दिखेगा।",
+  "about_thanks_link": "PS5Upload का साथ देने वाले सभी का धन्यवाद →",
 };
 
 export default hi;

@@ -7448,6 +7448,16 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
   "rp_bitrate": "بیت‌ریت",
   "rp_bitrate_hint": "مقدار کمتر شبکه کمتری مصرف می‌کند. پخش زنده آن را همان‌طور که هست می‌فرستد: Twitch تا 6 Mbps می‌پذیرد و Kick تا 8. از شروع بعدی اعمال می‌شود.",
   "rp_bitrate_auto": "خودکار (15 Mbps در 1080p)",
+  "thanks_tab": "سپاس",
+  "thanks_title": "سپاس",
+  "thanks_intro": "PS5Upload رایگان است و به لطف افراد زیر مدام بهتر می‌شود. هر قهوه هزینهٔ سخت‌افزار آزمایش، شب‌بیداری‌ها و نسخهٔ بعدی را می‌دهد. از همهٔ شما سپاسگزارم.",
+  "thanks_tier_champion": "قهرمانان",
+  "thanks_tier_hero": "دلاوران",
+  "thanks_tier_friend": "دوستان",
+  "thanks_tier_supporter": "حامیان",
+  "thanks_anonymous": "…و {n} نفر دیگر که خواستند ناشناس بمانند. از شما هم سپاسگزارم.",
+  "thanks_cta": "شما هم می‌خواهید کمک کنید؟ نام شما با نسخهٔ بعدی اینجا نمایش داده می‌شود.",
+  "about_thanks_link": "سپاس از همهٔ کسانی که از PS5Upload حمایت می‌کنند ←",
 };
 
 export default fa;

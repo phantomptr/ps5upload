@@ -7163,6 +7163,16 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
   "rp_bitrate": "บิตเรต",
   "rp_bitrate_hint": "ค่าต่ำใช้เครือข่ายน้อยกว่า การไลฟ์จะส่งต่อตามค่านี้: Twitch รับได้สูงสุด 6 Mbps, Kick 8 Mbps มีผลในการเริ่มครั้งถัดไป",
   "rp_bitrate_auto": "อัตโนมัติ (15 Mbps ที่ 1080p)",
+  "thanks_tab": "ขอบคุณ",
+  "thanks_title": "ขอบคุณ",
+  "thanks_intro": "PS5Upload ใช้ฟรี และดีขึ้นเรื่อย ๆ เพราะทุกคนด้านล่างนี้ กาแฟทุกแก้วช่วยค่าอุปกรณ์ทดสอบ คืนที่อดนอน และรุ่นถัดไป ขอบคุณทุกคนมาก",
+  "thanks_tier_champion": "แชมเปียน",
+  "thanks_tier_hero": "ฮีโร่",
+  "thanks_tier_friend": "เพื่อน",
+  "thanks_tier_supporter": "ผู้สนับสนุน",
+  "thanks_anonymous": "…และอีก {n} คนที่เลือกไม่เปิดเผยชื่อ ขอบคุณเช่นกัน",
+  "thanks_cta": "อยากช่วยด้วยไหม? ชื่อของคุณจะแสดงที่นี่ในรุ่นถัดไป",
+  "about_thanks_link": "ขอบคุณทุกคนที่สนับสนุน PS5Upload →",
 };
 
 export default th;

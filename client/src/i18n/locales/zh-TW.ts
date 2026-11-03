@@ -7109,6 +7109,16 @@ helper_mismatch_boot_copy: "你的 PS5 啟動了為開機保留的舊版助手�
   "rp_bitrate": "位元率",
   "rp_bitrate_hint": "越低占用網路越少。直播會原樣傳送：Twitch 最高 6 Mbps，Kick 8 Mbps。下次開始時生效。",
   "rp_bitrate_auto": "自動（1080p 時 15 Mbps）",
+  "thanks_tab": "致謝",
+  "thanks_title": "致謝",
+  "thanks_intro": "PS5Upload 是免費的，正因為下面這些朋友，它才不斷變得更好。每一杯咖啡都支撐著測試設備、熬夜和下一個版本。謝謝你們每一位。",
+  "thanks_tier_champion": "冠軍",
+  "thanks_tier_hero": "英雄",
+  "thanks_tier_friend": "好友",
+  "thanks_tier_supporter": "支持者",
+  "thanks_anonymous": "…還有 {n} 位選擇匿名的朋友，同樣感謝。",
+  "thanks_cta": "也想支持一下嗎？下個版本你的名字就會出現在這裡。",
+  "about_thanks_link": "感謝所有支持 PS5Upload 的朋友 →",
 };
 
 export default zh_TW;

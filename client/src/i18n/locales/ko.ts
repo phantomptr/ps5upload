@@ -7173,6 +7173,16 @@ helper_mismatch_boot_copy: "PS5가 부팅용으로 보관한 이전 헬퍼 사�
   "rp_bitrate": "비트레이트",
   "rp_bitrate_hint": "낮을수록 네트워크를 덜 씁니다. 라이브 방송은 이 값을 그대로 보냅니다: Twitch는 최대 6 Mbps, Kick은 8 Mbps. 다음 시작부터 적용됩니다.",
   "rp_bitrate_auto": "자동(1080p에서 15 Mbps)",
+  "thanks_tab": "감사합니다",
+  "thanks_title": "감사합니다",
+  "thanks_intro": "PS5Upload는 무료이고, 아래 분들 덕분에 계속 좋아지고 있어요. 커피 한 잔이 테스트 장비와 밤샘, 다음 릴리스를 만들어요. 모두 감사합니다.",
+  "thanks_tier_champion": "챔피언",
+  "thanks_tier_hero": "히어로",
+  "thanks_tier_friend": "친구",
+  "thanks_tier_supporter": "서포터",
+  "thanks_anonymous": "…그리고 익명으로 남기를 원한 {n}분. 감사합니다.",
+  "thanks_cta": "함께 도와주시겠어요? 다음 릴리스에 이름이 여기 표시돼요.",
+  "about_thanks_link": "PS5Upload를 응원해 주시는 모든 분께 감사드려요 →",
 };
 
 export default ko;

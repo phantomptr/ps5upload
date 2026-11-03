@@ -7462,6 +7462,16 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "rp_bitrate": "Bitráta",
   "rp_bitrate_hint": "Az alacsonyabb kevesebb hálózatot használ. Az élő adás ezt változatlanul küldi tovább: a Twitch legfeljebb 6 Mbps-t fogad, a Kick 8-at. A következő indításkor lép életbe.",
   "rp_bitrate_auto": "Automatikus (15 Mbps 1080p-n)",
+  "thanks_tab": "Köszönöm",
+  "thanks_title": "Köszönöm",
+  "thanks_intro": "A PS5Upload ingyenes, és az alábbi emberek miatt lesz egyre jobb. Minden kávé tesztgépet, átvirrasztott éjszakákat és a következő kiadást fizeti. Köszönöm mindannyiótoknak.",
+  "thanks_tier_champion": "Bajnokok",
+  "thanks_tier_hero": "Hősök",
+  "thanks_tier_friend": "Barátok",
+  "thanks_tier_supporter": "Támogatók",
+  "thanks_anonymous": "…és még {n} ember, aki névtelen akart maradni. Nektek is köszönöm.",
+  "thanks_cta": "Te is segítenél? A neved a következő kiadással itt lesz.",
+  "about_thanks_link": "Köszönöm mindenkinek, aki támogatja a PS5Uploadot →",
 };
 
 export default hu;

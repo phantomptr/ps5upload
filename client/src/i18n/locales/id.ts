@@ -7165,6 +7165,16 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "rp_bitrate": "Laju bit",
   "rp_bitrate_hint": "Lebih rendah memakai lebih sedikit jaringan. Siaran langsung meneruskannya apa adanya: Twitch menerima hingga 6 Mbps, Kick 8. Berlaku saat mulai berikutnya.",
   "rp_bitrate_auto": "Otomatis (15 Mbps pada 1080p)",
+  "thanks_tab": "Terima kasih",
+  "thanks_title": "Terima kasih",
+  "thanks_intro": "PS5Upload gratis, dan terus menjadi lebih baik berkat orang-orang di bawah ini. Setiap kopi membiayai perangkat uji, begadang, dan rilis berikutnya. Terima kasih untuk kalian semua.",
+  "thanks_tier_champion": "Juara",
+  "thanks_tier_hero": "Pahlawan",
+  "thanks_tier_friend": "Sahabat",
+  "thanks_tier_supporter": "Pendukung",
+  "thanks_anonymous": "…dan {n} orang lain yang memilih tetap anonim. Terima kasih juga.",
+  "thanks_cta": "Ingin ikut membantu? Nama Anda akan muncul di sini pada rilis berikutnya.",
+  "about_thanks_link": "Terima kasih untuk semua yang mendukung PS5Upload →",
 };
 
 export default id;

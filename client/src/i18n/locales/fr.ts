@@ -7172,6 +7172,16 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
   "rp_bitrate": "Débit",
   "rp_bitrate_hint": "Plus bas utilise moins de réseau. Le direct retransmet ce débit tel quel : Twitch accepte jusqu'à 6 Mbps, Kick 8. Pris en compte au prochain démarrage.",
   "rp_bitrate_auto": "Auto (15 Mbps en 1080p)",
+  "thanks_tab": "Merci",
+  "thanks_title": "Merci",
+  "thanks_intro": "PS5Upload est gratuit, et il s'améliore grâce aux personnes ci-dessous. Chaque café paie le matériel de test, les nuits blanches et la prochaine version. Merci à vous tous.",
+  "thanks_tier_champion": "Champions",
+  "thanks_tier_hero": "Héros",
+  "thanks_tier_friend": "Amis",
+  "thanks_tier_supporter": "Soutiens",
+  "thanks_anonymous": "…et {n} autres qui ont préféré rester anonymes. Merci à vous aussi.",
+  "thanks_cta": "Vous voulez aider aussi ? Votre nom apparaîtra ici avec la prochaine version.",
+  "about_thanks_link": "Merci à tous ceux qui soutiennent PS5Upload →",
 };
 
 export default fr;

@@ -7175,6 +7175,16 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "rp_bitrate": "ビットレート",
   "rp_bitrate_hint": "低いほどネットワークの使用量が減ります。ライブ配信ではこの値のまま送られます: Twitch は最大 6 Mbps、Kick は 8 Mbps。次回の開始から適用されます。",
   "rp_bitrate_auto": "自動（1080p で 15 Mbps）",
+  "thanks_tab": "ありがとう",
+  "thanks_title": "ありがとう",
+  "thanks_intro": "PS5Upload は無料で、下の皆さんのおかげで良くなり続けています。一杯のコーヒーがテスト用の機材や夜なべ、次のリリースを支えています。本当にありがとうございます。",
+  "thanks_tier_champion": "チャンピオン",
+  "thanks_tier_hero": "ヒーロー",
+  "thanks_tier_friend": "フレンド",
+  "thanks_tier_supporter": "サポーター",
+  "thanks_anonymous": "…ほか、匿名を選んだ {n} 人の皆さん。ありがとうございます。",
+  "thanks_cta": "あなたも応援しませんか？次のリリースでここに名前が載ります。",
+  "about_thanks_link": "PS5Upload を応援してくれる皆さんへ感謝を →",
 };
 
 export default ja;
