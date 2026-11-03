@@ -7026,6 +7026,8 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
 "join_name_label": "Nama Anda",
 "join_name_hint": "Teman Anda melihat nama ini saat Anda minta bergabung.",
 "join_button": "Gabung",
+"join_open_app": "Buka di aplikasi PS5Upload",
+"join_open_app_hint": "Punya aplikasinya di perangkat ini? Gabung dari sana saja.",
 "join_host_fallback": "teman Anda",
 "join_connecting": "Menghubungkan ke {host}…",
 "join_waiting": "Menunggu {host} mengizinkan Anda masuk",

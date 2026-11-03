@@ -7024,6 +7024,8 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
 "join_name_label": "ชื่อของคุณ",
 "join_name_hint": "เพื่อนจะเห็นชื่อนี้เมื่อคุณขอเข้าร่วม",
 "join_button": "เข้าร่วม",
+"join_open_app": "เปิดในแอป PS5Upload",
+"join_open_app_hint": "มีแอปในอุปกรณ์นี้ไหม เข้าร่วมจากแอปแทนได้",
 "join_host_fallback": "เพื่อนของคุณ",
 "join_connecting": "กำลังเชื่อมต่อกับ {host}…",
 "join_waiting": "กำลังรอ {host} ให้คุณเข้า",

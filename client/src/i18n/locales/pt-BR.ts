@@ -7032,6 +7032,8 @@ helper_mismatch_boot_copy: "Seu PS5 iniciou uma cópia antiga do auxiliar que gu
 "join_name_label": "Seu nome",
 "join_name_hint": "Seu amigo vê isto quando você pede para entrar.",
 "join_button": "Entrar",
+"join_open_app": "Abrir no app PS5Upload",
+"join_open_app_hint": "Tem o app neste aparelho? Entre por ele.",
 "join_host_fallback": "seu amigo",
 "join_connecting": "Conectando a {host}…",
 "join_waiting": "Esperando {host} deixar você entrar",

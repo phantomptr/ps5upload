@@ -7017,6 +7017,8 @@ helper_mismatch_boot_copy: "আপনার PS5 বুটের জন্য র
 "join_name_label": "আপনার নাম",
 "join_name_hint": "যোগ দিতে অনুরোধ করলে আপনার বন্ধু এটি দেখবে।",
 "join_button": "যোগ দিন",
+"join_open_app": "PS5Upload অ্যাপে খুলুন",
+"join_open_app_hint": "এই ডিভাইসে অ্যাপটি আছে? তাহলে সেখান থেকে যোগ দিন।",
 "join_host_fallback": "আপনার বন্ধু",
 "join_connecting": "{host}-এর সাথে সংযোগ হচ্ছে…",
 "join_waiting": "{host} আপনাকে ঢুকতে দেওয়ার অপেক্ষায়",

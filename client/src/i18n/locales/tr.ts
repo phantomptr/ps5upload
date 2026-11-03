@@ -7024,6 +7024,8 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
 "join_name_label": "Adın",
 "join_name_hint": "Katılmak istediğinde arkadaşın bunu görür.",
 "join_button": "Katıl",
+"join_open_app": "PS5Upload uygulamasında aç",
+"join_open_app_hint": "Uygulama bu cihazda mı? Oradan katıl.",
 "join_host_fallback": "arkadaşın",
 "join_connecting": "Bağlanılıyor: {host}…",
 "join_waiting": "{host} seni içeri alsın diye bekleniyor",

@@ -7265,6 +7265,8 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
 "join_name_label": "Twoje imię",
 "join_name_hint": "Znajomy zobaczy je, gdy poprosisz o dołączenie.",
 "join_button": "Dołącz",
+"join_open_app": "Otwórz w aplikacji PS5Upload",
+"join_open_app_hint": "Masz aplikację na tym urządzeniu? Dołącz z niej.",
 "join_host_fallback": "twój znajomy",
 "join_connecting": "Łączenie z {host}…",
 "join_waiting": "Czekasz, aż {host} cię wpuści",

@@ -71,6 +71,7 @@ mod tray {
     }
 }
 // "Open with PS5Upload" for .pkg files: paths from the launch, a second launch, or macOS.
+mod open_links;
 mod opened_files;
 mod pip_window;
 
@@ -185,6 +186,9 @@ pub fn run() {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.plugin(tauri_plugin_drag::init());
     let app = builder
+        // ps5upload:// links (a Play Together invite's "Open in the PS5Upload app"), after
+        // single-instance so a second launch's link reaches this one (open_links.rs).
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         // Opener: the cross-platform way to open external URLs / reveal files.
         // It uses an Android Intent rather than spawning a system opener
@@ -209,6 +213,29 @@ pub fn run() {
                     .collect();
                 let cwd = std::env::current_dir().unwrap_or_default();
                 opened_files::push(opened_files::package_args(&argv, &cwd));
+            }
+
+            // ps5upload:// links: the one this launch was opened with, and any that arrive later.
+            // Installers register the scheme (bundle config); Windows and Linux also register it
+            // at run time, for the portable zip and the AppImage.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                #[cfg(any(windows, target_os = "linux"))]
+                if let Err(e) = app.deep_link().register_all() {
+                    eprintln!("[tauri] could not register ps5upload:// links: {e}");
+                }
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    open_links::push(&urls);
+                }
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    if open_links::push(&event.urls()) {
+                        use tauri::Emitter;
+                        let _ = handle.emit(open_links::EVENT, ());
+                        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                        tray::show_main(&handle);
+                    }
+                });
             }
 
             // The main window (built here, not from the config, so Remote Play's picture in
@@ -679,6 +706,8 @@ pub fn run() {
             bg_activity::bg_capabilities,
             // ── Open with PS5Upload (.pkg file association) ─────────
             opened_files::opened_files_take,
+            // ── ps5upload:// links (Play Together invites) ───────────
+            open_links::open_links_take,
         ])
         .build(tauri::generate_context!())
         .expect("tauri runtime failed to build");

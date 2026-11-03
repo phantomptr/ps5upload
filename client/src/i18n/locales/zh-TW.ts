@@ -6970,6 +6970,8 @@ helper_mismatch_boot_copy: "你的 PS5 啟動了為開機保留的舊版助手�
 "join_name_label": "你的名字",
 "join_name_hint": "你要求加入時，好友會看到這個名字。",
 "join_button": "加入",
+"join_open_app": "在 PS5Upload 應用程式中開啟",
+"join_open_app_hint": "這台裝置有安裝應用程式？請改在應用程式裡加入。",
 "join_host_fallback": "你的好友",
 "join_connecting": "正在連線到 {host}…",
 "join_waiting": "正在等待 {host} 讓你加入",

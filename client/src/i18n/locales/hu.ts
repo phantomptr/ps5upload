@@ -7323,6 +7323,8 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
 "join_name_label": "A neved",
 "join_name_hint": "A barátod ezt látja, amikor csatlakozni szeretnél.",
 "join_button": "Csatlakozás",
+"join_open_app": "Megnyitás a PS5Upload appban",
+"join_open_app_hint": "Megvan az app ezen az eszközön? Csatlakozz onnan.",
 "join_host_fallback": "a barátod",
 "join_connecting": "Csatlakozás ehhez: {host}…",
 "join_waiting": "Várakozás, hogy {host} beengedjen",

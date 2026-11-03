@@ -6970,6 +6970,8 @@ helper_mismatch_boot_copy: "PS5 запустила старую копию по�
 "join_name_label": "Ваше имя",
 "join_name_hint": "Друг увидит его, когда вы попроситесь в игру.",
 "join_button": "Войти",
+"join_open_app": "Открыть в приложении PS5Upload",
+"join_open_app_hint": "Приложение есть на этом устройстве? Присоединяйтесь из него.",
 "join_host_fallback": "ваш друг",
 "join_connecting": "Подключение к {host}…",
 "join_waiting": "Ждём, пока {host} вас впустит",

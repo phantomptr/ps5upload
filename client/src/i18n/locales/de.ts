@@ -7025,6 +7025,8 @@ helper_mismatch_boot_copy: "Deine PS5 hat eine ältere Kopie des Helfers gestart
 "join_name_label": "Dein Name",
 "join_name_hint": "Das sieht dein Freund, wenn du zum Mitspielen anfragst.",
 "join_button": "Mitspielen",
+"join_open_app": "In der PS5Upload-App öffnen",
+"join_open_app_hint": "Hast du die App auf diesem Gerät? Tritt stattdessen dort bei.",
 "join_host_fallback": "dein Freund",
 "join_connecting": "Verbinde mit {host}…",
 "join_waiting": "Warte, bis {host} dich reinlässt",

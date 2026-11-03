@@ -6970,6 +6970,8 @@ helper_mismatch_boot_copy: "Tu PS5 inició una copia antigua del ayudante que gu
 "join_name_label": "Tu nombre",
 "join_name_hint": "Tu amigo lo verá cuando pidas unirte.",
 "join_button": "Unirme",
+"join_open_app": "Abrir en la app PS5Upload",
+"join_open_app_hint": "¿Tienes la app en este dispositivo? Únete desde ahí.",
 "join_host_fallback": "tu amigo",
 "join_connecting": "Conectando con {host}…",
 "join_waiting": "Esperando a que {host} te deje entrar",

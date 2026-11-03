@@ -733,7 +733,9 @@ object ShareIntake {
     val uri: Uri? = when (intent.action) {
       Intent.ACTION_SEND -> streamExtra(intent) ?: intent.clipData
         ?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
-      Intent.ACTION_VIEW -> intent.data
+      // Files only: a ps5upload:// link (Play Together invite) is the deep-link plugin's.
+      Intent.ACTION_VIEW -> intent.data?.takeIf { it.scheme == "content" || it.scheme == "file" }
+        ?: return null
       else -> return null
     }
     if (uri == null) {

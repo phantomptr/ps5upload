@@ -4,6 +4,7 @@ import { Users } from "lucide-react";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useTr } from "../state/lang";
 import { tokenKey } from "../lib/joinClient";
+import { joinAppLink } from "../lib/joinProtocol";
 import { JoinView } from "./JoinView";
 import { JoinSession } from "./session";
 
@@ -126,6 +127,21 @@ export function JoinFlow({ url, invite, host }: { url: string; invite: string | 
         >
           {tr("join_button", undefined, "Join")}
         </button>
+        {invite && (
+          // The same invite in the PS5Upload app, where it is installed (ps5upload:// link).
+          <div className="space-y-1 border-t border-white/10 pt-4 text-center">
+            <a
+              href={joinAppLink(location.href)}
+              className="block w-full rounded-full border border-white/20 py-2.5 text-sm font-semibold text-white hover:bg-white/10"
+              data-testid="join-open-app"
+            >
+              {tr("join_open_app", undefined, "Open in the PS5Upload app")}
+            </a>
+            <span className="block text-xs text-white/50">
+              {tr("join_open_app_hint", undefined, "Have the app on this device? Join from there instead.")}
+            </span>
+          </div>
+        )}
       </form>
     </div>
   );

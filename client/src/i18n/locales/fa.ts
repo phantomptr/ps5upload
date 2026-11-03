@@ -7309,6 +7309,8 @@ helper_mismatch_boot_copy: "PS5 نسخه‌ی قدیمی‌تری از کمک‌
 "join_name_label": "نام شما",
 "join_name_hint": "وقتی درخواست پیوستن بدهید، دوستتان این را می‌بیند.",
 "join_button": "پیوستن",
+"join_open_app": "باز کردن در برنامهٔ PS5Upload",
+"join_open_app_hint": "برنامه روی این دستگاه نصب است؟ به‌جای اینجا از آنجا بپیوندید.",
 "join_host_fallback": "دوستتان",
 "join_connecting": "در حال اتصال به {host}…",
 "join_waiting": "منتظر اجازهٔ ورود از {host}",

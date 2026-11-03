@@ -7019,6 +7019,8 @@ helper_mismatch_boot_copy: "PS5 đã chạy một bản sao cũ của trình tr�
 "join_name_label": "Tên của bạn",
 "join_name_hint": "Bạn bè sẽ thấy tên này khi bạn xin vào.",
 "join_button": "Vào chơi",
+"join_open_app": "Mở trong ứng dụng PS5Upload",
+"join_open_app_hint": "Thiết bị này có ứng dụng? Tham gia từ đó.",
 "join_host_fallback": "bạn của bạn",
 "join_connecting": "Đang kết nối tới {host}…",
 "join_waiting": "Đang chờ {host} cho bạn vào",

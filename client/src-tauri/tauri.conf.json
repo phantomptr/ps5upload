@@ -115,5 +115,11 @@
         "type": "downloadBootstrapper"
       }
     }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": { "schemes": ["ps5upload"] },
+      "mobile": [{ "scheme": ["ps5upload"], "appLink": false }]
+    }
   }
 }

@@ -7036,6 +7036,8 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
 "join_name_label": "あなたの名前",
 "join_name_hint": "参加をリクエストすると、フレンドにこの名前が表示されます。",
 "join_button": "参加",
+"join_open_app": "PS5Upload アプリで開く",
+"join_open_app_hint": "この端末にアプリがあれば、アプリから参加できます。",
 "join_host_fallback": "フレンド",
 "join_connecting": "{host}さんに接続中…",
 "join_waiting": "{host}さんの許可を待っています",

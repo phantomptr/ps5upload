@@ -7033,6 +7033,8 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
 "join_name_label": "Votre nom",
 "join_name_hint": "Votre ami le verra quand vous demanderez à rejoindre.",
 "join_button": "Rejoindre",
+"join_open_app": "Ouvrir dans l’app PS5Upload",
+"join_open_app_hint": "Vous avez l’app sur cet appareil ? Rejoignez depuis l’app.",
 "join_host_fallback": "votre ami",
 "join_connecting": "Connexion à {host}…",
 "join_waiting": "En attente que {host} vous laisse entrer",

@@ -7017,6 +7017,8 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
 "join_name_label": "اسمك",
 "join_name_hint": "يرى صديقك هذا الاسم عندما تطلب الانضمام.",
 "join_button": "انضمام",
+"join_open_app": "فتح في تطبيق PS5Upload",
+"join_open_app_hint": "هل التطبيق على هذا الجهاز؟ انضم من هناك بدلًا من ذلك.",
 "join_host_fallback": "صديقك",
 "join_connecting": "جارٍ الاتصال بـ {host}…",
 "join_waiting": "بانتظار أن يسمح لك {host} بالدخول",

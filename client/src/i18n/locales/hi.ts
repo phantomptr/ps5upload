@@ -7031,6 +7031,8 @@ helper_mismatch_boot_copy: "आपके PS5 ने बूट के लिए �
 "join_name_label": "आपका नाम",
 "join_name_hint": "जुड़ने के लिए पूछने पर आपका दोस्त यह देखेगा।",
 "join_button": "जुड़ें",
+"join_open_app": "PS5Upload ऐप में खोलें",
+"join_open_app_hint": "क्या इस डिवाइस पर ऐप है? वहीं से जुड़ें।",
 "join_host_fallback": "आपका दोस्त",
 "join_connecting": "{host} से जुड़ रहे हैं…",
 "join_waiting": "{host} के अंदर आने देने का इंतज़ार",

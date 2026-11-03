@@ -7331,6 +7331,8 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
 "join_name_label": "Your name",
 "join_name_hint": "Your friend sees this when you ask to join.",
 "join_button": "Join",
+"join_open_app": "Open in the PS5Upload app",
+"join_open_app_hint": "Have the app on this device? Join from there instead.",
 "join_host_fallback": "your friend",
 "join_connecting": "Connecting to {host}…",
 "join_waiting": "Waiting for {host} to let you in",
