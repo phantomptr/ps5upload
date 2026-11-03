@@ -934,7 +934,7 @@ pub async fn relay(
 
 /// `GET /join`: the guest page.
 pub async fn page() -> impl IntoResponse {
-    Html(include_str!("join.html"))
+    Html(include_str!("join_page.html"))
 }
 
 fn say(v: serde_json::Value) -> Message {
