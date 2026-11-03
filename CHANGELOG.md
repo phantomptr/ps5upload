@@ -30,6 +30,15 @@ What's new in ps5upload, written for humans.
 - **Pairing says what to check (For #642).** When the PS5 doesn't answer pairing, the message now
   names the two usual causes: Remote Play is off on the PS5, or the PIN didn't come from the PS5's
   own Link Device screen (PINs from other tools don't work).
+- **Detailed logs.** A new switch in the Logs tab records much more about Remote Play's start
+  (the console's replies, each step's timing, retries) and Play Together (each guest's join,
+  resume and keyframe requests), for the hard cases like a console that keeps refusing. It turns
+  itself off after 24 hours, and never records keys, codes, tokens or passwords.
+- **Bug reports cover every feature.** A report now says what Remote Play, Play Together, phone
+  controllers and watch parties, Go live, saved connections, Hush, the cheats engine and
+  `ps5upload://` links were doing (counts and states only), whether Detailed logs were on, and
+  how the last Remote Play start ended. It also no longer copies the Remote Play wake keys kept in
+  the mesh's console list, or the token part of links saved in settings.
 - **No more "1e+218h left".** During a long step that moves no bytes (a conversion's hashing pass),
   the status bar's speed faded towards zero and showed nonsense like "2.2e-211 B/s · 1.4e+218h
   left". A job that isn't moving bytes now shows no speed, and no time left over 30 days.
