@@ -579,13 +579,13 @@ Thank you to everyone who has supported PS5Upload. Every coffee keeps it going. 
 the website list you too, under Thanks & Support.)
 
 <!-- supporters:start (scripts/supporters.mjs) -->
-**🟡 Champions:** BigPapii420 · clincher · Ice · Marv530e · San
+**🟡 Tier 1:** BigPapii420 · clincher · Ice · Marv530e · San
 
-**🟣 Heroes:** b1ackcoffee · Dennis · drsam · f0d · gabuscus · John Malpas · kheops · LEO · Lucky · MagneTo · Peejay571 · Ronnie K. · Slappula
+**🟣 Tier 2:** b1ackcoffee · Dennis · drsam · f0d · gabuscus · John Malpas · kheops · LEO · Lucky · MagneTo · Peejay571 · Ronnie K. · Slappula
 
-**🔵 Friends:** B3aver08 · Beetle · David Rabilero · Florian · hernanr1993 · Joe Szymkowicz · Joey Lam · kuttenkop de kutjelikker · Mehmet · Niko · StrijderNL
+**🔵 Tier 3:** B3aver08 · Beetle · David Rabilero · Florian · hernanr1993 · Joe Szymkowicz · Joey Lam · kuttenkop de kutjelikker · Mehmet · Niko · StrijderNL
 
-**🟢 Supporters:** Ferko · GerardoPTC · Griffdaddy · here · Mayankk! · Rubén · Turcan Vadim · Zeiko
+**🟢 Tier 4:** Ferko · GerardoPTC · Griffdaddy · here · Mayankk! · Rubén · Turcan Vadim · Zeiko
 
 …and 8 anonymous supporters. Thank you all! 💛
 

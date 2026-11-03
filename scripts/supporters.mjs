@@ -27,7 +27,7 @@ const TIERS = [
   ["friend", 5],
   ["supporter", 0],
 ];
-const TIER_TITLES = { champion: "Champions", hero: "Heroes", friend: "Friends", supporter: "Supporters" };
+const TIER_TITLES = { champion: "Tier 1", hero: "Tier 2", friend: "Tier 3", supporter: "Tier 4" };
 const TIER_DOTS = { champion: "🟡", hero: "🟣", friend: "🔵", supporter: "🟢" };
 
 /** RFC 4180 CSV: quoted fields may hold commas, quotes ("") and line breaks. */
