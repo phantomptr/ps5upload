@@ -1399,6 +1399,13 @@ the part not sent yet; meanwhile the progress reads "Skipping data the console a
 - **`.rar` needs the desktop app.** The Android build and the web UI say so. `.zip` and `.7z` work
   on Android; no archive format works in the browser.
 
+**Q: I want the `.zip` itself on the PS5, not unpacked (a jailbreak or payload update).**
+Upload asks what to do with each archive: **unpack it** (into a new folder, or straight into the
+destination) or **send it as it is**. It picks for you from what is inside: an archive holding a
+game or packages is unpacked; anything else (payloads, a jailbreak update such as Y2JB's, saves)
+is sent as the file. When it can't tell, nothing is picked and it asks before uploading. Copying
+a file into a folder in **Files** never unpacks it.
+
 **Q: Does an archive upload need free space on my PC?**
 No. The archive is decompressed and sent at the same time, so you only need room for the archive
 you already have. The `PS5UPLOAD_ARCHIVE_STAGE_MB` and `PS5UPLOAD_ZIP_RAM_THRESHOLD_MB` variables
@@ -2440,6 +2447,13 @@ still looks wrong, set Play › Settings › **Video decoding** to **Software** 
 **Q: Does my phone controller (Backbone, Razer Kishi, GameSir, Scuf Nomad...) work with Remote Play?**
 Yes. Phone controllers, USB-C or Bluetooth, are game controllers to the phone, so Remote Play reads them like any other: connect it, press a button, and it plays (the on-screen controller hides). If the browser doesn't recognise one, it still plays in the usual layout; if a button is wrong, open Play › Settings › Controllers › **Map buttons** and press each button as asked (any step can be skipped). **Set an extra button** gives a back button or paddle any PS5 button. Mappings are saved per controller. In the Android app the app also hands controllers to the page itself, for phones whose system browser misses them; on iPhone the app makes sure the page has the focus controllers need.
 
+**Q: Windows: my DualSense works in Windows but Play says "No controller seen yet".**
+Some Windows setups never hand a DualSense (often over Bluetooth) to the app's web view. The
+Windows app now reads a DualSense itself whenever the web view sees no controller, over USB or
+Bluetooth, and lists it under Play › Settings › Controllers with "(app)" after its name. Close
+DSX, DS4Windows or Steam Input if one of them hides the pad. Other controllers still come
+through the web view as before.
+
 **Q: What is the Game panel in Remote Play?**
 The **Game** button on the stream bar (or **Game** in the phone's **⋯** menu) opens a panel over
 the picture; the game keeps playing. **Game** shows what is running and has **Snapshot save now**
@@ -3231,6 +3245,15 @@ can't grow without bound. Use **Open logs folder** on the Bug report or
 Logs page to find them.
 
 ---
+
+## Supporting PS5Upload
+
+**Q: How can I support PS5Upload?**
+Open **Thanks & Support** (in the sidebar, under Bug Report), or the same section on the
+website. It has Ko-fi (card or PayPal, once or monthly) and Bitcoin, Ethereum, Solana and XRP
+addresses straight to my wallet, each with a QR code and the one network to send it on. Everyone
+who supports it is thanked there by the name they gave on Ko-fi, most support first; amounts are
+never shown. Want your name changed or taken off? Say so on Discord.
 
 ## Disclaimer
 

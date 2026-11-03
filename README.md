@@ -24,7 +24,8 @@
 ## What it does
 
 - **Fast, resumable uploads** of games, folders, disk images and `.zip` / `.7z` / `.rar`
-  archives (unpacked on the way, nothing extracted to your disk). Everything runs over
+  archives (unpacked on the way with nothing extracted to your disk, or sent as they are: a
+  game archive unpacks, anything else is sent as the file, and you can choose either). Everything runs over
   **AVA1**, one encrypted connection on port 9120. Every file is verified, and an upload
   continues after a dropped connection, a helper restart or rest mode. A job that will not
   fit is refused up front, counting what is already on the console. Queue, live speed and ETA;
@@ -69,6 +70,13 @@
   - A step-by-step setup (Play › Set up) that checks each requirement on the console and fixes
     what it can (sign-in, account ID, Remote Play switches, pairing, or pairing with the PIN the
     PS5 shows), plus a PIN for Sony's PS Remote Play app or chiaki-ng if you prefer those.
+  - **Play Together:** friends join your game as Player 2, 3 and 4, each with their own
+    controller on the PS5, from any browser or the app. Share a QR code, a link or a short
+    code, allow each friend, and they pick Quick Play on the TV. A short drop keeps their
+    place.
+  - **Go live** to YouTube, Twitch, Kick, Facebook or any RTMP/SRT server, several at once,
+    straight from Play (desktop apps and the web UI), or add the stream to **OBS** for your own
+    scenes and overlays.
   - A local automation API lets a script or AI agent on the engine's computer watch and play a
     running session ([AUTOMATION.md](AUTOMATION.md)).
 - **Cheats, fan curve, hardware view,** payload sender with a catalogue and playlists, and
