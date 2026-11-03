@@ -4,6 +4,15 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.0.1
+
+- **A NAS share typed with its folders works on the PS5's Shared Folders too.** Typing the share
+  as `Media/Games/PS5` (or pasting `\\nas\Media\Games`), as other PS5 tools take it, was refused as
+  "not a share name". The share is now the first name and the folders become the start folder,
+  as the app's own SMB sources already did.
+- The desktop app's declared minimum Rust version is now the one its code needs (1.87), so the
+  build's lints match.
+
 ## 11.0.0
 
 - **Play Together: friends play your PS5 as Player 2, 3 and 4 (For #641).** While you play, the

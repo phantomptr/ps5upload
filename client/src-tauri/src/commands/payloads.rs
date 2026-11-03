@@ -2687,7 +2687,7 @@ mod tests {
         use std::io::Write;
         let elf: Vec<u8> = {
             let mut v = b"\x7FELF".to_vec();
-            v.extend(std::iter::repeat(0u8).take(2048));
+            v.extend(std::iter::repeat_n(0u8, 2048));
             v
         };
         let zip_path =

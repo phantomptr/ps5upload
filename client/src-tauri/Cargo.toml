@@ -1,10 +1,10 @@
 [package]
 name = "ps5upload-desktop"
-version = "11.0.0"
+version = "11.0.1"
 description = "The all-in-one PS5 companion app."
 license = "GPL-3.0-or-later"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.87"  # is_multiple_of (engine crates it links); CI builds on stable
 
 [lib]
 name = "ps5upload_desktop_lib"
