@@ -9,7 +9,7 @@ import { androidPipAvailable } from "../../lib/androidPip";
 import { appSavesToPhotos } from "../../lib/rpCapture";
 import { gameModeKind } from "../../lib/gameMode";
 import { keysFor, rebind, PAD_ACTIONS, type KeyAction } from "../../lib/remotePlayStream";
-import { useRemotePlayStore, type RpPrefs } from "../../state/remotePlay";
+import { RP_BITRATES, useRemotePlayStore, type RpPrefs } from "../../state/remotePlay";
 import { askMotion, motionAvailable } from "../../lib/motion";
 import { dualSenseCapable } from "../../lib/dualSense";
 import { connectWebHidTouchpad, webHidTouchpadAvailable, webHidTouchpadConnected } from "../../lib/padTouchpad";
@@ -342,6 +342,23 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
             ]}
           />
           <HdrNote support={hdr} chosen={prefs.codec === "hdr"} />
+          <Select
+            label={tr("rp_bitrate", undefined, "Bitrate")}
+            value={String(prefs.bitrateKbps)}
+            hint={tr(
+              "rp_bitrate_hint",
+              undefined,
+              "Lower uses less network. Going live sends this on as it is: Twitch takes up to 6 Mbps, Kick 8. Applies the next time you start.",
+            )}
+            onChange={(e) => setPrefs({ bitrateKbps: num(e.target.value) })}
+            data-testid="rp-bitrate"
+            options={RP_BITRATES.map((b) => ({
+              value: String(b),
+              label: b
+                ? `${b / 1000} Mbps`
+                : tr("rp_bitrate_auto", undefined, "Auto (15 Mbps at 1080p)"),
+            }))}
+          />
           <Hint>
             {tr(
               "rp_decoding_hint",

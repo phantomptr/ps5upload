@@ -75,6 +75,7 @@ import { JoinAsks, PlayTogetherPanel } from "./PlayTogether";
 import { friendsIn, useJoinHost } from "./playTogetherState";
 import { okToStartPlay } from "./JoinAFriend";
 import { useConfirm } from "../../components/ConfirmDialog";
+import { GoLiveBarIcon, GoLiveChip, GoLivePanel, goLiveAvailable, useGoLivePolling } from "./GoLivePanel";
 import { GamePanel } from "./game/GamePanel";
 import { LaunchStatus } from "./game/LaunchStatus";
 import { DropChoice, DropZone, useStreamDropZone } from "./game/DropToInstall";
@@ -484,6 +485,8 @@ export function StreamPanel() {
   /** Play Together (#641): friends as Player 2–4. */
   const [togetherOpen, setTogetherOpen] = useState(false);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  /** The Stream panel (Go live, OBS; #635). */
+  const [goLiveOpen, setGoLiveOpen] = useState(false);
   const [full, setFull] = useState(false);
   const [chrome, setChrome] = useState(true);
   const [fitOpen, setFitOpen] = useState(false);
@@ -559,6 +562,8 @@ export function StreamPanel() {
     };
   }, [running, prefs.motion]);
   const playing = running && phase === "playing";
+  const goLive = goLiveAvailable({ mobile: isMobile() });
+  useGoLivePolling(running && goLive, goLiveOpen);
   // Play a title on the stream (from a game's page, or the Game panel): stream, helper, launch.
   const launcher = useGameLaunch();
   // The running game, for its controls (turbo, mouse aim, macros): from the shared running-games
@@ -1341,6 +1346,19 @@ export function StreamPanel() {
                   <Users size={16} />
                 </BarButton>
               )}
+              {!compact && goLive && (
+                <BarButton
+                  label={tr("golive_title", undefined, "Stream")}
+                  active={goLiveOpen}
+                  onClick={() => {
+                    if (full) exitFull();
+                    setGoLiveOpen((v) => !v);
+                  }}
+                  testId="rp-golive"
+                >
+                  <GoLiveBarIcon />
+                </BarButton>
+              )}
               {playing && <KbmBarButton mode={kbm.mode} title={controlsTitle} onCycle={kbm.cycle} captured={kbm.captured} />}
               <BarButton
                 label={tr("rp_game_button", undefined, "Game")}
@@ -1400,6 +1418,7 @@ export function StreamPanel() {
             </div>
           )}
           {running && <CaptureOverlay />}
+          {running && goLive && <GoLiveChip />}
           <QualityNotice />
           {touchHere && touchpadOn && (
             <TouchpadOverlay
@@ -1747,6 +1766,8 @@ export function StreamPanel() {
           onClose={() => setPhonesOpen(false)}
         />
       )}
+
+      {goLiveOpen && running && goLive && <GoLivePanel onClose={() => setGoLiveOpen(false)} />}
 
       {!full && settingsDrawer}
 

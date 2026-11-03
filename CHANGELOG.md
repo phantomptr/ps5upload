@@ -62,6 +62,30 @@ What's new in ps5upload, written for humans.
 
 ---
 - A resumed upload shows what was already on the PS5, and its time left counts only what's still to send.
+- **Stream your PS5 to YouTube, Twitch, Kick or Facebook, straight from Play (For #635).** A new
+  **Stream** button on the Play bar (the one with the red dot) opens **Go live**: add a site,
+  paste its stream key (each site's form says where to find it), and press Go live. Several
+  sites at once work too, and **Custom** takes any RTMP, RTMPS or SRT server. The picture is
+  sent exactly as the PS5 made it, so it costs this computer almost nothing; only the sound is
+  converted (sites don't take the PS5's Opus sound), by ffmpeg, which is downloaded the first
+  time (30 to 90 MB) and checked against a fixed fingerprint before it is ever run. While live,
+  a **LIVE** badge on the picture shows the time and bitrate. If the connection drops, it
+  reconnects by itself (after 2, 4, 8, 15, then every 30 seconds) while you keep playing; if one
+  of several sites fails, the others keep going. A refused key, a site that's unreachable, or a
+  video format the site doesn't take each get a plain explanation. Stream keys are kept
+  encrypted on the engine's computer and only their last four characters are ever shown. Desktop
+  apps and the web UI; not in the phone apps yet.
+- **Each site's limits are checked before you go live.** Twitch, Kick and Facebook take H.264
+  only and cap the bitrate (about 6, 8 and 9 Mbps); when Play sends HEVC or more than a site
+  takes, the panel says so and offers to restart Play in H.264 at the right bitrate. Twitch has
+  a **Test without going public** switch (on by default) to try it first.
+- **Stream with OBS instead.** The Stream panel's **OBS** tab gives a link to the live stream on
+  this computer, with the four steps to add it in OBS as a Media Source, for your own scenes and
+  overlays. The feed starts at a keyframe, asks the PS5 for one every 2 seconds while OBS reads
+  it, and holds back damaged frames after a network loss until the picture is clean again.
+  Scripts can read it too: `GET /api/ps5/rp/live.ts` (see AUTOMATION.md).
+- **Play › Settings › Picture › Bitrate.** Choose the video bitrate the PS5 streams at (Auto is
+  15 Mbps at 1080p, as before): lower it for a busy network, or for a streaming site's limit.
 
 ## 10.7.6
 
