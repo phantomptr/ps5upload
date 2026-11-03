@@ -21,6 +21,15 @@ What's new in ps5upload, written for humans.
   on Minion's Cheats page.
 - **Timings in the helper's log**, for a bug report: when the game started, when its eboot.bin
   loaded, each cheat's waits, and "applied 180 ms after launch (code ready at 150 ms)".
+- **A PS4 game's DLC is no longer listed as a second copy of the game.** For #638. Some DLC
+  packages, mostly the small ones that only unlock something already in the game, have no
+  data of their own, and the library did not recognise that kind of package, so it counted it
+  as the game itself and marked the game as a duplicate. These are now recognised as DLC, a
+  package's own "this is DLC" note is believed even when its header says otherwise, and two
+  items only count as the same game stored twice when they are the same release (the same
+  content ID): a game and its DLC, or two DLCs, never are. Libraries are re-read once, so
+  games marked as duplicates by mistake are cleared on the next scan.
+
 
 ## 10.7.5
 

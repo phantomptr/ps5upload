@@ -113,11 +113,15 @@ fn package(path: &Path) -> PkgInfo {
     };
     if head.content_type != 0 {
         // Only a PS4 package carries a PARAM.SFO CATEGORY to cross-check; for a PS5 package
-        // the reader fills one in from the same header bits, which would check nothing.
-        let category = if head.content_type == 0x1A || head.content_type == 0x1B {
-            head.category.as_str()
-        } else {
+        // the reader fills one in from the same header bits, which would check nothing. Every
+        // PS4 type gets it, a DLC-only licence (0x1C) and a type not known yet included: the
+        // CATEGORY is what tells an unknown type's DLC from its game (#638).
+        let category = if head.platform.eq_ignore_ascii_case("ps5")
+            || ps5upload_pkg::kind::content_type_platform(head.content_type) == Some("PS5")
+        {
             ""
+        } else {
+            head.category.as_str()
         };
         let (kind, confident, reason) = classify(head.content_type, head.content_flags, category);
         info.kind = kind.as_str().into();
@@ -219,4 +223,156 @@ pub fn cover(path: &Path, kind: &str) -> Option<Vec<u8>> {
         _ => None,
     }
     .filter(|b| !b.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+    use crate::collection::group::{finish, place, summarize};
+    use crate::collection::Location;
+    use crate::inspect::test_fixtures::{scratch, sfo};
+
+    const GAME: &str = "EP0700-CUSA12345_00-GAME000000000000";
+
+    /// A PS4 `\x7FCNT` package: its header's content ID, `content_type` and `content_flags`,
+    /// and a PARAM.SFO with `category` unless that is `None`.
+    fn ps4_pkg(
+        dir: &Path,
+        name: &str,
+        cid: &str,
+        content_type: u32,
+        flags: u32,
+        category: Option<&str>,
+    ) -> PathBuf {
+        let table = 0x100u32;
+        let entries: u32 = if category.is_some() { 1 } else { 0 };
+        // A package with no PARAM.SFO still has an entry (here an empty one at id 0x0001).
+        let data_off = table + 0x20;
+        let mut pkg = vec![0u8; data_off as usize];
+        pkg[0..4].copy_from_slice(&ps5upload_pkg::PKG_MAGIC.to_be_bytes());
+        pkg[0x10..0x14].copy_from_slice(&1u32.to_be_bytes());
+        pkg[0x18..0x1C].copy_from_slice(&table.to_be_bytes());
+        pkg[0x40..0x40 + cid.len()].copy_from_slice(cid.as_bytes());
+        pkg[0x74..0x78].copy_from_slice(&content_type.to_be_bytes());
+        pkg[0x78..0x7C].copy_from_slice(&flags.to_be_bytes());
+        let e = table as usize;
+        let body = match category {
+            Some(c) => sfo(&[("CATEGORY", c), ("CONTENT_ID", cid), ("TITLE", "Some Game")]),
+            None => vec![0u8; 0x10],
+        };
+        let id: u32 = if entries == 1 { 0x1000 } else { 0x0001 };
+        pkg[e..e + 4].copy_from_slice(&id.to_be_bytes());
+        pkg[e + 0x10..e + 0x14].copy_from_slice(&data_off.to_be_bytes());
+        pkg[e + 0x14..e + 0x18].copy_from_slice(&(body.len() as u32).to_be_bytes());
+        pkg.extend_from_slice(&body);
+        pkg.resize(pkg.len().max(0x200), 0);
+        let p = dir.join(name);
+        std::fs::write(&p, &pkg).unwrap();
+        p
+    }
+
+    fn kind_of(p: &Path) -> PkgInfo {
+        identify(p, "pkg").unwrap()
+    }
+
+    #[test]
+    fn every_ps4_package_shape_is_named_by_what_it_is() {
+        let d = scratch();
+        let game = kind_of(&ps4_pkg(&d, "g.pkg", GAME, 0x1A, 0x0A00_0000, Some("gd")));
+        assert_eq!((game.kind.as_str(), game.kind_confident), ("base", true));
+        assert_eq!(
+            (game.title_id.as_str(), game.platform.as_str()),
+            ("CUSA12345", "PS4")
+        );
+        let patch = kind_of(&ps4_pkg(&d, "u.pkg", GAME, 0x1A, 0x6210_0000, Some("gp")));
+        assert_eq!((patch.kind.as_str(), patch.kind_confident), ("patch", true));
+        let ac = "EP0700-CUSA12345_00-SEASONPASS000001";
+        let dlc = kind_of(&ps4_pkg(&d, "d.pkg", ac, 0x1B, 0, Some("ac")));
+        assert_eq!((dlc.kind.as_str(), dlc.kind_confident), ("dlc", true));
+        // #638: a DLC that is only a licence (AL, 0x1C), with and without a PARAM.SFO.
+        let al = "EP0700-CUSA12345_00-UNLOCKKEY0000002";
+        let unlock = kind_of(&ps4_pkg(&d, "k.pkg", al, 0x1C, 0, Some("ac")));
+        assert_eq!((unlock.kind.as_str(), unlock.kind_confident), ("dlc", true));
+        assert_eq!(unlock.platform, "PS4");
+        let bare = kind_of(&ps4_pkg(&d, "b.pkg", al, 0x1C, 0, None));
+        assert_eq!(
+            (bare.kind.as_str(), bare.title_id.as_str()),
+            ("dlc", "CUSA12345")
+        );
+        let bare_ac = kind_of(&ps4_pkg(&d, "b2.pkg", ac, 0x1B, 0, None));
+        assert_eq!(bare_ac.kind, "dlc");
+        // A header that says "game" while its PARAM.SFO says add-on is an add-on.
+        let odd = kind_of(&ps4_pkg(&d, "o.pkg", ac, 0x1A, 0, Some("ac")));
+        assert_eq!((odd.kind.as_str(), odd.kind_confident), ("dlc", false));
+    }
+
+    #[test]
+    fn a_game_with_all_its_dlc_is_one_copy_and_the_game_twice_is_a_duplicate() {
+        let d = scratch();
+        let shapes = [
+            ("game.pkg", GAME, 0x1A, 0x0A00_0000, Some("gd")),
+            ("update.pkg", GAME, 0x1A, 0x6210_0000, Some("gp")),
+            (
+                "dlc1.pkg",
+                "EP0700-CUSA12345_00-SEASONPASS000001",
+                0x1B,
+                0,
+                Some("ac"),
+            ),
+            (
+                "dlc2.pkg",
+                "EP0700-CUSA12345_00-COSTUMEPACK00002",
+                0x1B,
+                0,
+                None,
+            ),
+            (
+                "dlc3.pkg",
+                "EP0700-CUSA12345_00-UNLOCKKEY0000003",
+                0x1C,
+                0,
+                Some("ac"),
+            ),
+            (
+                "dlc4.pkg",
+                "EP0700-CUSA12345_00-UNLOCKKEY0000004",
+                0x1C,
+                0,
+                None,
+            ),
+        ];
+        let mut games = BTreeMap::new();
+        let add = |games: &mut BTreeMap<_, _>, p: PathBuf| {
+            let info = kind_of(&p);
+            let loc = Location {
+                path: p.display().to_string(),
+                kind: "pkg".into(),
+                size_bytes: std::fs::metadata(&p).unwrap().len(),
+                pkg: Some(info.clone()),
+                ..Location::default()
+            };
+            place(games, &info.title_id, loc);
+        };
+        for (name, cid, ct, flags, cat) in shapes {
+            add(&mut games, ps4_pkg(&d, name, cid, ct, flags, cat));
+        }
+        finish(games.get_mut("CUSA12345").unwrap());
+        let g = &games["CUSA12345"];
+        assert_eq!(g.locations.len(), 6);
+        assert_eq!((g.copies, g.is_duplicate), (1, false));
+        assert_eq!(summarize(&games).duplicates_count, 0);
+
+        // The same game stored a second time is a duplicate.
+        add(
+            &mut games,
+            ps4_pkg(&d, "game-again.pkg", GAME, 0x1A, 0x0A00_0000, Some("gd")),
+        );
+        finish(games.get_mut("CUSA12345").unwrap());
+        let g = &games["CUSA12345"];
+        assert_eq!((g.copies, g.is_duplicate), (2, true));
+        assert_eq!(summarize(&games).duplicates_count, 1);
+    }
 }

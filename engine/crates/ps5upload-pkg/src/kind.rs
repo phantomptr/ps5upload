@@ -23,30 +23,52 @@ impl Kind {
     }
 }
 
-/// `content_type` values the container header carries, with their platform.
+/// `content_type` values the container header carries, with their platform. PS4: 0x1A game
+/// data (a game or its patch), 0x1B additional content with data, 0x1C additional content
+/// without data (a licence that unlocks something already in the game), 0x1E a delta patch.
+/// PS5: 0x20 a game, 0x21 additional content, 0x26 an application.
 pub fn content_type_platform(content_type: u32) -> Option<&'static str> {
     match content_type {
-        0x1A | 0x1B => Some("PS4"),
+        0x1A | 0x1B | 0x1C | 0x1E => Some("PS4"),
         0x20 | 0x21 | 0x26 => Some("PS5"),
         _ => None,
     }
 }
 
-const DLC_CONTENT_TYPES: [u32; 2] = [0x1B, 0x21];
+const DLC_CONTENT_TYPES: [u32; 3] = [0x1B, 0x1C, 0x21];
+/// A PS4 delta patch says it is a patch by its type alone.
+const PATCH_CONTENT_TYPES: [u32; 1] = [0x1E];
 /// 0x40000000 a later patch, 0x00100000 the first patch.
 const PATCH_FLAG_MASK: u32 = 0x4010_0000;
+
+/// What a PARAM category says, when it says one of the three.
+fn kind_of_category(category: &str) -> Option<Kind> {
+    match category.trim().to_ascii_lowercase().as_str() {
+        "gd" => Some(Kind::Base),
+        "gp" => Some(Kind::Patch),
+        "ac" => Some(Kind::Dlc),
+        _ => None,
+    }
+}
 
 /// What the header says the package is, whether that is certain, and why.
 ///
 /// The header (`content_type`, `content_flags`) decides. On PS4 the `param.sfo` CATEGORY is a
 /// second witness: when it disagrees the header still wins, but the answer is marked unsure,
-/// and the reason names both.
+/// and the reason names both. Two exceptions, both because a DLC taken for the game makes the
+/// game look stored twice (#638): a CATEGORY of `ac` beats a header that only says "game"
+/// (no add-on type, no patch bit), and a header type that is not known defers to the CATEGORY.
 pub fn classify(content_type: u32, content_flags: u32, category: &str) -> (Kind, bool, String) {
     let known = content_type_platform(content_type).is_some();
     let (kind, why) = if DLC_CONTENT_TYPES.contains(&content_type) {
         (
             Kind::Dlc,
             format!("content_type={content_type:#04x} is additional content"),
+        )
+    } else if PATCH_CONTENT_TYPES.contains(&content_type) {
+        (
+            Kind::Patch,
+            format!("content_type={content_type:#04x} is a delta patch"),
         )
     } else if content_flags & PATCH_FLAG_MASK != 0 {
         (
@@ -64,23 +86,30 @@ pub fn classify(content_type: u32, content_flags: u32, category: &str) -> (Kind,
             ),
         )
     };
+    let sfo_kind = kind_of_category(category);
     if !known {
-        return (
-            kind,
-            false,
-            format!("content_type={content_type:#04x} unrecognized; {why}"),
-        );
+        return match sfo_kind {
+            Some(sfo) => (
+                sfo,
+                false,
+                format!("content_type={content_type:#04x} unrecognized; param.sfo CATEGORY={category} says {}", sfo.as_str()),
+            ),
+            None => (
+                kind,
+                false,
+                format!("content_type={content_type:#04x} unrecognized; {why}"),
+            ),
+        };
     }
-    let sfo_kind = match category.trim().to_ascii_lowercase().as_str() {
-        "gd" => Some(Kind::Base),
-        "gp" => Some(Kind::Patch),
-        "ac" => Some(Kind::Dlc),
-        _ => None,
-    };
     if let Some(sfo) = sfo_kind {
         if sfo != kind {
+            let decided = if kind == Kind::Base && sfo == Kind::Dlc {
+                Kind::Dlc
+            } else {
+                kind
+            };
             return (
-                kind,
+                decided,
                 false,
                 format!(
                     "header says {} ({why}) but param.sfo CATEGORY={category} says {}",
@@ -224,6 +253,41 @@ mod tests {
         assert!(why.contains("CATEGORY=gp says patch"), "{why}");
         let (_, sure, why) = classify(0x99, 0, "");
         assert!(!sure && why.contains("unrecognized"));
+    }
+
+    #[test]
+    fn every_ps4_add_on_shape_is_dlc_never_the_game() {
+        // #638: a DLC that is only a licence (AL, 0x1C) carries no data and often no
+        // param.sfo; it was "unrecognized", so taken for the game, so a duplicate.
+        assert_eq!(classify(0x1C, 0, ""), classify(0x1C, 0, "ac"));
+        let (k, sure, why) = classify(0x1C, 0, "");
+        assert_eq!((k, sure), (Kind::Dlc, true), "{why}");
+        assert_eq!(content_type_platform(0x1C), Some("PS4"));
+        let (k, sure, _) = classify(0x1B, 0, "ac");
+        assert_eq!((k, sure), (Kind::Dlc, true));
+        // A header that only says "game" while param.sfo says add-on: the add-on wins.
+        let (k, sure, why) = classify(0x1A, 0, "ac");
+        assert_eq!((k, sure), (Kind::Dlc, false));
+        assert!(
+            why.contains("header says base") && why.contains("says dlc"),
+            "{why}"
+        );
+        // A patch stays a patch; a delta patch is one by its type.
+        assert_eq!(classify(0x1A, 0x4000_0000, "gp").0, Kind::Patch);
+        assert_eq!(
+            classify(0x1E, 0, "gp"),
+            (
+                Kind::Patch,
+                true,
+                "content_type=0x1e is a delta patch".into()
+            )
+        );
+        // A type nobody knows defers to the CATEGORY, unsure.
+        let (k, sure, _) = classify(0x99, 0, "ac");
+        assert_eq!((k, sure), (Kind::Dlc, false));
+        // PS5 additional content.
+        assert_eq!(classify(0x21, 0x0a02_0000, "").0, Kind::Dlc);
+        assert_eq!(classify(0x20, 0x0202_0000, "").0, Kind::Base);
     }
 
     #[test]

@@ -4,15 +4,52 @@ use std::collections::BTreeMap;
 
 use super::{Game, Location, Summary};
 
-/// Every full copy but the largest. Add-ons never count.
+/// A game's full copies, one set per release they are: copies are the same release only when
+/// they carry the same content ID (`UP9000-CUSA00900_00-BLOODBORNE000000`). Two packages under
+/// one Game ID with different content IDs are different things (a game and a DLC the reader
+/// could not tell apart, two DLCs), never a duplicate (#638). A copy that names no content ID
+/// (an archive, an unreadable package) joins the largest set: a missed duplicate costs more
+/// than a spurious one.
+pub fn copy_sets(locations: &[Location]) -> Vec<Vec<&Location>> {
+    let mut known: BTreeMap<String, Vec<&Location>> = BTreeMap::new();
+    let mut unknown: Vec<&Location> = Vec::new();
+    for l in locations.iter().filter(|l| l.is_copy()) {
+        let cid = l
+            .pkg
+            .as_ref()
+            .map(|p| p.content_id.trim().to_ascii_uppercase())
+            .unwrap_or_default();
+        if cid.is_empty() {
+            unknown.push(l);
+        } else {
+            known.entry(cid).or_default().push(l);
+        }
+    }
+    let mut sets: Vec<Vec<&Location>> = known.into_values().collect();
+    if !unknown.is_empty() {
+        // The largest set, the first by content ID on a tie.
+        let largest = sets
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.len().cmp(&b.1.len()).then(b.0.cmp(&a.0)))
+            .map(|(i, _)| i);
+        match largest {
+            Some(i) => sets[i].extend(unknown),
+            None => sets.push(unknown),
+        }
+    }
+    sets
+}
+
+/// In every set of copies of one release, every copy but the largest. Add-ons never count.
 pub fn redundant_bytes(locations: &[Location]) -> u64 {
-    let mut sizes: Vec<u64> = locations
+    copy_sets(locations)
         .iter()
-        .filter(|l| l.is_copy())
-        .map(|l| l.size_bytes)
-        .collect();
-    sizes.sort_unstable_by(|a, b| b.cmp(a));
-    sizes.iter().skip(1).sum()
+        .map(|set| {
+            let total: u64 = set.iter().map(|l| l.size_bytes).sum();
+            total - set.iter().map(|l| l.size_bytes).max().unwrap_or(0)
+        })
+        .sum()
 }
 
 /// A platform from a Game ID, when nothing better is known.
@@ -89,7 +126,12 @@ pub fn finish(g: &mut Game) {
         .iter()
         .filter_map(|l| l.modified_at.clone())
         .max();
-    g.copies = g.locations.iter().filter(|l| l.is_copy()).count();
+    // The most copies of any one release; more than one is a duplicate.
+    g.copies = copy_sets(&g.locations)
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(0);
     g.is_duplicate = g.copies > 1;
     g.total_size_bytes = g.locations.iter().map(|l| l.size_bytes).sum();
 }
@@ -207,6 +249,76 @@ mod tests {
         assert_eq!(g.sources, vec!["folder", "mount", "zip", "pkg"]);
         let s = summarize(&games);
         assert_eq!((s.duplicates_count, s.reclaimable_bytes), (1, 130));
+    }
+
+    fn with_cid(mut l: Location, cid: &str) -> Location {
+        if let Some(p) = l.pkg.as_mut() {
+            p.content_id = cid.into();
+        }
+        l
+    }
+
+    const GAME: &str = "EP0700-CUSA12345_00-GAME000000000000";
+
+    #[test]
+    fn only_the_same_release_twice_is_a_duplicate() {
+        // #638: a game, its update, two DLCs, and a package read as a game whose content ID
+        // is not the game's (a DLC the header could not name): one copy, no duplicate.
+        let mut games = BTreeMap::new();
+        for (path, size, kind, cid) in [
+            ("g.pkg", 50, "base", GAME),
+            ("u.pkg", 9, "patch", "EP0700-CUSA12345_00-GAME000000000000"),
+            ("d1.pkg", 2, "dlc", "EP0700-CUSA12345_00-SEASONPASS000001"),
+            ("d2.pkg", 3, "dlc", "EP0700-CUSA12345_00-COSTUMEPACK00002"),
+            ("odd.pkg", 1, "base", "EP0700-CUSA12345_00-UNLOCKKEY0000003"),
+        ] {
+            place(
+                &mut games,
+                "CUSA12345",
+                with_cid(loc(path, "pkg", size, Some(kind), 1), cid),
+            );
+        }
+        finish(games.get_mut("CUSA12345").unwrap());
+        let g = &games["CUSA12345"];
+        assert_eq!((g.copies, g.is_duplicate), (1, false));
+        assert_eq!(summarize(&games).reclaimable_bytes, 0);
+
+        // The same game stored twice (a package and its folder, case aside) still is one.
+        place(
+            &mut games,
+            "CUSA12345",
+            with_cid(
+                loc("CUSA12345-app", "folder", 60, Some("base"), 2),
+                &GAME.to_ascii_lowercase(),
+            ),
+        );
+        // An archive names no content ID: it joins the game's own copies.
+        place(&mut games, "CUSA12345", loc("g.rar", "rar", 40, None, 3));
+        finish(games.get_mut("CUSA12345").unwrap());
+        let g = &games["CUSA12345"];
+        assert_eq!((g.copies, g.is_duplicate), (3, true));
+        let s = summarize(&games);
+        assert_eq!((s.duplicates_count, s.reclaimable_bytes), (1, 90));
+    }
+
+    #[test]
+    fn two_copies_of_one_dlc_are_not_a_duplicate_game() {
+        let mut games = BTreeMap::new();
+        for p in ["a/dlc.pkg", "b/dlc.pkg"] {
+            place(
+                &mut games,
+                "CUSA12345",
+                with_cid(
+                    loc(p, "pkg", 2, Some("dlc"), 1),
+                    "EP0700-CUSA12345_00-SEASONPASS000001",
+                ),
+            );
+        }
+        finish(games.get_mut("CUSA12345").unwrap());
+        assert_eq!(
+            (games["CUSA12345"].copies, games["CUSA12345"].is_duplicate),
+            (0, false)
+        );
     }
 
     #[test]
