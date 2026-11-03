@@ -174,18 +174,11 @@ fn find_method(id: u16) -> Result<Method> {
     // The console's keyboard and mouse take input only from the page that owns the Remote Play
     // session, or from this engine's own machine (ps5upload-engine vinput_api.rs): never through a
     // generic passthrough that other admitted peers can reach.
-    // Play Together's controllers (Players 2-4) likewise take input only from the engine's own
-    // guest link: a passthrough peer must not open, drive or close a guest's pad.
-    const INPUT_ONLY: [u16; 7] = [
-        mgmt::m::VINPUT_SESSION.id,
-        mgmt::m::VINPUT_REPORT.id,
-        mgmt::m::VPAD_OPEN.id,
-        mgmt::m::VPAD_STATE.id,
-        mgmt::m::VPAD_STATES.id,
-        mgmt::m::VPAD_HB.id,
-        mgmt::m::VPAD_CLOSE.id,
-    ];
-    if INPUT_ONLY.contains(&id) {
+    // Play Together's guest controllers (vpad.*) likewise: only this engine's join.rs drives them.
+    if id == mgmt::m::VINPUT_SESSION.id
+        || id == mgmt::m::VINPUT_REPORT.id
+        || crate::vpad::is_input_method(id)
+    {
         return Err(anyhow!(
             "management method {id} is not available through the passthrough"
         ));

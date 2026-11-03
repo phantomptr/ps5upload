@@ -759,9 +759,8 @@ mod tests {
         // A watcher (watch party) must never be asked.
         let (stx, mut srx) = mpsc::channel(8);
         l.spectators.lock().unwrap().push(Spectator {
-            id: 77,
-            tx: stx,
             need_key: true,
+            ..Spectator::watcher(77, stx)
         });
         let mut want = q("10.0.0.9");
         want.session = Some(l.session);
