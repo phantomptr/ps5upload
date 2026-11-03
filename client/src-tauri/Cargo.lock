@@ -4567,6 +4567,7 @@ dependencies = [
  "blake3",
  "futures-util",
  "getrandom 0.4.3",
+ "if-addrs",
  "image",
  "lz4_flex 0.14.0",
  "lzma-rust2",

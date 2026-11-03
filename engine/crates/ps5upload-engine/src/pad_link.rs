@@ -219,6 +219,83 @@ pub(crate) fn tailscale_ip() -> Option<std::net::IpAddr> {
     tailnet_choice(lan_ip_toward("100.100.100.100"), lan_ip_toward("1.1.1.1"))
 }
 
+/// Virtual adapters nobody joins through (containers, virtual machines): their addresses would
+/// only be noise among the choices.
+fn virtual_adapter(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    [
+        "docker",
+        "br-",
+        "veth",
+        "vethernet",
+        "vmnet",
+        "vboxnet",
+        "virbr",
+        "lxc",
+        "lxd",
+        "cni",
+        "flannel",
+        "podman",
+        "vmware",
+        "virtualbox",
+        "hyper-v",
+        "default switch",
+        "wsl",
+        "bridge10",
+    ]
+    .iter()
+    .any(|p| n.starts_with(p) || n.contains(&format!("({p}")))
+}
+
+/// A private address someone could reach this computer on through a VPN of their own
+/// (WireGuard, OpenVPN, ZeroTier…): home-network ranges and the shared 100.64/10 range.
+fn vpn_reachable(ip: std::net::Ipv4Addr) -> bool {
+    ip.is_private() || (ip.octets()[0] == 100 && (ip.octets()[1] & 0xc0) == 64)
+}
+
+/// This computer's other private addresses, from its network interfaces: a WireGuard (or other
+/// VPN) interface a friend reaches it on. Not loopback, not link-local, not virtual adapters, and
+/// not `skip` (the addresses already offered).
+fn other_private_ips(skip: &[std::net::IpAddr]) -> Vec<std::net::IpAddr> {
+    let Ok(ifaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    let mut out: Vec<std::net::IpAddr> = Vec::new();
+    for i in ifaces {
+        let std::net::IpAddr::V4(v4) = i.ip() else {
+            continue;
+        };
+        let ip = std::net::IpAddr::V4(v4);
+        if i.is_loopback()
+            || v4.is_link_local()
+            || !vpn_reachable(v4)
+            || virtual_adapter(&i.name)
+            || skip.contains(&ip)
+            || out.contains(&ip)
+        {
+            continue;
+        }
+        out.push(ip);
+    }
+    out
+}
+
+/// Every address of this computer a phone or friend may use, best first: the home network's
+/// (`lan_ips`), then other private ones (a VPN such as WireGuard), then Tailscale's last.
+pub(crate) fn reach_ips(
+    console: Option<&str>,
+) -> (Vec<std::net::IpAddr>, Option<std::net::IpAddr>) {
+    let mut ips = lan_ips(console);
+    let tailscale = tailscale_ip();
+    let mut skip = ips.clone();
+    skip.extend(tailscale);
+    ips.extend(other_private_ips(&skip));
+    if let Some(ip) = tailscale.filter(|ip| !ips.contains(ip)) {
+        ips.push(ip);
+    }
+    (ips, tailscale)
+}
+
 /// Where phones reach this engine, toward the console being played (or `console`).
 fn base_url(headers: &HeaderMap, console: Option<&str>) -> Option<String> {
     let ip = *lan_ips(console).first()?;
@@ -228,12 +305,8 @@ fn base_url(headers: &HeaderMap, console: Option<&str>) -> Option<String> {
 fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
     let base = base_url(headers, console);
     let port = port_of(headers);
-    let mut ips = lan_ips(console);
-    // The Tailscale address last: the QR code shows the home network's unless the host picks it.
-    let tailscale = tailscale_ip();
-    if let Some(ip) = tailscale.filter(|ip| !ips.contains(ip)) {
-        ips.push(ip);
-    }
+    // Home network first (the QR code's), then a VPN's, Tailscale's last: the host picks.
+    let (ips, tailscale) = reach_ips(console);
     with_link(|l| {
         serde_json::json!({
             "open": l.key.is_some(),
@@ -835,6 +908,49 @@ pub(crate) async fn relay_to(mut socket: WebSocket, url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vpn_addresses_are_private_and_not_virtual_adapters() {
+        let v4 = |s: &str| s.parse::<std::net::Ipv4Addr>().unwrap();
+        assert!(vpn_reachable(v4("10.8.0.1"))); // WireGuard's usual server address
+        assert!(vpn_reachable(v4("172.16.5.1")));
+        assert!(vpn_reachable(v4("100.64.0.7")));
+        assert!(!vpn_reachable(v4("8.8.8.8")));
+        assert!(!vpn_reachable(v4("100.128.0.1")));
+        for name in [
+            "docker0",
+            "br-1a2b",
+            "veth9f",
+            "vEthernet (WSL)",
+            "vmnet8",
+            "vboxnet0",
+            "virbr0",
+            "bridge100",
+        ] {
+            assert!(virtual_adapter(name), "{name}");
+        }
+        for name in [
+            "wg0",
+            "utun4",
+            "WireGuard Tunnel",
+            "tun0",
+            "en0",
+            "Ethernet",
+            "Wi-Fi",
+        ] {
+            assert!(!virtual_adapter(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn this_computer_lists_its_addresses_without_repeats() {
+        let (ips, _) = reach_ips(Some("127.0.0.1"));
+        let mut seen = ips.clone();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), ips.len());
+        assert!(ips.iter().all(|ip| !ip.is_loopback()));
+    }
 
     /// A bug report gets the link's counts, never its key or a phone's name.
     #[test]

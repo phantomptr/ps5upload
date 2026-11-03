@@ -1801,18 +1801,12 @@ fn bases(console: &str, reach: &Reach) -> Vec<String> {
         .iter()
         .map(|h| format!("http://{h}"))
         .collect();
-    for ip in crate::pad_link::lan_ips(Some(console)) {
+    // Home network, then a VPN's (WireGuard…), then Tailscale's (pad_link::reach_ips).
+    for ip in crate::pad_link::reach_ips(Some(console)).0 {
         let b = match ip {
             IpAddr::V6(v6) => format!("http://[{v6}]:{}", reach.port),
             IpAddr::V4(v4) => format!("http://{v4}:{}", reach.port),
         };
-        if !out.contains(&b) {
-            out.push(b);
-        }
-    }
-    // Last: this computer's Tailscale address, for friends it is shared with (the host picks it).
-    if let Some(IpAddr::V4(v4)) = crate::pad_link::tailscale_ip() {
-        let b = format!("http://{v4}:{}", reach.port);
         if !out.contains(&b) {
             out.push(b);
         }

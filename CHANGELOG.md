@@ -11,6 +11,8 @@ What's new in ps5upload, written for humans.
   panel offer **This network | Tailscale** above the QR code; the Tailscale link reaches your
   computer from anywhere your friend's Tailscale does (sign them in to your tailnet, or share just
   this computer with them). No PS5 payload needed. See the FAQ.
+- **WireGuard and other VPNs too.** The invite and phone controller panels also list the computer's
+  VPN addresses (a WireGuard server on it, say), so a friend on that VPN gets a link that works.
 - **Links open in the PS5Upload app.** A Play Together invite, a phone controller link or a watch
   link opened in a browser first asks **Open in the PS5Upload app?**, the way Slack and Zoom links
   do: the app opens with the invite filled in (Play › Join a friend) or as that computer's

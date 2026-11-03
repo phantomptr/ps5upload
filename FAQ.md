@@ -192,6 +192,14 @@ The rest works as at home: they ask, you allow. Everything goes through Tailscal
 connection; how smooth it is depends on both connections' upload speed (take 720p if it stutters).
 We don't support forwarding the engine's port on your router: its pages use plain `http`.
 
+**Q: Can a friend join over WireGuard (or another VPN) instead?**
+Yes (11.0.1). Your friend only needs to reach the computer that plays, on TCP 19113. If their VPN
+puts them on your home network, the usual link works. If they reach the computer on its own VPN
+address (a WireGuard server on the computer, like `10.8.0.1`), Play Together and the phone
+controller panel list that address too: pick it under "This computer is on more than one
+network". Let incoming TCP 19113 through the computer's firewall on the VPN's network (Windows
+often counts a WireGuard tunnel as a Public network and blocks it).
+
 **Q: Can the app wake the PS5 without turning on the TV?**
 Yes. The TV comes on because of HDMI-CEC: a PS5 that wakes up tells the TV to turn on and switch
 to it. Turn that off on either side:
