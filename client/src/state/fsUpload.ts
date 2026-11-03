@@ -36,8 +36,12 @@ export interface FsUploadActive {
   destDir: string;
   /** "" until the engine has answered with the job. */
   jobId: string;
+  /** Includes `resumed`: the engine counts what a resumed upload found on the console as done. */
   sent: number;
   total: number;
+  /** A resumed upload: what the console already held when the job opened (part of `sent`, not
+   *  of this run's speed). 0 or absent on a fresh upload. */
+  resumed?: number;
   /** The engine's live notes: carries the console's "finishing" counts. */
   live: JobLive | undefined;
   startedAtMs: number;
@@ -504,6 +508,7 @@ export async function runFsUpload(
             const total = snap.total_bytes ?? 0;
             base.sent = sent;
             base.total = total;
+            base.resumed = snap.resumed_bytes ?? 0;
             if (isList && order.length > 0) {
               // The file the sender is on (its counter, in the order it sends them), and how
               // many the console has made permanent: "N of M" counts finished files, which the

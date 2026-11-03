@@ -32,6 +32,7 @@ import {
   pushRateSample,
   type RateSample,
 } from "../lib/rollingRate";
+import { runBytes } from "../lib/resumedProgress";
 import { archiveFormat, useUploadStore, type SourceKind } from "./upload";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useRecentHostMetricsStore } from "./recentHostMetrics";
@@ -102,6 +103,9 @@ export type TransferPhase =
       /** Reconcile-mode counters. 0 for plain uploads. */
       skippedFiles: number;
       skippedBytes: number;
+      /** A resumed upload: what the console already held when the job opened (part of
+       *  `bytesSent`, not of `bytesPerSec`). 0 on a fresh upload. */
+      resumedBytes?: number;
       /** Durable-file counters fed by the console (files and bytes it has
        *  made durable so far, and the file total). Zero until the console
        *  reports its first durable file. */
@@ -473,6 +477,7 @@ export const useTransferStore = create<TransferState>((set) => {
         filesCompleted: 0,
         skippedFiles: 0,
         skippedBytes: 0,
+        resumedBytes: 0,
         filesFinalized: 0,
         filesFinalizingTotal: 0,
         bytesFinalized: 0,
@@ -828,7 +833,9 @@ export const useTransferStore = create<TransferState>((set) => {
         } else {
           const now = Date.now();
           const bytesSent = snap.bytes_sent ?? 0;
-          pushRateSample(samples, now, bytesSent);
+          const resumedBytes = snap.resumed_bytes ?? 0;
+          // Speed is this run's: the resumed part was already on the console.
+          pushRateSample(samples, now, runBytes(bytesSent, resumedBytes));
           const bytesPerSec = computeRate(samples, now);
           const fileCount = snap.files_count ?? 0;
           if (fileCount > 0) loadFiles(fileCount);
@@ -880,6 +887,7 @@ export const useTransferStore = create<TransferState>((set) => {
             filesCompleted,
             skippedFiles: snap.skipped_files ?? 0,
             skippedBytes: snap.skipped_bytes ?? 0,
+            resumedBytes,
             filesFinalized: snap.files_finalized ?? 0,
             filesFinalizingTotal: snap.files_finalizing_total ?? 0,
             bytesFinalized: snap.bytes_finalized ?? 0,

@@ -1465,6 +1465,14 @@ pub(crate) fn live_notes_for(job_id: Uuid) -> Arc<ps5upload_core::transfer::Live
     notes
 }
 
+/// Threads `job_id`'s live notes into `cfg`, with the counter the transfer writes the bytes
+/// a resume found already on the console into (served as `resumed_bytes`).
+fn attach_live_notes(cfg: &mut TransferConfig, job_id: Uuid) {
+    let notes = live_notes_for(job_id);
+    cfg.progress_bytes_resumed = Some(notes.resumed_bytes.clone());
+    cfg.progress_live = Some(notes);
+}
+
 /// Adds a running job's live notes to its snapshot JSON: `phase` (`"skipping"` with
 /// `skip_done_bytes` / `skip_total_bytes`), `bottleneck` (AVA1's word) and `settling`. Fields
 /// that do not apply are absent, so the client shows nothing for them. A snapshot that is not
@@ -1490,6 +1498,12 @@ pub(crate) fn merge_live_notes(
             "skip_total_bytes".into(),
             n.skip_total_bytes.load(Relaxed).into(),
         );
+    }
+    // What the console already held when the job first opened (a resume). `bytes_sent`
+    // counts it, so a client takes it off for this run's speed and time left.
+    let resumed = n.resumed_bytes.load(std::sync::atomic::Ordering::Acquire);
+    if resumed > 0 {
+        o.insert("resumed_bytes".into(), resumed.into());
     }
     let bn = n.bottleneck.load(Relaxed);
     if bn != 0 {
@@ -6465,7 +6479,7 @@ async fn transfer_file_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, bandwidth_cap);
 
         if fail_job_unless_console_ready(&jobs, &events_tx, job_id, started_at_ms, &addr) {
@@ -6820,7 +6834,7 @@ async fn transfer_dir_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         crate::log_info!("transfer_dir: job={job_id} protocol=ava1");
         if skip_existing.is_some() {
@@ -7367,7 +7381,7 @@ async fn transfer_zip_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // Resume is by job_id (the sender reopens with JobOpen); retries live in the
         // adapter's loop. An archive AVA1 cannot read (encryption, an unsupported method, a
@@ -8855,7 +8869,7 @@ async fn transfer_7z_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         if fail_job_unless_console_ready(&jobs, &events_tx, job_id, started_at_ms, &addr) {
             fail_guard.mark_succeeded();
@@ -9081,7 +9095,7 @@ async fn transfer_rar_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // The password stays in this request for the job's lifetime and is never logged;
         // resume passes reuse it from the RarSource. An archive AVA1 cannot read is a failure
@@ -9454,7 +9468,7 @@ async fn link_download_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         let remote = Arc::new(crate::remote_pkg::RemoteSource::new_with_options(
             url, packed, insecure,
@@ -9736,7 +9750,7 @@ async fn transfer_file_list_handler(
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
-        cfg.progress_live = Some(live_notes_for(job_id));
+        attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         crate::log_info!("transfer_file_list: job={job_id} protocol=ava1");
         // Resume is by job_id (the sender reopens with JobOpen); retries live in the adapter's
@@ -12915,6 +12929,23 @@ mod helpers_tests {
             ),
             (Some(12), Some(50))
         );
+        let done = serde_json::json!({"status": "done"});
+        assert_eq!(merge_live_notes(Some(&n), done.clone()), done);
+    }
+
+    #[test]
+    fn a_resumed_running_snapshot_says_what_the_console_already_had() {
+        use ps5upload_core::transfer::LiveNotes;
+        use std::sync::atomic::Ordering::Relaxed;
+        let n = LiveNotes::default();
+        let running = serde_json::json!({"status": "running", "bytes_sent": 70});
+        // A fresh upload: no note.
+        assert!(merge_live_notes(Some(&n), running.clone())
+            .get("resumed_bytes")
+            .is_none());
+        n.resumed_bytes.store(60, Relaxed);
+        let v = merge_live_notes(Some(&n), running);
+        assert_eq!(v["resumed_bytes"].as_u64(), Some(60));
         let done = serde_json::json!({"status": "done"});
         assert_eq!(merge_live_notes(Some(&n), done.clone()), done);
     }

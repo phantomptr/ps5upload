@@ -61,6 +61,7 @@ What's new in ps5upload, written for humans.
   the link.
 
 ---
+- A resumed upload shows what was already on the PS5, and its time left counts only what's still to send.
 
 ## 10.7.6
 

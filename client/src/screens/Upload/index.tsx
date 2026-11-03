@@ -125,6 +125,7 @@ import { humanizePs5Error } from "../../lib/humanizeError";
 import { formatBytes } from "../../lib/format";
 import { FoldSection } from "../../components/FoldSection";
 import { resumeSummary } from "../../lib/resumeSummary";
+import { progressFigures, resumedShown } from "../../lib/resumedProgress";
 import { useTr, type Translator } from "../../state/lang";
 
 // formatBytes moved to lib/format.ts.
@@ -2197,6 +2198,7 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
       filesCompleted,
       skippedFiles,
       skippedBytes,
+      resumedBytes,
     } = phase;
     const resuming = resumeSummary(
       skippedFiles,
@@ -2204,6 +2206,9 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
       skippedBytes,
       totalBytes,
     );
+    // A resume with no whole file in place (one big file partly sent before): say how much
+    // of it was already there, once.
+    const resumedHave = resuming ? null : resumedShown(resumedBytes, totalBytes);
     // Reconcile Phase 1 interstitial: the engine set Running before the
     // walk completed, so we have nothing to show yet. "Uploading 0 B"
     // would be misleading — describe what's actually happening.
@@ -2247,10 +2252,9 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
         </div>
       );
     }
-    const pct =
-      totalBytes > 0 ? Math.min(100, (bytesSent / totalBytes) * 100) : 0;
-    const remaining = Math.max(0, totalBytes - bytesSent);
-    const etaSec = bytesPerSec > 0 ? remaining / bytesPerSec : null;
+    // `bytesSent` includes what a resume found already on the PS5; the speed is this run's,
+    // so the time left counts only what is still to send.
+    const { pct, etaSec } = progressFigures(bytesSent, totalBytes, bytesPerSec);
     // Finalize phase: every shard has been pushed onto the wire but the
     // engine is still waiting for the PS5's COMMIT_TX_ACK / drain ACKs.
     // For large file counts this round-trip waits on the PS5 fsyncing
@@ -2274,6 +2278,15 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
                 send: formatBytes(resuming.sendBytes),
               },
               "Resuming: {done} of {total} files already present ({have}); {send} to send.",
+            )}
+          </div>
+        )}
+        {resumedHave !== null && (
+          <div className="mb-2 text-xs text-[var(--color-muted)]">
+            {tr(
+              "upload_resumed_have",
+              { have: formatBytes(resumedHave) },
+              "Resumed: {have} was already on the PS5.",
             )}
           </div>
         )}

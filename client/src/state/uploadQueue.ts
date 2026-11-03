@@ -47,6 +47,7 @@ import {
   pushRateSample,
   type RateSample,
 } from "../lib/rollingRate";
+import { runBytes } from "../lib/resumedProgress";
 import { archiveFormat, type SourceKind } from "./upload";
 import { rarPasswordProblem } from "../lib/rarPassword";
 import { jobLiveFromSnapshot, type JobLive } from "../lib/jobLive";
@@ -308,8 +309,13 @@ export interface QueueItem {
   /** While running: how long nothing has moved, once that is STALL_AFTER_MS or more (the row then
    *  offers to restart the transfer, which resumes). Null otherwise. */
   stalledForMs?: number | null;
-  /** Live progress while running, final count when done, 0 otherwise. */
+  /** Live progress while running, final count when done, 0 otherwise. While running it
+   *  includes `resumedBytes` (the engine counts what the console already had as done). */
   bytesSent: number;
+  /** While running a resumed upload: what the console already held when the job opened (a file
+   *  partly sent before, or files already in place). Part of `bytesSent` but not of this run's
+   *  speed or time left. 0 or absent on a fresh upload and outside a run. */
+  resumedBytes?: number;
   /** Total bytes the engine pre-stat'd for this source. 0 until first
    *  Running tick lands. */
   totalBytes: number;
@@ -1830,7 +1836,9 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       // round-trip from the renderer.
       const now = Date.now();
       const bytesSent = snap.bytes_sent ?? 0;
-      pushRateSample(samples, now, bytesSent);
+      const resumedBytes = snap.resumed_bytes ?? 0;
+      // Speed is this run's: the resumed part was already there and arrives in one jump.
+      pushRateSample(samples, now, runBytes(bytesSent, resumedBytes));
       const bytesPerSec = computeRate(samples, now);
       if (bytesSent !== lastBytes) {
         lastBytes = bytesSent;
@@ -1843,6 +1851,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       set((s) => ({
         items: patchItem(s.items, item.id, {
           bytesSent,
+          resumedBytes,
           totalBytes: totalNow,
           bytesPerSec,
           stalledForMs,
@@ -1977,6 +1986,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           // item starts the bar + speed readout from zero instead
           // of inheriting the stale terminal values.
           bytesSent: 0,
+          resumedBytes: 0,
           totalBytes: 0,
           bytesPerSec: 0,
           recovering: false,
@@ -2207,6 +2217,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
               status: "running",
               recovering: false,
               bytesSent: 0,
+              resumedBytes: 0,
               totalBytes: 0,
               bytesPerSec: 0,
               error: null,

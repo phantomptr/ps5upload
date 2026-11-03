@@ -32,6 +32,7 @@ fn cfg() -> TransferConfig {
     c.progress_files = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files_finalized = Some(Arc::new(AtomicU64::new(0)));
     c.progress_bytes_finalized = Some(Arc::new(AtomicU64::new(0)));
+    c.progress_bytes_resumed = Some(Arc::new(AtomicU64::new(0)));
     c.cancel = Some(Arc::new(AtomicBool::new(false)));
     c
 }
@@ -145,6 +146,7 @@ async fn scenario(tag: &str, c_receiver: bool) {
     // Resume immediately, same job id, same pool (same shared session).
     let c2 = cfg();
     let sent2 = c2.progress_bytes.clone().unwrap();
+    let resumed2 = c2.progress_bytes_resumed.clone().unwrap();
     let flag2 = c2.cancel.clone().unwrap();
     let (p, s, d) = (pool.clone(), src.clone(), dest.clone());
     let second = tokio::task::spawn_blocking(move || upload_dir_in(&p, &c2, id, &d, &s));
@@ -181,6 +183,19 @@ async fn scenario(tag: &str, c_receiver: bool) {
         "resent durable data: sent {} after {} durable",
         r.bytes_sent,
         durable_at_cancel
+    );
+    // The resume reports what the console already held when it opened (at least what was
+    // durable at the cancel), and counts it as done: the progress reaches the whole job.
+    let resumed = resumed2.load(Ordering::Relaxed);
+    assert!(
+        resumed >= durable_at_cancel && resumed <= TOTAL as u64,
+        "resumed {resumed}, durable at cancel {durable_at_cancel}"
+    );
+    assert!(
+        sent2.load(Ordering::Relaxed) >= TOTAL as u64,
+        "progress {} of {TOTAL} (resumed {resumed}, sent {}, durable at cancel {durable_at_cancel})",
+        sent2.load(Ordering::Relaxed),
+        r.bytes_sent
     );
     let root = if c_receiver {
         PathBuf::from(&dest)

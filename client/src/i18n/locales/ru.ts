@@ -4570,6 +4570,7 @@ upload_phase_settling_count: "Осталось {left} из {total} файлов"
 upload_phase_settling_eta: "осталось около {time}",
 upload_phase_settling_rate: "файлов/с",
 upload_status_resuming: "Возобновление: {done} из {total} файлов уже на месте ({have}); осталось отправить {send}.",
+upload_resumed_have: "Возобновлено: {have} уже было на PS5.",
 volumes_kept_by_console: "{kept} зарезервировано консолью для собственных нужд",
 processes_and_ports: "Процессы и порты",
 payloads_tab_ps5: "На вашей PS5",

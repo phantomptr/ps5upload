@@ -93,6 +93,7 @@ import { partialUploadPath } from "../../lib/partialUpload";
 import { isStreamUnreachableError } from "../../lib/networkFix";
 import { streamInstallFailHelp } from "../../lib/streamInstallHint";
 import { convertFirstState, type WorkshopHandOver } from "../../lib/convertFirst";
+import { progressFigures, resumedShown } from "../../lib/resumedProgress";
 import { useInRouterContext, useNavigate } from "react-router";
 import { NetworkFixActions } from "../InstallPackage/NetworkFixActions";
 
@@ -958,10 +959,10 @@ export function QueueRow({
     !!icon.sourceSrc ||
     !!titleId;
   const rowName = queueRowName(item, titleInfo?.title, art?.title, artPath);
-  const pct =
-    item.totalBytes > 0
-      ? Math.max(0, Math.min(100, (item.bytesSent / item.totalBytes) * 100))
-      : 0;
+  // `bytesSent` includes what a resumed upload found already on the PS5, so the bar, the
+  // percent and the bytes left start where the last run stopped; the speed is this run's.
+  const { pct, etaSec } = progressFigures(item.bytesSent, item.totalBytes, item.bytesPerSec);
+  const resumedHave = resumedShown(item.resumedBytes, item.totalBytes);
   const isActive = item.status === "running";
   const isPending = item.status === "pending";
   // Between auto-recovery attempts: the prior attempt failed for a
@@ -982,14 +983,9 @@ export function QueueRow({
   // waiting on — lives in this row rather than in a banner elsewhere.
   const showInstallProgress =
     isActive && !isRecovering && (isInstall || phase === "installing");
-  // Show ETA only when we have a real total + a real rate; otherwise
-  // the readout would print "ETA Infinity" or "ETA 0s" right at the
-  // start of a transfer where the smoother hasn't seen two samples yet.
-  const remainingBytes = Math.max(0, item.totalBytes - item.bytesSent);
-  const etaSec =
-    item.bytesPerSec > 0 && remainingBytes > 0
-      ? remainingBytes / item.bytesPerSec
-      : null;
+  // `etaSec` (above) is null without a real total and a real rate; otherwise the readout
+  // would print "ETA Infinity" or "ETA 0s" right at the start of a transfer where the
+  // smoother hasn't seen two samples yet.
   const kind = packageKindLabel(item.category, tr);
   const finished = item.status === "done" || item.status === "failed";
 
@@ -1441,6 +1437,15 @@ export function QueueRow({
 
       {isActive && !showInstallProgress && !isRecovering && (
         <div className="mt-2">
+          {resumedHave !== null && (
+            <div className="mb-1 text-xs text-[var(--color-muted)]" data-testid="queue-resumed">
+              {tr(
+                "upload_resumed_have",
+                { have: formatBytes(resumedHave) },
+                "Resumed: {have} was already on the PS5.",
+              )}
+            </div>
+          )}
           <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 text-xs text-[var(--color-muted)]">
             <span>
               {formatBytes(item.bytesSent)} / {formatBytes(item.totalBytes)}

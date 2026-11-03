@@ -4631,6 +4631,7 @@ upload_phase_settling_count: "{total} में से {left} फ़ाइले
 upload_phase_settling_eta: "लगभग {time} बाकी",
 upload_phase_settling_rate: "फ़ाइलें/से",
 upload_status_resuming: "फिर से शुरू हो रहा है: {total} में से {done} फ़ाइलें पहले से मौजूद हैं ({have}); {send} भेजना बाकी।",
+upload_resumed_have: "फिर से शुरू हुआ: {have} पहले से PS5 पर था।",
 volumes_kept_by_console: "{kept} कंसोल ने अपने उपयोग के लिए रखा है",
 processes_and_ports: "प्रोसेस और पोर्ट",
 payloads_tab_ps5: "आपके PS5 पर",

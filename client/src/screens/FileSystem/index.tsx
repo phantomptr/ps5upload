@@ -184,6 +184,7 @@ import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
 import { formatBytes } from "../../lib/format";
 import { formatEtaSeconds } from "../../lib/uploadEta";
 import { useRateEta } from "../../lib/useRateEta";
+import { resumedShown } from "../../lib/resumedProgress";
 import { humanizePs5Error } from "../../lib/humanizeError";
 
 /**
@@ -4273,7 +4274,7 @@ export default function FileSystemScreen() {
 /** Byte progress of an "Add files" upload (see `runUpload`). */
 type UploadProgress = Pick<
   FsUploadActive,
-  "sent" | "total" | "index" | "count" | "jobId" | "live" | "retry"
+  "sent" | "total" | "index" | "count" | "jobId" | "live" | "retry" | "resumed"
 >;
 
 /** Time since `sinceMs`, ticking: a run that outlives the screen keeps its real age. */
@@ -4318,13 +4319,26 @@ function UploadProgressDetail({
   onPause?: () => void;
 }) {
   const tr = useTr();
-  const { sent, total, index, count, jobId, live, retry } = progress;
-  const { rate, etaSeconds } = useRateEta(jobId, sent, total);
+  const { sent, total, index, count, jobId, live, retry, resumed } = progress;
+  // `sent` includes what a resumed upload found already on the console: the bar starts there,
+  // while speed and time left are measured on this run's bytes alone.
+  const had = Math.max(0, Math.min(sent, resumed ?? 0));
+  const { rate, etaSeconds } = useRateEta(jobId, sent - had, Math.max(0, total - had));
+  const resumedHave = resumedShown(resumed, total);
   const pct = total > 0 ? Math.min(100, (sent / total) * 100) : null;
   const finishing = total > 0 && sent >= total;
   const settleLeft = live?.settling ? live.settleLeft : undefined;
   return (
     <div className="mt-1 basis-full" data-testid="fs-upload-progress">
+      {resumedHave !== null && (
+        <div className="mb-1 text-[var(--color-muted)]" data-testid="fs-upload-resumed">
+          {tr(
+            "upload_resumed_have",
+            { have: formatBytes(resumedHave) },
+            "Resumed: {have} was already on the PS5.",
+          )}
+        </div>
+      )}
       {retry && (
         <div
           className="mb-1 text-[var(--color-warn)]"
