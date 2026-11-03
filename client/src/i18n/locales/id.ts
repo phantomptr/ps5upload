@@ -6958,6 +6958,12 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
   "update_open_log": "Buka log pembaruan",
   "update_no_log": "Belum ada log pembaruan.",
   "update_open_log_failed": "Tidak bisa membuka log pembaruan: {message}",
+  "rp_mini_back": "Kembali ke Main: {name}",
+  "rp_mini_close": "Sembunyikan pemutar mini (streaming tetap berjalan)",
+  "rp_mini_setting": "Pemutar mini di layar lain",
+  "rp_mini_setting_hint": "Saat kamu memakai layar lain di aplikasi, gambar tetap di jendela kecil yang bisa kamu seret ke sudut mana pun. Ketuk untuk kembali ke sini.",
+  "rp_system_pip_setting": "Biarkan gambar tetap mengambang saat keluar dari aplikasi",
+  "rp_system_pip_setting_hint": "Saat kamu ke layar beranda sambil bermain, gambar tetap di jendela kecil di atas aplikasi lain. Ketuk untuk kembali.",
 };
 
 export default id;

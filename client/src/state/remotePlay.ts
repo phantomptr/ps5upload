@@ -97,6 +97,11 @@ export interface RpPrefs {
   touchMode: "controller" | "touchpad";
   /** How far the PS5's pointer moves for a finger's movement on the touchpad. */
   touchpadSpeed: number;
+  /** On other screens of the app, the picture in a small floating window (layout/RemotePlayMini). */
+  miniPlayer: boolean;
+  /** Android app: leaving the app while playing keeps the picture floating over other apps
+   *  (Android's picture in picture, lib/androidPip.ts). */
+  systemPip: boolean;
 }
 
 export const DEFAULT_RP_PREFS: RpPrefs = {
@@ -128,6 +133,8 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   escHoldRelease: true,
   touchMode: "controller",
   touchpadSpeed: 1.5,
+  miniPlayer: true,
+  systemPip: true,
 };
 
 /** The smallest sound buffer the Sound buffer setting offers. */

@@ -7197,6 +7197,12 @@ helper_mismatch_boot_copy: "PS5 uruchomiła starszą kopię pomocnika, którą t
   "update_open_log": "Otwórz dziennik aktualizacji",
   "update_no_log": "Nie ma jeszcze dziennika aktualizacji.",
   "update_open_log_failed": "Nie udało się otworzyć dziennika aktualizacji: {message}",
+  "rp_mini_back": "Wróć do gry: {name}",
+  "rp_mini_close": "Ukryj miniodtwarzacz (strumień trwa dalej)",
+  "rp_mini_setting": "Miniodtwarzacz na innych ekranach",
+  "rp_mini_setting_hint": "Gdy korzystasz z innych ekranów aplikacji, obraz zostaje w małym oknie, które możesz przeciągnąć do dowolnego rogu. Dotknij go, aby tu wrócić.",
+  "rp_system_pip_setting": "Obraz unosi się po wyjściu z aplikacji",
+  "rp_system_pip_setting_hint": "Gdy podczas gry przejdziesz do ekranu głównego, obraz zostaje w małym oknie nad innymi aplikacjami. Dotknij go, aby wrócić.",
 };
 
 export default pl;

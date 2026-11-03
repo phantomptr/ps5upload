@@ -29,7 +29,19 @@ What's new in ps5upload, written for humans.
   items only count as the same game stored twice when they are the same release (the same
   content ID): a game and its DLC, or two DLCs, never are. Libraries are re-read once, so
   games marked as duplicates by mistake are cleared on the next scan.
-
+- **Remote Play keeps showing while you use other screens, and over other apps on Android (For
+  #637).** Leave Play while a stream runs and the picture stays in a small mini player in a
+  corner of the app, on the desktop, phone and tablet apps and in the browser: drag it to any
+  corner (remembered), tap it to go back, mute it, or hide it with ×. The controller and keyboard
+  still play only while Play is in front, so they work the app's menus elsewhere. In the Android
+  app, going to the home screen while you play shrinks the stream into Android's
+  picture-in-picture window, which floats over other apps with its sound; tap it to come back.
+  Both can be turned off in Play › Settings › Session.
+- **Remote Play sound the browser held back starts on the next click or key.** A session that
+  did not start right after a click (a launch that first woke the console or started the game)
+  could play no sound at all, the stats reading "sound 0 ms": the browser holds sound back
+  until you click. Now any click or key in the app starts it, also when the browser stops it
+  later, and the picture shows a **Turn on sound** button meanwhile.
 
 ## 10.7.5
 

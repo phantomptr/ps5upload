@@ -6968,6 +6968,12 @@ helper_mismatch_boot_copy: "PS5 が起動用に保持している古いヘルパ
   "update_open_log": "アップデートログを開く",
   "update_no_log": "アップデートログはまだありません。",
   "update_open_log_failed": "アップデートログを開けませんでした: {message}",
+  "rp_mini_back": "プレイに戻る：{name}",
+  "rp_mini_close": "ミニプレーヤーを隠す（ストリームは続きます）",
+  "rp_mini_setting": "ほかの画面でミニプレーヤー",
+  "rp_mini_setting_hint": "アプリのほかの画面を使っている間も、映像は小さなウィンドウに表示され、好きな隅にドラッグできます。タップするとここに戻ります。",
+  "rp_system_pip_setting": "アプリを離れても映像をフローティング表示",
+  "rp_system_pip_setting_hint": "プレイ中にホーム画面へ移動すると、映像がほかのアプリの上に小さなウィンドウで表示されます。タップすると戻ります。",
 };
 
 export default ja;

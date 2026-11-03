@@ -7255,6 +7255,12 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
   "update_open_log": "Frissítési napló megnyitása",
   "update_no_log": "Még nincs frissítési napló.",
   "update_open_log_failed": "A frissítési napló nem nyitható meg: {message}",
+  "rp_mini_back": "Vissza a Játékhoz: {name}",
+  "rp_mini_close": "Minilejátszó elrejtése (a stream fut tovább)",
+  "rp_mini_setting": "Minilejátszó a többi képernyőn",
+  "rp_mini_setting_hint": "Amíg az alkalmazás más képernyőit használod, a kép egy kis ablakban marad, amelyet bármelyik sarokba húzhatsz. Koppints rá, hogy visszatérj ide.",
+  "rp_system_pip_setting": "A kép lebegve marad, ha elhagyod az alkalmazást",
+  "rp_system_pip_setting_hint": "Ha játék közben a kezdőképernyőre lépsz, a kép egy kis ablakban marad a többi alkalmazás felett. Koppints rá a visszatéréshez.",
 };
 
 export default hu;
