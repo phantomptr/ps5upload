@@ -163,7 +163,9 @@ network, and plays your PS5 as Player 2, 3 or 4 while you play as Player 1.
    **⋯ › Play Together**). Your friend scans the QR code with their phone's camera, or you send
    the link (Copy, or Share on a phone). With the PS5Upload app they can instead type the short
    code (like `K7M-2QX`) in **Play › Join a friend**, or pick you from **Playing nearby**. No app?
-   The link opens a page in any browser.
+   The link opens a page in any browser. A browser first asks **Open in the PS5Upload app?**
+   (11.0.1): with the app on that device, it opens there with the invite filled in; otherwise
+   **Continue in browser**. Tick **Remember my choice** to skip the question next time.
 2. **Allow.** Their name pops up over your picture: press **Allow**.
 3. **On the TV**, your friend presses **PS** on their controller and picks **Quick Play** (or
    their own user) under "Who's using this controller?".
@@ -172,7 +174,23 @@ They play with a controller connected to their device, or the on-screen controls
 and Create are blocked for friends unless you turn that off in the panel. Up to three friends at
 once; stopping Play ends it for them, and the app asks first. If a friend's delay shows red, a
 lower Play quality (720p or 30 fps) makes it smoother for everyone. **Playing from somewhere
-else?** Both of you join the same Tailscale network, then share the link.
+else?** See the next question.
+
+**Q: Can a friend who isn't at my place play together, or use a phone controller?**
+Yes, with Tailscale (11.0.1). Your friend connects to your computer, not to the PS5, so only your
+computer and your friend's device need it; no payload on the PS5.
+
+1. Install [Tailscale](https://tailscale.com/download) on the computer that plays, and sign in.
+2. Your friend installs Tailscale on their phone, tablet or computer. Either sign them in to your
+   tailnet, or keep your tailnets apart and share just this computer with them: in Tailscale's
+   admin console, open the computer's **⋯ › Share…** and send them the invite.
+3. In Play Together (or the phone controller and watch panel), press **Tailscale** above the QR
+   code: the link and the code switch to your computer's Tailscale address. Send that link.
+
+The **This network | Tailscale** choice shows only while Tailscale is connected on your computer.
+The rest works as at home: they ask, you allow. Everything goes through Tailscale's encrypted
+connection; how smooth it is depends on both connections' upload speed (take 720p if it stutters).
+We don't support forwarding the engine's port on your router: its pages use plain `http`.
 
 **Q: Can the app wake the PS5 without turning on the TV?**
 Yes. The TV comes on because of HDMI-CEC: a PS5 that wakes up tells the TV to turn on and switch

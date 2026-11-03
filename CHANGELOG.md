@@ -6,6 +6,26 @@ What's new in ps5upload, written for humans.
 
 ## 11.0.1
 
+- **Friends away from home can play together, over Tailscale.** While the Tailscale app is
+  connected on the computer that plays, Play Together's invite and the phone controller / watch
+  panel offer **This network | Tailscale** above the QR code; the Tailscale link reaches your
+  computer from anywhere your friend's Tailscale does (sign them in to your tailnet, or share just
+  this computer with them). No PS5 payload needed. See the FAQ.
+- **Links open in the PS5Upload app.** A Play Together invite, a phone controller link or a watch
+  link opened in a browser first asks **Open in the PS5Upload app?**, the way Slack and Zoom links
+  do: the app opens with the invite filled in (Play › Join a friend) or as that computer's
+  controller, or you carry on in the browser, and can have it remember. Works on Windows, macOS,
+  Linux, Android and iOS (`ps5upload://` links).
+- **A friend's frozen picture comes back by itself (For #648).** A guest whose connection hiccuped
+  could be left on a still picture until they reloaded the page: their player skipped to the next
+  keyframe but had no way to ask for one. It now asks (at most once a second), and the host's
+  engine passes the request to the PS5.
+- **Scan QR asks for the camera.** Join a friend's **Scan QR** on Android said "The camera didn't
+  open": the app never asked for the camera. It asks now, and if the camera is turned off it says
+  so with **Try again** and **Open settings**.
+- **"No space" on a game's disk image says why.** Changing files of a game run from an image
+  (.exfat, .ffpfs, .ffpkg) was refused with "only 0 bytes are safely allocatable" and nothing
+  more. The message now says the image is exactly as big as the game and how to change its files.
 - **A NAS share typed with its folders works on the PS5's Shared Folders too.** Typing the share
   as `Media/Games/PS5` (or pasting `\\nas\Media\Games`), as other PS5 tools take it, was refused as
   "not a share name". The share is now the first name and the folders become the start folder,

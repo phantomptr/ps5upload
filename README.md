@@ -73,7 +73,8 @@
   - **Play Together:** friends join your game as Player 2, 3 and 4, each with their own
     controller on the PS5, from any browser or the app. Share a QR code, a link or a short
     code, allow each friend, and they pick Quick Play on the TV. A short drop keeps their
-    place.
+    place. Friends away from home join over Tailscale, and a link opens in the PS5Upload app
+    when they have it.
   - **Go live** to YouTube, Twitch, Kick, Facebook or any RTMP/SRT server, several at once,
     straight from Play (desktop apps and the web UI), or add the stream to **OBS** for your own
     scenes and overlays.
