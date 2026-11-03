@@ -217,6 +217,65 @@ impl Run {
     }
 }
 
+/// Where a destination streams to, for a bug report: its service and, for a custom server, only
+/// the host (never the path or query, where a stream key may sit, nor the key itself).
+pub(crate) fn server_host(server: &str) -> Option<String> {
+    let rest = server.split_once("://").map(|(_, r)| r).unwrap_or(server);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // user:pass@host -> host
+    let host = authority.rsplit('@').next().unwrap_or("");
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+/// Go live for a bug report: the destinations as service + host, the run's phase and health.
+/// The run's ffmpeg lines and the labels the user typed are left out.
+pub(crate) fn diag_summary() -> serde_json::Value {
+    let (destinations, store_error) = match golive_dest::store() {
+        Ok(s) => (
+            s.list()
+                .into_iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "service": d.dest.preset,
+                        "server_host": server_host(&d.dest.server),
+                        "enabled": d.dest.enabled,
+                        "bandwidth_test": d.dest.bandwidth_test,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            None,
+        ),
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    let run = current().and_then(|r| {
+        let s = r.st.lock().ok()?;
+        let now = Instant::now();
+        Some(serde_json::json!({
+            "phase": s.phase,
+            "error_code": s.error.as_ref().map(|e| e.code),
+            "started_s": now.saturating_duration_since(r.started).as_secs(),
+            "live_s": s.live_since.map(|t| now.saturating_duration_since(t).as_secs()),
+            "ended_s_ago": s.ended_at.map(|t| now.saturating_duration_since(t).as_secs()),
+            "reconnects": s.reconnects,
+            "kbps": s.kbps.round(),
+            "upload_skips": s.upload_skips,
+            "slow_upload": s.slow_upload,
+            "audio_kbps": r.audio_kbps,
+            "destinations": s.dests.iter().map(|d| serde_json::json!({
+                "service": d.preset,
+                "state": d.state,
+                "error_code": d.error.as_ref().map(|e| e.code),
+            })).collect::<Vec<_>>(),
+        }))
+    });
+    serde_json::json!({
+        "ffmpeg": ffmpeg_tool::status_json().get("installed").cloned(),
+        "destinations": destinations,
+        "store_error": store_error,
+        "run": run,
+    })
+}
+
 /// How one ffmpeg run ended.
 #[derive(Debug, Default)]
 struct Exit {

@@ -104,7 +104,7 @@ fn hex16(s: &str) -> Result<[u8; KEY_SIZE]> {
     }
     let mut out = [0u8; KEY_SIZE];
     for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| anyhow!("not hex: {s:?}"))?;
+        *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| anyhow!("not hex"))?;
     }
     Ok(out)
 }
@@ -187,9 +187,16 @@ pub(crate) fn session_init(host: &str, regist_key: &[u8; KEY_SIZE]) -> Result<[u
         .map(|b| format!("{b:02x}"))
         .collect();
 
+    let t0 = std::time::Instant::now();
     let addr = resolve(host, SESSION_PORT)?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10))
-        .map_err(|e| anyhow!("connecting for session init: {e}"))?;
+    crate::core_debug!("rp session init: {host} ({addr}) asking, Rp-Version {RP_VERSION}");
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| {
+        crate::core_debug!(
+            "rp session init: {host}: connect failed after {} ms: {e}",
+            t0.elapsed().as_millis()
+        );
+        anyhow!("connecting for session init: {e}")
+    })?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
@@ -209,10 +216,20 @@ pub(crate) fn session_init(host: &str, regist_key: &[u8; KEY_SIZE]) -> Result<[u
     let _ = stream.shutdown(Shutdown::Write);
 
     let mut raw = Vec::new();
-    stream
-        .read_to_end(&mut raw)
-        .map_err(|e| anyhow!("reading session init reply: {e}"))?;
+    stream.read_to_end(&mut raw).map_err(|e| {
+        crate::core_debug!(
+            "rp session init: {host}: reading the reply failed after {} ms ({} bytes in): {e}",
+            t0.elapsed().as_millis(),
+            raw.len()
+        );
+        anyhow!("reading session init reply: {e}")
+    })?;
     let reply = split_http(&raw)?;
+    crate::core_debug!(
+        "rp session init: {host}: {} in {} ms",
+        crate::rp_regist::reply_for_log(&reply),
+        t0.elapsed().as_millis()
+    );
     if reply.code != 200 {
         let reason = reply
             .headers
@@ -315,9 +332,14 @@ fn ctrl_connect(
         }
     }
     if raw.is_empty() {
+        crate::core_debug!("rp sign-in ctrl: {host}: connection accepted, no reply");
         bail!("the console accepted the ctrl connection but sent no response");
     }
     let reply = split_http(&raw)?;
+    crate::core_debug!(
+        "rp sign-in ctrl: {host}: {}",
+        crate::rp_regist::reply_for_log(&reply)
+    );
     if reply.code != 200 {
         let reason = reply
             .headers
@@ -675,7 +697,10 @@ pub fn login_session_when_ready(
     // So: one init, then retry only the ctrl connection until the console has
     // finished booting.
     let mut nonce = None;
+    let t0 = std::time::Instant::now();
+    let mut attempt = 0u32;
     loop {
+        attempt += 1;
         let err = match nonce {
             None => match session_init(host, &creds.regist_key) {
                 Ok(n) => {
@@ -696,7 +721,24 @@ pub fn login_session_when_ready(
             },
         };
         let msg = format!("{err:#}");
-        if !is_transient_session_error(&msg) || std::time::Instant::now() >= deadline {
+        let transient = is_transient_session_error(&msg);
+        crate::core_debug!(
+            "rp sign-in: {host}: attempt {attempt} ({}) failed after {} ms: {msg}; {}",
+            if nonce.is_some() {
+                "ctrl"
+            } else {
+                "session init"
+            },
+            t0.elapsed().as_millis(),
+            if !transient {
+                "not a passing error, giving up".to_string()
+            } else if std::time::Instant::now() >= deadline {
+                "out of time".to_string()
+            } else {
+                format!("retrying in {} ms", backoff.min(RETRY_MAX).as_millis())
+            }
+        );
+        if !transient || std::time::Instant::now() >= deadline {
             // A console whose Remote Play stayed busy for the whole budget is
             // not going to free it on its own. Measured on hardware: once it
             // wedges, two consecutive full budgets both failed and only a

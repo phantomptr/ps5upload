@@ -259,6 +259,24 @@ fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
     })
 }
 
+/// Phone controllers and the watch party for a bug report: counts and switches, never the link's
+/// key, an address or a phone's name. `tailscale` says only whether a Tailscale address exists.
+pub(crate) fn diag_summary() -> serde_json::Value {
+    let tailscale = tailscale_ip().is_some();
+    with_link(|l| diag_of(l, tailscale))
+}
+
+fn diag_of(l: &Link, tailscale: bool) -> serde_json::Value {
+    serde_json::json!({
+        "open": l.key.is_some(),
+        "phones": l.pads.iter().filter(|p| !p.watch).count(),
+        "watchers": l.pads.iter().filter(|p| p.watch).count(),
+        "watchers_in_control": l.pads.iter().filter(|p| p.watch && p.control).count(),
+        "asking": l.pending.len(),
+        "tailscale_ip_present": tailscale,
+    })
+}
+
 #[derive(serde::Deserialize, Default)]
 pub struct StatusQuery {
     #[serde(default)]
@@ -817,6 +835,43 @@ pub(crate) async fn relay_to(mut socket: WebSocket, url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bug report gets the link's counts, never its key or a phone's name.
+    #[test]
+    fn the_bug_report_summary_has_no_key_or_names() {
+        let (tx, _rx) = mpsc::channel(1);
+        let l = Link {
+            key: Some("a1b2c3d4e5f60718a1b2c3d4e5f60718".into()),
+            pads: vec![
+                Pad {
+                    id: 1,
+                    name: "Ann's phone".into(),
+                    since_ms: 0,
+                    tx: tx.clone(),
+                    watch: false,
+                    control: false,
+                },
+                Pad {
+                    id: 2,
+                    name: "Bob's tablet".into(),
+                    since_ms: 0,
+                    tx,
+                    watch: true,
+                    control: true,
+                },
+            ],
+            pending: Vec::new(),
+        };
+        let v = diag_of(&l, true);
+        let text = v.to_string();
+        assert!(!text.contains("a1b2c3d4"), "{text}");
+        assert!(!text.contains("Ann") && !text.contains("Bob"), "{text}");
+        assert_eq!(v["open"], true);
+        assert_eq!(v["phones"], 1);
+        assert_eq!(v["watchers"], 1);
+        assert_eq!(v["watchers_in_control"], 1);
+        assert_eq!(v["tailscale_ip_present"], true);
+    }
 
     #[test]
     fn relayed_link_passes_its_key_and_watch_flag_only_when_sound() {

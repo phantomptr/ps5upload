@@ -55,6 +55,23 @@ fn lock_consoles() -> std::sync::MutexGuard<'static, HashMap<String, ConsoleStat
     consoles().lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The mesh for a bug report: what kind of device this engine is and, per console it greets,
+/// how many app windows are active and whether the console took our presence. No names.
+pub(crate) fn diag_summary() -> Value {
+    let now = Instant::now();
+    let consoles: Vec<Value> = lock_consoles()
+        .values()
+        .map(|c| {
+            json!({
+                "hello_s_ago": c.hello_at.map(|t| now.saturating_duration_since(t).as_secs()),
+                "windows": c.clients.values().filter(|(t, _)| now.saturating_duration_since(*t) < CLIENT_GONE).count(),
+                "presence_pushed": c.pushed.is_some(),
+            })
+        })
+        .collect();
+    json!({ "kind": kind(), "consoles": consoles })
+}
+
 // ---- who we are ----
 
 pub fn kind() -> &'static str {

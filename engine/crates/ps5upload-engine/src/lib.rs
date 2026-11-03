@@ -54,6 +54,7 @@ mod console_read;
 mod console_shares_api;
 mod console_snapshot;
 mod convert_source;
+mod diag_api;
 mod disk_usage;
 mod download_relay;
 mod elfldr_guard;
@@ -10972,6 +10973,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // (reconcile per-parent progress, transfer retries, etc.) without
     // having to install a separate pipe for core diagnostics.
     ps5upload_core::log::set_sink(|msg| engine_log::record("info", msg.to_string()));
+    // core_debug! lines (written only while "Detailed logs" is on) land at debug.
+    ps5upload_core::log::set_debug_sink(|msg| engine_log::record("debug", msg.to_string()));
     // The bug-report journal: every crate's events (ps5upload_core::events) land on disk here.
     event_journal::install();
     ps5upload_core::events::emit(
@@ -11698,6 +11701,11 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         )
         .route("/api/events", get(events_stream))
         .route("/api/engine-logs", get(engine_logs_tail))
+        .route(
+            "/api/diag/log-level",
+            get(diag_api::log_level_get).post(diag_api::log_level_set),
+        )
+        .route("/api/diag/features", get(diag_api::features))
         .route("/api/event-journal", get(event_journal::events_handler))
         .route(
             "/api/ps5/helper-log-ftp",

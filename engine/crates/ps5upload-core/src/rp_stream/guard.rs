@@ -83,6 +83,10 @@ fn next_allowed() -> &'static Mutex<HashMap<String, Instant>> {
 
 /// Remember that `host` must not be asked again for `wait`.
 pub fn hold_off(host: &str, wait: Duration) {
+    crate::core_debug!(
+        "rp guard: {host}: holding off new sessions for {} s",
+        wait.as_secs()
+    );
     if let Ok(mut m) = next_allowed().lock() {
         let until = Instant::now() + wait;
         let e = m.entry(host.to_string()).or_insert(until);
@@ -116,12 +120,29 @@ pub fn prepare(
     on_wake: &mut dyn FnMut(),
 ) -> Result<()> {
     if let Some(left) = held_for(host) {
+        crate::core_debug!(
+            "rp guard: {host}: held off for {} s more (the last session's slot)",
+            left.as_secs()
+        );
         return Err(NotReady::Busy(left).into());
     }
+    let t0 = Instant::now();
     let status = match ddp::probe(host, Duration::from_secs(2)) {
         Ok(s) => s,
-        Err(_) => return Err(NotReady::Unreachable.into()),
+        Err(e) => {
+            crate::core_debug!(
+                "rp guard: {host}: no discovery answer in {} ms: {e:#}",
+                t0.elapsed().as_millis()
+            );
+            return Err(NotReady::Unreachable.into());
+        }
     };
+    crate::core_debug!(
+        "rp guard: {host}: discovery {} {} in {} ms (wake allowed: {wake})",
+        status.code,
+        status.status_text,
+        t0.elapsed().as_millis()
+    );
     match status.code {
         200 => Ok(()),
         620 => {
@@ -140,9 +161,18 @@ pub fn prepare(
                     }
                 }
                 if Instant::now() > deadline {
+                    crate::core_debug!(
+                        "rp guard: {host}: still not awake after {} s",
+                        budget.as_secs()
+                    );
                     bail!("the PS5 did not wake within {} s", budget.as_secs());
                 }
             }
+            crate::core_debug!(
+                "rp guard: {host}: awake (discovery 200) {} ms after the wake; settling {} s",
+                t0.elapsed().as_millis(),
+                SETTLE_AFTER_WAKE.as_secs()
+            );
             std::thread::sleep(SETTLE_AFTER_WAKE);
             Ok(())
         }

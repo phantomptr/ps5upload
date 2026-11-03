@@ -272,9 +272,14 @@ fn ctrl_open(
     let mut counter_local = counter;
 
     let addr = resolve(host, SESSION_PORT)?;
+    let t0 = Instant::now();
     let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(10))
         .context("connecting for ctrl")?;
     s.set_nodelay(true).ok();
+    crate::core_debug!(
+        "rp ctrl: {host}: connected in {} ms; asking with codec {codec:?}",
+        t0.elapsed().as_millis()
+    );
     let req = format!(
         "GET /sie/ps5/rp/sess/ctrl HTTP/1.1\r\n\
          Host: {host}:{SESSION_PORT}\r\n\
@@ -307,6 +312,11 @@ fn ctrl_open(
         }
     };
     let reply = split_http(&raw[..header_end])?;
+    crate::core_debug!(
+        "rp ctrl: {host}: {} in {} ms",
+        crate::rp_regist::reply_for_log(&reply),
+        t0.elapsed().as_millis()
+    );
     if reply.code != 200 {
         let reason = reply
             .headers
@@ -854,6 +864,9 @@ pub fn run_stream(
                     && (format!("{e:#}").contains("ctrl reply")
                         || format!("{e:#}").contains("connecting for ctrl")) =>
             {
+                crate::core_debug!(
+                    "rp ctrl: {host}: attempt {attempt}/{CTRL_ATTEMPTS} failed: {e:#}; again in 1 s"
+                );
                 std::thread::sleep(Duration::from_secs(1));
             }
             r => break r,
@@ -883,6 +896,7 @@ pub fn run_stream(
     }
 
     let mut takion = Takion::connect(resolve(host, STREAM_PORT)?)?;
+    crate::core_debug!("rp stream: {host}: takion connected (ctrl took {attempt} attempt(s))");
     sink.progress(Progress::TakionConnected);
 
     let mut handshake_key = [0u8; HANDSHAKE_KEY_SIZE];
@@ -951,11 +965,23 @@ pub fn run_stream(
             }
             Message::StreamInfo(si) if have_bang => stream_info = Some(si),
             Message::StreamInfo(_) => early_streaminfo = Some(buf),
-            Message::Disconnect(r) => bail!("the console ended the stream: {r}"),
+            Message::Disconnect(r) => {
+                crate::core_debug!(
+                    "rp stream: {host}: the console disconnected during the handshake: {r}"
+                );
+                bail!("the console ended the stream: {r}")
+            }
             _ => {}
         }
     }
     let si = stream_info.unwrap();
+    crate::core_debug!(
+        "rp stream: {host}: STREAMINFO resolutions {:?}",
+        si.resolutions
+            .iter()
+            .map(|r| (r.width, r.height))
+            .collect::<Vec<_>>()
+    );
     report.resolutions = si.resolutions.iter().map(|r| (r.width, r.height)).collect();
     sink.progress(Progress::StreamInfo(report.resolutions.clone()));
     for (channel, msg) in after_streaminfo_messages(cfg.mic, cfg.dualsense) {

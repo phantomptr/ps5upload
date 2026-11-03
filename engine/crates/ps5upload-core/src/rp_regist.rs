@@ -102,7 +102,8 @@ fn pad_session_key_hex(hex: &str) -> String {
 
 pub fn credential_from_regist_key(regist_key_hex: &str) -> Result<u64> {
     let bytes = parse_hex(regist_key_hex)
-        .ok_or_else(|| anyhow!("regist key is not hex: {regist_key_hex:?}"))?;
+        // Never the key itself in the message: errors reach logs and bug reports.
+        .ok_or_else(|| anyhow!("regist key is not hex ({} chars)", regist_key_hex.len()))?;
     // The console pads the field with NULs; the meaningful part is the
     // text before the first one.
     let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
@@ -304,6 +305,39 @@ pub(crate) struct HttpReply {
     /// the console used.
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) body: Vec<u8>,
+}
+
+/// Headers whose values a log line may show; any other header is named only (RP-Nonce and the
+/// like are key material).
+const LOGGABLE_HEADERS: &[&str] = &[
+    "rp-application-reason",
+    "rp-version",
+    "server",
+    "content-length",
+    "connection",
+    "content-type",
+];
+
+/// A console reply for a detailed-logs line: the status, the reason, the header names, and the
+/// values of [`LOGGABLE_HEADERS`] only.
+pub(crate) fn reply_for_log(reply: &HttpReply) -> String {
+    let headers: Vec<String> = reply
+        .headers
+        .iter()
+        .map(|(k, v)| {
+            if LOGGABLE_HEADERS.contains(&k.as_str()) {
+                format!("{k}={v}")
+            } else {
+                k.clone()
+            }
+        })
+        .collect();
+    format!(
+        "HTTP {} [{}] body {} bytes",
+        reply.code,
+        headers.join(", "),
+        reply.body.len()
+    )
 }
 
 /// Split a raw HTTP response into its status code, headers and body.
