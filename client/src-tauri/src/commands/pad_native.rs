@@ -359,7 +359,7 @@ pub mod hid_reader {
                 }
                 let now = Instant::now();
                 if let Some(st) = &p.state {
-                    let due = p.last_emit.is_none_or(|t| now >= t + EMIT_EVERY);
+                    let due = p.last_emit.map_or(true, |t| now >= t + EMIT_EVERY);
                     if p.sent.as_ref() != Some(st) && due {
                         emit(&NativePadEvent {
                             slot: p.slot,
