@@ -226,6 +226,39 @@ pub fn build_request_body(
     RegistRequest { body, seed, iv }
 }
 
+/// Remote Play on the PS5 did not take the pairing at all: no answer to the search, or the
+/// pairing port refused the connection (#642). Nearly always Remote Play is off, or the console
+/// has no pairing window open: its own Link Device screen opens one, and only while it shows its
+/// PIN (a PIN from another tool, such as LinkDEV, opens nothing here).
+#[derive(Debug)]
+pub struct NotAnswering {
+    /// What the network said, kept for the log and bug reports.
+    pub detail: String,
+}
+
+impl std::fmt::Display for NotAnswering {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Remote Play on the PS5 is not answering pairing ({}). The PS5 must be awake, with \
+             Remote Play on: Settings › System › Remote Play › Enable Remote Play",
+            self.detail
+        )
+    }
+}
+
+impl std::error::Error for NotAnswering {}
+
+/// The same for a PIN typed from the PS5, where there are two things to check.
+fn pin_not_answering(detail: &str) -> anyhow::Error {
+    anyhow!(
+        "Remote Play on the PS5 is not answering pairing ({detail}). Check two things. Remote \
+         Play is on: Settings › System › Remote Play › Enable Remote Play. And the PIN comes from \
+         the PS5's own Settings › System › Remote Play › Link Device screen, left open while you \
+         pair: a PIN from another tool, such as LinkDEV, does not work"
+    )
+}
+
 /// Announce ourselves on 9295 before registering.
 ///
 /// Not optional: without it the console rejects the registration. It is a
@@ -243,11 +276,8 @@ fn regist_search(host: &str, timeout: Duration) -> Result<()> {
         .map_err(|e| anyhow!("sending SRC3 to {addr}: {e}"))?;
 
     let mut buf = [0u8; 1024];
-    let (n, _) = socket.recv_from(&mut buf).map_err(|e| {
-        anyhow!(
-            "the console did not answer the registration search on {addr}: {e}. \
-             It must be awake, with Remote Play enabled."
-        )
+    let (n, _) = socket.recv_from(&mut buf).map_err(|e| NotAnswering {
+        detail: format!("no answer to the search on {addr}: {e}"),
     })?;
     if !buf[..n].starts_with(b"RES3") {
         bail!(
@@ -348,8 +378,17 @@ pub fn register(host: &str, account_id_b64: &str, pin: u32) -> Result<Registrati
     let req_built = build_request_body(account_id_b64.trim(), pin, &nonce);
 
     let addr = resolve(host, REGIST_PORT)?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10))
-        .map_err(|e| anyhow!("connecting to {addr}: {e}"))?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| {
+        // Refused: nothing takes pairings on 9295 now, and trying again will not change
+        // that. Anything else (a timeout, a reset) may pass on the next try.
+        if e.kind() == std::io::ErrorKind::ConnectionRefused {
+            anyhow::Error::new(NotAnswering {
+                detail: format!("{addr} refused the connection: {e}"),
+            })
+        } else {
+            anyhow!("connecting to {addr}: {e}")
+        }
+    })?;
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
@@ -833,6 +872,10 @@ pub fn pair_with_pin(host: &str, account_id_b64: &str, pin: &str) -> Result<Pair
     }
     let reg = with_retries(PIN_TRIES, PIN_RETRY_WAIT, || {
         register(host, account_id_b64, pin)
+    })
+    .map_err(|e| match e.downcast_ref::<NotAnswering>() {
+        Some(n) => pin_not_answering(&n.detail),
+        None => e,
     })?;
     let credential = credential_from_regist_key(&reg.regist_key)?;
     Ok(PairResult {
@@ -879,7 +922,7 @@ mod manual_pin_tests {
         let n = Cell::new(0);
         let r: Result<()> = with_retries(3, quick, || {
             n.set(n.get() + 1);
-            bail!("connecting to 192.0.2.1:9295: connection refused")
+            bail!("connecting to 192.0.2.1:9295: connection timed out")
         });
         assert_eq!(n.get(), 3);
         let m = r.unwrap_err().to_string();
@@ -887,6 +930,41 @@ mod manual_pin_tests {
             m.contains("3 times") && m.contains("Press Pair again"),
             "{m}"
         );
+    }
+
+    #[test]
+    fn remote_play_not_answering_is_said_with_its_two_causes_and_not_retried() {
+        // A refused port or an unanswered search is not a dropped connection: no retry.
+        let quick = Duration::from_millis(0);
+        let n = std::cell::Cell::new(0);
+        let r: Result<()> = with_retries(3, quick, || {
+            n.set(n.get() + 1);
+            Err(NotAnswering {
+                detail: "192.0.2.1:9295 refused the connection: Connection refused (os error 111)"
+                    .into(),
+            }
+            .into())
+        });
+        assert_eq!(n.get(), 1);
+        let e = r.unwrap_err();
+        assert!(e.downcast_ref::<NotAnswering>().is_some());
+        // The helper's pairing: Remote Play must be on.
+        let m = e.to_string();
+        assert!(
+            m.contains("Enable Remote Play") && m.contains("os error 111"),
+            "{m}"
+        );
+        // A typed PIN: also where the PIN must come from, and that other tools' do not work.
+        let m = pin_not_answering("no answer to the search on 192.0.2.1:9295").to_string();
+        for want in [
+            "Enable Remote Play",
+            "Link Device",
+            "left open while you pair",
+            "LinkDEV",
+            "192.0.2.1:9295",
+        ] {
+            assert!(m.contains(want), "{want}: {m}");
+        }
     }
 
     #[test]
