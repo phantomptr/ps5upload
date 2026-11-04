@@ -313,13 +313,13 @@ fn config_lock() -> &'static Mutex<()> {
 }
 
 fn load_config() -> LocalConfig {
-    let Some(p) = state_dir().map(|d| d.join("config.json")) else {
-        return LocalConfig::default();
-    };
-    std::fs::read(&p)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    read_config().unwrap_or_default()
+}
+
+/// None when it could not be read: that says nothing about which folders are in it.
+fn read_config() -> Option<LocalConfig> {
+    let p = state_dir()?.join("config.json");
+    serde_json::from_slice(&std::fs::read(&p).ok()?).ok()
 }
 
 fn save_config(c: &LocalConfig) -> Result<()> {
@@ -3283,7 +3283,7 @@ fn sync_one(lm: &LocalMember, me: &str) {
         Ok(Ok(())) => {}
     }
     // It left while its pass ran, and the pass saved what it had done after that.
-    if !load_config().members.iter().any(|m| m.member == lm.member) {
+    if read_config().is_some_and(|c| !c.members.iter().any(|m| m.member == lm.member)) {
         forget_bases(lm);
     }
 }
@@ -5083,6 +5083,8 @@ mod tests {
         }
     }
 
+    type AfterSend = Box<dyn Fn(&MemStore, &str)>;
+
     #[derive(Default)]
     struct MemSide {
         store: Arc<MemStore>,
@@ -5090,7 +5092,7 @@ mod tests {
         hub: Arc<MemStore>,
         /// Runs before a file goes up, and after.
         before_send: Option<Box<dyn Fn()>>,
-        after_send: Option<Box<dyn Fn(&MemStore, &str)>>,
+        after_send: Option<AfterSend>,
         /// Fails this many sends and trashes.
         fail: std::sync::atomic::AtomicUsize,
         /// A failure means this console went away.
