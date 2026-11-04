@@ -2408,6 +2408,7 @@ pub(crate) mod origin_tests {
                         let mut reader = BufReader::new(peer);
                         loop {
                             let mut saw = false;
+                            let mut range = (0usize, data.len() - 1);
                             loop {
                                 let mut line = String::new();
                                 match reader.read_line(&mut line) {
@@ -2418,6 +2419,13 @@ pub(crate) mod origin_tests {
                                     break;
                                 }
                                 saw = true;
+                                let lower = line.to_ascii_lowercase();
+                                if let Some((a, b)) = lower
+                                    .strip_prefix("range: bytes=")
+                                    .and_then(|v| v.trim().split_once('-'))
+                                {
+                                    range = (a.parse().unwrap(), b.parse().unwrap());
+                                }
                             }
                             if !saw {
                                 return;
@@ -2440,18 +2448,19 @@ pub(crate) mod origin_tests {
                             } else {
                                 format!(
                                     "HTTP/1.1 206 Partial Content\r\n\
-                                     Content-Range: bytes 0-{}/{}\r\n\
+                                     Content-Range: bytes {}-{}/{}\r\n\
                                      Content-Length: {}\r\n\
                                      Connection: keep-alive\r\n\r\n",
-                                    data.len() - 1,
+                                    range.0,
+                                    range.1,
                                     data.len(),
-                                    data.len()
+                                    range.1 - range.0 + 1
                                 )
                             };
                             if stream.write_all(resp.as_bytes()).is_err() {
                                 return;
                             }
-                            if !refuse && stream.write_all(&data).is_err() {
+                            if !refuse && stream.write_all(&data[range.0..=range.1]).is_err() {
                                 return;
                             }
                             if stream.flush().is_err() {
