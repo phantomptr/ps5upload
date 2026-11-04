@@ -25,6 +25,12 @@ describe("the app's content security policy", () => {
     });
   }
 
+  /* lib/keepScreenVideo.ts: its clip is a data: URL, and a WebView without the wake lock API has
+     nothing else to keep the screen on. */
+  it("lets the keep-screen-on clip play", () => {
+    expect(directive(conf.app.security.csp, "media-src")).toContain("data:");
+  });
+
   it("still allows scripts from the app alone", () => {
     const csp = conf.app.security.csp;
     expect(directive(csp, "default-src")).toEqual(["'self'"]);
