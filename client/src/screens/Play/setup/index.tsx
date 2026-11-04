@@ -243,6 +243,16 @@ export default function PlaySetupScreen() {
           "Play streams your PS5 into this app over Remote Play. These steps get a console there once; each one ticks by itself when it's done.",
         )}
       />
+      {/* Before anyone pairs a console for nothing: a browser cannot decode video on this page. */}
+      {typeof window !== "undefined" && window.isSecureContext === false && (
+        <Callout tone="warn" data-testid="play-setup-needs-https">
+          {tr(
+            "play_setup_needs_https",
+            undefined,
+            "This page came over plain http, so Play cannot show video here. Browsers only decode video on https or on the computer running the engine. Open it through https (see REVERSE_PROXY.md), or use the desktop app.",
+          )}
+        </Callout>
+      )}
       <div className="surface-panel space-y-4 p-5" data-testid="play-setup">
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-sm">

@@ -66,6 +66,7 @@ export function useWindowedRows(count: number) {
     end: Math.min(count, WINDOW_FROM),
   });
   const [pitch, setPitch] = useState(ROW_GUESS_PX);
+  const pitchRef = useRef(ROW_GUESS_PX);
   const windowed = count >= WINDOW_FROM;
 
   const measure = useCallback(() => {
@@ -73,18 +74,14 @@ export function useWindowedRows(count: number) {
     if (!list) return;
     const scroller = scrollerOf(list);
     const rows = list.children;
-    let rowPitch = ROW_GUESS_PX;
-    if (rows.length >= 2) {
-      const step =
-        (rows[1] as HTMLElement).offsetTop - (rows[0] as HTMLElement).offsetTop;
-      // Zero while the screen is kept hidden: the last good one stands.
-      if (step > 0) rowPitch = step;
-    }
-    setPitch((p) =>
-      rows.length >= 2 && rowPitch !== p && rowPitch !== ROW_GUESS_PX
-        ? rowPitch
-        : p,
-    );
+    // Zero while the screen is kept hidden: the last good one stands.
+    const step =
+      rows.length >= 2
+        ? (rows[1] as HTMLElement).offsetTop - (rows[0] as HTMLElement).offsetTop
+        : 0;
+    const rowPitch = step > 0 ? step : pitchRef.current;
+    pitchRef.current = rowPitch;
+    setPitch(rowPitch);
     const top =
       list.getBoundingClientRect().top -
       (scroller?.getBoundingClientRect().top ?? 0);
@@ -120,6 +117,11 @@ export function useWindowedRows(count: number) {
       ro?.disconnect();
     };
   }, [windowed, measure]);
+
+  // Rows have just been rendered, the first time or after a move: their real height is known now.
+  useEffect(() => {
+    if (windowed) measure();
+  }, [windowed, measure, win.start, win.end]);
 
   /** Brings row `index` to the middle of the screen, rendered or not. */
   const scrollToRow = useCallback(
