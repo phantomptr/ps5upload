@@ -931,18 +931,24 @@ impl Live {
     /// With no page attached, the session still has a reason to run: the picture is off here on
     /// purpose, and Go live or Play Together needs the stream.
     fn held_without_page(&self) -> bool {
-        self.picture_off()
-            && (crate::rp_golive::run_needs_session() || crate::join::needs_session(&self.host))
+        self.picture_off() && self.stream_needed()
+    }
+
+    fn stream_needed(&self) -> bool {
+        crate::rp_golive::run_needs_session() || crate::join::needs_session(&self.host)
     }
 
     /// `keep_alive_s` ran out with no page, and nothing holds the session.
     fn alone_too_long(&self) -> bool {
+        self.wait_ran_out() && !self.held_without_page()
+    }
+
+    fn wait_ran_out(&self) -> bool {
         self.alone_since
             .lock()
             .ok()
             .and_then(|a| *a)
             .is_some_and(|t| t.elapsed() > self.keep_alive)
-            && !self.held_without_page()
     }
 
     fn ctl(&self) -> Option<mpsc::Sender<Message>> {
@@ -2013,25 +2019,29 @@ mod tests {
 
     #[test]
     fn with_no_page_the_wait_runs_out_unless_the_picture_is_off_for_a_reason() {
+        // Another test's Go live run may be under way (it is process-wide), so what Go live says
+        // is left out of the first part; Play Together is per console.
         let live = Arc::new(Live::new(
             "10.0.77.1".into(),
             false,
             Duration::from_millis(0),
         ));
+        assert!(!live.wait_ran_out());
         *live.alone_since.lock().unwrap() = Some(Instant::now() - Duration::from_secs(5));
-        // Picture on, or off with nobody needing the stream: over.
+        assert!(live.wait_ran_out());
+        // Picture on: nothing holds it, whoever needs the stream.
+        assert!(!live.held_without_page());
         assert!(live.alone_too_long());
-        live.set_picture(false);
-        assert!(live.alone_too_long());
-        // Off and friends are invited: it waits.
+        // Off, with friends invited: it waits. On again: the window applies as ever.
         crate::join::test_open_party("10.0.77.1");
+        assert!(crate::join::needs_session("10.0.77.1"));
+        live.set_picture(false);
+        assert!(live.held_without_page());
         assert!(!live.alone_too_long());
-        // On again, the window applies as ever.
         live.set_picture(true);
         assert!(live.alone_too_long());
         crate::join::test_close_party("10.0.77.1");
-        live.set_picture(false);
-        assert!(live.alone_too_long());
+        assert!(!crate::join::needs_session("10.0.77.1"));
     }
 
     #[test]
