@@ -202,8 +202,8 @@ the menus; in games their controller plays.
 - **Leave** is always one tap away, also while it waits or reconnects.
 
 In the PS5Upload app the same happens in **Play › Join a friend**: paste the link, type the short
-code, press **Scan QR** (the app asks for the camera the first time), or pick a host under
-**Playing nearby**. An invite opened on a phone with the app closed lands straight on the join
+code, press **Scan QR** (Android and desktop; the app asks for the camera the first time), or pick a
+host under **Playing nearby**. On an iPhone, point the Camera app at the code: it opens the invite. An invite opened on a phone with the app closed lands straight on the join
 screen with your last name filled in: one tap on **Join** (11.0.3).
 
 **Q: What happens in Play Together when the host stops, or a connection drops?**
@@ -401,12 +401,17 @@ is older (or on the Connection screen) and the app replaces it, waiting until th
 answers. If the old helper will not exit, restart the
 console and try again.
 
+**Q: Why is there no Engine URL in the Android or iPhone app?**
+The phone apps always use the engine built into the app, so the setting isn't there. To use a
+self-hosted engine from a phone, open its web UI in the phone's browser, at
+`http://<server>:19113`. An Engine URL saved by an older version is ignored.
+
 **Q: How do I cap the upload speed?**
 Set `PS5UPLOAD_BANDWIDTH_MBPS` (megabytes per second) before starting the app or engine. Unset or
 zero means no cap. The pre-6.0 name of this variable still works as an alias.
 
 **Q: Can I run the engine on a different machine (self-hosted)?**
-Yes. Run it on a server or NAS and point the app at it in **Settings → Engine URL**. For a
+Yes. Run it on a server or NAS and point the desktop app at it in **Settings → Engine URL**. For a
 step-by-step guide that ends with the app open on a phone, see "How do I use PS5Upload from my phone
 or another computer?" below. Images:
 `ghcr.io/phantomptr/ps5upload-engine` (engine only) and `ghcr.io/phantomptr/ps5upload-engine-webui`
@@ -997,6 +1002,13 @@ allow installs from your browser or file manager the first time. Updates install
 Older 32-bit phones take `PS5Upload-<ver>-android-armv7.apk` instead; if the normal APK says
 "App not installed" on an old phone, that is the one you need.
 
+**Q: Android or Play Protect says the APK is harmful or unsafe.**
+Google Play Protect warns about apps it doesn't know, and this one asks for a lot: all files, and
+installing updates by itself. PS5Upload isn't on the Play Store, so the warning is expected. To go on,
+tap **More details**, then **Install anyway**. If an in-app update is blocked the same way, the toast
+or **Settings → Updates** says so; use **Download page** and install the APK by hand. To check a file
+really comes from this project, run `gh attestation verify <file>.apk --repo phantomptr/ps5upload`.
+
 **Q: The app's text or buttons are huge (or tiny) on my phone.**
 Your phone's Display size or Font size setting scales the whole app. Open **Settings → Text
 size** in ps5upload and pick a smaller percentage.
@@ -1005,7 +1017,8 @@ size** in ps5upload and pick a smaller percentage.
 Android needs **All files access** before the app can read your files. Tap **Choose folder**,
 **Choose file** or **Add .pkg**, tap **Open settings**, turn on **Allow access to manage all
 files** for PS5Upload, come back and tap **Retry**. You can also grant it in **Android Settings
-→ Apps → PS5Upload → Permissions → All files access**.
+→ Apps → PS5Upload → Permissions → All files access**. Android 7 to 10 have no such page: tap
+**Allow** and say yes in the prompt, then tap **Retry**.
 
 **Q: How do I upload a big game from my phone?**
 **Upload & Install → Choose folder** (or **Choose file** for a `.zip`), pick it in the in-app browser,
@@ -1089,6 +1102,11 @@ Copy them with the **Files** app into **On My iPhone → PS5Upload** (from iClou
 or AirDrop). The app's file browser starts there, and exports such as logs and save backups land
 there too. Keep the app open and the screen on while a transfer or install runs: iOS pauses apps
 in the background.
+
+You can also pick a file with the app's Choose button, which opens the Files sheet (iCloud Drive,
+Chrome's downloads, other apps' folders). iOS then copies the file into the app first, so a 40 GB
+game needs 40 GB of free space on the iPhone. The app removes that copy when the upload or install
+is done, and the next time it starts. A folder can't be picked this way: copy it to **On My iPhone**.
 
 **Q: Does it work on an iPad or an Android tablet?**
 Yes: the iPhone `.ipa` installs on an iPad, and the Android `.apk` on an Android tablet. On a
@@ -1474,8 +1492,8 @@ the part not sent yet; meanwhile the progress reads "Skipping data the console a
   (`name.part1.rar`, or the plain `.rar` for `.r00` sets) and keep every part in one folder. A RAR
   holding several packages is unpacked straight to the console and each package installed in turn
   (base, then patch, then DLC).
-- **`.rar` needs the desktop app.** The Android build and the web UI say so. `.zip` and `.7z` work
-  on Android; no archive format works in the browser.
+- **`.rar` needs the desktop app.** The Android and iPhone apps and the web UI say so. `.zip` and
+  `.7z` work on phones; no archive format works in the browser.
 
 **Q: I want the `.zip` itself on the PS5, not unpacked (a jailbreak or payload update).**
 Upload asks what to do with each archive: **unpack it** (into a new folder, or straight into the
