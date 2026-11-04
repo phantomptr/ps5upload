@@ -397,6 +397,8 @@ void runtime_apply_ucred_jailbreak(void) {
         rc |= -1;
     }
     g_ucred_elevation_rc = rc;
+    /* What the ucred looks like now is what the wake watchdog compares with later. */
+    if (rc == 0) wake_watchdog_note_elevated();
     /* Release the kernel-RW lock. This unlock was MISSING when the gate was a
      * dedicated mutex: on a partial-elevation attempt (rc != 0 — e.g. pre-
      * kstuff where root_vnode == 0) the function returned still holding the
@@ -746,11 +748,10 @@ int main(void) {
         }
     }
 
-    /* Start the rest-mode wake watchdog. Detects when the PS5 wakes
-     * from rest mode (via wall-clock drift) and re-applies ucred
-     * elevation + fan threshold + mount reconciliation. Placed AFTER
-     * the fan restore so the watchdog's re-apply path has a valid pin
-     * to work with on its first wake detection.
+    /* Start the rest-mode wake watchdog. After a clock jump it reads the
+     * ucred back and, only if it really changed, re-applies the elevation
+     * and the fan threshold. Placed AFTER the fan restore so the watchdog's
+     * re-apply path has a valid pin to work with on its first wake detection.
      *
      * The thread is detached and self-contained — runs for the payload
      * lifetime with negligible overhead (one sleep(5) per cycle). */

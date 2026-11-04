@@ -1242,7 +1242,7 @@ test-payload: payload
 		-o /tmp/ps5upload-wake-watchdog-selftest \
 		$(PAYLOAD_DIR)/tests/wake_watchdog_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-wake-watchdog-selftest
-	@echo "✓ clock adjustments and unknown firmware state cannot trigger kernel writes"
+	@echo "✓ only a ucred that really changed is written again: a clock jump or a throttled thread never is"
 	@echo "Running process-identity self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-proc-identity-selftest \
