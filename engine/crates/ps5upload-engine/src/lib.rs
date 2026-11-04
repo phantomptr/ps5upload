@@ -76,6 +76,7 @@ mod hearbridge_api;
 mod helper_copies_api;
 mod helper_mirror;
 mod helper_stop;
+mod host_guard;
 mod icon_cache;
 mod image_browse;
 mod image_build;
@@ -116,6 +117,7 @@ mod state_io;
 mod telemetry;
 mod vinput_api;
 mod wake_login_api;
+mod web_pages;
 #[cfg(feature = "webui")]
 mod webui;
 mod win_net;
@@ -928,7 +930,7 @@ fn browser_origin_allows(origin: &str, host: &str) -> bool {
         return false;
     };
     let origin_authority = origin_rest.split('/').next().unwrap_or("");
-    if origin_authority.eq_ignore_ascii_case(host) {
+    if host_guard::same_server(origin_scheme, origin_authority, host) {
         return true;
     }
     // Vite development serves the renderer on a different port, but both
@@ -970,6 +972,7 @@ fn browser_request_allows(headers: &axum::http::HeaderMap, path: &str) -> bool {
     if path.starts_with("/pkg-host/") {
         return true;
     }
+    let path = host_guard::strip_base(path);
     let cross_site = headers
         .get("sec-fetch-site")
         .and_then(|v| v.to_str().ok())
@@ -1002,12 +1005,21 @@ fn browser_request_allows(headers: &axum::http::HeaderMap, path: &str) -> bool {
         // but still carry Fetch Metadata. Native/CLI clients carry neither.
         return !cross_site;
     };
+    // A proxy that rewrites `Host` says what the browser asked for here. A cross-site page cannot
+    // set this header without a preflight, and the preflight (without it) is refused above.
     browser_origin_allows(origin, host)
+        || host_guard::first_forwarded(headers, "x-forwarded-host")
+            .is_some_and(|forwarded| browser_origin_allows(origin, forwarded))
 }
 
 async fn browser_origin_guard(req: Request, next: Next) -> impl IntoResponse {
     let path = req.uri().path();
-    if browser_request_allows(req.headers(), path) {
+    if let Some(refused) = host_guard::refuse_host(req.headers(), path) {
+        return refused;
+    }
+    if host_guard::is_page_navigation(req.method(), req.headers(), path)
+        || browser_request_allows(req.headers(), path)
+    {
         return next.run(req).await.into_response();
     }
     eprintln!("[ps5upload-engine] refusing cross-site browser request to {path}");
@@ -6570,6 +6582,7 @@ async fn transfer_file_handler(
     let job_id = Uuid::new_v4();
     telemetry::tag(job_id, "file");
     telemetry::set_drive(job_id, &req.dest);
+    mesh_api::note_job(job_id, &addr, "Upload", &req.dest);
     let started_at_ms = now_ms();
     crate::log_info!(
         "transfer_file: job={job_id} addr={addr} src={} dest={} resume={caller_supplied_tx_id}",
@@ -6788,6 +6801,7 @@ async fn transfer_dir_handler(
     let job_id = Uuid::new_v4();
     telemetry::tag(job_id, "dir");
     telemetry::set_drive(job_id, &req.dest_root);
+    mesh_api::note_job(job_id, &addr, "Upload", &req.dest_root);
     let started_at_ms = now_ms();
     crate::log_info!(
         "transfer_dir: job={job_id} addr={addr} src_dir={} dest_root={} resume={} excludes={}",
@@ -7485,6 +7499,7 @@ async fn transfer_zip_handler(
     let job_id = Uuid::new_v4();
     telemetry::tag(job_id, "zip");
     telemetry::set_drive(job_id, &req.dest_root);
+    mesh_api::note_job(job_id, &addr, "Upload", &req.dest_root);
     let started_at_ms = now_ms();
     crate::log_info!(
         "transfer_zip: job={job_id} addr={addr} zip={} dest_root={} resume={} files={} bytes={total_bytes}",
@@ -7848,43 +7863,6 @@ struct ProfilePreviewReq {
 }
 
 // ─── Console toast ──────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct ToastReq {
-    addr: Option<String>,
-    title: String,
-    #[serde(default)]
-    subtitle: Option<String>,
-    #[serde(default)]
-    icon: Option<String>,
-    #[serde(default)]
-    action_url: Option<String>,
-}
-
-/// POST /api/ps5/toast: a notification on the console's own screen. The desktop app has the
-/// same thing as a command; this is the web UI's way to it.
-async fn ps5_toast_handler(
-    State(state): State<AppState>,
-    Json(req): Json<ToastReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
-    let toast = ps5upload_core::app_lifecycle::ToastRequest {
-        title: req.title,
-        subtitle: req.subtitle.unwrap_or_default(),
-        icon: req.icon.unwrap_or_default(),
-        action_url: req.action_url.unwrap_or_default(),
-    };
-    let r = tokio::task::spawn_blocking(move || {
-        ps5upload_core::app_lifecycle::toast_send(&addr, &toast)
-    })
-    .await
-    .map_err(anyhow::Error::from)
-    .and_then(|r| r);
-    match r {
-        Ok(ack) => Json(ack).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
-}
 
 // ─── User create / delete ───────────────────────────────────────────────
 
@@ -9031,6 +9009,7 @@ async fn transfer_7z_handler(
     let job_id = Uuid::new_v4();
     telemetry::tag(job_id, "7z");
     telemetry::set_drive(job_id, &req.dest_root);
+    mesh_api::note_job(job_id, &addr, "Upload", &req.dest_root);
     let started_at_ms = now_ms();
     crate::log_info!(
         "transfer_7z: job={job_id} addr={addr} archive={} dest_root={} resume={} files={} bytes={total_bytes}",
@@ -9232,6 +9211,7 @@ async fn transfer_rar_handler(
     let job_id = Uuid::new_v4();
     telemetry::tag(job_id, "rar");
     telemetry::set_drive(job_id, &req.dest_root);
+    mesh_api::note_job(job_id, &addr, "Upload", &req.dest_root);
     let started_at_ms = now_ms();
     crate::log_info!(
         "transfer_rar: job={job_id} addr={addr} archive={} dest_root={} resume={} files={} bytes={total_bytes}",
@@ -9576,6 +9556,7 @@ async fn link_download_handler(
     let job_id = Uuid::new_v4();
     telemetry::tag(job_id, "link_download");
     telemetry::set_drive(job_id, &dest_dir);
+    mesh_api::note_job(job_id, &addr, "Upload", &dest_dir);
     let started_at_ms = now_ms();
     // The host only: a link can carry a signed token in its path or query.
     let host = url
@@ -9752,6 +9733,7 @@ async fn transfer_file_list_handler(
     let job_id = Uuid::new_v4();
     telemetry::tag(job_id, "file_list");
     telemetry::set_drive(job_id, &req.dest_root);
+    mesh_api::note_job(job_id, &addr, "Upload", &req.dest_root);
     let started_at_ms = now_ms();
     let entries: Vec<FileListEntry> = req
         .files
@@ -10730,6 +10712,37 @@ struct PortCheckQuery {
 /// talking to the prior version's engine indefinitely (silently
 /// missing any newly-added routes — e.g. the FS_OP frames added in
 /// 2.2.7).
+#[derive(serde::Deserialize)]
+struct ToastBody {
+    addr: Option<String>,
+    title: String,
+    subtitle: Option<String>,
+    icon: Option<String>,
+    action_url: Option<String>,
+}
+
+/// `POST /api/ps5/toast`: a notification on the console's screen, over its management port. The web
+/// UI's way to it, for "Upload complete" on the TV.
+async fn ps5_toast(Json(b): Json<ToastBody>) -> axum::response::Response {
+    let Some(addr) = required_console_addr(b.addr) else {
+        return missing_console_addr();
+    };
+    let req = ps5upload_core::app_lifecycle::ToastRequest {
+        title: b.title,
+        subtitle: b.subtitle.unwrap_or_default(),
+        icon: b.icon.unwrap_or_default(),
+        action_url: b.action_url.unwrap_or_default(),
+    };
+    let sent =
+        tokio::task::spawn_blocking(move || ps5upload_core::app_lifecycle::toast_send(&addr, &req))
+            .await;
+    match sent {
+        Ok(Ok(ack)) => Json(ack).into_response(),
+        Ok(Err(e)) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 async fn engine_version() -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -10739,6 +10752,12 @@ async fn engine_version() -> impl IntoResponse {
             // (UnRAR is a helper program, which neither phone app has), so the
             // client hides the .rar option when this is false.
             "caps": { "rar": cfg!(not(any(target_os = "android", target_os = "ios"))) },
+            // `PS5_ADDR`, when the operator set one: the web UI lists it for a first browser, so
+            // the console the setup named is not typed in again.
+            "default_console": std::env::var("PS5_ADDR")
+                .ok()
+                .map(|a| a.trim().to_string())
+                .filter(|a| !a.is_empty()),
         })),
     )
 }
@@ -11039,6 +11058,28 @@ fn trigger_shutdown() {
     SHUTDOWN.notify_one();
 }
 
+/// How long the drain may take once a stop was asked for. Under Docker's 10 seconds before SIGKILL.
+const DRAIN_CEILING: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// After a stop was asked for: a response that does not finish in time does not get to keep the
+/// process, and the journal is flushed before it goes. Not for an engine inside a phone app, whose
+/// process is the app.
+fn spawn_drain_ceiling() {
+    std::thread::spawn(|| {
+        std::thread::sleep(DRAIN_CEILING);
+        stderr_quiet("[ps5upload-engine] drain took too long — exiting");
+        ps5upload_core::events::emit(
+            ps5upload_core::events::Cat::System,
+            ps5upload_core::events::Level::Info,
+            "engine_stop",
+            None,
+            "engine stopped with requests still open",
+        );
+        event_journal::flush_now();
+        std::process::exit(0);
+    });
+}
+
 /// Print to stderr without panicking. `eprintln!` panics when stderr is a closed pipe, which is
 /// exactly the state a dead desktop parent leaves behind (it was reading our stderr): the
 /// parent-watch thread died on its first message and the engine lived on, holding its port.
@@ -11135,6 +11176,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     convert_source::register();
     // Every management call (hardware, filesystem, apps, ...) goes through one transport
     // seam in the core crate; this registers the AVA1 implementation over the shared pool.
+    host_guard::log_settings();
     // A console it cannot serve is a `helper_not_ava1` error, never another protocol.
     ps5upload_ava1::mgmt::install();
     // Every new session says who this engine is, whatever opened it (Devices showed a phone
@@ -11232,6 +11274,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         }));
     }
 
+    let state_jobs_for_presence = state.jobs.clone();
     let activity_installs = pkg_state.clone();
     let jobs_installs = pkg_state.clone();
     let helper_stop_installs = pkg_state.clone();
@@ -11252,6 +11295,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/activity/label", post(activity::label_handler))
         .route("/api/ps5/status", get(ps5_status))
         .route("/api/ps5/port-check", get(ps5_port_check))
+        .route("/api/ps5/toast", post(ps5_toast))
         .route("/api/ps5/readiness", get(ps5_readiness))
         .route(
             ps5upload_core::mgmt_proxy::ROUTE,
@@ -11724,7 +11768,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/rp/pad-relay", get(pad_link::relay))
         .route("/api/ps5/power/ddp-status", get(ps5_power_ddp_status))
         .route("/api/ps5/power/pair", post(ps5_power_pair))
-        .route("/api/ps5/toast", post(ps5_toast_handler))
         .route("/api/ps5/users/create", post(user_create_handler))
         .route("/api/ps5/users/delete", post(user_delete_handler))
         .route("/api/ps5/backup/snapshot", post(backup_snapshot_handler))
@@ -11984,24 +12027,14 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     #[cfg(feature = "webui")]
     let app = app.fallback(webui::spa_fallback);
 
-    let app = if let Ok(base) = std::env::var("PS5UPLOAD_BASE_URL") {
-        let base = base.trim_end_matches('/');
-        if !base.is_empty() {
-            // Format Base URL
-            let base = if !base.starts_with('/') {
-                format!("/{}", base)
-            } else {
-                base.to_string()
-            };
-            // Create Axum Router using the base URL as a prefix for all routes.
-            axum::Router::new()
-                .nest(&base, app)
-                .route(&format!("{}/", base), get(ui_handler))
-        } else {
-            app
-        }
-    } else {
+    let base = host_guard::base_path();
+    let app = if base.is_empty() {
         app
+    } else {
+        // Create Axum Router using the base URL as a prefix for all routes.
+        axum::Router::new()
+            .nest(base, app)
+            .route(&format!("{base}/"), get(ui_handler))
     };
 
     let cors = CorsLayer::new()
@@ -12019,7 +12052,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
                 .is_some_and(|value| browser_origin_allows(value, host))
         }))
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        // The renderer's JSON POST pollers would otherwise send a preflight before every request.
+        .max_age(std::time::Duration::from_secs(600));
 
     let app = app
         .merge(pkg_install::host_router(pkg_state))
@@ -12029,6 +12064,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         // below. The guard sits outside this layer, so foreign origins are
         // rejected before CORS can answer either a simple request or preflight.
         .layer(cors)
+        .layer(middleware::from_fn(web_pages::finish_pages))
         // Explicit body-size cap. Axum's default DefaultBodyLimit is
         // 2 MiB, which is borderline for a TransferFileListReq carrying
         // tens of thousands of file paths and could silently change
@@ -12054,7 +12090,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         // guard outermost, an off-loopback peer hitting any
         // non-`/pkg-host/*` route is rejected immediately, before
         // body-limit / handler.
-        .layer(middleware::from_fn_with_state(guard_cfg, loopback_guard));
+        .layer(middleware::from_fn_with_state(guard_cfg, loopback_guard))
+        // Outside the allowlist it feeds: behind a trusted proxy, the address that counts is the
+        // client's.
+        .layer(middleware::from_fn(host_guard::apply_trusted_proxy));
 
     // Bind `0.0.0.0` so the PS5 can fetch `/pkg-host/*` for fakepkg
     // installs. The loopback-guard middleware (above) gates every
@@ -12133,6 +12172,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     save_backup_server::spawn();
     // Mesh Drive folders are kept in sync here too, app open or not.
     mesh_drive::spawn();
+    pkg_install::spawn_stale_upload_sweep();
+    // What the other devices see of this engine, with no window open to say so.
+    mesh_api::spawn_presence(state_jobs_for_presence);
     // Server copies an earlier run left behind (an extract that failed, then the app closed)
     // are removed here: nothing else knows them after a restart.
     tokio::task::spawn_blocking(remote::fetch::sweep_stale_copies);
@@ -12140,9 +12182,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // Graceful shutdown: when the parent-watcher fires (stdin EOF), the
     // SHUTDOWN Notify wakes this future, axum stops
     // accepting new connections, drains in-flight ones, then returns.
-    // The 10-second watchdog in spawn_parent_watcher is the hard ceiling
-    // — if a stuck request blocks the drain (rare; only for pkg-host
-    // range reads on a dying PS5), we fall through to process::exit(0).
+    // `spawn_drain_ceiling` is the hard ceiling: an open `/api/events`, a
+    // browser upload or a `/pkg-host` read would otherwise hold the drain
+    // until Docker's SIGKILL, and the stop line below would never be written.
     // `into_make_service_with_connect_info::<SocketAddr>` is what makes
     // the `ConnectInfo<SocketAddr>` extractor work in the loopback-guard
     // middleware. Without this, axum hands handlers a generic ConnectInfo
@@ -12153,7 +12195,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             no_delay(listener),
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async {
+            shutdown_signal().await;
+            spawn_drain_ceiling();
+        })
         .await
     } else {
         serve_rebindable(&bind, listener, app, shutdown_signal()).await
@@ -12299,13 +12344,7 @@ pub fn healthcheck() -> i32 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(19113);
-    let base = std::env::var("PS5UPLOAD_BASE_URL").unwrap_or_default();
-    let base = base.trim_matches('/');
-    let path = if base.is_empty() {
-        "/api/jobs".to_string()
-    } else {
-        format!("/{base}/api/jobs")
-    };
+    let path = format!("{}/api/jobs", host_guard::base_path());
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let timeout = std::time::Duration::from_secs(3);
     let ok = (|| -> std::io::Result<bool> {
@@ -12677,6 +12716,35 @@ mod loopback_guard_tests {
             &headers,
             "/pkg-host/session/file.pkg"
         ));
+    }
+
+    #[test]
+    fn browser_guard_lets_a_link_from_another_site_open_a_page() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("host", "ps5upload.home".parse().unwrap());
+        headers.insert("sec-fetch-site", "cross-site".parse().unwrap());
+        headers.insert("sec-fetch-mode", "navigate".parse().unwrap());
+        headers.insert("sec-fetch-dest", "document".parse().unwrap());
+        let get = axum::http::Method::GET;
+        assert!(host_guard::is_page_navigation(&get, &headers, "/join"));
+        // The guard's other half still refuses this shape, for what is not a page.
+        assert!(!host_guard::is_page_navigation(&get, &headers, "/api/jobs"));
+        assert!(!browser_request_allows(&headers, "/api/jobs"));
+    }
+
+    #[test]
+    fn browser_guard_compares_servers_not_strings() {
+        // A proxy's Host with the port spelled out, or dropped.
+        assert!(browser_origin_allows("https://x", "x:443"));
+        assert!(browser_origin_allows("https://x:8443", "x"));
+        assert!(!browser_origin_allows("https://evil.example", "x"));
+        // A proxy that rewrites Host and says what the browser asked for.
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("host", "192.168.1.10:19113".parse().unwrap());
+        headers.insert("origin", "https://ps5upload.home".parse().unwrap());
+        assert!(!browser_request_allows(&headers, "/api/jobs"));
+        headers.insert("x-forwarded-host", "ps5upload.home, inner".parse().unwrap());
+        assert!(browser_request_allows(&headers, "/api/jobs"));
     }
 
     #[test]

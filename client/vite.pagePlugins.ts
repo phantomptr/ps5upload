@@ -45,6 +45,10 @@ export function keysIn(source: string): string[] {
   return [...source.matchAll(/\b(?:tr|trStatic)\(\s*"([\w.]+)"/g)].map((m) => m[1]);
 }
 
+/** The modules a page swaps (see `pageStrings`), for what walks its files without the bundler. */
+export const pageModuleSwap = (file: string): string =>
+  file === LANG ? PAGE_LANG : file === TR_STATIC ? TR_STATIC_PAGE : file;
+
 /** state/lang and lib/trStatic → the page's own (src/join/joinLang.ts); the strings as a
  *  placeholder, filled after bundling with exactly the keys the bundled modules use. */
 export function pageStrings(page: string): Plugin {

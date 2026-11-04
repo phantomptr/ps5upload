@@ -1,3 +1,4 @@
+import { writeClipboard } from "../../lib/clipboard";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Gamepad2, RefreshCw, Share2, Smartphone, UserMinus, Users, X } from "lucide-react";
 
@@ -239,12 +240,10 @@ export function PlayTogetherPanel({
   };
   const copy = async () => {
     if (!link) return;
-    try {
-      await navigator.clipboard.writeText(link);
+    // writeClipboard also works on plain http, where the browser has no navigator.clipboard.
+    if (await writeClipboard(link)) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // No clipboard: the link is on screen to copy by hand.
     }
   };
 
@@ -290,8 +289,14 @@ export function PlayTogetherPanel({
       )}
       {failed && (
         <p className="text-sm text-[var(--color-warn)]" data-testid="pt-failed">
-          {tr("pt_unavailable", undefined, "Play Together could not start. Check that the engine is up to date.")}
-          {why ? ` (${why})` : ""}
+          {why === "host_not_local"
+            ? tr(
+                "pt_host_not_local",
+                undefined,
+                "A reverse proxy on the engine's computer is in the way. On the engine, set PS5UPLOAD_ALLOW_HOST to this page's name, and PS5UPLOAD_TRUSTED_PROXY to the proxy's address.",
+              )
+            : tr("pt_unavailable", undefined, "Play Together could not start. Check that the engine is up to date.")}
+          {why && why !== "host_not_local" ? ` (${why})` : ""}
         </p>
       )}
 

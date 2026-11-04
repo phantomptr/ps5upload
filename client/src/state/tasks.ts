@@ -138,7 +138,9 @@ export type TaskControlRef =
   // A Convert or .ffpfsc run; Cancel stops its build job.
   | { owner: "fpkg-convert" }
   // A copy from a saved server (NAS) to this computer: Cancel stops the engine's fetch job.
-  | { owner: "remote-fetch"; jobId: string };
+  | { owner: "remote-fetch"; jobId: string }
+  // A file going from this browser to the engine (lib/browserStaging): Cancel stops the upload.
+  | { owner: "browser-staging"; stagingId: string };
 
 /** Per-kind specifics. Kept loose (record of string→unknown) so each
  *  feature can store what it needs without forcing a union. The typed
@@ -239,7 +241,7 @@ function loadInitial(): Task[] {
 
 /** At most one progress write per this long. A plain debounce would never fire: running
  *  transfers report more often than this, so there would be no quiet window to write in. */
-const PROGRESS_PERSIST_MS = 500;
+const PROGRESS_PERSIST_MS = 5000;
 let pendingPersist: Task[] | null = null;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 

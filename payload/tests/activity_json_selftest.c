@@ -103,7 +103,29 @@ static void make_sl2_db(const char *path) {
     sqlite3_close(db);
 }
 
+/* The watcher rewrites and syncs the file only when there is something new in it. */
+static void test_save_due(void) {
+    printf("saves only what changed\n");
+    assert(!activity_save_due(0, 0, 100000)); /* idle: never */
+    assert(!activity_save_due(1, 0, 30));     /* a change: within the minute */
+    assert(activity_save_due(1, 0, 61));
+    assert(!activity_save_due(0, 1, 61));     /* a running game's time: every few minutes */
+    assert(!activity_save_due(0, 1, 180));
+    assert(activity_save_due(0, 1, 181));
+    assert(activity_save_due(0, 1, -5));      /* the clock moved back */
+    assert(!activity_save_due(0, 0, -5));
+    /* What marks it. */
+    g_dirty = 0;
+    record_launch("CUSA09999");
+    assert(g_dirty == 1);
+    g_dirty = 0;
+    record_exit("CUSA09999");
+    assert(g_dirty == 1);
+    g_dirty = 0;
+}
+
 int main(void) {
+    test_save_due();
     make_app_db(CONTENT_DB_APP);
     make_sl2_db(ACTIVITY_SL2_DB);
 

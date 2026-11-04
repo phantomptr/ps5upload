@@ -47,9 +47,16 @@ docker run --rm --entrypoint /ps5upload-unrar "$image" --version | grep -q '^ps5
   || fail "the RAR helper /ps5upload-unrar is missing or does not run"
 echo "ok: the RAR helper is next to the engine"
 
-# Any Host header is served (the engine has no hostname allowlist): reaching it by a name works.
-curl -fsS -m 5 -H 'Host: nas.example' "$base/api/jobs" >/dev/null || fail "a hostname Host header was refused"
-echo "ok: the engine answers when reached by a hostname"
+# Reaching it by a LAN name works; a public name needs PS5UPLOAD_ALLOW_HOST, which the refusal names.
+for name in nas nas.local ps5upload.home 192.168.1.10; do
+  curl -fsS -m 5 -H "Host: $name" "$base/api/jobs" >/dev/null || fail "the Host $name was refused"
+done
+echo "ok: the engine answers when reached by a LAN name"
+refused="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' -H 'Host: rebound.example' "$base/api/jobs")"
+[ "$refused" = 403 ] || fail "the Host rebound.example got $refused, not 403"
+curl -sS -m 5 -H 'Host: rebound.example' "$base/api/jobs" | grep -q PS5UPLOAD_ALLOW_HOST \
+  || fail "the refusal does not name PS5UPLOAD_ALLOW_HOST"
+echo "ok: a public name is refused, and told which setting allows it"
 
 tmp="$(mktemp -d)"
 head -c 65536 /dev/urandom > "$tmp/smoke.pkg"
@@ -85,6 +92,21 @@ if [ "$webui" = "--webui" ]; then
   ctype="$(curl -fsS -m 5 -o /dev/null -w '%{content_type}' "$base/")" || fail "web UI index did not load"
   case "$ctype" in text/html*) ;; *) fail "web UI index served $ctype, not HTML" ;; esac
   echo "ok: the web UI loads"
+  # The page must find its own code: under a prefix, and from a deep link. An HTML reply to a
+  # script is the blank page a passing check on the index used to hide.
+  for page in "$base/" "$base/games/PPSA01234"; do
+    script="$(curl -fsS -m 5 "$page" | grep -oE '<script[^>]+type="module"[^>]+src="[^"]+"' | head -1 | sed -E 's/.*src="([^"]+)"/\1/')" \
+      || fail "$page did not load"
+    [ -n "$script" ] || fail "$page names no script"
+    case "$script" in /*) ;; *) fail "$page names a relative script ($script): a deep link cannot find it" ;; esac
+    ctype="$(curl -fsS -m 5 -o /dev/null -w '%{content_type}' "http://127.0.0.1:${port}${script}")" \
+      || fail "$script did not load"
+    case "$ctype" in *javascript*) ;; *) fail "$script served $ctype, not JavaScript" ;; esac
+  done
+  echo "ok: the web UI finds its scripts, from a deep link too"
+  curl -fsS -m 5 "$base/" | grep -q "name=\"ps5upload-base\" content=\"${SMOKE_BASE_PATH:-}\"" \
+    || fail "the page was not told its prefix"
+  echo "ok: the page knows its prefix"
 fi
 
 for _ in $(seq 1 40); do

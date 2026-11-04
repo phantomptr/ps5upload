@@ -1,3 +1,4 @@
+import { cancelStaging } from "../lib/browserStaging";
 import { useFpkgConversion } from "./fpkgConversion";
 import { useFsBulkOpStore } from "./fsBulkOp";
 import { retryInstallReverify } from "./pkgLibrary";
@@ -37,7 +38,7 @@ export function taskCapabilities(task: Task): TaskCapabilities {
   if (control.owner === "link-download") {
     return { ...none, canCancel: task.status === "running" || task.status === "queued" };
   }
-  if (control.owner === "remote-fetch") {
+  if (control.owner === "remote-fetch" || control.owner === "browser-staging") {
     return { ...none, canCancel: task.status === "running" };
   }
   if (control.owner === "fpkg-convert") {
@@ -93,6 +94,7 @@ export async function commandTask(task: Task, command: TaskCommand): Promise<boo
       await invoke("pkg_remote_download_cancel", { id: control.downloadId });
       return true;
     }
+    if (control.owner === "browser-staging") return cancelStaging(control.stagingId);
     if (control.owner === "remote-fetch") {
       // The fetch stops at its next chunk; materializeRemote then settles the task as cancelled.
       await invoke("job_cancel", { jobId: control.jobId });

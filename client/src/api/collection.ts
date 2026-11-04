@@ -8,11 +8,12 @@ import { ENGINE_LONG_TIMEOUT_MS, ENGINE_TIMEOUT_MS, engineFetch, type EngineFetc
 
 /** Keyed by the cover's version too: a cover read out again must not be answered with the
  *  bytes this session held for the old one. */
-const coverKey = (gameId: string, version?: string) => `collection|${gameId}|${version ?? ""}`;
+const coverKey = (gameId: string, version?: string, size?: number) =>
+  `collection|${gameId}|${version ?? ""}${size ? `|${size}` : ""}`;
 
 /** A Collection cover this session already holds, as a `data:` URL. */
-export function cachedCollectionCover(gameId: string, version?: string): string | undefined {
-  return getCachedIcon(coverKey(gameId, version));
+export function cachedCollectionCover(gameId: string, version?: string, size?: number): string | undefined {
+  return getCachedIcon(coverKey(gameId, version, size));
 }
 
 /** A Collection cover over the IPC, as a `data:` URL, or null. The desktop window's own load
@@ -21,13 +22,14 @@ export function cachedCollectionCover(gameId: string, version?: string): string 
 export async function collectionCoverDataUrl(
   gameId: string,
   version?: string,
+  size?: number,
 ): Promise<string | null> {
-  const hit = getCachedIcon(coverKey(gameId, version));
+  const hit = getCachedIcon(coverKey(gameId, version, size));
   if (hit) return hit;
   try {
-    const url = await invoke<string>("collection_cover_data", { gameId });
+    const url = await invoke<string>("collection_cover_data", { gameId, size });
     if (typeof url === "string" && url.startsWith("data:")) {
-      setCachedIcon(coverKey(gameId, version), url);
+      setCachedIcon(coverKey(gameId, version, size), url);
       return url;
     }
     return null;
@@ -451,8 +453,11 @@ export const collection = {
       body: JSON.stringify({ path: path ?? null }),
     }),
   /** `version` (see coverVersion) makes a cover read again once its game changed. */
-  coverUrl: (gameId: string, version?: string) =>
-    `${getEngineUrl()}/api/collection/games/${encodeURIComponent(gameId)}/cover${
-      version ? `?v=${encodeURIComponent(version)}` : ""
-    }`,
+  coverUrl: (gameId: string, version?: string, size?: number) => {
+    const q = new URLSearchParams();
+    if (version) q.set("v", version);
+    if (size) q.set("size", String(size));
+    const query = q.toString();
+    return `${getEngineUrl()}/api/collection/games/${encodeURIComponent(gameId)}/cover${query ? `?${query}` : ""}`;
+  },
 };

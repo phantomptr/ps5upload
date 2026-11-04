@@ -1,4 +1,23 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { storage, listeners } = vi.hoisted(() => {
+  // In place before the module loads, which is when it hooks page unload.
+  const storage = { data: new Map<string, string>(), writes: 0 };
+  const listeners = new Map<string, () => void>();
+  vi.stubGlobal("window", {
+    localStorage: {
+      getItem: (k: string) => storage.data.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        storage.writes++;
+        storage.data.set(k, v);
+      },
+      removeItem: (k: string) => void storage.data.delete(k),
+      clear: () => storage.data.clear(),
+    },
+    addEventListener: (k: string, fn: () => void) => void listeners.set(k, fn),
+  });
+  return { storage, listeners };
+});
 
 import { useActivityHistoryStore } from "./activityHistory";
 
@@ -206,5 +225,54 @@ describe("activityHistory clear(host) / clearRunning(host)", () => {
     expect(st().entries.every((e) => e.outcome !== "running")).toBe(true);
     st().clear();
     expect(st().entries).toHaveLength(0);
+  });
+});
+
+describe("activityHistory writes", () => {
+  const stored = () => storage.data.get("ps5upload.activityHistory") ?? "";
+
+  beforeEach(() => {
+    resetStore();
+    window.localStorage.clear();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    resetStore();
+  });
+
+  it("progress every half second is written once per interval, not per tick", () => {
+    const { start, update } = useActivityHistoryStore.getState();
+    const id = start("upload-queue", "x", { bytes: 0 });
+    const before = storage.writes;
+    for (let i = 1; i <= 20; i++) {
+      update(id, { bytes: i });
+      vi.advanceTimersByTime(600);
+    }
+    const writes = storage.writes - before;
+    expect(writes).toBeGreaterThan(0);
+    expect(writes).toBeLessThanOrEqual(3);
+  });
+
+  it("an ended entry and a new phase are written at once, with the latest numbers", () => {
+    const { start, update, finish } = useActivityHistoryStore.getState();
+    const id = start("upload-queue", "x", { bytes: 0 });
+    update(id, { bytes: 7 });
+    expect(stored()).not.toContain('"bytes":7');
+    update(id, { phase: "finalizing" });
+    expect(stored()).toContain('"finalizing"');
+    expect(stored()).toContain('"bytes":7');
+    finish(id, "done");
+    expect(stored()).toContain('"outcome":"done"');
+  });
+
+  it("a page going away writes what is pending", () => {
+    const { start, update } = useActivityHistoryStore.getState();
+    const id = start("upload-queue", "x", { bytes: 0 });
+    update(id, { bytes: 9 });
+    listeners.get("pagehide")?.();
+    expect(stored()).toContain('"bytes":9');
   });
 });

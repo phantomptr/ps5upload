@@ -47,6 +47,22 @@ describe("logs store", () => {
     expect(s.errorCount).toBe(200);
   });
 
+  it("debug lines cannot push a warning out", () => {
+    const { appendMany } = useLogsStore.getState();
+    appendMany([line("warn", "keep me"), line("error", "and me")]);
+    for (let i = 0; i < 20; i++) {
+      appendMany(Array.from({ length: 100 }, () => line("debug")));
+      appendMany(Array.from({ length: 10 }, () => line("trace")));
+    }
+    const s = useLogsStore.getState();
+    expect(s.entries.map((e) => e.message)).toEqual(expect.arrayContaining(["keep me", "and me"]));
+    expect(s.errorCount).toBe(1);
+    expect(s.entries.filter((e) => e.level === "debug" || e.level === "trace").length).toBe(300);
+    // still in the order they came
+    const ids = s.entries.map((e) => e.id);
+    expect([...ids].sort((a, b) => a - b)).toEqual(ids);
+  });
+
   it("append still works one line at a time; clear resets the count", () => {
     useLogsStore.getState().append("error", "x", "boom");
     expect(useLogsStore.getState().errorCount).toBe(1);

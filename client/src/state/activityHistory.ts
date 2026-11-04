@@ -190,16 +190,17 @@ function loadInitial(): ActivityEntry[] {
   }
 }
 
-// Debounced localStorage writer. activityWiring fires update() on
-// every transfer poll tick (~5 Hz during uploads) — without
-// debouncing, a multi-hour upload writes the full entries JSON
-// ~18,000 times, which causes UI jank during big transfers and
-// pressures Linux WebKit's localStorage quota. The debounce
-// collapses bursts to one disk write per quiet window.
+// localStorage writer. activityWiring fires update() on every transfer poll
+// tick (500 ms plus the round trip), and a 500 ms debounce never saw a quiet
+// window to coalesce in: a multi-hour upload wrote the full entries JSON every
+// tick, on the main thread. Progress is written at most this often, and a
+// restart loses at most that much of a number that is about to be redone anyway.
+// Anything a restart must find (an entry added, ended or removed, a new phase)
+// is written at once.
 //
 // Synchronous flush before unload guarantees we don't lose the
 // last in-flight write when the user closes the app.
-const PERSIST_DEBOUNCE_MS = 500;
+const PROGRESS_PERSIST_MS = 5000;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingEntries: ActivityEntry[] | null = null;
 
@@ -213,32 +214,32 @@ function persistNow(entries: ActivityEntry[]) {
   }
 }
 
+function flushPersist() {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  if (pendingEntries) {
+    const entries = pendingEntries;
+    pendingEntries = null;
+    persistNow(entries);
+  }
+}
+
 function persist(entries: ActivityEntry[]) {
   pendingEntries = entries;
-  if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    persistTimer = null;
-    if (pendingEntries) {
-      persistNow(pendingEntries);
-      pendingEntries = null;
-    }
-  }, PERSIST_DEBOUNCE_MS);
+  flushPersist();
+}
+
+function persistProgress(entries: ActivityEntry[]) {
+  pendingEntries = entries;
+  if (!persistTimer) persistTimer = setTimeout(flushPersist, PROGRESS_PERSIST_MS);
 }
 
 if (typeof window !== "undefined") {
-  // Best-effort flush on tab close. localStorage.setItem is
-  // synchronous so this completes before the page unloads even
-  // when the debounce window hasn't elapsed.
-  window.addEventListener("beforeunload", () => {
-    if (pendingEntries) {
-      persistNow(pendingEntries);
-      pendingEntries = null;
-      if (persistTimer) {
-        clearTimeout(persistTimer);
-        persistTimer = null;
-      }
-    }
-  });
+  // setItem is synchronous, so these complete before the page unloads.
+  window.addEventListener("beforeunload", flushPersist);
+  window.addEventListener("pagehide", flushPersist);
 }
 
 let nextIdCounter = 0;
@@ -296,13 +297,18 @@ export const useActivityHistoryStore = create<ActivityHistoryState>(
     update(id, patch) {
       set((s) => {
         let changed = false;
+        let moved = false;
         const next = s.entries.map((e) => {
           if (e.id !== id) return e;
           changed = true;
+          moved =
+            (patch.outcome !== undefined && patch.outcome !== e.outcome) ||
+            (patch.phase !== undefined && patch.phase !== e.phase);
           return { ...e, ...patch };
         });
         if (!changed) return s;
-        persist(next);
+        if (moved) persist(next);
+        else persistProgress(next);
         return { entries: next };
       });
     },

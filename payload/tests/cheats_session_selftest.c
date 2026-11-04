@@ -622,7 +622,7 @@ static void test_fast_applies_at_start(void) {
     F.c[0].ready_at = t0 + 150;
     F.write_cost = 2;
     cheats_session_launch(&S, 106, "CUSA03041", t0, 1, 1, now_ms);
-    cheats_sched_t k = { 0, 0 };
+    cheats_sched_t k = { 0, 0, 0 };
     drive_t d = drive(&k, t0 + 1000);
     CHECK(status(0) == CHEATS_ST_APPLIED);
     int late = -1;
@@ -651,7 +651,7 @@ static void test_fast_nothing_on(void) {
     F.c[0].on = 0;
     cheats_session_launch(&S, 106, "CUSA03041", now_ms, 1, 1, now_ms);
     CHECK(cheats_session_fast(&S, now_ms)); /* not listed yet */
-    cheats_sched_t k = { 0, 0 };
+    cheats_sched_t k = { 0, 0, 0 };
     drive_t d = drive(&k, now_ms + 10000);
     CHECK(d.fast == 0 && d.full == 4 && F.applies == 0);
 }
@@ -661,7 +661,7 @@ static void test_fast_held(void) {
     setup(1);
     F.held = 1;
     cheats_session_launch(&S, 106, "CUSA03041", now_ms, 1, 1, now_ms);
-    cheats_sched_t k = { 0, 0 };
+    cheats_sched_t k = { 0, 0, 0 };
     drive_t d = drive(&k, now_ms + 10000);
     CHECK(d.fast == 0 && F.applies == 0 && F.notes == 1);
 }
@@ -673,7 +673,7 @@ static void test_fast_window_capped(void) {
     uint64_t t0 = now_ms;
     F.c[0].ready_at = t0 + 10 * 60 * 1000;
     cheats_session_launch(&S, 106, "CUSA03041", t0, 1, 1, now_ms);
-    cheats_sched_t k = { 0, 0 };
+    cheats_sched_t k = { 0, 0, 0 };
     drive_t d = drive(&k, t0 + CHEATS_SESSION_FAST_MS + 1);
     CHECK(d.fast > 10000 && d.fast <= (int)(CHEATS_SESSION_FAST_MS / CHEATS_SESSION_FAST_EVERY_MS));
     CHECK(d.full == (int)(CHEATS_SESSION_FAST_MS / CHEATS_SESSION_FULL_EVERY_MS) + 1);
@@ -691,7 +691,7 @@ static void test_late_after_launch(void) {
     uint64_t t0 = now_ms;
     F.c[0].ready_at = t0 + 4000;
     cheats_session_launch(&S, 106, "CUSA03041", t0, 1, 1, now_ms);
-    cheats_sched_t k = { 0, 0 };
+    cheats_sched_t k = { 0, 0, 0 };
     drive(&k, t0 + 5000);
     int late = 0;
     int64_t a = after_of(0, &late);
@@ -719,7 +719,7 @@ static void test_fast_skips_scans(void) {
     F.c[0].scan_partial = 1;
     F.c[1].ready_at = t0 + 100;
     cheats_session_launch(&S, 106, "CUSA03041", t0, 1, 1, now_ms);
-    cheats_sched_t k = { 0, 0 };
+    cheats_sched_t k = { 0, 0, 0 };
     drive(&k, t0 + 2000);
     CHECK(status(1) == CHEATS_ST_APPLIED && status(0) == CHEATS_ST_WAITING);
     CHECK(F.applies < 40); /* cheat 0: one try, cheat 1: ~100 ms of fast tries */
@@ -732,7 +732,7 @@ static void test_reexec_and_force(void) {
     setup(1);
     uint64_t t0 = now_ms;
     cheats_session_launch(&S, 106, "CUSA03041", t0, 1, 1, now_ms);
-    cheats_sched_t k = { 0, 0 };
+    cheats_sched_t k = { 0, 0, 0 };
     drive(&k, t0 + 50);
     CHECK(status(0) == CHEATS_ST_APPLIED && F.writes == 1);
     F.c[0].bytes = B_ORIG;
@@ -753,7 +753,7 @@ static void test_reexec_and_force(void) {
 static void test_sched_idle(void) {
     cheats_session_t idle;
     cheats_session_reset(&idle);
-    cheats_sched_t k = { 1000, 0 };
+    cheats_sched_t k = { 1000, 0, 0 };
     uint64_t w = 0;
     CHECK(cheats_sched_next(&k, &idle, 1, 1100, &w) == CHEATS_NEXT_WAIT && w == 400);
     CHECK(cheats_sched_next(&k, &idle, 1, 1500, &w) == CHEATS_NEXT_FULL);
@@ -761,6 +761,10 @@ static void test_sched_idle(void) {
     CHECK(cheats_sched_next(&k, &idle, 0, 4000, &w) == CHEATS_NEXT_FULL);
     k.last_full_ms = 0;
     CHECK(cheats_sched_next(&k, &idle, 0, 4000, &w) == CHEATS_NEXT_FULL);
+    /* With the launch watch live, the engine on looks no more often than the backstop. */
+    cheats_sched_t watched = { 1000, 0, 1 };
+    CHECK(cheats_sched_next(&watched, &idle, 1, 1500, &w) == CHEATS_NEXT_WAIT && w == 2500);
+    CHECK(cheats_sched_next(&watched, &idle, 1, 4000, &w) == CHEATS_NEXT_FULL);
 }
 
 int main(void) {

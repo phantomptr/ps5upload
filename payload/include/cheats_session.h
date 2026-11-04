@@ -203,10 +203,12 @@ int cheats_session_fast_pass(cheats_session_t *s, uint64_t now_ms,
 /* 1 while the start-up window is open and a cheat still waits (or nothing is listed yet). */
 int cheats_session_fast(const cheats_session_t *s, uint64_t now_ms);
 
-/* The watcher's clock: when it last ran a full and a fast pass (0: never). */
+/* The watcher's clock: when it last ran a full and a fast pass (0: never), and whether its launch
+ * watch is running. */
 typedef struct {
     uint64_t last_full_ms;
     uint64_t last_fast_ms;
+    int watching;
 } cheats_sched_t;
 
 enum {
@@ -216,7 +218,9 @@ enum {
 };
 
 /* Which pass is due now. Full: every CHEATS_SESSION_FULL_EVERY_MS, or CHEATS_SESSION_IDLE_EVERY_MS
- * while the engine is on and no game is known. Fast: CHEATS_SESSION_FAST_EVERY_MS after the last
+ * while the engine is on, no game is known and no launch watch runs (k->watching: the watch wakes
+ * the helper at a launch, so walking every process twice a second adds nothing; the slower pace
+ * stays as its backstop). Fast: CHEATS_SESSION_FAST_EVERY_MS after the last
  * fast pass ended, while cheats_session_fast(). */
 int cheats_sched_next(const cheats_sched_t *k, const cheats_session_t *s, int engine_on,
                       uint64_t now_ms, uint64_t *wait_ms);

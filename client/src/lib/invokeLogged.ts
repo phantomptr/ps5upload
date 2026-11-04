@@ -4,6 +4,7 @@ import {
   type InvokeOptions,
 } from "@tauri-apps/api/core";
 
+import { LEVEL_RANK, currentMinRank } from "../state/diagSettings";
 import { log } from "../state/logs";
 import { isTauriEnv } from "./tauriEnv";
 import { browserInvoke } from "./browserInvoke";
@@ -70,8 +71,10 @@ export async function invoke<T>(
           : await rawInvoke<T>(cmd, args, options);
     }
     // Cheap, name-only at trace — the value/args could be large (manifests,
-    // file lists), and the point of the breadcrumb is the sequence of calls.
-    log.trace("cmd", cmd);
+    // file lists), and the point of the breadcrumb is the sequence of calls. Only when someone
+    // asked for trace, and never for reading the log itself: that would write a line per second
+    // about the line it just read.
+    if (cmd !== "engine_logs_tail" && currentMinRank() <= LEVEL_RANK.trace) log.trace("cmd", cmd);
     const recovered = observeInvokeOutcome(cmd, undefined, Date.now());
     if (recovered.kind === "recovered") {
       log.warn(

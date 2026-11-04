@@ -5,6 +5,7 @@
  *  cheat collection has for it and what is already on the console — plus the
  *  odd cheat downloaded for a game that is not installed here. */
 
+import { compareText } from "./collate";
 import type { CheatRepoEntry, CheatTitle, InstalledTitle } from "../api/ps5";
 import { isSupportedCheatFormat, isUsableGameTitle } from "./cheatBrowse";
 import { compareVersions, sameVersion, versionParts } from "./versionNumbers";
@@ -98,8 +99,7 @@ export function buildCheatGames(input: {
  *  games with cheats ready to switch on, games with cheats to download, and
  *  the rest. Alphabetical inside each; empty sections are left out. */
 export function cheatSections(games: CheatGame[]): CheatSection[] {
-  const byName = (a: CheatGame, b: CheatGame) =>
-    a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  const byName = (a: CheatGame, b: CheatGame) => compareText(a.name, b.name);
   const pick = (f: (g: CheatGame) => boolean) => games.filter(f).sort(byName);
   const sections: CheatSection[] = [
     { key: "playing", games: pick((g) => g.running) },

@@ -2915,7 +2915,7 @@ static void *watcher_thread(void *arg) {
         fprintf(stderr, "[cheats] cannot watch game launches; looking for a new game every %u ms\n",
                 CHEATS_SESSION_IDLE_EVERY_MS);
 
-    cheats_sched_t k = { 0, 0 };
+    cheats_sched_t k = { 0, 0, 0 };
     uint64_t none_ms = 0; /* when the last look found no game (0: it found one) */
     launch_ev_t ev;
     memset(&ev, 0, sizeof ev);
@@ -2925,6 +2925,7 @@ static void *watcher_thread(void *arg) {
         if (ev.pid > 0) on_launch_locked(&ev, &k);
         if (ev.exited) k.last_full_ms = 0; /* the game closed: end its session now */
         memset(&ev, 0, sizeof ev);
+        k.watching = kq >= 0;
         int next = cheats_sched_next(&k, &g_sess, atomic_load(&g_engine_enabled), mono_ms(), &wait);
         if (next == CHEATS_NEXT_FULL) {
             full_pass_locked(&none_ms);

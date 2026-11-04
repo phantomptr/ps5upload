@@ -1,6 +1,6 @@
 // Engine sidecar liveness probe.
 //
-// Used by the status bar's engine dot — touches `/api/jobs` (served
+// Used by the status bar's engine dot — touches `/api/version` (served
 // from in-memory state, no PS5 round-trip). The earlier `status` and
 // `volumes` exports here were unused; the renderer goes through the
 // Tauri IPC surface in `api/ps5.ts` for everything except this probe.
@@ -10,7 +10,7 @@ import { getEngineUrl } from "../state/engine";
 export const engineApi = {
   /** Lightweight engine liveness probe. Unlike `/api/ps5/status` (which
    *  round-trips to the PS5 and fails if the console is off), this hits
-   *  `/api/jobs` — served from in-memory state, responds immediately,
+   *  `/api/version` — no state read, responds immediately,
    *  touches no network. Used by the status bar's engine dot.
    *
    *  Wraps in a tight 2 s timeout: if the engine accept loop is
@@ -22,10 +22,16 @@ export const engineApi = {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2000);
     try {
-      const res = await fetch(`${getEngineUrl()}/api/jobs`, {
+      // Not /api/jobs: that builds the whole job list, every 5 s per tab, for one bit of information.
+      const res = await fetch(`${getEngineUrl()}/api/version`, {
         signal: controller.signal,
       });
-      return res.ok;
+      if (res.status !== 404) return res.ok;
+      // An older self-hosted engine.
+      const old = await fetch(`${getEngineUrl()}/api/jobs`, {
+        signal: controller.signal,
+      });
+      return old.ok;
     } catch {
       return false;
     } finally {

@@ -4,7 +4,7 @@ import { useEffect, useMemo } from "react";
 import { hostOf, transferAddr } from "../lib/addr";
 import { fetchHwTemps, fetchHwPower, type HwTemps, type HwPower } from "../api/ps5";
 import { useConnectionStore } from "./connection";
-import { transferScreenBusy } from "../lib/ps5Transfers";
+import { consoleBusy } from "../lib/usePoll";
 import { isTerminal, useTaskStore } from "./tasks";
 
 /**
@@ -304,7 +304,7 @@ function startPoll(host: string, handle: PollHandle): void {
       store.setPaused(host, "helper");
       return;
     }
-    if (transferScreenBusy(host) || packageInstallIsActiveForHost(host)) {
+    if (consoleBusy(host) || packageInstallIsActiveForHost(host)) {
       store.setPaused(host, "transfer");
       return;
     }

@@ -4,7 +4,7 @@
 //! document) when another browser saved in between, so the browser merges and tries again instead
 //! of overwriting. Kept in `state/web-shared.json` under the data folder (the Docker volume).
 //!
-//! The desktop and mobile apps keep these settings themselves; their engine is theirs alone.
+//! The desktop and mobile apps keep these settings themselves, whichever engine they use.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -58,11 +58,40 @@ fn path() -> Option<PathBuf> {
     Some(dir.join("web-shared.json"))
 }
 
+/// The store, or an empty one when there is no file yet. A file that cannot be read or parsed is
+/// reported and kept beside the store under a new name: the next save would overwrite it, and it
+/// may be the only copy of someone's consoles and Wake keys. (The browsers treat an empty store as
+/// one that lost its list and hand theirs back: client state/rosterShare.ts.)
 fn load_from(path: &Path) -> Docs {
-    std::fs::read(path)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Docs::default(),
+        Err(e) => {
+            crate::log_warn!("shared settings: {} is unreadable: {e}", path.display());
+            keep_bad_copy(path);
+            return Docs::default();
+        }
+    };
+    match serde_json::from_slice(&bytes) {
+        Ok(docs) => docs,
+        Err(e) => {
+            crate::log_warn!("shared settings: {} is damaged: {e}", path.display());
+            keep_bad_copy(path);
+            Docs::default()
+        }
+    }
+}
+
+fn keep_bad_copy(path: &Path) {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let copy = path.with_extension(format!("json.bad-{stamp}"));
+    match std::fs::rename(path, &copy) {
+        Ok(()) => crate::log_warn!("shared settings: kept the old file as {}", copy.display()),
+        Err(e) => crate::log_warn!("shared settings: could not keep the old file: {e}"),
+    }
 }
 
 fn save_to(path: &Path, docs: &Docs) -> std::io::Result<()> {
@@ -78,15 +107,21 @@ fn store() -> &'static Mutex<Option<Docs>> {
     STORE.get_or_init(|| Mutex::new(None))
 }
 
+/// Changes the store and saves it. Memory takes the change only once the file has it: a change a
+/// full disk refused must not be served to the browsers as saved and then vanish at the restart.
 fn with<R>(f: impl FnOnce(&mut Docs) -> R) -> (R, std::io::Result<()>) {
     let mut guard = store().lock().unwrap_or_else(|e| e.into_inner());
     let file = path();
     let docs = guard.get_or_insert_with(|| file.as_deref().map(load_from).unwrap_or_default());
-    let out = f(docs);
+    let mut next = docs.clone();
+    let out = f(&mut next);
     let saved = match file {
-        Some(file) => save_to(&file, docs),
+        Some(file) => save_to(&file, &next),
         None => Ok(()),
     };
+    if saved.is_ok() {
+        *docs = next;
+    }
     (out, saved)
 }
 
@@ -197,6 +232,30 @@ mod tests {
         save_to(&file, &docs).unwrap();
         assert_eq!(load_from(&file), docs);
         assert_eq!(load_from(&dir.join("missing.json")), Docs::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_damaged_file_loads_empty_and_is_kept_under_a_new_name() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-shared-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("web-shared.json");
+        std::fs::write(&file, b"{ not json").unwrap();
+        assert_eq!(load_from(&file), Docs::new());
+        assert!(!file.exists());
+        let kept: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            kept.iter().any(|n| n.starts_with("web-shared.json.bad-")),
+            "{kept:?}"
+        );
+        assert_eq!(
+            std::fs::read(dir.join(&kept[0])).unwrap(),
+            b"{ not json".to_vec()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

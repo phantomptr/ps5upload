@@ -139,6 +139,7 @@ import {
 } from "../../lib/fsLastPath";
 import { useFsNavStore } from "../../state/fsNavigation";
 import { stageBrowserFile } from "../../api/pkgUpload";
+import { isStagingCancelled, noteStaged, stageWithTask } from "../../lib/browserStaging";
 import { dragOut, dragOutAvailable, isDragOutCopy } from "../../lib/dragOut";
 import { beginTask, trackTask } from "../../state/trackTask";
 import { useActivityHistoryStore } from "../../state/activityHistory";
@@ -183,6 +184,7 @@ import { fsUploadDeps } from "../../state/fsUploadRuntime";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
 import { formatBytes } from "../../lib/format";
+import { useWindowedRows } from "../../lib/useWindowedRows";
 import { formatEtaSeconds } from "../../lib/uploadEta";
 import { useRateEta } from "../../lib/useRateEta";
 import { resumedShown } from "../../lib/resumedProgress";
@@ -621,13 +623,6 @@ export default function FileSystemScreen() {
       if (latestListReqRef.current !== probedPath) return;
       if (probe.isStale()) return;
       const raw: DirEntry[] = listing;
-      raw.sort((a, b) => {
-        if (a.kind !== b.kind) {
-          if (a.kind === "dir") return -1;
-          if (b.kind === "dir") return 1;
-        }
-        return a.name.localeCompare(b.name);
-      });
       // A Mesh Drive's own sync files are hidden; the folder says it is a drive instead.
       setMeshHome(raw.some((e) => e.name === MESH_MARKER));
       setEntries(raw.filter((e) => !isMeshInternal(e.name)));
@@ -836,6 +831,7 @@ export default function FileSystemScreen() {
     openView("snapshots");
   };
   // A search hit opens its folder; a file hit is then selected once the listing has it.
+  const scrollToEntry = useRef<(name: string) => void>(() => {});
   const [pendingSelect, setPendingSelect] = useState<{ dir: string; name: string } | null>(null);
   const openHit = (hit: SearchHit) => {
     const t = fileSystemTargetFor(hit);
@@ -907,11 +903,12 @@ export default function FileSystemScreen() {
     setSelected(new Set([pendingSelect.name]));
     setPendingSelect(null);
     const name = pendingSelect.name;
-    requestAnimationFrame(() =>
-      document
-        .querySelector(`[data-fs-name="${CSS.escape(name)}"]`)
-        ?.scrollIntoView({ block: "center" }),
-    );
+    requestAnimationFrame(() => {
+      const row = document.querySelector(`[data-fs-name="${CSS.escape(name)}"]`);
+      // A long folder renders only the rows near the screen.
+      if (row) row.scrollIntoView({ block: "center" });
+      else scrollToEntry.current(name);
+    });
   }, [pendingSelect, path, entries]);
 
   const selectedEntries = useMemo(
@@ -1517,9 +1514,13 @@ export default function FileSystemScreen() {
           void (async () => {
             const paths: string[] = [];
             try {
-              for (const f of files) paths.push((await stageBrowserFile(f)).path);
+              for (const f of files) {
+                const staged = await stageWithTask(f, stageBrowserFile);
+                noteStaged(staged);
+                paths.push(staged.path);
+              }
             } catch (e) {
-              setError(humanizeCaught(e));
+              if (!isStagingCancelled(e)) setError(humanizeCaught(e));
             }
             if (paths.length > 0) await addPicked(paths, "file");
           })();
@@ -1775,6 +1776,15 @@ export default function FileSystemScreen() {
     () => (entries ? sortEntries(entries, sort) : []),
     [entries, sort],
   );
+  // A folder can hold 100,000 entries: only those near the screen are rendered.
+  const rowsListRef = useRef<HTMLUListElement | null>(null);
+  const { start: rowsStart, end: rowsEnd, before: rowsBefore, after: rowsAfter, scrollToRow } = useWindowedRows(
+    sortedEntries.length,
+    rowsListRef,
+  );
+  useEffect(() => {
+    scrollToEntry.current = (name) => scrollToRow(sortedEntries.findIndex((e) => e.name === name));
+  }, [scrollToRow, sortedEntries]);
   // "Send to another console…" (#433): the items waiting for a console and folder.
   const [sendItems, setSendItems] = useState<SendItem[] | null>(null);
   // The console's own Files page: its pinned folders, and "Show on console".
@@ -2701,7 +2711,13 @@ export default function FileSystemScreen() {
           })
         : await pickPath({
             mode: "folder",
-            title: tr(
+            title: !isTauriEnv()
+              ? tr(
+                  "fs_copy_to_server_dialog_title",
+                  { name: entry.name },
+                  'Pick a folder on the server for "{name}"',
+                )
+              : tr(
               "fs_download_dialog_title",
               { name: entry.name },
               'Pick a destination folder for "{name}"',
@@ -3005,7 +3021,10 @@ export default function FileSystemScreen() {
             },
             {
               icon: Download,
-              label: tr("fs_menu_download", undefined, "Download"),
+              // In the web UI the destination is the server's disk, not the computer in front of you.
+              label: isTauriEnv()
+                ? tr("fs_menu_download", undefined, "Download")
+                : tr("fs_menu_copy_to_server", undefined, "Copy to the server…"),
               run: () => void runDownload(menuEntry),
               disabled: downloadOp.active,
             },
@@ -4147,8 +4166,12 @@ export default function FileSystemScreen() {
               </div>
             )}
 
-            <ul className="grid gap-1.5">
-              {sortedEntries.map((e) => {
+            <ul
+              ref={rowsListRef}
+              className="grid gap-1.5"
+              style={{ paddingTop: rowsBefore, paddingBottom: rowsAfter }}
+            >
+              {sortedEntries.slice(rowsStart, rowsEnd).map((e) => {
                 const isDir = e.kind === "dir";
                 const Icon = isDir ? Folder : FileIcon;
                 const isRenaming = renaming === e.name;

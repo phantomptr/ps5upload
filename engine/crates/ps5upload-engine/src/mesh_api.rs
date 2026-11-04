@@ -34,8 +34,14 @@ use crate::json_err;
 
 /// Say hello again after this long, so the console's "last seen" and our name stay current.
 const HELLO_EVERY: Duration = Duration::from_secs(300);
-/// A window that has not posted its activity or polled for this long is gone.
-const CLIENT_GONE: Duration = Duration::from_secs(20);
+/// A window that has not posted its activity or polled for this long is gone. Above a minute: a
+/// browser throttles a hidden tab's timers to about once a minute, and a tab in the background is
+/// still there.
+const CLIENT_GONE: Duration = Duration::from_secs(75);
+/// How often the engine looks at what the consoles should show, with or without a window.
+const PRESENCE_TICK: Duration = Duration::from_secs(10);
+/// After a console did not take the update, leave it this long.
+const PRESENCE_RETRY: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 struct ConsoleState {
@@ -87,7 +93,7 @@ pub fn kind() -> &'static str {
 }
 
 fn is_docker() -> bool {
-    std::env::var_os("PS5UPLOAD_DOCKER").is_some() || std::path::Path::new("/.dockerenv").exists()
+    crate::pkg_install::in_container()
 }
 
 fn os_label() -> String {
@@ -342,14 +348,95 @@ fn hello(addr: &str) -> anyhow::Result<bool> {
     Ok(r.is_some())
 }
 
+/// A transfer this engine runs against a console: what its window would say if it had one.
+struct NotedJob {
+    host: String,
+    kind: &'static str,
+    title: String,
+}
+
+fn noted_jobs() -> &'static Mutex<HashMap<uuid::Uuid, NotedJob>> {
+    static NOTED: OnceLock<Mutex<HashMap<uuid::Uuid, NotedJob>>> = OnceLock::new();
+    NOTED.get_or_init(Default::default)
+}
+
+/// A transfer started. It keeps running when the tab that asked for it closes, and the other
+/// devices should still see it: the helper would otherwise be restarted under it.
+pub(crate) fn note_job(job: uuid::Uuid, addr: &str, kind: &'static str, dest: &str) {
+    let title: String = dest
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(80)
+        .collect();
+    noted_jobs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(
+            job,
+            NotedJob {
+                host: ps5upload_core::events::console_host(addr),
+                kind,
+                title,
+            },
+        );
+}
+
+type JobMap = std::sync::Arc<Mutex<HashMap<uuid::Uuid, crate::JobState>>>;
+
+fn job_map() -> &'static OnceLock<JobMap> {
+    static JOBS: OnceLock<JobMap> = OnceLock::new();
+    &JOBS
+}
+
+/// Percent to the nearest ten: a percent every few seconds would be a write to the console for
+/// each, in the middle of the transfer it describes.
+fn rough_pct(sent: u64, total: u64) -> Option<u64> {
+    (total > 0).then(|| (sent.saturating_mul(10) / total).min(10) * 10)
+}
+
+/// The presence items for the transfers this engine runs against `addr`. Finished jobs are
+/// forgotten here.
+fn engine_job_items(addr: &str) -> Vec<Value> {
+    let Some(jobs) = job_map().get() else {
+        return Vec::new();
+    };
+    let host = ps5upload_core::events::console_host(addr);
+    let jobs = jobs.lock().unwrap_or_else(|e| e.into_inner());
+    let mut noted = noted_jobs().lock().unwrap_or_else(|e| e.into_inner());
+    noted.retain(|id, _| matches!(jobs.get(id), Some(crate::JobState::Running { .. })));
+    noted
+        .iter()
+        .filter(|(_, n)| n.host == host)
+        .filter_map(|(id, n)| match jobs.get(id) {
+            Some(crate::JobState::Running {
+                bytes_sent,
+                total_bytes,
+                ..
+            }) => Some(json!({
+                "kind": n.kind,
+                "title": n.title,
+                "pct": rough_pct(*bytes_sent, *total_bytes),
+            })),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The union of every live window's items (plus, on Docker, how many browsers use this engine), if
-/// it differs from what the console has.
+/// it differs from what the console has. With no window left, what this engine itself is running.
 fn presence_due(addr: &str, now: Instant) -> Option<Value> {
+    let own_jobs = engine_job_items(addr);
     let mut map = lock_consoles();
     let c = map.entry(addr.to_string()).or_default();
     c.clients
         .retain(|_, (t, _)| now.duration_since(*t) < CLIENT_GONE);
     let mut items: Vec<Value> = c.clients.values().flat_map(|(_, i)| i.clone()).collect();
+    if c.clients.is_empty() {
+        items.extend(own_jobs);
+    }
     if kind() == "docker" && !c.clients.is_empty() {
         items.push(json!({ "kind": "browsers", "count": c.clients.len() }));
     }
@@ -377,6 +464,43 @@ fn push_presence(addr: &str) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The consoles to keep current: those this engine has greeted.
+fn greeted() -> Vec<String> {
+    lock_consoles()
+        .iter()
+        .filter(|(_, c)| c.hello_at.is_some())
+        .map(|(a, _)| a.clone())
+        .collect()
+}
+
+/// The presence used to move only when a window called: with none left, the console went on
+/// showing the last list ("Docker: Remote Play" long after it ended), and nothing ever said an
+/// upload was still running with its tab closed. Sends nothing unless the list changed.
+pub(crate) fn spawn_presence(jobs: JobMap) {
+    let _ = job_map().set(jobs);
+    tokio::spawn(async {
+        let mut wait_until: HashMap<String, Instant> = HashMap::new();
+        loop {
+            tokio::time::sleep(PRESENCE_TICK).await;
+            for addr in greeted() {
+                let now = Instant::now();
+                if wait_until.get(&addr).is_some_and(|t| now < *t) {
+                    continue;
+                }
+                let target = addr.clone();
+                let pushed = tokio::task::spawn_blocking(move || push_presence(&target))
+                    .await
+                    .is_ok_and(|r| r.is_ok());
+                if pushed {
+                    wait_until.remove(&addr);
+                } else {
+                    wait_until.insert(addr, now + PRESENCE_RETRY);
+                }
+            }
+        }
+    });
 }
 
 fn seen(addr: &str, client: Option<&str>) {
@@ -616,7 +740,7 @@ mod tests {
             c.clients.insert(
                 "b".into(),
                 (
-                    now - Duration::from_secs(60),
+                    now - CLIENT_GONE - Duration::from_secs(1),
                     vec![json!({"kind":"upload","title":"B"})],
                 ),
             );
@@ -626,6 +750,81 @@ mod tests {
         assert!(s.contains("\"A\"") && !s.contains("\"B\""), "{s}");
         lock_consoles().get_mut(addr).unwrap().pushed = Some(v);
         assert!(presence_due(addr, now).is_none());
+    }
+
+    #[test]
+    fn a_tab_a_browser_has_throttled_to_once_a_minute_is_still_there() {
+        let addr = "test-presence-hidden";
+        let now = Instant::now();
+        lock_consoles()
+            .entry(addr.into())
+            .or_default()
+            .clients
+            .insert(
+                "hidden".into(),
+                (
+                    now - Duration::from_secs(60),
+                    vec![json!({"kind":"upload","title":"H"})],
+                ),
+            );
+        assert!(presence_due(addr, now)
+            .expect("a push")
+            .to_string()
+            .contains("\"H\""));
+    }
+
+    #[test]
+    fn a_noted_transfer_shows_when_no_window_is_left_and_only_then() {
+        let addr = "192.0.2.77";
+        let id = uuid::Uuid::new_v4();
+        note_job(id, addr, "Upload", "/data/homebrew/Game.pkg/");
+        let jobs: JobMap = Default::default();
+        jobs.lock().unwrap().insert(
+            id,
+            crate::JobState::Running {
+                stage: None,
+                started_at_ms: 0,
+                bytes_sent: 55,
+                total_bytes: 100,
+                files: Default::default(),
+                skipped_files: 0,
+                skipped_bytes: 0,
+                files_processing: 0,
+                files_finalized: 0,
+                files_finalizing_total: 0,
+                bytes_finalized: 0,
+            },
+        );
+        let _ = job_map().set(jobs.clone());
+        // Another test may have set the map first: then there is nothing of ours to look at.
+        if !std::sync::Arc::ptr_eq(job_map().get().unwrap(), &jobs) {
+            return;
+        }
+        let now = Instant::now();
+        let shown = presence_due(addr, now).expect("the job is shown");
+        assert_eq!(
+            shown,
+            json!([{"kind": "Upload", "title": "Game.pkg", "pct": 50}])
+        );
+        // A window speaks for itself.
+        lock_consoles()
+            .entry(addr.into())
+            .or_default()
+            .clients
+            .insert(
+                "w".into(),
+                (now, vec![json!({"kind":"Upload","title":"mine"})]),
+            );
+        let with_window = presence_due(addr, now).unwrap().to_string();
+        assert!(!with_window.contains("Game.pkg"), "{with_window}");
+    }
+
+    #[test]
+    fn a_rough_percent_only_moves_in_tens() {
+        assert_eq!(rough_pct(0, 100), Some(0));
+        assert_eq!(rough_pct(19, 100), Some(10));
+        assert_eq!(rough_pct(100, 100), Some(100));
+        assert_eq!(rough_pct(5, 0), None);
     }
 
     #[test]

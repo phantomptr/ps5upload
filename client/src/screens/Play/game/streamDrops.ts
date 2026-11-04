@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { deleteBrowserPkgUpload, stageBrowserPkg } from "../../../api/pkgUpload";
+import { stageWithTask } from "../../../lib/browserStaging";
 import { isInstallPackagePath } from "../../../lib/pkgDropDedupe";
 import { pkgLibraryStore } from "../../../state/pkgLibrary";
 import { pushNotification } from "../../../state/notifications";
@@ -43,7 +44,7 @@ export async function installDropped(p: DroppedPackage): Promise<void> {
   // The browser's file goes to the engine first (it cannot read the browser's disk).
   let uploadId: string | null = null;
   try {
-    const staged = await stageBrowserPkg(p.file);
+    const staged = await stageWithTask(p.file, stageBrowserPkg);
     uploadId = staged.uploadId;
     const r = await lib.installStream(staged.path, p.host, { displayName: staged.filename || p.name });
     if (!r.ok) {

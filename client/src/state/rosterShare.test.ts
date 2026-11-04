@@ -1,7 +1,20 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { asDoc, mergeShared, RosterShare, sharedForm, type ShareApi, type SharedProfile } from "./rosterShare";
+import { applyBundle } from "../lib/settingsBackup";
+import { safeGetItem } from "../lib/safeStorage";
+import {
+  asDoc,
+  mergeShared,
+  RosterShare,
+  seedDefaultConsole,
+  sharedForm,
+  UNSAVED_KEY,
+  type ShareApi,
+  type SharedProfile,
+} from "./rosterShare";
 import { useRosterStore, type PS5Profile } from "./roster";
+
+const ROSTER_KEY = "ps5upload.roster.v1";
 
 const p = (id: string, extra: Partial<PS5Profile> = {}): SharedProfile => ({
   id,
@@ -71,6 +84,18 @@ function fakeEngine(start: SharedProfile[] | null = null) {
 
 const ids = () => useRosterStore.getState().profiles.map((x) => x.id);
 
+/** vitest's node environment has no localStorage, and the unsaved mark lives there. */
+function stubStorage() {
+  const store = new Map<string, string>();
+  vi.stubGlobal("window", {
+    localStorage: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    },
+  });
+}
+
 describe("RosterShare", () => {
   beforeEach(() => {
     useRosterStore.setState({ profiles: [], active_id: null });
@@ -135,6 +160,162 @@ describe("RosterShare", () => {
     await share.push();
     expect(useRosterStore.getState().profiles).toBe(before);
     expect(e.doc.rev).toBe(1);
+  });
+});
+
+describe("RosterShare when the engine's store goes away", () => {
+  beforeEach(() => {
+    stubStorage();
+    useRosterStore.setState({ profiles: [], active_id: null });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("a page already open keeps its consoles and hands them to an engine that lost its store", async () => {
+    const e = fakeEngine([p("a"), p("b")]);
+    const share = new RosterShare(e.api);
+    await share.start();
+    Object.assign(e.doc, { rev: 0, value: null });
+    await share.pull();
+    expect(ids()).toEqual(["a", "b"]);
+    expect(e.doc.rev).toBe(1);
+    expect(e.doc.value?.profiles?.map((x) => x.id)).toEqual(["a", "b"]);
+  });
+
+  it("a store that went back to an older list loses nothing on either side", async () => {
+    const e = fakeEngine([p("a")]);
+    const share = new RosterShare(e.api);
+    await share.start();
+    e.otherSaves([p("a"), p("b")]);
+    await share.pull();
+    e.doc.rev = 1;
+    e.doc.value = { profiles: [p("c")] };
+    await share.pull();
+    expect(ids().sort()).toEqual(["a", "b", "c"]);
+    expect(e.doc.value?.profiles?.map((x) => x.id).sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("a store replaced at the same revision is not read as removals", async () => {
+    const e = fakeEngine([p("a")]);
+    const share = new RosterShare(e.api);
+    await share.start();
+    e.doc.value = { profiles: [p("c")] };
+    await share.pull();
+    expect(ids().sort()).toEqual(["a", "c"]);
+  });
+
+  it("an answer with no list in it removes nothing", async () => {
+    const e = fakeEngine([p("a")]);
+    const share = new RosterShare(e.api);
+    await share.start();
+    e.doc.rev = 2;
+    e.doc.value = {} as { profiles: SharedProfile[] };
+    await share.pull();
+    expect(ids()).toEqual(["a"]);
+  });
+
+  it("another browser really removing every console still applies", async () => {
+    const e = fakeEngine([p("a")]);
+    const share = new RosterShare(e.api);
+    await share.start();
+    e.otherSaves([]);
+    await share.pull();
+    expect(ids()).toEqual([]);
+    expect(e.doc.rev).toBe(2);
+  });
+});
+
+describe("RosterShare with a save that failed", () => {
+  beforeEach(() => {
+    stubStorage();
+    useRosterStore.setState({ profiles: [], active_id: null });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const downFor = (e: ReturnType<typeof fakeEngine>) => {
+    const state = { down: true };
+    const api: ShareApi = {
+      get: e.api.get,
+      put: async (rev, profiles) => {
+        if (state.down) throw new Error("HTTP 502");
+        return e.api.put(rev, profiles);
+      },
+    };
+    return { api, state };
+  };
+  const add = (id: string) =>
+    useRosterStore.setState({ profiles: [...useRosterStore.getState().profiles, p(id) as PS5Profile] });
+
+  it("the next pull saves it, with no further change", async () => {
+    const e = fakeEngine([p("a")]);
+    const d = downFor(e);
+    const share = new RosterShare(d.api);
+    await share.start();
+    add("b");
+    await expect(share.push()).rejects.toThrow();
+    expect(safeGetItem(UNSAVED_KEY)).not.toBeNull();
+    d.state.down = false;
+    await share.pull();
+    expect(e.doc.value?.profiles?.map((x) => x.id)).toEqual(["a", "b"]);
+    expect(safeGetItem(UNSAVED_KEY)).toBeNull();
+  });
+
+  it("a reload merges it instead of the engine's list replacing it", async () => {
+    const e = fakeEngine([p("a")]);
+    const d = downFor(e);
+    const share = new RosterShare(d.api);
+    await share.start();
+    add("b");
+    await expect(share.push()).rejects.toThrow();
+    e.otherSaves([p("a"), p("c")]);
+    d.state.down = false;
+    await new RosterShare(d.api).start();
+    expect(ids().sort()).toEqual(["a", "b", "c"]);
+    expect(e.doc.value?.profiles?.map((x) => x.id).sort()).toEqual(["a", "b", "c"]);
+    expect(safeGetItem(UNSAVED_KEY)).toBeNull();
+  });
+
+  it("a restored backup goes back to the engine instead of being overwritten", async () => {
+    const e = fakeEngine([p("a")]);
+    useRosterStore.setState({ profiles: [p("r") as PS5Profile], active_id: "r" });
+    applyBundle({ local_storage: { [ROSTER_KEY]: "{}" } });
+    await new RosterShare(e.api).start();
+    expect(ids()).toEqual(["r"]);
+    expect(e.doc.value?.profiles?.map((x) => x.id)).toEqual(["r"]);
+    expect(safeGetItem(UNSAVED_KEY)).toBeNull();
+  });
+});
+
+describe("seedDefaultConsole", () => {
+  beforeEach(() => {
+    stubStorage();
+    useRosterStore.setState({ profiles: [], active_id: null });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+  const empty = () => useRosterStore.getState().profiles.length === 0;
+
+  it("lists the console the setup named, for a first browser", async () => {
+    await seedDefaultConsole(empty, async () => ({ default_console: "192.168.1.50" }));
+    expect(useRosterStore.getState().profiles.map((x) => x.host)).toEqual(["192.168.1.50"]);
+    expect(useRosterStore.getState().active_id).toBe(useRosterStore.getState().profiles[0].id);
+  });
+
+  it("adds nothing when none was named, or the engine does not say", async () => {
+    await seedDefaultConsole(empty, async () => ({}));
+    await seedDefaultConsole(empty, async () => ({ default_console: "  " }));
+    expect(ids()).toEqual([]);
+  });
+
+  it("does not ask, and does not bring a console back, once there is a list", async () => {
+    let asked = false;
+    await seedDefaultConsole(
+      () => false,
+      async () => {
+        asked = true;
+        return { default_console: "192.168.1.50" };
+      },
+    );
+    expect(asked).toBe(false);
+    expect(ids()).toEqual([]);
   });
 });
 

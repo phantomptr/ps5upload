@@ -10,10 +10,13 @@
  *
  * Commands that are native-only (local filesystem, host temp-zip, OS APIs)
  * throw `BrowserUnsupportedError` so callers fail loudly in dev rather than
- * silently doing nothing. Feature gating (hiding those buttons in the browser
- * UI) is handled by `isTauriEnv()` checks at the call sites.
+ * silently doing nothing. Hiding those buttons in the browser is up to the call
+ * sites (`isTauriEnv()`), and nothing enforces it: the coverage test only checks
+ * this map's names against the commands.
  */
 
+import { resumeForget, resumeLookup, resumeRemember, type ResumeKey } from "./resumeTxidBrowser";
+import { trStatic } from "./trStatic";
 import { getEngineUrl } from "../state/engine";
 import { consoleAddr } from "./addr";
 
@@ -25,10 +28,9 @@ import { consoleAddr } from "./addr";
 export class BrowserUnsupportedError extends Error {
   readonly cmd: string;
   constructor(cmd: string) {
-    super(
-      `"${cmd}" requires the Tauri desktop client — it is not available in the browser.` +
-        ` Guard the call site with isTauriEnv() or hide the UI affordance.`,
-    );
+    // Reaches people, and their bug reports: this is for them, not for whoever wrote the call.
+    // The command's name is on the error for a developer.
+    super(trStatic("browser_unsupported", "This needs the desktop app. It does not work in the browser."));
     this.name = "BrowserUnsupportedError";
     this.cmd = cmd;
   }
@@ -648,9 +650,30 @@ export async function browserInvoke<T>(
       })) as T;
     }
 
+    case "resume_txid_lookup":
+      return resumeLookup(args["req"] as ResumeKey) as T;
+    case "resume_txid_remember":
+      resumeRemember(args["req"] as ResumeKey & { tx_id_hex: string; mode?: string });
+      return undefined as T;
+    case "resume_txid_forget":
+      resumeForget(args["req"] as ResumeKey);
+      return undefined as T;
+
+    // The console's own notification, over its management port: the engine sends it.
+    case "toast_push":
+      return postJson<T>("/api/ps5/toast", {
+        addr: args["addr"],
+        title: args["title"],
+        subtitle: args["subtitle"] ?? null,
+        icon: args["icon"] ?? null,
+        action_url: args["actionUrl"] ?? null,
+      });
+
     case "collection_cover_data": {
       const res = await fetch(
-        `${getEngineUrl()}/api/collection/games/${encodeURIComponent(String(args["gameId"] ?? ""))}/cover`,
+        `${getEngineUrl()}/api/collection/games/${encodeURIComponent(String(args["gameId"] ?? ""))}/cover${
+          args["size"] ? `?size=${encodeURIComponent(String(args["size"]))}` : ""
+        }`,
       );
       if (!res.ok) throw new Error(`cover HTTP ${res.status}`);
       const blob = await res.blob();
@@ -1443,15 +1466,6 @@ export async function browserInvoke<T>(
       });
 
     // ── Users / backup ───────────────────────────────────────────────────────
-
-    case "toast_push":
-      return postJson<T>("/api/ps5/toast", {
-        addr: args["addr"],
-        title: args["title"],
-        subtitle: args["subtitle"],
-        icon: args["icon"],
-        action_url: args["actionUrl"],
-      });
 
     case "user_delete":
       return postJson<T>("/api/ps5/users/delete", {

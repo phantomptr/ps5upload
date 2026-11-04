@@ -401,8 +401,8 @@ int cheats_session_fast_pass(cheats_session_t *s, uint64_t now, const cheats_ses
 
 int cheats_sched_next(const cheats_sched_t *k, const cheats_session_t *s, int engine_on,
                       uint64_t now, uint64_t *wait_ms) {
-    uint64_t every = engine_on && s->pid <= 0 ? CHEATS_SESSION_IDLE_EVERY_MS
-                                              : CHEATS_SESSION_FULL_EVERY_MS;
+    uint64_t every = engine_on && s->pid <= 0 && !k->watching ? CHEATS_SESSION_IDLE_EVERY_MS
+                                                              : CHEATS_SESSION_FULL_EVERY_MS;
     if (!k->last_full_ms || now < k->last_full_ms || now - k->last_full_ms >= every)
         return CHEATS_NEXT_FULL;
     uint64_t wait = every - (now - k->last_full_ms);

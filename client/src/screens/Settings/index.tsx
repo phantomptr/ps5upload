@@ -63,7 +63,9 @@ import {
   useEngineStore,
   DEFAULT_ENGINE_URL,
   engineRunsElsewhere,
+  engineUrlIsValid,
   isLoopbackUrl,
+  normalizeEngineUrl,
   setLiveEngineUrl,
 } from "../../state/engine";
 import { shellErrorText } from "../../lib/shellError";
@@ -290,6 +292,7 @@ function EngineUrlSection() {
   const runningAt = useEngineStore((s) => s.runningAt);
   const elsewhere = engineRunsElsewhere({ engineUrl, runningAt });
   const [draft, setDraft] = useState(engineUrl);
+  const [invalid, setInvalid] = useState(false);
 
   return (
     <Section title={tr("settings_card_engine", undefined, "Engine")}>
@@ -297,8 +300,27 @@ function EngineUrlSection() {
         label={tr("engine_url_label", undefined, "Engine URL")}
         type="text"
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => setEngineUrl(draft)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          setInvalid(false);
+        }}
+        onBlur={() => {
+          if (!engineUrlIsValid(draft)) {
+            setInvalid(true);
+            return;
+          }
+          setDraft(normalizeEngineUrl(draft));
+          setEngineUrl(draft);
+        }}
+        error={
+          invalid
+            ? tr(
+                "engine_url_invalid",
+                undefined,
+                "This is not an address the app can use. Example: http://192.168.1.10:19113",
+              )
+            : undefined
+        }
         placeholder={DEFAULT_ENGINE_URL}
         spellCheck={false}
         hint={tr(
@@ -314,6 +336,7 @@ function EngineUrlSection() {
               type="button"
               onClick={() => {
                 setDraft(DEFAULT_ENGINE_URL);
+                setInvalid(false);
                 setEngineUrl(DEFAULT_ENGINE_URL);
               }}
               className="text-xs text-[var(--color-muted)] hover:text-[var(--color-text)] max-md:inline-flex max-md:min-h-11 max-md:items-center max-md:px-2"

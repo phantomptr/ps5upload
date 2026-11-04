@@ -470,6 +470,17 @@ fn cleanup_stale_uploads_in(dir: &std::path::Path) {
     }
 }
 
+/// Sweeps staged browser uploads when the engine starts and every hour after: an upload that was
+/// the last one for a while must not leave its copy for as long as the engine runs.
+pub(crate) fn spawn_stale_upload_sweep() {
+    tokio::spawn(async {
+        loop {
+            let _ = tokio::task::spawn_blocking(cleanup_stale_pkg_uploads).await;
+            tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
+        }
+    });
+}
+
 fn pkg_upload_path(id: &str) -> Option<std::path::PathBuf> {
     Uuid::parse_str(id)
         .ok()
@@ -3597,9 +3608,12 @@ pub fn lan_ip_for_ps5(ps5_host: &str) -> std::io::Result<IpAddr> {
     Ok(sock.local_addr()?.ip())
 }
 
-/// True when this engine runs in a container (Docker or Podman).
+/// True when this engine runs in a container. The one test for it: the images set
+/// `PS5UPLOAD_DOCKER=1` (which is all that containerd or Kubernetes leave to go by), Docker leaves
+/// `/.dockerenv`, and Podman `/run/.containerenv`.
 pub(crate) fn in_container() -> bool {
-    std::path::Path::new("/.dockerenv").exists()
+    std::env::var("PS5UPLOAD_DOCKER").is_ok_and(|v| !v.is_empty() && v != "0")
+        || std::path::Path::new("/.dockerenv").exists()
         || std::path::Path::new("/run/.containerenv").exists()
 }
 

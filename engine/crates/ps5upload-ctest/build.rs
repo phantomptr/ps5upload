@@ -125,6 +125,7 @@ fn main() {
             ava1.join("gen/ava1_gen.c"),
             app_gen.join("ava1_app_gen.c"),
             p.join("src/mgmt_rpc.c"),
+            p.join("src/mgmt_page_keep.c"),
             p.join("src/mgmt_fs.c"),
             p.join("src/path_policy.c"),
             here.join("csrc/test_shim_fs.c"),

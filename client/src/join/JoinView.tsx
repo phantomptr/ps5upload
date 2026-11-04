@@ -43,6 +43,12 @@ export function endText(tr: Tr, stage: JoinStage, host: string): string {
         return tr("join_refused_unreachable", { host }, `${host}'s computer couldn't reach their PS5. Try again in a moment.`);
       case "slow_down":
         return tr("join_refused_slow_down", undefined, "Too many wrong codes. Wait a minute, then try again.");
+      case "address":
+        return tr(
+          "join_refused_address",
+          { host },
+          `This link's address is outside your home network, so the app will not use it. Ask ${host} for a link with their computer's IP address.`,
+        );
       default:
         return tr("join_refused_other", { host }, `${host} didn't let you in.`);
     }

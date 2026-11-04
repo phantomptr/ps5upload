@@ -20,6 +20,7 @@ export type RefuseWhy =
   | "old_helper"
   | "not_playing"
   | "unreachable"
+  | "address"
   | "slow_down"
   | "refused";
 
@@ -67,6 +68,7 @@ const REFUSE: ReadonlySet<string> = new Set([
   "not_playing",
   "unreachable",
   "slow_down",
+  "address",
 ]);
 const BYE: Readonly<Record<string, ByeWhy>> = {
   kicked: "kicked",

@@ -289,8 +289,12 @@ export async function syncWith(host: string): Promise<string[]> {
     // Apply to this device what the merge changed.
     const profiles = useRosterStore.getState().profiles;
     const todo = plan(merged, localView(profiles, safeGetItem), profiles);
-    // Several settings about to change at once: keep a copy of how they were first.
-    if (todo.settings.length >= 3 || (todo.roster && todo.settings.length > 0)) {
+    // Several settings about to change at once, or consoles about to go: keep a copy of how they
+    // were first.
+    if (
+      todo.settings.length >= 3 ||
+      (todo.roster && (todo.settings.length > 0 || todo.roster.length < profiles.length))
+    ) {
       void backupBeforeChange("before-sync", useMeshStore.getState().me?.name ?? "");
     }
     applying = true;

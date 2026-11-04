@@ -23,17 +23,17 @@ const newTask = () =>
     consoleId: "192.168.1.31",
   });
 
-it("writes progress at most twice a second, also while ticks never pause", () => {
+it("writes progress at most every 5 s, also while ticks never pause", () => {
   const id = newTask();
   writes.length = 0;
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 200; i++) {
     useTaskStore.getState().updateTask(id, { stage: `s${i}` });
     vi.advanceTimersByTime(100);
   }
-  // 5 s of 10 Hz ticks: not one write per tick, and not none (a debounce would never find a
+  // 20 s of 10 Hz ticks: not one write per tick, and not none (a debounce would never find a
   // quiet window while a transfer runs).
-  expect(writes.length).toBeGreaterThanOrEqual(9);
-  expect(writes.length).toBeLessThanOrEqual(11);
+  expect(writes.length).toBeGreaterThanOrEqual(3);
+  expect(writes.length).toBeLessThanOrEqual(5);
 });
 
 it("writes a task's end at once, with no stale progress write after it", () => {

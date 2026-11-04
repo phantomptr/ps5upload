@@ -63,8 +63,9 @@ opt-level = 2
 [profile.dev.package.ps5-dump-forge-pfs]
 opt-level = 2
 
-# Same for the release engine binary — not a shipped bundle, so trade a
-# little size for faster link times.
+# The desktop app embeds this release engine and extracts it on first start. Left unstripped and
+# without LTO on purpose: its symbols make a panic's backtrace readable (about 27 % of its 50 MB),
+# and LTO would add minutes to every release build for the sake of a binary kept on disk once.
 [profile.release]
 debug = false
 

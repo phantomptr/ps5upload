@@ -26,6 +26,9 @@ const OWN_KEYS = new Set([
   "ps5upload.shared_prefs.meta.v1",
   "ps5upload.mesh_prefs.meta.v1",
   "ps5upload.mesh.client",
+  "ps5upload.roster.share_unsaved.v1",
+  "ps5upload.browser_staged.v1",
+  "ps5upload.resume_txids.v1",
 ]);
 /** The keys that sign in to a console's user. A saved file can go anywhere, so it never carries them
  *  (`buildBundle`). The engine's copy keeps them sealed (settings_backup.rs) and a console's own copy
@@ -165,6 +168,11 @@ export function applyBundle(parsed: unknown): number {
   for (const { key, value } of actions) {
     if (value === null) safeRemoveItem(key);
     else safeSetItem(key, value);
+  }
+  // The self-hosted web UI: the engine's list would replace the restored one at the next load
+  // (state/rosterShare.ts). This list is the one asked for, so it goes back to the engine.
+  if (typeof ls[ROSTER_KEY] === "string") {
+    safeSetItem("ps5upload.roster.share_unsaved.v1", JSON.stringify({ base: null }));
   }
   return actions.length;
 }

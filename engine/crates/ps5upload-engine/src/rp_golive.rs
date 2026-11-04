@@ -960,8 +960,10 @@ fn resolve(ids: &[String]) -> Result<Vec<Dest>, (StatusCode, &'static str, Strin
 /// (`PS5UPLOAD_ALLOW_IP`: the web UI of an engine on a NAS or in Docker). The same rule as
 /// Play Together's host API (join.rs).
 fn guard(peer: std::net::IpAddr, headers: &HeaderMap) -> Option<Response> {
-    (peer.is_loopback() && !crate::vinput_api::host_is_local(headers))
-        .then(crate::vinput_api::host_not_local)
+    (peer.is_loopback()
+        && !crate::vinput_api::host_is_local(headers)
+        && !crate::host_guard::host_named_by_operator(headers))
+    .then(crate::vinput_api::host_not_local)
 }
 
 /// `POST /api/stream/start`.

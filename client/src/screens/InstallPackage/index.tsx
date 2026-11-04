@@ -112,6 +112,7 @@ import { remainingSeconds } from "../../lib/rollingRate";
 import { acceptPkgDrop, isInstallPackagePath } from "../../lib/pkgDropDedupe";
 import { writeClipboard } from "../../lib/clipboard";
 import { deleteBrowserPkgUpload, stageBrowserPkg } from "../../api/pkgUpload";
+import { stageWithTask } from "../../lib/browserStaging";
 
 /* ─── Cover art ────────────────────────────────────────────────────────
  * Thin wrapper over the shared GameIcon (keyed by title id from the
@@ -973,7 +974,7 @@ export default function InstallPackageScreen({
       const names: Record<string, string> = {};
       const paths: string[] = [];
       for (const file of files) {
-        const staged = await stageBrowserPkg(file);
+        const staged = await stageWithTask(file, stageBrowserPkg);
         uploadIds.push(staged.uploadId);
         names[staged.path] = staged.filename || file.name;
         paths.push(staged.path);

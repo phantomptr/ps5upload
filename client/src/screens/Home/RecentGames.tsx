@@ -11,7 +11,7 @@ import { collectionGames, loadCollection, loadConsoleStates, useCollectionStore 
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 import { useRosterStore } from "../../state/roster";
-import { CollectionCover } from "../Collection/CollectionCover";
+import { COVER_THUMB_PX, CollectionCover } from "../Collection/CollectionCover";
 import { recentGames, rowEdges, type RecentFilter, type StatesByHost } from "./recentGamesFilter";
 
 const filterKey = (f: RecentFilter) => (typeof f === "string" ? f : `host:${f.host}`);
@@ -225,7 +225,7 @@ export function RecentGames() {
                       </>
                     }
                   >
-                    <CollectionCover game={g} className="h-full" />
+                    <CollectionCover game={g} size={COVER_THUMB_PX} className="h-full" />
                   </CoverFrame>
                   <CoverCaption
                     title={g.title}

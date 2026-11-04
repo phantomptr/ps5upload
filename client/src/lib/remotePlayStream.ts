@@ -430,6 +430,21 @@ export function canvasClass(fit: PictureFit): string {
   return `rp-picture pointer-events-none ${FIT_CLASS[fit] ?? FIT_CLASS.fit}`;
 }
 
+/**
+ * Nobody can see this frame and nothing reads it: the window is hidden, or the canvas is off the
+ * page (another screen, mini player off). Drawing it would still be a GPU upload and a shader pass,
+ * 60 times a second, on battery. The next frame someone can see draws as usual.
+ */
+export function pictureUnseen(s: {
+  hidden: boolean;
+  detached: boolean;
+  /** Someone waits for the next drawn frame (a snapshot). */
+  waiting: boolean;
+  holds: number;
+}): boolean {
+  return (s.hidden || s.detached) && !s.waiting && s.holds === 0;
+}
+
 /** True when this device can play a stream at all. */
 export function canStream(): boolean {
   return typeof VideoDecoder !== "undefined" && typeof WebSocket !== "undefined";
@@ -730,6 +745,8 @@ export class RemotePlayStream {
    *  client's snapshot (rpSnapshot.ts), and who waits for the next one. */
   private frameSeq = 0;
   private frameAt = 0;
+  /** See `holdPicture`. */
+  private pictureHolds = 0;
   private frameWaiters = new Set<() => void>();
 
   /** The visible picture the stream's SPS describes (rpSps.ts), to put right a decoder that
@@ -1601,6 +1618,7 @@ export class RemotePlayStream {
     const c = this.cv as HTMLCanvasElement & { captureStream?: (fps?: number) => MediaStream };
     if (typeof c.captureStream !== "function") return null;
     const stream = c.captureStream(fps);
+    const letGo = this.holdPicture();
     const actx = this.audioCtx;
     const from: AudioNode | null = this.worklet ?? this.gainNode;
     let dest: MediaStreamAudioDestinationNode | null = null;
@@ -1616,6 +1634,7 @@ export class RemotePlayStream {
     return {
       stream,
       release: () => {
+        letGo();
         for (const t of stream.getTracks()) t.stop();
         try {
           if (dest) from?.disconnect(dest);
@@ -1997,6 +2016,26 @@ export class RemotePlayStream {
   /** Draw one decoded frame onto the canvas (it closes the frame). The canvas is the picture's
    *  own size (its visible part, at the display aspect), taken from each frame, never from the
    *  size asked for: the console may send another; upscaled, it is the size upscaled to. */
+  private pictureUnseen(): boolean {
+    return pictureUnseen({
+      hidden: this.cv.ownerDocument?.visibilityState === "hidden",
+      detached: this.cv.isConnected === false,
+      waiting: this.frameWaiters.size > 0,
+      holds: this.pictureHolds,
+    });
+  }
+
+  /** Something reads this canvas with no one looking at it (a clip, a video picture in picture):
+   *  frames keep being drawn until the returned function is called. */
+  holdPicture(): () => void {
+    this.pictureHolds++;
+    let held = true;
+    return () => {
+      if (held) this.pictureHolds--;
+      held = false;
+    };
+  }
+
   private drawFrame(frame: VideoFrame): void {
     const fw = frame.displayWidth;
     const fh = frame.displayHeight;
@@ -2224,7 +2263,9 @@ export class RemotePlayStream {
         this.rebuilds = 0;
         this.gaveUp = false;
         const frame = this.withRealVisibleRect(decoded);
-        this.drawFrame(frame);
+        // Decoding has to go on (the next frames build on this one); showing it does not.
+        if (this.pictureUnseen()) frame.close();
+        else this.drawFrame(frame);
         this.outputPending = now;
         this.decoded++;
       },

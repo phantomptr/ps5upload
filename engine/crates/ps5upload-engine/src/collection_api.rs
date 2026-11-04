@@ -367,22 +367,67 @@ pub async fn get_game(Path(id): Path<String>) -> Response {
     }
 }
 
-pub async fn get_cover(Path(id): Path<String>) -> Response {
+#[derive(Deserialize)]
+pub struct CoverQuery {
+    /// A grid's size (128, 256 or 384): the cover scaled to it, as for the console's icons.
+    /// Anything else, or none, is the full cover.
+    size: Option<u32>,
+}
+
+/// `cover`'s thumbnail at `px`, from its own file beside the covers while that is not older than
+/// the cover: a thumbnail is made once. None (use the full cover) when the cover is that small
+/// already, or does not decode.
+fn cover_thumbnail(cover: &std::path::Path, px: u32) -> Option<Vec<u8>> {
+    let thumbs = cover.parent()?.join("thumbs");
+    let name = cover.file_name()?.to_string_lossy().into_owned();
+    let thumb = thumbs.join(format!("{name}@{px}"));
+    let modified = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let cover_at = modified(cover)?;
+    if modified(&thumb).is_some_and(|at| at >= cover_at) {
+        if let Ok(bytes) = std::fs::read(&thumb) {
+            return Some(bytes);
+        }
+    }
+    let small = crate::icon_thumbnail(&std::fs::read(cover).ok()?, px)?;
+    // A cache: not being able to keep it only costs making it again.
+    if std::fs::create_dir_all(&thumbs).is_ok() {
+        let tmp = thumbs.join(format!("{name}@{px}.tmp"));
+        if std::fs::write(&tmp, &small).is_ok() {
+            let _ = std::fs::rename(&tmp, &thumb);
+        }
+    }
+    Some(small)
+}
+
+/// What the bytes are: a thumbnail is a JPEG unless the cover had transparency.
+fn cover_mime(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        "image/jpeg"
+    } else {
+        "image/png"
+    }
+}
+
+pub async fn get_cover(Path(id): Path<String>, Query(q): Query<CoverQuery>) -> Response {
     let id = id.to_ascii_uppercase();
     let file = library()
         .and_then(|l| l.games.get(&id).and_then(|g| g.local_cover.clone()))
         .filter(|name| crate::collection::is_bare_file_name(name))
         .and_then(|name| store::covers_dir().map(|d| d.join(name)));
+    let px = crate::icon_thumb_px(q.size);
     let bytes = match file {
-        Some(f) => tokio::task::spawn_blocking(move || std::fs::read(f).ok())
-            .await
-            .ok()
-            .flatten(),
+        Some(f) => tokio::task::spawn_blocking(move || {
+            px.and_then(|px| cover_thumbnail(&f, px))
+                .or_else(|| std::fs::read(&f).ok())
+        })
+        .await
+        .ok()
+        .flatten(),
         None => None,
     };
     match bytes {
         Some(bytes) => Response::builder()
-            .header(header::CONTENT_TYPE, "image/png")
+            .header(header::CONTENT_TYPE, cover_mime(&bytes))
             .header(header::CACHE_CONTROL, "max-age=300")
             .body(Body::from(bytes))
             .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "cover")),
@@ -866,5 +911,57 @@ mod scan_claim_tests {
         assert!(st.running);
         assert!(!st.deep, "the running scan's settings stay");
         assert_eq!(st.started_ms, started);
+    }
+}
+
+#[cfg(test)]
+mod cover_tests {
+    use super::*;
+
+    fn png(side: u32, shade: u8) -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(side, side, image::Rgb([shade, shade, shade]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn a_thumbnail_is_made_once_and_again_when_the_cover_changes() {
+        let dir =
+            std::env::temp_dir().join(format!("ps5upload-cover-thumb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cover = dir.join("PPSA01234.png");
+        std::fs::write(&cover, png(512, 10)).unwrap();
+        let first = cover_thumbnail(&cover, 128).expect("thumbnail");
+        assert_eq!(cover_mime(&first), "image/jpeg");
+        let kept = dir.join("thumbs").join("PPSA01234.png@128");
+        assert_eq!(std::fs::read(&kept).unwrap(), first);
+        // From the file: what is on disk is what comes back.
+        std::fs::write(&kept, b"marker").unwrap();
+        assert_eq!(cover_thumbnail(&cover, 128).unwrap(), b"marker");
+        // A newer cover makes a new one.
+        let old = std::time::SystemTime::now() - Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&kept)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        std::fs::write(&cover, png(512, 200)).unwrap();
+        assert_ne!(cover_thumbnail(&cover, 128).unwrap(), b"marker");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_small_cover_has_no_thumbnail() {
+        let dir =
+            std::env::temp_dir().join(format!("ps5upload-cover-small-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cover = dir.join("PPSA00001.png");
+        std::fs::write(&cover, png(64, 1)).unwrap();
+        assert!(cover_thumbnail(&cover, 128).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

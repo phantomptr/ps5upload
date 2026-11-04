@@ -72,7 +72,9 @@ import { ensureOsNotificationPermission } from "../lib/osNotify";
 import { powerTick } from "../api/ps5";
 import { anyAwakeWork, awakeConsoles } from "../lib/awakeWork";
 import { useTaskStore } from "../state/tasks";
-import { transferBytesMoved, transferScreenBusy } from "../lib/ps5Transfers";
+import { transferScreenBusy } from "../lib/ps5Transfers";
+import { bytesMoved } from "../lib/bytesMoved";
+import { consoleBusy } from "../lib/usePoll";
 import {
   autoRedeployDecision,
   liveHelperDecision,
@@ -116,6 +118,7 @@ import {
 import { isDragOutCopy } from "../lib/dragOut";
 import { keepMinionOff } from "../state/minionMemory";
 import { startRosterShare } from "../state/rosterShare";
+import { startStagedRelease } from "../lib/browserStaging";
 import { startSharedPrefs } from "../lib/sharedPrefs";
 import { startMeshShare } from "../lib/meshShare";
 import { useMeshSync } from "./useMeshSync";
@@ -149,7 +152,7 @@ installConvertRunner();
  *  status bar. Runs for the lifetime of the app so the indicators
  *  reflect current state regardless of which screen is visible.
  *
- *  - Engine: localhost `/api/jobs`, every 5s. Fast; doesn't touch PS5.
+ *  - Engine: localhost `/api/version`, every 5s. Fast; doesn't touch PS5.
  *  - Payload: the PS5's :9120 via `payload_check`, every 10s, and only
  *    when a host is configured (no point spamming DOWN probes against
  *    the default IP if the user hasn't entered theirs). */
@@ -421,8 +424,8 @@ function useStatusPolling() {
       // contention during exactly the window where the console can least
       // afford it. If the count has NOT advanced, the transfer may
       // genuinely be stuck, and we fall through to a real probe.
-      if (transferScreenBusy(probedHost)) {
-        const sent = transferBytesMoved(probedHost);
+      if (consoleBusy(probedHost)) {
+        const sent = bytesMoved(key);
         const prevSent = transferProgressRef.current[key];
         // Any CHANGE counts as proof of life, not just an increase: a
         // resumed attempt restarts the byte count lower, and that still
@@ -1367,7 +1370,8 @@ function HelperVersionBanner() {
             variant="primary"
             onClick={() => {
               if (appOlder) {
-                void useUpdateStore.getState().checkNow();
+                // The browser build updates with its container; Settings says how.
+                if (isTauriEnv()) void useUpdateStore.getState().checkNow();
                 navigate("/settings");
               } else {
                 // Send it right here: the banner already said what this does.
@@ -1630,6 +1634,8 @@ export default function AppShell() {
     // The self-hosted web UI keeps the console list in the engine, so every browser sees the
     // same consoles. No-op in the desktop and mobile apps.
     const stopRosterShare = startRosterShare();
+    // Copies staged from this browser go when the upload they were for has.
+    const stopStagedRelease = isTauriEnv() ? () => {} : startStagedRelease();
     // ...and the settings every browser shares (lib/sharedPrefs). The sidebar follows another
     // browser's change at once; the rest at the next page load.
     const stopSharedPrefs = isTauriEnv()
@@ -1658,6 +1664,7 @@ export default function AppShell() {
     return () => {
       window.clearInterval(pruneTimer);
       stopRosterShare();
+      stopStagedRelease();
       stopSharedPrefs();
       stopMeshShare();
       stopSaveBackupSync();

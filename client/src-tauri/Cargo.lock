@@ -4565,6 +4565,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "blake3",
+ "flate2",
  "futures-util",
  "getrandom 0.4.3",
  "if-addrs",
@@ -4595,6 +4596,7 @@ dependencies = [
  "unicode-normalization",
  "ureq",
  "uuid",
+ "webpki-roots",
  "zip",
 ]
 

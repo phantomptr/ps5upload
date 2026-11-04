@@ -98,8 +98,17 @@ function snapshotCurrent(): SettingsSnapshot {
 }
 
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
-/** What the file last got, so a change that did not touch the snapshot writes nothing. */
+/** What the file holds, as far as this page knows. A write that changes nothing is skipped: the
+ *  file is synced to the drive each time, and the stores fire for much that it does not hold. */
 let lastWritten: string | null = null;
+
+async function writeIfChanged(): Promise<void> {
+  const config = snapshotCurrent();
+  const text = JSON.stringify(config);
+  if (text === lastWritten) return;
+  await invoke("user_config_save", { config });
+  lastWritten = text;
+}
 
 /** Request a file-mirror write. Coalesces rapid changes into one write. */
 function schedulePersist() {
@@ -108,11 +117,7 @@ function schedulePersist() {
   pendingTimer = setTimeout(async () => {
     pendingTimer = null;
     try {
-      const config = snapshotCurrent();
-      const text = JSON.stringify(config);
-      if (text === lastWritten) return;
-      await invoke("user_config_save", { config });
-      lastWritten = text;
+      await writeIfChanged();
     } catch (e) {
       // Silent: file-mirror is best-effort. localStorage is still the
       // source of truth, so a failed disk write doesn't lose anything.
@@ -182,7 +187,7 @@ async function persistNow(): Promise<void> {
     pendingTimer = null;
   }
   try {
-    await invoke("user_config_save", { config: snapshotCurrent() });
+    await writeIfChanged();
   } catch (e) {
     console.warn("[settings-mirror] initial persist failed:", e);
   }

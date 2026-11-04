@@ -1377,7 +1377,7 @@ pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::
         |parts| Json(json!({ "ok": true, "parts": parts })).into_response(),
     )
     .await;
-    let _ = cleanup_temp_dir(&tmp_s);
+    let _ = tokio::task::spawn_blocking(move || cleanup_temp_dir(&tmp_s)).await;
     response
 }
 

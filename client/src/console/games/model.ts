@@ -12,6 +12,7 @@
  * neither may be uninstalled or hidden from here. Each title's version, size and last-played
  * time come from appinfo.db (the same keys the PC app's game page reads).
  */
+import { compareNames } from "../../lib/collate";
 import { ApiError, call } from "../api";
 
 export const TILE_TITLE_ID = "PSUP00001";
@@ -377,7 +378,7 @@ export type Show = "all" | "hidden";
 /** Running first; then (recent) the last played first, never-played after; then by name. */
 export function sortGames(games: Game[], running: ReadonlySet<string>, mode: SortMode): Game[] {
   const byName = (a: Game, b: Game) =>
-    a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }) || a.titleId.localeCompare(b.titleId);
+    compareNames(a.name, b.name) || a.titleId.localeCompare(b.titleId);
   return games.slice().sort((a, b) => {
     const ra = running.has(a.titleId) ? 0 : 1;
     const rb = running.has(b.titleId) ? 0 : 1;

@@ -16,7 +16,8 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { oneLangPerSelector, pageStrings } from "./vite.pagePlugins";
+import { oneLangPerSelector, pageModuleSwap, pageStrings } from "./vite.pagePlugins";
+import { pageCss } from "./vite.pageCss";
 
 const RAW_BUDGET = 900 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url));
@@ -55,10 +56,15 @@ function singleFile(): Plugin {
 }
 
 export default defineConfig({
-  // The client root, not src/join: Tailwind finds the classes it generates by scanning from the
-  // root, and the controller (screens/Play/TouchControls.tsx) lives outside src/join.
   base: "./",
-  plugins: [pageStrings("join"), react(), tailwindcss(), oneLangPerSelector(), singleFile()],
+  plugins: [
+    pageStrings("join"),
+    pageCss(fileURLToPath(new URL("./src/join/main.tsx", import.meta.url)), pageModuleSwap),
+    react(),
+    tailwindcss(),
+    oneLangPerSelector(),
+    singleFile(),
+  ],
   build: {
     outDir: fileURLToPath(new URL("./dist-join", import.meta.url)),
     emptyOutDir: true,

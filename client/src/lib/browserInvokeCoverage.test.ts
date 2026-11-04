@@ -130,9 +130,6 @@ const NATIVE_ONLY: Record<string, string> = {
   send_payload_history_load: "native: desktop history file",
   send_payload_history_add: "native: desktop history file",
   send_payload_history_clear: "native: desktop history file",
-  resume_txid_lookup: "native: desktop resume-state file",
-  resume_txid_remember: "native: desktop resume-state file",
-  resume_txid_forget: "native: desktop resume-state file",
 
   // Payload catalogue: downloads ELFs to host disk, then sends them over a
   // raw socket. The browser build's Payloads screen has no Catalog or Send tab.
