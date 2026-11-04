@@ -7050,6 +7050,8 @@ helper_mismatch_boot_copy: "PS5 Anda menjalankan salinan helper lama yang disimp
 "join_scan": "Pindai QR",
 "join_invite_title": "Gabung ke game {host}",
 "join_show_controls": "Tampilkan kontrol",
+"join_hide_controls": "Sembunyikan",
+"join_hold_hint": "Tekan dan tahan gambar untuk menampilkan tombol",
 "join_scan_hint": "Arahkan kamera ke kode QR di layar teman Anda.",
 "join_scan_failed": "Kamera tidak terbuka. Tempel tautannya saja.",
 "join_scan_denied": "PS5Upload perlu kamera untuk memindai kode. Tekan Coba lagi lalu izinkan, atau nyalakan kamera di pengaturan.",

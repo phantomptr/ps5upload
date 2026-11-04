@@ -12,6 +12,9 @@ export const HIDE_AFTER_MS = 3000;
 export class AutoHide {
   private enabled = false;
   private pinned = false;
+  /** Touch: the buttons come and go only when asked (a long press, the Hide button), never by
+   *  themselves; a tap is the game's. */
+  private sticky = false;
   private shown = true;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -25,27 +28,43 @@ export class AutoHide {
     return !this.enabled || this.pinned || this.shown;
   }
 
-  set(enabled: boolean, pinned: boolean): void {
+  set(enabled: boolean, pinned: boolean, sticky = false): void {
     const was = this.enabled && !this.pinned;
+    const wasEnabled = this.enabled;
+    const wasSticky = this.sticky;
     this.enabled = enabled;
     this.pinned = pinned;
+    this.sticky = sticky;
     if (!enabled || pinned) {
       this.stop();
       this.show(true);
-    } else if (!was) {
+    } else if (sticky) {
+      this.stop();
+      // Touch, just started hiding (full screen on): straight to the picture. A pin let go
+      // (a press or focus on the buttons) leaves them showing: only asking hides them.
+      if (!wasEnabled || !wasSticky) this.show(false);
+      else if (!was) this.show(true);
+    } else if (!was || wasSticky) {
       // Just started hiding (full screen on, or a pin let go): a full moment before they go.
       this.show(true);
       this.arm();
     }
   }
 
-  /** A touch, click, key or mouse move: show them (again) for a moment. */
+  /** A click, key or mouse move: show them (again) for a moment. Touch (sticky): show them,
+   *  and they stay until hidden. */
   poke(): void {
     this.show(true);
-    if (this.enabled && !this.pinned) this.arm();
+    if (this.enabled && !this.pinned && !this.sticky) this.arm();
   }
 
-  /** Hide them now (the handle pressed while they show). */
+  /** A long press on the picture: show them if hidden, hide them if shown. */
+  toggle(): void {
+    if (this.visible) this.hide();
+    else this.poke();
+  }
+
+  /** Hide them now (the handle or the Hide button). */
   hide(): void {
     if (!this.enabled || this.pinned) return;
     this.stop();
@@ -77,7 +96,11 @@ export class AutoHide {
 }
 
 /** AutoHide for a component: whether the buttons show, and the poke and hide for its events. */
-export function useAutoHide(enabled: boolean, pinned: boolean): { shown: boolean; poke: () => void; hide: () => void } {
+export function useAutoHide(
+  enabled: boolean,
+  pinned: boolean,
+  sticky = false,
+): { shown: boolean; poke: () => void; hide: () => void; toggle: () => void } {
   const [shown, setShown] = useState(true);
   const ctl = useRef<AutoHide | null>(null);
   useEffect(() => {
@@ -89,9 +112,10 @@ export function useAutoHide(enabled: boolean, pinned: boolean): { shown: boolean
     };
   }, []);
   useEffect(() => {
-    ctl.current?.set(enabled, pinned);
-  }, [enabled, pinned]);
+    ctl.current?.set(enabled, pinned, sticky);
+  }, [enabled, pinned, sticky]);
   const poke = useCallback(() => ctl.current?.poke(), []);
   const hide = useCallback(() => ctl.current?.hide(), []);
-  return { shown: !enabled || pinned || shown, poke, hide };
+  const toggle = useCallback(() => ctl.current?.toggle(), []);
+  return { shown: !enabled || pinned || shown, poke, hide, toggle };
 }

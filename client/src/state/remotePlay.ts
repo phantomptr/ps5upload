@@ -408,6 +408,15 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
   },
 
   stop() {
+    // A stop someone asked for (Stop, the banner, the mini player): Play Together on that
+    // console ends with it, so friends are told at once instead of waiting out the window the
+    // engine keeps for a host whose stream dropped by itself.
+    const host = get().stream ? get().target?.host : undefined;
+    if (host) {
+      void import("../screens/Play/playTogetherState")
+        .then(({ joinApi }) => joinApi.close(host))
+        .catch(() => {});
+    }
     get().stream?.stop();
   },
 

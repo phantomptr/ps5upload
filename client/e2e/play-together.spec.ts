@@ -374,11 +374,13 @@ test.describe("a friend's phone", () => {
     await page.getByTestId("join-go").tap();
     await expect(page.getByTestId("join-player")).toHaveText("You are Player 3", { timeout: 30_000 });
     await page.getByTestId("join-guide-ok").tap();
+    await expect(page.getByTestId("join-hold-hint")).toBeVisible();
     await page.getByRole("button", { name: "✕" }).tap();
     await expect.poll(() => frames.some((f) => f[5] === 1)).toBe(true);
 
-    // Leave and Full screen sit in the middle of the picture, clear of the controller's buttons,
-    // then hide after a quiet moment; the controller's menu button brings them back.
+    // On touch the buttons start hidden and never come back by themselves (a tap is the
+    // game's); the controller's menu button brings them back, in the middle of the picture,
+    // clear of the controller's buttons.
     const bar = page.getByTestId("join-bar");
     await expect(bar).toHaveAttribute("data-shown", "0", { timeout: 6_000 });
     await page.getByTestId("rp-menu-handle").tap();
@@ -390,7 +392,26 @@ test.describe("a friend's phone", () => {
       const apart = card.x + card.width <= b.x || b.x + b.width <= card.x || card.y + card.height <= b.y || b.y + b.height <= card.y;
       expect(apart, `the buttons overlap ${name}`).toBe(true);
     }
-    await expect(bar).toHaveAttribute("data-shown", "0", { timeout: 6_000 });
+    // They stay until hidden: Hide puts them away.
+    await page.waitForTimeout(4_000);
+    await expect(bar).toHaveAttribute("data-shown", "1");
+    await page.getByTestId("join-hide-controls").tap();
+    await expect(bar).toHaveAttribute("data-shown", "0");
+
+    // A long press on the picture (away from the controller) shows them; a short tap doesn't.
+    const stage = page.getByTestId("join-stage-view");
+    const press = async (ms: number) => {
+      const at = { pointerType: "touch", pointerId: 7, isPrimary: true, clientX: 422, clientY: 40, bubbles: true };
+      await stage.dispatchEvent("pointerdown", at);
+      await page.waitForTimeout(ms);
+      await stage.dispatchEvent("pointerup", at);
+    };
+    await press(100);
+    await expect(bar).toHaveAttribute("data-shown", "0");
+    await press(700);
+    await expect(bar).toHaveAttribute("data-shown", "1");
+    await press(700);
+    await expect(bar).toHaveAttribute("data-shown", "0");
   });
 });
 
@@ -465,6 +486,32 @@ test("the host stopping keeps the friend's place until they play again", async (
   back();
   await expect(page.getByTestId("join-host-away")).toHaveCount(0);
   await expect(page.getByTestId("join-player")).toBeVisible();
+
+  // Waiting is never a trap: Leave is on the waiting screen and ends it at once.
+  bye();
+  await expect(page.getByTestId("join-host-away")).toBeVisible();
+  await page.getByTestId("join-reconnecting-leave").click();
+  await expect(page.getByTestId("join-reconnecting")).toHaveCount(0);
+  await expect(page.getByTestId("join-go")).toBeVisible();
+});
+
+test("the host ending Play Together tells the friend at once", async ({ page }) => {
+  await serveJoinPage(page);
+  let bye: () => void = () => {};
+  await page.routeWebSocket(/\/api\/join\/ws/, (ws) => {
+    ws.onMessage((m) => {
+      if (typeof m !== "string" || !m.includes("hello")) return;
+      ws.send(JSON.stringify({ stage: "joined", player: 2, token: "T", hevc: false }));
+      bye = () => ws.send(JSON.stringify({ bye: "closed" }));
+    });
+  });
+  await page.goto(`/join#i=${INVITE}&n=Ann`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("join-name").fill("Ben");
+  await page.getByTestId("join-go").click();
+  await expect(page.getByTestId("join-player")).toBeVisible({ timeout: 30_000 });
+  bye();
+  await expect(page.getByText("Ann closed Play Together.")).toBeVisible();
+  await expect(page.getByTestId("join-reconnecting")).toHaveCount(0);
 });
 
 test("an invite opened in the app asks only for the name, filled in from last time", async ({ page }) => {

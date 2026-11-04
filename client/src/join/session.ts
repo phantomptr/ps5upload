@@ -33,7 +33,11 @@ export interface JoinSnapshot {
   noSound: boolean;
   /** The host's name: from the link, then from the engine's status. */
   host: string | null;
+  /** The guest muted the game's sound (remembered on this device). */
+  muted: boolean;
 }
+
+const MUTED_KEY = "ps5upload.join.muted";
 
 export interface JoinSessionOptions {
   /** The guest socket (direct, or through this app's engine). */
@@ -87,6 +91,7 @@ export class JoinSession {
       sound: false,
       noSound: false,
       host: opts.host,
+      muted: readMuted(),
     };
     this.client = new JoinClient({
       url: opts.url,
@@ -121,6 +126,7 @@ export class JoinSession {
         () => this.client.askKeyframe(),
       );
       this.player.onSoundFail = () => this.set({ noSound: true });
+      this.player.setMuted(this.snap.muted);
     }
     return this.player;
   }
@@ -135,6 +141,8 @@ export class JoinSession {
     // Keys held then are let go too (their keyup goes to whatever has the focus next).
     const vis = () => {
       if (document.visibilityState === "hidden") guestHeld.clear();
+      // Back: sound the browser stopped while away plays again.
+      else this.player?.resumeSound();
       this.client.setNeutral(document.visibilityState === "hidden");
     };
     const blur = () => {
@@ -153,7 +161,10 @@ export class JoinSession {
     };
     window.addEventListener("keydown", keyDown);
     window.addEventListener("keyup", keyUp);
-    const focus = () => this.client.setNeutral(document.visibilityState === "hidden");
+    const focus = () => {
+      this.client.setNeutral(document.visibilityState === "hidden");
+      if (document.visibilityState !== "hidden") this.player?.resumeSound();
+    };
     document.addEventListener("visibilitychange", vis);
     window.addEventListener("blur", blur);
     window.addEventListener("focus", focus);
@@ -166,6 +177,17 @@ export class JoinSession {
       guestHeld.clear();
     });
     this.client.start();
+  }
+
+  /** Mute or unmute the game's sound; remembered for the next game. */
+  setMuted(m: boolean): void {
+    this.player?.setMuted(m);
+    try {
+      localStorage.setItem(MUTED_KEY, m ? "1" : "0");
+    } catch {
+      // Private mode: this game only.
+    }
+    this.set({ muted: m });
   }
 
   startSound(): void {
@@ -219,4 +241,12 @@ export class JoinSession {
 
 export function useJoinSession(s: JoinSession): JoinSnapshot {
   return useSyncExternalStore(s.subscribe, () => s.snapshot);
+}
+
+function readMuted(): boolean {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(MUTED_KEY) === "1";
+  } catch {
+    return false;
+  }
 }

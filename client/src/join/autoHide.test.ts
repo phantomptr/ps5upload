@@ -89,3 +89,39 @@ describe("AutoHide", () => {
     expect(seen).toEqual([]);
   });
 });
+
+describe("AutoHide on touch (sticky)", () => {
+  it("starts hidden, shows and hides only when asked, never by a timer", () => {
+    vi.useFakeTimers();
+    const seen: boolean[] = [];
+    const a = new AutoHide((v) => seen.push(v), 1000);
+    a.set(true, false, true);
+    expect(a.visible).toBe(false);
+    a.toggle();
+    expect(a.visible).toBe(true);
+    vi.advanceTimersByTime(5000);
+    expect(a.visible).toBe(true);
+    a.toggle();
+    expect(a.visible).toBe(false);
+    a.poke();
+    a.hide();
+    expect(a.visible).toBe(false);
+    a.set(true, true, true);
+    expect(a.visible).toBe(true);
+    a.set(false, false, true);
+    expect(a.visible).toBe(true);
+    a.dispose();
+    vi.useRealTimers();
+  });
+});
+
+describe("AutoHide on touch: a pin let go", () => {
+  it("keeps them showing (only asking hides them)", () => {
+    const a = new AutoHide(() => {}, 1000);
+    a.set(true, false, true);
+    a.poke();
+    a.set(true, true, true);
+    a.set(true, false, true);
+    expect(a.visible).toBe(true);
+  });
+});

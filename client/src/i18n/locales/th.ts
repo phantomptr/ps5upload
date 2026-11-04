@@ -7048,6 +7048,8 @@ helper_mismatch_boot_copy: "PS5 เปิดสำเนาตัวช่วย
 "join_scan": "สแกน QR",
 "join_invite_title": "เข้าร่วมเกมของ {host}",
 "join_show_controls": "แสดงปุ่มควบคุม",
+"join_hide_controls": "ซ่อน",
+"join_hold_hint": "กดค้างที่ภาพเพื่อแสดงปุ่ม",
 "join_scan_hint": "หันกล้องไปที่ QR โค้ดบนหน้าจอของเพื่อน",
 "join_scan_failed": "เปิดกล้องไม่ได้ วางลิงก์แทน",
 "join_scan_denied": "PS5Upload ต้องใช้กล้องเพื่อสแกนโค้ด กดลองอีกครั้งแล้วอนุญาต หรือเปิดกล้องในการตั้งค่า",
