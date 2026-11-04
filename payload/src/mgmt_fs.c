@@ -1,7 +1,11 @@
 /* AVA1 filesystem management methods: see include/mgmt_fs.h. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE /* host builds on glibc: RTLD_DEFAULT */
+#endif
 #include "mgmt_fs.h"
 
 #include <dirent.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -89,6 +93,23 @@ static int errno_error(mgmt_ctx_t *cx, const char *prefix, int err) {
 
 /* ---- fs.list ---- */
 
+/* An entry's metadata, not following a link. `full` is its whole path (it always fits: a path under
+ * FS_PATH_MAX, a '/' and a name of at most 255 bytes). The kernel refuses a path of FS_PATH_MAX bytes
+ * or more, so an entry past that is asked about through its open directory, when this firmware's
+ * libkernel exports fstatat (looked up rather than linked: a symbol a firmware lacks would stop the
+ * whole ELF from loading, and only such a deep entry needs it). 0, or -1: listed with an unknown kind. */
+static int entry_stat(DIR *dir, const char *name, const char *full, struct stat *st) {
+    typedef int (*fstatat_fn)(int, const char *, struct stat *, int);
+    static fstatat_fn at;
+    static int looked;
+    if (strlen(full) < FS_PATH_MAX) return lstat(full, st);
+    if (!looked) {
+        at = (fstatat_fn)dlsym(RTLD_DEFAULT, "fstatat");
+        looked = 1;
+    }
+    return at ? at(dirfd(dir), name, st, AT_SYMLINK_NOFOLLOW) : -1;
+}
+
 int mgmt_run_fs_list(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
     ava1_fs_list_t q;
     ava1_fs_list_result_t res;
@@ -130,12 +151,14 @@ int mgmt_run_fs_list(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
             more = 1;
             break;
         }
-        if (snprintf(full, sizeof full, "%s/%s", path, name) >= (int)sizeof path) {
+        /* Compared with the buffer it is written to: a deep directory's entries used to be measured
+         * against the 1024-byte path limit here and vanished from the listing without a word. */
+        if (snprintf(full, sizeof full, "%s/%s", path, name) >= (int)sizeof full) {
             /* Skipped without counting, so the caller's offset arithmetic still lines up
              * (the handler's rule: a page of such names must not look like the end). */
             continue;
         }
-        stat_ok = lstat(full, &st) == 0;
+        stat_ok = entry_stat(dir, name, full, &st) == 0;
         memset(&e, 0, sizeof e);
         /* The wire name is UTF-8 text; a name that is not valid is shown with '?' for its high bytes. */
         if (nl >= sizeof clean) nl = sizeof clean - 1;
