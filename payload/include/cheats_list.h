@@ -15,6 +15,7 @@
 
 #define CHEATS_LIST_TITLE_MAX 16 /* MAX_TITLE_ID in cheats.c */
 #define CHEATS_LIST_XML_DIRS  6  /* XML game patch folders (format 4), searched in order */
+#define CHEATS_STATE_FILE_MAX (64 * 1024) /* the longest <TITLE>.json sidecar anyone reads */
 
 typedef struct {
     /* json, shn, mc4 folders (format 1, 2, 3) */

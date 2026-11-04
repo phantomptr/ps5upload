@@ -1179,6 +1179,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/cheats_list_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-cheats-list-selftest
 	@echo "✓ a large or badly encoded cheat pack lists as valid, bounded JSON"
+	@echo "Running cheat JSON field self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-cheats-json-selftest \
+		$(PAYLOAD_DIR)/tests/cheats_json_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-cheats-json-selftest
+	@echo "✓ a cheat's name is never taken for the game's; escapes decode; slips in a file do not lose its fields"
 	@echo "Running cheat apply-plan self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-cheats-plan-selftest \
