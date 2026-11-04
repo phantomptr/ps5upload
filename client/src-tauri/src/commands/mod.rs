@@ -29,6 +29,7 @@ pub mod diag_log;
 pub mod diagnostics;
 pub mod discover;
 pub mod dragout;
+mod drive_checks;
 pub mod folder_inspect;
 pub mod game_mode;
 pub mod heal_appmeta;

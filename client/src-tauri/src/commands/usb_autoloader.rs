@@ -110,6 +110,9 @@ fn enumerate_drives() -> Vec<UsbDrive> {
                 }
             }
         }
+        if !super::drive_checks::usable_mount(&p) {
+            continue;
+        }
         let (free, total) = statvfs_or_zero(&p);
         out.push(UsbDrive {
             path: p.to_string_lossy().to_string(),
@@ -150,7 +153,9 @@ fn enumerate_drives() -> Vec<UsbDrive> {
                 Some(n) => n.to_string(),
                 None => continue,
             };
-            if name == user || name.starts_with('.') {
+            // `/media/$USER` in the bare root is the folder of mounts, not a drive; a stick
+            // labelled like the user under `/media/$USER/` is one.
+            if (is_alt && name == user) || name.starts_with('.') {
                 continue;
             }
             let meta = match std::fs::metadata(&p) {
@@ -176,7 +181,7 @@ fn enumerate_drives() -> Vec<UsbDrive> {
             let (free, total) = statvfs_or_zero(&p);
             // Skip suspicious entries with zero capacity — usually
             // empty mountpoint stubs left over by a previous mount.
-            if total == 0 {
+            if total == 0 || !super::drive_checks::usable_mount(&p) {
                 continue;
             }
             out.push(UsbDrive {
@@ -221,6 +226,8 @@ fn enumerate_drives() -> Vec<UsbDrive> {
         ) -> i32;
     }
     const DRIVE_REMOVABLE: u32 = 2;
+    const DRIVE_FIXED: u32 = 3;
+    const FILE_READ_ONLY_VOLUME: u32 = 0x0008_0000;
 
     let mut buf: Vec<u16> = vec![0; 256];
     let n = unsafe { GetLogicalDriveStringsW(buf.len() as u32, buf.as_mut_ptr()) };
@@ -246,7 +253,9 @@ fn enumerate_drives() -> Vec<UsbDrive> {
                 let mut wide: Vec<u16> = path_os.encode_wide().collect();
                 wide.push(0);
                 let kind = unsafe { GetDriveTypeW(wide.as_ptr()) };
-                if kind == DRIVE_REMOVABLE {
+                let usb_disk = kind == DRIVE_FIXED
+                    && super::drive_checks::fixed_disk_on_usb(&path_os.to_string_lossy());
+                if kind == DRIVE_REMOVABLE || usb_disk {
                     let (free, total) = {
                         let mut free_caller: u64 = 0;
                         let mut total_bytes: u64 = 0;
@@ -293,6 +302,11 @@ fn enumerate_drives() -> Vec<UsbDrive> {
                     } else {
                         String::new()
                     };
+                    // A locked or write-protected drive would only fail when written to.
+                    if label_ok != 0 && fs_flags & FILE_READ_ONLY_VOLUME != 0 {
+                        start = i + 1;
+                        continue;
+                    }
                     let path_str = path_os.to_string_lossy().into_owned();
                     let label = if !label_str.is_empty() {
                         label_str

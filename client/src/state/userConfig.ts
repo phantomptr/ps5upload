@@ -6,7 +6,7 @@ import { useLangStore } from "./lang";
 import { useKeepAwakeStore } from "./keepAwake";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useConnectionStore } from "./connection";
-import { useEngineStore, normalizeEngineUrl } from "./engine";
+import { useEngineStore, normalizeEngineUrl, setLiveEngineUrl } from "./engine";
 import { useSaveSettingsStore, normalizeSavePath } from "./saveSettings";
 import { useAccessibilityStore } from "./accessibility";
 import { useNavSidebarStore } from "./navSidebar";

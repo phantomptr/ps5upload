@@ -66,9 +66,7 @@ import {
   isLoopbackUrl,
   setLiveEngineUrl,
 } from "../../state/engine";
-import { invoke } from "../../lib/invokeLogged";
 import { shellErrorText } from "../../lib/shellError";
-import { formatBytes } from "../../lib/format";
 import { engineRestart } from "../../lib/engineDiagnosis";
 import { useConnectionStore } from "../../state/connection";
 import { useSaveSettingsStore, DEFAULT_SAVE_PATH } from "../../state/saveSettings";

@@ -20,8 +20,6 @@
 use std::time::Duration;
 
 use serde::Serialize;
-use tokio::net::TcpStream;
-use tokio::time::timeout;
 
 /// A single well-known scene-tool listener.
 ///
@@ -145,47 +143,15 @@ pub async fn companion_probe(host: String) -> Vec<CompanionStatus> {
     for c in COMPANIONS.iter().copied() {
         let host = host.clone();
         handles.push(tokio::spawn(async move {
-            // Resolve through the shared helper so a hostname gets its own
-            // (longer) lookup budget instead of having to resolve AND connect
-            // inside PROBE_TIMEOUT — a slow first lookup used to render as
-            // "this tool isn't running" (#272).
-            let targets = match crate::commands::probes::resolve_targets(&host, c.port).await {
-                Ok(t) => t,
-                Err(e) => {
-                    return CompanionStatus {
-                        name: c.name,
-                        role: c.role,
-                        port: c.port,
-                        web: c.web,
-                        reachable: false,
-                        error: Some(e),
-                    }
-                }
-            };
-            let mut last = String::from("no addresses to try");
-            for sa in targets {
-                match timeout(PROBE_TIMEOUT, TcpStream::connect(sa)).await {
-                    Ok(Ok(_)) => {
-                        return CompanionStatus {
-                            name: c.name,
-                            role: c.role,
-                            port: c.port,
-                            web: c.web,
-                            reachable: true,
-                            error: None,
-                        }
-                    }
-                    Ok(Err(e)) => last = e.to_string(),
-                    Err(_) => last = "timeout".to_string(),
-                }
-            }
+            let probe = crate::commands::probes::connect_probe_within(&host, c.port, PROBE_TIMEOUT);
+            let error = probe.await.err();
             CompanionStatus {
                 name: c.name,
                 role: c.role,
                 port: c.port,
                 web: c.web,
-                reachable: false,
-                error: Some(last),
+                reachable: error.is_none(),
+                error,
             }
         }));
     }

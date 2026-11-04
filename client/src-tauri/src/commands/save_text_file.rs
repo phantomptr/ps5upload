@@ -56,14 +56,20 @@ impl ReplacingFile {
         name.push(format!(".{}-{seq}.tmp", std::process::id()));
         let tmp = dest.with_file_name(name);
         match std::fs::File::create(&tmp) {
-            Ok(file) => Ok((
-                Self {
-                    path: tmp,
-                    dest: Some(dest),
-                    remove_on_drop: true,
-                },
-                file,
-            )),
+            Ok(file) => {
+                // The file it replaces may be private: the new one keeps that.
+                if let Ok(existing) = std::fs::metadata(&dest) {
+                    let _ = std::fs::set_permissions(&tmp, existing.permissions());
+                }
+                Ok((
+                    Self {
+                        path: tmp,
+                        dest: Some(dest),
+                        remove_on_drop: true,
+                    },
+                    file,
+                ))
+            }
             Err(_) => {
                 let existed = dest.exists();
                 let file = std::fs::File::create(&dest)?;
@@ -310,6 +316,20 @@ mod replacing_tests {
             .unwrap()
             .file_type()
             .is_symlink());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_file_stays_private_when_replaced() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("mode");
+        let dest = dir.join("export.json");
+        std::fs::write(&dest, b"old").unwrap();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_replacing(&dest, b"new").unwrap();
+        let mode = std::fs::metadata(&dest).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
