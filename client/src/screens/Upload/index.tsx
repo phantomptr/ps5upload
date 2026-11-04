@@ -3225,7 +3225,7 @@ function RarSourceCard() {
         </p>
         <p className="text-xs text-[var(--color-warn)]">
           {tr(
-            "err_rar_unsupported",
+            "err_rar_phones",
             "RAR archives aren't supported on phones (the app uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.",
           )}
         </p>
