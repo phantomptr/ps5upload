@@ -97,7 +97,7 @@ export function busyTasks(tasks: ReadonlyArray<{ kind: string; status: string }>
   return tasks.some((t) => (t.status === "running" || t.status === "queued") && !LIGHT_TASKS.has(t.kind));
 }
 
-async function appIdle(): Promise<boolean> {
+export async function appIdle(): Promise<boolean> {
   const [
     { useUploadQueueStore },
     { useTransferStore },
@@ -786,7 +786,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
                 // openExternalUrl already logged the underlying error; give the
                 // user an actionable message + the in-panel browser button.
                 message:
-                  "Couldn't open the download link. Tap “Get APK in browser”, or grab it from the GitHub releases page.",
+                  trStatic("update_open_link_failed", "Couldn't open the download link. Tap “Get APK in browser”, or get it from the GitHub releases page."),
               },
         });
         return;
@@ -796,7 +796,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
           phase: {
             kind: "download-failed",
             result,
-            message: "No download bundle for your platform in this release.",
+            message: trStatic("update_no_bundle", "No download bundle for your platform in this release."),
           },
         });
         return;

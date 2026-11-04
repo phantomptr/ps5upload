@@ -1449,6 +1449,15 @@ export async function browserInvoke<T>(
 
     // ── Users / backup ───────────────────────────────────────────────────────
 
+    case "toast_push":
+      return postJson<T>("/api/ps5/toast", {
+        addr: args["addr"],
+        title: args["title"],
+        subtitle: args["subtitle"],
+        icon: args["icon"],
+        action_url: args["actionUrl"],
+      });
+
     case "user_create":
       return postJson<T>("/api/ps5/users/create", {
         addr: args["req"]?.addr,

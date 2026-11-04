@@ -7659,6 +7659,45 @@ struct ProfilePreviewReq {
     crop: Option<ps5upload_core::profile::CropPosition>,
 }
 
+// ─── Console toast ──────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ToastReq {
+    addr: Option<String>,
+    title: String,
+    #[serde(default)]
+    subtitle: Option<String>,
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
+    action_url: Option<String>,
+}
+
+/// POST /api/ps5/toast: a notification on the console's own screen. The desktop app has the
+/// same thing as a command; this is the web UI's way to it.
+async fn ps5_toast_handler(
+    State(state): State<AppState>,
+    Json(req): Json<ToastReq>,
+) -> impl IntoResponse {
+    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    let toast = ps5upload_core::app_lifecycle::ToastRequest {
+        title: req.title,
+        subtitle: req.subtitle.unwrap_or_default(),
+        icon: req.icon.unwrap_or_default(),
+        action_url: req.action_url.unwrap_or_default(),
+    };
+    let r = tokio::task::spawn_blocking(move || {
+        ps5upload_core::app_lifecycle::toast_send(&addr, &toast)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
+    match r {
+        Ok(ack) => Json(ack).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
 // ─── User create / delete ───────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -11489,6 +11528,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/rp/pad-relay", get(pad_link::relay))
         .route("/api/ps5/power/ddp-status", get(ps5_power_ddp_status))
         .route("/api/ps5/power/pair", post(ps5_power_pair))
+        .route("/api/ps5/toast", post(ps5_toast_handler))
         .route("/api/ps5/users/create", post(user_create_handler))
         .route("/api/ps5/users/delete", post(user_delete_handler))
         .route("/api/ps5/backup/snapshot", post(backup_snapshot_handler))

@@ -1595,6 +1595,32 @@ describe("install items", () => {
     await waitFor(() => !useUploadQueueStore.getState().items.some((i) => i.id === q.id));
   });
 
+  it("keeps a running install's row and says so when the stop did not go through", async () => {
+    const api = await import("../api/ps5");
+    vi.mocked(api.pkgInstallStop).mockRejectedValueOnce(new Error("engine unreachable"));
+    const q = useUploadQueueStore.getState().enqueueInstall({
+      host, request: { via: "stream", source: "/refused.pkg" }, displayName: "R",
+    });
+    await waitFor(() => calls.length === 1);
+    useUploadQueueStore.setState((st) => ({
+      items: st.items.map((i) => (i.id === q.id ? { ...i, installJobId: "job-9" } : i)),
+    }));
+    vi.useFakeTimers();
+    try {
+      useUploadQueueStore.getState().cancelItem(q.id);
+      await vi.advanceTimersByTimeAsync(31_000);
+    } finally {
+      vi.useRealTimers();
+    }
+    const row = useUploadQueueStore.getState().items.find((i) => i.id === q.id);
+    expect(row).toMatchObject({ status: "running", stopping: false });
+    expect(row?.installNote).toMatch(/still running/);
+    // It can be asked again; the install ends and the row leaves.
+    useUploadQueueStore.getState().cancelItem(q.id);
+    gate.get("/refused.pkg")!({ ok: false, message: "stopped" });
+    await waitFor(() => !useUploadQueueStore.getState().items.some((i) => i.id === q.id));
+  });
+
   it("an install stopped before the engine has its job is stopped once the job comes", async () => {
     const api = await import("../api/ps5");
     vi.mocked(api.pkgInstallStop).mockClear();

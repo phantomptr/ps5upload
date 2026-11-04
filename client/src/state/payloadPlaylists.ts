@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { withLocalCopy } from "../lib/materialize";
 
 import { hostOf } from "../lib/addr";
+import { isTauriEnv } from "../lib/tauriEnv";
 import { randomHexId } from "../lib/randomId";
 import {
   payloadPlaylistsLoad,
@@ -168,6 +169,8 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
     }));
 
   const scheduleSave = () => {
+    // The file is the desktop app's; a browser keeps playlists for the page (see hydrate).
+    if (!isTauriEnv()) return;
     if (saveTimer !== null) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = null;
