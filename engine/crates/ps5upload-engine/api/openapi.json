@@ -1247,28 +1247,6 @@
         ],
         "type": "object"
       },
-      "CancelBody": {
-        "properties": {
-          "addr": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "x-aliases": [
-              "console",
-              "host"
-            ]
-          },
-          "id": {
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "type": "object"
-      },
       "CancelReq": {
         "properties": {
           "path": {
@@ -13565,6 +13543,45 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "engine.console_cleanup_api.CancelBody": {
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
+            ]
+          },
+          "id": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "engine.console_tasks_api.CancelBody": {
+        "properties": {
+          "addr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
         "type": "object"
       },
       "engine.disk_usage.StartReq": {
@@ -26939,7 +26956,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CancelBody"
+                "$ref": "#/components/schemas/engine.console_cleanup_api.CancelBody"
               }
             }
           },
@@ -27620,6 +27637,197 @@
         "x-ps5upload": {
           "access": "loopback",
           "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/ps5/console-tasks": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "supported": {},
+                    "tasks": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "501": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not implemented"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "console-tools"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [],
+            "in": "query",
+            "name": "addr",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/ps5/console-tasks/cancel": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/engine.console_tasks_api.CancelBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Engine error"
+          },
+          "501": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not implemented"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error",
+            "description": "The console or remote end failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "tags": [
+          "console-tools"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [],
+            "in": "body",
+            "name": "addr",
+            "required": true
+          },
+          "response_schema": "literal"
         }
       }
     },
