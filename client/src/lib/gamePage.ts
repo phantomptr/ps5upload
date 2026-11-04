@@ -80,12 +80,6 @@ const TITLE_ID = /^[A-Z]{4}\d{5}$/;
 /** A PlayStation title ID (`PPSA01234`, `CUSA00900`), the key consoles know a game by. */
 export const hasTitleId = (id: string): boolean => TITLE_ID.test(id);
 
-/** `UP0000-PPSA01234_00-ASTRO0000000000` → `PPSA01234`. */
-export function titleIdFromContentId(contentId: string | null | undefined): string | null {
-  const id = contentId?.slice(7, 16) ?? "";
-  return TITLE_ID.test(id) ? id : null;
-}
-
 /** The game page's URL. */
 export const gamePath = (titleId: string): string => `/games/${encodeURIComponent(titleId)}`;
 

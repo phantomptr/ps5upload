@@ -5,7 +5,7 @@ import { SECTIONS } from "../sections";
 import { t } from "../strings";
 import { LibraryView, groupSize, type LibraryViewProps } from "./Library";
 import { baseTitleId, compareVersions, filterGroups, formatOf, groupEntries, nameKey, roleOf, titleFromFileName } from "./group";
-import { copyDest, displayName, entriesOf, filterEntries, parseScan, stagePath, STAGE_DIR, type Entry, type LibItem, type LibScan } from "./model";
+import { copyDest, displayName, entriesOf, parseScan, stagePath, STAGE_DIR, type Entry, type LibItem, type LibScan } from "./model";
 
 const SCAN_JSON = JSON.stringify({
   source: "3fa2c1d0",
@@ -49,9 +49,6 @@ describe("library model", () => {
     expect(list.map(displayName)).toEqual(["Astro Bot", "Jak X", "Jak X", "PPSA09999 Venus"]);
     expect(list.find((e) => e.source === "console")?.at).toBe("/data/homebrew/Jak");
     expect(list.find((e) => e.kind === "pkg")?.at).toBe("smb://3fa2c1d0/PS5/Astro.pkg");
-    expect(filterEntries(list, "venus").length).toBe(1);
-    expect(filterEntries(list, "cusa07842").length).toBe(2);
-    expect(filterEntries(list, "  ").length).toBe(4);
   });
 
   it("copies into the drive's homebrew folder and stages packages in the helper's staging folder", () => {

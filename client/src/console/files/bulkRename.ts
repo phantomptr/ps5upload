@@ -172,8 +172,3 @@ export async function runRenames(
   }
   return r;
 }
-
-/** The helper refused a rename because the name is taken (409 exists). */
-export function isExists(err: unknown): boolean {
-  return err instanceof ApiError && err.status === 409 && /exist/i.test(err.code);
-}

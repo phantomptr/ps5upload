@@ -122,36 +122,6 @@ export async function startScan(source: string): Promise<string> {
   return r.job;
 }
 
-/** What the grid calls it: the title, else the file name without its extension. */
-export function displayName(i: Pick<LibItem, "title" | "name" | "title_id">): string {
-  if (i.title) return i.title;
-  const base = i.name.replace(/\.(pkg|exfat|ffpkg|ffpfsc?|)$/i, "");
-  return base || i.title_id || "?";
-}
-
-export function entriesOf(sources: LibSource[], scans: ReadonlyMap<string, LibScan | null>): Entry[] {
-  const out: Entry[] = [];
-  for (const s of sources) {
-    const scan = scans.get(s.id);
-    if (!scan) continue;
-    for (const it of scan.items)
-      out.push({
-        ...it,
-        key: `${s.id}:${it.path}`,
-        source: s.id,
-        sourceName: s.name,
-        at: s.id === CONSOLE_SOURCE ? it.path : `smb://${s.id}/${it.path}`,
-      });
-  }
-  return out.sort((a, b) => displayName(a).localeCompare(displayName(b)));
-}
-
-export function filterEntries(list: Entry[], query: string): Entry[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return list;
-  return list.filter((e) => `${displayName(e)} ${e.name} ${e.title_id}`.toLowerCase().includes(q));
-}
-
 /** Where a copy of `e` goes on drive `drive` ("/data", "/mnt/usb0"…): its homebrew folder, where ShadowMount+ and the PC app look. */
 export function copyDest(drive: string, e: Pick<Entry, "name" | "path">): string {
   const name = e.name || e.path.split("/").pop() || "game";

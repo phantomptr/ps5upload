@@ -784,14 +784,3 @@ export function installNavigation(map: InputMap): () => void {
   };
 }
 
-/**
- * What the HintBar shows: ✕ and ○ always (they work in every browser: ○ is the
- * browser's own Back), then each verified button with an action of its own.
- * Directions, the sticks and the system buttons are never listed.
- */
-export function hintEntries(map: InputMap): InputBinding[] {
-  const always = (b: InputBinding) => b.button === "cross" || b.button === "circle";
-  return map.filter(
-    (b) => always(b) || (b.verified && isNavAction(b.action) && !isDirection(b.action)),
-  );
-}

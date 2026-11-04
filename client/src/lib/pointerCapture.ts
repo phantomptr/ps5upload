@@ -215,12 +215,6 @@ export function releaseCapture(): void {
   set({ kind: "none", el: null, engaged: null });
 }
 
-/** The keyboard and mouse are the PS5's (given to `el`, when given). */
-export function isEngaged(el?: Element | null): boolean {
-  if (!state.engaged) return false;
-  return el === undefined || (el !== null && state.engaged === el);
-}
-
 /** The mouse's movement in a mousemove: movementX/Y, or (where those are 0 and the cursor moves,
  *  as under a grab that does not hold the cursor) the change of its screen position. */
 export function captureDelta(e: Pick<MouseEvent, "movementX" | "movementY" | "screenX" | "screenY">): [number, number] {

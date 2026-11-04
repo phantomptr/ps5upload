@@ -17,8 +17,7 @@
 //!   4. `save_archive_cleanup_temp`.
 
 use ps5upload_core::save_archive::{
-    auto_backup_slot, backup_finalize, cleanup_temp_dir, make_temp_dir, restore_prepare,
-    unzip_strict, zip_folder,
+    backup_finalize, cleanup_temp_dir, make_temp_dir, restore_prepare, unzip_strict, zip_folder,
 };
 pub use ps5upload_core::save_archive::{
     SaveArchiveBackupFinalizeResp, SaveArchiveRestorePrepareResp, SaveArchiveUnzipResp,
@@ -158,37 +157,3 @@ pub async fn save_archive_unzip(req: SaveArchiveUnzipReq) -> Result<SaveArchiveU
 }
 
 // ─── Automatic save backups ────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct SaveAutoBackupSlotReq {
-    /// The folder the user chose for automatic backups.
-    pub dir: String,
-    pub title_id: String,
-    pub user_id: u32,
-    /// `YYYY-MM-DD_HHMMSS`, local time (the renderer's `backupTimestamp`).
-    pub stamp: String,
-    /// How many backups of one save to keep, this one included (at least 1).
-    pub keep: u32,
-    /// True once this slot's zip has been written: this save's backups beyond `keep` are
-    /// then removed. False beforehand, so a failed backup never costs an old one.
-    #[serde(default)]
-    pub prune: bool,
-}
-
-/// Where the next automatic backup of a save goes (`ps5upload_core::save_archive::auto_backup_slot`).
-#[tauri::command]
-pub async fn save_auto_backup_slot(req: SaveAutoBackupSlotReq) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        auto_backup_slot(
-            &req.dir,
-            &req.title_id,
-            req.user_id,
-            &req.stamp,
-            req.keep,
-            req.prune,
-        )
-        .map(|p| p.to_string_lossy().into_owned())
-    })
-    .await
-    .map_err(|e| format!("automatic backup task: {e}"))?
-}

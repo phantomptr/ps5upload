@@ -119,11 +119,6 @@ export function uploadFolders(items: UploadItem[]): string[] {
   return Array.from(set).sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
 }
 
-/** Total bytes of the items. */
-export function uploadBytes(items: UploadItem[]): number {
-  return items.reduce((s, it) => s + it.file.size, 0);
-}
-
 /**
  * Send one file as `dest` (its full path on the console). `overwrite` replaces
  * a file there. The helper checks the folder, the name and the free space

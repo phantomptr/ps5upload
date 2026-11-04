@@ -8,7 +8,6 @@ import {
   patchesSiteUrl,
   platformForTitleId,
   readTitleCache,
-  titleIdFromContentId,
   writeTitleCache,
 } from "./titleDetails";
 
@@ -84,23 +83,6 @@ describe("metaSourceForTitleId", () => {
   it("returns null for prefixes that don't run on PS5 (PCSA/NPXS/etc.)", () => {
     expect(metaSourceForTitleId("PCSE00001")).toBeNull();
     expect(metaSourceForTitleId("NPXS40000")).toBeNull();
-  });
-});
-
-describe("titleIdFromContentId", () => {
-  it("extracts the title id from a full ContentID", () => {
-    expect(titleIdFromContentId("EP4040-PPSA01342_00-DEADSPACEPS5BB00")).toBe(
-      "PPSA01342",
-    );
-    expect(titleIdFromContentId("UP0006-CUSA57609_00-CARDEALERSIM0000")).toBe(
-      "CUSA57609",
-    );
-  });
-  it("returns null for headerless / unrecognizable ids", () => {
-    expect(titleIdFromContentId("")).toBeNull();
-    expect(titleIdFromContentId(null)).toBeNull();
-    expect(titleIdFromContentId(undefined)).toBeNull();
-    expect(titleIdFromContentId("EP4040-XX_00")).toBeNull();
   });
 });
 

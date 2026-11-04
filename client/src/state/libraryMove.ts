@@ -5,6 +5,7 @@ import {
   classifyMovePollError,
   isExpectedNotInFlight,
 } from "../lib/movePollerPolicy";
+import { forgetGameMeta } from "../lib/gameMetaCache";
 
 /**
  * A Games-row Move (copy on the console, then remove the source), kept outside the row.
@@ -243,6 +244,9 @@ export async function runLibraryMove(
     });
     return;
   }
+  // The folder is somewhere else now: what was read about either path is out of date.
+  forgetGameMeta(req.host, from);
+  forgetGameMeta(req.host, to);
   end({ phase: "done", error: null });
 }
 

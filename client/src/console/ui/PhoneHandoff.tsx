@@ -113,9 +113,3 @@ export function PhoneHandoff({
     </div>
   );
 }
-
-/** Tests: forget the cached answer. */
-export function _resetPhoneForTests(): void {
-  cached = null;
-  inflight = null;
-}

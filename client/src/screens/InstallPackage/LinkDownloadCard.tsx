@@ -22,21 +22,10 @@ const watchDeps: WatchedJobDeps = {
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 };
 
-/** Where a download-only file goes when the user does not choose: next to the package
- *  library on the console's default drive, in its own `downloads` folder. */
-export function defaultDownloadDir(host: string): string {
-  const storage = pkgStorageFor(host, null);
-  return storage.dir.replace(/\/pkg_library$/, "/downloads");
-}
-
 /** Where a game image goes: the default drive's `homebrew` folder, which ShadowMount+ scans
  *  (internal storage: `/data/homebrew`). */
 export function imageDirFor(volume: string | null): string {
   return volume ? `${volume.replace(/\/+$/, "")}/homebrew` : "/data/homebrew";
-}
-
-export function defaultImageDir(host: string): string {
-  return imageDirFor(pkgStorageFor(host, null).volume);
 }
 
 const IMAGE_LABEL: Record<string, string> = { exfat: "exFAT", ufs: "UFS (.ffpkg)", pfs: "PFS" };

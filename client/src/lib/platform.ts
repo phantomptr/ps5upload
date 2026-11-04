@@ -60,41 +60,7 @@ export function isMobile(): boolean {
 
 // ── v5 platform extensions ──────────────────────────────────────────────
 
-export type FormFactor = "phone" | "tablet" | "desktop";
-export type InputMode = "touch" | "mouse" | "hybrid";
 export type ResponsiveTier = "xs" | "sm" | "md" | "lg" | "xl";
-
-/** The smaller of the two viewport dimensions. Used by formFactor() so
- *  that a phone in landscape (wide but short) still classifies as a
- *  phone, not a tablet. */
-function viewportMin(): number {
-  if (typeof window === "undefined") return 1024;
-  return Math.min(window.innerWidth, window.innerHeight);
-}
-
-/** Device class. "desktop" for non-mobile; "tablet" for mobile with
- *  viewportMin >= 600 (iPad, large Android tablet); "phone" otherwise.
- *  Per v5-mobile-design §1.1. */
-export function formFactor(): FormFactor {
-  if (!isMobile()) return "desktop";
-  // iPad reports >= 768 in portrait; iPhones report <= 430.
-  // 600px is the Android/Nexus 7 small-tablet boundary.
-  return viewportMin() >= 600 ? "tablet" : "phone";
-}
-
-/** Primary input mechanism. Per v5-mobile-design §1.1. "hybrid" covers
- *  Surface tablets and iPad Pro with keyboard — both coarse and fine
- *  pointers. Pure touch devices (phones, tablets without keyboard) are
- *  "touch". Everything else is "mouse". */
-export function inputMode(): InputMode {
-  if (typeof window === "undefined") return "mouse";
-  const coarse = window.matchMedia("(pointer: coarse)").matches;
-  const fine = window.matchMedia("(pointer: fine)").matches;
-  const hover = window.matchMedia("(hover: hover)").matches;
-  if (coarse && fine) return "hybrid";
-  if (coarse && !hover) return "touch";
-  return "mouse";
-}
 
 /** Responsive layout tier based on viewport width. Per v5-mobile-design
  *  §2.1 breakpoints (Tailwind-aligned). xs < 480, sm 480-767, md
