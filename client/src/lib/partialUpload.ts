@@ -5,7 +5,11 @@
 
 import type { QueueItem } from "../state/uploadQueue";
 
-const NO_SPACE = new Set(["ava1_no_space", "preflight_insufficient_space"]);
+const NO_SPACE = new Set([
+  "ava1_no_space",
+  "preflight_insufficient_space",
+  "preflight_insufficient_space_image",
+]);
 
 /** The partial file a failed single-file upload left on the console, or null. */
 export function partialUploadPath(

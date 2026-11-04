@@ -31,6 +31,24 @@ export function BottleneckLine({ cause }: { cause: BottleneckCause | null }) {
  *  already holds. Without this line the wait looks like a stall. */
 export function SkippingLine({ live }: { live: JobLive }) {
   const tr = useTr();
+  if (live.measuringBytes !== undefined) {
+    const done = formatBytes(live.measuringBytes);
+    return (
+      <div
+        className="flex items-center gap-1.5 text-xs text-[var(--color-warn)]"
+        data-testid="measuring-line"
+      >
+        <Loader2 size={12} className="animate-spin" aria-hidden />
+        <span>
+          {tr(
+            "upload_phase_measuring",
+            { done },
+            `This RAR doesn't say how big its files are, so it is being read first: ${done} so far. A large one takes a while.`,
+          )}
+        </span>
+      </div>
+    );
+  }
   if (!live.skipping) return null;
   const done = formatBytes(live.skipDoneBytes);
   const total = formatBytes(live.skipTotalBytes);

@@ -413,6 +413,10 @@ pub(crate) enum JobState {
         /// happens to be watching the job against.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_console: Option<String>,
+        /// The figures behind a refusal for lack of room, which the client words in the user's
+        /// language (`error` and `error_detail` hold the English, for logs and scripts).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_space: Option<ps5upload_ava1::space::SpaceRefusal>,
     },
 }
 
@@ -445,6 +449,7 @@ fn job_failed_from_err(started_at_ms: u64, completed_at_ms: u64, err: &anyhow::E
             error_reason: Some(pce.kind.as_str().into()),
             error_detail: Some(pce.detail.clone()), // the console's message
             error_console: None,
+            error_space: None,
         };
     }
     if let Some(cf) = err.downcast_ref::<ps5upload_ava1::upload::ConsoleFailure>() {
@@ -472,6 +477,9 @@ fn job_failed_from_err(started_at_ms: u64, completed_at_ms: u64, err: &anyhow::E
             error_reason: Some(failure.reason.clone()),
             error_detail: Some(failure.detail.clone()),
             error_console: None,
+            error_space: err
+                .downcast_ref::<ps5upload_ava1::space::SpaceRefusal>()
+                .cloned(),
         };
     }
     let (reason, detail) = extract_payload_error(err);
@@ -501,6 +509,7 @@ fn job_failed_from_err(started_at_ms: u64, completed_at_ms: u64, err: &anyhow::E
         error_reason: reason,
         error_detail: detail,
         error_console: None,
+        error_space: None,
     }
 }
 
@@ -1019,13 +1028,15 @@ fn walk_plan(root: &std::path::Path, excludes: &[String]) -> (u64, Vec<PlannedFi
             if ft.is_dir() {
                 stack.push(path);
             } else if ft.is_file() {
-                if ps5upload_core::excludes::is_excluded_strings(&path, excludes) {
+                // Relative to the source, as the transfer matches: a pattern naming a folder that
+                // also occurs above it (`data`, `Games`) must not empty the plan.
+                let rel = path.strip_prefix(root).unwrap_or(&path);
+                if ps5upload_core::excludes::is_excluded_strings(rel, excludes) {
                     continue;
                 }
                 if let Ok(m) = entry.metadata() {
                     let size = m.len();
                     total += size;
-                    let rel = path.strip_prefix(root).unwrap_or(&path);
                     let rel_str = rel
                         .to_string_lossy()
                         .replace(std::path::MAIN_SEPARATOR, "/");
@@ -1062,7 +1073,8 @@ fn walk_plan_with(
                 stack.push(path);
                 continue;
             }
-            if ps5upload_core::excludes::is_excluded_strings(&path, excludes) {
+            let rel = path.strip_prefix(root).unwrap_or(&path);
+            if ps5upload_core::excludes::is_excluded_strings(rel, excludes) {
                 continue;
             }
             let m = fs
@@ -1070,7 +1082,6 @@ fn walk_plan_with(
                 .map_err(|e| format!("could not read {}: {e}", path.display()))?;
             {
                 total += m.len;
-                let rel = path.strip_prefix(root).unwrap_or(&path);
                 out.push(PlannedFile {
                     rel_path: rel.to_string_lossy().replace('\\', "/"),
                     size: m.len,
@@ -1422,6 +1433,7 @@ impl Drop for JobFailOnDropGuard {
                 error_reason: None,
                 error_detail: None,
                 error_console: None,
+                error_space: None,
             },
         );
     }
@@ -1504,6 +1516,13 @@ pub(crate) fn merge_live_notes(
         o.insert(
             "skip_total_bytes".into(),
             n.skip_total_bytes.load(Relaxed).into(),
+        );
+    }
+    if n.phase.load(Relaxed) == ps5upload_core::transfer::LIVE_PHASE_MEASURING {
+        o.insert("phase".into(), "measuring".into());
+        o.insert(
+            "measure_done_bytes".into(),
+            n.skip_done_bytes.load(Relaxed).into(),
         );
     }
     // What the console already held when the job first opened (a resume). `bytes_sent`
@@ -1589,9 +1608,23 @@ fn cancel_flag(job_id: Uuid) -> Option<Arc<AtomicBool>> {
         .and_then(Weak::upgrade)
 }
 
-/// Pause or resume a running Workshop job. False when there is none by that id.
-pub(crate) fn set_job_paused(job_id: Uuid, paused: bool) -> bool {
-    cancel_flag(job_id).is_some_and(|f| ps5upload_fpkg::workshop::set_paused(&f, paused))
+/// How asking a job to pause or go on ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JobPause {
+    Done,
+    /// There is no running job by that id.
+    NotRunning,
+    /// There is, and it is not one that can wait (only a Workshop job's workers can).
+    NotPausable,
+}
+
+/// Pause or resume a running Workshop job.
+pub(crate) fn set_job_paused(job_id: Uuid, paused: bool) -> JobPause {
+    match cancel_flag(job_id) {
+        None => JobPause::NotRunning,
+        Some(f) if ps5upload_fpkg::workshop::set_paused(&f, paused) => JobPause::Done,
+        Some(_) => JobPause::NotPausable,
+    }
 }
 
 /// Register a fresh cancel flag for `job_id` and return it to thread into
@@ -6588,50 +6621,7 @@ async fn transfer_file_handler(
         // Resume is by job_id (the sender reopens with JobOpen); retries live in the
         // adapter's loop.
         let result = ps5upload_ava1::upload::upload_file(&cfg, tx_id, &req.dest, &src_path);
-        let files_sent_count: u64 = 1;
-        let mut skipped_files_count: u64 = 0;
-        let mut skipped_bytes_count: u64 = 0;
-        let mut files_sent_count = files_sent_count;
-        // An AVA1 job reports what the console already had (skip policies, SPEC §11.4)
-        // and the files actually sent; an all-skipped resume is "already up to date".
-        if let Some((sf, sb, fs)) = result
-            .as_ref()
-            .ok()
-            .and_then(|r| ava1_skip_counts(&r.commit_ack_body))
-        {
-            (skipped_files_count, skipped_bytes_count, files_sent_count) = (sf, sb, fs);
-        }
-        match result {
-            Ok(r) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    JobState::Done {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        tx_id_hex: r.tx_id_hex,
-                        bytes_sent: r.bytes_sent,
-                        dest: r.dest,
-                        files_sent: files_sent_count,
-                        skipped_files: skipped_files_count,
-                        skipped_bytes: skipped_bytes_count,
-                        commit_ack: serde_json::from_str(&r.commit_ack_body).ok(),
-                    },
-                )
-            }
-            Err(e) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    job_failed_from_err(started_at_ms, completed_at_ms, &e),
-                )
-            }
-        }
+        publish_transfer_end(&jobs, &events_tx, job_id, started_at_ms, result, 1);
         fail_guard.mark_succeeded();
     });
 
@@ -6953,45 +6943,14 @@ async fn transfer_dir_handler(
             ),
             None => ps5upload_ava1::upload::upload_dir(&cfg, tx_id, &req.dest_root, &src_path),
         };
-        // What the console already had (skip policies, SPEC §11.4) and the files actually
-        // sent, from the commit ack, as the single-file route reports them; the plan's
-        // count when the ack has none.
-        let (skipped_files_count, skipped_bytes_count, files_sent_count) = result
-            .as_ref()
-            .ok()
-            .and_then(|r| ava1_skip_counts(&r.commit_ack_body))
-            .unwrap_or((0, 0, files_sent_count));
-        match result {
-            Ok(r) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    JobState::Done {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        tx_id_hex: r.tx_id_hex,
-                        bytes_sent: r.bytes_sent,
-                        dest: r.dest,
-                        files_sent: files_sent_count,
-                        skipped_files: skipped_files_count,
-                        skipped_bytes: skipped_bytes_count,
-                        commit_ack: serde_json::from_str(&r.commit_ack_body).ok(),
-                    },
-                )
-            }
-            Err(e) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    job_failed_from_err(started_at_ms, completed_at_ms, &e),
-                )
-            }
-        }
+        publish_transfer_end(
+            &jobs,
+            &events_tx,
+            job_id,
+            started_at_ms,
+            result,
+            files_sent_count,
+        );
         fail_guard.mark_succeeded();
     });
 
@@ -7026,12 +6985,16 @@ struct LocalPathQuery {
 /// browser UI has no such thing, so the Upload screen's drag-drop router
 /// had nothing to call and threw BrowserUnsupportedError (issue #262).
 async fn local_path_kind_handler(Query(q): Query<LocalPathQuery>) -> impl IntoResponse {
-    let kind = match std::fs::metadata(&q.path) {
+    // Off the async workers: a stat of a hung network mount parks its thread for the mount's
+    // timeout, and every console's requests share these workers.
+    let kind = tokio::task::spawn_blocking(move || match std::fs::metadata(&q.path) {
         Ok(md) if md.is_dir() => "folder",
         Ok(md) if md.is_file() => "file",
         Ok(_) => "other",
         Err(_) => "missing",
-    };
+    })
+    .await
+    .unwrap_or("missing");
     (StatusCode::OK, Json(serde_json::json!({ "kind": kind }))).into_response()
 }
 
@@ -7487,37 +7450,14 @@ async fn transfer_zip_handler(
             std::path::Path::new(&req.zip_path),
         )
         .map_err(zip_failure);
-        match result {
-            Ok(r) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    JobState::Done {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        tx_id_hex: r.tx_id_hex,
-                        bytes_sent: r.bytes_sent,
-                        dest: r.dest,
-                        files_sent: files_sent_count,
-                        skipped_files: 0,
-                        skipped_bytes: 0,
-                        commit_ack: serde_json::from_str(&r.commit_ack_body).ok(),
-                    },
-                )
-            }
-            Err(e) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    job_failed_from_err(started_at_ms, completed_at_ms, &e),
-                )
-            }
-        }
+        publish_transfer_end(
+            &jobs,
+            &events_tx,
+            job_id,
+            started_at_ms,
+            result,
+            files_sent_count,
+        );
         fail_guard.mark_succeeded();
     });
 
@@ -7528,6 +7468,40 @@ async fn transfer_zip_handler(
         }),
     )
         .into_response()
+}
+
+/// Publishes how a transfer job ended. What the console already had and the files actually sent
+/// come from the commit ack (a resume or a skip policy, SPEC §11.4; an all-skipped resume is
+/// "already up to date"), `planned_files` when the ack has none.
+fn publish_transfer_end(
+    jobs: &Arc<Mutex<HashMap<Uuid, JobState>>>,
+    events_tx: &broadcast::Sender<String>,
+    job_id: Uuid,
+    started_at_ms: u64,
+    result: anyhow::Result<ps5upload_core::transfer::TransferResult>,
+    planned_files: u64,
+) {
+    let completed_at_ms = now_ms();
+    let state = match result {
+        Ok(r) => {
+            let (skipped_files, skipped_bytes, files_sent) =
+                ava1_skip_counts(&r.commit_ack_body).unwrap_or((0, 0, planned_files));
+            JobState::Done {
+                started_at_ms,
+                completed_at_ms,
+                elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                tx_id_hex: r.tx_id_hex,
+                bytes_sent: r.bytes_sent,
+                dest: r.dest,
+                files_sent,
+                skipped_files,
+                skipped_bytes,
+                commit_ack: serde_json::from_str(&r.commit_ack_body).ok(),
+            }
+        }
+        Err(e) => job_failed_from_err(started_at_ms, completed_at_ms, &e),
+    };
+    set_job(jobs, events_tx, job_id, state);
 }
 
 /// A zip the AVA1 source refused as unusable becomes a typed job failure, so the client shows
@@ -8950,6 +8924,10 @@ async fn transfer_7z_handler(
         let _stop_guard = TickerStopGuard::new(stop_ticker);
         let mut fail_guard =
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
+        if fail_job_unless_console_ready(&jobs, &events_tx, job_id, started_at_ms, &addr) {
+            fail_guard.mark_succeeded();
+            return;
+        }
         let mut cfg = make_transfer_config(&addr);
         // The flag registered before the task: the core checks it at every shard boundary.
         cfg.cancel = Some(cancel);
@@ -8960,10 +8938,6 @@ async fn transfer_7z_handler(
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
         attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
-        if fail_job_unless_console_ready(&jobs, &events_tx, job_id, started_at_ms, &addr) {
-            fail_guard.mark_succeeded();
-            return;
-        }
         // Resume is by job_id (the sender reopens with JobOpen); retries live in the
         // adapter's loop. An archive AVA1 cannot read (encryption, a feature the decoder lacks)
         // is a failure with its own reason: there is no other transport to hand it to.
@@ -8985,37 +8959,14 @@ async fn transfer_7z_handler(
                 e
             }
         });
-        match result {
-            Ok(r) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    JobState::Done {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        tx_id_hex: r.tx_id_hex,
-                        bytes_sent: r.bytes_sent,
-                        dest: r.dest,
-                        files_sent: files_sent_count,
-                        skipped_files: 0,
-                        skipped_bytes: 0,
-                        commit_ack: serde_json::from_str(&r.commit_ack_body).ok(),
-                    },
-                )
-            }
-            Err(e) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    job_failed_from_err(started_at_ms, completed_at_ms, &e),
-                )
-            }
-        }
+        publish_transfer_end(
+            &jobs,
+            &events_tx,
+            job_id,
+            started_at_ms,
+            result,
+            files_sent_count,
+        );
         fail_guard.mark_succeeded();
     });
 
@@ -9127,10 +9078,13 @@ async fn transfer_rar_handler(
     let progress_files = Arc::new(AtomicU64::new(0));
     let progress_files_finalized = Arc::new(AtomicU64::new(0));
     let progress_bytes_finalized = Arc::new(AtomicU64::new(0));
+    // The plan leaves out entries whose headers give no size; the transfer stores the measured
+    // total here once it has decoded them.
+    let measured_total = Arc::new(AtomicU64::new(total_bytes));
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
-        dynamic_total_bytes: None,
+        dynamic_total_bytes: Some(Arc::clone(&measured_total)),
         skipped_files: 0,
         skipped_bytes: 0,
     };
@@ -9182,6 +9136,7 @@ async fn transfer_rar_handler(
         // The flag registered before the task: the core checks it at every shard boundary.
         cfg.cancel = Some(cancel);
         cfg.excludes = req.excludes;
+        cfg.progress_total = Some(measured_total);
         cfg.progress_bytes = Some(Arc::clone(&progress));
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
@@ -9210,37 +9165,14 @@ async fn transfer_rar_handler(
                 e
             }
         });
-        match result {
-            Ok(r) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    JobState::Done {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        tx_id_hex: r.tx_id_hex,
-                        bytes_sent: r.bytes_sent,
-                        dest: r.dest,
-                        files_sent: files_sent_count,
-                        skipped_files: 0,
-                        skipped_bytes: 0,
-                        commit_ack: serde_json::from_str(&r.commit_ack_body).ok(),
-                    },
-                )
-            }
-            Err(e) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    job_failed_from_err(started_at_ms, completed_at_ms, &e),
-                )
-            }
-        }
+        publish_transfer_end(
+            &jobs,
+            &events_tx,
+            job_id,
+            started_at_ms,
+            result,
+            files_sent_count,
+        );
         fail_guard.mark_succeeded();
     });
 
@@ -9376,7 +9308,7 @@ async fn link_probe_handler(Json(req): Json<LinkProbeReq>) -> impl IntoResponse 
     }
 }
 
-fn valid_link_url(url: &str) -> bool {
+pub(crate) fn valid_link_url(url: &str) -> bool {
     url.len() <= 4093
         && !url.bytes().any(|b| b < 0x20 || b == 0x7f)
         && !url.contains('#')
@@ -9452,6 +9384,7 @@ async fn link_download_handler(
         )
         .into_response();
     }
+    let validators = class.validators.clone();
     // An .lz4 link is unpacked on the way: the console gets the image, not the .lz4.
     let lz4 = class.lz4.clone().filter(|_| req.unpack);
     let packed = total;
@@ -9563,9 +9496,10 @@ async fn link_download_handler(
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
         attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
-        let remote = Arc::new(crate::remote_pkg::RemoteSource::new_with_options(
-            url, packed, insecure,
-        ));
+        let remote = Arc::new(
+            crate::remote_pkg::RemoteSource::new_with_options(url, packed, insecure)
+                .with_validators(validators),
+        );
         // A plain file is read at any offset (resume continues where the console stopped); an
         // .lz4 is decoded forward on one thread and its decoded bytes are what is sent.
         let (source, seq): (
@@ -9625,37 +9559,7 @@ async fn link_download_handler(
                     }
                 }
             });
-        match result {
-            Ok(r) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    JobState::Done {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        tx_id_hex: r.tx_id_hex,
-                        bytes_sent: r.bytes_sent,
-                        dest: r.dest,
-                        files_sent: 1,
-                        skipped_files: 0,
-                        skipped_bytes: 0,
-                        commit_ack: serde_json::from_str(&r.commit_ack_body).ok(),
-                    },
-                )
-            }
-            Err(e) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    job_failed_from_err(started_at_ms, completed_at_ms, &e),
-                )
-            }
-        }
+        publish_transfer_end(&jobs, &events_tx, job_id, started_at_ms, result, 1);
         fail_guard.mark_succeeded();
     });
 
@@ -9851,43 +9755,14 @@ async fn transfer_file_list_handler(
         // Resume is by job_id (the sender reopens with JobOpen); retries live in the adapter's
         // loop. A list that names several directories becomes one job per directory.
         let result = ps5upload_ava1::upload::upload_list(&cfg, tx_id, &req.dest_root, &entries);
-        // Skip and sent counts from the commit ack when it has them (as the dir route).
-        let (skipped_files_count, skipped_bytes_count, files_sent_count) = result
-            .as_ref()
-            .ok()
-            .and_then(|r| ava1_skip_counts(&r.commit_ack_body))
-            .unwrap_or((0, 0, files_sent_count));
-        match result {
-            Ok(r) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    JobState::Done {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        tx_id_hex: r.tx_id_hex,
-                        bytes_sent: r.bytes_sent,
-                        dest: r.dest,
-                        files_sent: files_sent_count,
-                        skipped_files: skipped_files_count,
-                        skipped_bytes: skipped_bytes_count,
-                        commit_ack: serde_json::from_str(&r.commit_ack_body).ok(),
-                    },
-                )
-            }
-            Err(e) => {
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    job_failed_from_err(started_at_ms, completed_at_ms, &e),
-                )
-            }
-        }
+        publish_transfer_end(
+            &jobs,
+            &events_tx,
+            job_id,
+            started_at_ms,
+            result,
+            files_sent_count,
+        );
         fail_guard.mark_succeeded();
     });
 
@@ -10211,6 +10086,13 @@ async fn transfer_download_handler(
         )
         .into_response();
     }
+    if let Some(why) = ps5upload_core::transfer::host_unsafe_component(basename) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!("{basename:?} cannot be saved on this computer: {why}."),
+        )
+        .into_response();
+    }
     // Stat via spawn_blocking — dest_dir can be a network mount where
     // a blocking stat would stall the reactor for every console.
     let dest_dir_for_stat = dest_dir.clone();
@@ -10263,6 +10145,10 @@ struct TransferDownloadZipReq {
     /// (smaller for text-heavy trees; cannot resume, so a drop restarts the archive).
     #[serde(default)]
     compression: Option<String>,
+    /// What to do with a file already at `dest_zip`: `replace` overwrites it (the person chose
+    /// that, say in a save dialog). Absent: refuse with a 409, as the link download does.
+    #[serde(default)]
+    existing: Option<String>,
 }
 
 /// POST /api/transfer/download-zip — pull a PS5 file/folder straight into a
@@ -10329,6 +10215,22 @@ async fn transfer_download_zip_handler(
                 return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
                     .into_response()
             }
+        }
+    }
+    // A finished download renames over the destination: an archive already there would be gone
+    // without a word.
+    if req.existing.as_deref() != Some("replace") {
+        let at = dest_zip.clone();
+        if let Ok(Ok(md)) = tokio::task::spawn_blocking(move || std::fs::metadata(&at)).await {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("{} already exists ({} bytes).", dest_zip.display(), md.len()),
+                    "existing_path": dest_zip.display().to_string(),
+                    "existing_bytes": md.len(),
+                })),
+            )
+                .into_response();
         }
     }
 
@@ -10463,8 +10365,19 @@ async fn transfer_dir_reconcile_handler(
         .into_response()
 }
 
-/// GET /api/jobs/{id}
-async fn get_job(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+/// GET /api/jobs/{id}: a transfer job, or an install by its own id (`<epoch>-<seq>`, the same
+/// status as `/api/pkg/install/status`).
+async fn get_job(
+    State(state): State<AppState>,
+    installs: pkg_install::PkgInstallStateHandle,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if install::is_install_job_id(&id) {
+        return match installs.jobs.get(&id) {
+            Some(st) => (StatusCode::OK, Json(st)).into_response(),
+            None => json_err(StatusCode::NOT_FOUND, "job not found").into_response(),
+        };
+    }
     let uuid = match id.parse::<Uuid>() {
         Ok(u) => u,
         Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid job id").into_response(),
@@ -10514,8 +10427,21 @@ async fn get_job_files(State(state): State<AppState>, Path(id): Path<String>) ->
 /// registered cancel flag; the core aborts at its next shard boundary with
 /// `transfer_cancelled` and the partial tx is left interrupted/resumable (same
 /// as a dropped connection). Idempotent — cancelling an unknown/finished job is
-/// a no-op 200 (`cancelled:false`); the client may race the job ending.
-async fn cancel_job(Path(id): Path<String>) -> impl IntoResponse {
+/// a no-op 200 (`cancelled:false`); the client may race the job ending. An install's id stops
+/// that install, as `/api/pkg/install/stop` does.
+async fn cancel_job(
+    installs: pkg_install::PkgInstallStateHandle,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if install::is_install_job_id(&id) {
+        let cancelled = installs.jobs.request_cancel(&id);
+        crate::log_info!("cancel_job: install job={id} cancelled={cancelled}");
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({ "cancelled": cancelled })),
+        )
+            .into_response();
+    }
     let uuid = match id.parse::<Uuid>() {
         Ok(u) => u,
         Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid job id").into_response(),
@@ -10677,23 +10603,30 @@ async fn activity_handler(
     Json(activity::snapshot(q.since, active))
 }
 
-/// GET /api/jobs
-async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
-    let jobs = state.jobs.lock().unwrap_or_else(|e| e.into_inner());
-    let summary: Vec<serde_json::Value> = jobs
-        .iter()
-        .map(|(id, s)| {
-            serde_json::json!({
-                "job_id": id.to_string(),
-                "status": match s {
-                    JobState::Running { .. } => "running",
-                    JobState::Done {..} => "done",
-                    JobState::Failed {..} => "failed",
-                },
-                "job": s,
+/// GET /api/jobs: transfers (`kind: "transfer"`) and installs (`kind: "install"`, whose `job` is
+/// the status `/api/pkg/install/status` gives). `GET /api/jobs/{id}` and its `cancel` take either id.
+async fn list_jobs(
+    State(state): State<AppState>,
+    installs: pkg_install::PkgInstallStateHandle,
+) -> impl IntoResponse {
+    let mut summary: Vec<serde_json::Value> = {
+        let jobs = state.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        jobs.iter()
+            .map(|(id, s)| {
+                serde_json::json!({
+                    "job_id": id.to_string(),
+                    "kind": "transfer",
+                    "status": match s {
+                        JobState::Running { .. } => "running",
+                        JobState::Done {..} => "done",
+                        JobState::Failed {..} => "failed",
+                    },
+                    "job": s,
+                })
             })
-        })
-        .collect();
+            .collect()
+    };
+    summary.extend(installs.jobs.all().iter().map(install::job_list_entry));
     Json(summary)
 }
 
@@ -10733,6 +10666,58 @@ fn bundle_path_ok(p: &str) -> bool {
             .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
 }
 
+/// Zips the bundle's entries, or says why not.
+fn build_bug_bundle(entries: &[BugBundleEntry]) -> Result<Vec<u8>, (StatusCode, String)> {
+    use base64::Engine as _;
+    use std::io::{Cursor, Write};
+
+    // A bundle is diagnostics, not a file transfer. Cap it so a malformed or
+    // hostile caller cannot drive the engine's memory through the roof.
+    const MAX_TOTAL: usize = 64 * 1024 * 1024;
+
+    let failed = |why: &str| (StatusCode::INTERNAL_SERVER_ERROR, why.to_string());
+    let mut buf = Cursor::new(Vec::<u8>::new());
+    let mut total = 0usize;
+    let mut zw = zip::ZipWriter::new(&mut buf);
+    let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for e in entries {
+        if !bundle_path_ok(&e.path) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("unsafe entry path: {}", e.path),
+            ));
+        }
+        let bytes: Vec<u8> = if let Some(t) = &e.text {
+            t.as_bytes().to_vec()
+        } else if let Some(b) = &e.base64 {
+            base64::engine::general_purpose::STANDARD
+                .decode(b)
+                .map_err(|_| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("entry {} has invalid base64", e.path),
+                    )
+                })?
+        } else {
+            Vec::new()
+        };
+        total = total.saturating_add(bytes.len());
+        if total > MAX_TOTAL {
+            return Err((
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "bundle too large".to_string(),
+            ));
+        }
+        zw.start_file(e.path.clone(), opts)
+            .map_err(|_| failed("zip entry failed"))?;
+        zw.write_all(&bytes)
+            .map_err(|_| failed("zip write failed"))?;
+    }
+    zw.finish().map_err(|_| failed("zip finish failed"))?;
+    Ok(buf.into_inner())
+}
+
 /// POST /api/bug-report/bundle — zip client-supplied entries and return the
 /// archive as a download.
 ///
@@ -10747,69 +10732,31 @@ fn bundle_path_ok(p: &str) -> bool {
 /// only has to do the two things a browser cannot: build the zip and hand it
 /// back as an attachment.
 async fn bug_report_bundle_handler(Json(req): Json<BugBundleReq>) -> axum::response::Response {
-    use base64::Engine as _;
-    use std::io::{Cursor, Write};
-
     if req.entries.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "entries is required").into_response();
     }
-    // A bundle is diagnostics, not a file transfer. Cap it so a malformed or
-    // hostile caller cannot drive the engine's memory through the roof.
-    const MAX_TOTAL: usize = 64 * 1024 * 1024;
-
-    let mut buf = Cursor::new(Vec::<u8>::new());
-    let mut total = 0usize;
-    {
-        let mut zw = zip::ZipWriter::new(&mut buf);
-        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-        for e in &req.entries {
-            if !bundle_path_ok(&e.path) {
-                return json_err(
-                    StatusCode::BAD_REQUEST,
-                    &format!("unsafe entry path: {}", e.path),
-                )
-                .into_response();
-            }
-            let bytes: Vec<u8> = if let Some(t) = &e.text {
-                t.as_bytes().to_vec()
-            } else if let Some(b) = &e.base64 {
-                match base64::engine::general_purpose::STANDARD.decode(b) {
-                    Ok(v) => v,
-                    Err(_) => {
-                        return json_err(
-                            StatusCode::BAD_REQUEST,
-                            format!("entry {} has invalid base64", e.path),
-                        )
-                        .into_response()
-                    }
-                }
-            } else {
-                Vec::new()
-            };
-            total = total.saturating_add(bytes.len());
-            if total > MAX_TOTAL {
-                return json_err(StatusCode::PAYLOAD_TOO_LARGE, "bundle too large").into_response();
-            }
-            if zw.start_file(e.path.clone(), opts).is_err() {
-                return json_err(StatusCode::INTERNAL_SERVER_ERROR, "zip entry failed")
-                    .into_response();
-            }
-            if zw.write_all(&bytes).is_err() {
-                return json_err(StatusCode::INTERNAL_SERVER_ERROR, "zip write failed")
-                    .into_response();
-            }
+    let filename = req.filename;
+    let entries = req.entries;
+    let count = entries.len();
+    // Deflating up to 64 MiB takes a while: not on an async worker, which serves every console.
+    let built = match tokio::task::spawn_blocking(move || build_bug_bundle(&entries)).await {
+        Ok(built) => built,
+        Err(e) => {
+            return json_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("bundle task failed: {e}"),
+            )
+            .into_response()
         }
-        if zw.finish().is_err() {
-            return json_err(StatusCode::INTERNAL_SERVER_ERROR, "zip finish failed")
-                .into_response();
-        }
-    }
+    };
+    let buf = match built {
+        Ok(buf) => buf,
+        Err((status, why)) => return json_err(status, why).into_response(),
+    };
 
     // Keep the leaf name simple: it lands in the user's Downloads folder and is
     // echoed into a Content-Disposition header.
-    let name = req
-        .filename
+    let name = filename
         .as_deref()
         .filter(|n| {
             !n.is_empty()
@@ -10819,10 +10766,10 @@ async fn bug_report_bundle_handler(Json(req): Json<BugBundleReq>) -> axum::respo
         })
         .unwrap_or("ps5upload-bugreport.zip");
 
-    let body = buf.into_inner();
+    let body = buf;
     crate::log_info!(
         "bug-report bundle: {} entries, {} bytes, name={}",
-        req.entries.len(),
+        count,
         body.len(),
         name
     );
@@ -11114,6 +11061,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     }
 
     let activity_installs = pkg_state.clone();
+    let jobs_installs = pkg_state.clone();
     let helper_stop_installs = pkg_state.clone();
     let cleanup_installs = pkg_state.clone();
     let app = Router::new()
@@ -11776,14 +11724,32 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         )
         .route("/api/version", get(engine_version))
         .route("/api/engine/update", get(engine_update::check))
-        .route("/api/jobs", get(list_jobs))
+        .route(
+            "/api/jobs",
+            get({
+                let installs = jobs_installs.clone();
+                move |st: State<AppState>| list_jobs(st, installs.clone())
+            }),
+        )
         .route("/api/jobs/summaries", get(telemetry::summaries_handler))
         .route("/api/jobs/{id}/summary", get(telemetry::summary_handler))
         .route("/api/metrics", get(telemetry::metrics_handler))
         .route("/api/bug-report/bundle", post(bug_report_bundle_handler))
-        .route("/api/jobs/{id}", get(get_job))
+        .route(
+            "/api/jobs/{id}",
+            get({
+                let installs = jobs_installs.clone();
+                move |st: State<AppState>, id: Path<String>| get_job(st, installs.clone(), id)
+            }),
+        )
         .route("/api/jobs/{id}/files", get(get_job_files))
-        .route("/api/jobs/{id}/cancel", post(cancel_job))
+        .route(
+            "/api/jobs/{id}/cancel",
+            post({
+                let installs = jobs_installs.clone();
+                move |id: Path<String>| cancel_job(installs.clone(), id)
+            }),
+        )
         .route("/api/jobs/{id}/pause", post(workshop_api::pause_job))
         .route("/api/jobs/{id}/resume", post(workshop_api::resume_job))
         .route(
@@ -12510,7 +12476,9 @@ mod cancel_registry_tests {
         let job_id = Uuid::new_v4();
         let flag = register_transfer_cancel(job_id);
         if cancel {
-            let r = cancel_job(Path(job_id.to_string())).await.into_response();
+            let r = cancel_job(Default::default(), Path(job_id.to_string()))
+                .await
+                .into_response();
             assert_eq!(r.status(), StatusCode::OK);
         }
         let jobs2 = Arc::clone(&jobs);
@@ -12619,6 +12587,88 @@ mod cancel_registry_tests {
 #[cfg(test)]
 mod helpers_tests {
     use super::*;
+
+    /// A pattern naming a folder that also occurs ABOVE the source (`data`, `Games`) must only
+    /// match inside it, as the transfer does: it emptied the plan, and the job then read
+    /// "N bytes of 0" while the whole tree was sent.
+    #[test]
+    fn the_folder_plan_matches_excludes_inside_the_source_only() {
+        let base = std::env::temp_dir().join(format!("ps5u-plan-{}", std::process::id()));
+        let root = base.join("data").join("Games").join("G");
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(root.join("eboot.bin"), b"12345").unwrap();
+        std::fs::write(root.join("data").join("a.bin"), b"123").unwrap();
+        let excludes = vec!["data".to_string()];
+
+        let (total, files) = walk_plan(&root, &excludes);
+        assert_eq!(total, 5);
+        assert_eq!(
+            files
+                .iter()
+                .map(|f| f.rel_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["eboot.bin"]
+        );
+
+        let local = ps5upload_core::source_fs::LocalFs;
+        let (total, files) = walk_plan_with(&local, &root, &excludes).unwrap();
+        assert_eq!(total, 5);
+        assert_eq!(files.len(), 1);
+
+        // Nothing named by the pattern: the whole tree, however the source's own path reads.
+        let (total, _) = walk_plan(&root, &["Games".to_string()]);
+        assert_eq!(total, 8);
+
+        let inventory = ps5upload_core::fs_ops::walk_local_inventory(&root, &excludes).unwrap();
+        assert_eq!(inventory.keys().collect::<Vec<_>>(), vec!["eboot.bin"]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Every transfer reports a resume the same way: zip, 7z and RAR used to say 0 skipped and the
+    /// planned count as sent, whatever the console had.
+    #[test]
+    fn a_finished_job_reads_what_was_skipped_and_sent_from_the_ack() {
+        let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::default();
+        let (events_tx, _rx) = broadcast::channel(4);
+        let job_id = Uuid::new_v4();
+        let result = |ack: &str| {
+            Ok(ps5upload_core::transfer::TransferResult {
+                tx_id_hex: "00".into(),
+                files_sent: 0,
+                bytes_sent: 10,
+                dest: "/data/x".into(),
+                commit_ack_body: ack.into(),
+            })
+        };
+        publish_transfer_end(
+            &jobs,
+            &events_tx,
+            job_id,
+            1,
+            result(r#"{"skipped_files":3,"skipped_bytes":900,"files_sent":2}"#),
+            5,
+        );
+        let g = jobs.lock().unwrap();
+        match g.get(&job_id) {
+            Some(JobState::Done {
+                files_sent,
+                skipped_files,
+                skipped_bytes,
+                ..
+            }) => assert_eq!((*files_sent, *skipped_files, *skipped_bytes), (2, 3, 900)),
+            other => panic!("{other:?}"),
+        }
+        drop(g);
+        publish_transfer_end(&jobs, &events_tx, job_id, 1, result("{}"), 5);
+        match jobs.lock().unwrap().get(&job_id) {
+            Some(JobState::Done {
+                files_sent,
+                skipped_files,
+                ..
+            }) => assert_eq!((*files_sent, *skipped_files), (5, 0), "the plan's count"),
+            other => panic!("{other:?}"),
+        };
+    }
 
     /// #275 — `POST /api/transfer/dir` used to await the full source walk
     /// before returning the job_id, so the client sat on "Starting…" for the
@@ -12801,16 +12851,25 @@ mod helpers_tests {
             events_tx,
         };
         let snap = body_json(
-            get_job(State(state.clone()), Path(job_id.to_string()))
-                .await
-                .into_response(),
+            get_job(
+                State(state.clone()),
+                Default::default(),
+                Path(job_id.to_string()),
+            )
+            .await
+            .into_response(),
         )
         .await;
         assert_eq!(snap["status"], "running");
         assert_eq!(snap["files_count"], 3);
         assert!(snap.get("files").is_none(), "full list in the poll: {snap}");
 
-        let listed = body_json(list_jobs(State(state.clone())).await.into_response()).await;
+        let listed = body_json(
+            list_jobs(State(state.clone()), Default::default())
+                .await
+                .into_response(),
+        )
+        .await;
         assert!(listed[0]["job"].get("files").is_none());
         assert_eq!(listed[0]["job"]["files_count"], 3);
 
@@ -12877,6 +12936,7 @@ mod helpers_tests {
                     error_reason: None,
                     error_detail: None,
                     error_console: None,
+                    error_space: None,
                 },
             );
             tokio::time::sleep(Duration::from_millis(450)).await;

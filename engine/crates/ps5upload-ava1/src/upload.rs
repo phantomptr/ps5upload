@@ -205,8 +205,14 @@ pub fn upload_rar_in(
     password: Option<&str>,
 ) -> Result<TransferResult> {
     use crate::rar_source::{rar_failure, RarOpenError, RarSource};
-    let (manifest, source) = match RarSource::open(archive, password, &cfg.excludes) {
+    let watch = ps5upload_core::transfer::RarLayoutWatch {
+        cancel: cfg.cancel.as_deref(),
+        live: cfg.progress_live.as_deref(),
+    };
+    let (manifest, source) = match RarSource::open_watched(archive, password, &cfg.excludes, watch)
+    {
         Ok(v) => v,
+        Err(RarOpenError::Cancelled) => return Err(anyhow!("transfer_cancelled")),
         Err(RarOpenError::Plan(f)) => return Err(rar_upload_failure(f.reason, f.message).into()),
         // A duplicate, a case clash, a file/dir clash or an unsafe path: terminal.
         Err(RarOpenError::Unsupported(m)) => {
@@ -217,6 +223,16 @@ pub fn upload_rar_in(
             .into())
         }
     };
+    // The headers do not give an unknown size, so the job's plan left those entries out: now
+    // that they are measured, the bar counts them.
+    if let Some(total) = &cfg.progress_total {
+        let measured = manifest
+            .entries
+            .iter()
+            .filter(|e| e.kind == gen::ENTRY_FILE)
+            .fold(0u64, |sum, e| sum.saturating_add(e.size));
+        total.store(measured, Ordering::Release);
+    }
     let source = Arc::new(source);
     let mut opts = SendOptions::upload(dest_root);
     opts.seq = Some(source.clone());
@@ -454,14 +470,29 @@ pub(crate) fn refusal(status: u16, message: String) -> UploadFailure {
     }
 }
 
-/// The console's own ENOSPC (its preallocation of a file, or a write) after the up-front check
-/// admitted the job: the same refusal the check gives, with the same figures and the pool
-/// sentence. The console keeps the journal and the `.ava-part`, so a retry resumes.
-pub(crate) fn late_no_space(job: &[u8; 16], console_message: String) -> UploadFailure {
-    UploadFailure {
-        reason: "preflight_insufficient_space".into(),
-        detail: crate::space::late_no_space_detail(job, &console_message),
+/// A drive that cannot take the job, with the figures behind it when they are known. The typed
+/// failure stays what callers downcast to; `downcast_ref::<SpaceRefusal>` finds the figures, so
+/// the client can word them in the user's language.
+fn no_room_failure(detail: String, refusal: Option<crate::space::SpaceRefusal>) -> anyhow::Error {
+    let reason = refusal
+        .as_ref()
+        .map_or("preflight_insufficient_space", |r| r.reason());
+    let failure = UploadFailure {
+        reason: reason.into(),
+        detail,
+    };
+    match refusal {
+        Some(r) => anyhow::Error::from(failure).context(r),
+        None => failure.into(),
     }
+}
+
+/// The console's own ENOSPC (its preallocation of a file, or a write) after the up-front check
+/// admitted the job: the same refusal the check gives, with the same figures and what explains
+/// them. The console keeps the journal and the `.ava-part`, so a retry resumes.
+pub(crate) fn late_no_space(job: &[u8; 16], console_message: String) -> anyhow::Error {
+    let (detail, refusal) = crate::space::late_no_space(job, &console_message);
+    no_room_failure(detail, refusal)
 }
 
 impl PostCommitError {
@@ -801,7 +832,7 @@ pub fn upload_with_seq_in(
                     return Err(PostCommitError::new(PostCommitKind::CrossDevice, r.message).into());
                 }
                 Ok(r) if r.status == gen::ERR_NO_SPACE => {
-                    return Err(late_no_space(&job_id, r.message.unwrap_or_default()).into());
+                    return Err(late_no_space(&job_id, r.message.unwrap_or_default()));
                 }
                 Ok(r) => return Err(refusal(r.status, r.message.unwrap_or_default()).into()),
                 Err(SendError::Disconnected(why)) => {
@@ -846,7 +877,7 @@ pub fn upload_with_seq_in(
                     );
                 }
                 Err(SendError::Refused { status, message }) if status == gen::ERR_NO_SPACE => {
-                    return Err(late_no_space(&job_id, message).into());
+                    return Err(late_no_space(&job_id, message));
                 }
                 Err(SendError::Refused { status, message }) => {
                     return Err(refusal(status, message).into());
@@ -855,11 +886,7 @@ pub fn upload_with_seq_in(
                 // The rest of the job does not fit the drive: said once, up front, with the
                 // numbers. The console keeps what it has, so freeing room and retrying resumes.
                 Err(SendError::NoRoom(detail)) => {
-                    return Err(UploadFailure {
-                        reason: "preflight_insufficient_space".into(),
-                        detail,
-                    }
-                    .into());
+                    return Err(no_room_failure(detail, crate::space::take_refusal(&job_id)));
                 }
                 Err(e) => return Err(anyhow!(e)),
             }

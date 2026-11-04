@@ -278,8 +278,9 @@ shows nothing for it. Code that matches on these fields points here (`client/src
 
 | field | type | meaning |
 |-------|------|---------|
-| `phase` | `"skipping"` | 7z/RAR resume: the decoder is discarding data the console already has. Absent otherwise. |
+| `phase` | `"skipping"` or `"measuring"` | `skipping`: 7z/RAR resume, the decoder is discarding data the console already has. `measuring`: see `measure_done_bytes`. Absent otherwise. |
 | `skip_done_bytes`, `skip_total_bytes` | u64 | Progress of the skipping phase (decoded vs to skip). |
+| `measure_done_bytes` | u64 | With `phase: "measuring"`: a RAR's entries of unknown size are being decoded to learn them, this many bytes so far. `total_bytes` includes them once it ends. |
 | `bottleneck` | string | AVA1's words: `network`, `source`, `console drive`, `console workers`, `console memory`, `none`. A finished job carries the same word in `commit_ack.bottleneck`. |
 | `settling` | bool | Files are still settling on the console after the job finished (the engine sees `unswept` > 0 in `job.status`): the client shows "Finishing on the console…". Sent on the job while it settles; absent or `false` shows nothing. |
 

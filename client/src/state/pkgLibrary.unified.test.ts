@@ -209,6 +209,14 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
     expect(o.errMessage).toMatch(/^The PS5 stopped fetching/);
   });
 
+  it("a link whose file changed says that, in the app's words", () => {
+    const o = statusToOutcome(
+      status({ phase: "failed", verdict: "failed", reason: "origin_changed", hint: "the file at this link changed" }),
+    );
+    expect(o.installed).toBe(false);
+    expect(o.errMessage).toMatch(/^The file at this link changed during the install/);
+  });
+
   it("a regressed patch gets the update-specific copy, not a raw error", () => {
     const o = statusToOutcome(
       status({ phase: "failed", verdict: "failed", patch_verdict: "regressed" }),
@@ -226,6 +234,31 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
       }),
     );
     expect(o.errMessage).toBe(PKG_PATCH_DID_NOT_APPLY_HINT);
+  });
+
+  it("an update still unconfirmed when the wait ended is not a failure and keeps the package", () => {
+    const o = statusToOutcome(
+      status({
+        phase: "done",
+        verdict: "unverified",
+        patch_verdict: "inconclusive",
+        metrics: { ...status({}).metrics, phase_ms: { verify: 420_000 } },
+      }),
+    );
+    expect(o.unverified).toBe(true);
+    // `installed` is what authorizes deleting the staged package.
+    expect(o.installed).toBe(false);
+    expect(o.errMessage).toContain("after 7 min");
+    expect(o.errMessage).toContain("The package was kept");
+  });
+
+  it("a link the console fetches by itself is sent, not installed", () => {
+    const o = statusToOutcome(
+      status({ phase: "done", verdict: "unverified", patch_verdict: null }),
+    );
+    expect(o.unverified).toBe(true);
+    expect(o.installed).toBe(false);
+    expect(o.errMessage).toContain("downloads it by itself");
   });
 
   it("falls back to the hex code when the engine gave no hint", () => {

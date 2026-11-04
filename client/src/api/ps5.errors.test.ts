@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   UploadJobError,
+  describeSpaceRefusal,
   humanizeJobErrorReason,
   volumeAllocatableBytes,
   volumeForPath,
@@ -63,6 +64,12 @@ describe("humanizeJobErrorReason", () => {
     const msg = humanizeJobErrorReason("preflight_insufficient_space");
     expect(msg).toMatch(/destination drive/i);
     expect(msg).toMatch(/retry|free up/i);
+  });
+
+  it("does not tell a user to free PS5 storage for a full game image", () => {
+    const msg = humanizeJobErrorReason("preflight_insufficient_space_image");
+    expect(msg).toMatch(/inside a game image/i);
+    expect(msg).toMatch(/doesn't help/i);
   });
 
   it("recognizes path-denied errors", () => {
@@ -223,6 +230,60 @@ describe("volumeForPath (longest-prefix match)", () => {
   });
 });
 
+describe("describeSpaceRefusal", () => {
+  const base = {
+    volume: "/data/x",
+    need_bytes: 2048,
+    avail_bytes: 1024,
+    free_bytes: 3072,
+    reserve_bytes: 2048,
+    promised_bytes: 0,
+    reused_bytes: 0,
+    image: false,
+    late: false,
+  };
+
+  it("fills every figure on a drive", () => {
+    const m = describeSpaceRefusal(base);
+    expect(m).toBe(
+      "/data/x needs 2.00 KiB more for this upload, but only 1.00 KiB can be used (3.00 KiB free, 2.00 KiB kept back).",
+    );
+  });
+
+  it("explains what an image can take and how to make room in it", () => {
+    // The Discord report: a game image with 200 MiB free refused a 211 MiB file.
+    const m = describeSpaceRefusal({
+      ...base,
+      volume: "/mnt/shadowmnt/G_ca51a0d7/data.bin",
+      need_bytes: 221_531_975,
+      avail_bytes: 200 * 1024 * 1024,
+      reserve_bytes: 0,
+      image: true,
+    });
+    expect(m).toContain("211 MiB");
+    expect(m).toContain("200 MiB");
+    expect(m).toContain("Delete the old file first");
+    expect(m).not.toContain("kept back");
+    expect(m).not.toContain("{");
+  });
+
+  it("adds what other uploads hold and what is reused only when there is some", () => {
+    const m = describeSpaceRefusal({ ...base, promised_bytes: 1024, reused_bytes: 4096 });
+    expect(m).toContain("1.00 KiB is set aside for other uploads");
+    expect(m).toContain("4.00 KiB of this upload is already on the console");
+    expect(describeSpaceRefusal(base)).not.toContain("set aside");
+    expect(describeSpaceRefusal(base)).not.toContain("already on the console");
+  });
+
+  it("does not blame internal storage for a late refusal on an image", () => {
+    const drive = describeSpaceRefusal({ ...base, late: true });
+    expect(drive).toContain("internal storage holds back");
+    const image = describeSpaceRefusal({ ...base, late: true, image: true });
+    expect(image).not.toContain("internal storage");
+    expect(image).toContain("The image ran out of room");
+  });
+});
+
 describe("humanizeJobErrorReason i18n", () => {
   it("returns the English text when no locale is loaded", () => {
     // trStatic falls back to the English literal at the call site, so a key
@@ -236,6 +297,7 @@ describe("humanizeJobErrorReason i18n", () => {
   it("never leaks a translation key for any known reason", () => {
     const reasons = [
       "preflight_insufficient_space",
+      "preflight_insufficient_space_image",
       "direct_staged_file_missing",
       "direct_writer_io_error",
       "direct_tx_corrupt",

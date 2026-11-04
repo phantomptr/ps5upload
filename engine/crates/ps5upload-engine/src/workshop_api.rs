@@ -128,18 +128,20 @@ fn pause_or_resume(id: &str, paused: bool) -> Response {
     let Ok(uuid) = id.parse::<Uuid>() else {
         return json_err(StatusCode::BAD_REQUEST, "invalid job id").into_response();
     };
-    let found = crate::set_job_paused(uuid, paused);
+    let outcome = crate::set_job_paused(uuid, paused);
     crate::log_info!(
-        "{}_job: job={uuid} found={found}",
+        "{}_job: job={uuid} outcome={outcome:?}",
         if paused { "pause" } else { "resume" }
     );
-    if !found {
-        // Over already, or not a job that can wait (an upload has its own pause).
-        return json_err(
-            StatusCode::CONFLICT,
-            "this job is not running, or cannot be paused",
-        )
-        .into_response();
+    match outcome {
+        crate::JobPause::Done => {}
+        crate::JobPause::NotRunning => {
+            return json_err(StatusCode::CONFLICT, "this job is not running").into_response();
+        }
+        // An upload has its own pause.
+        crate::JobPause::NotPausable => {
+            return json_err(StatusCode::CONFLICT, "this job cannot be paused").into_response();
+        }
     }
     (
         StatusCode::OK,
@@ -179,23 +181,29 @@ mod tests {
 
     #[test]
     fn only_a_registered_running_job_pauses() {
+        use crate::JobPause::{Done, NotPausable, NotRunning};
         let id = Uuid::new_v4();
-        assert!(!crate::set_job_paused(id, true), "unknown job");
+        assert_eq!(crate::set_job_paused(id, true), NotRunning, "unknown job");
         let plain = crate::register_transfer_cancel(id);
-        assert!(
-            !crate::set_job_paused(id, true),
+        assert_eq!(
+            crate::set_job_paused(id, true),
+            NotPausable,
             "an upload is not pausable here"
         );
         drop(plain);
         let flag = crate::register_workshop_job(id);
-        assert!(crate::set_job_paused(id, true));
+        assert_eq!(crate::set_job_paused(id, true), Done);
         let v = crate::with_live_notes(id, serde_json::json!({ "status": "running" }));
         assert_eq!(v["paused"], true, "{v}");
         assert_eq!(v["pausable"], true, "{v}");
-        assert!(crate::set_job_paused(id, false));
+        assert_eq!(crate::set_job_paused(id, false), Done);
         let v = crate::with_live_notes(id, serde_json::json!({ "status": "running" }));
         assert_eq!(v["paused"], false, "{v}");
         drop(flag);
-        assert!(!crate::set_job_paused(id, true), "a finished job");
+        assert_eq!(
+            crate::set_job_paused(id, true),
+            NotRunning,
+            "a finished job"
+        );
     }
 }

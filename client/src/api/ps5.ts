@@ -5,6 +5,7 @@
 // TCP send) stay in-process.
 
 import { trStatic } from "../lib/trStatic";
+import { formatBytes } from "../lib/format";
 import {
   classifySession,
   reportIfNotPaired,
@@ -854,7 +855,8 @@ export async function startTransferDownload(
 
 /** Download a PS5 file/folder straight into a `.zip` at `destZip`, streamed
  *  through Deflate as it downloads (no scratch dir). Returns the job_id —
- *  poll job_status for progress, same as a plain download. */
+ *  poll job_status for progress, same as a plain download. The caller has its person's answer
+ *  about a file already at `destZip` (the save dialog asks, and the phones pick a free name). */
 export async function startTransferDownloadZip(
   srcPath: string,
   destZip: string,
@@ -869,6 +871,7 @@ export async function startTransferDownloadZip(
       addr: transferAddr,
       kind,
       unsafe_read: unsafeRead,
+      existing: "replace",
     },
   });
   return res.job_id;
@@ -4460,6 +4463,91 @@ export interface JobSnapshot {
    *  to two: the failure may be the source's, not the destination the caller polls
    *  against). A not-paired failure opens THIS console's pairing dialog. */
   error_console?: string;
+  /** The figures behind a refusal for lack of room. {@link jobStatus} words them in the user's
+   *  language into `error` and `error_detail`, which hold English when they come from the engine. */
+  error_space?: SpaceRefusal;
+}
+
+/** Why an upload does not fit (engine `SpaceRefusal`). */
+export interface SpaceRefusal {
+  /** What the engine calls the drive: the destination, or its mount path. */
+  volume: string;
+  /** What the upload must still allocate, after crediting what the console already has. */
+  need_bytes: number;
+  /** What it may allocate: free space less the margin and other uploads' promises. */
+  avail_bytes: number;
+  free_bytes: number;
+  reserve_bytes: number;
+  /** Promised to other uploads running now, already taken off `avail_bytes`. */
+  promised_bytes: number;
+  /** Already on the console and reused. */
+  reused_bytes: number;
+  /** The destination is inside an attached disk image. */
+  image: boolean;
+  /** The console ran out of room after the check had admitted the job. */
+  late: boolean;
+}
+
+function withVars(text: string, vars: Record<string, string>): string {
+  return Object.entries(vars).reduce((t, [k, v]) => t.split(`{${k}}`).join(v), text);
+}
+
+/** A refusal for lack of room, in the user's language. */
+export function describeSpaceRefusal(s: SpaceRefusal): string {
+  const vars = {
+    volume: s.volume,
+    need: formatBytes(s.need_bytes),
+    avail: formatBytes(s.avail_bytes),
+    free: formatBytes(s.free_bytes),
+    reserve: formatBytes(s.reserve_bytes),
+    promised: formatBytes(s.promised_bytes),
+    reused: formatBytes(s.reused_bytes),
+  };
+  const parts: string[] = [];
+  if (s.late) {
+    parts.push(
+      s.image
+        ? trStatic(
+            "joberr.space_late_image",
+            "The image ran out of room during this upload. It needed {need} more, and {avail} was free when this was checked. The partial upload is kept. Delete a file in the image, then retry.",
+          )
+        : trStatic(
+            "joberr.space_late",
+            "{volume} ran out of room during this upload. It needed {need} more, and {avail} could be used when this was checked. PS5 internal storage holds back about a fifth more than is written, so less fits than its free space suggests. The partial upload is kept, so free some space and retry to resume.",
+          ),
+    );
+  } else if (s.image) {
+    parts.push(
+      trStatic(
+        "joberr.space_image",
+        "This upload needs {need} more, but only {avail} is free in the image. Replacing a file needs room for the new copy while the old one is still there. Delete the old file first, or change the files where the image was made and rebuild it.",
+      ),
+    );
+  } else {
+    parts.push(
+      trStatic(
+        "joberr.space_drive",
+        "{volume} needs {need} more for this upload, but only {avail} can be used ({free} free, {reserve} kept back).",
+      ),
+    );
+  }
+  if (s.promised_bytes > 0) {
+    parts.push(
+      trStatic(
+        "joberr.space_promised",
+        "{promised} is set aside for other uploads running now.",
+      ),
+    );
+  }
+  if (s.reused_bytes > 0) {
+    parts.push(
+      trStatic(
+        "joberr.space_reused",
+        "{reused} of this upload is already on the console and will be reused.",
+      ),
+    );
+  }
+  return parts.map((p) => withVars(p, vars)).join(" ");
 }
 
 /** Job-failure exception carrying the structured `error_reason` +
@@ -4519,6 +4607,11 @@ export function humanizeJobErrorReason(
       return trStatic(
         "joberr.preflight_insufficient_space",
         "The destination drive doesn't have enough free space for this file. Free up space on the PS5 (Settings → Storage) or pick a different destination, then click Retry.",
+      );
+    case "preflight_insufficient_space_image":
+      return trStatic(
+        "joberr.preflight_insufficient_space_image",
+        "This folder is inside a game image, and the image doesn't have enough free space for this file. An image keeps only a little spare room, so freeing space on the PS5 doesn't help.",
       );
     case "direct_staged_file_missing":
       return trStatic(
@@ -4792,6 +4885,13 @@ export async function jobStatus(
       (raw as { error_reason?: unknown }).error_reason ?? raw.error,
       typeof named === "string" && named.trim() ? named : host,
     );
+    // Every screen shows `error` or `error_detail`: the engine's figures become the user's
+    // language here, once, instead of the engine's English sentence.
+    const space = (raw as { error_space?: SpaceRefusal }).error_space;
+    if (space) {
+      const text = describeSpaceRefusal(space);
+      return { ...raw, error: text, error_detail: text } as unknown as JobSnapshot;
+    }
   }
   return raw as unknown as JobSnapshot;
 }
@@ -5936,7 +6036,10 @@ export interface InstallStatus {
   title_id: string | null;
   phase: "resolve" | "deliver" | "install" | "verify" | "done" | "failed";
   route: "loopback" | "stream" | "path" | null;
-  verdict: "installed" | "may_not_launch" | "failed" | null;
+  /** `unverified`: Sony accepted it and nothing failed, but the engine cannot say it finished
+   *  (the console fetches a bare link by itself; an update's version had not moved when the wait
+   *  ended). The package is kept. */
+  verdict: "installed" | "may_not_launch" | "failed" | "unverified" | null;
   code: number;
   hint: string | null;
   reason: string | null;
@@ -5962,18 +6065,26 @@ export interface InstallStatus {
   updated_at: number;
 }
 
-/** Start an install; returns the job id (or a busy error with the active job). */
+/** Start an install; returns the job id, or `error: "busy"` when the console already has one
+ *  running. The engine refuses that with a 409 (an engine before 11.1 with a 200), which both
+ *  transports turn into a thrown message ending in the body's `error`. */
 export async function pkgInstall(
   req: InstallRequestBody,
 ): Promise<{ ok: boolean; job?: string; error?: string }> {
-  return invoke("pkg_install", { req }) as Promise<{
-    ok: boolean;
-    job?: string;
-    error?: string;
-  }>;
+  try {
+    return (await invoke("pkg_install", { req })) as {
+      ok: boolean;
+      job?: string;
+      error?: string;
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (/(^|: )busy$/.test(message.trim())) return { ok: false, error: "busy" };
+    throw e;
+  }
 }
 
-/** Stop a running install job; the engine ends it as `cancelled` within a few seconds. */
+/** Stop a running install job; the engine ends it as `cancelled` at once. */
 export async function pkgInstallStop(job: string): Promise<void> {
   await invoke("pkg_install_stop", { job });
 }

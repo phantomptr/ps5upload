@@ -121,6 +121,28 @@ pub fn data_dir() -> Option<PathBuf> {
     (!home.trim().is_empty()).then(|| PathBuf::from(home).join(".ps5upload"))
 }
 
+/// Where the engine keeps large temporary copies: a package uploaded from a browser, a folder copied
+/// from a saved server for Convert. `PS5UPLOAD_STAGING_DIR`, else the data folder. Not the OS temp
+/// folder: in the Docker image that is the container's own layer (no volume, it survives restarts
+/// and fills the Docker Desktop VM's disk), and on Fedora and Arch desktops it is RAM. Neither is a
+/// place for tens of gigabytes.
+pub fn staging_root() -> PathBuf {
+    staging_root_from(
+        std::env::var_os("PS5UPLOAD_STAGING_DIR"),
+        // A test's copies stay in the temp folder, not in the user's data folder.
+        if cfg!(test) { None } else { data_dir() },
+    )
+}
+
+fn staging_root_from(pinned: Option<std::ffi::OsString>, data: Option<PathBuf>) -> PathBuf {
+    match pinned.filter(|v| !v.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => data
+            .map(|d| d.join("staging"))
+            .unwrap_or_else(std::env::temp_dir),
+    }
+}
+
 /// On disk: each secret is `base64(nonce || ciphertext)` of the JSON-encoded [`Secret`].
 #[derive(Serialize, Deserialize)]
 struct Stored {
@@ -471,6 +493,20 @@ pub(crate) fn conn(name: &str, protocol: Protocol) -> Connection {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn staging_goes_where_it_is_told_else_beside_the_engines_data() {
+        let data = || Some(std::path::PathBuf::from("/data/.ps5upload"));
+        assert_eq!(
+            super::staging_root_from(Some("/big/disk".into()), data()),
+            std::path::PathBuf::from("/big/disk")
+        );
+        assert_eq!(
+            super::staging_root_from(Some("".into()), data()),
+            std::path::PathBuf::from("/data/.ps5upload/staging")
+        );
+        assert_eq!(super::staging_root_from(None, None), std::env::temp_dir());
+    }
+
     use super::*;
 
     fn pw(p: &str) -> Secret {

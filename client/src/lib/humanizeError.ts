@@ -102,6 +102,17 @@ export function humanizePs5Error(
     return te("err_unmount_permission");
   }
 
+  // ─── This computer has no room (a link download, a server copy, a browser upload) ─────
+  {
+    const m = raw.match(/Not enough space: needs (.+?), (.+?) free\./);
+    if (m) return te("err_not_enough_space", { need: m[1], free: m[2] });
+  }
+
+  // ─── The file behind a link changed during a read ─────────────────
+  if (/the file at this link changed while it was being read/i.test(raw)) {
+    return te("err_link_changed");
+  }
+
   // ─── Uninstall the PS5 refused (#476) ──────────────────────────────
   {
     const m = raw.match(/uninstall_refused:(0x[0-9a-f]{8}|unknown)/i);

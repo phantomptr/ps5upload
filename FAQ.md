@@ -417,6 +417,9 @@ pre-release.
 - The API has **no password**. Set `PS5UPLOAD_ALLOW_IP` to the IPs or ranges allowed to use it
   (`192.168.1.0/24`); anything else gets a `403` naming the refused address. Trusted LAN only,
   never the internet.
+- With `PS5UPLOAD_ALLOW_IP` set, the engine does not fetch links that lead to its own machine or
+  to link-local addresses. A server on your LAN still works. `PS5UPLOAD_ALLOW_LOCAL_LINKS=1` turns
+  this off.
 - Start from [`engine/compose.yaml`](engine/compose.yaml) (set `PS5_ADDR`, `PS5UPLOAD_ALLOW_IP`
   and your package folder). It uses **host networking**: a stream install makes the PS5 download
   the package *from the engine*, and on Docker's bridge network the engine offers an address the
@@ -533,8 +536,9 @@ phone or another computer?" below walks through it from start to finish.
   `PS5UPLOAD_BROWSE_ROOTS=/pkgs` (comma-separated for several) so the picker opens there.
   In **Upload & Install**, **From this device…** stages files from your browser machine on the
   engine, then opens the normal review before sending to the PS5. Keep the tab open until
-  staging finishes. This needs free space on the engine; temporary uploads expire after seven
-  days. A package staged this way offers **Stream & install** on its card like any other.
+  staging finishes. This needs free space on the engine, in its data folder (`/data` in the Docker
+  image; `PS5UPLOAD_STAGING_DIR` puts it elsewhere); temporary uploads expire after seven days. A
+  package staged this way offers **Stream & install** on its card like any other.
 - An upload keeps running when you close the tab; reopening shows it. Only one tab runs the queue.
 - **Payloads → Send payload** accepts an ELF from your browser machine and forwards it through
   the engine to the selected console's loader (9021 by default). Sending bytes does not confirm
@@ -583,7 +587,8 @@ volumes:
 ```
 
 - Keep port **19113** the same on both sides (`"19113:19113"`). The PS5 downloads packages from
-  that port during Stream & install, and the engine tells it to use 19113.
+  that port during Stream & install, and the engine tells it to use 19113. If you publish another
+  port (`"8080:19113"`), set `PS5UPLOAD_PKG_HOST_PORT` to it (`"8080"`).
 - `PS5UPLOAD_PKG_HOST_IP` is the address the PS5 is told to download from. Without it, a stream
   install hands the PS5 an address inside Docker that it cannot reach.
 - `/pkgs` is what the web UI's file picker shows: change `/Users/you/PS5` to the folder that holds

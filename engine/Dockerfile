@@ -86,10 +86,11 @@ FROM scratch
 COPY --from=builder /build/engine/target/release/ps5upload-engine /ps5upload-engine
 # The engine looks for the RAR helper next to its own binary.
 COPY --from=builder /build/engine/target/release/ps5upload-unrar /ps5upload-unrar
-# /tmp: staging for uploaded packages, archive extraction and the like. It
-# is copied as a child of /rootfs because copying a directory applies only
-# its contents: `COPY /rootfs/tmp /tmp` left a 0755 root-owned /tmp and the
-# upload still failed. /data: the engine's home (HOME=/data puts its state in
+# /tmp: small scratch files. Uploaded packages and copies from a saved server
+# go to the data folder (PS5UPLOAD_STAGING_DIR moves them), since this layer is
+# no volume. It is copied as a child of /rootfs because copying a directory
+# applies only its contents: `COPY /rootfs/tmp /tmp` left a 0755 root-owned /tmp
+# and the upload still failed. /data: the engine's home (HOME=/data puts its state in
 # /data/.ps5upload), owned by the runtime user so it is writable.
 COPY --from=builder /rootfs/ /
 COPY --from=builder --chown=65532:65532 /rootfs-data/ /

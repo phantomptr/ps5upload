@@ -45,6 +45,9 @@ pub struct TransferConfig {
     /// The live notes a running job reports beyond bytes and files (what limits it, the 7z/RAR
     /// skipping phase, files still settling). The engine puts them in the job snapshot.
     pub progress_live: Option<std::sync::Arc<LiveNotes>>,
+    /// The job's total bytes, when the transfer learns them only after it starts (a RAR whose
+    /// headers do not give every size). The job's progress reads it as its denominator.
+    pub progress_total: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     /// Optional outbound bandwidth cap, in bytes per second. `None` = unlimited. Useful when
     /// uploading from a connection that is also carrying video calls or game streaming and you
     /// want to leave headroom.
@@ -71,6 +74,7 @@ impl TransferConfig {
             progress_bytes_resumed: None,
             progress_verify: None,
             progress_live: None,
+            progress_total: None,
             bandwidth_cap_bps: None,
             cancel: None,
             source_fs: None,
@@ -189,7 +193,8 @@ pub struct FileListEntry {
 pub struct LiveNotes {
     /// AVA1's bottleneck code (`ava1::gen::BN_*`; 0 = none).
     pub bottleneck: std::sync::atomic::AtomicU8,
-    /// 0 = sending, `LIVE_PHASE_SKIPPING` = the decoder is discarding data the console has.
+    /// 0 = sending, `LIVE_PHASE_SKIPPING` = the decoder is discarding data the console has,
+    /// `LIVE_PHASE_MEASURING` = it is learning the size of entries whose headers do not say.
     pub phase: std::sync::atomic::AtomicU8,
     pub skip_done_bytes: std::sync::atomic::AtomicU64,
     pub skip_total_bytes: std::sync::atomic::AtomicU64,
@@ -215,6 +220,8 @@ pub struct LiveNotes {
 }
 
 pub const LIVE_PHASE_SKIPPING: u8 = 1;
+/// A RAR with entries of unknown size is being decoded to learn them (`skip_done_bytes` so far).
+pub const LIVE_PHASE_MEASURING: u8 = 2;
 pub const LIVE_ROUTE_DIRECT: u8 = 1;
 pub const LIVE_ROUTE_RELAY: u8 = 2;
 
@@ -529,20 +536,15 @@ pub fn zip_plan_preview_with_progress(
         }
         files.push((rel, entry.uncompressed_size));
     }
-    // Collapse duplicate paths keeping the last (the AVA1 zip
-    // source's manifest rule) so the preview's total + file count match
-    // exactly what the transfer sends — otherwise the progress bar's
-    // denominator would exceed the bytes actually streamed.
+    // Two entries that normalise to one path cannot both land, and the AVA1 zip source refuses
+    // the archive whole (a manifest holds unique paths). Refused here too, with its words, so
+    // the archive fails at planning and not as a job that was shown as fine.
     files.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut deduped: Vec<(String, u64)> = Vec::with_capacity(files.len());
-    for f in files {
-        if deduped.last().is_some_and(|(p, _)| *p == f.0) {
-            deduped.pop();
-        }
-        deduped.push(f);
+    if let Some(pair) = files.windows(2).find(|w| w[0].0 == w[1].0) {
+        bail!("{}: two zip entries name the same file", pair[0].0);
     }
-    let total = deduped.iter().map(|(_, s)| *s).sum();
-    Ok((total, deduped))
+    let total = files.iter().map(|(_, s)| *s).sum();
+    Ok((total, files))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -832,7 +834,10 @@ pub use rar_support::{inspect_rar, rar_plan_preview};
 #[cfg(not(target_os = "android"))]
 pub(crate) use rar_support::{rar_dirs, rar_plan_entries, spawn_rar_worker};
 #[cfg(not(target_os = "android"))]
-pub use rar_support::{rar_layout, rar_walk, RarFailKind, RarLayout, RarWalkError, RarWalkSink};
+pub use rar_support::{
+    rar_layout, rar_layout_watched, rar_walk, RarFailKind, RarLayout, RarLayoutWatch, RarWalkError,
+    RarWalkSink, RAR_LAYOUT_CANCELLED,
+};
 
 #[cfg(not(target_os = "android"))]
 mod rar_support {
@@ -1323,10 +1328,31 @@ mod rar_support {
     }
 
     /// One header pass: files, dirs and the solid flag. Never decodes.
+    /// What may stop [`rar_layout_watched`] and what it reports. A RAR's layout normally takes
+    /// only its headers, but an entry of unknown size has to be decoded to learn it, and in a
+    /// solid archive that means all of it: hours for a large game.
+    #[derive(Default, Clone, Copy)]
+    pub struct RarLayoutWatch<'a> {
+        pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
+        pub live: Option<&'a LiveNotes>,
+    }
+
+    /// What [`rar_layout_watched`] fails with when `cancel` is raised.
+    pub const RAR_LAYOUT_CANCELLED: &str = "transfer_cancelled";
+
     pub fn rar_layout(
         archive_path: &Path,
         password: Option<&str>,
         excludes: &[String],
+    ) -> Result<RarLayout> {
+        rar_layout_watched(archive_path, password, excludes, RarLayoutWatch::default())
+    }
+
+    pub fn rar_layout_watched(
+        archive_path: &Path,
+        password: Option<&str>,
+        excludes: &[String],
+        watch: RarLayoutWatch<'_>,
     ) -> Result<RarLayout> {
         let path_str = archive_path.to_string_lossy().into_owned();
         let opened = list_headers(&path_str, password)
@@ -1367,7 +1393,7 @@ mod rar_support {
             dirs.retain(|d: &String| files.iter().any(|(f, _)| f.starts_with(&format!("{d}/"))));
         }
         if files.iter().any(|(_, s)| rar_size_unknown(*s)) {
-            measure_unknown_sizes(&path_str, password, solid, &mut files)?;
+            measure_unknown_sizes(&path_str, password, solid, &mut files, watch)?;
         }
         Ok(RarLayout {
             files,
@@ -1439,12 +1465,48 @@ mod rar_support {
     /// Learn the real size of every unknown-size entry by decoding it once (the
     /// stream's own end and CRC define it). Decodes the whole archive when it is
     /// solid; a non-solid archive only decodes the unknown entries.
+    ///
+    /// `watch`: a raised `cancel` ends it within one decoded piece, and `live` shows the bytes
+    /// decoded so far, so the job is neither uncancellable nor a silent "0 bytes".
     fn measure_unknown_sizes(
         path_str: &str,
         password: Option<&str>,
         solid: bool,
         files: &mut [(String, u64)],
+        watch: RarLayoutWatch<'_>,
     ) -> Result<()> {
+        use std::sync::atomic::Ordering::Relaxed;
+        // Set back to "sending" when the measuring ends, however it ends.
+        struct Phase<'a>(Option<&'a LiveNotes>);
+        impl Drop for Phase<'_> {
+            fn drop(&mut self) {
+                if let Some(l) = self.0 {
+                    l.phase.store(0, Relaxed);
+                    l.skip_done_bytes.store(0, Relaxed);
+                }
+            }
+        }
+        let _phase = Phase(watch.live);
+        if let Some(l) = watch.live {
+            l.phase.store(LIVE_PHASE_MEASURING, Relaxed);
+        }
+        let cancelled = || watch.cancel.is_some_and(|c| c.load(Relaxed));
+        let decoded = std::cell::Cell::new(0u64);
+        // One decoded piece more: says how far it got, and whether to go on.
+        let piece = |n: u64| {
+            decoded.set(decoded.get().saturating_add(n));
+            if let Some(l) = watch.live {
+                l.skip_done_bytes.store(decoded.get(), Relaxed);
+            }
+            !cancelled()
+        };
+        let cancel_or = |e: anyhow::Error| {
+            if cancelled() {
+                anyhow::anyhow!(RAR_LAYOUT_CANCELLED)
+            } else {
+                e
+            }
+        };
         let mut walk = rar_helper::walk(path_str, password)
             .map_err(|e| map_rar_open_err(path_str, "open rar", e))?;
         {
@@ -1472,6 +1534,9 @@ mod rar_support {
             .collect();
         let mut left = wanted.len();
         while left > 0 {
+            if cancelled() {
+                anyhow::bail!(RAR_LAYOUT_CANCELLED);
+            }
             let Some(header) = walk
                 .next_header()
                 .map_err(|e| map_rar_err("read rar header", e))?
@@ -1487,18 +1552,20 @@ mod rar_support {
                     let mut n = 0u64;
                     walk.read(true, &mut |p: Piece<'_>| {
                         n += p.bytes();
-                        true
+                        piece(p.bytes())
                     })
                     .map_err(|e| {
-                        map_rar_err("measure rar entry", e)
-                            .context(format!("encrypted={}", encrypted && password.is_some()))
+                        cancel_or(
+                            map_rar_err("measure rar entry", e)
+                                .context(format!("encrypted={}", encrypted && password.is_some())),
+                        )
                     })?;
                     files[i].1 = n;
                     left -= 1;
                 }
                 None if solid && !header.is_directory() => {
-                    walk.read(true, &mut |_: Piece<'_>| true)
-                        .map_err(|e| map_rar_err("measure rar entry", e))?;
+                    walk.read(true, &mut |p: Piece<'_>| piece(p.bytes()))
+                        .map_err(|e| cancel_or(map_rar_err("measure rar entry", e)))?;
                 }
                 None => {
                     walk.skip().map_err(|e| map_rar_err("skip rar entry", e))?;

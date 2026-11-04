@@ -63,6 +63,11 @@ impl RemotePkg {
         }
     }
 
+    /// The file behind a link changed under this install. Only a link can do that.
+    pub fn origin_changed(&self) -> bool {
+        matches!(self, RemotePkg::Http(r) if r.origin_changed())
+    }
+
     /// Fetch ahead of the console. Only the HTTP source needs it: its window
     /// cache is what lets the origin run ahead of the console. An SMB read on
     /// a LAN share answers well inside the console's own pacing.
@@ -423,6 +428,11 @@ mod persist {
 /// engine's other scratch state; each upload gets a UUID subdir so concurrent
 /// uploads and the same filename don't collide.
 fn pkg_upload_dir() -> std::path::PathBuf {
+    crate::remote::store::staging_root().join("ps5upload-pkg-upload")
+}
+
+/// Where an older version staged uploads, swept like the rest so nothing stays behind in it.
+fn legacy_pkg_upload_dir() -> std::path::PathBuf {
     std::env::temp_dir().join("ps5upload-pkg-upload")
 }
 
@@ -433,7 +443,12 @@ fn pkg_upload_dir() -> std::path::PathBuf {
 const PKG_UPLOAD_STALE_AGE: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
 
 fn cleanup_stale_pkg_uploads() {
-    let Ok(entries) = std::fs::read_dir(pkg_upload_dir()) else {
+    cleanup_stale_uploads_in(&pkg_upload_dir());
+    cleanup_stale_uploads_in(&legacy_pkg_upload_dir());
+}
+
+fn cleanup_stale_uploads_in(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     let now = std::time::SystemTime::now();
@@ -494,26 +509,36 @@ struct RemoveOnDrop(Option<PathBuf>);
 impl Drop for RemoveOnDrop {
     fn drop(&mut self) {
         if let Some(dir) = self.0.take() {
-            let _ = std::fs::remove_dir_all(dir);
+            // Tens of GB on a slow disk: not on an async worker, which serves every console.
+            match tokio::runtime::Handle::try_current() {
+                Ok(rt) => {
+                    rt.spawn_blocking(move || std::fs::remove_dir_all(dir));
+                }
+                Err(_) => {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+            }
         }
     }
 }
 
-async fn pkg_upload_handler(form: axum::extract::Multipart) -> Response<Body> {
-    stage_browser_upload(form, true).await
+async fn pkg_upload_handler(headers: HeaderMap, form: axum::extract::Multipart) -> Response<Body> {
+    stage_browser_upload(headers, form, true).await
 }
 
-async fn file_upload_handler(form: axum::extract::Multipart) -> Response<Body> {
-    stage_browser_upload(form, false).await
+async fn file_upload_handler(headers: HeaderMap, form: axum::extract::Multipart) -> Response<Body> {
+    stage_browser_upload(headers, form, false).await
 }
 
 async fn stage_browser_upload(
+    headers: HeaderMap,
     mut form: axum::extract::Multipart,
     packages_only: bool,
 ) -> Response<Body> {
     use tokio::io::AsyncWriteExt;
 
-    cleanup_stale_pkg_uploads();
+    // Removes week-old uploads, tens of GB each on a slow disk: not on an async worker.
+    tokio::task::spawn_blocking(cleanup_stale_pkg_uploads);
     let id = Uuid::new_v4();
     let dir = pkg_upload_dir().join(id.to_string());
     if let Err(e) = tokio::fs::create_dir_all(&dir).await {
@@ -521,6 +546,23 @@ async fn stage_browser_upload(
             StatusCode::INTERNAL_SERVER_ERROR,
             serde_json::json!({ "error": format!("could not create upload dir: {e}") }),
         );
+    }
+    // The size is known before the first byte: say so now rather than half-way through. The
+    // multipart wrapping makes this a little more than the file, which is no harm.
+    let announced = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    if let Some(want) = announced {
+        let room = dir.clone();
+        let free = tokio::task::spawn_blocking(move || ps5upload_fpkg::build::free_bytes(&room))
+            .await
+            .ok()
+            .flatten();
+        if let Some(refusal) = free.and_then(|f| crate::remote::fetch::no_room(f, want)) {
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+            return refusal;
+        }
     }
     // A browser that goes away mid-upload drops this handler at an await, past every cleanup
     // below: the partial package (tens of GB) would sit in the temp dir for a week.
@@ -913,6 +955,11 @@ async fn link_create_handler(
     State(state): State<PkgInstallStateHandle>,
     Json(req): Json<LinkCreateRequest>,
 ) -> Response<Body> {
+    // One at a time, from looking for an existing link to marking a new one as a link. Two clicks
+    // raced past the look, and the second start then met the first's new session and was refused
+    // as "an install of this exact package is already running", for a link nobody installs yet.
+    static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _turn = ONE_AT_A_TIME.lock().await;
     // An existing link for the same file is handed back, not doubled.
     {
         let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
@@ -2535,22 +2582,65 @@ pub(crate) fn read_installed_app_ver(mgmt_addr: &str, title_id: &str) -> Option<
         .filter(|v| !v.trim().is_empty())
 }
 
+/// What the wait for a patch to take effect found.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PatchCheck {
+    pub verdict: ps5upload_core::patch_verify::PatchVerdict,
+    /// The last version read.
+    pub after: Option<String>,
+    /// The budget ran out with the version still short of the package's. That alone proves
+    /// nothing: the console may still be writing it.
+    pub timed_out: bool,
+}
+
+/// How long a patch gets to show up after the console has it. A patch landed 150 s after the
+/// call on hardware, and a multi-GB one is decrypted and written for longer than a small one, so
+/// the wait grows with the package (about 50 MiB/s, past a floor that covers the measured case).
+pub(crate) fn patch_verify_budget(package_bytes: u64) -> std::time::Duration {
+    const FLOOR_SECS: u64 = 240;
+    const CEILING_SECS: u64 = 60 * 60;
+    let secs = FLOOR_SECS.saturating_add(package_bytes / (50 * 1024 * 1024));
+    std::time::Duration::from_secs(secs.min(CEILING_SECS))
+}
+
 /// Wait for a patch to take effect, then say whether it did.
 ///
 /// A PS5 install is asynchronous: on hardware the same patch landed 150 s
 /// after the call returned. Polling too early is exactly how this bug was
 /// twice mis-diagnosed, so this waits, and returns the moment the version
 /// moves rather than burning the whole budget on a success.
+///
+/// `stop` ends the wait early (the user stopped the install).
 pub(crate) fn verify_patch_after_install(
     mgmt_addr: &str,
     title_id: &str,
     before: Option<&str>,
     package_app_ver: &str,
-) -> (ps5upload_core::patch_verify::PatchVerdict, Option<String>) {
+    budget: std::time::Duration,
+    stop: &dyn Fn() -> bool,
+) -> PatchCheck {
+    wait_for_patch(
+        &|| read_installed_app_ver(mgmt_addr, title_id),
+        before,
+        package_app_ver,
+        budget,
+        std::time::Duration::from_secs(10),
+        stop,
+    )
+}
+
+/// [`verify_patch_after_install`] with the read and the step passed in, so the waiting rules are
+/// tested without a console.
+fn wait_for_patch(
+    read: &dyn Fn() -> Option<String>,
+    before: Option<&str>,
+    package_app_ver: &str,
+    budget: std::time::Duration,
+    step: std::time::Duration,
+    stop: &dyn Fn() -> bool,
+) -> PatchCheck {
     use ps5upload_core::patch_verify::{parse_app_ver, verify_patch_applied, PatchVerdict};
-    const BUDGET: std::time::Duration = std::time::Duration::from_secs(240);
-    const STEP: std::time::Duration = std::time::Duration::from_secs(10);
-    let deadline = std::time::Instant::now() + BUDGET;
+    let deadline = std::time::Instant::now() + budget;
     let mut latest: Option<String> = before.map(|s| s.to_string());
 
     // When the package does not claim a newer version there is no change to
@@ -2564,7 +2654,7 @@ pub(crate) fn verify_patch_after_install(
         _ => false,
     };
     if !expecting_rise {
-        let after = read_installed_app_ver(mgmt_addr, title_id).or(latest.clone());
+        let after = read().or(latest.clone());
         let verdict = verify_patch_applied(before, after.as_deref(), Some(package_app_ver));
         // A single sample is enough ONLY when it is not claiming a loss.
         // Sony's overwrite removes the old update before writing the new one,
@@ -2574,13 +2664,17 @@ pub(crate) fn verify_patch_after_install(
         // that looks like a loss falls through to the wait loop, which only
         // concludes at its deadline.
         if verdict != PatchVerdict::Regressed {
-            return (verdict, after);
+            return PatchCheck {
+                verdict,
+                after,
+                timed_out: false,
+            };
         }
         latest = after;
     }
 
     loop {
-        let after = read_installed_app_ver(mgmt_addr, title_id);
+        let after = read();
         if after.is_some() {
             latest = after.clone();
         }
@@ -2592,18 +2686,42 @@ pub(crate) fn verify_patch_after_install(
         // Concluding "regressed" from that sample would fail a perfectly good
         // install, which is worse than the silent no-op this exists to catch.
         // Only the deadline decides a failure.
-        if verify_patch_applied(before, latest.as_deref(), Some(package_app_ver))
-            == PatchVerdict::Applied
+        let verdict = verify_patch_applied(before, latest.as_deref(), Some(package_app_ver));
+        // A re-install that claims no rise is over once the title is back where it started.
+        if verdict == PatchVerdict::Applied
+            || (!expecting_rise && verdict != PatchVerdict::Regressed)
         {
-            return (PatchVerdict::Applied, latest);
+            return PatchCheck {
+                verdict,
+                after: latest,
+                timed_out: false,
+            };
+        }
+        if stop() {
+            return PatchCheck {
+                verdict: PatchVerdict::Inconclusive,
+                after: latest,
+                timed_out: false,
+            };
         }
         if std::time::Instant::now() >= deadline {
-            return (
-                verify_patch_applied(before, latest.as_deref(), Some(package_app_ver)),
-                latest,
-            );
+            // A version that has not moved when the wait ends is not a verdict of "did not
+            // apply": a large patch may still be writing. A loss is still only ever concluded
+            // here, at the end.
+            return PatchCheck {
+                verdict: match verdict {
+                    PatchVerdict::Regressed => PatchVerdict::Regressed,
+                    _ => PatchVerdict::Inconclusive,
+                },
+                after: latest,
+                timed_out: true,
+            };
         }
-        std::thread::sleep(STEP);
+        // In slices, so a stop is seen within a moment.
+        let wake = std::time::Instant::now() + step;
+        while std::time::Instant::now() < wake && !stop() {
+            std::thread::sleep(step.min(std::time::Duration::from_millis(250)));
+        }
     }
 }
 
@@ -2708,8 +2826,7 @@ async fn serve_handler(
     // strip_host_port for details — extracted so the URL-builder above
     // and this gate stay in sync (Round 1 fixed only this site; Round 2
     // caught the URL-builder mirror bug at the same site of truth).
-    let expected_ip = strip_host_port(&session.ps5_mgmt_addr);
-    let peer_ip = peer.ip().to_string();
+    let console_host = strip_host_port(&session.ps5_mgmt_addr);
     // A peer the operator already declared trusted via PS5UPLOAD_ALLOW_IP is
     // exempt from the source gate. This is what makes a NAT'd deployment work:
     // behind Docker port-mapping (Docker Desktop macOS/Windows) the console's
@@ -2720,12 +2837,17 @@ async fn serve_handler(
     // real console IP is visible and no allowlist entry is needed.
     let peer_trusted =
         peer.ip().is_loopback() || crate::allow_rules_contain(parse_allow_ips_env(), peer.ip());
-    if !peer_trusted && !session.shared_any && !expected_ip.is_empty() && peer_ip != expected_ip {
+    if !peer_trusted
+        && !session.shared_any
+        && !console_host.is_empty()
+        && !peer_is_console(&console_host, peer.ip()).await
+    {
         crate::log_warn!(
-            "pkg-host fetch REJECTED: peer={} expected={} session={} \
+            "pkg-host fetch REJECTED: peer={} expected={} (is {:?}) session={} \
              (set PS5UPLOAD_ALLOW_IP to this peer if the console is behind NAT)",
-            peer_ip,
-            expected_ip,
+            peer.ip(),
+            console_host,
+            console_addresses_known(&console_host),
             session.id,
         );
         return plain_response(
@@ -2947,11 +3069,14 @@ async fn resolve_remote_source(
     // concurrent installs for other consoles keep being served.
     let (remote, meta) = tokio::task::spawn_blocking(move || {
         let probe = crate::remote_pkg::RemoteSource::probe_with_options(&owned, insecure_tls)?;
-        let remote = Arc::new(crate::remote_pkg::RemoteSource::new_with_options(
-            owned,
-            probe.total_size,
-            insecure_tls,
-        ));
+        let remote = Arc::new(
+            crate::remote_pkg::RemoteSource::new_with_options(
+                owned,
+                probe.total_size,
+                insecure_tls,
+            )
+            .with_validators(probe.validators()),
+        );
         let read_at = |offset: u64, len: u64| -> Option<Vec<u8>> {
             if len == 0 {
                 return Some(Vec::new());
@@ -3633,11 +3758,88 @@ fn read_split_range(s: &InstallSession, start: u64, end: u64) -> std::io::Result
 /// by hundreds of Range requests per install, so cache rather than re-parse the
 /// env on each. The value is fixed at process start (set by the container/host
 /// launcher), so a OnceLock snapshot is correct.
-fn parse_allow_ips_env() -> &'static [crate::AllowRule] {
+pub(crate) fn parse_allow_ips_env() -> &'static [crate::AllowRule] {
     static ALLOW: std::sync::OnceLock<Vec<crate::AllowRule>> = std::sync::OnceLock::new();
     ALLOW.get_or_init(|| {
         crate::parse_allow_ips(&std::env::var("PS5UPLOAD_ALLOW_IP").unwrap_or_default())
     })
+}
+
+/// How long an answer about a console's name is used before it is looked up again.
+const CONSOLE_NAME_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+type ConsoleNames = HashMap<String, (std::time::Instant, Vec<IpAddr>)>;
+
+/// A console added by name (`ps5.local`, a DNS name): the addresses that name last resolved to.
+fn console_names() -> &'static Mutex<ConsoleNames> {
+    static NAMES: std::sync::OnceLock<Mutex<ConsoleNames>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(Mutex::default)
+}
+
+/// The address a console was given as, when it was given as one. A zone (`fe80::1%en0`) is not
+/// part of the address a peer shows up with.
+fn console_ip_literal(host: &str) -> Option<IpAddr> {
+    host.split('%').next()?.parse().ok()
+}
+
+/// `peer` is one of `console`'s addresses. A v4 peer reaching a dual-stack socket shows up as
+/// `::ffff:a.b.c.d`.
+fn peer_matches(peer: IpAddr, console: &[IpAddr]) -> bool {
+    let peer = peer.to_canonical();
+    console.iter().any(|ip| ip.to_canonical() == peer)
+}
+
+/// What a console's name is known to resolve to right now, for the log.
+fn console_addresses_known(host: &str) -> Vec<IpAddr> {
+    if let Some(ip) = console_ip_literal(host) {
+        return vec![ip];
+    }
+    console_names()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(host)
+        .map(|(_, ips)| ips.clone())
+        .unwrap_or_default()
+}
+
+/// Whether `peer` is the console a session was made for. A session keeps the address as the
+/// client gave it, and the app accepts a name: comparing that text with the peer's IP refused
+/// every fetch from a console added as `ps5.local`, which then read as "the PS5 never reached
+/// this computer". A name is looked up as it is when the install URL is built, and the answer is
+/// kept briefly: the console asks for hundreds of ranges per install.
+async fn peer_is_console(host: &str, peer: IpAddr) -> bool {
+    if let Some(ip) = console_ip_literal(host) {
+        return peer_matches(peer, &[ip]);
+    }
+    let fresh = console_names()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(host)
+        .filter(|(at, _)| at.elapsed() < CONSOLE_NAME_TTL)
+        .map(|(_, ips)| peer_matches(peer, ips));
+    if let Some(answer) = fresh {
+        return answer;
+    }
+    let name = host.to_string();
+    let looked_up = tokio::task::spawn_blocking(move || {
+        use std::net::ToSocketAddrs;
+        format!("{name}:1")
+            .to_socket_addrs()
+            .map(|a| a.map(|s| s.ip()).collect::<Vec<IpAddr>>())
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    let mut names = console_names().lock().unwrap_or_else(|e| e.into_inner());
+    // A lookup that failed (a hiccup in mDNS, say) keeps what was known, so one failure does not
+    // cut off an install that is running.
+    let known = match names.get(host) {
+        Some((_, ips)) if looked_up.is_empty() => ips.clone(),
+        _ => looked_up,
+    };
+    let answer = peer_matches(peer, &known);
+    names.insert(host.to_string(), (std::time::Instant::now(), known));
+    answer
 }
 
 pub fn lan_ip_for_ps5(ps5_host: &str) -> std::io::Result<IpAddr> {
@@ -3721,10 +3923,20 @@ pub(crate) fn engine_origin_for_ps5(ps5_addr: &str) -> std::io::Result<String> {
         })?,
         _ => lan_ip_for_ps5(&ps5_host_only)?,
     };
-    let host_port = std::env::var("PS5UPLOAD_ENGINE_PORT")
-        .ok()
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(19113);
+    // PS5UPLOAD_PKG_HOST_PORT is the same pin for the port: a container published on another host
+    // port (`-p 8080:19113`) listens on 19113 inside, and the PS5 can only reach it on 8080.
+    let host_port = match std::env::var("PS5UPLOAD_PKG_HOST_PORT") {
+        Ok(v) if !v.trim().is_empty() => v.trim().parse::<u16>().map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("PS5UPLOAD_PKG_HOST_PORT='{v}' is not a valid port: {e}"),
+            )
+        })?,
+        _ => std::env::var("PS5UPLOAD_ENGINE_PORT")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(19113),
+    };
     Ok(format!("http://{local_ip}:{host_port}"))
 }
 
@@ -4357,6 +4569,110 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     // after a fixed timer, deleting the staged pkg WHILE Sony was still
     // installing from it. The cure is "Complete only on observed completion".
 
+    // ── the wait for a patch to show up ──
+
+    #[test]
+    fn the_patch_wait_grows_with_the_package_up_to_a_limit() {
+        use std::time::Duration;
+        assert_eq!(patch_verify_budget(0), Duration::from_secs(240));
+        // 8.69 GB, the patch measured on hardware.
+        let b = patch_verify_budget(8_690_000_000);
+        assert!(
+            b > Duration::from_secs(400) && b < Duration::from_secs(500),
+            "{b:?}"
+        );
+        assert_eq!(patch_verify_budget(u64::MAX), Duration::from_secs(3600));
+    }
+
+    const PATCH_STEP: std::time::Duration = std::time::Duration::from_millis(5);
+
+    #[test]
+    fn a_patch_still_installing_when_the_wait_ends_is_not_a_failure() {
+        use ps5upload_core::patch_verify::PatchVerdict;
+        let c = wait_for_patch(
+            &|| Some("01.00".into()),
+            Some("01.00"),
+            "01.09",
+            std::time::Duration::from_millis(20),
+            PATCH_STEP,
+            &|| false,
+        );
+        assert_eq!(c.verdict, PatchVerdict::Inconclusive);
+        assert!(c.timed_out);
+        assert_eq!(c.after.as_deref(), Some("01.00"));
+    }
+
+    #[test]
+    fn a_patch_that_lands_ends_the_wait_at_once() {
+        use ps5upload_core::patch_verify::PatchVerdict;
+        let reads = std::sync::atomic::AtomicU32::new(0);
+        let c = wait_for_patch(
+            &|| {
+                let n = reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Some(if n < 2 { "01.00" } else { "01.09" }.to_string())
+            },
+            Some("01.00"),
+            "01.09",
+            std::time::Duration::from_secs(60),
+            PATCH_STEP,
+            &|| false,
+        );
+        assert_eq!(c.verdict, PatchVerdict::Applied);
+        assert!(!c.timed_out);
+    }
+
+    /// Sony removes the old update first, so a lower reading is only a loss at the deadline.
+    #[test]
+    fn a_lower_version_is_only_a_loss_at_the_end_of_the_wait() {
+        use ps5upload_core::patch_verify::PatchVerdict;
+        let reads = std::sync::atomic::AtomicU32::new(0);
+        let c = wait_for_patch(
+            &|| {
+                let n = reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Some(if n < 2 { "01.00" } else { "01.09" }.to_string())
+            },
+            Some("01.09"),
+            "01.09",
+            std::time::Duration::from_secs(60),
+            PATCH_STEP,
+            &|| false,
+        );
+        assert_eq!(
+            c.verdict,
+            PatchVerdict::Inconclusive,
+            "back where it started"
+        );
+        assert!(!c.timed_out);
+        assert_eq!(c.after.as_deref(), Some("01.09"));
+        let c = wait_for_patch(
+            &|| Some("01.00".into()),
+            Some("01.09"),
+            "01.09",
+            std::time::Duration::from_millis(20),
+            PATCH_STEP,
+            &|| false,
+        );
+        assert_eq!(c.verdict, PatchVerdict::Regressed);
+        assert!(c.timed_out);
+    }
+
+    #[test]
+    fn a_stop_ends_the_patch_wait_without_a_verdict() {
+        use ps5upload_core::patch_verify::PatchVerdict;
+        let started = std::time::Instant::now();
+        let c = wait_for_patch(
+            &|| Some("01.00".into()),
+            Some("01.00"),
+            "01.09",
+            std::time::Duration::from_secs(600),
+            std::time::Duration::from_secs(600),
+            &|| started.elapsed() > std::time::Duration::from_millis(30),
+        );
+        assert_eq!(c.verdict, PatchVerdict::Inconclusive);
+        assert!(!c.timed_out);
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    }
+
     // ── delete_staging / staging cleanup (the Auto-Delete data-loss fix) ──
 
     #[test]
@@ -4509,6 +4825,75 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
             url2.starts_with("http://127.0.0.1:"),
             "empty override should fall back to the routing guess: {url2}"
         );
+    }
+
+    /// `-p 8080:19113`: the engine listens on 19113 inside, the PS5 can only reach 8080.
+    #[test]
+    fn pkg_host_url_for_honours_a_published_port() {
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PS5UPLOAD_ENGINE_PORT", "19113");
+        std::env::set_var("PS5UPLOAD_PKG_HOST_PORT", "8080");
+        let url = pkg_host_url_for("127.0.0.1", "s", "IV0001-X");
+        std::env::set_var("PS5UPLOAD_PKG_HOST_PORT", "not-a-port");
+        let bad = pkg_host_url_for("127.0.0.1", "s", "IV0001-X");
+        std::env::set_var("PS5UPLOAD_PKG_HOST_PORT", " ");
+        let blank = pkg_host_url_for("127.0.0.1", "s", "IV0001-X");
+        std::env::remove_var("PS5UPLOAD_PKG_HOST_PORT");
+        std::env::remove_var("PS5UPLOAD_ENGINE_PORT");
+        assert!(url.unwrap().starts_with("http://127.0.0.1:8080/"));
+        assert!(bad.unwrap_err().to_string().contains("not a valid port"));
+        assert!(blank.unwrap().starts_with("http://127.0.0.1:19113/"));
+    }
+
+    #[test]
+    fn a_peer_is_compared_with_the_console_as_addresses() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert!(peer_matches(ip("192.168.1.5"), &[ip("192.168.1.5")]));
+        // A v4 peer on a dual-stack socket.
+        assert!(peer_matches(ip("::ffff:192.168.1.5"), &[ip("192.168.1.5")]));
+        // The text differs, the address does not.
+        assert!(peer_matches(ip("2001:db8::1"), &[ip("2001:DB8:0::1")]));
+        assert!(!peer_matches(ip("192.168.1.6"), &[ip("192.168.1.5")]));
+        assert_eq!(console_ip_literal("fe80::1%en0"), Some(ip("fe80::1")));
+        assert_eq!(console_ip_literal("ps5.local"), None);
+    }
+
+    /// A console added by name: its fetches come from the address the name resolves to. The
+    /// session's text is a name, which no peer address equals.
+    #[tokio::test]
+    async fn a_console_added_by_name_passes_the_source_gate_and_others_do_not() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        console_names().lock().unwrap().insert(
+            "ps5-gate-test.invalid".into(),
+            (std::time::Instant::now(), vec![ip("192.0.2.7")]),
+        );
+        assert!(peer_is_console("ps5-gate-test.invalid", ip("192.0.2.7")).await);
+        assert!(peer_is_console("ps5-gate-test.invalid", ip("::ffff:192.0.2.7")).await);
+        assert!(!peer_is_console("ps5-gate-test.invalid", ip("192.0.2.8")).await);
+        assert_eq!(
+            console_addresses_known("ps5-gate-test.invalid"),
+            vec![ip("192.0.2.7")]
+        );
+        // An address is never looked up.
+        assert!(peer_is_console("192.0.2.9", ip("192.0.2.9")).await);
+        assert!(!peer_is_console("192.0.2.9", ip("192.0.2.7")).await);
+    }
+
+    /// A lookup that fails keeps the last answer: one hiccup must not cut off a running install.
+    #[tokio::test]
+    async fn a_failed_lookup_keeps_what_was_known() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        // `.invalid` never resolves (RFC 6761), and the entry is past its TTL.
+        let long_ago = std::time::Instant::now()
+            .checked_sub(CONSOLE_NAME_TTL * 2)
+            .expect("the machine has been up long enough");
+        console_names().lock().unwrap().insert(
+            "ps5-hiccup-test.invalid".into(),
+            (long_ago, vec![ip("192.0.2.7")]),
+        );
+        assert!(peer_is_console("ps5-hiccup-test.invalid", ip("192.0.2.7")).await);
+        // Never known and unresolvable: refused.
+        assert!(!peer_is_console("ps5-unknown-test.invalid", ip("192.0.2.7")).await);
     }
 
     #[test]
@@ -5310,6 +5695,77 @@ mod host_net_tests {
 #[cfg(test)]
 mod browser_file_intake_tests {
     use super::*;
+
+    /// The size is known from the first line: a package that cannot fit is refused before any of
+    /// its tens of gigabytes arrive, not half-way through with a raw I/O error.
+    #[tokio::test]
+    async fn an_upload_that_cannot_fit_is_refused_before_its_bytes_arrive() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let state = Arc::new(PkgInstallState::restored());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server =
+            tokio::spawn(async move { axum::serve(listener, router(state)).await.unwrap() });
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        let huge = u64::MAX / 2;
+        stream
+            .write_all(
+                format!(
+                    "POST /api/pkg/upload HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+                     Content-Type: multipart/form-data; boundary=boundary\r\n\
+                     Content-Length: {huge}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut reply = Vec::new();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            stream.read_to_end(&mut reply),
+        )
+        .await;
+        server.abort();
+        read.expect("answered with no body sent").unwrap();
+        let reply = String::from_utf8_lossy(&reply);
+        assert!(reply.starts_with("HTTP/1.1 507"), "{reply}");
+        assert!(reply.contains("Not enough space"), "{reply}");
+    }
+
+    /// Two clicks at once: both get the one link. The second used to meet the first's new session
+    /// and be refused as "an install of this exact package is already running".
+    #[tokio::test]
+    async fn two_copy_link_clicks_at_once_get_one_link() {
+        let dir = std::env::temp_dir().join(format!("ps5u-link-race-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pkg = dir.join("game.pkg");
+        let mut bytes: Vec<u8> = (0..8192).map(|i| (i * 31 + 7) as u8).collect();
+        bytes[..4].copy_from_slice(b"\x7FCNT");
+        std::fs::write(&pkg, &bytes).unwrap();
+        let state = Arc::new(PkgInstallState::restored());
+        let create = || {
+            let (state, path) = (state.clone(), pkg.to_string_lossy().into_owned());
+            tokio::spawn(async move {
+                let req = LinkCreateRequest {
+                    ps5_addr: "127.0.0.1".into(),
+                    path,
+                };
+                let resp = link_create_handler(State(state), Json(req)).await;
+                let status = resp.status();
+                let body = axum::body::to_bytes(resp.into_body(), 1 << 16)
+                    .await
+                    .unwrap();
+                let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                (status, v)
+            })
+        };
+        let (a, b) = (create(), create());
+        let ((a_status, a), (b_status, b)) = (a.await.unwrap(), b.await.unwrap());
+        assert_eq!(a_status, StatusCode::OK, "{a}");
+        assert_eq!(b_status, StatusCode::OK, "{b}");
+        assert_eq!(a["id"], b["id"], "one file, one link");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     #[tokio::test]
     async fn a_browser_can_stage_a_non_package_file_and_remove_only_its_upload() {
         let state = Arc::new(PkgInstallState::restored());

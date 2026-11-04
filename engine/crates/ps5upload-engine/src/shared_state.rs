@@ -108,14 +108,17 @@ pub async fn get_doc(UrlPath(name): UrlPath<String>) -> Response {
     if let Some(r) = unknown(&name) {
         return r;
     }
-    let doc = {
+    // The first read of the file blocks: not on an async worker.
+    let doc = tokio::task::spawn_blocking(move || {
         let mut guard = store().lock().unwrap_or_else(|e| e.into_inner());
         guard
             .get_or_insert_with(|| path().as_deref().map(load_from).unwrap_or_default())
             .get(&name)
             .cloned()
             .unwrap_or_default()
-    };
+    })
+    .await
+    .unwrap_or_default();
     Json(doc).into_response()
 }
 

@@ -139,6 +139,7 @@ fn failed(started_at_ms: u64, error: String) -> JobState {
         error_reason: None,
         error_detail: None,
         error_console: None,
+        error_space: None,
     }
 }
 
@@ -345,26 +346,31 @@ fn plan_copy(
             format!("{}: {e}", dest_dir.display()),
         ));
     }
-    if let Some(free) = (deps.free_bytes)(&dest_dir) {
-        if free < total.saturating_add(HEADROOM) {
-            if made_dir {
-                let _ = std::fs::remove_dir_all(&dest_dir);
-            }
-            return Err((
-                StatusCode::INSUFFICIENT_STORAGE,
-                format!(
-                    "Not enough space: needs {}, {} free.",
-                    ps5upload_core::units::iec_bytes(total.saturating_add(HEADROOM)),
-                    ps5upload_core::units::iec_bytes(free)
-                ),
-            ));
+    if let Some(refusal) = (deps.free_bytes)(&dest_dir)
+        .and_then(|free| no_room_message(free, total.saturating_add(HEADROOM)))
+    {
+        if made_dir {
+            let _ = std::fs::remove_dir_all(&dest_dir);
         }
+        return Err((StatusCode::INSUFFICIENT_STORAGE, refusal));
     }
     let name = server_path
         .rsplit('/')
         .find(|s| !s.is_empty())
         .unwrap_or("server")
         .to_string();
+    // What the server calls it lands as one file here, whatever this computer is: `CON`, `a:b`
+    // or `x.` is a device, a stream or another name on Windows (and a listed folder's own files
+    // get the same rule from `safe_join`).
+    if let Some(why) = ps5upload_core::transfer::host_unsafe_component(&name) {
+        if made_dir {
+            let _ = std::fs::remove_dir_all(&dest_dir);
+        }
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("{name:?} cannot be saved on this computer: {why}."),
+        ));
+    }
     let dest = dest_dir.join(&name);
     // The copy and a RAR set's other volumes alike: never write over (and later delete) a file
     // that was already there.
@@ -517,6 +523,23 @@ struct CopyJob<'a> {
     report: &'a (dyn Fn(u64) + Send + Sync),
 }
 
+/// The refusal when `need` bytes do not fit in the `free` bytes of a folder on this computer, else
+/// `None`.
+pub(crate) fn no_room(free: u64, need: u64) -> Option<Response> {
+    no_room_message(free, need).map(|msg| err(StatusCode::INSUFFICIENT_STORAGE, msg))
+}
+
+/// What [`no_room`] says, for a refusal that ends a job rather than a request.
+fn no_room_message(free: u64, need: u64) -> Option<String> {
+    (free < need).then(|| {
+        format!(
+            "Not enough space: needs {}, {} free.",
+            ps5upload_core::units::iec_bytes(need),
+            ps5upload_core::units::iec_bytes(free)
+        )
+    })
+}
+
 /// `dest` + a relative path from a server listing, refusing anything that would land outside
 /// `dest`: `..`, an absolute path, a drive prefix, or a backslash (a separator on Windows).
 fn safe_join(dest: &Path, rel: &str) -> Result<PathBuf, String> {
@@ -529,7 +552,12 @@ fn safe_join(dest: &Path, rel: &str) -> Result<PathBuf, String> {
     let mut out = dest.to_path_buf();
     for c in Path::new(rel).components() {
         match c {
-            Component::Normal(part) => out.push(part),
+            Component::Normal(part)
+                if ps5upload_core::transfer::host_unsafe_component(&part.to_string_lossy())
+                    .is_none() =>
+            {
+                out.push(part)
+            }
             _ => return Err(unsafe_name()),
         }
     }
@@ -691,6 +719,11 @@ fn remove_copies(roots: &[PathBuf]) -> Vec<(PathBuf, std::io::Error)> {
 
 /// Folder the engine copies server files into when the caller names none.
 fn default_copy_root() -> PathBuf {
+    super::store::staging_root().join("ps5upload-remote")
+}
+
+/// Where an older version copied to, swept like the rest so nothing stays behind in it.
+fn legacy_copy_root() -> PathBuf {
     std::env::temp_dir().join("ps5upload-remote")
 }
 
@@ -703,6 +736,7 @@ const STALE_COPY_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 
 /// another engine's copy in progress is safe.
 pub fn sweep_stale_copies() {
     sweep_stale_copies_in(&default_copy_root(), STALE_COPY_AGE);
+    sweep_stale_copies_in(&legacy_copy_root(), STALE_COPY_AGE);
     sweep_stale_copies_in(&inspect_root(), STALE_COPY_AGE);
 }
 
@@ -806,6 +840,28 @@ fn total_size(sizes: impl IntoIterator<Item = u64>) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::remote::pool::testing::remote_with;
+
+    /// Legal names on a NAS or the PS5, and a device, a stream or another name on Windows.
+    #[test]
+    fn a_listed_name_this_computer_cannot_hold_is_refused() {
+        let dest = Path::new("/tmp/copy");
+        for rel in ["CON", "a/aux.dat", "x.", "a/b ", "a:b"] {
+            assert!(safe_join(dest, rel).is_err(), "{rel}");
+        }
+        assert_eq!(
+            safe_join(dest, "a/ゲーム.bin").unwrap(),
+            dest.join("a").join("ゲーム.bin")
+        );
+    }
+
+    #[test]
+    fn what_fits_exactly_fits() {
+        assert!(no_room(100, 100).is_none());
+        assert_eq!(
+            no_room(99, 100).unwrap().status(),
+            StatusCode::INSUFFICIENT_STORAGE
+        );
+    }
 
     #[test]
     fn sizes_that_overflow_are_refused_not_wrapped() {

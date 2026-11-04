@@ -1017,10 +1017,12 @@ fn walk_local_inventory_until(
             } else if ft.is_file() {
                 let size = entry.metadata().map_or(0, |m| m.len());
                 let path = entry.path();
-                if crate::excludes::is_excluded_strings(&path, excludes) {
+                // Relative to the source, as the transfer matches it: a pattern naming a folder
+                // that also occurs above the source must not exclude everything.
+                let rel = path.strip_prefix(root).unwrap_or(&path);
+                if crate::excludes::is_excluded_strings(rel, excludes) {
                     continue;
                 }
-                let rel = path.strip_prefix(root).unwrap_or(&path);
                 // Use forward-slash paths on every OS so relpaths match
                 // what the PS5 returns (PS5 is FreeBSD, always '/').
                 let rel_str = rel

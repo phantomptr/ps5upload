@@ -57,20 +57,23 @@ fn default_download_dir() -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("ps5upload"))
 }
 
-/// Strip anything that is not safe in a file name. The name comes from a URL,
-/// so it is attacker-influenced in the sense that a hostile link could carry
-/// `../../` or a NUL; it must never escape the download directory.
+/// A name that is safe as one file in the download directory. The name comes from a URL, so it is
+/// attacker-influenced in the sense that a hostile link could carry `../../` or a NUL; it must never
+/// escape the directory. Only what is unsafe goes: `ゲーム.part1.rar` must keep its stem, which is
+/// how the parts of a set find each other, and two differently named packages must not collapse
+/// into one name (the second would then read as already downloaded).
 fn safe_file_name(raw: &str) -> String {
-    let trimmed = raw.rsplit('/').next().unwrap_or(raw);
-    let cleaned: String = trimmed
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ' '))
-        .collect();
-    let cleaned = cleaned.trim().trim_start_matches('.').to_string();
-    if cleaned.is_empty() {
+    let name = crate::link::sanitize_name(raw);
+    // A trailing dot or space is dropped by Windows, naming another file.
+    let mut name = name.trim_end_matches(['.', ' ']).to_string();
+    // `CON.pkg` is a device there, whatever follows the dot.
+    if ps5upload_core::transfer::host_unsafe_component(&name).is_some() {
+        name.insert(0, '_');
+    }
+    if name.is_empty() {
         "package.pkg".to_string()
     } else {
-        cleaned
+        name
     }
 }
 
@@ -338,6 +341,12 @@ async fn start_handler(
     if url.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "url is required");
     }
+    if !crate::valid_link_url(&url) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "url must be an http(s) link with no fragment or control characters",
+        );
+    }
 
     let insecure = req.insecure_tls;
     let probe_url = url.clone();
@@ -367,6 +376,7 @@ async fn start_handler(
 
     let partial = partial_path(&path);
     let total = probe.total_size;
+    let validators = probe.validators();
     // Asked first, before an existing file is taken over below: a live download of the
     // same name owns that file and its partial.
     if let Some(busy) = live_download_for(&state, &path) {
@@ -442,7 +452,8 @@ async fn start_handler(
         let worker = dl.clone();
         tokio::task::spawn_blocking(move || {
             let dl = worker;
-            let src = crate::remote_pkg::RemoteSource::new_with_options(url, total, insecure);
+            let src = crate::remote_pkg::RemoteSource::new_with_options(url, total, insecure)
+                .with_validators(validators);
             match copy_to_file(&src, &dl, may_resume) {
                 // The partial stays: the next try of the same link resumes from it.
                 Err(e) => {
@@ -530,6 +541,19 @@ fn prepare_files(
         Err(_) => {}
     }
     let may_resume = took_over || read_sidecar(partial).is_some_and(|m| m.same_file(meta));
+    // What is still to come must fit: without this the download runs until the disk is full and
+    // ends in a raw I/O error. A partial being resumed is part of it; any other is about to go.
+    let partial_len = std::fs::metadata(partial).map_or(0, |m| m.len());
+    let (need, free_soon) = if may_resume {
+        (total.saturating_sub(partial_len), 0)
+    } else {
+        (total, partial_len)
+    };
+    if let Some(free) = ps5upload_fpkg::build::free_bytes(dir) {
+        if let Some(refusal) = crate::remote::fetch::no_room(free.saturating_add(free_soon), need) {
+            return Err(Box::new(refusal));
+        }
+    }
     if let Err(e) = write_sidecar(partial, meta) {
         crate::log_warn!("link-download: could not record the partial's source: {e}");
     }
@@ -772,12 +796,55 @@ mod tests {
     fn a_url_cannot_name_a_file_outside_the_download_directory() {
         assert_eq!(safe_file_name("../../etc/passwd"), "passwd");
         assert_eq!(safe_file_name("/a/b/c.pkg"), "c.pkg");
-        assert_eq!(
-            safe_file_name("..%2F..%2Fx.pkg"),
-            "..2F..2Fx.pkg".trim_start_matches('.')
-        );
+        assert_eq!(safe_file_name(r"..\..\x.pkg"), "x.pkg");
+        // Still encoded here, so still one component of its own.
+        assert_eq!(safe_file_name("..%2F..%2Fx.pkg"), "%2F..%2Fx.pkg");
         assert_eq!(safe_file_name(""), "package.pkg");
         assert_eq!(safe_file_name("...."), "package.pkg");
+        assert_eq!(safe_file_name("a\u{0}b.pkg"), "ab.pkg");
+    }
+
+    /// `ゲーム.part1.rar` became `part1.rar`, which UnRAR cannot find `part2` from, and every
+    /// non-Latin name of one size collapsed into one file, so the second download read as done.
+    #[test]
+    fn a_name_keeps_everything_that_is_not_unsafe() {
+        assert_eq!(safe_file_name("ゲーム.part1.rar"), "ゲーム.part1.rar");
+        assert_eq!(safe_file_name("Игра (2024).pkg"), "Игра (2024).pkg");
+        assert_eq!(super::local_name_for("ゲーム.pkg", false), "ゲーム.pkg");
+        assert_ne!(
+            super::local_name_for("ゲーム.pkg", false),
+            super::local_name_for("게임.pkg", false)
+        );
+    }
+
+    #[test]
+    fn a_name_cannot_be_something_else_on_windows() {
+        assert_eq!(safe_file_name("CON.pkg"), "_CON.pkg");
+        assert_eq!(safe_file_name("lpt1"), "_lpt1");
+        assert_eq!(safe_file_name("game.pkg."), "game.pkg");
+        assert_eq!(safe_file_name("game.pkg  "), "game.pkg");
+        assert_eq!(safe_file_name("a:b.pkg"), "ab.pkg");
+    }
+
+    /// The probe knows the size, so a download that cannot fit is said at once. It used to run
+    /// until the disk was full and end in a raw I/O error.
+    #[test]
+    fn a_download_that_cannot_fit_is_refused_before_it_starts() {
+        let dir = scratch("too-big");
+        let (path, partial) = (dir.join("a.pkg"), dir.join("a.pkg.partial"));
+        let huge = u64::MAX / 2;
+        let meta = PartialMeta {
+            host: "h".into(),
+            path: "/a.pkg".into(),
+            total: huge,
+            etag: None,
+            last_modified: None,
+        };
+        let refused = prepare_files(&dir, &path, &partial, huge, None, &meta)
+            .expect_err("nothing has that much free space");
+        assert_eq!(refused.status(), StatusCode::INSUFFICIENT_STORAGE);
+        assert!(!partial.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
