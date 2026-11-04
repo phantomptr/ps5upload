@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { QueueRow, queueItemsForHost, queueRowIcon, queueRowName, queueSections } from "./QueuePanel";
+import { FinishedRowNotes, QueueRow, queueItemsForHost, queueRowIcon, queueRowName, queueSections } from "./QueuePanel";
 import en from "../../i18n/locales/en";
 import type { QueueItem } from "../../state/uploadQueue";
 
@@ -155,6 +155,40 @@ describe("Queue panel", () => {
     expect(row(pkg({}))).toContain('data-testid="queue-pause"');
     expect(row(pkg({ installPhase: "installing" }))).not.toContain('data-testid="queue-pause"');
     expect(row(pkg({ uploadDone: true }))).not.toContain('data-testid="queue-pause"');
+  });
+
+  it("offers Stop install, not Cancel upload, once a package row is installing", () => {
+    const stoppable = row(
+      item({
+        id: "p",
+        sourceKind: "pkg",
+        sourcePath: "/g/p.pkg",
+        displayName: "Game P",
+        addr: "10.0.0.2:9113",
+        status: "running",
+        uploadDone: true,
+        installPhase: "installing",
+      }),
+    );
+    expect(stoppable).toContain("Stop this install");
+    expect(stoppable).not.toContain("Cancel this upload");
+  });
+
+  it("a finished row says why a game is not on the home screen", () => {
+    const notes = (over: Record<string, unknown>) =>
+      renderToStaticMarkup(
+        <FinishedRowNotes
+          item={{ sourceKind: "folder", registeredAs: null, mountWarnings: [], mountedAt: null, ...over } as never}
+        />,
+      );
+    expect(notes({ mountWarnings: ["Couldn't add it to the home screen"] })).toContain(
+      "Couldn&#x27;t add it to the home screen",
+    );
+    expect(notes({ registeredAs: "Game" })).toContain("On your PS5 home screen");
+    expect(notes({})).toContain("Next: open the game in Games");
+    // A plain file has no next step, and a mounted image has already taken it.
+    expect(notes({ sourceKind: "file" })).toBe("");
+    expect(notes({ sourceKind: "image", mountedAt: "/mnt/x" })).toBe("");
   });
 
   it("shows only the given console's items", () => {

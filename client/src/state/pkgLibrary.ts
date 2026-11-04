@@ -1013,6 +1013,9 @@ interface PkgLibraryState {
   installingAll: boolean;
 
   refresh: (host: string) => Promise<void>;
+  /** An install run outside this store (the queue's package finisher) has ended: clears
+   *  `installing` and runs the refresh held for it, as an install run here does. */
+  endExternalInstall: () => void;
   addAndUpload: (
     localPath: string,
     host: string,
@@ -2261,6 +2264,8 @@ const makePkgLibraryStore = () =>
     refreshDeferred: false,
     downloadNotice: null,
     installingAll: false,
+
+    endExternalInstall: endInstall,
 
     async refresh(host) {
       if (!host?.trim()) return;
@@ -4105,8 +4110,11 @@ registerInstallJobResolver(async (job) => {
   let st: InstallStatus;
   try {
     st = await pkgInstallStatus(job);
-  } catch {
-    return { state: "gone" };
+  } catch (e) {
+    // Only the engine saying it has no such job means gone (see pkgInstallStatus).
+    return /no such job/i.test(e instanceof Error ? e.message : String(e))
+      ? { state: "gone" }
+      : { state: "unanswered" };
   }
   if (st.phase === "done" || st.phase === "failed") {
     const o = statusToOutcome(st);
