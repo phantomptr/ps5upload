@@ -1149,6 +1149,16 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             (false, 0, Some("the installer rejected the request".into()))
         }
         Ok(ic::InstallReply::UnknownJob) => (false, 0, Some("no such install job".into())),
+        Ok(ic::InstallReply::SourceUnreadable) => (
+            false,
+            0,
+            Some("the package could not be opened on the PS5; check it is still there".into()),
+        ),
+        Ok(ic::InstallReply::LoopbackFailed) => (
+            false,
+            0,
+            Some("the installer could not serve the package on the PS5".into()),
+        ),
         Ok(ic::InstallReply::Sony { code, hint }) => (false, *code, hint.clone()),
         Ok(ic::InstallReply::Unknown(s)) => (
             false,

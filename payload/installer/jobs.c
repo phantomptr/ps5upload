@@ -30,6 +30,15 @@ int inst_stop_allowed(int install_in_flight, inst_job_phase_t active_phase,
     return inst_admit_install(active_phase, active_complete);
 }
 
+int inst_stop_forced_allowed(int install_in_flight) {
+    return install_in_flight ? 0 : 1;
+}
+
+int inst_job_released(uint64_t bytes_served, uint64_t total, double idle_seconds) {
+    if (total == 0 || bytes_served >= total) return 1;
+    return idle_seconds >= INST_JOB_STALLED_S ? 1 : 0;
+}
+
 void inst_coverage_reset(inst_coverage_t *c) {
     c->count = 0;
 }

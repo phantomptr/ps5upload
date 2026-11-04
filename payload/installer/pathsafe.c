@@ -102,6 +102,13 @@ int inst_build_loopback_url(char *out, size_t cap, uint16_t port,
     return n;
 }
 
+const char *inst_loopback_serve_name(const char *attempt, const char *basename) {
+    char url[INST_INSTALL_URI_MAX + 1];
+    if (inst_build_loopback_url(url, sizeof(url), 65535, attempt, basename) > 0)
+        return basename;
+    return "package.pkg";
+}
+
 int inst_is_network_class(uint32_t code) {
     return (code & 0xFFFF0000u) == 0x80430000u ? 1 : 0;
 }
