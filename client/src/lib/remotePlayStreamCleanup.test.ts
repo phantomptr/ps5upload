@@ -278,12 +278,16 @@ describe("RemotePlayStream at its end", () => {
   });
 
   it("does not start behind a stop that came while it checked the codecs", async () => {
-    const s = new RemotePlayStream(options());
+    const o = options();
+    const s = new RemotePlayStream(o);
     const starting = s.start();
     s.stop();
     await starting;
     await flush();
-    expect(sockets).toHaveLength(0);
+    // The one socket is the stop's own word to the engine; the start never connected.
+    expect(sockets).toHaveLength(1);
+    expect(o.phases).not.toContain("connecting");
+    expect(o.phases).toEqual(["ended"]);
   });
 
   const opened = async (o = options()) => {

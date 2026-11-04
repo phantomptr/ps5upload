@@ -260,7 +260,7 @@ describe("the stream bar's mode button", () => {
     expect(kbmBlocked({ ...NONE, supported: true, reason: "vinput_needs_loader" })).toBe("needs_loader");
     expect(kbmBlocked({ ...NONE, supported: true, reason: "vinput_companion_failed" })).toBe("companion_failed");
     expect(kbmBlocked({ ...NONE, supported: true, reason: "vinput_unsupported" })).toBe("unavailable");
-    expect(kbmBlocked({ ...NONE, supported: true, reason: "unreachable" })).toBe("unavailable");
+    expect(kbmBlocked({ ...NONE, supported: true, reason: "unreachable" })).toBe("unreachable");
     // A reason does not turn off devices the console says it has.
     expect(kbmBlocked({ ...BOTH, supported: true, reason: "vinput_needs_loader" })).toBeNull();
   });

@@ -9,6 +9,10 @@ import { useRemotePlayStore } from "../state/remotePlay";
 import { RemotePlayHost } from "./RemotePlayHost";
 
 vi.mock("../lib/pipPopups", () => ({ closeLeftoverPipPopups: async () => {} }));
+// The real box puts itself on the document, which this runner doesn't have.
+vi.mock("../components/PasscodeDialog", () => ({
+  PasscodeDialog: ({ testId }: { testId: string }) => <div data-testid={testId} />,
+}));
 
 const at = (path: string) =>
   renderToStaticMarkup(

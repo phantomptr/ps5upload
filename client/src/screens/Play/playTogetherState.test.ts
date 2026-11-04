@@ -47,7 +47,7 @@ describe("Play Together host state", () => {
     const s = readJoinState({ guests: [null, { id: 1 }], asks: "x", invite: { code: 1 } });
     expect(s.invite).toBeNull();
     expect(s.guests).toEqual([
-      { id: 1, name: "", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true },
+      { id: 1, name: "", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true, behind: false },
     ]);
     expect(s.settings.blockSystemButtons).toBe(false);
     expect(readJoinState(null).helperOk).toBe(true);
