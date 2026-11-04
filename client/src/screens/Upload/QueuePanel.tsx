@@ -58,7 +58,7 @@ import { humanizePs5Error } from "../../lib/humanizeError";
 import { hostOf, transferAddr } from "../../lib/addr";
 import {
   platformForTitleId,
-  titleIdFromContentId,
+  findTitleId,
 } from "../../lib/titleDetails";
 import { useTitleInfo } from "../../lib/useTitleInfo";
 import { formatBytes, formatDuration } from "../../lib/format";
@@ -1855,8 +1855,8 @@ export function queueRowIcon(
   sourceSrc: string | null;
 } {
   const titleId =
-    titleIdFromContentId(item.contentId) ||
-    titleIdFromContentId(art?.contentId) ||
+    findTitleId(item.contentId) ||
+    findTitleId(art?.contentId) ||
     art?.titleId ||
     null;
   const gamePath =

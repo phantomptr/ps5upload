@@ -10,7 +10,6 @@
  * and a rename onto an existing name is refused by the helper anyway (it
  * never overwrites); the planner refuses it first, with the reason.
  */
-import { ApiError } from "../api";
 import type { BatchResult } from "./move";
 import { renameEntry } from "./move";
 

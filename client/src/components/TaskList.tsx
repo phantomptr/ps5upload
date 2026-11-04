@@ -43,7 +43,6 @@ import {
 import clsx from "clsx";
 
 import { ProgressBar } from "./ProgressBar";
-import { Badge } from "./Badge";
 import { Spinner } from "./Spinner";
 import { ConsoleChip } from "./ConsoleChip";
 import { OverflowMenu, type OverflowMenuItem } from "./OverflowMenu";

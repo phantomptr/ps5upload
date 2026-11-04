@@ -464,7 +464,7 @@ export async function installRarPackages(
       dest,
       outcomes: [],
       space,
-      message: trStatic("rar_no_space", "Not enough space on {drive}: the packages need {need}, it has {room} free. Nothing was unpacked.", { drive: space.drive, need: fmtGb(space.need), room: fmtGb(space.room ?? 0) }),
+      message: trStatic("rar_no_space", "Not enough space on {drive}: the packages need {need}, it has {room} free. Nothing was unpacked.", { drive: space.drive ?? "", need: fmtGb(space.need), room: fmtGb(space.room ?? 0) }),
     };
   }
   for (const dir of pkgMkdirChain(dest)) {

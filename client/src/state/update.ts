@@ -25,6 +25,7 @@ import { useLangStore } from "./lang";
 import { pushNotification, useNotificationsStore } from "./notifications";
 import { appIsForeground, sendOsNotification } from "../lib/osNotify";
 import { log } from "./logs";
+import { trStatic } from "../lib/trStatic";
 
 // Shared store for update check + download state.
 //
