@@ -118,10 +118,11 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
       return;
     }
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
       const { readTextFileFromPath } = await import("../../lib/saveTextFile");
-      const src = await open({ multiple: false, filters: [{ name: "JSON", extensions: ["json"] }] });
-      if (!src || typeof src !== "string") return;
+      const { pickPath } = await import("../../lib/pickPath");
+      // Not the system dialog directly: on Android it answers with a content:// URI.
+      const src = await pickPath({ mode: "file", thisDevice: true, filters: [{ name: "JSON", extensions: ["json"] }] });
+      if (!src) return;
       await applyImport(await readTextFileFromPath(src));
     } catch (e) {
       setShareMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });

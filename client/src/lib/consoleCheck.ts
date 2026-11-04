@@ -6,7 +6,8 @@ import { ddpStatus, payloadCheck, portProbe } from "../api/ps5";
 import { localNetworkBlocked } from "./androidLocalNetwork";
 import { PAYLOAD_MANAGER_PORT, PS5_LOADER_PORT } from "./addr";
 import { checkSaysRest, powerFromCheck } from "./consolePower";
-import { looksLikeMacLocalNetworkBlock } from "./localNetworkHint";
+import { localNetworkHintFor } from "./localNetworkHint";
+import { isIOS } from "./platform";
 import type { Translator } from "../state/lang";
 
 type HelperCheck = Awaited<ReturnType<typeof payloadCheck>>;
@@ -97,7 +98,11 @@ export function closedPortText(
   }
   // "No route to host" at once, on a Mac, with the console known to be up from another
   // computer, is what a denied Local Network permission looks like: say where it is.
-  if (looksLikeMacLocalNetworkBlock(check.error, userAgent)) {
+  const networkHint = localNetworkHintFor(check.error, userAgent, isIOS());
+  if (networkHint === "ios") {
+    return `${detail}. ${tr("connection_ios_local_network_hint", undefined, "iOS may be blocking this app from your local network. Open Settings → PS5Upload, turn on Local Network, then check again.")}`;
+  }
+  if (networkHint === "mac") {
     return `${detail}. ${tr("connection_mac_local_network_hint", undefined, "macOS may be blocking this app from your local network. Open System Settings → Privacy & Security → Local Network, allow PS5Upload, then check again.")}`;
   }
   // A VPN on this computer sends the console's address out through the tunnel: the

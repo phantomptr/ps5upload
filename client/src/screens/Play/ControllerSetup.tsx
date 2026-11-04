@@ -18,6 +18,7 @@ import {
   type PadSnapshot,
 } from "../../lib/padProfiles";
 import { gamepadsOf } from "../../lib/nativePad";
+import { setPadForwardReason } from "../../lib/androidPadBridge";
 import { PadButton, type PadProfile } from "../../lib/remotePlayStream";
 import { useTr } from "../../state/lang";
 import { rpInput } from "../../state/remotePlay";
@@ -42,6 +43,11 @@ function useConnectedPads(): PadInfo[] {
           .filter((g): g is Gamepad => !!g?.connected)
           .map((g) => ({ index: g.index, id: g.id, standard: g.mapping === "standard" }));
   const [pads, setPads] = useState(read);
+  // Android: the app forwards controllers only while something on the page reads them.
+  useEffect(() => {
+    setPadForwardReason("controller-setup", true);
+    return () => setPadForwardReason("controller-setup", false);
+  }, []);
   useEffect(() => {
     const update = () => setPads(read());
     window.addEventListener("gamepadconnected", update);

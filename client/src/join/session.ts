@@ -20,6 +20,8 @@ import {
 } from "../lib/remotePlayStream";
 import { makeWatchPlayer, type MsePlayer, type WatchPlayer, type WatchProblem } from "../pad/watchPlayer";
 import { rpInput } from "../state/remotePlay";
+import { setScreenWakeReason } from "../lib/androidScreenWake";
+import { setPadForwardReason } from "../lib/androidPadBridge";
 
 export interface JoinSnapshot {
   stage: JoinStage;
@@ -266,4 +268,23 @@ function readMuted(): boolean {
   } catch {
     return false;
   }
+}
+
+/** While `session` is alive (connecting, asking, playing or reconnecting): the screen stays on (a
+ *  controller does not count as touching the phone; when it sleeps the page hides, the pad goes
+ *  neutral and the game drops to Reconnecting) and controllers are the page's. Returns the undo. */
+export function holdWhileJoined(session: JoinSession): () => void {
+  const apply = () => {
+    const k = session.snapshot.stage.kind;
+    const on = k !== "refused" && k !== "ended";
+    setScreenWakeReason("play-together", on);
+    setPadForwardReason("play-together", on);
+  };
+  apply();
+  const off = session.subscribe(apply);
+  return () => {
+    off();
+    setScreenWakeReason("play-together", false);
+    setPadForwardReason("play-together", false);
+  };
 }

@@ -27,7 +27,7 @@ pub mod mgmt_convert;
 pub mod mgmt_job;
 pub mod pool;
 pub mod progress;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod rar_source;
 pub mod relay;
 pub mod seq;

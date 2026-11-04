@@ -303,7 +303,7 @@ v5.x helper: the banner's **Send helper** replaces it in one click.
 ## Architecture
 
 ```
-client/ (Tauri 2 · React · TypeScript)   Android app · Docker web UI
+client/ (Tauri 2 · React · TypeScript)   Android and iPhone apps · Docker web UI
    │
    └── spawns ── ps5upload-engine (HTTP :19113)
                           │
@@ -315,7 +315,7 @@ client/ (Tauri 2 · React · TypeScript)   Android app · Docker web UI
   file operations and every management call, over [AVA1](https://github.com/phantomptr/ava1), the
   transfer protocol (its own repository, checked out as `third_party/ava1`).
 - **`engine/`**: Rust workspace with the AVA1 client, transfer logic, HTTP API and lab tools.
-- **`client/`**: Tauri 2 desktop app (and the Android and web builds), talking to the engine.
+- **`client/`**: Tauri 2 desktop app (and the Android, iPhone and web builds), talking to the engine.
 
 ## Build and test
 

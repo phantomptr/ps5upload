@@ -83,6 +83,7 @@ import { releasePageUrl } from "../../layout/UpdateToast";
 import { isIOS, isMobile } from "../../lib/platform";
 import { apkUpdaterAvailable } from "../../state/apkUpdate";
 import { ApkProgress, ApkUpdateStatus } from "../../layout/ApkUpdateStatus";
+import { useApkInstallGuard } from "../../layout/useApkInstallGuard";
 import { settingsVisibility } from "./visibility";
 import type { LanguageCode } from "../../i18n";
 // Static imports for stores already pulled into the main bundle by
@@ -696,6 +697,17 @@ export default function SettingsScreen() {
         )}
 
         {show.engineUrl && <EngineUrlSection />}
+        {show.engineBuiltIn && (
+          <Section title={tr("settings_card_engine", undefined, "Engine")}>
+            <p className="text-xs text-[var(--color-muted)]">
+              {tr(
+                "engine_built_in_hint",
+                undefined,
+                "This app uses its built-in engine, and you can't change that here. To use a self-hosted engine, open its web UI in your phone's browser.",
+              )}
+            </p>
+          </Section>
+        )}
 
         <GroupHeading>
           {tr("settings_group_a11y", undefined, "Accessibility")}
@@ -1337,13 +1349,16 @@ function BackupRestorePanel() {
     setError(null);
     setInfo(null);
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
       const { readTextFileFromPath } = await import("../../lib/saveTextFile");
-      const src = await open({
-        multiple: false,
+      const { pickPath } = await import("../../lib/pickPath");
+      // Not the system dialog directly: on Android it answers with a content:// URI, which
+      // cannot be read as a file.
+      const src = await pickPath({
+        mode: "file",
+        thisDevice: true,
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
-      if (!src || typeof src !== "string") return;
+      if (!src) return;
       const text = await readTextFileFromPath(src);
       const restored = await applyBundleText(text);
       setInfo(restoredMessage(restored));
@@ -1808,6 +1823,7 @@ function ResetPanel() {
  *  `useUpdateStore` so the same sidebar badge that indicates
  *  "available" also drives this card's main CTA. */
 function UpdatesPanel() {
+  const { confirmInstall, guardDialog } = useApkInstallGuard();
   const tr = useTr();
   const phase = useUpdateStore((s) => s.phase);
   const checkNow = useUpdateStore((s) => s.checkNow);
@@ -1872,6 +1888,7 @@ function UpdatesPanel() {
 
   const handleDownload = async () => {
     if (busy) return;
+    if (!(await confirmInstall())) return;
     setBusy(true);
     try {
       await download();
@@ -1902,6 +1919,7 @@ function UpdatesPanel() {
 
   return (
     <div className="flex flex-col gap-3">
+      {guardDialog}
       <StatusRow phase={phase} />
       {phase.kind === "downloading" && !mobile && <UpdateDownloadProgressRow />}
       {failed && (

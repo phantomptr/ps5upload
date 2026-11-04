@@ -803,8 +803,9 @@ pub fn sevenz_plan_preview_with_progress(
 //  (engine/crates/ps5upload-unrar, only ps5upload's own code + UnRAR), which
 //  `crate::rar_helper` starts and talks to over pipes. This module keeps all the
 //  RAR logic (paths, exclusions, errors, resume) and asks the helper only to
-//  list headers, skip an entry or decode one. Android has no helper, so this
-//  whole module is compiled out there (Android keeps zip/7z only).
+//  list headers, skip an entry or decode one. Phones have no helper (and iOS would
+//  not let the app start one), so this whole module is compiled out on Android and
+//  iOS, which keep zip/7z only.
 //
 //  This module inspects and walks an archive: `inspect_rar` and `rar_plan_preview`
 //  for the Upload card, `rar_layout` and `rar_walk` for the AVA1 RAR source
@@ -829,17 +830,17 @@ pub fn sevenz_plan_preview_with_progress(
 //  exception + the full UnRAR license: see LICENSES/UnRAR-exception.md and
 //  LICENSES/UnRAR-license.txt.
 // ═══════════════════════════════════════════════════════════════════════════
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use rar_support::{inspect_rar, rar_plan_preview};
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) use rar_support::{rar_dirs, rar_plan_entries, spawn_rar_worker};
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use rar_support::{
     rar_layout, rar_layout_watched, rar_walk, RarFailKind, RarLayout, RarLayoutWatch, RarWalkError,
     RarWalkSink, RAR_LAYOUT_CANCELLED,
 };
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod rar_support {
     use super::*;
     use crate::rar_helper::{self, Code as RarCode, Piece, RarError};

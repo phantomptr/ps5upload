@@ -28,11 +28,14 @@ export interface PickPathOptions {
   /** A saved server to browse instead of this computer (resolves with a `remote://` path), or
    *  the console (a `ps5://` path). */
   source?: { connectionId: string } | { console: string };
+  /** The file is read here in the app, not by the engine (a settings backup, say), so a remote
+   *  engine must not change which machine is browsed. */
+  thisDevice?: boolean;
 }
 
 /** The system file sheet is used for files on iOS while the engine runs in the app. */
-function iosSystemFiles(mode: string, source: PickPathOptions["source"]): boolean {
-  return isIOS() && mode === "file" && !source && engineIsOnThisDevice();
+function iosSystemFiles(mode: string, source: PickPathOptions["source"], thisDevice?: boolean): boolean {
+  return isIOS() && mode === "file" && !source && (!!thisDevice || engineIsOnThisDevice());
 }
 
 /** A picked file as a path: iOS hands back `file://` URLs (percent-encoded). */
@@ -61,11 +64,16 @@ export async function pickPath(opts: PickPathOptions): Promise<string | null> {
   // A server, Android, the web build and a remote engine all browse in-app: the web build has
   // no system dialog, and the system dialog would browse the wrong machine (this one, not the
   // engine's) whenever the engine runs elsewhere.
-  if (iosSystemFiles(opts.mode, opts.source)) {
+  if (iosSystemFiles(opts.mode, opts.source, opts.thisDevice)) {
     const got = await pickIosFiles(false, opts);
     if (got) return got[0] ?? null;
   }
-  if (opts.source || opts.mode === "any" || isMobile() || !engineIsOnThisDevice()) {
+  if (
+    opts.source ||
+    opts.mode === "any" ||
+    isMobile() ||
+    (!opts.thisDevice && !engineIsOnThisDevice())
+  ) {
     return pickLocalPath({
       mode: opts.mode,
       title: opts.title,

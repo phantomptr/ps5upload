@@ -2,8 +2,10 @@
 """Check the iOS build produced one real, unsigned iPhone app, then copy it to the given path.
 
 Fails the job (rather than uploading something useless) when the .ipa is missing, holds no app,
-is a simulator build, lacks the local-network permission text, or its binary is not arm64.
+is a simulator build, lacks the local-network permission text, carries another version than the
+release (TAG_VERSION, when set), cannot open ps5upload:// links, or its binary is not arm64.
 """
+import os
 import plistlib
 import shutil
 import subprocess
@@ -30,6 +32,13 @@ def main() -> None:
             raise SystemExit(f"not a device build: {info.get('CFBundleSupportedPlatforms')}")
         if not info.get("NSLocalNetworkUsageDescription"):
             raise SystemExit("NSLocalNetworkUsageDescription is missing (Info.ios.plist not merged?)")
+        version = info.get("CFBundleShortVersionString")
+        expected = os.environ.get("TAG_VERSION")
+        if expected and version != expected:
+            raise SystemExit(f"CFBundleShortVersionString is {version!r}, the release is {expected!r}")
+        schemes = {s for t in info.get("CFBundleURLTypes", []) for s in t.get("CFBundleURLSchemes", [])}
+        if "ps5upload" not in schemes:
+            raise SystemExit(f"CFBundleURLTypes has no ps5upload scheme: {sorted(schemes)}")
         name = info.get("CFBundleDisplayName") or info.get("CFBundleName")
         if name != "PS5Upload":
             raise SystemExit(f"home-screen name is {name!r}, not PS5Upload")

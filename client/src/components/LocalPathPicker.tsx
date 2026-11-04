@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 import { Button } from ".";
-import { localFs } from "../api/localFs";
+import { localFs, storageAccessUsesPrompt } from "../api/localFs";
 import { remoteApi, RemoteApiError } from "../api/remote";
 import { parentOf, fmtSize } from "../lib/pathBrowser";
 import { displayPath, remotePath } from "../lib/remotePath";
@@ -119,7 +119,7 @@ export function PickerView(p: PickerViewProps) {
     // behind itself — and below the confirm/prompt layer (z-[60]).
     <div
       className="anim-scrim scrim fixed inset-0 z-[55] flex items-end justify-center sm:items-center"
-      style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "var(--safe-bottom)" }}
+      style={{ paddingTop: "var(--safe-top)", paddingBottom: "var(--safe-bottom)" }}
       onClick={p.onCancel}
     >
       <div
@@ -150,15 +150,23 @@ export function PickerView(p: PickerViewProps) {
               {tr("picker_grant_title", undefined, "Allow access to your files")}
             </p>
             <p className="text-xs text-[var(--color-muted)]">
-              {tr(
-                "picker_grant_hint",
-                undefined,
-                "To upload a game folder or .zip, PS5 Upload needs permission to read your files. Tap below, enable “Allow access to manage all files”, then come back and tap Retry.",
-              )}
+              {storageAccessUsesPrompt()
+                ? tr(
+                    "picker_grant_hint_prompt",
+                    undefined,
+                    "To upload a game folder or .zip, PS5 Upload needs permission to read your files. Tap Allow, say yes in the prompt, then tap Retry.",
+                  )
+                : tr(
+                    "picker_grant_hint",
+                    undefined,
+                    "To upload a game folder or .zip, PS5 Upload needs permission to read your files. Tap below, enable “Allow access to manage all files”, then come back and tap Retry.",
+                  )}
             </p>
             <div className="mt-2 flex gap-2">
               <Button variant="primary" size="sm" onClick={p.onRequestAccess}>
-                {tr("picker_open_settings", undefined, "Open settings")}
+                {storageAccessUsesPrompt()
+                  ? tr("picker_allow", undefined, "Allow")
+                  : tr("picker_open_settings", undefined, "Open settings")}
               </Button>
               <Button variant="ghost" size="sm" onClick={p.onRetry}>
                 <RefreshCw size={14} />

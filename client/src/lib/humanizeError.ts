@@ -258,10 +258,10 @@ export function humanizePs5Error(
     }
   }
   if (/RAR is not supported on this build/i.test(raw)) {
-    // Android (and any build without the desktop-only unrar dep). The UI
-    // should feature-gate before calling, but if a request slips through the
-    // engine returns 501 with this body.
-    return te("err_rar_unsupported");
+    // The phone apps (no build there has the desktop-only unrar helper). The UI should
+    // feature-gate before calling, but if a request slips through the engine returns 501
+    // with this body.
+    return te("err_rar_phones");
   }
   if (/rar contains an unsafe or invalid entry path/i.test(raw)) {
     return te("err_rar_unsafe_entry");

@@ -3,6 +3,7 @@ import { LockKeyhole } from "lucide-react";
 
 import { isPasscode } from "../lib/passcode";
 import { useTr } from "../state/lang";
+import { useBackDismiss } from "../lib/systemBack";
 
 /** Presses and keys in the box are the box's: never the picture's, never the pad's (over the
  *  stream the box sits inside the stage, and React events bubble to it). */
@@ -54,6 +55,7 @@ export function PasscodeDialog({
   useEffect(() => {
     cancelRef.current = onCancel;
   });
+  useBackDismiss(true, onCancel);
 
   useEffect(() => {
     input.current?.focus({ preventScroll: true });

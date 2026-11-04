@@ -1,0 +1,17 @@
+# Text wry's build script adds to the Kotlin it generates for Android (only that build reads it).
+# This is wry's own extension point; `gen/android/.../generated/` is written during the Rust build,
+# so scripts/release/android-postinit-patch.sh cannot patch that file.
+# Here and not in src-tauri/: Cargo looks for this file from the folder it runs in, and the Tauri
+# CLI's Android build does not run it inside src-tauri/ (scripts/release/verify-android-apk.py fails
+# the release when this does not reach the APK).
+[env]
+# Without this, Android kills the whole app when the WebView's renderer dies (an out-of-memory
+# during Remote Play, a GPU crash), and with it the in-process engine and any transfer. Recreating
+# the activity gives a new WebView; the engine stays up and the page reads its state back from it.
+WRY_RUSTWEBVIEWCLIENT_CLASS_EXTENSION = """
+    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+        android.util.Log.w("PS5UploadWebView", "renderer gone, crash=" + detail.didCrash())
+        (view.context as? android.app.Activity)?.recreate()
+        return true
+    }
+"""

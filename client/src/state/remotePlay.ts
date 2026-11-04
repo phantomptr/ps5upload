@@ -26,6 +26,8 @@ import { gamepadsOf } from "../lib/nativePad";
 import { profileFor } from "../lib/padProfiles";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { setGameMode } from "../lib/gameMode";
+import { setScreenWakeReason } from "../lib/androidScreenWake";
+import { setPadForwardReason } from "../lib/androidPadBridge";
 import { padMotion, padTouchState, setPadTouchpad } from "../lib/padTouchpad";
 import { DualSenseEffects, dualSenseCapable, findDualSense } from "../lib/dualSense";
 import { applyControls } from "../lib/gameControls";
@@ -507,6 +509,13 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
 // nothing plays yet, and a hold a reloaded page left on is let go.
 setGameMode(false);
 useRemotePlayStore.subscribe((s) => setGameMode(!!s.stream && s.phase === "playing"));
+
+// Keep the screen on while playing (a controller does not count as touching the phone). From the
+// store, not a screen: the stream keeps playing in the mini player on other screens.
+useRemotePlayStore.subscribe((s) => setScreenWakeReason("remote-play", !!s.stream && s.phase === "playing"));
+
+// Controllers are the page's while there is a stream (lib/androidPadBridge).
+useRemotePlayStore.subscribe((s) => setPadForwardReason("remote-play", !!s.stream));
 
 // A DualSense's touchpad (lib/padTouchpad.ts) is read while a stream plays; each change sends the
 // pad at once, like a key, so a quick tap is not lost between two frames.

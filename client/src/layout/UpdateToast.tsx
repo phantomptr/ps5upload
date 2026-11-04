@@ -20,7 +20,8 @@ import { Modal } from "../components/Modal";
 import { MarkdownView } from "../components/MarkdownView";
 import { Button } from "../components/Button";
 import { openExternalUrl } from "../lib/openExternalUrl";
-import { isMobile } from "../lib/platform";
+import { isIOS, isMobile } from "../lib/platform";
+import { useApkInstallGuard } from "./useApkInstallGuard";
 import { apkUpdaterAvailable, progressPercent, useApkUpdateStore } from "../state/apkUpdate";
 
 /** The GitHub page of one release. */
@@ -163,6 +164,7 @@ export function UpdateToast() {
   const lastInstall = useUpdateStore((s) => s.lastInstall);
   const retryInstall = useUpdateStore((s) => s.retryInstall);
   const apkStep = useApkUpdateStore((s) => s.step);
+  const { confirmInstall, guardDialog } = useApkInstallGuard();
   // Dismiss is keyed by version so a NEWER release later in the session
   // re-surfaces the bar instead of staying hidden.
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
@@ -194,6 +196,9 @@ export function UpdateToast() {
   // Android with the installer bridge: one tap downloads and opens Android's dialog.
   const apkInstall =
     isMobile() && "result" in phase && !!phase.result.download_url && apkUpdaterAvailable();
+  // Android refused after its dialog (Play Protect, a conflict, no space), or Install unknown
+  // apps stayed off. `phase` is back to "available" by then, so this is the only place it shows.
+  const apkFailed = apkInstall && apkStep.kind === "failed" && !downloading ? apkStep.message : null;
   const downloadPct =
     apkInstall && apkStep.kind === "downloading"
       ? progressPercent(apkStep.received, apkStep.total)
@@ -202,9 +207,10 @@ export function UpdateToast() {
         : null;
 
   return (
-    <div className="mx-3 mt-2 flex items-center gap-3 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] px-4 py-2 text-sm md:mx-6">
+    // A phone has no room for this on one line: the text takes its own row, in full.
+    <div className="mx-3 mt-2 flex items-center gap-3 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] px-4 py-2 text-sm max-sm:flex-wrap max-sm:gap-y-1 max-sm:rounded-[var(--radius-card)] md:mx-6">
       <Sparkles size={15} className="shrink-0 text-[var(--color-accent)]" />
-      <span className="min-w-0 flex-1 truncate">
+      <span className="min-w-0 flex-1 truncate max-sm:basis-[calc(100%-2.5rem)] max-sm:whitespace-normal">
         <span className="font-medium text-[var(--color-text)]">
           {ready
             ? tr("update_toast_ready", { version }, "v{version} ready")
@@ -212,6 +218,8 @@ export function UpdateToast() {
               ? tr("update_install_failed_title", undefined, "Update didn't install")
               : downloaded
                 ? tr("update_toast_downloaded", undefined, "Update downloaded")
+                : apkFailed
+                  ? tr("update_install_failed_title", undefined, "Update didn't install")
                 : failed
                   ? tr("update_toast_failed", undefined, "Update download failed")
                   : tr("update_toast_title", undefined, "Update available")}
@@ -245,6 +253,19 @@ export function UpdateToast() {
             {tr("update_apk_toast_confirm", undefined, "tap Update in Android's dialog")}
           </span>
         )}
+        {apkFailed && (
+          <span className="text-[var(--color-bad)]" data-testid="update-toast-apk-failed">
+            {" · "}
+            {apkFailed}
+          </span>
+        )}
+        {/* iPhone: Download only opens the file; nothing installs it from here. */}
+        {isIOS() && !downloaded && (
+          <span className="text-[var(--color-muted)]">
+            {" · "}
+            {tr("update_ios_toast_hint", undefined, "install the new .ipa with your sideloading app")}
+          </span>
+        )}
       </span>
       <button
         type="button"
@@ -276,11 +297,21 @@ export function UpdateToast() {
           </button>
         </>
       )}
+      {apkFailed && (
+        <button
+          type="button"
+          onClick={() => void openExternalUrl(releasePageUrl(version))}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
+        >
+          <ExternalLink size={13} />
+          {tr("update_download_page", undefined, "Download page")}
+        </button>
+      )}
       {!downloaded && !installFailed && (
         <button
           type="button"
           disabled={downloading}
-          onClick={() => void download()}
+          onClick={() => void confirmInstall().then((go) => (go ? download() : undefined))}
           className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent)] disabled:opacity-60"
         >
           {downloading ? (
@@ -341,6 +372,7 @@ export function UpdateToast() {
       {showNotes && (
         <ReleaseNotesDialog version={version} notes={notes} onClose={() => setShowNotes(false)} />
       )}
+      {guardDialog}
     </div>
   );
 }

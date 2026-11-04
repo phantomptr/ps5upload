@@ -783,6 +783,9 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: bash scripts/release/android-sign.sh
 
+      - name: Check the APKs
+        run: python3 scripts/release/verify-android-apk.py PS5Upload-android.apk PS5Upload-android-armv7.apk
+
       - name: Upload signed APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -877,7 +880,7 @@ jobs:
         run: npx tauri ios build --ci --target aarch64 --no-sign
 
       - name: Check the IPA
-        run: python3 scripts/release/verify-ios-ipa.py PS5Upload-ios-unsigned.ipa
+        run: TAG_VERSION="$(tr -d '[:space:]' < VERSION)" python3 scripts/release/verify-ios-ipa.py PS5Upload-ios-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

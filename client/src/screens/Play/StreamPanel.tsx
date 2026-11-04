@@ -34,7 +34,6 @@ import { useRosterStore } from "../../state/roster";
 import { deviceName, meshFor, othersRemotePlaying, remotePlayPads, useMeshStore } from "../../state/mesh";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { isLinuxDesktop, isMobile } from "../../lib/platform";
-import { setScreenWakeReason } from "../../lib/androidScreenWake";
 import {
   canStream,
   stopEngineSession,
@@ -723,12 +722,6 @@ export function StreamPanel() {
     holdPageStill(true);
     return () => holdPageStill(false);
   }, [full]);
-  // Keep the screen on while playing (a controller does not count as touching the phone).
-  useEffect(() => {
-    if (!playing) return;
-    setScreenWakeReason("remote-play", true);
-    return () => setScreenWakeReason("remote-play", false);
-  }, [playing]);
   const togglePip = useCallback(async () => {
     if (useRemotePlayStore.getState().pip) return closePip();
     if (full) exitFull();

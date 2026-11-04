@@ -2140,9 +2140,9 @@ struct SevenzInspectReq {
 }
 
 /// `/api/transfer/rar` request. Like 7z plus an optional `password` for
-/// encrypted archives. (RAR is desktop-only — the Android build cfg's out both
+/// encrypted archives. (RAR is desktop-only — the phone builds cfg out both
 /// the real handler and this struct, so it lives behind the same gate.)
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[derive(Deserialize)]
 struct TransferRarReq {
     addr: Option<String>,
@@ -2194,7 +2194,7 @@ struct RarPackagesReq {
 }
 
 /// `/api/rar/inspect` request. Desktop-only, same gate as the handler.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[derive(Deserialize)]
 struct RarInspectReq {
     archive_path: String,
@@ -9147,7 +9147,7 @@ async fn transfer_7z_handler(
 
 /// POST /api/rar/inspect — desktop only. Counts + uncompressed size of a
 /// `.rar` (multi-volume opens from the first part; `password` for encrypted).
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn rar_inspect_handler(Json(req): Json<RarInspectReq>) -> impl IntoResponse {
     let p = req.archive_path.clone();
     let pw = req.password.clone();
@@ -9166,7 +9166,7 @@ async fn rar_inspect_handler(Json(req): Json<RarInspectReq>) -> impl IntoRespons
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 async fn rar_inspect_handler() -> impl IntoResponse {
     json_err(
         StatusCode::NOT_IMPLEMENTED,
@@ -9178,7 +9178,7 @@ async fn rar_inspect_handler() -> impl IntoResponse {
 /// POST /api/transfer/rar — desktop only. Host-extract the `.rar` (any volume
 /// set, optional password) to a temp dir, then stream the tree to the PS5 via
 /// the directory transfer. Mirrors `transfer_7z_handler`'s job model.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn transfer_rar_handler(
     State(state): State<AppState>,
     Json(req): Json<TransferRarReq>,
@@ -9351,7 +9351,7 @@ async fn transfer_rar_handler(
         .into_response()
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 async fn transfer_rar_handler() -> impl IntoResponse {
     json_err(
         StatusCode::NOT_IMPLEMENTED,
@@ -9363,7 +9363,7 @@ async fn transfer_rar_handler() -> impl IntoResponse {
 /// POST /api/rar/packages — the `.pkg` entries of a ZIP, 7z or RAR (any folder depth), from
 /// the headers alone, so several packages in one archive can be found before anything is
 /// unpacked (R6, #370). `PKG_ALLOW` is the same allow-list the unpack passes as `excludes`, so
-/// what is listed here is exactly what `/api/transfer/rar` will send. On Android only RAR is
+/// what is listed here is exactly what `/api/transfer/rar` will send. On a phone only RAR is
 /// refused: ZIP and 7z are pure Rust and their unpack routes exist there.
 async fn rar_packages_handler(Json(req): Json<RarPackagesReq>) -> impl IntoResponse {
     let p = req.archive_path.clone();
@@ -9432,11 +9432,11 @@ fn archive_package_entries(
         Some(ArchiveKind::SevenZ) => {
             Ok(ps5upload_core::transfer::sevenz_plan_preview(p, &allow)?.1)
         }
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         Some(ArchiveKind::Rar) => {
             Ok(ps5upload_core::transfer::rar_layout(p, password, &allow)?.files)
         }
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         Some(ArchiveKind::Rar) => {
             let _ = password;
             anyhow::bail!("RAR is not supported on this build")
@@ -10736,9 +10736,9 @@ async fn engine_version() -> impl IntoResponse {
         Json(serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
             // Capability flags the UI feature-detects. `rar` is desktop-only
-            // (the UnRAR C dep is excluded from the Android build), so the
+            // (UnRAR is a helper program, which neither phone app has), so the
             // client hides the .rar option when this is false.
-            "caps": { "rar": cfg!(not(target_os = "android")) },
+            "caps": { "rar": cfg!(not(any(target_os = "android", target_os = "ios"))) },
         })),
     )
 }
@@ -11106,8 +11106,9 @@ fn spawn_parent_watcher() {
 /// (`serve_in_process`); the two differ only in these flags.
 pub struct EngineConfig {
     /// Socket to bind. Desktop: `"0.0.0.0:19113"` (so the PS5 can reach
-    /// `/pkg-host/*` for fakepkg installs). Mobile in-process:
-    /// `"127.0.0.1:19113"` (loopback only; the renderer hits the same).
+    /// `/pkg-host/*` for fakepkg installs). Mobile in-process: the same
+    /// (`0.0.0.0:19113`, so the PS5 can fetch packages from the phone); the
+    /// renderer uses loopback, and the guard keeps `/api/*` local.
     pub bind: String,
     /// Default PS5 transfer address. Per-request `addr` params override
     /// it, so this is only a fallback.
@@ -12147,12 +12148,16 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // middleware. Without this, axum hands handlers a generic ConnectInfo
     // and the middleware would have to fall back to header-based source
     // detection (less reliable, easier to spoof from a hostile LAN peer).
-    let served = axum::serve(
-        no_delay(listener),
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await;
+    let served = if cfg.exit_on_error {
+        axum::serve(
+            no_delay(listener),
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+    } else {
+        serve_rebindable(&bind, listener, app, shutdown_signal()).await
+    };
     ps5upload_core::events::emit(
         ps5upload_core::events::Cat::System,
         ps5upload_core::events::Level::Info,
@@ -12169,6 +12174,72 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("axum serve terminated: {e}"));
     }
     Ok(())
+}
+
+fn rebind_signal() -> &'static tokio::sync::Notify {
+    static SIGNAL: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+    SIGNAL.get_or_init(tokio::sync::Notify::new)
+}
+
+/// Phones: drop the listening socket and bind a new one, leaving the engine and its running
+/// requests alone. iOS can reclaim a suspended app's listening socket, after which nothing
+/// connects and `accept` only fails, while the process itself is fine.
+pub fn rebind_in_process() {
+    rebind_signal().notify_one();
+}
+
+/// In-process serving: as `axum::serve`, plus `rebind_in_process`. Connections already open finish
+/// on the old server, which has dropped its listener by then.
+async fn serve_rebindable<F>(
+    bind: &str,
+    first: tokio::net::TcpListener,
+    app: Router,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let (stop_all, _) = tokio::sync::watch::channel(false);
+    let stop = stop_all.clone();
+    tokio::spawn(async move {
+        shutdown.await;
+        let _ = stop.send(true);
+    });
+    let mut listener = first;
+    loop {
+        let (stop_this, stop_this_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut all = stop_all.subscribe();
+        let serve = axum::serve(
+            no_delay(listener),
+            app.clone()
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            tokio::select! {
+                _ = stop_this_rx => {}
+                _ = all.wait_for(|stopped| *stopped) => {}
+            }
+        });
+        let mut serving = tokio::spawn(async move { serve.await });
+        tokio::select! {
+            ended = &mut serving => {
+                return ended.unwrap_or_else(|e| Err(std::io::Error::other(e)));
+            }
+            _ = rebind_signal().notified() => {
+                // The old server keeps draining on its own task.
+                let _ = stop_this.send(());
+                listener = loop {
+                    match tokio::net::TcpListener::bind(bind).await {
+                        Ok(l) => break l,
+                        Err(e) => {
+                            eprintln!("[ps5upload-engine] listening again on {bind}: {e}");
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        }
+                    }
+                };
+            }
+        }
+    }
 }
 
 /// The message a caught panic carried (`catch_unwind`'s payload), for an error text.
@@ -12208,6 +12279,13 @@ fn install_panic_logger() {
         engine_log::record("error", format!("PANIC at {loc}: {msg}\n{bt}"));
         default(info);
     }));
+}
+
+/// A panic the phone app's own hook caught (client/src-tauri/src/mobile_log.rs), for the in-app
+/// Log tab and the bug bundle. The engine's hook above is the desktop sidecar's; on a phone the
+/// hook belongs to the host.
+pub fn record_host_panic(text: String) {
+    engine_log::record_quiet("error", text);
 }
 
 /// `ps5upload-engine --healthcheck`: exit 0 when this host's engine answers
@@ -12345,6 +12423,59 @@ mod request_log_tests {
         assert!(is_constant_poll("/api/activity"));
         assert!(!is_constant_poll("/api/ps5/status"));
         assert!(!is_constant_poll("/api/activity/other"));
+    }
+}
+
+#[cfg(test)]
+mod rebind_tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    async fn get(addr: std::net::SocketAddr) -> std::io::Result<String> {
+        tokio::task::spawn_blocking(move || {
+            let mut s = std::net::TcpStream::connect(addr)?;
+            s.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;
+            s.write_all(b"GET /ping HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")?;
+            let mut out = String::new();
+            s.read_to_string(&mut out)?;
+            Ok(out)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_rebind_makes_a_new_listener_on_the_same_port_and_shutdown_still_ends_it() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route("/ping", axum::routing::get(|| async { "pong" }));
+        let (quit, quit_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            serve_rebindable(&addr.to_string(), listener, app, async move {
+                let _ = quit_rx.await;
+            })
+            .await
+        });
+        assert!(get(addr).await.unwrap().contains("pong"));
+
+        rebind_in_process();
+        // The switch takes a moment: the same port must answer again.
+        let mut answered = false;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            if get(addr).await.is_ok_and(|r| r.contains("pong")) {
+                answered = true;
+                break;
+            }
+        }
+        assert!(answered, "the port never answered after the rebind");
+
+        let _ = quit.send(());
+        tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("shutdown must still end serving")
+            .unwrap()
+            .unwrap();
     }
 }
 

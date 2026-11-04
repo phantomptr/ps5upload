@@ -25,6 +25,7 @@ import { parsePS5Firmware } from "../lib/ps5Firmware";
 import { menuKeyTarget } from "../lib/menuKeys";
 import { formatDate } from "../lib/formatDate";
 import { useFitOnScreen } from "../components/useFitOnScreen";
+import { useBackDismiss } from "../lib/systemBack";
 
 /**
  * Sidebar dropdown for switching between known PS5s.
@@ -77,6 +78,7 @@ export default function RosterPicker() {
     setOpen(false);
     triggerRef.current?.focus();
   };
+  useBackDismiss(open, closeMenu);
 
   const onMenuKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape" || e.key === "Tab") {

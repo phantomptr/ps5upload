@@ -1077,7 +1077,8 @@ export default function SavesScreen() {
         count={saves?.length}
         loading={loading}
         description={
-          isAndroid()
+          // The app, not the web UI opened in a phone's browser (Backup is hidden there).
+          isAndroid() && isTauriEnv()
             ? tr("saves_android_destination", undefined, "Backups are saved as dated ZIP files in this phone’s Download folder (/storage/emulated/0/Download). Restore copies encrypted files; it does not change the owning account or title ID.")
             : isTauriEnv()
             ? tr(

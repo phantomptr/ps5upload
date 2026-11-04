@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useBackDismiss } from "../lib/systemBack";
 
 /**
  * v5 Menu primitive (§22.27).
@@ -72,6 +73,8 @@ export function MenuList({
     // Only on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useBackDismiss(true, onClose);
 
   // Focus the active item when it changes.
   useEffect(() => {

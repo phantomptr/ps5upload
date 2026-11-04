@@ -20,6 +20,7 @@ import { installConsoleCapture, installDiskLogSink, log } from "./state/logs";
 import { installEngineLogBridge } from "./state/engineLogBridge";
 import { installEngineStartupEvents } from "./state/engineStartupEvents";
 import { installAccidentalReloadGuard } from "./lib/preventAccidentalReload";
+import { installSystemBack } from "./lib/systemBack";
 
 // Capture console.error / warn + unhandled promise rejections into
 // the in-app log store before any other module runs — that way the
@@ -72,6 +73,12 @@ void hydrateFromUserConfig();
 // reload keyboard shortcuts are additionally blocked in production. No-op on
 // non-Tauri / Android. See preventAccidentalReload.ts for the dev/prod split.
 installAccidentalReloadGuard();
+
+// System Back closes what is open on top before it changes the page (phones have no Escape).
+installSystemBack();
+
+// iPhone: the copies the Files sheet makes do not stay forever.
+void import("./state/iosInbox").then((m) => m.installIosInbox());
 
 // Android soft-keyboard avoidance: when the keyboard appears, the visualViewport
 // shrinks. Scroll the focused input into view so it isn't hidden behind the

@@ -186,7 +186,7 @@ pub fn upload_zip(
 /// Retained for the engine's error mapping; AVA1 no longer raises it. Duplicate paths,
 /// case clashes, file/directory clashes and unsafe paths in a RAR are terminal
 /// (`ava1_rar_unsupported`).
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[derive(Debug, thiserror::Error)]
 #[error("rar is not usable as an AVA1 source: {0}")]
 pub struct RarUnsupported(pub String);
@@ -195,7 +195,7 @@ pub struct RarUnsupported(pub String);
 /// ([`crate::rar_source::RarSource`]). `password` is held only in memory for this job;
 /// it is never logged. Failures that retrying cannot fix are [`UploadFailure`]s with
 /// the `ava1_rar_*` reasons in [`crate::rar_source::RarReason`].
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn upload_rar_in(
     pool: &Pool,
     cfg: &TransferConfig,
@@ -244,7 +244,7 @@ pub fn upload_rar_in(
     })
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn rar_upload_failure(reason: crate::rar_source::RarReason, message: String) -> UploadFailure {
     use crate::rar_source::RarReason::*;
     let detail = match reason {
@@ -263,7 +263,7 @@ fn rar_upload_failure(reason: crate::rar_source::RarReason, message: String) -> 
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn upload_rar(
     cfg: &TransferConfig,
     job_id: [u8; 16],

@@ -12,7 +12,7 @@ import {
   type ActivityPhase,
 } from "./activityHistory";
 import { setBackgroundWorkHold, setTransferKeepAwake } from "../lib/keepAwakeHold";
-import { anyAwakeWork } from "../lib/awakeWork";
+import { anyWorkRunning } from "./runningWork";
 import { useTaskStore } from "./tasks";
 import { trStatic } from "../lib/trStatic";
 import { bulkOpLabel } from "./taskWiring";
@@ -48,34 +48,12 @@ export function installActivityWiring() {
   // reconcile the OS sleep inhibitor on every relevant change. The hold
   // is edge-collapsed + best-effort in `setTransferKeepAwake`, and the
   // Rust side refcounts it separately from the manual Settings toggle.
-  const anyTransferActive = (): boolean => {
-    const phases = useTransferStore.getState().phasesByHost;
-    if (
-      Object.values(phases).some(
-        (p) => p.kind === "starting" || p.kind === "running",
-      )
-    )
-      return true;
-    if (
-      Object.values(useFsDownloadOpStore.getState().byHost).some(
-        (d) => d.active,
-      )
-    )
-      return true;
-    if (
-      useUploadQueueStore.getState().items.some((it) => it.status === "running")
-    )
-      return true;
-    // Installs (stream, link, archive, upload), copies and builds: every one registers a task.
-    if (anyAwakeWork(useTaskStore.getState().tasks)) return true;
-    return false;
-  };
   // The host's background-work hold (#457) also covers a queue between items: its
   // drain loop is running but no item is, for the settle delay before the next.
   const queueDraining = (): boolean =>
     Object.values(useUploadQueueStore.getState().runningHosts).some(Boolean);
   const reconcileKeepAwake = () => {
-    const active = anyTransferActive();
+    const active = anyWorkRunning();
     setTransferKeepAwake(active);
     setBackgroundWorkHold(active || queueDraining());
   };

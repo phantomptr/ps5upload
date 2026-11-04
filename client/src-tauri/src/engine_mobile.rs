@@ -42,6 +42,9 @@ const FALLBACK_PORTS: std::ops::RangeInclusive<u16> = 19123..=19132;
 /// `engine_url_get`).
 static URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// `start` has run in this process.
+static STARTED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The first port that can be bound now, 19113 first. A probe bind released at once: the
 /// engine binds it a moment later on its own task.
 fn pick_port() -> u16 {
@@ -59,8 +62,7 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
     // Android can run setup again when its Activity is recreated while the process lives on;
     // the engine from the first run still holds the port, and a second bind would only fail
     // and tell the renderer the engine did not start.
-    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    if STARTED.set(()).is_err() {
+    if STARTED_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
         return Ok(url());
     }
     let port = pick_port();
@@ -147,8 +149,8 @@ pub struct Diagnosis {
     pub os: &'static str,
 }
 
-pub async fn diagnose(_app: &AppHandle) -> Diagnosis {
-    let probe = match crate::engine_http::engine_client_builder().build() {
+async fn probe() -> Result<(), String> {
+    match crate::engine_http::engine_client_builder().build() {
         Ok(client) => match client
             .get(format!("{}/api/version", url()))
             .timeout(std::time::Duration::from_millis(800))
@@ -160,7 +162,11 @@ pub async fn diagnose(_app: &AppHandle) -> Diagnosis {
             Err(e) => Err(crate::engine_http::error_chain(&e)),
         },
         Err(e) => Err(e.to_string()),
-    };
+    }
+}
+
+pub async fn diagnose(_app: &AppHandle) -> Diagnosis {
+    let probe = probe().await;
     Diagnosis {
         url: url().to_string(),
         local: true,
@@ -170,7 +176,7 @@ pub async fn diagnose(_app: &AppHandle) -> Diagnosis {
         port_taken: None,
         binary_found: None,
         binary_error: None,
-        log_path: None,
+        log_path: crate::mobile_log::log_path().map(|p| p.display().to_string()),
         os: std::env::consts::OS,
     }
 }
@@ -184,10 +190,25 @@ pub async fn restart(_app: &AppHandle) -> Result<String> {
 
 /// No-op on mobile, returning where the proxies stay. The desktop build made the engine URL
 /// runtime-configurable (point the app at a remote/self-hosted engine), but mobile links the engine
-/// in-process — there is no sidecar and no remote-engine story here, so the
-/// `engine_url_set` command is inert. Defined so the shared command module
-/// (`commands::ps5_engine`) compiles for the Android/iOS target. The renderer
-/// may still store an Engine URL setting; mobile simply ignores it.
+/// in-process, its native commands always reach that engine and Android allows plain http to
+/// loopback only. Defined so the shared command module (`commands::ps5_engine`) compiles for the
+/// Android/iOS target. The page does not apply a stored remote URL on a phone either
+/// (state/engine.ts).
 pub fn set_url(_url: String) -> String {
     url().to_string()
+}
+
+/// The app is back in front: if the engine has stopped answering, listen again.
+///
+/// iOS can reclaim a suspended app's listening sockets (seen by others; not yet measured on an
+/// iPhone here), and every renderer call goes through this one. The engine itself is fine, so
+/// only the listener is re-created.
+pub async fn check_listener() {
+    if !STARTED_ONCE.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if let Err(e) = probe().await {
+        eprintln!("[engine] not answering after resume ({e}); listening again");
+        ps5upload_engine::rebind_in_process();
+    }
 }

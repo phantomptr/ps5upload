@@ -13,11 +13,10 @@
 //   - CUSA##### → PS4 → orbispatches.com
 //   - Anything else → null (PSP/Vita/system apps don't run on PS5)
 //
-// **Why these calls go through Tauri**: the renderer's CSP
-// `connect-src` does not whitelist external hosts, and a cross-origin
-// fetch would not satisfy the webview's CORS policy regardless. We
-// invoke a Rust-side `title_meta_fetch` command — the request is
-// issued from the desktop process (no CSP, no CORS), and a hostname
+// **Why these calls go through Tauri**: a cross-origin fetch would not
+// satisfy the webview's CORS policy. We invoke a Rust-side
+// `title_meta_fetch` command — the request is issued from the
+// desktop process (no CORS), and a hostname
 // allowlist there acts as SSRF defense in case a compromised
 // renderer tries to pivot through this command.
 //

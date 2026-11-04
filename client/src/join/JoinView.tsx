@@ -287,6 +287,25 @@ export function JoinView({
     return () => window.removeEventListener("keydown", onKey);
   }, [live, full, poke]);
 
+  // System Back on a phone in full screen: back to the picture's place, still playing, as the
+  // host's player does (StreamPanel). Same state as the page's own entry: the router sees no
+  // navigation.
+  useEffect(() => {
+    if (!full || !coarsePointer()) return;
+    window.history.pushState(window.history.state, "");
+    const entry = window.location.href;
+    let popped = false;
+    const onPop = () => {
+      popped = true;
+      setFull(false);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      if (!popped && window.location.href === entry) window.history.back();
+    };
+  }, [full]);
+
   // The browser left full screen itself (Esc): back to the picture's place. Not on a touch
   // screen, where Android drops it on a system gesture mid-game and the picture keeps filling.
   useEffect(() => {
