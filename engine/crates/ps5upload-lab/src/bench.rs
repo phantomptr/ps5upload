@@ -47,9 +47,6 @@ pub const LISTING_MARKER: &str = ".ps5upload-lab-listing";
 /// The frozen record schema version (A3). Every record carries `schema: 1` plus the
 /// identity fields; changing the schema means bumping this and saying what changed,
 /// never silently.
-// FIXME-ish note, not a lint hack: SCHEMA is consumed by the record-writing commands
-// (the follow-up calibrate arm and Task 27's runner) and by the tests; until then the
-// bin build sees it unused.
 pub const SCHEMA: u64 = 1;
 
 /// One corpus's statistics. Serializes (T27/T28 record it); `duplicate_ratio` is `NaN`

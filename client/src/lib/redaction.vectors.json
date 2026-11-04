@@ -26,7 +26,7 @@
   {
     "name": "home folders",
     "redact": true,
-    "in": "/Users/yunpengl/Library/x and C:\\Users\\bob\\x and /home/amy/y",
+    "in": "/Users/alice/Library/x and C:\\Users\\bob\\x and /home/amy/y",
     "out": "~/Library/x and ~\\x and ~/y"
   },
   {
