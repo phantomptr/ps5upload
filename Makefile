@@ -1173,6 +1173,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/profile_np_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-profile-np-selftest
 	@echo "✓ a sign-in backup restores byte for byte, stays the first one, and a damaged one writes nothing wrong"
+	@echo "Running notification store self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-notif-selftest \
+		$(PAYLOAD_DIR)/tests/notif_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-notif-selftest
+	@echo "✓ saved notifications come back exactly, the sequence never rewinds, a cut store keeps what it can"
 	@echo "Running JSON string escape self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-json-escape-selftest \

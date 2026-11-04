@@ -23,6 +23,14 @@ static int failures = 0;
 static void test_parse(void) {
     inst_request_t r;
 
+    /* A web page cannot drive the port. A daemon reads one line per connection, and what a browser
+     * sends first is its request line, with any quote in the URL as %22, so a body it could post is
+     * never looked at. */
+    const char *from_page = "POST /?{%22op%22:%22stop%22} HTTP/1.1\r";
+    inst_parse_request(from_page, strlen(from_page), &r);
+    CHECK(r.error != NULL);
+    CHECK(r.op == INST_OP_UNKNOWN);
+
     /* hello */
     inst_parse_request("{\"op\":\"hello\"}", 14, &r);
     CHECK(r.error == NULL);
