@@ -83,6 +83,16 @@ pub enum FailReason {
     StagedRefused,
     /// The user stopped it.
     Cancelled,
+    /// A PS4 update or add-on whose base game is not on the console. Sony accepts one and writes
+    /// nothing (measured), so it is refused up front.
+    BaseMissing,
+    /// Another install holds the console, or this package is already being served to it.
+    Busy,
+    /// ShadowMount+ has this title registered from a disk image: Sony would install over the live
+    /// registration and leave it with both (measured). The image has to be moved away first.
+    ImageMounted,
+    /// The installer took the request and its answer never came back. Sony may have it.
+    ReplyLost,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -122,6 +132,11 @@ pub struct InstallStatus {
     /// package can safely be sent through Stream: the client may offer "Retry with Stream".
     #[serde(default)]
     pub retry_with_stream: bool,
+    /// With `FailReason::DestructiveGuard`: what the install would replace, so the client can ask
+    /// in the right words: "game" (Sony removes it first) or "update" (one already applied, which
+    /// re-applying can undo).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<String>,
     /// Windows only: which local adapter faces the console, what network category Windows gave it
     /// and whether the firewall lets this engine in on it. Set when the console could not reach
     /// this computer; the UI offers the fixes it implies. Never set off Windows.
@@ -155,6 +170,7 @@ impl InstallStatus {
             patch_verdict: None,
             shortened: false,
             retry_with_stream: false,
+            replaces: None,
             net_diag: None,
             started_at: now,
             updated_at: now,
@@ -201,6 +217,7 @@ mod tests {
             patch_verdict: None,
             shortened: false,
             retry_with_stream: false,
+            replaces: None,
             net_diag: None,
             started_at: 1_790_000_000,
             updated_at: 1_790_000_001,

@@ -241,6 +241,8 @@ pub struct PkgInstallState {
     /// partially-mutated session row is no worse than a stale row,
     /// and the next status poll / GC pass cleans it up.
     pub sessions: Mutex<HashMap<String, InstallSession>>,
+    /// When the sessions were last saved because bytes went out (see `note_bytes_sent`).
+    pub sessions_saved_unix: std::sync::atomic::AtomicU64,
     /// Unified-install (spec 2) job store: one install per console, statuses
     /// polled via `/api/pkg/install/status`.
     pub jobs: crate::install::JobStore,
@@ -261,6 +263,7 @@ impl PkgInstallState {
         }
         Self {
             sessions: Mutex::new(sessions),
+            sessions_saved_unix: std::sync::atomic::AtomicU64::new(0),
             jobs: crate::install::JobStore::new(),
         }
     }
@@ -395,7 +398,9 @@ mod persist {
                     detail: String::new(),
                     cancelled: false,
                     created_at_unix: s.created_at_unix,
-                    last_activity_unix: now,
+                    // As saved: a restored session is not a console pulling it right now, so it
+                    // must not hold a retry back as a rival.
+                    last_activity_unix: s.last_activity_unix,
                     staging_path: s.staging_path,
                     terminal_status: None,
                     launchable: None,
@@ -1306,22 +1311,14 @@ fn verify_installed_artifact(
 }
 
 fn remote_pkg_size(addr: &str, path: &str) -> Option<u64> {
-    let (parent, name) = path.rsplit_once('/')?;
-    let parent = if parent.is_empty() { "/" } else { parent };
-    let listing = ps5upload_core::fs_ops::list_dir(
-        addr,
-        parent,
-        ps5upload_core::fs_ops::ListDirOptions::default(),
-    )
-    .ok()?;
-    listing
-        .entries
-        .into_iter()
-        .find(|e| e.kind == "file" && e.name == name)
-        .map(|e| e.size)
+    // Stat, not a listing: a listing holds the first 256 entries of the folder.
+    ps5upload_core::fs_ops::fs_stat(addr, path)
+        .ok()
+        .filter(|s| s.kind == "file")
+        .map(|s| s.size)
 }
 
-fn remote_pkg_identity(addr: &str, path: &str) -> (u64, String) {
+pub(crate) fn remote_pkg_identity(addr: &str, path: &str) -> (u64, String) {
     let size = remote_pkg_size(addr, path).unwrap_or(0);
     let fingerprint = package_fingerprint_from_reader(size, |off, len| {
         ps5upload_core::fs_ops::fs_read(addr, path, off, len).ok()
@@ -1887,51 +1884,6 @@ pub(crate) async fn install_start_handler(
         }
     }
 
-    // ── Destructive-staged-reinstall guard ──────────────────────────────
-    // A STAGED (PS5-local) install of a full game whose title is ALREADY
-    // installed is destructive on failure: Sony's installer clears the old
-    // title before writing the new one, so if the write then fails the user
-    // is left with neither. Hardware-observed on FW 5.10 — a working
-    // CUSA03474 was removed by a staged reinstall that failed with
-    // 0x80B2150F, while `install/start` had returned 0 (start only registers;
-    // the failure is asynchronous, so nothing upstream can react in time).
-    //
-    // Staged is also simply the worse path: measured 0/3 successful staged
-    // installs across two consoles vs 9/9 for stream, same packages.
-    //
-    // So refuse this specific combination by default and point at Stream.
-    // `allow_destructive_reinstall` lets a caller that has warned the user
-    // proceed anyway. Stream (serve_only) is never blocked — it does not
-    // take this destructive route.
-    if !req.serve_only && is_local && package_type.ends_with("GD") {
-        if let Some(title_id) =
-            ps5upload_core::pkg_install::title_id_from_content_id(&head_meta.content_id)
-        {
-            if !req.allow_destructive_reinstall {
-                let addr = req.ps5_addr.clone();
-                let tid = title_id.clone();
-                let check = tokio::task::spawn_blocking(move || {
-                    ps5upload_core::pkg_install::verify_title_registered(&addr, &tid)
-                })
-                .await
-                .unwrap_or(ps5upload_core::pkg_install::LaunchCheck::Unsupported);
-                if matches!(check, ps5upload_core::pkg_install::LaunchCheck::Registered) {
-                    crate::log_warn!(
-                        "staged reinstall refused: {} already installed on {} (destructive on failure)",
-                        title_id,
-                        req.ps5_addr
-                    );
-                    return json_err(
-                        StatusCode::CONFLICT,
-                        &format!(
-                            "{title_id} is already installed. Re-installing it from PS5 storage wipes the current copy before writing the new one, so a failure would leave the game gone. Use Stream install instead, or uninstall {title_id} first."
-                        ),
-                    );
-                }
-            }
-        }
-    }
-
     // ── Patch/add-on-without-base pre-flight ────────────────────────────
     // A patch or add-on whose base game isn't installed cannot install:
     // Sony's installer accepts the request, writes nothing, and the progress
@@ -2261,6 +2213,8 @@ pub(crate) async fn install_start_handler(
 /// session GC age, so a genuinely active transfer is always protected while a
 /// finished-but-unpolled one never blocks its own retry.
 const RIVAL_ACTIVE_WINDOW_SEC: u64 = 90;
+/// How often a session's last activity is written out while it serves.
+const SESSION_SAVE_EVERY_SECS: u64 = 60;
 
 /// Default maximum age (seconds) of an install session before the
 /// engine GCs it. 2 hours covers the practical worst case: a large
@@ -2520,6 +2474,89 @@ pub(crate) fn normalize_mgmt_addr(addr: &str) -> String {
     } else {
         host
     })
+}
+
+/// What a console says about a title. `Unknown` is an unanswered question (console busy, payload
+/// too old): never read as "not installed", which is what lets the last resort run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InstalledState {
+    Installed(String),
+    Absent,
+    Unknown,
+}
+
+pub(crate) fn read_installed_state(mgmt_addr: &str, title_id: &str) -> InstalledState {
+    match ps5upload_core::diagnostics::appinfo_query(mgmt_addr, title_id, Some("APP_VER")) {
+        Err(_) => InstalledState::Unknown,
+        Ok(rows) => rows
+            .rows
+            .into_iter()
+            .find(|r| r.key == "APP_VER")
+            .map(|r| r.val)
+            .filter(|v| !v.trim().is_empty())
+            .map_or(InstalledState::Absent, InstalledState::Installed),
+    }
+}
+
+/// What the wait for an installed base game or add-on found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArtifactWait {
+    /// This package's file is on a drive.
+    Landed,
+    /// The wait ran out with no sign of it.
+    NotSeen,
+    /// Nothing to check it against (no title id in the content id).
+    CannotTell,
+}
+
+/// Wait for a base game's or add-on's package file to appear after the console has all of it.
+/// `idle` restarts whenever the title's files grow, or while the console does not answer: both say
+/// nothing against the install. Sony preallocates a large file, so this usually ends at once. A
+/// ceiling keeps a console that never answers from holding the job for good.
+pub(crate) fn wait_for_installed_artifact(
+    addr: &str,
+    content_id: &str,
+    package_type: &str,
+    expected_size: u64,
+    expected_fingerprint: &str,
+    idle: std::time::Duration,
+    stop: &dyn Fn() -> bool,
+) -> ArtifactWait {
+    const CEILING: std::time::Duration = std::time::Duration::from_secs(4 * 60 * 60);
+    const POLL: std::time::Duration = std::time::Duration::from_secs(5);
+    let started = std::time::Instant::now();
+    let mut idle_from = started;
+    let mut most_seen = 0u64;
+    let title = ps5upload_core::pkg_install::title_id_from_content_id(content_id);
+    loop {
+        match verify_installed_artifact(
+            addr,
+            content_id,
+            package_type,
+            expected_size,
+            expected_fingerprint,
+        ) {
+            InstalledArtifactCheck::Match => return ArtifactWait::Landed,
+            InstalledArtifactCheck::Unsupported => return ArtifactWait::CannotTell,
+            InstalledArtifactCheck::Absent | InstalledArtifactCheck::Different => {}
+        }
+        let answered = ps5upload_core::volumes::list_volumes(addr).is_ok();
+        let seen = title.as_deref().map_or(0, |t| {
+            installed_pkg_inventory(addr, t)
+                .artifacts
+                .iter()
+                .map(|a| a.size)
+                .sum()
+        });
+        if !answered || seen > most_seen {
+            most_seen = most_seen.max(seen);
+            idle_from = std::time::Instant::now();
+        }
+        if stop() || idle_from.elapsed() >= idle || started.elapsed() >= CEILING {
+            return ArtifactWait::NotSeen;
+        }
+        std::thread::sleep(POLL);
+    }
 }
 
 /// Read a title's installed `APP_VER`, or `None` when it cannot be read (title
@@ -2883,11 +2920,6 @@ async fn serve_handler(
             // would age out from under a long transfer.
             active.last_activity_unix = now_unix();
             active.requests_served = active.requests_served.saturating_add(1);
-            active.bytes_served = active.bytes_served.saturating_add(len);
-            if counts_as_progress {
-                active.transfer.mark(start, end);
-                active.transfer_bytes = active.transfer.bytes();
-            }
             // Periodic serve-rate line, so the CONSOLE leg is measurable the
             // same way the origin leg is. A "my install is slow" report needs
             // both numbers: a slow origin and a slow console link look
@@ -2947,7 +2979,12 @@ async fn serve_handler(
     let body = if is_head {
         Body::empty()
     } else {
-        range_body(session, source, start, end)
+        let sent = counts_as_progress;
+        range_body(session, source, start, end, {
+            let state = state.clone();
+            let sid = served_session_id.clone();
+            move |from, to| note_bytes_sent(&state, &sid, from, to, sent)
+        })
     };
     builder.body(body).unwrap_or_else(builder_failed_response)
 }
@@ -2965,7 +3002,42 @@ const PKG_HOST_STREAM_CHUNK: u64 = 1024 * 1024;
 /// early: the headers are already sent by then, so the client sees a truncated
 /// response and retries, which is the only signalling HTTP allows at that
 /// point.
-fn range_body(session: InstallSession, source: ServeSource, start: u64, end: u64) -> Body {
+/// A chunk of a response went out: the only moment it counts. Marking a range when it was asked
+/// for called a package complete under a body still in flight, and a 250 MiB footer range on a
+/// slow link looked idle for minutes. A long install's session is also saved from here, or its
+/// saved last activity stays at its creation and a restart past the idle window drops it.
+fn note_bytes_sent(
+    state: &PkgInstallStateHandle,
+    sid: &str,
+    from: u64,
+    to: u64,
+    counts_as_progress: bool,
+) {
+    let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    let now = now_unix();
+    if let Some(active) = sessions.get_mut(sid) {
+        active.last_activity_unix = now;
+        active.bytes_served = active.bytes_served.saturating_add(to - from + 1);
+        if counts_as_progress {
+            active.transfer.mark(from, to);
+            active.transfer_bytes = active.transfer.bytes();
+        }
+    }
+    use std::sync::atomic::Ordering;
+    let last = state.sessions_saved_unix.load(Ordering::Relaxed);
+    if now.saturating_sub(last) >= SESSION_SAVE_EVERY_SECS {
+        state.sessions_saved_unix.store(now, Ordering::Relaxed);
+        persist::save(&sessions);
+    }
+}
+
+fn range_body(
+    session: InstallSession,
+    source: ServeSource,
+    start: u64,
+    end: u64,
+    on_sent: impl Fn(u64, u64) + Send + 'static,
+) -> Body {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
     tokio::task::spawn_blocking(move || {
         let mut cursor = start;
@@ -2986,6 +3058,7 @@ fn range_body(session: InstallSession, source: ServeSource, start: u64, end: u64
                     if tx.blocking_send(Ok(axum::body::Bytes::from(b))).is_err() {
                         return;
                     }
+                    on_sent(cursor, stop);
                 }
                 Err(e) => {
                     let _ = tx.blocking_send(Err(e));
@@ -4185,6 +4258,10 @@ mod loader_route_tests {
 fn is_rival(other: &InstallSession, new: &InstallSession, now: u64) -> bool {
     !other.cancelled
         && other.terminal_status.is_none()
+        // Kept after its job ended (a lost reply, a stall): one no console ever asked anything of
+        // is not being pulled, and one it has all of has nothing left to pull.
+        && other.requests_served > 0
+        && (other.total_size == 0 || other.transfer.bytes() < other.total_size)
         && !other.package_fingerprint.is_empty()
         && other.package_fingerprint == new.package_fingerprint
         // Another console installing the same package is not a rival: each pulls its own

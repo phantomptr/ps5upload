@@ -301,6 +301,20 @@ pub fn path_fallback_refused_hint(code: u32) -> String {
     )
 }
 
+/// Re-applying an update the game already has, or an older one: Sony removes the applied update
+/// first, and the game can end up back on its base version (measured; `PKG_PATCH_REGRESSED_HINT`).
+/// Unknown versions say nothing, so they never refuse.
+pub fn update_already_applied(package_app_ver: &str, installed_app_ver: &str) -> bool {
+    use ps5upload_core::patch_verify::parse_app_ver;
+    match (
+        parse_app_ver(package_app_ver),
+        parse_app_ver(installed_app_ver),
+    ) {
+        (Some(p), Some(i)) => i >= p,
+        _ => false,
+    }
+}
+
 pub fn guard_decision(category: &str, already_installed: bool, allow: bool) -> GuardDecision {
     if is_destructive_reinstall(category, already_installed) && !allow {
         GuardDecision::Refuse
@@ -411,15 +425,132 @@ pub fn fill_from_header(
 /// install fails instantly (0x80431064) until the daemon process restarts;
 /// Sony's install library keeps the bad state for the life of the process.
 pub fn should_recycle_daemon(stream: bool, never_fetched: bool, code: u32) -> bool {
-    stream && never_fetched && (code & 0xFFFF_0000) == 0x8043_0000
+    stream && never_fetched && is_network_class(code)
 }
 
-/// Whether a stalled delivery should recycle the installer daemon: only when
-/// the daemon served it (a console-path install). The daemon keeps a loopback
-/// job "serving" until Sony has read every byte, which a stalled install never
-/// does, so without a restart every later install is refused as busy.
-pub fn should_recycle_after_stall(daemon_served: bool) -> bool {
-    daemon_served
+/// Sony's network-class codes (0x8043xxxx): only these say the console could not fetch. Any other
+/// code on a stream it never fetched from is a verdict on the package, not on the firewall.
+pub fn is_network_class(code: u32) -> bool {
+    (code & 0xFFFF_0000) == 0x8043_0000
+}
+
+/// What failed when the install call came back without Sony's verdict, for the job's reason.
+pub fn reason_from_reply(reply: &Result<ic::InstallReply, String>) -> Option<FailReason> {
+    match reply {
+        Ok(ic::InstallReply::Busy { .. }) => Some(FailReason::Busy),
+        Ok(ic::InstallReply::SourceUnreadable) => Some(FailReason::SourceGone),
+        Ok(ic::InstallReply::BadPath) | Ok(ic::InstallReply::BadRequest) => {
+            Some(FailReason::BadRequest)
+        }
+        Ok(ic::InstallReply::LoopbackFailed) | Ok(ic::InstallReply::NotReady { .. }) => {
+            Some(FailReason::NoBringup)
+        }
+        Ok(ic::InstallReply::Unknown(_)) | Err(_) => Some(FailReason::ReplyLost),
+        Ok(ic::InstallReply::Accepted { .. })
+        | Ok(ic::InstallReply::UnknownJob)
+        | Ok(ic::InstallReply::Sony { .. }) => None,
+    }
+}
+
+/// Whether a console-path install the console refused goes on through this engine. A network-class
+/// refusal needs a fresh daemon first (see `should_recycle_daemon`).
+pub fn staged_retry_through_engine(reply: &Result<ic::InstallReply, String>) -> Option<u32> {
+    match reply {
+        Ok(ic::InstallReply::Sony { code, .. })
+            if STAGED_ROUTE_REFUSALS.contains(code) || is_network_class(*code) =>
+        {
+            Some(*code)
+        }
+        Ok(ic::InstallReply::LoopbackFailed) => Some(0),
+        _ => None,
+    }
+}
+
+/// The form a package's type takes for the artifact check: its platform (a PS5 title id is PPSA)
+/// and its kind, from a category that may be `gp` or `PS4DP`.
+pub fn package_type_for_verify(category: &str, title_id: &str) -> String {
+    let c = category.to_ascii_lowercase();
+    let platform = if title_id.starts_with("PPSA") || c.starts_with("ps5") {
+        "PS5"
+    } else {
+        "PS4"
+    };
+    let kind = if c.ends_with("gp") || c.ends_with("dp") {
+        "DP"
+    } else if c.ends_with("ac") {
+        "AC"
+    } else {
+        "GD"
+    };
+    format!("{platform}{kind}")
+}
+
+/// The package needs a base game and its absence is a known silent no-op: PS4 only. A PS5 update
+/// can carry the whole app and installs on its own (measured), so there the PS5 decides.
+pub fn base_check_applies(category: &str, title_id: &str) -> Option<&'static str> {
+    if package_type_for_verify(category, title_id).starts_with("PS5") {
+        return None;
+    }
+    let c = category.to_ascii_lowercase();
+    if c.ends_with("gp") || c.ends_with("dp") {
+        Some("gp")
+    } else if c.ends_with("ac") {
+        Some("ac")
+    } else {
+        None
+    }
+}
+
+/// What the console's next request for this session should find, once the job has stopped
+/// waiting on delivery. A released session answers 410, and PlayGo answers that by deleting what
+/// it downloaded (observed: 64.8 GiB). So only a user's Stop releases one at once. A stall may be
+/// a pause: the PS5 runs one install at a time and holds a second until the first ends, and a
+/// download can be paused there. It stays served until the idle prune, and `is_rival` lets a
+/// retry through. A complete delivery stays for a moment too, for a request still in flight.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum SessionAfterDelivery {
+    Release,
+    ReleaseWhenQuiet,
+    Keep,
+}
+
+pub fn session_after_delivery(delivery: DeliveryProgress) -> SessionAfterDelivery {
+    match delivery {
+        DeliveryProgress::Cancelled => SessionAfterDelivery::Release,
+        DeliveryProgress::Complete => SessionAfterDelivery::ReleaseWhenQuiet,
+        DeliveryProgress::Stalled | DeliveryProgress::Pending => SessionAfterDelivery::Keep,
+    }
+}
+
+/// Whether a refused start should release the session it had set up. Only an answer that says
+/// Sony did not take it: a lost or unreadable reply says nothing, and the console may already be
+/// fetching.
+pub fn release_after_refusal(reply: &Result<ic::InstallReply, String>) -> bool {
+    !matches!(reply, Err(_) | Ok(ic::InstallReply::Unknown(_)))
+}
+
+/// How long a fully delivered session goes on answering after its last request.
+const QUIET_BEFORE_RELEASE_SECS: u64 = 60;
+
+/// Release `sid` once no console has asked it for anything for `QUIET_BEFORE_RELEASE_SECS`.
+/// Coverage counts a range as it goes out, so the last range can still fail on its way; the
+/// console's retry must find the session.
+fn release_when_quiet(state: &PkgInstallStateHandle, sid: &str) {
+    let (state, sid) = (state.clone(), sid.to_string());
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let last = {
+                let s = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+                s.get(&sid).map(|x| x.last_activity_unix)
+            };
+            let Some(last) = last else { return };
+            if status::now_unix().saturating_sub(last) >= QUIET_BEFORE_RELEASE_SECS {
+                crate::pkg_install::release_serve_session(&state.sessions, &sid);
+                return;
+            }
+        }
+    });
 }
 
 /// Stop the installer daemon and wait (bounded) until :9115 has actually
@@ -429,7 +560,11 @@ pub fn should_recycle_after_stall(daemon_served: bool) -> bool {
 async fn recycle_daemon(ip: &str) {
     let ip_s = ip.to_string();
     let _ = tokio::task::spawn_blocking(move || {
-        let _ = ic::stop(&ip_s);
+        // Forced: a plain stop is refused for exactly the job this is clearing.
+        if let Err(e) = ic::stop_forced(&ip_s) {
+            crate::log_warn!("installer daemon on {ip_s} did not stop: {e}");
+            return;
+        }
         use ps5upload_core::payload_lifecycle as pl;
         let addr = pl::join_host_port(&ip_s, pl::INSTALLER_PORT);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -452,7 +587,7 @@ const SCE_HTTP_ERROR_PROXY: u32 = 0x8043_1084;
 /// Why Sony refused an install: a stream the console never fetched from gets
 /// its own reason, so the UI can explain it in the user's language.
 pub fn refusal_reason(never_fetched: bool, code: u32, route: Route) -> FailReason {
-    match (never_fetched && code != 0, code) {
+    match (never_fetched && is_network_class(code), code) {
         (true, SCE_HTTP_ERROR_PROXY) => FailReason::StreamProxy,
         (true, _) => FailReason::StreamUnreachable,
         _ if route == Route::Loopback && STAGED_ROUTE_REFUSALS.contains(&code) => {
@@ -496,7 +631,10 @@ pub fn stream_retry_allowed(category: &str, via_daemon: bool) -> bool {
 /// payload/include/sceAppInstUtil.h), and the staged route installs there
 /// now. 9.60 and 5.10 have not been measured since, so the retry through
 /// this engine stays.
-const STAGED_ROUTE_REFUSALS: &[u32] = &[0x80B2_116F, 0x80B2_150F];
+///
+/// 0x80A30003 is the install source being too long (127 bytes, see `inst_loopback_serve_name`):
+/// a daemon older than 1.6.0 hits it on a long package name, and the engine's URL is short.
+const STAGED_ROUTE_REFUSALS: &[u32] = &[0x80B2_116F, 0x80B2_150F, 0x80A3_0003];
 
 pub fn stream_unreachable_hint(
     served_from: Option<&str>,
@@ -945,6 +1083,29 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             }
         }
     }
+    // The same for a file on this computer: whatever the caller left out, for every check below.
+    if let Source::HostFile(path) = &req.source {
+        if req.category.is_none()
+            || req.package_app_ver.is_none()
+            || req.title_id.is_none()
+            || req.content_id.trim().is_empty()
+        {
+            let p = path.clone();
+            let meta = tokio::task::spawn_blocking(move || read_host_header(&p))
+                .await
+                .ok()
+                .flatten();
+            if let Some(h) = meta {
+                fill_from_header(
+                    &mut req,
+                    &h.content_id,
+                    &h.title_id,
+                    &h.category,
+                    &h.app_ver,
+                );
+            }
+        }
+    }
     crate::log_info!(
         "{tag}: install start ps5={ip} source={} content_id={} category={} app_ver={}",
         req.source.kind(),
@@ -974,39 +1135,65 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         s.phase = Phase::Resolve;
     });
 
-    // resolve: destructive-reinstall guard.
-    let already_installed = match &title_id {
+    // resolve: what the console has. Could-not-read stays apart from not-installed: it never
+    // refuses an install, and never lets the last resort through either.
+    let installed = match &title_id {
         Some(t) => {
             let (m, t) = (mgmt.clone(), t.clone());
             unless_stopped(
                 &state,
                 &job,
                 tokio::task::spawn_blocking(move || {
-                    crate::pkg_install::read_installed_app_ver(&m, &t).is_some()
+                    crate::pkg_install::read_installed_state(&m, &t)
                 }),
             )
             .await
             .and_then(Result::ok)
-            .unwrap_or(false)
+            .unwrap_or(crate::pkg_install::InstalledState::Unknown)
         }
-        None => false,
+        None => crate::pkg_install::InstalledState::Unknown,
     };
+    let already_installed = !matches!(installed, crate::pkg_install::InstalledState::Absent);
     if ended_by_stop(&state, &job, &req, started, None).await {
         return;
     }
-    if let GuardDecision::Refuse = guard_decision(
-        &category,
-        already_installed,
-        req.options.allow_destructive_reinstall,
-    ) {
+    if let Some(t) = &title_id {
+        if let Some((reason, hint)) = refusal_before_delivery(&req, &category, t, &mgmt).await {
+            state.jobs.update(&job, |s| {
+                s.phase = Phase::Failed;
+                s.verdict = Some(Verdict::Failed);
+                s.reason = Some(reason);
+                s.hint = Some(hint.clone());
+            });
+            finalize(&state, &job, &req, started).await;
+            return;
+        }
+    }
+    // The destructive-reinstall guard, for what is known to be installed.
+    let installed_ver = match &installed {
+        crate::pkg_install::InstalledState::Installed(v) => Some(v.as_str()),
+        _ => None,
+    };
+    let reapplied_update = patch_ver
+        .as_deref()
+        .zip(installed_ver)
+        .is_some_and(|(p, i)| update_already_applied(p, i));
+    let erases_game = installed_ver.is_some()
+        && matches!(
+            guard_decision(&category, true, req.options.allow_destructive_reinstall),
+            GuardDecision::Refuse
+        );
+    if erases_game || (reapplied_update && !req.options.allow_destructive_reinstall) {
         state.jobs.update(&job, |s| {
             s.phase = Phase::Failed;
             s.verdict = Some(Verdict::Failed);
             s.reason = Some(FailReason::DestructiveGuard);
-            s.hint = Some(
-                "this would erase the installed game first; re-run with allow_destructive_reinstall"
-                    .into(),
-            );
+            s.replaces = Some(if erases_game { "game" } else { "update" }.into());
+            s.hint = Some(if erases_game {
+                "this would erase the installed game first; re-run with allow_destructive_reinstall".into()
+            } else {
+                "the game already has this update, and applying it again can undo it; re-run with allow_destructive_reinstall".into()
+            });
         });
         finalize(&state, &job, &req, started).await;
         return;
@@ -1039,6 +1226,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     // ensure the daemon. It is sent as a companion image, so it runs alongside
     // the helper and never displaces it.
     let elf = crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Installer).ok();
+    let elf_for_ensure = elf.clone();
     let ip_for_ensure = ip.clone();
     let ens = unless_stopped(
         &state,
@@ -1047,7 +1235,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             // Wait out an elfldr swap in progress rather than send into its gap.
             let lock = crate::elfldr_guard::loader_lock(&ip_for_ensure);
             let _loader = lock.lock().unwrap_or_else(|e| e.into_inner());
-            ic::ensure(&ip_for_ensure, elf.as_deref(), false)
+            ic::ensure(&ip_for_ensure, elf_for_ensure.as_deref(), false)
         }),
     )
     .await;
@@ -1077,6 +1265,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     let hint_name = name_hint(title_id.as_deref());
     state.jobs.update(&job, |s| s.phase = Phase::Install);
     let mut served_from: Option<String> = None;
+    let mut serve_failure: Option<FailReason> = None;
     let (reply, session_id, shortened): (Result<ic::InstallReply, String>, Option<String>, bool) =
         match &req.source {
             Source::ConsolePath(path) => {
@@ -1096,13 +1285,24 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 // not expected on FW 13.60 since daemon 1.3.9). Try once more
                 // with the same bytes served from this engine — read back
                 // through the helper, one job, one result.
-                match &r {
-                    Ok(ic::InstallReply::Sony { code, .. })
-                        if STAGED_ROUTE_REFUSALS.contains(code) =>
-                    {
+                match staged_retry_through_engine(&r) {
+                    Some(code) => {
                         crate::log_info!(
                             "{tag}: the console refused its own copy (0x{code:08X}); serving it from this engine instead"
                         );
+                        // A network refusal stays with Sony's library for the life of the
+                        // process, so the next URL would fail the same way. The daemon no longer
+                        // answers one by trying the bare path by itself; this is the way on.
+                        if is_network_class(code) {
+                            recycle_daemon(&ip).await;
+                            let (i, e) = (ip.clone(), elf.clone());
+                            let _ = tokio::task::spawn_blocking(move || {
+                                let lock = crate::elfldr_guard::loader_lock(&i);
+                                let _loader = lock.lock().unwrap_or_else(|e| e.into_inner());
+                                ic::ensure(&i, e.as_deref(), false)
+                            })
+                            .await;
+                        }
                         let console_url = format!("ps5://{ip}{path}");
                         match serve_session_unless_stopped(&state, &job, &req, &console_url).await {
                             Ok((sid, url)) => {
@@ -1116,12 +1316,20 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                                 (r2, Some(sid), false)
                             }
                             Err(e) => {
-                                crate::log_warn!("{tag}: could not serve the console's copy: {e}");
-                                (if forced { Err(e) } else { r }, None, false)
+                                crate::log_warn!(
+                                    "{tag}: could not serve the console's copy: {}",
+                                    e.message
+                                );
+                                if forced {
+                                    serve_failure = e.reason;
+                                    (Err(e.message), None, false)
+                                } else {
+                                    (r, None, false)
+                                }
                             }
                         }
                     }
-                    _ => (r, None, false),
+                    None => (r, None, false),
                 }
             }
             Source::Url(url) => {
@@ -1179,10 +1387,15 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                                 (r2, Some(sid), false)
                             }
                             Err(e) => {
-                                crate::log_warn!("{tag}: could not proxy the link: {e}");
+                                crate::log_warn!("{tag}: could not proxy the link: {}", e.message);
                                 // When the proxy was the only thing asked for, its own
                                 // failure is the answer, not a made-up refusal code.
-                                (if proxied { Err(e) } else { r }, None, was_short)
+                                if proxied {
+                                    serve_failure = e.reason;
+                                    (Err(e.message), None, was_short)
+                                } else {
+                                    (r, None, was_short)
+                                }
                             }
                         }
                     }
@@ -1200,7 +1413,10 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                             install_call(&state, &job, move || ic::install_url(&i, &u, &h)).await;
                         (r, Some(sid), false)
                     }
-                    Err(e) => (Err(e), None, false),
+                    Err(e) => {
+                        serve_failure = e.reason;
+                        (Err(e.message), None, false)
+                    }
                 }
             }
         };
@@ -1245,6 +1461,18 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             if ended_by_stop(&state, &job, &req, started, None).await {
                 return;
             }
+            route = Route::Path;
+            via_plain_path = true;
+            state.jobs.update(&job, |s| s.route = Some(Route::Path));
+        }
+    }
+    // A daemon older than 1.6.0 can fall back to the bare path by itself. Sony's "accepted" says
+    // little on that route, so it gets the check the last resort gets.
+    if let (Ok(ic::InstallReply::Accepted { via, .. }), Source::ConsolePath(_)) =
+        (&reply, &req.source)
+    {
+        if session_id.is_none() && (via == "path" || via == "file") {
+            crate::log_warn!("{tag}: the daemon installed by file path ({via}) by itself");
             route = Route::Path;
             via_plain_path = true;
             state.jobs.update(&job, |s| s.route = Some(Route::Path));
@@ -1310,7 +1538,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             s.get(sid).map(|x| (x.bytes_served, x.total_size))
         });
         let never_fetched = fetched.is_some_and(|(served, _)| served == 0);
-        let net_diag = if never_fetched && code != 0 {
+        let net_diag = if never_fetched && is_network_class(code) {
             match served_from.as_deref() {
                 Some(o) => net_diag_for(&ip, o).await,
                 None => None,
@@ -1320,7 +1548,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         };
         let hint = if via_plain_path {
             Some(path_fallback_refused_hint(code))
-        } else if never_fetched && code != 0 {
+        } else if never_fetched && is_network_class(code) {
             Some(stream_unreachable_hint(
                 served_from.as_deref(),
                 code,
@@ -1330,9 +1558,14 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             hint
         };
         if let Some(sid) = &session_id {
-            crate::pkg_install::release_serve_session(&state.sessions, sid);
+            if release_after_refusal(&reply) {
+                crate::pkg_install::release_serve_session(&state.sessions, sid);
+            }
         }
-        if should_recycle_daemon(route == Route::Stream, never_fetched, code) {
+        // A link the console fetches by itself has no session and never counts as fetched, and it
+        // poisons Sony's library just the same.
+        let nothing_fetched = fetched.is_none_or(|(served, _)| served == 0);
+        if should_recycle_daemon(route == Route::Stream, nothing_fetched, code) {
             crate::log_warn!(
                 "{tag}: network-class refusal 0x{code:08X} before any fetch — recycling the installer daemon so the next install starts clean"
             );
@@ -1341,7 +1574,9 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         state.jobs.update(&job, |s| {
             s.phase = Phase::Failed;
             s.verdict = Some(Verdict::Failed);
-            let reason = refusal_reason(never_fetched, code, route);
+            let reason = serve_failure
+                .or_else(|| reason_from_reply(&reply))
+                .unwrap_or_else(|| refusal_reason(never_fetched, code, route));
             s.retry_with_stream = stream_retry_offered(Some(reason), &req.source, &category, true);
             s.reason = Some(reason);
             s.code = code;
@@ -1428,11 +1663,16 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             let _ = unless_stopped(&state, &job, round).await;
         }
     };
-    // The console has finished with the stream source (pulled it all, or
-    // stalled): release the pkg-host session so the same package can be
-    // installed again. Its counters stay readable for the metrics below.
+    // Whether the console may still come back for the stream source decides what happens to its
+    // session (see `session_after_delivery`). Its counters stay readable for the metrics below.
     if let Some(sid) = &session_id {
-        crate::pkg_install::release_serve_session(&state.sessions, sid);
+        match session_after_delivery(delivery) {
+            SessionAfterDelivery::Release => {
+                crate::pkg_install::release_serve_session(&state.sessions, sid);
+            }
+            SessionAfterDelivery::ReleaseWhenQuiet => release_when_quiet(&state, sid),
+            SessionAfterDelivery::Keep => {}
+        }
     }
     let deliver_ms = deliver_started.elapsed().as_millis() as u64;
     if delivery == DeliveryProgress::Cancelled {
@@ -1459,12 +1699,8 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         crate::log_warn!(
             "{tag}: delivery stalled at {last_served} bytes — source kept, reporting failed"
         );
-        if should_recycle_after_stall(session_id.is_none() && install_job_id.is_some()) {
-            crate::log_warn!(
-                "{tag}: recycling the installer daemon so a retry is not refused as busy"
-            );
-            recycle_daemon(&ip).await;
-        }
+        // A daemon serving this job is left alone too: it gives way to the next install by itself
+        // once the job has been idle, and until then a paused download can still resume.
         // A stream the console never fetched a single byte of is not a stall:
         // it could not reach this computer, so give the same guidance as the
         // other unreachable paths (host IP, firewall) rather than "stopped
@@ -1487,6 +1723,9 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 crate::log_info!(
                     "{tag}: the console never fetched from this engine; last resort: installing its own copy by file path"
                 );
+                if let Some(sid) = &session_id {
+                    crate::pkg_install::release_serve_session(&state.sessions, sid);
+                }
                 let (i, p, h) = (ip.clone(), path.clone(), hint_name.clone());
                 let r =
                     install_call(&state, &job, move || ic::install_path_plain(&i, &p, &h)).await;
@@ -1515,7 +1754,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             } else if never_reached {
                 stream_unreachable_hint(served_from.as_deref(), 0, stall_diag.as_ref())
             } else {
-                "the console stopped fetching the package before it finished; the package was kept so you can retry"
+                "the console has not asked for the package for 5 minutes; this engine goes on serving it, so a paused download can still resume, and the package was kept"
                 .into()
             };
             state.jobs.update(&job, |s| {
@@ -1568,6 +1807,50 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 verdict_after_wait(check.verdict, check.timed_out, delivered),
                 Some(status::PatchVerdict::from(check.verdict)),
                 check.after,
+            )
+        }
+        // A base game or add-on: Sony's failures arrive after the bytes, so the whole package
+        // reaching the console says little. The artifact on a drive does.
+        (Some(t), None) if observable && !req.content_id.trim().is_empty() => {
+            let (m, st, jb) = (mgmt.clone(), state.clone(), job.clone());
+            let cid = req.content_id.clone();
+            let ptype = package_type_for_verify(&category, t);
+            let total = state.jobs.get(&job).map_or(0, |s| s.metrics.total_bytes);
+            let budget = crate::pkg_install::patch_verify_budget(total);
+            let console_copy = match &req.source {
+                Source::ConsolePath(p) => Some(p.clone()),
+                _ => None,
+            };
+            let sid = session_id.clone();
+            let found = tokio::task::spawn_blocking(move || {
+                let fingerprint = console_copy
+                    .map(|p| crate::pkg_install::remote_pkg_identity(&m, &p).1)
+                    .or_else(|| {
+                        let sid = sid?;
+                        let s = st.sessions.lock().unwrap_or_else(|e| e.into_inner());
+                        s.get(&sid).map(|x| x.package_fingerprint.clone())
+                    })
+                    .unwrap_or_default();
+                crate::pkg_install::wait_for_installed_artifact(
+                    &m,
+                    &cid,
+                    &ptype,
+                    total,
+                    &fingerprint,
+                    budget,
+                    &|| st.jobs.is_cancelled(&jb),
+                )
+            })
+            .await
+            .unwrap_or(crate::pkg_install::ArtifactWait::CannotTell);
+            (
+                match found {
+                    crate::pkg_install::ArtifactWait::Landed
+                    | crate::pkg_install::ArtifactWait::CannotTell => verdict_no_identity(true),
+                    crate::pkg_install::ArtifactWait::NotSeen => Verdict::Unverified,
+                },
+                None,
+                None,
             )
         }
         // Nothing to check the install against: the whole package reaching the console is the
@@ -1668,7 +1951,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
 fn unverified_hint(delivered: bool, waited_ms: u64) -> String {
     if delivered {
         format!(
-            "the PS5 has the whole package and its version had not changed after {} s; it may still be installing, so the package was kept",
+            "the PS5 has the whole package and it had not shown up installed after {} s; it may still be installing, so the package was kept",
             waited_ms / 1000
         )
     } else {
@@ -1682,11 +1965,15 @@ async fn create_serve_session(
     state: &PkgInstallStateHandle,
     job: &str,
     req: &InstallRequest,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), ServeFailure> {
     let path = match &req.source {
         Source::HostFile(p) => p.clone(),
         Source::Remote { connection, path } => format!("remote://{connection}/{path}"),
-        _ => return Err("create_serve_session called for a non-stream source".into()),
+        _ => {
+            return Err(ServeFailure::plain(
+                "create_serve_session called for a non-stream source",
+            ))
+        }
     };
     serve_session_unless_stopped(state, job, req, &path).await
 }
@@ -1699,7 +1986,7 @@ async fn serve_session_unless_stopped(
     job: &str,
     req: &InstallRequest,
     path: &str,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), ServeFailure> {
     let start_req = serve_session_request(req, path);
     let st = state.clone();
     let mut task = tokio::spawn(async move { create_serve_session_for(&st, start_req).await });
@@ -1712,9 +1999,11 @@ async fn serve_session_unless_stopped(
                     crate::pkg_install::release_serve_session(&st.sessions, &sid);
                 }
             });
-            Err("stopped by the user".into())
+            Err(ServeFailure::plain("stopped by the user"))
         }
-        out = &mut task => out.unwrap_or_else(|e| Err(format!("serve session task failed: {e}"))),
+        out = &mut task => out.unwrap_or_else(|e| {
+            Err(ServeFailure::plain(format!("serve session task failed: {e}")))
+        }),
     }
 }
 
@@ -1743,27 +2032,121 @@ fn serve_session_request(req: &InstallRequest, path: &str) -> serde_json::Value 
     }
 }
 
+/// Why this engine could not set up a stream session: what to tell the user, in plain text rather
+/// than the handler's JSON, and which reason that is.
+pub struct ServeFailure {
+    reason: Option<FailReason>,
+    message: String,
+}
+
+impl ServeFailure {
+    fn plain(message: impl Into<String>) -> Self {
+        Self {
+            reason: None,
+            message: message.into(),
+        }
+    }
+
+    /// From the start handler's refusal.
+    fn from_response(status: StatusCode, body: &[u8]) -> Self {
+        let text = String::from_utf8_lossy(body);
+        let message = serde_json::from_slice::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v["error"].as_str().map(str::to_string))
+            .unwrap_or_else(|| text.into_owned());
+        let reason = if status == StatusCode::CONFLICT {
+            FailReason::Busy
+        } else if message.contains("isn't installed on this PS5") {
+            FailReason::BaseMissing
+        } else if status == StatusCode::BAD_REQUEST {
+            FailReason::SourceGone
+        } else {
+            FailReason::BadRequest
+        };
+        Self {
+            reason: Some(reason),
+            message,
+        }
+    }
+}
+
 async fn create_serve_session_for(
     state: &PkgInstallStateHandle,
     start_req: serde_json::Value,
-) -> Result<(String, String), String> {
-    let start_req: crate::pkg_install::InstallStartRequest =
-        serde_json::from_value(start_req).map_err(|e| format!("build start request: {e}"))?;
+) -> Result<(String, String), ServeFailure> {
+    let start_req: crate::pkg_install::InstallStartRequest = serde_json::from_value(start_req)
+        .map_err(|e| ServeFailure::plain(format!("build start request: {e}")))?;
     let resp =
         crate::pkg_install::install_start_handler(State(state.clone()), Json(start_req)).await;
     let (parts, body) = resp.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)
         .await
-        .map_err(|e| format!("read start response: {e}"))?;
+        .map_err(|e| ServeFailure::plain(format!("read start response: {e}")))?;
     if !parts.status.is_success() {
-        return Err(format!(
-            "serve session failed: {}",
-            String::from_utf8_lossy(&bytes)
-        ));
+        return Err(ServeFailure::from_response(parts.status, &bytes));
     }
-    let start: crate::pkg_install::InstallStartResponse =
-        serde_json::from_slice(&bytes).map_err(|e| format!("parse start response: {e}"))?;
+    let start: crate::pkg_install::InstallStartResponse = serde_json::from_slice(&bytes)
+        .map_err(|e| ServeFailure::plain(format!("parse start response: {e}")))?;
     Ok((start.session_id, start.url))
+}
+
+/// A package file on this computer's header, for what the caller did not say about it.
+fn read_host_header(path: &str) -> Option<ps5upload_pkg::ReaderMetadata> {
+    use std::io::{Read, Seek, SeekFrom};
+    let file = std::cell::RefCell::new(std::fs::File::open(path).ok()?);
+    ps5upload_pkg::metadata_from_reader(|off, len| {
+        let mut f = file.borrow_mut();
+        f.seek(SeekFrom::Start(off)).ok()?;
+        let mut buf = Vec::new();
+        (&mut *f).take(len).read_to_end(&mut buf).ok()?;
+        Some(buf)
+    })
+}
+
+/// What refuses an install before anything reaches the console, when it is certain. Reads that
+/// fail refuse nothing.
+async fn refusal_before_delivery(
+    req: &InstallRequest,
+    category: &str,
+    title_id: &str,
+    mgmt: &str,
+) -> Option<(FailReason, String)> {
+    let c = category.to_ascii_lowercase();
+    let is_game = !(c.ends_with("gp") || c.ends_with("dp") || c.ends_with("ac"));
+    if is_game {
+        let (m, t) = (mgmt.to_string(), title_id.to_string());
+        let mounted = tokio::task::spawn_blocking(move || {
+            ps5upload_core::fs_ops::app_list_registered(&m)
+                .map(|l| {
+                    l.apps
+                        .iter()
+                        .any(|a| a.title_id == t && (a.image_backed || !a.src.is_empty()))
+                })
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false);
+        if mounted {
+            return Some((
+                FailReason::ImageMounted,
+                format!("{title_id} is registered on the PS5 from a game image or folder; move that off the scan folder first"),
+            ));
+        }
+    }
+    if let Some(kind) = base_check_applies(category, title_id) {
+        if !req.content_id.trim().is_empty() {
+            let (m, cid) = (mgmt.to_string(), req.content_id.clone());
+            let refusal = tokio::task::spawn_blocking(move || {
+                ps5upload_core::pkg_install::preflight_patch_install(&m, &cid, kind)
+            })
+            .await
+            .unwrap_or(None);
+            if let Some(message) = refusal {
+                return Some((FailReason::BaseMissing, message));
+            }
+        }
+    }
+    None
 }
 
 /// Record history and release the console's active-job guard. Always runs.
@@ -1933,16 +2316,6 @@ mod tests {
         assert!(!should_recycle_daemon(true, false, 0x8043_1064));
         assert!(!should_recycle_daemon(true, true, 0x80B2_116F));
         assert!(!should_recycle_daemon(true, true, 0));
-    }
-
-    #[test]
-    fn a_stalled_daemon_served_install_recycles_the_daemon() {
-        // Measured on FW 5.10: the daemon keeps a stalled loopback job as
-        // "serving" until Sony reads every byte, which never happens, so every
-        // later install was refused as busy until the daemon restarted.
-        assert!(should_recycle_after_stall(true));
-        // A stream stall is served by this engine; the daemon holds nothing.
-        assert!(!should_recycle_after_stall(false));
     }
 
     // ── a stream the console never fetched from: say why, not "declined" ──
@@ -2525,6 +2898,150 @@ mod tests {
         assert_eq!(verdict_from_verify(PV::DidNotApply, true), Verdict::Failed);
         assert_eq!(verdict_no_identity(true), Verdict::Installed);
         assert_eq!(verdict_no_identity(false), Verdict::Failed);
+    }
+
+    #[test]
+    fn only_an_explicit_stop_lets_go_of_a_session_at_once() {
+        assert_eq!(
+            session_after_delivery(DeliveryProgress::Cancelled),
+            SessionAfterDelivery::Release
+        );
+        assert_eq!(
+            session_after_delivery(DeliveryProgress::Stalled),
+            SessionAfterDelivery::Keep,
+            "a stall may be a pause: a 410 makes PlayGo delete what it downloaded"
+        );
+        assert_eq!(
+            session_after_delivery(DeliveryProgress::Complete),
+            SessionAfterDelivery::ReleaseWhenQuiet
+        );
+    }
+
+    #[test]
+    fn a_lost_reply_keeps_the_session_a_refusal_releases_it() {
+        assert!(!release_after_refusal(&Err("read timed out".into())));
+        assert!(!release_after_refusal(&Ok(ic::InstallReply::Unknown(
+            "garbled".into()
+        ))));
+        assert!(release_after_refusal(&Ok(ic::InstallReply::Sony {
+            code: 0x80B2_116F,
+            hint: None
+        })));
+        assert!(release_after_refusal(&Ok(ic::InstallReply::Busy {
+            job: "j".into()
+        })));
+    }
+
+    #[test]
+    fn failures_that_are_not_sonys_say_so() {
+        let r = |x: Result<ic::InstallReply, String>| reason_from_reply(&x);
+        assert_eq!(
+            r(Ok(ic::InstallReply::Busy { job: "j".into() })),
+            Some(FailReason::Busy)
+        );
+        assert_eq!(
+            r(Ok(ic::InstallReply::SourceUnreadable)),
+            Some(FailReason::SourceGone)
+        );
+        assert_eq!(
+            r(Ok(ic::InstallReply::BadPath)),
+            Some(FailReason::BadRequest)
+        );
+        assert_eq!(
+            r(Ok(ic::InstallReply::LoopbackFailed)),
+            Some(FailReason::NoBringup)
+        );
+        assert_eq!(
+            r(Err("connect refused".into())),
+            Some(FailReason::ReplyLost)
+        );
+        assert_eq!(
+            r(Ok(ic::InstallReply::Sony {
+                code: 1,
+                hint: None
+            })),
+            None
+        );
+    }
+
+    #[test]
+    fn a_serve_failure_reads_as_its_inner_error() {
+        let f = ServeFailure::from_response(
+            StatusCode::BAD_REQUEST,
+            br#"{"error":"This is an update/patch for CUSA00001, but that game isn't installed on this PS5. Install the base game first."}"#,
+        );
+        assert_eq!(f.reason, Some(FailReason::BaseMissing));
+        assert!(f.message.starts_with("This is an update"), "{}", f.message);
+        let f =
+            ServeFailure::from_response(StatusCode::CONFLICT, br#"{"error":"already running"}"#);
+        assert_eq!(f.reason, Some(FailReason::Busy));
+        let f = ServeFailure::from_response(StatusCode::BAD_REQUEST, b"no such file");
+        assert_eq!(f.reason, Some(FailReason::SourceGone));
+        assert_eq!(f.message, "no such file");
+    }
+
+    #[test]
+    fn only_a_network_code_blames_the_network() {
+        assert_eq!(
+            refusal_reason(true, 0x8043_1064, Route::Stream),
+            FailReason::StreamUnreachable
+        );
+        assert_eq!(
+            refusal_reason(true, 0x80B2_116F, Route::Stream),
+            FailReason::SonyRefused
+        );
+        assert_eq!(
+            refusal_reason(true, 0, Route::Stream),
+            FailReason::SonyRefused
+        );
+    }
+
+    #[test]
+    fn the_console_path_goes_on_through_this_engine_for_what_the_route_causes() {
+        let sony = |code| Ok(ic::InstallReply::Sony { code, hint: None });
+        assert_eq!(
+            staged_retry_through_engine(&sony(0x80B2_116F)),
+            Some(0x80B2_116F)
+        );
+        // The daemon no longer tries the bare path by itself on these.
+        assert_eq!(
+            staged_retry_through_engine(&sony(0x8043_1064)),
+            Some(0x8043_1064)
+        );
+        // Too long for Sony, from a daemon older than 1.6.0.
+        assert_eq!(
+            staged_retry_through_engine(&sony(0x80A3_0003)),
+            Some(0x80A3_0003)
+        );
+        assert_eq!(
+            staged_retry_through_engine(&Ok(ic::InstallReply::LoopbackFailed)),
+            Some(0)
+        );
+        assert_eq!(staged_retry_through_engine(&sony(0x80A3_000C)), None);
+        assert_eq!(
+            staged_retry_through_engine(&Ok(ic::InstallReply::SourceUnreadable)),
+            None
+        );
+    }
+
+    #[test]
+    fn an_update_the_game_already_has_needs_asking() {
+        assert!(update_already_applied("01.04", "01.04"));
+        assert!(update_already_applied("01.04", "01.09"));
+        assert!(!update_already_applied("01.09", "01.04"));
+        assert!(!update_already_applied("01.09", ""));
+    }
+
+    #[test]
+    fn package_type_and_base_check_follow_the_title() {
+        assert_eq!(package_type_for_verify("gd", "CUSA00001"), "PS4GD");
+        assert_eq!(package_type_for_verify("gp", "PPSA00001"), "PS5DP");
+        assert_eq!(package_type_for_verify("PS5AC", "XXXX00001"), "PS5AC");
+        assert_eq!(base_check_applies("gp", "CUSA00001"), Some("gp"));
+        assert_eq!(base_check_applies("PS4AC", "CUSA00001"), Some("ac"));
+        assert_eq!(base_check_applies("gd", "CUSA00001"), None);
+        // A PS5 update can carry the whole app (measured), so the PS5 decides.
+        assert_eq!(base_check_applies("gp", "PPSA00001"), None);
     }
 
     #[test]
