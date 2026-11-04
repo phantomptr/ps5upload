@@ -433,7 +433,12 @@ fn show_dialog(message: &str) {
     );
     if zenity.is_err() {
         let _ = wait_for_program(
-            std::process::Command::new("kdialog").args(["--title", "PS5Upload", "--error", message]),
+            std::process::Command::new("kdialog").args([
+                "--title",
+                "PS5Upload",
+                "--error",
+                message,
+            ]),
             DIALOG_LIMIT,
         );
     }
