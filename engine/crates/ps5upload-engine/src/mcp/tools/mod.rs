@@ -831,6 +831,7 @@ mod tests {
         assert_eq!(hints("games_unregister"), (false, true));
         assert_eq!(hints("rp_stop"), (false, true));
         assert_eq!(hints("shell_run"), (false, true));
+        assert_eq!(hints("payloads_send"), (false, true));
         assert_eq!(hints("consoles_discover"), (true, false));
         for tool in all() {
             assert_eq!(

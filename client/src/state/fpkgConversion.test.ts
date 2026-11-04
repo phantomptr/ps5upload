@@ -720,6 +720,14 @@ describe("fpkg pipeline", () => {
     expect(pushNotification).not.toHaveBeenCalled();
   });
 
+  it("has nothing to follow when the engine answers no list", async () => {
+    for (const answer of [null, {}, undefined]) {
+      runningJobs.mockResolvedValueOnce(answer as never);
+      await expect(useFpkgConversion.getState().attachRunning()).resolves.toBeUndefined();
+      expect(useFpkgConversion.getState().pipeline.phase).toBe("idle");
+    }
+  });
+
   it("follows a build left running by a reload, and leaves its result for the queue", async () => {
     runningJobs.mockResolvedValueOnce([{ job_id: "j9", kind: "image", source: "/g/A", started_at_ms: 5 }]);
     await useFpkgConversion.getState().attachRunning();

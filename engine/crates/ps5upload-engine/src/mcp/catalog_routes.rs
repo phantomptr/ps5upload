@@ -77,6 +77,11 @@ pub(crate) fn reaches_a_backup_slot(
                 .and_then(Value::as_str)
                 .is_some_and(slot);
     }
+    // A shell reads anything on the console, whatever its command says: MCP.md says so, and the
+    // tool asks for the user's confirmation. Refusing one spelling would only look like a guard.
+    if plain_path(path) == "/api/ps5/shell/run" {
+        return false;
+    }
     let file = |text: &str| plain_path(text).contains("/mesh/v1/doc-backup-");
     query.iter().any(|(_, v)| file(v)) || body.is_some_and(|b| any_text(b, &file))
 }
@@ -831,6 +836,12 @@ mod tests {
                 "{file}"
             );
         }
+        let shell = json!({"cmd": "cat /data/ps5upload/mesh/v1/doc-backup-01"});
+        assert!(!reaches_a_backup_slot(
+            "/api/ps5/shell/run",
+            &[],
+            Some(&shell)
+        ));
         let other = json!({"path": "/data/ps5upload/mesh/v1/doc-prefs"});
         assert!(!reaches_a_backup_slot(
             "/api/ps5/fs/read-preview",

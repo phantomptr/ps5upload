@@ -211,7 +211,8 @@ clients let you allow tools one by one, so keep these on "ask".
 | `games_unregister` | Remove a title from the console |
 | `games_stop`, `processes_kill` | End a game, losing what isn't saved |
 | `power_control` | Rest, reboot or shut down |
-| `shell_run` | Run any command on the console |
+| `shell_run` | Run any command on the console, and read any file there, sign-in keys included |
+| `payloads_send` | Run a program on the console, with the same reach as a shell |
 | `payloads_store`, `payloads_delete`, `payloads_autoload` | Change what the console keeps and runs at boot |
 | `cleanup_apply`, `health_fix` | Delete what a scan found, and apply repairs |
 | `rp_stop` | End the Remote Play session someone may be playing |
@@ -220,7 +221,7 @@ clients let you allow tools one by one, so keep these on "ask".
 | `golive_destination_remove` | Forget a saved stream key |
 | `api_request` | Anything the API can do |
 
-Some tools aren't marked destructive but still matter: `install_pkg`, `payloads_send`, `games_launch`,
+Some tools aren't marked destructive but still matter: `install_pkg`, `games_launch`,
 `rp_input`, `rp_start`, `together_invite`, `together_decide`, `settings_set`.
 
 ### What never reaches a model
@@ -229,6 +230,8 @@ The keys that sign in to a console's users stay out. `api_request` refuses `/api
 and `/api/settings-backup/get`, which are left out of the catalog too. No tool reaches a console's
 backup slots, through `/api/mesh/doc` or by the helper's file path; a console's other documents stay
 readable. `/api/consoles` says only whether a console has keys. Stream keys for Go live show only their last four characters.
+
+**A shell on the console has everything.** `shell_run`, and `api_request` calling `/api/ps5/shell/run`, can read any file on the console, including the backup slot files the rules above keep other tools from. Nothing filters what a command reads, and no filter could. `payloads_send` runs a program there, which can do the same. So these tools are marked destructive, and read-only mode refuses them. Keep them on "ask" and read each command before you allow it, or turn them off in your client.
 
 ## Things that need more than the engine
 

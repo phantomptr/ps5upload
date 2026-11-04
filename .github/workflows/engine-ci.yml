@@ -369,7 +369,7 @@ jobs:
         timeout-minutes: 20
         env:
           RUST_BACKTRACE: 1
-        run: cargo test -p ps5upload-engine --lib -- --ignored --test-threads 1 rp_golive live_feed
+        run: cargo test -p ps5upload-engine --lib -- --ignored --test-threads 1 rp_golive live_feed ffmpeg_makes_a_picture_of_a_keyframe ffmpeg_says_why_garbage_makes_no_picture ffmpeg_makes_a_frame_for_a_session_with_no_page
 
   # The C interop suite. The C server and the data layer are process-wide singletons, so the
   # suite runs one test at a time: a test that holds the server cannot starve the others. That

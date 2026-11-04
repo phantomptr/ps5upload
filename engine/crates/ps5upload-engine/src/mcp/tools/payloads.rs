@@ -44,7 +44,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                           engine's computer (`path`) or one of the library (`payload_id`). A \
                           payload is a program with full access to the console: only one the user \
                           asked for.",
-            kind: Kind::Write { idempotent: false },
+            kind: Kind::Destructive { idempotent: false },
             schema: object(
                 json!({
                     "console": console_required(),

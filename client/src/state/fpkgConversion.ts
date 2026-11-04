@@ -1001,8 +1001,9 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
 
   attachRunning: async () => {
     if (get().pipeline.phase !== "idle") return;
-    const runs = await fpkg.runningJobs().catch(() => [] as WorkshopRun[]);
-    const run = runs[0];
+    const runs: WorkshopRun[] | null = await fpkg.runningJobs().catch(() => null);
+    // An engine that answers with no list has nothing to follow.
+    const run = Array.isArray(runs) ? runs[0] : undefined;
     // Started by hand meanwhile, or nothing to follow.
     if (!run || get().pipeline.phase !== "idle") return;
     const stage: PipelineStage = run.kind === "extract" ? "extract" : "check";

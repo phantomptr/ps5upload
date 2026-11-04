@@ -127,8 +127,9 @@ pub(super) fn tools() -> Vec<ToolDef> {
             name: "shell_run",
             title: "Run a console command",
             description: "Runs a command in the PS5Upload helper's shell on a console. It can do \
-                          anything the helper can, including what cannot be undone: only what the \
-                          user asked for, and show them the command first.",
+                          anything the helper can, including what cannot be undone, and read any \
+                          file there, sign-in keys in backup copies too: only what the user asked \
+                          for, and show them the command first.",
             kind: Kind::Destructive { idempotent: false },
             schema: object(
                 json!({
