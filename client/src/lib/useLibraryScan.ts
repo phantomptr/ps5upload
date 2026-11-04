@@ -7,7 +7,7 @@ import {
   refreshLibrary,
   useLibraryStore,
 } from "../state/library";
-import { transferScreenBusy } from "./ps5Transfers";
+import { consoleBusy } from "./usePoll";
 
 /**
  * Keep the connected console's drive scan (state/library) current while a screen that shows it
@@ -24,13 +24,13 @@ export function useLibraryScan(enabled = true): void {
   );
   const active = enabled && up && !!host;
   useEffect(() => {
-    if (!active || transferScreenBusy(host)) return;
+    if (!active || consoleBusy(host)) return;
     if (libraryIsStale(host)) void refreshLibrary(host);
   }, [active, host, lastRefreshedAt]);
   useEffect(() => {
     if (!active) return;
     const onInvalidate = () => {
-      if (!transferScreenBusy(host)) void refreshLibrary(host);
+      if (!consoleBusy(host)) void refreshLibrary(host);
     };
     window.addEventListener("ps5upload:library:invalidate", onInvalidate);
     return () =>

@@ -72,6 +72,8 @@ import { powerTick } from "../api/ps5";
 import { anyAwakeWork, awakeConsoles } from "../lib/awakeWork";
 import { useTaskStore } from "../state/tasks";
 import { transferScreenBusy } from "../lib/ps5Transfers";
+import { bytesMoved } from "../lib/bytesMoved";
+import { consoleBusy } from "../lib/usePoll";
 import {
   autoRedeployDecision,
   liveHelperDecision,
@@ -409,9 +411,8 @@ function useStatusPolling() {
       // contention during exactly the window where the console can least
       // afford it. If the count has NOT advanced, the transfer may
       // genuinely be stuck, and we fall through to a real probe.
-      if (transferScreenBusy(probedHost)) {
-        const phase = useTransferStore.getState().phasesByHost[key];
-        const sent = phase && phase.kind === "running" ? phase.bytesSent : null;
+      if (consoleBusy(probedHost)) {
+        const sent = bytesMoved(key);
         const prevSent = transferProgressRef.current[key];
         // Any CHANGE counts as proof of life, not just an increase: a
         // resumed attempt restarts the byte count lower, and that still

@@ -2,7 +2,7 @@ import { useConnectionStore } from "./connection";
 import { useRunningAppsStore } from "./runningApps";
 import { fetchRunningGames } from "../lib/runningGames";
 import { hostOf, mgmtAddr } from "../lib/addr";
-import { transferScreenBusy } from "../lib/ps5Transfers";
+import { consoleBusy } from "../lib/usePoll";
 
 /**
  * The app-wide "is a game running?" watcher.
@@ -62,7 +62,7 @@ export function installRunningWatch(): void {
 
     const host = useConnectionStore.getState().host;
     if (!host?.trim()) return;
-    if (transferScreenBusy(host)) return;
+    if (consoleBusy(host)) return;
 
     // Somebody with a faster loop is already keeping this current.
     const store = useRunningAppsStore.getState();

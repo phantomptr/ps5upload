@@ -240,6 +240,9 @@ export function collapseByHost<T extends Pick<PS5Profile, "id" | "host" | "name"
 
 const initial = loadStored();
 
+/** How old `last_seen_at` may get before a successful probe refreshes it. */
+export const SEEN_REFRESH_S = 5 * 60;
+
 export const useRosterStore = create<RosterState>((set, get) => ({
   profiles: initial.profiles,
   active_id: initial.active_id,
@@ -486,6 +489,20 @@ export const useRosterStore = create<RosterState>((set, get) => ({
   },
   noteSeen: (id, patch) => {
     const now = Math.floor(Date.now() / 1000);
+    // Every status poll lands here (every 10 s per console). A new array re-renders every screen
+    // holding `profiles` and rewrites the roster, and "last seen" reads in minutes: only a new
+    // firmware or helper version, or a stamp gone stale, is worth that.
+    const seen = get().profiles.find((p) => p.id === id);
+    if (
+      seen &&
+      seen.last_seen_at != null &&
+      now - seen.last_seen_at < SEEN_REFRESH_S &&
+      now >= seen.last_seen_at &&
+      (patch.kernel === undefined || patch.kernel === seen.last_seen_kernel) &&
+      (patch.payload === undefined || patch.payload === seen.last_seen_payload)
+    ) {
+      return;
+    }
     const next = get().profiles.map((p) =>
       p.id === id
         ? {

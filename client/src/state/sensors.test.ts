@@ -11,8 +11,8 @@ vi.mock("../api/ps5", () => ({
   fetchHwPower: sensorMocks.fetchPower,
 }));
 
-vi.mock("../lib/ps5Transfers", () => ({
-  transferScreenBusy: sensorMocks.transferBusy,
+vi.mock("../lib/usePoll", () => ({
+  consoleBusy: sensorMocks.transferBusy,
 }));
 
 import {

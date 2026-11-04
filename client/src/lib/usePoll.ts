@@ -139,6 +139,19 @@ export function transferBusy(
   return !!runningHosts[want];
 }
 
+/** `transferBusy` as of now, for a poller outside React. This is the one meaning of "busy" for
+ *  anything that only reads: a Files upload, a download, a copy and an install count as much as the
+ *  Upload screen's queue. (`transferScreenBusy` is narrower on purpose: it is what an install waits
+ *  behind, one client on the transfer port.) */
+export function consoleBusy(host?: string | null): boolean {
+  return transferBusy(
+    host,
+    useTaskStore.getState().tasks,
+    useTransferStore.getState().phasesByHost,
+    useUploadQueueStore.getState().runningHosts,
+  );
+}
+
 /** `transferBusy` as a hook: true while data is moving to or from `host`.
  *  This is exactly when `usePoll` stands aside, so a screen can say why its
  *  list is not loading instead of sitting blank. */

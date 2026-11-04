@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router";
 
 import { takeHandoffForPc, type HandoffTake } from "../api/consoleFiles";
-import { transferScreenBusy } from "../lib/ps5Transfers";
+import { consoleBusy } from "../lib/usePoll";
 import { useDocumentVisible } from "../lib/visibility";
 import { useConnectionStore } from "../state/connection";
 import { openInFileSystem } from "../state/fsNavigation";
@@ -116,7 +116,7 @@ export function useConsoleHandoff(): void {
     const p = createHandoffPoller({
       take: () => takeHandoffForPc(host),
       delay: () => (live.current.onFiles ? HANDOFF_POLL_FILES_MS : HANDOFF_POLL_OTHER_MS),
-      skip: () => transferScreenBusy(host),
+      skip: () => consoleBusy(host),
       onPath: (path) => deliverHandoff(path, live.current),
     });
     return () => p.stop();
