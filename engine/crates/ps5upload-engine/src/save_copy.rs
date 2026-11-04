@@ -1017,17 +1017,9 @@ impl Console for Live<'_> {
     }
     fn fill(&self, mount: &str, src: &Path) -> Result<(), String> {
         let host = self.host;
-        let listing = local::get(&format!(
-            "/api/ps5/list-dir?addr={}&path={}&offset=0&limit=4096",
-            local::enc(host),
-            local::enc(mount)
-        ))?;
-        for e in listing
-            .get("entries")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-        {
+        // Every page: a listing stops at 256 entries, and what it missed would stay, mixed with
+        // the files that were meant to replace it.
+        for e in local::folder_entries(host, mount)? {
             let Some(name) = e.get("name").and_then(Value::as_str) else {
                 continue;
             };
