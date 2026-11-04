@@ -96,6 +96,10 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
 /// which is after this). An explicit `PS5UPLOAD_DATA_DIR` wins.
 fn point_engine_at_app_data(app: &AppHandle) {
     use tauri::Manager;
+    // The Payload Library's folder: the in-process /api/payloads and the Payloads screen share it.
+    if let Ok(dir) = crate::commands::payloads::library_dir(app) {
+        std::env::set_var(ps5upload_core::payload_library::PAYLOADS_DIR_ENV, dir);
+    }
     if std::env::var_os("PS5UPLOAD_DATA_DIR").is_some_and(|v| !v.is_empty()) {
         return;
     }

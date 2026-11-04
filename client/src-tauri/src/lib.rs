@@ -489,6 +489,7 @@ pub fn run() {
             commands::payloads_local_inventory,
             commands::payloads_local_path,
             commands::payloads_download,
+            commands::payloads_download_cancel,
             commands::payloads_add_custom_repo,
             commands::payloads_remove_custom_repo,
             // ── ShadowMount+ awareness (read-only) ──────────────────

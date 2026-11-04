@@ -58,13 +58,13 @@ open = "5"
 # `probes.rs::decompress_to_cache`. Pure-Rust miniz backend, no
 # system-lib linkage, so cross-compilation to arm64/Windows stays simple.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-# SHA-256 of a catalogue payload whose release publishes SHA256SUMS (commands/payloads.rs
-# CHECKSUM_FILES). Same version the engine crates already pull in.
+# SHA-256 of a downloaded update (commands/updates.rs). Same version the engine crates pull in.
 sha2 = "0.11"
 
 # Engine core modules invoked directly in-process by Tauri commands
 # (no HTTP hop). Same workspace, different manifest root.
-ps5upload-core = { path = "../../engine/crates/ps5upload-core" }
+# "mdns": console discovery, core's discover.rs.
+ps5upload-core = { path = "../../engine/crates/ps5upload-core", features = ["mdns"] }
 
 # BLAKE3 for hash-stamping the extracted engine binary + payload.
 # Replaces the previous full-byte compare on every launch — hashing
@@ -87,20 +87,6 @@ base64 = "0.23"
 # save folder into <title_id>.zip and validate/extract restore zips.
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
-# mDNS service discovery for the Connection screen's "Find PS5s on the
-# network" button. Pure-Rust implementation — no system avahi/bonjour
-# linkage, so cross-compilation to all desktop targets (macOS arm64/x64,
-# Windows x64/arm64, Linux x64/arm64) stays single-toolchain. Used only
-# from `commands/discover.rs`; a discovery is a single 3-second LAN
-# browse, not a long-running daemon.
-mdns-sd = { version = "0.21", default-features = false, features = ["async"] }
-
-# Enumerate ALL local network interfaces (not just the default-route one) so
-# the LAN sweep in commands/discover.rs probes every subnet the host is on —
-# Ethernet + Wi-Fi + USB-tether simultaneously. Pure-Rust, cross-platform
-# (macOS/Windows/Linux), no system linkage; keeps the single-toolchain
-# cross-compile story intact.
-if-addrs = "0.15"
 tauri-plugin-opener = "2"
 tauri-plugin-deep-link = "2"
 

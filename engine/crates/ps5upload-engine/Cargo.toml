@@ -77,6 +77,11 @@ if-addrs = "0.15"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 trash = "5.2"
 
+# POST /api/discover with mDNS. On a phone the app's own build turns the feature on and holds the
+# multicast lock; the engine alone adds no dependency there and sweeps.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+ps5upload-core = { path = "../ps5upload-core", features = ["mdns"] }
+
 [dev-dependencies]
 # Writes the tiny archives the no-helper tests plan against (the decode side is ps5upload-core's).
 sevenz-rust2 = { version = "0.23", default-features = false, features = ["compress"] }
