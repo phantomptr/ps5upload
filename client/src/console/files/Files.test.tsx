@@ -379,6 +379,10 @@ describe("Files listing controls", () => {
     );
     expect(self).not.toContain('data-conflict="replace"');
     expect(self).not.toContain('data-action="conflict-all"');
+    // Confirming Replace: the dialog stays mounted under the confirm (○ returns to Replace).
+    const asked = renderToStaticMarkup(<ConflictDialog conflict={conflict} onAnswer={vi.fn()} asking />);
+    expect(asked).toContain('data-conflict="replace"');
+    expect(asked.indexOf('data-conflict="replace"')).toBeLessThan(asked.indexOf('role="alertdialog"'));
   });
 
   it("paste messages: skipped, already here, failures", () => {

@@ -120,6 +120,11 @@ describe("Games section", () => {
   });
 
   it("asks before an uninstall, in the words of where the game came from", () => {
+    // The sheet stays mounted under its confirm: ○ returns to the button that asked.
+    const asked = html({ openId: "PPSA01650", ask: { kind: "uninstall", game: game() } });
+    expect(asked).toContain('data-game-action="uninstall"');
+    expect(asked.indexOf('data-game-action="uninstall"')).toBeLessThan(asked.indexOf('role="alertdialog"'));
+    expect((asked.match(/data-nav-modal/g) ?? []).length).toBe(2);
     const pkg = html({ ask: { kind: "uninstall", game: game() } });
     expect(pkg).toContain(t("cw_games_confirm_uninstall_pkg"));
     const reg = html({ ask: { kind: "uninstall", game: game({ origin: "registered" }) } });
