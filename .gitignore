@@ -292,3 +292,6 @@ client/site-shots/out/
 Transaction_All*.csv
 *ko-fi*.csv
 *kofi*.csv
+
+# Written by scripts/site-altstore.mjs on each website deploy.
+site/altstore.json
