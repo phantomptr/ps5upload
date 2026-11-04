@@ -152,6 +152,16 @@ macOS x64. Sideload the APK on a real Android device.
 See `v2.5.1` and `v2.5.2` for the "noticed after release, patched same
 day" playbook.
 
+## Browser tests
+
+```sh
+cd client && npm run build:vite && npx playwright test   # or name a spec file
+```
+
+The suite starts its own servers on ports 14470-14472 (`PS5UPLOAD_VITE_PORT` moves them), so a dev
+server on 1420 is left alone. In CI a test that passes only on its retry fails the run; the job
+uploads the traces of what failed as `playwright-results`.
+
 ## Coverage reports
 
 ```sh

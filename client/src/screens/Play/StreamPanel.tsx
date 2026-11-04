@@ -1209,7 +1209,16 @@ export function StreamPanel() {
             <KbmReleaseChip low={showBar && !compact} />
           )}
           {playing && kbm.hint && !settingsOpen && !pip && (
-            <KbmCaptureCard key={kbm.hint.n} reason={kbm.hint.reason} onDone={kbm.dismissHint} />
+            <KbmCaptureCard
+              key={kbm.hint.n}
+              reason={kbm.hint.reason}
+              onDone={() => {
+                // The button is about to go: without this the focus falls to the page, and the
+                // keys (the release key too) stop reaching the picture.
+                stage.current?.focus();
+                kbm.dismissHint();
+              }}
+            />
           )}
           {playing && kbm.toast && !pip && <KbmToast key={kbm.toast.n} mode={kbm.toast.mode} captured={kbm.toast.captured} />}
           {running && <PadAsks pending={padLink.pending} />}

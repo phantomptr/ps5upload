@@ -13,7 +13,10 @@ export default defineConfig({
   // A committed test.only would run one test and report green.
   forbidOnly: !!process.env.CI,
   timeout: 120_000,
-  retries: process.env.CI ? 2 : 0,
+  // One retry tells a flake from a failure, and a flake fails the run too: passing on a retry hid
+  // these for weeks. Failed on a real one? gh run rerun <id> --failed, and fix the test.
+  retries: process.env.CI ? 1 : 0,
+  failOnFlakyTests: !!process.env.CI,
   reporter: process.env.CI
     ? [["line"], ["html", { outputFolder: "../output/playwright/report", open: "never" }]]
     : "line",

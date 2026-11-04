@@ -856,6 +856,15 @@ jobs:
         working-directory: client
         run: npm run test:e2e
 
+      # What it takes to see why a browser test failed on a runner: traces and screenshots.
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: playwright-results
+          path: output/playwright/
+          retention-days: 14
+
   # ─────────────────────────────────────────────────────────────────────
   # Security scan: dependencies with known vulnerabilities (cargo audit,
   # npm audit) and secrets anywhere in the git history (gitleaks). The same

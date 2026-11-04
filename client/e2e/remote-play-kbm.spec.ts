@@ -425,6 +425,20 @@ test("the desktop app grabs the cursor when no pointer lock comes, sends the mou
   await expect.poll(async () => (await cursorCalls(page)).slice(-2)).toEqual(UNGRAB);
 });
 
+test("after Got it on the card the keys still reach the PS5", async ({ page }) => {
+  await noPointerLock(page);
+  const engine = await mockConsole(page, { mouse: true, keyboard: true });
+  await start(page);
+  await nativeMode(page, engine);
+  await page.getByTestId("rp-stage").filter({ visible: true }).click();
+  await page.getByTestId("rp-kbm-card-ok").click();
+  await expect(page.getByTestId("rp-kbm-card")).toHaveCount(0);
+  await expect(page.getByTestId("rp-stage").filter({ visible: true })).toBeFocused();
+  engine.reports.length = 0;
+  await page.keyboard.press("KeyA");
+  await expect.poll(() => engine.reports.some((r) => keysOf(r).includes(0x04))).toBe(true);
+});
+
 test("a browser that refuses the pointer lock sends the mouse while it is over the picture", async ({ page }) => {
   await noPointerLock(page);
   const engine = await mockConsole(page, { mouse: true, keyboard: true });
