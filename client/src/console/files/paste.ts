@@ -42,7 +42,7 @@ import {
   type BatchOptions,
   type BatchResult,
 } from "./move";
-import { ReplaceError, replaceItem, type Placed, type ReplaceSide } from "./replace";
+import { renameChecked, ReplaceError, replaceItem, type Placed, type ReplaceSide } from "./replace";
 
 export type PasteMode = "copy" | "cut";
 export type ConflictChoice = "skip" | "replace" | "keep";
@@ -226,11 +226,13 @@ export async function pasteItems(
     const place = async (temp: string): Promise<Placed> => {
       if (renames) {
         try {
-          await call("/api/fs/rename", { from: item, to: temp });
+          await renameChecked(side, item, temp);
           renamed = true;
-          return { end: "done", undo: () => side.rename(temp, item) };
+          return { end: "done", undo: () => renameChecked(side, temp, item) };
         } catch (e) {
-          if (!(e instanceof ApiError && e.code === "cross_mount")) throw e;
+          if (e instanceof ApiError && e.status === 401) throw e;
+          // Whatever is at the temporary name after this may be the item itself: it is never cleared.
+          if (!(e instanceof ApiError && e.code === "cross_mount")) return { end: "failed", why: e, notThere: true };
         }
       }
       // A cut across drives copies too: its original goes only after the new item is in place.

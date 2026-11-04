@@ -296,6 +296,51 @@ describe("a cut that replaces", () => {
   });
 });
 
+describe("a rename whose answer never came", () => {
+  /** Does the rename `which` of the helper, but the page never hears back. */
+  function answerLost(which: (b: Record<string, string>) => boolean) {
+    const { fs, log } = fakeConsole(WORLD);
+    const real = mockCall.getMockImplementation()!;
+    mockCall.mockImplementation(async (route: string, body?: unknown) => {
+      const r = await real(route, body);
+      if (route === "/api/fs/rename" && which(body as Record<string, string>)) throw new ApiError(0, "timeout");
+      return r as never;
+    });
+    return { fs, log };
+  }
+
+  it("moving the old one aside did happen: the swap goes on", async () => {
+    const { fs } = answerLost((b) => b.to.endsWith(".ps5u-old"));
+    const r = await paste();
+    expect(fs).toEqual({ "/data/a/G": NEW, "/data/b/G": NEW });
+    expect(r.failed).toEqual([]);
+  });
+
+  it("taking the name did happen: replaced, not put back", async () => {
+    const { fs } = answerLost((b) => b.to === "/data/b/G");
+    const r = await paste();
+    expect(fs).toEqual({ "/data/a/G": NEW, "/data/b/G": NEW });
+    expect(r.failed).toEqual([]);
+  });
+
+  it("a cut's rename did happen: the item is not taken for a partial copy and deleted", async () => {
+    const { fs } = answerLost((b) => b.from === "/data/a/G");
+    const r = await paste({ mode: "cut" });
+    expect(fs).toEqual({ "/data/b/G": NEW });
+    expect(r.done).toEqual(["/data/a/G"]);
+  });
+
+  it("nothing moved and the helper is gone: never reported as moved, nothing cleared", async () => {
+    const { fs, log } = fakeConsole(WORLD, (route, b) =>
+      route === "/api/fs/rename" && b.from === "/data/a/G" ? new ApiError(0, "offline") : null,
+    );
+    const r = await paste({ mode: "cut" });
+    expect(fs).toEqual(WORLD);
+    expect(log.filter((l) => l.startsWith("delete"))).toEqual([]);
+    expect(failure(r).what).toBe("copy");
+  });
+});
+
 describe("temporary names", () => {
   it("a name that is taken is never used: it may be someone's only copy", async () => {
     const leftover = { "/data/b/G.ps5u-new": "someone's", "/data/b/G.ps5u-old": "an earlier old copy" };

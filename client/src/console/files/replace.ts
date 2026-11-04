@@ -70,8 +70,8 @@ export type Placed =
   | { end: "stopped" }
   /** Stop could not cancel it: its job may still be writing there, so that stays. */
   | { end: "left" }
-  /** It failed; `why` says why when known. */
-  | { end: "failed"; why?: unknown };
+  /** It failed; `why` says why when known. `notThere`: it never wrote to the temporary name, so nothing is cleared. */
+  | { end: "failed"; why?: unknown; notThere?: boolean };
 
 export type ReplaceFailure =
   /** The new copy did not arrive: the old item was not touched. */
@@ -117,6 +117,24 @@ export type ReplaceEnd =
 
 function isTokenGone(e: unknown): boolean {
   return e instanceof ApiError && e.status === 401;
+}
+
+/**
+ * A rename whose answer never came (the call's deadline, a dropped link) may have happened all the
+ * same, and what follows must not act on the wrong item. So the two names are read: moved means
+ * done. Anything else, or a read that fails too, stays the failure it was.
+ */
+export async function renameChecked(side: ReplaceSide, from: string, to: string): Promise<void> {
+  try {
+    await side.rename(from, to);
+  } catch (why) {
+    if (!(why instanceof ApiError && why.status === 0)) throw why;
+    const moved = await Promise.all([side.taken(from), side.taken(to)]).then(
+      ([f, t]) => !f && t,
+      () => false,
+    );
+    if (!moved) throw why;
+  }
 }
 
 /**
@@ -168,20 +186,22 @@ export async function replaceItem(
   }
   if (placed.end === "left") return { end: "stopped", temp };
   if (placed.end === "stopped") return { end: "stopped", temp: await discard(side, temp) };
-  if (placed.end === "failed") throw new ReplaceError("copy", item, { why: placed.why, temp: await discard(side, temp) });
+  if (placed.end === "failed") {
+    throw new ReplaceError("copy", item, { why: placed.why, temp: placed.notThere ? null : await discard(side, temp) });
+  }
 
   let aside: string;
   try {
     aside = joinPath(dir, await tempName(dir, item, TEMP_OLD, side.taken));
-    await side.rename(dest, aside);
+    await renameChecked(side, dest, aside);
   } catch (why) {
     if (isTokenGone(why)) throw why;
     throw new ReplaceError("swap", item, { why, temp: await dropPlaced(side, placed, temp) });
   }
   try {
-    await side.rename(temp, dest);
+    await renameChecked(side, temp, dest);
   } catch (why) {
-    const back = await side.rename(aside, dest).then(
+    const back = await renameChecked(side, aside, dest).then(
       () => true,
       () => false,
     );
