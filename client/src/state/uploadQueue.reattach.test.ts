@@ -108,7 +108,8 @@ describe("the web UI re-attaches to running jobs after a reload", () => {
     } as never);
     vi.mocked(jobStatus).mockRejectedValue(new Error("404"));
     await useUploadQueueStore.getState().hydrate();
-    await new Promise((r) => setTimeout(r, 30));
+    await until(() => vi.mocked(jobStatus).mock.calls.some((c) => c[0] === "GONE"));
+    await new Promise((r) => setTimeout(r, 0)); // its refusal handled
     expect(row("b")?.status).toBe("pending");
     expect(row("b")?.attachJobId).toBeUndefined();
     expect(useUploadQueueStore.getState().runningHosts["10.0.0.2"]).toBeFalsy();

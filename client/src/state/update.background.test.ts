@@ -1,34 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import type { UpdateCheck, UpdateDownload } from "../api/ps5";
+import { installStorage } from "../test-utils/storage";
 
 // The desktop app: background download, the once-a-day notice and the tray hint.
-
-function installStorage() {
-  const make = () => {
-    const map = new Map<string, string>();
-    return {
-      getItem: (k: string) => (map.has(k) ? (map.get(k) as string) : null),
-      setItem: (k: string, v: string) => void map.set(k, String(v)),
-      removeItem: (k: string) => void map.delete(k),
-      clear: () => map.clear(),
-      key: (i: number) => Array.from(map.keys())[i] ?? null,
-      get length() {
-        return map.size;
-      },
-    } as unknown as Storage;
-  };
-  const local = make();
-  const session = make();
-  vi.stubGlobal("localStorage", local);
-  vi.stubGlobal("sessionStorage", session);
-  vi.stubGlobal("window", {
-    localStorage: local,
-    sessionStorage: session,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  });
-}
 
 const listeners = new Map<string, () => void>();
 const busy = { queue: false };

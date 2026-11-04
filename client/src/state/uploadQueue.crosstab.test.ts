@@ -121,6 +121,7 @@ describe("only one tab runs the queue", () => {
     expect(st.runningHosts["10.0.0.2"]).toBe(true);
 
     // actions do nothing
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await st.startHost("10.0.0.2");
     await st.start();
     st.stop();
@@ -130,7 +131,8 @@ describe("only one tab runs the queue", () => {
     const r = st.enqueueInstall({ host: "10.0.0.2" } as never);
     expect((await r.done).ok).toBe(false);
     expect(st.retryItem("run")).toBe(false);
-    await new Promise((r) => setTimeout(r, 400)); // past the save debounce
+    await vi.advanceTimersByTimeAsync(301); // past the 300 ms save debounce
+    vi.useRealTimers();
     expect(useUploadQueueStore.getState().items.map((i) => i.id)).toEqual(["run", "wait"]);
     expect(startTransferFile).not.toHaveBeenCalled();
     expect(jobStatus).not.toHaveBeenCalled();

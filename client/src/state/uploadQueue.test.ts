@@ -91,6 +91,7 @@ import {
   MAX_POLL_FAILURES,
   sameInstall,
 } from "./uploadQueue";
+import { installLocalStorageStub } from "../test-utils/storage";
 
 // The store before any test stubs its actions (some blocks replace startHost).
 const pristineQueue = useUploadQueueStore.getState();
@@ -102,20 +103,6 @@ const mockedStandby = vi.mocked(powerStandby);
 const mockedPkgInstall = vi.mocked(runPkgInstall);
 const mockedFsDelete = vi.mocked(fsDelete);
 const mockedQueueSave = vi.mocked(uploadQueueSave);
-
-function installLocalStorageStub() {
-  const store = new Map<string, string>();
-  vi.stubGlobal("localStorage", {
-    getItem: (k: string) => store.get(k) ?? null,
-    setItem: (k: string, v: string) => void store.set(k, v),
-    removeItem: (k: string) => void store.delete(k),
-    clear: () => store.clear(),
-    key: (i: number) => Array.from(store.keys())[i] ?? null,
-    get length() {
-      return store.size;
-    },
-  });
-}
 
 function addItem(addr: string, name: string): void {
   const input: AddQueueItem = {
@@ -1861,13 +1848,16 @@ describe("install item lifecycle", () => {
 
   it("never writes a link to disk", async () => {
     registerInstallExecutor(() => new Promise(() => {}));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     useUploadQueueStore.getState().enqueueInstall({
       host,
       request: { via: "link", url: "https://cdn.example/x.pkg?token=SECRET", mode: "stream", insecureTls: false },
       displayName: "X",
     });
-    await new Promise((r) => setTimeout(r, 450)); // past the 300 ms save debounce
+    await vi.advanceTimersByTimeAsync(301); // past the 300 ms save debounce
+    vi.useRealTimers();
     const calls = mockedQueueSave.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
     const saved = JSON.stringify(calls[calls.length - 1]?.[0]);
     expect(saved).not.toContain("SECRET");
     expect(saved).not.toContain("cdn.example");
@@ -2121,10 +2111,12 @@ describe("review fixes", () => {
   it("a queue item added before the saved queue loads is kept, and nothing is saved before the load", async () => {
     useUploadQueueStore.setState({ loaded: false });
     registerInstallExecutor(() => new Promise(() => {}));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const q = useUploadQueueStore.getState().enqueueInstall({
       host, request: { via: "stream", source: "/d.pkg" }, displayName: "D",
     });
-    await new Promise((r) => setTimeout(r, 400));
+    await vi.advanceTimersByTimeAsync(301); // past the 300 ms save debounce
+    vi.useRealTimers();
     expect(mockedQueueSave).not.toHaveBeenCalled();
     vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
       continueOnFailure: false,

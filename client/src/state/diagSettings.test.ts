@@ -9,6 +9,7 @@ import {
   KEY_DETAILED_UNTIL,
   detailedActive,
 } from "./diagSettings";
+import { installWindowStub } from "../test-utils/storage";
 
 /**
  * The disk-log sink in `logs.ts` writes an entry only when its level rank is
@@ -32,21 +33,6 @@ describe("diagSettings level ranks", () => {
     expect(DEFAULT_LOG_LEVEL).toBe("info");
   });
 });
-
-// vitest's default node env has no `window`; the store reads
-// `window.localStorage`. Install a tiny in-memory stub (mirrors the pattern
-// in lib/fsLastPath.test.ts — cheaper than pulling in jsdom) so the real
-// persist/clear branches run.
-function installWindowStub() {
-  const store = new globalThis.Map<string, string>();
-  const localStorage = {
-    getItem: (k: string) => (store.has(k) ? (store.get(k) as string) : null),
-    setItem: (k: string, v: string) => void store.set(k, String(v)),
-    removeItem: (k: string) => void store.delete(k),
-    clear: () => store.clear(),
-  };
-  (globalThis as { window?: unknown }).window = { localStorage };
-}
 
 describe("diagSettings store", () => {
   beforeEach(() => {

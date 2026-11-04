@@ -1,22 +1,7 @@
 import { describe, expect, it, afterEach, vi } from "vitest";
 
 import { useBetaFeaturesStore } from "./betaFeatures";
-
-// vitest's default node env has no `window`; the store reads
-// `window.localStorage`. Install a tiny in-memory stub (same pattern as
-// installSettings.test.ts) so the real load branch runs.
-function installWindowStub(seed?: Record<string, string>) {
-  const store = new globalThis.Map<string, string>(
-    seed ? Object.entries(seed) : [],
-  );
-  const localStorage = {
-    getItem: (k: string) => (store.has(k) ? (store.get(k) as string) : null),
-    setItem: (k: string, v: string) => void store.set(k, String(v)),
-    removeItem: (k: string) => void store.delete(k),
-    clear: () => store.clear(),
-  };
-  (globalThis as { window?: unknown }).window = { localStorage };
-}
+import { installWindowStub } from "../test-utils/storage";
 
 const KEY = "ps5upload.beta_features";
 
