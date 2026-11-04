@@ -118,7 +118,7 @@ export function PickerView(p: PickerViewProps) {
     // behind itself — and below the confirm/prompt layer (z-[60]).
     <div
       className="anim-scrim scrim fixed inset-0 z-[55] flex items-end justify-center sm:items-center"
-      style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "var(--safe-bottom)" }}
+      style={{ paddingTop: "var(--safe-top)", paddingBottom: "var(--safe-bottom)" }}
       onClick={p.onCancel}
     >
       <div

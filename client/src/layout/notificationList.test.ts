@@ -46,6 +46,6 @@ describe("PANEL_SHEET", () => {
       expect(PANEL_SHEET.split(" ")).toContain(cls);
     }
     expect(PANEL_SHEET).toMatch(/max-md:max-h-\[/);
-    expect(PANEL_SHEET).toContain("safe-area-inset-top");
+    expect(PANEL_SHEET).toContain("--safe-top");
   });
 });

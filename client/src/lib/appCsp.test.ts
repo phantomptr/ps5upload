@@ -1,0 +1,33 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+const conf = JSON.parse(
+  readFileSync(new URL("../../src-tauri/tauri.conf.json", import.meta.url), "utf-8"),
+) as { app: { security: { csp: string; devCsp: string } } };
+
+function directive(csp: string, name: string): string[] {
+  const found = csp.split(";").map((d) => d.trim().split(/\s+/)).find(([n]) => n === name);
+  return found?.slice(1) ?? [];
+}
+
+describe("the app's content security policy", () => {
+  /* Settings → Engine URL takes any URL, and the page fetches the engine directly: an engine
+     behind a proxy (https) or on another port must not half work. */
+  for (const key of ["csp", "devCsp"] as const) {
+    it(`${key} lets a remote engine answer on any port and scheme`, () => {
+      const csp = conf.app.security[key];
+      for (const scheme of ["http:", "https:", "ws:", "wss:"]) {
+        expect(directive(csp, "connect-src")).toContain(scheme);
+      }
+      for (const scheme of ["http:", "https:"]) {
+        expect(directive(csp, "img-src")).toContain(scheme);
+      }
+    });
+  }
+
+  it("still allows scripts from the app alone", () => {
+    const csp = conf.app.security.csp;
+    expect(directive(csp, "default-src")).toEqual(["'self'"]);
+    expect(directive(csp, "script-src")).toEqual([]);
+  });
+});
