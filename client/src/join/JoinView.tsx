@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Expand, Gamepad2, LogOut, Minimize, MoreHorizontal, RotateCw, Users, Volume2, VolumeX } from "lucide-react";
+import { Expand, EyeOff, Gamepad2, LogOut, Minimize, MoreHorizontal, RotateCw, Users, Volume2, VolumeX } from "lucide-react";
 
 import type { JoinStage } from "../lib/joinClient";
 import { delayTone, playerColor } from "../lib/joinProtocol";
@@ -104,6 +104,11 @@ function onController(t: EventTarget | null): boolean {
   return !!(t as Element | null)?.closest?.('[data-testid="rp-touch"]');
 }
 
+/** How long a finger rests on the picture to show or hide the buttons (touch). */
+export const HOLD_MS = 450;
+/** A finger that moves further than this (px) is not holding. */
+const HOLD_SLOP = 14;
+
 const coarsePointer = () => typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
 
 const TONE_COLOR = {
@@ -182,8 +187,29 @@ export function JoinView({
   const [barHover, setBarHover] = useState(false);
   const [barFocus, setBarFocus] = useState(false);
   const autoHide = live && (full || !inApp);
-  const chrome = useAutoHide(autoHide, reconnecting || picking || barHover || barFocus);
+  // Touch: a tap is the game's, so the buttons come and go only on a long press on the picture
+  // (away from the controller), the controller's menu button or Hide; full screen starts
+  // without them. A mouse or keyboard keeps the quiet-moment hiding.
+  const touch = coarsePointer();
+  const chrome = useAutoHide(autoHide, reconnecting || picking || barHover || barFocus, touch);
   const { poke } = chrome;
+  const hold = useRef<{ id: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const endHold = () => {
+    if (hold.current) clearTimeout(hold.current.timer);
+    hold.current = null;
+  };
+  useEffect(() => endHold, []);
+  // The first time they go on touch, a hint says how to get them back (once per game).
+  const [holdHint, setHoldHint] = useState(false);
+  const hinted = useRef(false);
+  useEffect(() => {
+    // After the first-time guide card, which sits over the same spot.
+    if (!autoHide || !touch || chrome.shown || !guided || hinted.current) return;
+    hinted.current = true;
+    setHoldHint(true);
+    const t = setTimeout(() => setHoldHint(false), 6000);
+    return () => clearTimeout(t);
+  }, [autoHide, touch, chrome.shown, guided]);
 
   useEffect(() => {
     if (!live) return;
@@ -348,6 +374,17 @@ export function JoinView({
   );
   const actions = (
     <>
+      {autoHide && touch && chrome.shown && !(reconnecting || picking) && (
+        <button
+          type="button"
+          onClick={chrome.hide}
+          className="flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 font-medium"
+          data-testid="join-hide-controls"
+        >
+          <EyeOff size={13} />
+          {tr("join_hide_controls", undefined, "Hide")}
+        </button>
+      )}
       {!snap.sound && (
         <button
           type="button"
@@ -357,6 +394,18 @@ export function JoinView({
         >
           <Volume2 size={13} />
           {tr("join_sound", undefined, "Tap for sound")}
+        </button>
+      )}
+      {snap.sound && !snap.noSound && (
+        <button
+          type="button"
+          onClick={() => session.setMuted(!snap.muted)}
+          aria-pressed={snap.muted}
+          className="flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 hover:bg-white/25"
+          data-testid="join-mute"
+        >
+          {snap.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
+          {snap.muted ? tr("rp_unmute", undefined, "Sound on") : tr("rp_mute", undefined, "Mute")}
         </button>
       )}
       {snap.noSound && (
@@ -412,11 +461,31 @@ export function JoinView({
         className={`${box} select-none text-white [-webkit-touch-callout:none]`}
         style={{ touchAction: "none" }}
         onPointerMove={(e) => {
-          if (e.pointerType === "mouse") poke();
+          if (e.pointerType === "mouse") return poke();
+          const h = hold.current;
+          if (h && h.id === e.pointerId && Math.hypot(e.clientX - h.x, e.clientY - h.y) > HOLD_SLOP) endHold();
         }}
         onPointerDown={(e) => {
-          if (!onController(e.target)) poke();
+          if (onController(e.target)) return;
+          if (e.pointerType === "mouse" || !touch) return poke();
+          // A press on a button (the bar's, the guide's, Tap for sound) is that button's.
+          if ((e.target as Element).closest?.('[data-testid="join-bar"], button, a, input, [role="button"]')) return;
+          endHold();
+          const { pointerId: id, clientX: x, clientY: y } = e;
+          hold.current = {
+            id,
+            x,
+            y,
+            timer: setTimeout(() => {
+              hold.current = null;
+              navigator.vibrate?.(15);
+              chrome.toggle();
+            }, HOLD_MS),
+          };
         }}
+        onPointerUp={endHold}
+        onPointerCancel={endHold}
+        onPointerLeave={endHold}
         data-testid="join-stage-view"
       >
         <div ref={screen} className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center" aria-hidden />
@@ -457,6 +526,15 @@ export function JoinView({
           >
             <MoreHorizontal size={16} aria-hidden />
           </button>
+        )}
+
+        {holdHint && !chrome.shown && (
+          <p
+            className="pointer-events-none absolute left-1/2 top-[max(10px,env(safe-area-inset-top))] z-20 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-xs text-white/85"
+            data-testid="join-hold-hint"
+          >
+            {tr("join_hold_hint", undefined, "Press and hold the picture to show the buttons")}
+          </p>
         )}
 
         {snap.problem && (
@@ -531,6 +609,16 @@ export function JoinView({
 
         {reconnecting && (
           <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/70 px-6 text-center" data-testid="join-reconnecting">
+            {/* Never stuck waiting: Leave is here too (the buttons above sit under this). */}
+            <button
+              type="button"
+              onClick={leave}
+              className="absolute right-3 top-[max(10px,env(safe-area-inset-top))] flex items-center gap-1 rounded-full bg-white/15 px-3 py-1.5 text-sm font-medium hover:bg-white/25"
+              data-testid="join-reconnecting-leave"
+            >
+              <LogOut size={14} />
+              {tr("join_leave", undefined, "Leave")}
+            </button>
             <span className="h-7 w-7 animate-spin rounded-full border-2 border-white/30 border-t-white" aria-hidden />
             {stage.hostStopped ? (
               <p className="max-w-sm text-base font-medium" data-testid="join-host-away">

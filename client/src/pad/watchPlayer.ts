@@ -5,6 +5,7 @@
 
 import { avcDescription, lengthPrefixed, opusInit, opusSamples, opusSegment, videoInit, videoSegment } from "../lib/fmp4";
 import { avcCodecString, isKeyframe, supportedHevc } from "../lib/rpCodec";
+import { OpusPipe } from "../lib/rpAudioPipe";
 import { hevcCodecString, spsVisibleRect } from "../lib/rpSps";
 
 export type WatchProblem = "no_hevc" | "decode";
@@ -79,6 +80,128 @@ export class KeyAsker {
   }
 }
 
+/** One sound frame as the engine sends it (kind 4): the console's u16 BE frame index, then one
+ *  Opus packet (rp_stream StreamSink::audio). The index is not Opus: a decoder fed it as part of
+ *  the packet makes noise or nothing. Null for a frame too short to hold a packet. */
+export function opusFrame(payload: Uint8Array): { index: number; packet: Uint8Array } | null {
+  if (payload.length < 3) return null;
+  return { index: (payload[0] << 8) | payload[1], packet: payload.subarray(2) };
+}
+
+/** Which sound frames MSE plays: each index once, in order. The engine sends a lost frame's
+ *  recovered copy (FEC) after the frames that follow it; MSE times are back to back, so a late
+ *  or repeated frame would play twice or out of place, and is left out. */
+export class FrameOrder {
+  private last = -1;
+  /** Whether frame `index` comes after every frame taken so far (16-bit, wrapping). */
+  take(index: number): boolean {
+    if (this.last >= 0) {
+      const d = (index - this.last) & 0xffff;
+      if (d === 0 || d >= 0x8000) return false;
+    }
+    this.last = index;
+    return true;
+  }
+  /** A new stream (the header again). */
+  reset(): void {
+    this.last = -1;
+  }
+}
+
+/** The audio header, as long as OpusPipe reads it: [channels][?][u32 rate][u32 samples per frame]
+ *  (a shorter one gets 10 ms frames). */
+function pipeHeader(h: Uint8Array): Uint8Array {
+  if (h.length >= 10) return h;
+  const out = new Uint8Array(10);
+  out.set(h.subarray(0, 6));
+  const dv = new DataView(out.buffer);
+  dv.setUint32(6, Math.round(dv.getUint32(2) / 100) || 480);
+  return out;
+}
+
+/** When each decoded piece of a guest's sound starts (AudioContext seconds). A cushion ahead of
+ *  now absorbs the network's jitter: every time the sound runs dry it grows by 20 ms (up to
+ *  `max`), and after 10 s without it shrinks back by 10 ms (down to `min`). Sound that would sit
+ *  further ahead than the cushion plus SOUND_SLACK is dropped, never played over what is already
+ *  scheduled (a burst after a stall used to start on top of it: the same sound twice). A burst
+ *  smaller than that still leaves the sound behind the picture, so while the least lead over
+ *  TRIM_WINDOW stays more than TRIM_OVER past the cushion, one piece a window is left out until
+ *  it is back (measured live: a watcher's first burst kept the sound 210 ms late for good). */
+export class SoundClock {
+  private next = 0;
+  private calmSince = 0;
+  /** The least lead (s) since `windowAt`. */
+  private minLead = Infinity;
+  private windowAt = 0;
+  cushion: number;
+  underruns = 0;
+  dropped = 0;
+  constructor(
+    private readonly min: number,
+    private readonly max = 0.2,
+  ) {
+    this.cushion = min;
+  }
+  /** Where `dur` s of sound decoded at `now` plays, or null (dropped). */
+  at(now: number, dur: number): number | null {
+    if (this.next < now + 0.005) {
+      if (this.next > 0) {
+        this.underruns++;
+        this.cushion = Math.min(this.max, this.cushion + 0.02);
+      }
+      this.calmSince = now;
+      this.next = now + this.cushion;
+      this.minLead = Infinity;
+      this.windowAt = now;
+    } else if (now - this.calmSince > 10 && this.cushion > this.min) {
+      this.cushion = Math.max(this.min, this.cushion - 0.01);
+      this.calmSince = now;
+    }
+    const lead = this.next - now;
+    if (lead > this.cushion + SOUND_SLACK) {
+      this.dropped++;
+      return null;
+    }
+    this.minLead = Math.min(this.minLead, lead);
+    if (now - this.windowAt >= TRIM_WINDOW) {
+      const trim = this.minLead > this.cushion + TRIM_OVER;
+      this.minLead = Infinity;
+      this.windowAt = now;
+      if (trim) {
+        this.dropped++;
+        return null;
+      }
+    }
+    const t = this.next;
+    this.next += dur;
+    return t;
+  }
+  /** Start over at the next piece (the output was suspended, or a new stream). */
+  reset(): void {
+    this.next = 0;
+  }
+}
+
+/** How far past its cushion the sound may run ahead before pieces are dropped, s. */
+export const SOUND_SLACK = 0.15;
+/** The window (s) over which a lead above the cushion is measured, and by how much (s) the least
+ *  lead in it must pass the cushion for one piece to be left out. */
+export const TRIM_WINDOW = 0.25;
+export const TRIM_OVER = 0.02;
+
+/** Whether this page's AudioDecoder decodes Opus at `rate` and `channels`. */
+async function decodesOpus(rate: number, channels: number): Promise<boolean> {
+  try {
+    if (typeof AudioDecoder === "undefined") return false;
+    return !!(await AudioDecoder.isConfigSupported({ codec: "opus", sampleRate: rate, numberOfChannels: channels })).supported;
+  } catch {
+    return false;
+  }
+}
+
+/** The events a browser lets start sound (a touch's pointerdown is not one). */
+const GESTURES = ["pointerup", "touchend", "click", "keydown"] as const;
+
 export class WatchPlayer {
   readonly canvas = document.createElement("canvas");
   get element(): HTMLElement {
@@ -92,12 +215,15 @@ export class WatchPlayer {
   private sawKey = false;
   private keyAsk: KeyAsker;
   private ts = 0;
-  private audio: AudioDecoder | null = null;
+  /** Sound frames back in order, decoded (lib/rpAudioPipe, as the host's page does). */
+  private pipe: OpusPipe | null = null;
+  /** Bumped by every audio header: a slower Opus check for an older one is ignored. */
+  private audioGen = 0;
   private actx: AudioContext | null = null;
-  private nextAt = 0;
+  private clock: SoundClock;
   private soundOn = false;
-  /** The decoder has given sound (a later decode error is not a missing codec). */
-  private heard = false;
+  /** Gesture listeners waiting to resume a suspended output (iPhone after a call, a tab away). */
+  private unarm: (() => void) | null = null;
   /** The sound through MSE where this page has VideoDecoder but no AudioDecoder (Safari before
    *  26 on a secure page, the iPhone app among them). */
   private mseSound: MseSound | null = null;
@@ -110,6 +236,7 @@ export class WatchPlayer {
     onNeedKey?: () => void,
   ) {
     this.keyAsk = new KeyAsker(onNeedKey);
+    this.clock = new SoundClock(latency === "player" ? 0.05 : 0.08);
     // Made now, so the tap that starts the sound also starts this element (iPhone).
     if (typeof AudioDecoder === "undefined") this.mseSound = new MseSound(latency, () => this.onSoundFail?.());
     this.canvas.className = "block h-full w-full object-contain";
@@ -130,7 +257,14 @@ export class WatchPlayer {
       return;
     }
     try {
-      if (!this.actx) this.actx = new AudioContext({ latencyHint: "interactive" });
+      if (!this.actx) {
+        const ctx = new AudioContext({ latencyHint: "interactive" });
+        this.actx = ctx;
+        // Suspended or interrupted later (a call, the tab away): the next tap resumes it.
+        ctx.onstatechange = () => {
+          if (this.actx === ctx && ctx.state !== "running" && ctx.state !== "closed") this.armResume();
+        };
+      }
       void this.actx.resume().catch(() => {});
     } catch {
       this.onSoundFail?.();
@@ -139,6 +273,56 @@ export class WatchPlayer {
 
   get sound(): boolean {
     return this.soundOn;
+  }
+
+  /** Sound muted by the guest (the picture and the timing go on). */
+  private muted = false;
+  setMuted(m: boolean): void {
+    this.muted = m;
+    this.mseSound?.setMuted(m);
+  }
+
+  /** The page is back (visible, focused): sound that stopped meanwhile starts again. */
+  resumeSound(): void {
+    if (!this.soundOn) return;
+    if (this.mseSound) return this.mseSound.resume();
+    const ctx = this.actx;
+    if (!ctx || ctx.state === "running" || ctx.state === "closed") return;
+    this.clock.reset();
+    void ctx.resume().catch(() => {});
+    this.armResume();
+  }
+
+  /** What the sound has done since the start (a session's health, tests). */
+  get soundStats(): { decoded: number; concealed: number; underruns: number; dropped: number; cushionMs: number } {
+    return {
+      decoded: this.pipe?.decoded ?? 0,
+      concealed: this.pipe?.concealed ?? 0,
+      underruns: this.clock.underruns,
+      dropped: this.clock.dropped,
+      cushionMs: Math.round(this.clock.cushion * 1000),
+    };
+  }
+
+  /** Resume the output on the next gesture (a browser may refuse it without one). */
+  private armResume(): void {
+    if (this.unarm || typeof window === "undefined" || !window.addEventListener) return;
+    const go = () => {
+      const ctx = this.actx;
+      if (!ctx || ctx.state === "closed") return this.unarm?.();
+      this.clock.reset();
+      void ctx
+        .resume()
+        .then(() => {
+          if (ctx.state === "running") this.unarm?.();
+        })
+        .catch(() => {});
+    };
+    for (const e of GESTURES) window.addEventListener(e, go, true);
+    this.unarm = () => {
+      for (const e of GESTURES) window.removeEventListener(e, go, true);
+      this.unarm = null;
+    };
   }
 
   /** One binary message from the engine. */
@@ -216,35 +400,29 @@ export class WatchPlayer {
 
   private openAudio(header: Uint8Array): void {
     if (header.length < 6) return;
+    const gen = ++this.audioGen;
+    this.pipe?.reset();
+    this.pipe = null;
+    this.clock.reset();
+    if (this.mseSound) return this.mseSound.setHeader(header);
     const channels = header[0];
     const rate = new DataView(header.buffer, header.byteOffset, header.byteLength).getUint32(2);
-    try {
-      this.audio?.close();
-    } catch {
-      // Already closed.
-    }
-    this.audio = null;
-    if (!this.mseSound) {
+    void decodesOpus(rate, channels).then((ok) => {
+      if (gen !== this.audioGen) return;
+      // No Opus in this decoder: MSE plays it, if it can.
+      if (!ok) return this.soundThroughMse(header);
+      const pipe = new OpusPipe((planes, scale) => this.play(planes, scale, pipe.sampleRate));
       try {
-        const a = new AudioDecoder({
-          output: (d) => this.play(d),
-          // No Opus in this decoder: MSE plays it, if it can.
-          error: () => {
-            if (this.audio === a && !this.heard) this.soundThroughMse(header);
-          },
-        });
-        a.configure({ codec: "opus", sampleRate: rate, numberOfChannels: channels });
-        this.audio = a;
-        return;
+        pipe.header(pipeHeader(header));
+        this.pipe = pipe;
       } catch {
-        // No Opus in this decoder: MSE plays it, if it can.
+        this.soundThroughMse(header);
       }
-    }
-    this.soundThroughMse(header);
+    });
   }
 
   private soundThroughMse(header: Uint8Array): void {
-    this.audio = null;
+    this.pipe = null;
     if (!this.mseSound) {
       this.mseSound = new MseSound(this.latency, () => this.onSoundFail?.());
       if (this.soundOn) this.mseSound.start();
@@ -254,43 +432,36 @@ export class WatchPlayer {
 
   private onAudio(frame: Uint8Array): void {
     if (this.mseSound) return this.mseSound.frame(frame);
-    const a = this.audio;
-    if (!a || a.state !== "configured" || !this.soundOn) return;
-    a.decode(new EncodedAudioChunk({ type: "key", timestamp: 0, data: frame }));
+    if (!this.soundOn || !this.pipe) return;
+    this.pipe.packet(frame);
   }
 
-  private play(d: AudioData): void {
-    this.heard = true;
+  /** Decoded sound: scheduled `clock`'s cushion ahead (`scale` < 1: a lost frame covered). */
+  private play(planes: Float32Array[], scale: number, rate: number): void {
     const ctx = this.actx;
-    if (!ctx) {
-      d.close();
-      return;
-    }
-    const buf = ctx.createBuffer(d.numberOfChannels, d.numberOfFrames, d.sampleRate);
-    for (let c = 0; c < d.numberOfChannels; c++) {
-      const ch = new Float32Array(d.numberOfFrames);
-      d.copyTo(ch, { planeIndex: c, format: "f32-planar" });
-      buf.copyToChannel(ch, c);
-    }
-    d.close();
+    if (!ctx || ctx.state !== "running" || !planes.length) return;
+    const n = planes[0].length;
+    const at = this.clock.at(ctx.currentTime, n / rate);
+    if (at === null) return;
+    const buf = ctx.createBuffer(planes.length, n, rate);
+    const k = this.muted ? 0 : scale;
+    planes.forEach((p, c) => buf.copyToChannel((k === 1 ? p : p.map((v) => v * k)) as Float32Array<ArrayBuffer>, c));
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.connect(ctx.destination);
-    // A small cushion; far behind (a stall) starts again from now.
-    const now = ctx.currentTime;
-    const far = this.latency === "player" ? 0.2 : 0.5;
-    if (this.nextAt < now + 0.02 || this.nextAt > now + far) this.nextAt = now + (this.latency === "player" ? 0.04 : 0.06);
-    src.start(this.nextAt);
-    this.nextAt += buf.duration;
+    src.start(at);
   }
 
   stop(): void {
     try {
       this.video?.close();
-      this.audio?.close();
     } catch {
       // Already closed.
     }
+    this.audioGen++;
+    this.pipe?.reset();
+    this.pipe = null;
+    this.unarm?.();
     void this.actx?.close().catch(() => {});
     this.mseSound?.stop();
   }
@@ -318,8 +489,12 @@ function mseSupports(MS: MseCtor, mime: string): boolean {
   }
 }
 
-/** The MIME type the sound is sent to MSE as: Opus in fragmented MP4. */
-export const OPUS_MP4 = 'audio/mp4; codecs="opus"';
+/** The MIME type the sound is sent to MSE as: Opus in fragmented MP4. "Opus" as the MP4 mapping
+ *  names it (its sample entry): Safari's MediaSource takes only that spelling (measured, WebKit
+ *  27.2: "opus" false, "Opus" true), Chrome takes both. */
+export const OPUS_MP4 = 'audio/mp4; codecs="Opus"';
+/** The spelling 11.0.2 asked for, tried next (a browser that knows only it). */
+export const OPUS_MP4_LOWER = 'audio/mp4; codecs="opus"';
 
 /**
  * The sound through Media Source Extensions: an <audio> element fed Opus in fragmented MP4.
@@ -334,6 +509,7 @@ export class MseSound {
   private time = 0;
   private on = false;
   private failed = false;
+  private order = new FrameOrder();
 
   constructor(
     latency: Latency,
@@ -368,11 +544,29 @@ export class MseSound {
     }
   }
 
-  frame(frame: Uint8Array): void {
+  /** One sound frame as the engine sends it ([u16 index][Opus packet], see opusFrame). */
+  frame(payload: Uint8Array): void {
     if (!this.on || this.failed || (!this.track.ready && !this.track.backlog)) return;
-    const seg = opusSegment(this.track.nextSeq(), this.time, frame);
-    this.time += opusSamples(frame);
+    const f = opusFrame(payload);
+    if (!f || !this.order.take(f.index)) return;
+    const seg = opusSegment(this.track.nextSeq(), this.time, f.packet);
+    this.time += opusSamples(f.packet);
     this.track.push(seg);
+  }
+
+  /** Sound muted by the guest. */
+  setMuted(m: boolean): void {
+    this.el.muted = m;
+  }
+
+  /** The page is back: an element the browser paused meanwhile plays again. */
+  resume(): void {
+    if (!this.playing || !this.el.paused) return;
+    try {
+      void this.el.play()?.catch?.(() => {});
+    } catch {
+      // The next segment's play() tries again.
+    }
   }
 
   stop(): void {
@@ -385,8 +579,11 @@ export class MseSound {
     if (!h || h.length < 6 || this.failed) return;
     const channels = h[0];
     const rate = new DataView(h.buffer, h.byteOffset, h.byteLength).getUint32(2);
-    if (this.track.open(OPUS_MP4, opusInit(channels, rate))) this.time = 0;
-    else this.fail();
+    const init = opusInit(channels, rate);
+    if (this.track.open(OPUS_MP4, init) || this.track.open(OPUS_MP4_LOWER, init)) {
+      this.time = 0;
+      this.order.reset();
+    } else this.fail();
   }
 
   private fail(): void {
@@ -562,6 +759,16 @@ export class MsePlayer {
   startSound(): void {
     this.soundOn = true;
     this.audio.start();
+  }
+
+  /** The page is back (visible, focused): sound the browser paused meanwhile plays again. */
+  resumeSound(): void {
+    if (this.soundOn) this.audio.resume();
+  }
+
+  /** Sound muted by the guest. */
+  setMuted(m: boolean): void {
+    this.audio.setMuted(m);
   }
 
   get sound(): boolean {

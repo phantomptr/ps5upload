@@ -1696,6 +1696,18 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 _ => {}
             },
+            // Sound before pictures, as the host's page gets
+            // them (rp_stream_api's ctl queue goes first): on a link the pictures fill, a picture
+            // first left the sound waiting behind every one of them, late and then dropped.
+            f = async {
+                match other.as_mut() {
+                    Some(r) => r.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => match f {
+                Some(m) => if socket.send(m).await.is_err() { break },
+                None => other = None,
+            },
             f = async {
                 match video.as_mut() {
                     Some(r) => r.recv().await,
@@ -1709,15 +1721,6 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
                     if socket.send(m).await.is_err() { break }
                 }
                 None => video = None,
-            },
-            f = async {
-                match other.as_mut() {
-                    Some(r) => r.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => match f {
-                Some(m) => if socket.send(m).await.is_err() { break },
-                None => other = None,
             },
             _ = tick.tick() => {
                 let _ = socket.send(Message::Ping(now_ms().to_le_bytes().to_vec().into())).await;

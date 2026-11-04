@@ -7057,6 +7057,8 @@ helper_mismatch_boot_copy: "Votre PS5 a lancé une ancienne copie de l'assistant
 "join_scan": "Scanner le QR",
 "join_invite_title": "Rejoindre la partie de {host}",
 "join_show_controls": "Afficher les commandes",
+"join_hide_controls": "Masquer",
+"join_hold_hint": "Maintenez l'image appuyée pour afficher les boutons",
 "join_scan_hint": "Pointez la caméra vers le QR code affiché sur l'écran de votre ami.",
 "join_scan_failed": "La caméra ne s'est pas ouverte. Collez plutôt le lien.",
 "join_scan_denied": "PS5Upload a besoin de l’appareil photo pour scanner le code. Appuyez sur Réessayer et autorisez-le, ou activez l’appareil photo dans les réglages.",

@@ -4,6 +4,28 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.0.4
+
+- **Friends hear the game.** A friend's sound in Play Together (and on the watch page) never
+  played right: the player fed each sound frame's 2-byte number to the decoder as if it were
+  sound, so browsers either stopped with a decode error or played noise. Fixed, and checked
+  against a PS5 for a minute at a time in Chrome and Safari's engine with no gaps. Also:
+  - Safari's way of naming the sound's format is now asked first, so iPhones no longer say
+    "No sound in this browser" when they can play it (For #657).
+  - Sound never doubles up, keeps its delay short, comes back after a decode hiccup, and
+    starts again after a phone call or switching tabs.
+  - The host's engine sends friends' sound ahead of their picture, so a busy connection
+    delays the picture rather than dropping the sound.
+  - Friends get a **Mute** button, remembered for the next game.
+- **Host stops, friends know at once.** When the host stops Play (Stop, the banner or the
+  mini player), Play Together ends with it and friends see that straight away, instead of a
+  60-second wait for a host who isn't coming back. If the host's stream drops by itself,
+  friends still wait for it to come back, and the waiting screen now has **Leave**.
+- **Full screen on phones: buttons only when you want them.** On a phone or tablet the
+  buttons over a friend's game start hidden and no longer pop up on every tap. **Press and
+  hold** the picture (away from the controller) to show them; hold again or tap **Hide** to
+  put them away. A hint says so the first time.
+
 ## 11.0.3
 
 - **Invites open straight into the game.** Opening a Play Together invite on a phone with the app

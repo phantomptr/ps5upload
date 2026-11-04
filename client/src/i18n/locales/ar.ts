@@ -7041,6 +7041,8 @@ helper_mismatch_boot_copy: "شغّل PS5 نسخة أقدم من المساعد �
 "join_scan": "مسح رمز QR",
 "join_invite_title": "انضم إلى لعبة {host}",
 "join_show_controls": "إظهار عناصر التحكم",
+"join_hide_controls": "إخفاء",
+"join_hold_hint": "اضغط مطولاً على الصورة لإظهار الأزرار",
 "join_scan_hint": "وجّه الكاميرا إلى رمز QR على شاشة صديقك.",
 "join_scan_failed": "لم تُفتح الكاميرا. الصق الرابط بدلًا من ذلك.",
 "join_scan_denied": "يحتاج PS5Upload إلى الكاميرا لمسح الرمز. اضغط «حاول مجددًا» واسمح بها، أو شغّل الكاميرا من الإعدادات.",
