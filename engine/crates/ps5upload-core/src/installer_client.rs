@@ -19,7 +19,7 @@ use crate::payload_lifecycle::{
 const INSTALLER_ELF_NAME: &str = "ps5upload-installer.elf";
 
 /// Must match the daemon's INST_VERSION in payload/installer/main.c.
-pub const INSTALLER_VERSION: &str = "1.5.0";
+pub const INSTALLER_VERSION: &str = "1.6.0";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const SHORT_TIMEOUT: Duration = Duration::from_secs(5); // hello / job / stop

@@ -43,6 +43,19 @@ static void test_listen_broken_window(void) {
     CHECK(inst_mono_ms() != 0);
 }
 
+/* The watchdog over a Sony call that never returns: only a call past the ceiling ends the daemon. */
+static void test_sony_wedged(void) {
+    CHECK(!inst_sony_wedged(0, 999999999));                 /* nothing in flight */
+    CHECK(!inst_sony_wedged(1000, 1000));
+    CHECK(!inst_sony_wedged(1000, 1000 + INST_SONY_CEILING_MS - 1));
+    CHECK(inst_sony_wedged(1000, 1000 + INST_SONY_CEILING_MS));
+    CHECK(inst_sony_wedged(1000, 1000 + 2 * INST_SONY_CEILING_MS));
+    CHECK(!inst_sony_wedged(5000, 4000));                   /* clock never goes back */
+    /* Longer than the engine waits for the answer (INSTALL_TIMEOUT, 900 s): a slow call the engine
+     * still waits on is never ended from here. */
+    CHECK(INST_SONY_CEILING_MS > 900u * 1000u);
+}
+
 static void test_slot_cap(void) {
     volatile int n = 0;
     for (int i = 0; i < 16; i++) CHECK(inst_slot_take(&n, 16) == 1);
@@ -149,6 +162,7 @@ static void test_real_failure_retries_sequentially(void) {
 int main(void) {
     test_accept_classify();
     test_listen_broken_window();
+    test_sony_wedged();
     test_slot_cap();
     test_stop_rule();
     test_timeout_reuses_inflight_attempt();
