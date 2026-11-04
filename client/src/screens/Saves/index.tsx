@@ -47,6 +47,7 @@ import {
   fsDelete,
   fsListDir,
   waitForJob,
+  isPathMissingError,
   saveArchiveMakeTemp,
   saveArchiveCleanupTemp,
   saveArchiveZip,
@@ -841,19 +842,18 @@ export default function SavesScreen() {
     const onlyUser = (allSaves ?? [])
       .filter((s) => s.title_id === entry.title_id)
       .every((s) => userHex(s.user_id) === userHex(entry.user_id));
-    try {
-      return await latestUsbBackup(
-        async (rel) => {
-          const list = await fsListDir(addr, rel ? `${titleDir}/${rel}` : titleDir).catch(() => []);
-          return list.filter((e) => e.kind === "dir").map((e) => e.name);
-        },
-        entry.user_id,
-        onlyUser,
-      );
-    } catch {
-      // Dir absent or unreadable — no backup has ever been written.
-      return null;
-    }
+    return latestUsbBackup(
+      async (rel) => {
+        // No folder: no backup. Any other failure is not a fact about the backups.
+        const list = await fsListDir(addr, rel ? `${titleDir}/${rel}` : titleDir).catch((e) => {
+          if (isPathMissingError(e)) return [];
+          throw e;
+        });
+        return list.filter((e) => e.kind === "dir").map((e) => e.name);
+      },
+      entry.user_id,
+      onlyUser,
+    );
   }
 
   /**

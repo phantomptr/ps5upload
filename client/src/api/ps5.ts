@@ -12,6 +12,8 @@ import {
 } from "../lib/consoleSession";
 import { Channel } from "@tauri-apps/api/core";
 import { getEngineUrl } from "../state/engine";
+import { hostOf } from "../lib/addr";
+import { fetchConsoleStat } from "./consoleFiles";
 // Logging wrapper: every command leaves a trace breadcrumb + logs failures at
 // warn. See lib/invokeLogged.ts. (Channel still comes straight from core.)
 import { isTauriEnv } from "../lib/tauriEnv";
@@ -980,6 +982,8 @@ export interface DestinationProbe {
   exists: boolean;
   entryCount: number;
   totalBytes: number;
+  /** The folder holds more than `entryCount`: only one page was counted. */
+  more?: boolean;
 }
 
 export interface Volume {
@@ -1393,24 +1397,33 @@ export async function fsMkdir(
   await invoke("ps5_fs_mkdir", { req: { addr, path } });
 }
 
-/** Best-effort "does this path exist on the PS5?" probe. Lists the
- *  parent directory and looks for the basename. There is no FS_STAT
- *  frame in the protocol, so this is the cheapest existence check
- *  we have without inventing a new frame type.
+/** True when a console stat, listing or read failed because the path is not there: the helper
+ *  answered ENOENT or ENOTDIR (`…_errno_2`, `…_errno_20`). Anything else (a timeout, a busy
+ *  helper, a dropped connection, access denied) says nothing about the path. */
+export function isPathMissingError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /ENOENT|ENOTDIR|No such file|_errno_(?:2|20)(?!\d)/.test(msg);
+}
+
+/** Whether `path` is on the console, asked with FS_STAT. Unlike {@link fsPathExists} it rejects
+ *  when the console could not answer, for decisions where "don't know" must not read as "no". */
+export async function fsPathPresent(transferAddr: string, path: string): Promise<boolean> {
+  try {
+    await fetchConsoleStat(transferAddr, path);
+    return true;
+  } catch (e) {
+    if (isPathMissingError(e)) return false;
+    throw e;
+  }
+}
+
+/** Best-effort "does this path exist on the PS5?": {@link fsPathPresent}, with every failure read
+ *  as `false`. Callers must treat `false` as "best-effort no" rather than a hard guarantee (the
+ *  payload's own `fs_copy_dest_exists` check is the real backstop). Anything that acts on a "no"
+ *  in a way that can lose data uses `fsPathPresent`.
  *
- *  Caveats:
- *  - Returns `false` on listing errors (parent missing, permission
- *    denied, allowlist rejection). Callers must treat `false` as
- *    "best-effort no" rather than a hard guarantee — the payload's
- *    own `fs_copy_dest_exists` check is the real backstop.
- *  - Listing is paginated (limit 1024). For directories with more
- *    entries the basename might be missed; pre-flight callers should
- *    accept that risk and let the payload reject if a race fires.
- *  - Comparison is case-sensitive because the PS5 filesystems we
- *    target (UFS internal, exfat external) are mixed: UFS is
- *    case-sensitive, exfat is case-preserving but case-insensitive.
- *    We err on the side of false-negative (look for an exact match)
- *    so we don't block legitimate moves that differ only in case. */
+ *  The answer comes from the filesystem, so on a case-insensitive drive (exFAT) a name that
+ *  differs only in case counts as present: that name is taken there. */
 export async function fsPathExists(
   transferAddr: string,
   path: string,
@@ -1419,21 +1432,11 @@ export async function fsPathExists(
   if (norm === "") return true; // root always exists
   const slash = norm.lastIndexOf("/");
   // No slash at all (e.g. "foo" — relative path) shouldn't reach this
-  // helper since callers pass PS5 absolute paths, but bail out so we
-  // don't accidentally list the wrong directory if it does.
+  // helper since callers pass PS5 absolute paths.
   if (slash < 0) return false;
-  const parent = slash === 0 ? "/" : norm.slice(0, slash);
   const basename = norm.slice(slash + 1);
   if (!basename) return false;
-  const addr = toMgmtAddr(transferAddr);
-  try {
-    const res = await invoke<{
-      entries?: Array<{ name?: string }>;
-    }>("ps5_list_dir", { addr, path: parent, offset: 0, limit: 1024 });
-    return (res.entries ?? []).some((e) => e.name === basename);
-  } catch {
-    return false;
-  }
+  return fsPathPresent(transferAddr, norm).catch(() => false);
 }
 
 /** Recursive copy on the PS5. Works across mount points (unlike fsMove,
@@ -3175,12 +3178,33 @@ export async function fsWriteText(
  *  Read-modify-write of the small list file; idempotent (skips if the path is
  *  already listed). `added` is false when it was already present. SMP creates
  *  `/data/shadowmount/` itself, so this is only meaningful while SMP runs. */
-export async function smpManualInstall(
+export function smpManualInstall(
   addr: string,
   path: string,
 ): Promise<{ added: boolean }> {
+  // One edit of a console's list at a time: two hand-offs reading the same list lose one line.
+  const key = hostOf(addr);
+  const run = (smpListTail.get(key) ?? Promise.resolve()).then(() =>
+    appendToManualList(addr, path),
+  );
+  const tail: Promise<void> = run.then(
+    () => {},
+    () => {},
+  ).finally(() => {
+    if (smpListTail.get(key) === tail) smpListTail.delete(key);
+  });
+  smpListTail.set(key, tail);
+  return run;
+}
+
+const smpListTail = new Map<string, Promise<void>>();
+
+async function appendToManualList(addr: string, path: string): Promise<{ added: boolean }> {
+  // Only a list that is really not there counts as empty (fsWriteText then creates it). A read
+  // that fails (a timeout, a busy helper) must fail the hand-off: writing now would replace the
+  // whole list with this one line.
   let existing = "";
-  try {
+  if (await fsPathPresent(addr, SMP_MANUAL_LIST_PATH)) {
     const r = await fsReadPreview(addr, SMP_MANUAL_LIST_PATH);
     if (r.base64) {
       const bin = atob(r.base64);
@@ -3188,12 +3212,11 @@ export async function smpManualInstall(
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       existing = new TextDecoder().decode(bytes);
     }
-  } catch {
-    existing = ""; // list/dir may not exist yet — fsWriteText creates it
   }
   const next = appendManualListLine(existing, path);
   if (next === null) return { added: false };
-  await fsWriteText(addr, SMP_MANUAL_LIST_PATH, next);
+  const w = await fsWriteText(addr, SMP_MANUAL_LIST_PATH, next);
+  if (!w.ok) throw new Error(`Add to ShadowMount+ list: ${w.err ?? "refused"}`);
   return { added: true };
 }
 
@@ -3378,11 +3401,14 @@ export interface LibraryEntry {
  *
  *  Permission-denied / non-existent paths are silently skipped — the
  *  PS5 has plenty of system-only directories a user payload can't
- *  read, and they're not library content. */
-export async function scanLibrary(
+ *  read, and they're not library content. Any other failure (a timeout,
+ *  a busy helper) is tried once more; pages already read are kept, and
+ *  the result says `incomplete` so the screen can tell the user. */
+export async function scanLibraryChecked(
   transferAddr: string,
-): Promise<LibraryEntry[]> {
+): Promise<{ entries: LibraryEntry[]; incomplete: boolean }> {
   const addr = toMgmtAddr(transferAddr);
+  let incomplete = false;
   const volumesRaw = await invoke<{ volumes?: Volume[] }>("ps5_volumes", {
     addr,
   });
@@ -3444,32 +3470,40 @@ export async function scanLibrary(
     Array<{ name?: string; kind?: string; size?: number; mtime?: number }>
   > =>
     scanLimit(async () => {
-      try {
-        type Entry = { name?: string; kind?: string; size?: number; mtime?: number };
-        const out: Entry[] = [];
-        // The helper paginates directory listings. A busy games directory can
-        // put every image beyond the first page; honor the same scan budget.
-        while (out.length < MAX_ENTRIES_PER_VOLUME) {
+      type Entry = { name?: string; kind?: string; size?: number; mtime?: number };
+      const out: Entry[] = [];
+      let retried = false;
+      // The helper paginates directory listings. A busy games directory can
+      // put every image beyond the first page; honor the same scan budget.
+      while (out.length < MAX_ENTRIES_PER_VOLUME) {
+        try {
           const res = await invoke<{ entries?: Entry[]; truncated?: boolean }>(
             "ps5_list_dir", { addr, path, offset: out.length, limit: 512 },
           );
           const page = res.entries ?? [];
           out.push(...page);
           if (!res.truncated || page.length === 0) break;
+        } catch (e) {
+          if (isListingRefused(e)) break;
+          if (!retried) {
+            retried = true;
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            continue;
+          }
+          incomplete = true;
+          break;
         }
-        // Stable sort: dir/file kind first, then name. Eliminates
-        // non-determinism from the payload returning entries in
-        // inode or readdir order instead of alphabetical.
-        out.sort((a, b) => {
-          const ak = a.kind ?? "";
-          const bk = b.kind ?? "";
-          if (ak !== bk) return ak.localeCompare(bk);
-          return (a.name ?? "").localeCompare(b.name ?? "");
-        });
-        return out;
-      } catch {
-        return [];
       }
+      // Stable sort: dir/file kind first, then name. Eliminates
+      // non-determinism from the payload returning entries in
+      // inode or readdir order instead of alphabetical.
+      out.sort((a, b) => {
+        const ak = a.kind ?? "";
+        const bk = b.kind ?? "";
+        if (ak !== bk) return ak.localeCompare(bk);
+        return (a.name ?? "").localeCompare(b.name ?? "");
+      });
+      return out;
     });
 
   const walkVolume = async (volumePath: string): Promise<void> => {
@@ -3645,7 +3679,19 @@ export async function scanLibrary(
     if (a.path !== b.path) return a.path.localeCompare(b.path);
     return a.name.localeCompare(b.name);
   });
-  return entries;
+  return { entries, incomplete };
+}
+
+/** {@link scanLibraryChecked} for a caller that has nowhere to say a scan came back short. */
+export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]> {
+  return (await scanLibraryChecked(transferAddr)).entries;
+}
+
+/** A folder the helper may not read or that is not there: not library content, not a failure.
+ *  EPERM, EACCES, or the helper's allowlist. */
+function isListingRefused(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return isPathMissingError(e) || /_errno_(?:1|13)(?!\d)|not_allowed|denied/.test(msg);
 }
 
 /** Tiny async gate: cap in-flight work to `max`, queue the rest FIFO.
@@ -4293,57 +4339,39 @@ const toMgmtAddr = _mgmtAddr;
  *
  *  - Folder mode (isFolder=true): list `path` and report how many
  *    entries are in it.
- *  - File mode (isFolder=false): list `path`'s PARENT and look for
- *    the target filename — `list_dir` on a file path errors (ENOTDIR),
- *    which would hide an existing file under a "doesn't exist" banner.
+ *  - File mode (isFolder=false): stat `path` itself. A listing of its
+ *    parent stops at one page, which hides a file past entry 256.
  *
- *  Returns `{exists: false}` for real errors too — the caller only
- *  needs to know "something to override?", the specific reason doesn't
- *  affect the decision. */
+ *  `{exists: false}` means the path is really not there. Any other failure
+ *  rejects: "couldn't look" must not read as "nothing to overwrite".
+ *  `more` is set when a folder holds more than the one page counted. */
 export async function probeDestination(
   transferAddr: string,
   path: string,
   isFolder: boolean,
 ): Promise<DestinationProbe> {
   const addr = toMgmtAddr(transferAddr);
-  const listPath = isFolder ? path : parentDir(path);
-  const targetName = isFolder ? null : basenameUnix(path);
   try {
+    if (!isFolder) {
+      const st = await fetchConsoleStat(addr, path);
+      return { exists: true, entryCount: 1, totalBytes: st.size };
+    }
     const res = await invoke<{
       entries?: Array<{ name?: string; size?: number; kind?: string }>;
       truncated?: boolean;
-    }>("ps5_list_dir", { addr, path: listPath, offset: 0, limit: 256 });
+    }>("ps5_list_dir", { addr, path, offset: 0, limit: 256 });
     const entries = res.entries ?? [];
-    if (isFolder) {
-      const totalBytes = entries.reduce(
-        (acc, e) => acc + (typeof e.size === "number" ? e.size : 0),
-        0,
-      );
-      return { exists: true, entryCount: entries.length, totalBytes };
-    }
-    // File mode: look for our filename in the parent listing.
-    const match = entries.find((e) => e.name === targetName);
-    if (!match) return { exists: false, entryCount: 0, totalBytes: 0 };
-    return {
-      exists: true,
-      entryCount: 1,
-      totalBytes: typeof match.size === "number" ? match.size : 0,
-    };
-  } catch {
-    return { exists: false, entryCount: 0, totalBytes: 0 };
+    const totalBytes = entries.reduce(
+      (acc, e) => acc + (typeof e.size === "number" ? e.size : 0),
+      0,
+    );
+    return { exists: true, entryCount: entries.length, totalBytes, more: res.truncated === true };
+  } catch (e) {
+    if (isPathMissingError(e)) return { exists: false, entryCount: 0, totalBytes: 0 };
+    throw e;
   }
 }
 
-function parentDir(absPath: string): string {
-  const i = absPath.lastIndexOf("/");
-  if (i <= 0) return "/";
-  return absPath.slice(0, i);
-}
-
-function basenameUnix(absPath: string): string {
-  const i = absPath.lastIndexOf("/");
-  return i < 0 ? absPath : absPath.slice(i + 1);
-}
 
 export type JobStatus = "running" | "done" | "failed";
 

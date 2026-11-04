@@ -183,3 +183,69 @@ describe("after the swap", () => {
     expect(await readJournals(c.deps)).toEqual([]);
   });
 });
+
+describe("when the console cannot answer", () => {
+  const journal: SwapJournal = {
+    v: 1,
+    titleId: "PPSA30528",
+    dump: input.dump,
+    packagePath: input.packagePath,
+    parked: parkedPathFor(input.dump)!,
+    step: "parked",
+    at: 1,
+  };
+
+  it("rollback fails rather than saying the dump is back", async () => {
+    const { deps, files } = fakeConsole({ files: { [journal.parked]: "x" } });
+    deps.exists = async () => {
+      throw new Error("busy");
+    };
+    await expect(rollbackSwap(journal, deps)).rejects.toThrow("busy");
+    expect(files.has(journal.parked)).toBe(true);
+  });
+
+  it("finish keeps the journal when a step could not run, so the swap can be finished later", async () => {
+    const path = journalPathFor(journal.titleId);
+    const { deps, files } = fakeConsole({ files: { [journal.parked]: "x", [path]: "{}" } });
+    deps.remove = async () => {
+      throw new Error("busy");
+    };
+    await expect(finishSwap(journal, "delete", deps)).rejects.toThrow("busy");
+    expect(files.has(path)).toBe(true);
+
+    const again = fakeConsole({ files: { [path]: "{}" } });
+    again.deps.readText = async () => {
+      throw new Error("busy");
+    };
+    await expect(finishSwap(journal, "keep", again.deps)).rejects.toThrow("busy");
+    expect(again.files.has(path)).toBe(true);
+  });
+
+  it("a failed listing is not ShadowMount+ letting go: the wait goes on", async () => {
+    const { deps, calls } = fakeConsole({ files: { [input.dump]: "x" }, linkPolls: 0 });
+    const list = deps.list;
+    let n = 0;
+    deps.list = async (dir) => {
+      if (dir.startsWith("/user/app/") && n++ < 2) throw new Error("busy");
+      return list(dir);
+    };
+    const steps: string[] = [];
+    const r = await runSwap(input, deps, (s) => steps.push(s));
+    expect(r.ok).toBe(true);
+    expect(n).toBe(3);
+    expect(calls.findIndex((c) => c.startsWith("unregister"))).toBeGreaterThan(-1);
+  });
+
+  it("gives up at the deadline and undoes when the listing never comes back", async () => {
+    const { deps, files, calls } = fakeConsole({ files: { [input.dump]: "x" } });
+    const list = deps.list;
+    deps.list = async (dir) => {
+      if (dir.startsWith("/user/app/")) throw new Error("busy");
+      return list(dir);
+    };
+    const r = await runSwap(input, deps, () => {});
+    expect(r).toMatchObject({ ok: false, rolledBack: true });
+    expect(files.has(input.dump)).toBe(true);
+    expect(calls.some((c) => c.startsWith("unregister"))).toBe(false);
+  });
+});

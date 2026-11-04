@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import { cleanupApply, cleanupApplyStatus } from "../api/cleanup";
-import { appUnregister, fsPathExists } from "../api/ps5";
+import { appUnregister, fsPathPresent } from "../api/ps5";
 import { transferAddr } from "../lib/addr";
 import { libraryMoveDeps } from "../lib/libraryMoveDeps";
 import { defaultMoveSubpath, resolveMoveDestination } from "../lib/moveTarget";
@@ -209,7 +209,7 @@ export function consoleSpaceRunDeps(host: string, scanId: number, payloadVersion
       }
       return { done: st.done, skipped: st.skipped, failed: st.failed };
     },
-    pathExists: (path) => fsPathExists(addr, path),
+    pathExists: (path) => fsPathPresent(addr, path),
     async move(from, to, label, onProgress) {
       let activityId = "";
       await runLibraryMove({ host, addr, from, to, payloadVersion }, libraryMoveDeps, {

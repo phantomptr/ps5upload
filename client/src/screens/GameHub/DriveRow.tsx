@@ -69,7 +69,7 @@ import {
   engineImageCors,
   fsDelete,
   fsChmod,
-  fsPathExists,
+  fsPathPresent,
   fsMount,
   fsUnmount,
   appLaunch,
@@ -2795,7 +2795,7 @@ function MoveModal({
     let cancelled = false;
     setDestExists("unknown");
     const timer = setTimeout(() => {
-      fsPathExists(addr, resolved)
+      fsPathPresent(addr, resolved)
         .then((exists) => {
           if (!cancelled) setDestExists(exists ? "yes" : "no");
         })

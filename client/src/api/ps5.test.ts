@@ -12,7 +12,9 @@ vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => true }));
 const mockedInvoke = vi.mocked(invoke);
 
 describe("checkDestinationFreeSpace", () => {
-  beforeEach(() => mockedInvoke.mockReset());
+  beforeEach(() => {
+    mockedInvoke.mockReset();
+  });
 
   it("compares against what can really be allocated, not raw free bytes", async () => {
     mockedInvoke.mockResolvedValue({
@@ -85,7 +87,9 @@ describe("searchPS5", () => {
 });
 
 describe("sendPayload failures", () => {
-  beforeEach(() => mockedInvoke.mockReset());
+  beforeEach(() => {
+    mockedInvoke.mockReset();
+  });
 
   it("leaves a failure as the engine said it", async () => {
     mockedInvoke.mockResolvedValueOnce({ ok: false, error: "connect 10.0.0.2:9021: timeout" });

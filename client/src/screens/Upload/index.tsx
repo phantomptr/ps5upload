@@ -561,6 +561,7 @@ export default function UploadScreen({
     dest: string;
     addr: string;
     entryCount: number;
+    more: boolean;
     isFolder: boolean;
   }>(null);
   // Separate from transferPhase — covers the pre-flight window (probe
@@ -695,6 +696,7 @@ export default function UploadScreen({
         dest,
         addr,
         entryCount: probe.exists ? probe.entryCount : 0,
+        more: probe.exists && probe.more === true,
         isFolder,
       });
     } catch (e) {
@@ -858,6 +860,7 @@ export default function UploadScreen({
       {pending && (
         <ExistingDestinationDialog
           entryCount={pending.entryCount}
+          more={pending.more}
           dest={pending.dest}
           isFolder={pending.isFolder}
           onOverride={() => beginUpload("overwrite")}
@@ -2138,6 +2141,7 @@ const DIALOG_PLAIN =
 
 function ExistingDestinationDialog({
   entryCount,
+  more,
   dest,
   isFolder,
   onOverride,
@@ -2145,6 +2149,7 @@ function ExistingDestinationDialog({
   onCancel,
 }: {
   entryCount: number;
+  more: boolean;
   dest: string;
   isFolder: boolean;
   onOverride: () => void;
@@ -2176,7 +2181,7 @@ function ExistingDestinationDialog({
     <>
       <span className="font-mono text-xs">{dest}</span>
       {isFolder
-        ? ` contains ${entryCount.toLocaleString()} item${entryCount === 1 ? "" : "s"} already.`
+        ? ` contains ${entryCount.toLocaleString()}${more ? "+" : ""} item${entryCount === 1 ? "" : "s"} already.`
         : ` is already on your PS5.`}
     </>
   );
