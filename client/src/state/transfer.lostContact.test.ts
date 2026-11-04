@@ -14,11 +14,14 @@ vi.mock("../api/ps5", async (importOriginal) => {
     resumeTxidRemember: vi.fn(async () => {}),
     resumeTxidForget: vi.fn(async () => {}),
     toastPush: vi.fn(async () => {}),
+    fsMount: vi.fn(),
+    fsUnmount: vi.fn(async () => {}),
+    smpStatus: vi.fn(async () => ({ running: false })),
   };
 });
 vi.mock("../lib/fileResumeTx", () => ({ fileResumeTxId: vi.fn(async () => "tx") }));
 
-import { jobStatus, startTransferFile } from "../api/ps5";
+import { fsMount, jobStatus, startTransferFile } from "../api/ps5";
 import { LOST_POLL_INTERVAL_MS, MAX_POLL_FAILURES, useTransferStore } from "./transfer";
 
 const status = vi.mocked(jobStatus);
@@ -138,6 +141,38 @@ describe("one-shot upload — Retry", () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(startFile).toHaveBeenCalledTimes(2);
     expect(startFile.mock.calls[1].slice(0, 3)).toEqual(["/src/game.pkg", "/data/game.pkg", ADDR]);
+    useTransferStore.getState().reset(ADDR);
+  });
+
+  it("after a failed mount, Retry repeats only the mount", async () => {
+    const mount = vi.mocked(fsMount);
+    mount.mockRejectedValueOnce(new Error("mount busy"));
+    status.mockResolvedValue({ status: "done", dest: "/data/g.ffpkg", bytes_sent: 9, elapsed_ms: 5, files_sent: 1 } as never);
+    await useTransferStore.getState().start({
+      sourceKind: "image",
+      srcPath: "/src/g.ffpkg",
+      dest: "/data/g.ffpkg",
+      addr: ADDR,
+      mountAfterUpload: true,
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(phase()).toMatchObject({ kind: "failed", error: "upload completed, but mount failed: mount busy" });
+    startFile.mockClear();
+
+    // It fails again: still the mount that is on offer.
+    mount.mockRejectedValueOnce(new Error("still busy"));
+    expect(useTransferStore.getState().retry(ADDR)).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(phase()).toMatchObject({ kind: "failed", error: "upload completed, but mount failed: still busy" });
+
+    mount.mockResolvedValueOnce({ mount_point: "/data/g", kernel_ro: true, layout_valid: false } as never);
+    expect(useTransferStore.getState().retry(ADDR)).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(phase()).toMatchObject({ kind: "done", dest: "/data/g.ffpkg", mountedAt: "/data/g", bytesSent: 9 });
+    const done = phase();
+    expect(done.kind === "done" && done.mountWarnings).toHaveLength(1);
+    expect(mount).toHaveBeenLastCalledWith(ADDR, "/data/g.ffpkg", { mountPoint: "/data/g", readOnly: true });
+    expect(startFile).not.toHaveBeenCalled();
     useTransferStore.getState().reset(ADDR);
   });
 
