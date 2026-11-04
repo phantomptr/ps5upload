@@ -107,7 +107,7 @@ describe("presenceItems", () => {
         status: "running",
         attempts: 0,
         maxAttempts: 1,
-        consoleId: "192.168.86.99",
+        consoleId: "192.0.2.99",
         payload: {},
         label: "Astro Bot",
         updatedAtMs: 0,
@@ -116,7 +116,7 @@ describe("presenceItems", () => {
       }) as Task;
     const items = presenceItems(
       [t({}), t({ id: "2", status: "done" }), t({ id: "3", consoleId: "10.0.0.1" }), t({ id: "4", status: "queued" })],
-      "192.168.86.99:9120",
+      "192.0.2.99:9120",
     );
     expect(items).toEqual([{ kind: "Upload", title: "Astro Bot", pct: 25 }]);
   });
@@ -134,9 +134,9 @@ describe("the same PS5 from two devices (8.0.0 listed it twice)", () => {
   it("collapses duplicates already saved, keeping the selected one and filling in what it lacks", async () => {
     const { collapseByHost } = await import("./roster");
     const list = [
-      { id: "a", name: "PS5", host: "192.168.86.99", notes: null, wake_credential: null },
-      { id: "b", name: "Phat", host: "192.168.86.99", notes: "fan loud", wake_credential: "cred" },
-      { id: "c", name: "Pro", host: "192.168.86.100", notes: null, wake_credential: null },
+      { id: "a", name: "PS5", host: "192.0.2.99", notes: null, wake_credential: null },
+      { id: "b", name: "Phat", host: "192.0.2.99", notes: "fan loud", wake_credential: "cred" },
+      { id: "c", name: "Pro", host: "192.0.2.100", notes: null, wake_credential: null },
     ];
     const out = collapseByHost(list, "b");
     expect(out.map((p) => p.id)).toEqual(["b", "c"]);
