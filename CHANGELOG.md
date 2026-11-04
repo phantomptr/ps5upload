@@ -4,6 +4,32 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.0.2
+
+- **No more green picture on some Linux PCs (For #656).** On some Linux PCs, the Linux app's fast
+  way of handing the picture to the graphics card came back empty, which shows as solid green. The
+  app now notices and switches to drawing frames the slower way that always worked.
+- **Sound for friends on iPhone (For #657).** A friend playing from an iPhone's browser could get no
+  sound: the sound kept skipping ahead to catch up and never played. It now catches up gently, the
+  first tap anywhere in the game starts it, and if a browser can't play it at all the page says so.
+- **"New link" makes a new link (For #657).** Play Together's **New link** handed back the same
+  link. It now makes a fresh one (the old one stops working), says so if it fails, and an invite
+  that runs out while the panel is open is replaced by itself.
+- **Friends can play with the keyboard (For #654).** A friend who joins from a browser with no
+  controller can play with the keyboard, using the same keys as Remote Play (WASD moves, arrows
+  for the D-pad, Enter ✕, Backspace ○, Q □, E △, Tab Options). Escape still leaves full screen.
+- **Turbo works (For #655).** Turbo buttons, and a controller's own turbo, could reach the PS5 as
+  one long press: a release and the next press arrived together. Releases are now held as long as
+  presses, and turbo goes up to 10 presses a second, the most the console takes.
+- **Linux: the picture fills its box again after minimizing (For #652).** Bringing the window back
+  could leave black bars on the right and bottom; the picture is now laid out again.
+- **NAS addresses typed any way work.** An SMB connection whose Share was typed with folders
+  (`Media/Games`), or with a whole address pasted into Server or Share (`\\nas\Media\Games`,
+  `smb://nas/Media`), is split into server, share and start folder for you. A share that doesn't
+  exist is now named in the error, with what to type instead.
+- **NAS copies in Activity can be cancelled**, and the PS5's own PS5Upload page lists its NAS
+  copies under Tasks (For #658).
+
 ## 11.0.1
 
 - **Friends away from home can play together, over Tailscale.** While the Tailscale app is

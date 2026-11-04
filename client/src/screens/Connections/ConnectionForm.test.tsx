@@ -14,6 +14,7 @@ import {
   ConnectionFormView,
   emptyForm,
   switchProtocol,
+  tidySmbAddress,
   toRequest,
   type ConnectionFormProps,
   type FormValue,
@@ -125,5 +126,57 @@ describe("connection form", () => {
     );
     expect(out).toContain("SHA256:abc");
     expect(out).toContain("Accept");
+  });
+
+  it("splits a share typed with folders into share and start folder (Discord report)", () => {
+    const t = tidySmbAddress({ ...emptyForm(), host: "nas", share: "XXX/YYY/ZZZ" });
+    expect([t.host, t.share, t.startPath]).toEqual(["nas", "XXX", "/YYY/ZZZ"]);
+    const lead = tidySmbAddress({ ...emptyForm(), host: "nas", share: "\\XXX\\YYY\\", startPath: "/ZZZ" });
+    expect([lead.share, lead.startPath]).toEqual(["XXX", "/YYY/ZZZ"]);
+  });
+
+  it("splits a whole address pasted into Server or Share", () => {
+    const unc = tidySmbAddress({ ...emptyForm(), host: "\\\\nas\\Media\\Games\\PS5" });
+    expect([unc.host, unc.share, unc.startPath]).toEqual(["nas", "Media", "/Games/PS5"]);
+    const url = tidySmbAddress({ ...emptyForm(), host: "smb://nas:4455/Media" });
+    expect([url.host, url.port, url.share, url.startPath]).toEqual(["nas", 4455, "Media", ""]);
+    const inShare = tidySmbAddress({ ...emptyForm(), host: "", share: "SMB://nas/Media/Games" });
+    expect([inShare.host, inShare.share, inShare.startPath]).toEqual(["nas", "Media", "/Games"]);
+    // A share already typed wins over the path in Server.
+    const both = tidySmbAddress({ ...emptyForm(), host: "//nas/Other", share: "Media" });
+    expect([both.host, both.share]).toEqual(["nas", "Media"]);
+  });
+
+  it("leaves a plain SMB form and other protocols alone", () => {
+    const plain = { ...emptyForm(), host: "10.0.0.5", share: "games", startPath: "/ps5" };
+    expect(tidySmbAddress(plain)).toBe(plain);
+    const ipv6 = { ...emptyForm(), host: "fe80::1", share: "games" };
+    expect(tidySmbAddress(ipv6)).toBe(ipv6);
+    const ftp = { ...emptyForm(), protocol: "ftp" as const, host: "ftp://x/y", share: "a/b" };
+    expect(tidySmbAddress(ftp)).toBe(ftp);
+  });
+
+  it("sends the tidied address and enables Test for a pasted UNC path", () => {
+    const { connection } = toRequest({ ...emptyForm(), name: "NAS", host: "\\\\nas\\Media\\Games", share: "" });
+    expect([connection.host, connection.share, connection.start_path]).toEqual(["nas", "Media", "/Games"]);
+    const out = html({ host: "\\\\nas\\Media", share: "" });
+    expect(disabledButton(out, "Test")).toBe(false);
+  });
+
+  it("explains a missing share in words, naming it", () => {
+    const out = html(
+      { share: "XXX" },
+      {
+        testResult: {
+          ok: false,
+          error: "No share named 'XXX' on this server (STATUS_BAD_NETWORK_NAME).",
+          hint: "engine hint",
+        },
+      },
+    );
+    expect(out).toContain("No share named &#x27;XXX&#x27; on this server. The share is the first folder name only");
+    expect(out).not.toContain("engine hint");
+    const old = html({ share: "A" }, { testResult: { ok: false, error: "Protocol error: STATUS_BAD_NETWORK_NAME during TreeConnect" } });
+    expect(old).toContain("No share named &#x27;A&#x27;");
   });
 });

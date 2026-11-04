@@ -21,6 +21,70 @@ export interface Job {
   bytes_total: number;
   /** Started from this page (false: a paired PC's job). */
   mine: boolean;
+  /** What it works on, when the job says (a network-share copy names its file or folder). */
+  name?: string;
+}
+
+/** Network-share jobs carry this in front of the daemon's id, so cancel goes to the right place. */
+export const SMB_JOB_PREFIX = "smb:";
+/** A finished network-share job stays listed this long (the daemon keeps its last 16 jobs). */
+export const SMB_DONE_KEEP_S = 15 * 60;
+
+/** One /api/smb/jobs entry (payload/smb/smbd_jobs.c status_locked). */
+interface SmbDaemonJob {
+  job?: unknown;
+  kind?: unknown;
+  state?: unknown;
+  bytes_done?: unknown;
+  bytes_total?: unknown;
+  files_done?: unknown;
+  files_total?: unknown;
+  started?: unknown;
+  src?: unknown;
+  dest?: unknown;
+}
+
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+const lastName = (p: unknown) =>
+  typeof p === "string" ? (p.split("/").filter(Boolean).pop() ?? "") : "";
+
+/**
+ * A network-share (NAS) copy or removal the page started, as a Tasks row: the
+ * SMB daemon runs these, not the helper, so /api/jobs never lists them (#658).
+ * Library scans are left out (Library shows those), as is a finished job older
+ * than SMB_DONE_KEEP_S.
+ */
+export function smbJobToJob(s: SmbDaemonJob, nowS: number): Job | null {
+  if (typeof s.job !== "string" || !s.job) return null;
+  const kind = s.kind === "download" || s.kind === "upload" ? "copy" : s.kind === "remove" ? "op" : null;
+  if (!kind) return null;
+  const state = s.state === "running" ? "running" : s.state === "done" ? "done" : "failed";
+  if (state !== "running" && num(s.started) > 0 && nowS - num(s.started) > SMB_DONE_KEEP_S) return null;
+  const name = lastName(s.kind === "download" ? s.dest : s.src);
+  return {
+    job: SMB_JOB_PREFIX + s.job,
+    kind,
+    state,
+    files_done: num(s.files_done),
+    files_total: num(s.files_total),
+    bytes_done: num(s.bytes_done),
+    bytes_total: num(s.bytes_total),
+    mine: true,
+    ...(name ? { name } : {}),
+  };
+}
+
+/** The network-share daemon's jobs; none when it is not running or cannot be read. */
+async function fetchSmbJobs(): Promise<Job[]> {
+  try {
+    const r = await call<{ jobs?: unknown }>("/api/smb/jobs");
+    const nowS = Math.floor(Date.now() / 1000);
+    return Array.isArray(r?.jobs)
+      ? (r.jobs as SmbDaemonJob[]).map((j) => smbJobToJob(j, nowS)).filter((j): j is Job => j != null)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 export const JOBS_FAST_MS = 1000;
@@ -41,13 +105,15 @@ export function visibleJobs(jobs: Job[]): Job[] {
   return running.concat(jobs.filter((j) => j.state !== "running" && j.mine));
 }
 
-/** One read of /api/jobs: the jobs, and where running uploads (a PC's) are writing. */
+/** One read of /api/jobs (and of the network-share jobs): the jobs, and where running uploads
+ *  (a PC's) are writing. */
 export async function fetchJobsAll(): Promise<{ jobs: Job[]; uploading: string[] }> {
   const r = await call<{ jobs?: unknown; uploading?: unknown }>("/api/jobs");
+  const smb = await fetchSmbJobs();
   const uploading = Array.isArray(r?.uploading)
     ? r.uploading.filter((x): x is string => typeof x === "string" && x.startsWith("/"))
     : [];
-  return { jobs: Array.isArray(r?.jobs) ? (r.jobs as Job[]) : [], uploading };
+  return { jobs: (Array.isArray(r?.jobs) ? (r.jobs as Job[]) : []).concat(smb), uploading };
 }
 
 /** One read of /api/jobs. */
@@ -57,7 +123,8 @@ export async function fetchJobs(): Promise<Job[]> {
 
 /** Ask the helper to stop job `id` (any owner's). */
 export async function cancelJob(id: string): Promise<void> {
-  await call("/api/jobs/cancel", { job: id });
+  if (id.startsWith(SMB_JOB_PREFIX)) await call("/api/smb/cancel", { job: id.slice(SMB_JOB_PREFIX.length) });
+  else await call("/api/jobs/cancel", { job: id });
 }
 
 export interface JobsPoller {

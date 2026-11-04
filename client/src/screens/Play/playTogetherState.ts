@@ -232,11 +232,19 @@ async function change(path: string, addr: string, body: object): Promise<JoinHos
   return read(addr);
 }
 
+/** The body of an invite call: `new` only for a fresh link. */
+export function inviteBody(renew: boolean): { new?: true } {
+  return renew ? { new: true } : {};
+}
+
 export const joinApi = {
   read,
   open: (addr: string) => whole("/api/join/open", addr),
   close: (addr: string) => whole("/api/join/close", addr),
-  invite: (addr: string) => change("/api/join/invite", addr, {}),
+  /** The open invite (a new one when there is none or it expired); `renew` makes a new one
+   *  even then, and the old link and code stop working (#657: without `new` the engine hands
+   *  back the same invite, so "New link" changed nothing). */
+  invite: (addr: string, renew = false) => change("/api/join/invite", addr, inviteBody(renew)),
   decide: (addr: string, id: number, allow: boolean) => change("/api/join/decide", addr, { id, allow }),
   kick: (addr: string, player: number) => change("/api/join/kick", addr, { player }),
   settings: (addr: string, s: { block_system_buttons?: boolean; max_players?: number }) =>

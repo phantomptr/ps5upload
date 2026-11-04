@@ -64,7 +64,20 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
             "A name and a server address are required.",
         )));
     }
-    if c.protocol == Protocol::Smb && c.share.trim().is_empty() {
+    // SMB: a whole address pasted into Server (`\\\\nas\\Media\\Games`, `smb://nas/Media`) keeps
+    // only the server there; its share and folders fill Share when that was left empty.
+    let (host, share_raw) = if c.protocol == Protocol::Smb {
+        let (host, path) = split_smb_host(&c.host);
+        let share = if c.share.trim().is_empty() {
+            path
+        } else {
+            c.share.clone()
+        };
+        (host, share)
+    } else {
+        (c.host.trim().to_string(), c.share.clone())
+    };
+    if c.protocol == Protocol::Smb && share_raw.trim_matches(['/', '\\', ' ']).is_empty() {
         return Err(Box::new(err(
             StatusCode::BAD_REQUEST,
             "An SMB connection needs a share.",
@@ -89,10 +102,10 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
     };
     let insecure_tls = c.protocol == Protocol::Webdavs && c.insecure_tls;
     let (share, start_path) = if c.protocol == Protocol::Smb {
-        split_share(&c.share, c.start_path.trim())
+        split_share(&share_raw, c.start_path.trim())
     } else {
         (
-            c.share.trim().trim_matches(['/', '\\']).to_string(),
+            share_raw.trim().trim_matches(['/', '\\']).to_string(),
             c.start_path.trim().to_string(),
         )
     };
@@ -103,7 +116,7 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
             id: String::new(),
             name: c.name.trim().to_string(),
             protocol: c.protocol,
-            host: c.host.trim().to_string(),
+            host,
             port,
             share,
             user,
@@ -122,7 +135,8 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
 pub(crate) fn split_share(raw: &str, start: &str) -> (String, String) {
     let original = start;
     let raw = raw.trim();
-    let unc = raw.starts_with("\\\\") || raw.starts_with("//");
+    let (raw, url) = strip_smb_scheme(raw);
+    let unc = url || raw.starts_with("\\\\") || raw.starts_with("//");
     let mut segs: Vec<&str> = raw
         .split(['/', '\\'])
         .filter(|s| !s.trim().is_empty())
@@ -143,6 +157,36 @@ pub(crate) fn split_share(raw: &str, start: &str) -> (String, String) {
         return (share.trim().to_string(), original.to_string());
     }
     (share.trim().to_string(), format!("/{}", path.join("/")))
+}
+
+/// `smb://` or `cifs://` in front of an address, dropped (any letter case): the rest, and
+/// whether there was one (then the first name after it is the server).
+fn strip_smb_scheme(raw: &str) -> (&str, bool) {
+    for scheme in ["smb://", "cifs://"] {
+        if raw.len() >= scheme.len() && raw[..scheme.len()].eq_ignore_ascii_case(scheme) {
+            return (&raw[scheme.len()..], true);
+        }
+    }
+    (raw, false)
+}
+
+/// The Server field of an SMB form as the server alone and whatever path came after it:
+/// `\\\\nas\\Media\\Games` → (`nas`, `Media/Games`), `smb://nas:445/Media` → (`nas:445`, `Media`),
+/// `nas` → (`nas`, ``).
+pub(crate) fn split_smb_host(raw: &str) -> (String, String) {
+    let (rest, _) = strip_smb_scheme(raw.trim());
+    let rest = rest.trim_start_matches(['/', '\\']);
+    match rest.find(['/', '\\']) {
+        Some(i) => (
+            rest[..i].trim().to_string(),
+            rest[i + 1..]
+                .split(['/', '\\'])
+                .filter(|s| !s.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("/"),
+        ),
+        None => (rest.trim().to_string(), String::new()),
+    }
 }
 
 /// `{ error, hint? }` with a status that says what kind of failure it was.
@@ -448,6 +492,83 @@ mod tests {
             split_share("Media/Games", "/PS5/"),
             ("Media".into(), "/Games/PS5".into())
         );
+        assert_eq!(
+            split_share("smb://nas/Media/Games/PS5", ""),
+            ("Media".into(), "/Games/PS5".into())
+        );
+        assert_eq!(
+            split_share("SMB://nas/Media", ""),
+            ("Media".into(), String::new())
+        );
+        assert_eq!(
+            split_share("\\\\Media\\Games\\", ""),
+            ("Games".into(), String::new())
+        );
+        assert_eq!(
+            split_share("Media\\Games\\PS5", "x"),
+            ("Media".into(), "/Games/PS5/x".into())
+        );
+    }
+
+    #[test]
+    fn a_whole_smb_address_in_server_is_split() {
+        assert_eq!(split_smb_host("nas"), ("nas".into(), String::new()));
+        assert_eq!(
+            split_smb_host(" 10.0.0.5 "),
+            ("10.0.0.5".into(), String::new())
+        );
+        assert_eq!(
+            split_smb_host("\\\\nas\\Media\\Games"),
+            ("nas".into(), "Media/Games".into())
+        );
+        assert_eq!(
+            split_smb_host("smb://nas:445/Media/Games/"),
+            ("nas:445".into(), "Media/Games".into())
+        );
+        assert_eq!(
+            split_smb_host("//nas/Media"),
+            ("nas".into(), "Media".into())
+        );
+    }
+
+    fn smb_form(host: &str, share: &str, start: &str) -> ConnectionBody {
+        serde_json::from_value(json!({
+            "connection": {
+                "name": "NAS", "protocol": "smb", "host": host,
+                "share": share, "start_path": start,
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_smb_form_takes_the_share_from_a_pasted_address() {
+        let (c, _) = parse_body(smb_form("\\\\nas\\Media\\Games\\PS5", "", ""))
+            .ok()
+            .unwrap();
+        assert_eq!(
+            (c.host.as_str(), c.share.as_str(), c.start_path.as_str()),
+            ("nas", "Media", "/Games/PS5")
+        );
+        let (c, _) = parse_body(smb_form("smb://nas/Media", "", ""))
+            .ok()
+            .unwrap();
+        assert_eq!(
+            (c.host.as_str(), c.share.as_str(), c.start_path.as_str()),
+            ("nas", "Media", "")
+        );
+        // Share typed: it wins, and the server keeps only its own name.
+        let (c, _) = parse_body(smb_form("smb://nas/Other", "XXX/YYY/ZZZ", ""))
+            .ok()
+            .unwrap();
+        assert_eq!(
+            (c.host.as_str(), c.share.as_str(), c.start_path.as_str()),
+            ("nas", "XXX", "/YYY/ZZZ")
+        );
+        let (c, _) = parse_body(smb_form("nas", "/XXX/YYY/", "")).ok().unwrap();
+        assert_eq!((c.share.as_str(), c.start_path.as_str()), ("XXX", "/YYY"));
+        assert!(parse_body(smb_form("nas", "", "")).is_err());
+        assert!(parse_body(smb_form("smb://nas/", " / ", "")).is_err());
     }
 
     use super::*;

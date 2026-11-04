@@ -8,7 +8,7 @@
 // turns that into pixels on a canvas, sound, and input; the screen only drives it.
 
 import { isPasscode } from "./passcode";
-import { DEFAULT_PICTURE, PicturePass, PlaneReader, cropRect, isPlaneFormat, needsPass, sharpens, upscaleSize, upscales, type PictureTools } from "./rpPicture";
+import { DEFAULT_PICTURE, PicturePass, PlaneReader, chromaBlank, cropRect, isPlaneFormat, needsPass, sharpens, upscaleSize, upscales, type PictureTools } from "./rpPicture";
 import { isLinuxDesktop } from "./platform";
 import { linuxCompositingOff } from "./linuxGraphics";
 import { decoderStarting, linuxSoftwareVideo, withDecoderStart, type DecoderStart } from "./videoDecoderGuard";
@@ -25,6 +25,7 @@ import { decoderVerdict, FED_RECENT_MS, MAX_REBUILDS } from "./rpDecoderWatch";
 import type { RpKeyboardMsg, RpKeyboardSend } from "./rpKeyboard";
 import { parseSnapshotRequest, takeSnapshot } from "./rpSnapshot";
 import { OpusPipe } from "./rpAudioPipe";
+import { relayoutElement, watchRestore } from "./repaintOnRestore";
 // A file of the app's own: the apps' Content-Security-Policy refuses a worklet from a blob: URL.
 import audioWorkletUrl from "./rpAudioWorklet.js?url&no-inline";
 
@@ -610,6 +611,8 @@ export class RemotePlayStream {
   private workletLoading = false;
   /** Stops listening for the click that starts held-back sound (watchSoundBlocked). */
   private soundUnlockOff: (() => void) | null = null;
+  /** Stops laying the picture out again after the Linux app's window comes back. */
+  private restoreOff: (() => void) | null = null;
   /** The sound decoded on the page (no decoding worker here), made at the first header. */
   private audioPipe: OpusPipe | null = null;
   /** The sound decoded in a worker that feeds the worklet itself (rpAudioWorker.ts). */
@@ -790,6 +793,8 @@ export class RemotePlayStream {
   /** A copy is under way; the newest frame that came meanwhile waits (older ones are dropped). */
   private planesBusy = false;
   private planesNext: VideoFrame | null = null;
+  /** Copies in a row that came back empty (chromaBlank): a few and frames go as frames. */
+  private planesBlank = 0;
   /** How the last frame reached WebGL, for the log: "frame" (texImage2D) or "<format>-planes". */
   private input = "";
 
@@ -812,7 +817,8 @@ export class RemotePlayStream {
     // follows the window to a screen with another scaling (no resize there).
     const ro = new ResizeObserver((entries) => {
       const r = entries[entries.length - 1].contentRect;
-      this.boxCss = { w: r.width, h: r.height };
+      // A minimized window's 0x0 is not the picture's size (the next real size replaces it).
+      if (r.width > 0 && r.height > 0) this.boxCss = { w: r.width, h: r.height };
     });
     ro.observe(this.cv);
     this.boxWatch = ro;
@@ -996,6 +1002,15 @@ export class RemotePlayStream {
     }
     void this.audioCtx.resume();
     this.watchSoundBlocked(this.audioCtx);
+    // The Linux app lays the picture out again when its window comes back (lib/repaintOnRestore.ts).
+    if (isTauriEnv() && isLinuxDesktop()) {
+      this.restoreOff = watchRestore(window, () => {
+        if (this.ended) return;
+        relayoutElement(this.cv);
+        // The next frame logs where the picture is now.
+        this.laidOut = "";
+      });
+    }
     this.gainNode = this.audioCtx.createGain();
     this.gainNode.gain.value = this.volume;
     this.gainNode.connect(this.audioCtx.destination);
@@ -1619,6 +1634,8 @@ export class RemotePlayStream {
       );
     }
     this.watchBox(false);
+    this.restoreOff?.();
+    this.restoreOff = null;
     this.resetMedia();
     this.releasePicture();
     this.closeAudio();
@@ -1961,6 +1978,16 @@ export class RemotePlayStream {
           frame.close();
           return;
         }
+        if (chromaBlank(planes)) {
+          if (++this.planesBlank >= 3) {
+            // The copy gives nothing but zeros (a green picture): frames as frames from now on.
+            log.warn("remote-play", `picture: the frame's ${planes.format} planes came back empty: drawing frames as they are`);
+            this.planes = null;
+            this.drawFrame(frame);
+          } else frame.close();
+          return;
+        }
+        this.planesBlank = 0;
         const tools = this.passOff ? DEFAULT_PICTURE : this.tools;
         const band = cropRect(fw, fh, tools.crop219).h;
         const to = upscales(tools) ? upscaleSize({ w: fw, h: band }, this.boxPx()) : null;

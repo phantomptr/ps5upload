@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Gamepad2, RefreshCw, Share2, Smartphone, UserMinus, Users, X } from "lucide-react";
 
 import { Button, Callout, Toggle } from "../../components";
@@ -168,6 +168,21 @@ export function PlayTogetherPanel({
   const [why, setWhy] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
+  // A new link the engine would not make (shown, never swallowed: #657).
+  const [linkFailed, setLinkFailed] = useState(false);
+  const inviting = useRef(false);
+  /** Asks the engine for the invite; `renew` voids the old link and makes a new one. */
+  const askInvite = async (renew: boolean): Promise<void> => {
+    if (inviting.current) return;
+    inviting.current = true;
+    try {
+      const s = await joinApi.invite(addr, renew);
+      setLinkFailed(!s);
+      if (s) onState(s);
+    } finally {
+      inviting.current = false;
+    }
+  };
 
   // Opening the panel opens Play Together with a fresh invite (the engine keeps an open one).
   useEffect(() => {
@@ -195,6 +210,14 @@ export function PlayTogetherPanel({
   }, [addr, onState]);
 
   const helperOk = why !== "old_helper";
+  // An invite lasts 30 minutes: when it lapses while the panel is open, make the next one
+  // (otherwise the panel showed "…" with no link and no way to get one).
+  const lapsed = state.open && !state.invite && helperOk && !failed;
+  useEffect(() => {
+    if (lapsed) void askInvite(false);
+    // askInvite reads the latest addr/onState; only a lapse starts it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lapsed]);
   const invite = state.invite;
   const addresses = invite?.urls ?? [];
   const link = invite ? (picked ? inviteOn(invite.url, picked) : invite.url) : null;
@@ -300,12 +323,17 @@ export function PlayTogetherPanel({
                     size="sm"
                     variant="ghost"
                     leftIcon={<RefreshCw size={14} />}
-                    onClick={() => void joinApi.invite(addr).then((s) => s && onState(s))}
+                    onClick={() => void askInvite(true)}
                     data-testid="pt-new-link"
                   >
                     {tr("pt_new_link", undefined, "New link")}
                   </Button>
                 </div>
+                {linkFailed && (
+                  <p className="text-xs text-[var(--color-warn)]" data-testid="pt-new-link-failed">
+                    {tr("pt_new_link_failed", undefined, "A new link could not be made. Try again.")}
+                  </p>
+                )}
                 {invite?.code && (
                   <div className="space-y-0.5">
                     <p className="flex items-baseline gap-2 text-xs text-[var(--color-muted)]">
@@ -328,6 +356,15 @@ export function PlayTogetherPanel({
                   testId="pt-addresses"
                   addressTestId="pt-address"
                 />
+              </div>
+            ) : linkFailed ? (
+              <div className="space-y-2">
+                <p className="text-xs text-[var(--color-warn)]" data-testid="pt-new-link-failed">
+                  {tr("pt_new_link_failed", undefined, "A new link could not be made. Try again.")}
+                </p>
+                <Button size="sm" variant="ghost" leftIcon={<RefreshCw size={14} />} onClick={() => void askInvite(true)} data-testid="pt-new-link">
+                  {tr("pt_new_link", undefined, "New link")}
+                </Button>
               </div>
             ) : (
               <p className="text-xs text-[var(--color-muted)]">…</p>

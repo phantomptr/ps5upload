@@ -37,6 +37,9 @@ export function taskCapabilities(task: Task): TaskCapabilities {
   if (control.owner === "link-download") {
     return { ...none, canCancel: task.status === "running" || task.status === "queued" };
   }
+  if (control.owner === "remote-fetch") {
+    return { ...none, canCancel: task.status === "running" };
+  }
   if (control.owner === "fpkg-convert") {
     // Only the run that owns this row: an old Convert row must never stop a newer conversion.
     const p = useFpkgConversion.getState().pipeline;
@@ -88,6 +91,11 @@ export async function commandTask(task: Task, command: TaskCommand): Promise<boo
     }
     if (control.owner === "link-download") {
       await invoke("pkg_remote_download_cancel", { id: control.downloadId });
+      return true;
+    }
+    if (control.owner === "remote-fetch") {
+      // The fetch stops at its next chunk; materializeRemote then settles the task as cancelled.
+      await invoke("job_cancel", { jobId: control.jobId });
       return true;
     }
     useUploadQueueStore.getState().cancelItem(control.itemId);

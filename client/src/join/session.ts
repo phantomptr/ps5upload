@@ -9,7 +9,15 @@ import { JoinClient, type JoinStage } from "../lib/joinClient";
 import type { JoinStatus } from "../lib/joinProtocol";
 import { gamepadsOf } from "../lib/nativePad";
 import { profileFor } from "../lib/padProfiles";
-import { mergePads, padFromGamepads, playRumble, type PadState } from "../lib/remotePlayStream";
+import {
+  DEFAULT_KEYMAP,
+  mergePads,
+  padFromGamepads,
+  padFromKeys,
+  playRumble,
+  type KeyAction,
+  type PadState,
+} from "../lib/remotePlayStream";
 import { makeWatchPlayer, type MsePlayer, type WatchPlayer, type WatchProblem } from "../pad/watchPlayer";
 import { rpInput } from "../state/remotePlay";
 
@@ -21,6 +29,8 @@ export interface JoinSnapshot {
   light: [number, number, number] | null;
   problem: WatchProblem | null;
   sound: boolean;
+  /** The sound cannot play in this browser (#657): said, rather than a silent game. */
+  noSound: boolean;
   /** The host's name: from the link, then from the engine's status. */
   host: string | null;
 }
@@ -34,11 +44,30 @@ export interface JoinSessionOptions {
   host: string | null;
 }
 
-/** The pad this device is: connected controllers (standard mapping) plus the on-screen one. */
+/** A guest's keyboard (#654): Remote Play's default keys, except Escape, which stays the
+ *  browser's (it leaves full screen). */
+export const GUEST_KEYMAP: Record<string, KeyAction> = Object.fromEntries(
+  Object.entries(DEFAULT_KEYMAP).filter(([code]) => code !== "Escape"),
+);
+
+/** The keys held on this device (KeyboardEvent.code), while a session listens. */
+export const guestHeld = new Set<string>();
+
+/** Whether a key event is the guest's pad: a mapped key, not typed into a field. */
+export function isPadKey(e: Pick<KeyboardEvent, "code" | "target" | "ctrlKey" | "metaKey" | "altKey">): boolean {
+  if (!(e.code in GUEST_KEYMAP) || e.ctrlKey || e.metaKey || e.altKey) return false;
+  const t = e.target as (HTMLElement & { isContentEditable?: boolean }) | null;
+  const tag = t?.tagName;
+  return !(tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable);
+}
+
+/** The pad this device is: connected controllers (standard mapping), the keyboard and the
+ *  on-screen one, merged. */
 export function devicePad(): PadState {
   const pads = padFromGamepads(gamepadsOf(typeof navigator === "undefined" ? undefined : navigator), profileFor);
   const touch = rpInput.touchPad;
-  return { ...mergePads(pads, touch), touch: touch.touch ?? null, motion: rpInput.motion ?? null };
+  const merged = mergePads(mergePads(pads, padFromKeys(guestHeld, GUEST_KEYMAP)), touch);
+  return { ...merged, touch: touch.touch ?? null, motion: rpInput.motion ?? null };
 }
 
 export class JoinSession {
@@ -56,6 +85,7 @@ export class JoinSession {
       light: null,
       problem: null,
       sound: false,
+      noSound: false,
       host: opts.host,
     };
     this.client = new JoinClient({
@@ -84,11 +114,14 @@ export class JoinSession {
 
   /** The picture's player, made on first use (needs a document). */
   picture(): WatchPlayer | MsePlayer {
-    if (!this.player) this.player = makeWatchPlayer(
+    if (!this.player) {
+      this.player = makeWatchPlayer(
         (problem) => this.set({ problem }),
         "player",
         () => this.client.askKeyframe(),
       );
+      this.player.onSoundFail = () => this.set({ noSound: true });
+    }
     return this.player;
   }
 
@@ -99,8 +132,27 @@ export class JoinSession {
 
   start(): void {
     // Hidden or out of focus: let go of everything (no stuck stick while the friend is away).
-    const vis = () => this.client.setNeutral(document.visibilityState === "hidden");
-    const blur = () => this.client.setNeutral(true);
+    // Keys held then are let go too (their keyup goes to whatever has the focus next).
+    const vis = () => {
+      if (document.visibilityState === "hidden") guestHeld.clear();
+      this.client.setNeutral(document.visibilityState === "hidden");
+    };
+    const blur = () => {
+      guestHeld.clear();
+      this.client.setNeutral(true);
+    };
+    // The keyboard plays (#654) while joined; a key typed into a field stays the field's.
+    const keyDown = (e: KeyboardEvent) => {
+      if (this.client.current.kind !== "joined" || !isPadKey(e)) return;
+      e.preventDefault();
+      guestHeld.add(e.code);
+    };
+    const keyUp = (e: KeyboardEvent) => {
+      if (!guestHeld.delete(e.code)) return;
+      if (isPadKey(e)) e.preventDefault();
+    };
+    window.addEventListener("keydown", keyDown);
+    window.addEventListener("keyup", keyUp);
     const focus = () => this.client.setNeutral(document.visibilityState === "hidden");
     document.addEventListener("visibilitychange", vis);
     window.addEventListener("blur", blur);
@@ -109,11 +161,16 @@ export class JoinSession {
       document.removeEventListener("visibilitychange", vis);
       window.removeEventListener("blur", blur);
       window.removeEventListener("focus", focus);
+      window.removeEventListener("keydown", keyDown);
+      window.removeEventListener("keyup", keyUp);
+      guestHeld.clear();
     });
     this.client.start();
   }
 
   startSound(): void {
+    // Once: the first touch anywhere and the "Tap for sound" button both call this (#657).
+    if (this.snap.sound) return;
     this.picture().startSound();
     this.set({ sound: true });
   }

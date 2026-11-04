@@ -51,7 +51,10 @@ export function TaskRow({ job, onCancel }: { job: Job; onCancel: (job: Job) => v
         <Icon className="cw-task-icon" aria-hidden />
         <div className="cw-task-text">
           <div className="cw-task-title">
-            <span>{kindLabel(job.kind)}</span>
+            <span>
+              {kindLabel(job.kind)}
+              {job.name ? <span className="cw-dim">{` · ${job.name}`}</span> : null}
+            </span>
             <span className={`cw-tag${job.mine ? "" : " is-pc"}`}>
               {t(job.mine ? "cw_task_from_console" : "cw_task_from_pc")}
             </span>

@@ -5,7 +5,7 @@
 import { jobStatus } from "../api/ps5";
 import { remoteApi } from "../api/remote";
 import { useConnectionsStore } from "../state/connections";
-import { trackTask } from "../state/trackTask";
+import { useTaskStore } from "../state/tasks";
 import { isRemotePath, parseRemotePath } from "./remotePath";
 
 /** Local copies this app made of server files, so only those are ever cleaned up. */
@@ -69,16 +69,35 @@ export async function materializeRemote(
   const server =
     (parsed && useConnectionsStore.getState().nameOf(parsed.connectionId)) ?? "the server";
   const pollMs = opts.pollMs ?? 500;
-  const local = await trackTask(
-    { kind: "download", origin: "remote.fetch", label: `Copy ${name} from ${server}` },
-    (report) =>
-      fetchRemote(path, {
-        destDir: opts.destDir,
-        pollMs,
-        onProgress: (current, total) =>
-          report({ progress: { current, total, unit: "bytes" } }),
-      }),
-  );
+  const tasks = useTaskStore.getState();
+  const id = tasks.registerTask({
+    kind: "download",
+    origin: "remote.fetch",
+    label: `Copy ${name} from ${server}`,
+    consoleId: "",
+  });
+  let local: string;
+  try {
+    local = await fetchRemote(path, {
+      destDir: opts.destDir,
+      pollMs,
+      // Known once the engine took the job: from then on Activity can cancel it.
+      onJob: (jobId) =>
+        useTaskStore.getState().updateTask(id, { engineJobId: jobId, control: { owner: "remote-fetch", jobId } }),
+      onProgress: (current, total) =>
+        useTaskStore.getState().updateTask(id, { progress: { current, total, unit: "bytes" } }),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // The engine ends a cancelled fetch with the error "cancelled" (remote/fetch.rs copy_all).
+    if (message === "cancelled") useTaskStore.getState().finishTask(id, "cancelled");
+    else
+      useTaskStore.getState().finishTask(id, "failed", {
+        lastError: { code: "OP_FAILED", message, recoverable: false },
+      });
+    throw error;
+  }
+  useTaskStore.getState().finishTask(id, "done");
   copies.add(local);
   return local;
 }

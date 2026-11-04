@@ -71,8 +71,48 @@ export function switchProtocol(v: FormValue, protocol: Protocol): FormValue {
   return { ...v, protocol, port, authKind: protocol === "sftp" ? v.authKind : "password" };
 }
 
+const SMB_SCHEME = /^(smb|cifs):\/\//i;
+
+function pathSegs(s: string): string[] {
+  return s.split(/[/\\]+/).map((x) => x.trim()).filter(Boolean);
+}
+
+/**
+ * SMB: a whole address pasted into Server or Share (`\\\\nas\\Media\\Games`,
+ * `smb://nas/Media/Games`) or a share typed with folders after it (`Media/Games/PS5`) is split
+ * the way the server needs it: the server alone in Server, the share's own name in Share (the
+ * first folder name only), and the folders inside it in front of Start folder. A port typed
+ * after the server (`nas:4455`) moves to Port.
+ */
+export function tidySmbAddress(v: FormValue): FormValue {
+  if (v.protocol !== "smb") return v;
+  const hostSegs = pathSegs(v.host.trim().replace(SMB_SCHEME, ""));
+  let host = hostSegs[0] ?? "";
+  let shareSegs = pathSegs(v.share.trim().replace(SMB_SCHEME, ""));
+  const shareIsAddress = SMB_SCHEME.test(v.share.trim()) || /^(\\\\|\/\/)/.test(v.share.trim());
+  if (shareIsAddress && shareSegs.length >= 2) {
+    const server = shareSegs.shift()!;
+    if (!host) host = server;
+  }
+  if (shareSegs.length === 0) shareSegs = hostSegs.slice(1);
+  let port = v.port;
+  const hp = /^([^:[\]]+):(\d{1,5})$/.exec(host);
+  if (hp && Number(hp[2]) > 0 && Number(hp[2]) <= 65535) {
+    host = hp[1];
+    port = Number(hp[2]);
+  }
+  const share = shareSegs[0] ?? "";
+  const inner = shareSegs.slice(1);
+  const startPath = inner.length ? `/${[...inner, ...pathSegs(v.startPath)].join("/")}` : v.startPath;
+  if (host === v.host && share === v.share && startPath === v.startPath && port === v.port) return v;
+  // Nothing recognisable typed yet: leave the fields as they are.
+  if (!host) return v;
+  return { ...v, host, share, startPath, port };
+}
+
 /** The form as the engine takes it. An empty secret on an edit keeps the saved one. */
-export function toRequest(v: FormValue): { connection: ConnectionInput; secret: SecretInput } {
+export function toRequest(form: FormValue): { connection: ConnectionInput; secret: SecretInput } {
+  const v = tidySmbAddress(form);
   const connection: ConnectionInput = {
     name: v.name.trim(),
     protocol: v.protocol,
@@ -125,7 +165,17 @@ export function ConnectionFormView(p: ConnectionFormProps) {
       : isWebdav(v.protocol)
         ? tr("conn_no_signin", undefined, "No sign-in (public share)")
         : tr("conn_anonymous", undefined, "Anonymous (no user or password)");
-  const canTest = !!v.name.trim() && !!v.host.trim() && (v.protocol !== "smb" || !!v.share.trim());
+  const tidy = tidySmbAddress(v);
+  const canTest = !!v.name.trim() && !!tidy.host.trim() && (v.protocol !== "smb" || !!tidy.share.trim());
+  // Tidied when the field is left, so the user sees where each part went.
+  const tidyOnBlur = () => {
+    if (tidy !== v) p.onChange(tidy);
+  };
+  // The server has no share by that name: said in the user's language, naming the share tried.
+  const noShare =
+    failed && v.protocol === "smb" && /bad_network_name|no share named/i.test(failed.error)
+      ? (/No share named '([^']*)'/.exec(failed.error)?.[1] ?? tidy.share) || "?"
+      : null;
   return (
     <div className="space-y-4">
       <SegmentedControl
@@ -183,6 +233,7 @@ export function ConnectionFormView(p: ConnectionFormProps) {
             value={v.host}
             placeholder="192.168.1.20"
             onChange={(e) => set({ host: e.target.value })}
+            onBlur={tidyOnBlur}
           />
           <Input
             label={tr("conn_port", undefined, "Port")}
@@ -202,6 +253,7 @@ export function ConnectionFormView(p: ConnectionFormProps) {
               list="conn-shares"
               placeholder={tr("conn_share_placeholder", undefined, "games")}
               onChange={(e) => set({ share: e.target.value })}
+              onBlur={tidyOnBlur}
               rightSlot={
                 <button
                   type="button"
@@ -340,9 +392,15 @@ export function ConnectionFormView(p: ConnectionFormProps) {
         <div className="space-y-1 text-sm">
           <p className="flex items-start gap-2 text-[var(--color-bad)]">
             <XCircle size={16} className="mt-0.5 shrink-0" />
-            {failed.error}
+            {noShare
+              ? tr(
+                  "conn_smb_no_share",
+                  { share: noShare },
+                  `No share named '${noShare}' on this server. The share is the first folder name only (for example Media in \\\\nas\\Media\\Games); folders inside it go in Start folder. List shares shows the names this server offers.`,
+                )
+              : failed.error}
           </p>
-          {failed.hint && <p className="text-xs text-[var(--color-muted)]">{failed.hint}</p>}
+          {failed.hint && !noShare && <p className="text-xs text-[var(--color-muted)]">{failed.hint}</p>}
           {failed.host_key && (
             <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] p-2 text-xs">
               <AlertTriangle size={14} className="text-[var(--color-warn)]" />

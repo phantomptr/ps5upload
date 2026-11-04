@@ -38,6 +38,11 @@ export const DEFAULT_CONTROLS: GameControls = {
   macros: [],
 };
 
+/** The fastest turbo: the engine holds each press, and each release between two presses, for
+ *  50 ms so the console sees it (rp_stream/pad_pace.rs MIN_HOLD), so more presses a second
+ *  than this never reach the console (#655). */
+export const TURBO_MAX_HZ = 10;
+
 /** The buttons turbo and macros offer (sticks and the PS button are left out). */
 export const TURBO_BUTTONS: Array<{ bit: number; name: string }> = [
   { bit: PadButton.CROSS, name: "✕" },
@@ -132,7 +137,7 @@ export function applyControls(
 
   // Turbo: a held turbo button is let go every other half-period.
   if (c.turbo && c.turboHz > 0) {
-    const off = Math.floor((now / 1000) * c.turboHz * 2) % 2 === 1;
+    const off = Math.floor((now / 1000) * Math.min(c.turboHz, TURBO_MAX_HZ) * 2) % 2 === 1;
     if (off) {
       out.buttons &= ~(c.turbo & ~(L2_BIT | R2_BIT));
       if (c.turbo & L2_BIT) out.l2 = 0;
@@ -201,7 +206,7 @@ export function readControls(v: unknown): GameControls {
     : [];
   return {
     turbo: num(o.turbo, 0, 0, 0x7fffffff) | 0,
-    turboHz: num(o.turboHz, DEFAULT_CONTROLS.turboHz, 2, 30),
+    turboHz: num(o.turboHz, DEFAULT_CONTROLS.turboHz, 2, TURBO_MAX_HZ),
     mouse: o.mouse === true,
     mouseSens: num(o.mouseSens, 1, 0.1, 5),
     mouseInvertY: o.mouseInvertY === true,

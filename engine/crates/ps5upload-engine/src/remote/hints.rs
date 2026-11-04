@@ -6,7 +6,7 @@ pub fn hint_for(error: &str) -> Option<&'static str> {
     if has(&["0xc0000072", "account_disabled", "account disabled"]) {
         Some("The share's Guest account is disabled. Enable it on the server, or sign in with a user and password.")
     } else if has(&["0xc00000cc", "bad_network_name", "bad network name"]) {
-        Some("The server has no share by that name. Put only the share's own name in Share (for example Media); folders inside it go in Start folder.")
+        Some("The share is the first folder name only, for example Media in \\\\nas\\Media\\Games; folders inside it go in Start folder. List shares shows the names this server offers.")
     } else if has(&["0xc000015b", "logon_type_not_granted", "logon type"]) {
         Some("The server does not allow this account to sign in over the network. Check its network logon policy.")
     } else if has(&[
@@ -59,7 +59,7 @@ mod tests {
             .contains("permissions"));
         assert!(hint_for("STATUS_BAD_NETWORK_NAME during tree connect")
             .unwrap()
-            .contains("share's own name"));
+            .contains("first folder name only"));
         assert!(hint_for("the server requires signing")
             .unwrap()
             .contains("signing"));

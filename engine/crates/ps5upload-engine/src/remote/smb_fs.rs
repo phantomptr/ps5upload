@@ -111,6 +111,19 @@ fn map_err(host: &str, e: smb2::Error) -> RemoteError {
     }
 }
 
+/// A tree connect that failed: no share by that name says so in words (the server's own
+/// "STATUS_BAD_NETWORK_NAME during TreeConnect" means nothing to most people).
+fn share_err(host: &str, share: &str, e: smb2::Error) -> RemoteError {
+    if e.status() == Some(smb2::types::status::NtStatus::BAD_NETWORK_NAME) {
+        return RemoteError::NotFound(no_share_message(share));
+    }
+    map_err(host, e)
+}
+
+fn no_share_message(share: &str) -> String {
+    format!("No share named '{share}' on this server (STATUS_BAD_NETWORK_NAME).")
+}
+
 /// The share-relative form the crate takes: "/games/x" → "games/x", "/" → "".
 fn share_path(p: &str) -> String {
     p.trim_matches('/').to_string()
@@ -155,10 +168,11 @@ pub async fn list_shares(conn: &Connection, secret: &Secret) -> Result<Vec<Share
 impl SmbFs {
     pub async fn connect(conn: &Connection, secret: &Secret) -> Result<Self, RemoteError> {
         let (mut client, addr) = sign_in(conn, secret).await?;
+        let share = conn.share.trim_matches(['/', '\\']);
         let tree = client
-            .connect_share(conn.share.trim_matches(['/', '\\']))
+            .connect_share(share)
             .await
-            .map_err(|e| map_err(&addr, e))?;
+            .map_err(|e| share_err(&addr, share, e))?;
         crate::log_info!("remote smb: signed in to {addr}");
         Ok(Self {
             session: Mutex::new((client, tree)),
@@ -485,6 +499,30 @@ mod tests {
         let mapped = map_err("nas", error);
         assert!(!matches!(mapped, RemoteError::Auth(_)));
         assert!(mapped.to_string().contains("permission"));
+    }
+
+    #[test]
+    fn a_missing_share_is_named_in_words() {
+        let error = smb2::Error::Protocol {
+            status: smb2::types::status::NtStatus::BAD_NETWORK_NAME,
+            command: smb2::types::Command::TreeConnect,
+        };
+        let msg = share_err("nas:445", "XXX", error).to_string();
+        assert!(
+            msg.starts_with("No share named 'XXX' on this server"),
+            "{msg}"
+        );
+        // The hint still finds it, and explains where the folders go.
+        assert!(crate::remote::hints::hint_for(&msg)
+            .unwrap()
+            .contains("first folder name only"));
+        let other = smb2::Error::Protocol {
+            status: smb2::types::status::NtStatus::ACCESS_DENIED,
+            command: smb2::types::Command::TreeConnect,
+        };
+        assert!(share_err("nas:445", "XXX", other)
+            .to_string()
+            .contains("permission"));
     }
 
     #[test]

@@ -102,5 +102,18 @@ describe("materializeRemote", () => {
     await releaseCopy(local);
     expect(cleanup).toHaveBeenCalledWith("/tmp/z/a.zip");
   });
-});
 
+  it("gives the copy a Cancel in Activity, and ends the task cancelled when the engine stops it", async () => {
+    fetchJob.mockResolvedValue({ job_id: "j5" });
+    let seen: unknown;
+    jobStatus
+      .mockImplementationOnce(async () => {
+        seen = useTaskStore.getState().tasks[0]?.control;
+        return { status: "running", bytes_sent: 1, total_bytes: 10 };
+      })
+      .mockResolvedValueOnce({ status: "failed", error: "cancelled" });
+    await expect(materializeRemote("remote://nas-1/big.iso", { pollMs: 1 })).rejects.toThrow("cancelled");
+    expect(seen).toEqual({ owner: "remote-fetch", jobId: "j5" });
+    expect(useTaskStore.getState().tasks[0]).toMatchObject({ status: "cancelled", engineJobId: "j5" });
+  });
+});

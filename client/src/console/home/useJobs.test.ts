@@ -6,7 +6,17 @@ vi.mock("../api", async (importOriginal) => {
 });
 
 import { ApiError, call } from "../api";
-import { cancelJob, createJobsPoller, JOBS_FAST_MS, JOBS_SLOW_MS, nextJobsDelay, type Job } from "./useJobs";
+import {
+  cancelJob,
+  createJobsPoller,
+  fetchJobsAll,
+  JOBS_FAST_MS,
+  JOBS_SLOW_MS,
+  nextJobsDelay,
+  SMB_DONE_KEEP_S,
+  smbJobToJob,
+  type Job,
+} from "./useJobs";
 
 const mockCall = vi.mocked(call);
 
@@ -151,5 +161,69 @@ describe("useJobs poller", () => {
     mockCall.mockResolvedValue({});
     await cancelJob("abc");
     expect(mockCall).toHaveBeenCalledWith("/api/jobs/cancel", { job: "abc" });
+  });
+});
+
+describe("network-share jobs in Tasks (#658)", () => {
+  beforeEach(() => {
+    mockCall.mockReset();
+  });
+  const smb = (over: Record<string, unknown> = {}) => ({
+    job: "7",
+    kind: "download",
+    state: "running",
+    bytes_done: 50,
+    bytes_total: 200,
+    files_done: 0,
+    files_total: 1,
+    started: 1000,
+    src: "Games/PPSA01234",
+    dest: "/data/homebrew/PPSA01234",
+    ...over,
+  });
+
+  it("lists a NAS copy as this console's copy, named after what it copies", () => {
+    expect(smbJobToJob(smb(), 1010)).toEqual({
+      job: "smb:7",
+      kind: "copy",
+      state: "running",
+      bytes_done: 50,
+      bytes_total: 200,
+      files_done: 0,
+      files_total: 1,
+      mine: true,
+      name: "PPSA01234",
+    });
+    expect(smbJobToJob(smb({ kind: "upload", src: "/data/saves/a.zip", dest: "backup/a.zip" }), 1010)?.name).toBe("a.zip");
+    expect(smbJobToJob(smb({ kind: "remove", src: "old" }), 1010)?.kind).toBe("op");
+    expect(smbJobToJob(smb({ state: "cancelled" }), 1010)?.state).toBe("failed");
+  });
+
+  it("leaves out library scans, junk and long-finished jobs", () => {
+    expect(smbJobToJob(smb({ kind: "scan" }), 1010)).toBeNull();
+    expect(smbJobToJob({ kind: "download" }, 1010)).toBeNull();
+    expect(smbJobToJob(smb({ state: "done" }), 1000 + SMB_DONE_KEEP_S + 1)).toBeNull();
+    expect(smbJobToJob(smb({ state: "done" }), 1000 + 60)?.state).toBe("done");
+    // A running one stays however long it takes.
+    expect(smbJobToJob(smb(), 1000 + SMB_DONE_KEEP_S * 10)?.state).toBe("running");
+  });
+
+  it("merges them after the helper's jobs, and a dead daemon costs nothing", async () => {
+    mockCall.mockImplementation(async (route: string) =>
+      route === "/api/jobs" ? { jobs: [job("running")], uploading: [] } : { jobs: [smb({ started: Date.now() / 1000 })] },
+    );
+    const { jobs } = await fetchJobsAll();
+    expect(jobs.map((j) => j.job)).toEqual(["0123456789abcdef0123456789abcdef", "smb:7"]);
+    mockCall.mockImplementation(async (route: string) => {
+      if (route === "/api/jobs") return { jobs: [job("running")] };
+      throw new ApiError(502, "smb_daemon_gone");
+    });
+    expect((await fetchJobsAll()).jobs).toHaveLength(1);
+  });
+
+  it("cancels a network-share job through the share daemon", async () => {
+    mockCall.mockResolvedValue({ ok: true });
+    await cancelJob("smb:7");
+    expect(mockCall).toHaveBeenCalledWith("/api/smb/cancel", { job: "7" });
   });
 });
