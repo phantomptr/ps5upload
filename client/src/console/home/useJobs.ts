@@ -40,6 +40,7 @@ interface SmbDaemonJob {
   files_done?: unknown;
   files_total?: unknown;
   started?: unknown;
+  ended?: unknown;
   src?: unknown;
   dest?: unknown;
 }
@@ -59,7 +60,9 @@ export function smbJobToJob(s: SmbDaemonJob, nowS: number): Job | null {
   const kind = s.kind === "download" || s.kind === "upload" ? "copy" : s.kind === "remove" ? "op" : null;
   if (!kind) return null;
   const state = s.state === "running" ? "running" : s.state === "done" ? "done" : "failed";
-  if (state !== "running" && num(s.started) > 0 && nowS - num(s.started) > SMB_DONE_KEEP_S) return null;
+  // From when it ended (a daemon before "ended": when it started, which hid a long copy as it finished).
+  const endedS = num(s.ended) || num(s.started);
+  if (state !== "running" && endedS > 0 && nowS - endedS > SMB_DONE_KEEP_S) return null;
   const name = lastName(s.kind === "download" ? s.dest : s.src);
   return {
     job: SMB_JOB_PREFIX + s.job,

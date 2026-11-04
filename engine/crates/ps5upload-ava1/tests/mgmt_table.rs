@@ -97,6 +97,8 @@ fn the_ids_the_gate_and_the_converters_key_on_are_the_schema_numbers() {
     assert_eq!(m::CLEANUP_APPLY.id, gen::METHOD_CLEANUP_APPLY);
     assert_eq!(m::CLEANUP_APPLY_STATUS.id, gen::METHOD_CLEANUP_APPLY_STATUS);
     assert_eq!(m::CLEANUP_CANCEL.id, gen::METHOD_CLEANUP_CANCEL);
+    assert_eq!(m::CONSOLE_TASKS.id, gen::METHOD_CONSOLE_TASKS);
+    assert_eq!(m::CONSOLE_TASK_CANCEL.id, gen::METHOD_CONSOLE_TASK_CANCEL);
     assert_eq!(m::SMB_SHARES_LIST.id, gen::METHOD_SMB_SHARES_LIST);
     assert_eq!(m::SMB_SHARES_SAVE.id, gen::METHOD_SMB_SHARES_SAVE);
     assert_eq!(m::SMB_SHARES_REMOVE.id, gen::METHOD_SMB_SHARES_REMOVE);

@@ -670,6 +670,46 @@ void webui_smb_jobs(const char *b, size_t n, uint8_t *out, int fd) {
     free(r);
 }
 
+/* A listing for a poll: a daemon that is slow to answer costs one empty list, not a worker's seconds. */
+#define SMB_PC_JOBS_MS 1500
+
+char *webui_smb_pc_jobs(void) {
+    char *r = NULL, err[48];
+    if (smbc_request("\"op\":\"jobs\"", 11, SMB_PC_JOBS_MS, 0, &r, err, sizeof err) != 0) return NULL;
+    return r;
+}
+
+int webui_smb_pc_cancel(const char *id, char *err, size_t err_cap) {
+    sj_buf_t req;
+    char *r = NULL, tok[32], daemon_err[48];
+    int rc, i;
+    if (strlen(id) != 32) {
+        snprintf(err, err_cap, "bad_job");
+        return -1;
+    }
+    for (i = 0; i < 32; i++)
+        if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) {
+            snprintf(err, err_cap, "bad_job");
+            return -1;
+        }
+    sj_init(&req, 0);
+    sj_raw(&req, "\"op\":\"cancel\"");
+    sj_kv_str(&req, 1, "job", id);
+    rc = smbc_request(req.buf ? req.buf : "", req.len, SMB_QUICK_MS, 0, &r, daemon_err, sizeof daemon_err);
+    sj_free(&req);
+    if (rc != 0) {
+        snprintf(err, err_cap, "%s", !strcmp(daemon_err, "smb_daemon_not_running") ? "unknown_job" : daemon_err);
+        return -1;
+    }
+    rc = 0;
+    if (sj_str(r, strlen(r), "error", tok, sizeof tok) == 1 && strcmp(tok, "cancelled") != 0) {
+        snprintf(err, err_cap, "%s", !strcmp(tok, "not_found") ? "unknown_job" : tok);
+        rc = -1;
+    }
+    free(r);
+    return rc;
+}
+
 /* ---- the game library (#498) ---- */
 
 void webui_library_scan(const char *b, size_t n, uint8_t *out, int fd) {
