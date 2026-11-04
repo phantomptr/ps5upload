@@ -600,9 +600,8 @@ mod tests {
     fn a_stalled_job_still_renews_the_service_once_a_minute() {
         let mut st = State::default();
         let stuck = || snap(1, vec![job("a", "upload", "Game", 10, 100)], vec![]);
-        step(&mut st, &stuck(), false, 0);
-        // First active poll starts the service.
-        let start = step(&mut st, &stuck(), false, 1_000);
+        // The first active poll starts the service.
+        let start = step(&mut st, &stuck(), false, 0);
         assert!(matches!(start.first(), Some(Action::StartFg(_))));
         // A rate settling may change the text once; after that nothing changes.
         step(&mut st, &stuck(), false, 2_000);

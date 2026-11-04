@@ -13,7 +13,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Same cap as the desktop's engine.log (engine.rs).
 const MAX_BYTES: u64 = 1024 * 1024;
@@ -86,6 +86,7 @@ pub use on_phone::start;
 mod on_phone {
     use super::*;
     use std::os::fd::{FromRawFd, RawFd};
+    use std::path::Path;
     use std::sync::OnceLock;
     use tauri::{AppHandle, Manager};
 
