@@ -4,6 +4,7 @@ import { askToSignIn } from "../lib/signInNeeded";
 import { getEngineUrl } from "./engine";
 import {
   DEFAULT_KEYMAP,
+  FIT_ORDER,
   IDLE_PAD,
   PadButton,
   RemotePlayStream,
@@ -162,8 +163,16 @@ export function loadRpPrefs(): RpPrefs {
     const touchMode = p.touchMode === "touchpad" ? "touchpad" : "controller";
     const touchpadSpeed = Number.isFinite(p.touchpadSpeed) ? Math.min(4, Math.max(0.5, p.touchpadSpeed)) : 1.5;
     const bitrateKbps = RP_BITRATES.includes(p.bitrateKbps) ? p.bitrateKbps : 0;
+    // A value this version has no use for (hand-edited, a restored backup) falls back: `res` is
+    // split into numbers for the session, so a bad one would fail every stream.
+    const one = <T,>(v: T, allowed: readonly T[], fallback: T): T => (allowed.includes(v) ? v : fallback);
     return {
       ...p,
+      res: one(p.res, ["1920x1080", "1280x720"], DEFAULT_RP_PREFS.res),
+      fps: one(p.fps, [60, 30], DEFAULT_RP_PREFS.fps),
+      fit: one(p.fit, FIT_ORDER, DEFAULT_RP_PREFS.fit),
+      touchSize: one(p.touchSize, ["s", "m", "l"], DEFAULT_RP_PREFS.touchSize),
+      decoding: one(p.decoding, ["auto", "software"], DEFAULT_RP_PREFS.decoding),
       codec,
       bitrateKbps,
       touchMode,

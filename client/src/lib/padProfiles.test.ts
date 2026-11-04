@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { padFromGamepads, PadButton, STANDARD_PROFILE } from "./remotePlayStream";
-import { addExtra, applyStep, blankProfile, detectAxis, detectPress, MAP_STEPS, withStandardGaps } from "./padProfiles";
+import { addExtra, applyStep, blankProfile, detectAxis, detectPress, loadProfiles, MAP_STEPS, withStandardGaps } from "./padProfiles";
+import * as storage from "./safeStorage";
 
 /** A controller as the Gamepad API gives it. */
 function pad(over: { buttons?: number[]; axes?: number[]; mapping?: string; id?: string } = {}): Gamepad {
@@ -129,5 +130,18 @@ describe("a controller forwarded by the Android app", () => {
     expect(fired.filter((t) => t === "gamepaddisconnected")).toHaveLength(2);
     resetNativePad();
     vi.unstubAllGlobals();
+  });
+});
+
+describe("loadProfiles", () => {
+  it("keeps good profiles and drops damaged ones", () => {
+    const good = { buttons: [[1, { b: 0 }]], l2: null, r2: { b: 7 }, lx: null, ly: null, rx: null, ry: null };
+    const get = vi.spyOn(storage, "safeGetItem").mockReturnValue(
+      JSON.stringify({ a: good, b: { buttons: "x" }, c: 7, d: { ...good, buttons: [[1]] } }),
+    );
+    expect(Object.keys(loadProfiles())).toEqual(["a"]);
+    get.mockReturnValue("[]");
+    expect(loadProfiles()).toEqual({});
+    get.mockRestore();
   });
 });

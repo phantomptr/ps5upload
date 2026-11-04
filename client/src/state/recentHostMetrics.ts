@@ -51,8 +51,7 @@ interface RecentHostMetricsState {
   entries: Record<string, HostMetrics>;
   /** Look up metrics for a given addr (host:port). Returns undefined
    *  if no measurement exists. The caller decides whether the record
-   *  is too old to trust — see `MAX_AGE_MS` below for the recommended
-   *  cap, but the policy lives at the call site. */
+   *  is too old to trust. */
   lookup: (addr: string) => HostMetrics | undefined;
   /** Persist the measurements from a just-finished upload. Idempotent
    *  per (host, measuredAtMs) — calling twice in a row with the same
@@ -62,25 +61,6 @@ interface RecentHostMetricsState {
    *  "reset upload history" affordance, and used by the tests. */
   clear: () => void;
 }
-
-/** Recommended max age for a stored measurement (7 days). Older
- *  records are still loaded — the store doesn't prune on read — but
- *  consumers like the ETA banner should treat them as "no measurement"
- *  for the purpose of choosing between measured and default values.
- *  The 7-day window catches the common case where a PS5's storage
- *  hasn't changed; longer than that and a USB-swap or firmware update
- *  could have moved the per-file commit ms band entirely.
- *
- *  CURRENTLY UNUSED. The 2.17.6 banner shipped without staleness
- *  gating because Date.now() in render trips eslint
- *  react-hooks/purity, and the practical impact at session scale
- *  (minutes) is nil. Re-introduce via a useEffect-driven `isStale`
- *  flag when P3 lands — at that point commitMsPerFile becomes a
- *  measurement we actively want to refresh on a 7-day cadence
- *  (slow USB drive swap shouldn't anchor the estimate forever).
- *  Kept exported so the consumer code added in P3 can read it
- *  directly. */
-export const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function loadInitial(): Record<string, HostMetrics> {
   if (typeof window === "undefined") return {};

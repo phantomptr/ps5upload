@@ -34,4 +34,12 @@ describe("compareVersions", () => {
     expect(compareVersions("2.2", "2.2.3")).toBeNull();
     expect(compareVersions("", "2.2.3")).toBeNull();
   });
+
+  it("orders pre-release tags by SemVer's rule, not as text", () => {
+    expect(compareVersions("1.0.0-rc.9", "1.0.0-rc.10")).toBe(-1);
+    expect(compareVersions("1.0.0-rc.10", "1.0.0-rc.9")).toBe(1);
+    expect(compareVersions("1.0.0-1", "1.0.0-alpha")).toBe(-1);
+    expect(compareVersions("1.0.0-rc", "1.0.0-rc.1")).toBe(-1);
+    expect(compareVersions("1.0.0-beta", "1.0.0-rc")).toBe(-1);
+  });
 });

@@ -12,11 +12,11 @@ import {
   type HelperSendResult,
 } from "./helperSend";
 import type { Translator } from "./lang";
-import { invoke } from "../lib/invokeLogged";
 import { sendHelperOnce, sendInFlight, sentAgoMs } from "../lib/helperSendGate";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { trStatic } from "../lib/trStatic";
 import { getAppVersion } from "../lib/appVersion";
+import { engineSendsHelper } from "../lib/restoreMainPayload";
 
 /** The web UI has no helper file to send and no socket to the console: the engine sends its
  *  own bundled helper, stamped with its key, so it is paired by the send (#415). */
@@ -30,9 +30,8 @@ export function loaderHint(error: string): string {
     : error;
 }
 
-async function engineSendsHelper(ip: string): Promise<void> {
-  const r = (await invoke("payload_restore", { ip })) as { ok?: boolean; error?: string };
-  if (!r?.ok) throw new Error(loaderHint(r?.error ?? "the engine has no helper to send"));
+function withLoaderHint(e: unknown): never {
+  throw new Error(loaderHint(e instanceof Error ? e.message : String(e)));
 }
 
 /** A helper sent to this console moments ago is still starting: a button press in this window
@@ -85,7 +84,7 @@ export async function sendHelperTo(
           return;
         }
         await sendHelperOnce(ip, () =>
-          isTauriEnv() ? sendPayload(ip, elf) : engineSendsHelper(ip),
+          isTauriEnv() ? sendPayload(ip, elf) : engineSendsHelper(ip).catch(withLoaderHint),
         );
       },
       check: payloadCheck,

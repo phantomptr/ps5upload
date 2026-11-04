@@ -31,6 +31,19 @@ describe("loadRpPrefs", () => {
     vi.restoreAllMocks();
   });
 
+  it("falls back from values this version has no use for", () => {
+    stored({ res: "4k", fps: 144, fit: "zoom", touchSize: "xl", decoding: "gpu" });
+    const p = loadRpPrefs();
+    expect(p).toMatchObject({
+      res: DEFAULT_RP_PREFS.res,
+      fps: DEFAULT_RP_PREFS.fps,
+      fit: DEFAULT_RP_PREFS.fit,
+      touchSize: DEFAULT_RP_PREFS.touchSize,
+      decoding: DEFAULT_RP_PREFS.decoding,
+    });
+    vi.restoreAllMocks();
+  });
+
   it("keeps a button map and HDR, and drops what it does not know", () => {
     stored({ codec: "hdr", buttonMap: { cross: "circle", nope: "cross" } });
     expect(loadRpPrefs()).toMatchObject({ codec: "hdr", buttonMap: { cross: "circle" } });

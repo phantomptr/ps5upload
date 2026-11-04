@@ -337,11 +337,6 @@ function TaskRow({ task }: { task: Task }) {
         <span className="font-medium">
           {statusLabel(task.status, tr)}
         </span>
-        {task.attempts > 1 && (
-          <Badge tone="neutral" variant="soft">
-            {tr("task_attempts", { n: task.attempts }, `×${task.attempts}`)}
-          </Badge>
-        )}
       </div>
 
       {/* Error message */}

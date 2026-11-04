@@ -157,8 +157,6 @@ export interface Task {
   rate?: TaskRate;
   eta?: number;
   lastError?: TaskError;
-  attempts: number;
-  maxAttempts: number;
   /** Bare host (port-stripped) of the PS5 this task runs against. */
   consoleId: string;
   /** Stable identity of that console: the roster profile id, resolved when the task was
@@ -404,7 +402,6 @@ interface TaskState {
     control?: TaskControlRef;
     status?: TaskStatus;
     progress?: TaskProgress;
-    maxAttempts?: number;
   }) => string;
 
   /** Patch a task — typically progress/rate/eta as the engine reports.
@@ -461,8 +458,6 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       progress: init.progress,
       createdAt: new Date(now).toISOString(),
       updatedAtMs: now,
-      attempts: 1,
-      maxAttempts: init.maxAttempts ?? 3,
     };
     set((s) => {
       // New tasks go to the front so the Tasks tab shows newest first.

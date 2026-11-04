@@ -129,8 +129,6 @@ describe("presenceItems", () => {
         origin: "x",
         createdAt: "",
         status: "running",
-        attempts: 0,
-        maxAttempts: 1,
         consoleId: "192.168.86.99",
         payload: {},
         label: "Astro Bot",

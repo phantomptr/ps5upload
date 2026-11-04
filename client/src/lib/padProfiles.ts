@@ -18,12 +18,30 @@ import {
 
 const KEY = "ps5upload.rp_pad_profiles.v1";
 
+function isPadSource(v: unknown): boolean {
+  return v === null || (typeof v === "object" && !Array.isArray(v));
+}
+
+function isPadProfile(v: unknown): v is PadProfile {
+  if (!v || typeof v !== "object") return false;
+  const p = v as Partial<Record<keyof PadProfile, unknown>>;
+  return (
+    Array.isArray(p.buttons) &&
+    p.buttons.every((b) => Array.isArray(b) && b.length === 2 && typeof b[0] === "number" && isPadSource(b[1])) &&
+    [p.l2, p.r2, p.lx, p.ly, p.rx, p.ry].every(isPadSource)
+  );
+}
+
 /** Saved profiles by the controller's id (what the browser calls it). */
 export function loadProfiles(): Record<string, PadProfile> {
   try {
     const raw = safeGetItem(KEY);
     const v = raw ? (JSON.parse(raw) as unknown) : null;
-    return v && typeof v === "object" ? (v as Record<string, PadProfile>) : {};
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    // A damaged entry is dropped: its controller plays with the default until mapped again.
+    return Object.fromEntries(
+      Object.entries(v).filter((entry): entry is [string, PadProfile] => isPadProfile(entry[1])),
+    );
   } catch {
     return {};
   }
@@ -44,11 +62,6 @@ let cache: Record<string, PadProfile> | null = null;
 export function profileFor(g: Gamepad): PadProfile {
   cache ??= loadProfiles();
   return cache[g.id] ?? guessProfile(g);
-}
-
-/** Forget the cached profiles (another window saved one). */
-export function reloadProfiles(): void {
-  cache = null;
 }
 
 /** A controller as one moment of its buttons and axes. */
