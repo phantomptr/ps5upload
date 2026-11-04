@@ -611,13 +611,13 @@ mod tests {
         assert!(pre.prerelease);
     }
 
-    const LIST: &str = r#"[{"tag_name":"v2","assets":[{"name":"k.elf","browser_download_url":"https://github.com/EchoStretch/kstuff/releases/download/v2/k.elf","size":4}]},
+    const LIST: &str = r#"[{"tag_name":"v2","assets":[{"name":"k.elf","browser_download_url":"https://github.com/EchoStretch/kstuff-lite/releases/download/v2/k.elf","size":4}]},
         {"tag_name":"v1","assets":[]}]"#;
 
     #[test]
     fn a_list_is_fetched_cached_and_served_fresh() {
         let (_d, http, lib) = library("list-fresh");
-        let url = "https://api.github.com/repos/EchoStretch/kstuff/releases?per_page=30";
+        let url = "https://api.github.com/repos/EchoStretch/kstuff-lite/releases?per_page=30";
         http.ok(url, LIST.as_bytes());
         let list = lib.releases("kstuff-echostretch", false).unwrap();
         assert_eq!(list.len(), 2);
@@ -632,7 +632,7 @@ mod tests {
     #[test]
     fn a_failed_refresh_serves_the_cache_and_says_why() {
         let (_d, http, lib) = library("list-stale");
-        let url = "https://api.github.com/repos/EchoStretch/kstuff/releases?per_page=30";
+        let url = "https://api.github.com/repos/EchoStretch/kstuff-lite/releases?per_page=30";
         http.ok(url, LIST.as_bytes());
         lib.releases("kstuff-echostretch", false).unwrap();
         http.status(url, 403);
@@ -653,7 +653,7 @@ mod tests {
     #[test]
     fn a_prerelease_only_repo_falls_back_to_the_list() {
         let (_d, http, lib) = library("latest-404");
-        let base = "https://api.github.com/repos/EchoStretch/kstuff";
+        let base = "https://api.github.com/repos/EchoStretch/kstuff-lite";
         http.status(&format!("{base}/releases/latest"), 404);
         http.ok(&format!("{base}/releases?per_page=1"), LIST.as_bytes());
         let r = lib.release("kstuff-echostretch", false).unwrap();

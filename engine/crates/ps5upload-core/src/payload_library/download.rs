@@ -588,7 +588,7 @@ mod tests {
     use std::sync::Barrier;
 
     const KSTUFF_ASSET: &str =
-        "https://github.com/EchoStretch/kstuff/releases/download/v1/kstuff.elf";
+        "https://github.com/EchoStretch/kstuff-lite/releases/download/v1/kstuff.elf";
     const KSTUFF_ID: &str = "kstuff-echostretch";
 
     fn elf(fill: u8, len: usize) -> Vec<u8> {
@@ -1047,16 +1047,16 @@ mod tests {
     fn a_release_is_found_by_tag_and_ensure_cached_keeps_the_right_version() {
         let (_d, http, lib) = library("ensure");
         let list = format!(
-            r#"[{{"tag_name":"v2","assets":[{{"name":"kstuff.elf","browser_download_url":"https://github.com/EchoStretch/kstuff/releases/download/v2/kstuff.elf","size":4}}]}},
+            r#"[{{"tag_name":"v2","assets":[{{"name":"kstuff.elf","browser_download_url":"https://github.com/EchoStretch/kstuff-lite/releases/download/v2/kstuff.elf","size":4}}]}},
                 {{"tag_name":"v1","assets":[{{"name":"kstuff.elf","browser_download_url":"{KSTUFF_ASSET}","size":4}}]}}]"#
         );
         http.ok(
-            "https://api.github.com/repos/EchoStretch/kstuff/releases?per_page=30",
+            "https://api.github.com/repos/EchoStretch/kstuff-lite/releases?per_page=30",
             list.as_bytes(),
         );
         http.ok(KSTUFF_ASSET, &elf(1, 100));
         http.ok(
-            "https://github.com/EchoStretch/kstuff/releases/download/v2/kstuff.elf",
+            "https://github.com/EchoStretch/kstuff-lite/releases/download/v2/kstuff.elf",
             &elf(2, 200),
         );
         let p = lib.ensure_cached(KSTUFF_ID, Some("v1")).unwrap();
