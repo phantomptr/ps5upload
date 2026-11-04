@@ -4,7 +4,9 @@
 //! document) when another browser saved in between, so the browser merges and tries again instead
 //! of overwriting. Kept in `state/web-shared.json` under the data folder (the Docker volume).
 //!
-//! The desktop and mobile apps keep these settings themselves; their engine is theirs alone.
+//! The desktop and mobile apps keep their own copies and mirror them here, so `/api/consoles` and
+//! `/api/settings` (consoles_api.rs, settings_api.rs: the typed views over these documents) answer
+//! the same way on every platform.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -90,6 +92,52 @@ fn with<R>(f: impl FnOnce(&mut Docs) -> R) -> (R, std::io::Result<()>) {
     (out, saved)
 }
 
+/// The folder the documents are kept in; None when they are kept in memory only.
+pub(crate) fn state_dir() -> Option<PathBuf> {
+    path().and_then(|p| p.parent().map(Path::to_path_buf))
+}
+
+/// A document as it is now.
+pub(crate) fn read(name: &str) -> Doc {
+    let mut guard = store().lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .get_or_insert_with(|| path().as_deref().map(load_from).unwrap_or_default())
+        .get(name)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Saves `value` over the revision `base_rev`: the new revision, or what went wrong.
+pub(crate) fn write(name: &str, base_rev: u64, value: Value) -> Result<u64, String> {
+    match with(|docs| put(docs, name, base_rev, value)) {
+        (Ok(rev), Ok(())) => Ok(rev),
+        (Ok(_), Err(e)) => Err(e.to_string()),
+        (Err(cur), _) => Err(format!("{name} is at revision {}, not {base_rev}", cur.rev)),
+    }
+}
+
+/// Rewrites a document without a new revision (the same content, stored differently).
+pub(crate) fn set_quietly(name: &str, value: Value) -> std::io::Result<()> {
+    with(|docs| {
+        docs.entry(name.to_string()).or_default().value = Some(value);
+    })
+    .1
+}
+
+/// Changes a document in one step (a new revision): the document after it, or what went wrong.
+pub(crate) fn update(name: &str, change: impl FnOnce(&mut Value)) -> Result<Doc, String> {
+    let (doc, saved) = with(|docs| {
+        let doc = docs.entry(name.to_string()).or_default();
+        let mut value = doc.value.take().unwrap_or(Value::Null);
+        change(&mut value);
+        doc.value = Some(value);
+        doc.rev += 1;
+        doc.clone()
+    });
+    saved.map_err(|e| e.to_string())?;
+    Ok(doc)
+}
+
 fn json_error(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
 }
@@ -103,20 +151,48 @@ fn unknown(name: &str) -> Option<Response> {
     })
 }
 
-/// `GET /api/shared/{name}` — `{rev, value}`; `rev` 0 and `value` null when never saved.
+/// `GET /api/shared/{name}` — `{rev, value}`; `rev` 0 and `value` null when never saved. The console
+/// list comes without its keys here (`GET /api/consoles/document` has them, for the app).
 pub async fn get_doc(UrlPath(name): UrlPath<String>) -> Response {
     if let Some(r) = unknown(&name) {
         return r;
     }
-    let doc = {
-        let mut guard = store().lock().unwrap_or_else(|e| e.into_inner());
-        guard
-            .get_or_insert_with(|| path().as_deref().map(load_from).unwrap_or_default())
-            .get(&name)
-            .cloned()
-            .unwrap_or_default()
-    };
-    Json(doc).into_response()
+    if name == crate::consoles_api::DOC {
+        return Json(crate::consoles_api::shared_doc()).into_response();
+    }
+    Json(read(&name)).into_response()
+}
+
+/// `GET /api/shared/{name}/schema`: what the document holds, as JSON Schema.
+pub async fn schema(UrlPath(name): UrlPath<String>) -> Response {
+    if let Some(r) = unknown(&name) {
+        return r;
+    }
+    Json(if name == crate::consoles_api::DOC {
+        crate::consoles_api::document_schema()
+    } else {
+        crate::settings_api::document_schema()
+    })
+    .into_response()
+}
+
+/// Why a document's new value cannot be kept, as the answer to give.
+pub(crate) fn refuse_value(value: &Value) -> Option<Response> {
+    if !(value.is_object() || value.is_array()) {
+        return Some(json_error(
+            StatusCode::BAD_REQUEST,
+            "value must be a JSON object or array",
+        ));
+    }
+    let size = serde_json::to_vec(value)
+        .map(|v| v.len())
+        .unwrap_or(usize::MAX);
+    (size > MAX_BYTES).then(|| {
+        json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("{size} bytes is over {MAX_BYTES}"),
+        )
+    })
 }
 
 #[derive(Deserialize)]
@@ -131,20 +207,11 @@ pub async fn put_doc(UrlPath(name): UrlPath<String>, Json(body): Json<PutBody>) 
     if let Some(r) = unknown(&name) {
         return r;
     }
-    if !(body.value.is_object() || body.value.is_array()) {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            "value must be a JSON object or array",
-        );
+    if name == crate::consoles_api::DOC {
+        return crate::consoles_api::save_document(body, false).await;
     }
-    let size = serde_json::to_vec(&body.value)
-        .map(|v| v.len())
-        .unwrap_or(usize::MAX);
-    if size > MAX_BYTES {
-        return json_error(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            format!("{size} bytes is over {MAX_BYTES}"),
-        );
+    if let Some(r) = refuse_value(&body.value) {
+        return r;
     }
     let done = tokio::task::spawn_blocking(move || {
         with(|docs| put(docs, &name, body.base_rev, body.value))

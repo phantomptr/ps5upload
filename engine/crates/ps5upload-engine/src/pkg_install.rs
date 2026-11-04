@@ -1330,6 +1330,8 @@ fn remote_pkg_identity(addr: &str, path: &str) -> (u64, String) {
     (size, fingerprint)
 }
 
+/// `GET /api/pkg/installed?addr=&title_id=`: the package files one title has on the console now
+/// (`/api/ps5/apps/installed` lists the titles; `/api/games/installed` what saved consoles last had).
 async fn installed_pkg_inventory_handler(Query(q): Query<InstalledPkgQuery>) -> Response<Body> {
     if !valid_title_id(&q.title_id) {
         return json_err(StatusCode::BAD_REQUEST, "invalid title_id");

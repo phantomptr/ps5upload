@@ -53,6 +53,7 @@ mod console_payload;
 mod console_read;
 mod console_shares_api;
 mod console_snapshot;
+mod consoles_api;
 mod convert_source;
 mod diag_api;
 mod disk_usage;
@@ -68,6 +69,7 @@ mod ffmpeg_tool;
 mod folder_build;
 mod fpkg_api;
 mod fpkg_firmware;
+mod frame_decode;
 mod games_api;
 mod golive_dest;
 mod golive_ffmpeg;
@@ -109,6 +111,7 @@ mod rp_stream_api;
 mod save_backup;
 mod save_backup_server;
 mod save_copy;
+mod settings_api;
 mod settings_backup;
 mod shared_state;
 mod state_io;
@@ -578,7 +581,9 @@ pub(crate) fn console_addr(addr: &str) -> String {
 /// a console the user was not looking at. `None`: answer with [`missing_console_addr`].
 fn required_console_addr(addr: Option<String>) -> Option<String> {
     // Map first, then refuse an empty host: ":1234" names no console either.
-    addr.as_deref().map(console_addr).filter(|a| !a.is_empty())
+    addr.as_deref()
+        .map(|a| console_addr(&consoles_api::resolve(a)))
+        .filter(|a| !a.is_empty())
 }
 
 /// The 400 for a destructive request that names no console.
@@ -591,7 +596,9 @@ fn missing_console_addr() -> axum::response::Response {
 }
 
 fn console_addr_or_default(addr: Option<String>, default_addr: &str) -> String {
-    console_addr(addr.as_deref().unwrap_or(default_addr))
+    console_addr(&consoles_api::resolve(
+        addr.as_deref().unwrap_or(default_addr),
+    ))
 }
 
 /// The engine's one startup line about the transport.
@@ -3576,9 +3583,10 @@ async fn ps5_hw_drive_sensors(
     }
 }
 
-/// Snapshot of running PS5 processes. The payload walks `allproc` via
-/// kernel R/W and returns JSON directly; we pass it through largely
-/// untouched after a small reshape into the typed `ProcList` shape.
+/// GET /api/ps5/proc/list — a light snapshot of running PS5 processes. The payload walks `allproc`
+/// via kernel R/W and returns JSON directly; we pass it through largely untouched after a small
+/// reshape into the typed `ProcList` shape. `/api/ps5/process/list` is the detailed one (title ids,
+/// memory, kill support).
 async fn ps5_proc_list(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
@@ -4191,9 +4199,11 @@ struct PowerWakeLoginReq {
     host: String,
     #[serde(default)]
     credential: String,
-    /// Both hex, harvested from a pairing. Required — signing in needs the
-    /// full session keys, not just the wake credential.
+    /// Both hex, harvested from a pairing. Signing in needs the full session keys, not just the
+    /// wake credential; left out, the ones the engine keeps for this console are used.
+    #[serde(default)]
     regist_key: String,
+    #[serde(default)]
     rp_key: String,
     /// Someone is there to type the user's login passcode if the console asks: the sign-in is
     /// held and the passcode asked for (wake_login_api). Otherwise (an automatic wake) a
@@ -4208,7 +4218,14 @@ struct PowerWakeLoginReq {
 /// Play control session so the console comes up on the user's home screen,
 /// the way the official app does. Long-running: it waits for the console to
 /// boot before signing in.
-async fn ps5_power_wake_login(Json(req): Json<PowerWakeLoginReq>) -> impl IntoResponse {
+async fn ps5_power_wake_login(Json(mut req): Json<PowerWakeLoginReq>) -> impl IntoResponse {
+    req.host = consoles_api::resolve(&req.host);
+    if req.regist_key.trim().is_empty() && req.rp_key.trim().is_empty() {
+        if let Some((regist_key, rp_key)) = consoles_api::rp_keys(&req.host) {
+            req.regist_key = regist_key;
+            req.rp_key = rp_key;
+        }
+    }
     let host = req.host.clone();
     let cred = req.credential.clone();
     let creds =
@@ -4249,8 +4266,12 @@ async fn ps5_power_wake_login(Json(req): Json<PowerWakeLoginReq>) -> impl IntoRe
 }
 
 async fn ps5_power_wake(Json(req): Json<PowerWakeReq>) -> impl IntoResponse {
-    let host = req.host.clone();
-    let cred = req.credential.clone();
+    let host = consoles_api::resolve(&req.host);
+    let cred = if req.credential.trim().is_empty() {
+        consoles_api::wake_credential(&host).unwrap_or_default()
+    } else {
+        req.credential.clone()
+    };
     match tokio::task::spawn_blocking(move || ps5upload_core::ddp::wake(&host, &cred)).await {
         Ok(Ok(())) => (
             StatusCode::OK,
@@ -4296,7 +4317,7 @@ async fn ps5_power_pair(
     Json(req): Json<PowerPairReq>,
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
-    let host = req.host.clone();
+    let host = consoles_api::resolve(&req.host);
     let manual = req.pin.filter(|p| !p.trim().is_empty());
     crate::log_info!(
         "power_pair: addr={addr} host={host} with={}",
@@ -4307,9 +4328,14 @@ async fn ps5_power_pair(
         }
     );
     let account_id = req.account_id.unwrap_or_default();
-    let r = tokio::task::spawn_blocking(move || match manual {
-        Some(pin) => ps5upload_core::rp_regist::pair_with_pin(&host, &account_id, &pin),
-        None => ps5upload_core::rp_regist::pair_with_console(&addr, &host),
+    let r = tokio::task::spawn_blocking(move || {
+        let p = match manual {
+            Some(pin) => ps5upload_core::rp_regist::pair_with_pin(&host, &account_id, &pin),
+            None => ps5upload_core::rp_regist::pair_with_console(&addr, &host),
+        }?;
+        // The engine keeps the keys too, so a script can start a stream by address alone.
+        consoles_api::remember_pairing(&host, &p);
+        Ok::<_, anyhow::Error>(p)
     })
     .await
     .map_err(anyhow::Error::from)
@@ -5177,6 +5203,9 @@ struct InstalledApp {
 
 #[derive(Debug, serde::Serialize)]
 struct InstalledAppsResponse {
+    /// Where this list comes from: read from the console now (`/api/games/installed` is what
+    /// saved consoles had when last read; `/api/pkg/installed` is one title's package files).
+    source: &'static str,
     titles: Vec<InstalledApp>,
     /// True if app_list_registered() failed (e.g. older payload) — the
     /// UI then can't reliably tag the "registered" group, so it shows
@@ -5352,7 +5381,7 @@ fn app_folder_has_param(addr: &str, title_id: &str) -> bool {
         .any(|f| fs_read(addr, &format!("/user/app/{title_id}/sce_sys/{f}"), 0, 16).is_ok())
 }
 
-/// GET /api/ps5/apps/installed?addr=IP:MGMT_PORT
+/// GET /api/ps5/apps/installed?addr=IP:MGMT_PORT — what is on the console now, read from it.
 async fn ps5_apps_installed(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
@@ -5577,6 +5606,7 @@ async fn ps5_apps_installed(
                 })
             });
             Ok(InstalledAppsResponse {
+                source: "console",
                 titles,
                 registered_unavailable,
                 incomplete: !complete,
@@ -11225,6 +11255,20 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             "/api/shared/{name}",
             get(shared_state::get_doc).put(shared_state::put_doc),
         )
+        .route("/api/shared/{name}/schema", get(shared_state::schema))
+        // The console list and settings with names and types, every platform.
+        .route(
+            "/api/consoles",
+            get(consoles_api::list).put(consoles_api::put),
+        )
+        .route(
+            "/api/consoles/document",
+            get(consoles_api::get_document).put(consoles_api::put_document),
+        )
+        .route(
+            "/api/settings",
+            get(settings_api::get).patch(settings_api::patch),
+        )
         .route("/api/games/{id}", get(games_api::get_game))
         .route("/api/games/{id}/refresh", post(games_api::refresh))
         .route("/api/console-snapshots/keep", post(games_api::keep))
@@ -11432,6 +11476,22 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         // Remote Play stream spike (rp_stream_api).
         .route("/api/ps5/rp/ws", get(rp_stream_api::ws))
         .route("/api/ps5/rp/session", get(rp_stream_api::current))
+        // Remote Play with no app page (rp_control.rs), this computer only.
+        .route("/api/ps5/rp/start", post(rp_stream_api::control::start))
+        .route("/api/ps5/rp/stop", post(rp_stream_api::control::stop))
+        .route(
+            "/api/ps5/rp/settings",
+            post(rp_stream_api::control::settings),
+        )
+        .route(
+            "/api/ps5/rp/passcode",
+            post(rp_stream_api::control::passcode),
+        )
+        .route(
+            "/api/ps5/rp/keyboard",
+            post(rp_stream_api::control::keyboard),
+        )
+        .route("/api/ps5/rp/mic", post(rp_stream_api::control::mic))
         .route("/api/ps5/rp/replay", get(rp_stream_api::replay))
         // Remote Play for a local script or agent (#615), this computer only.
         .route("/api/ps5/rp/frame", get(rp_stream_api::automation::frame))
@@ -11464,6 +11524,11 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         )
         .route("/api/ps5/vinput/caps", get(vinput_api::caps))
         .route("/api/ps5/vinput/ws", get(vinput_api::ws))
+        .route(
+            "/api/ps5/vinput",
+            get(vinput_api::http_get).put(vinput_api::http_put),
+        )
+        .route("/api/ps5/vinput/report", post(vinput_api::http_report))
         .route("/rp-player", get(rp_stream_api::player))
         .route("/pad", get(pad_link::page))
         .route("/api/pad/ws", get(pad_link::ws))
@@ -12190,6 +12255,16 @@ mod loopback_guard_tests {
             "/api/ps5/rp/input/release",
             "/api/ps5/rp/live.ts",
             "/api/ps5/rp/live/status",
+            "/api/ps5/rp/start",
+            "/api/ps5/rp/stop",
+            "/api/ps5/rp/passcode",
+            "/api/ps5/rp/keyboard",
+            "/api/ps5/rp/mic",
+            "/api/ps5/vinput",
+            "/api/ps5/vinput/report",
+            "/api/consoles",
+            "/api/consoles/document",
+            "/api/settings",
             "/pad/../api/jobs",
             "/padx",
             "/api/pad/ws/x",

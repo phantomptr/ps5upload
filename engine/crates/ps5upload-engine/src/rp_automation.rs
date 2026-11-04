@@ -1,18 +1,21 @@
 //! Remote Play for a local script or agent (#615): see the picture, hold a controller.
 //!
 //! A child module of rp_stream_api.rs (it reads the running session's private state). Nothing
-//! here starts a stream, attaches a viewer, or moves one: it works on the session a page
-//! already runs, and only from this computer (`vinput_api::local_allowed`, the same rule as the
-//! keyboard & mouse socket).
+//! here starts a stream, attaches a viewer, or moves one (rp_control.rs starts them): it works on
+//! the session that runs, and only from this computer (`vinput_api::local_allowed`, the same rule
+//! as the keyboard & mouse socket).
 //!
 //! * `GET /api/ps5/rp/frame?host=&session=&format=png|jpeg&max_width=&after=&json=1`: the
-//!   picture the attached page shows now. The engine never decodes video, so it asks the page
-//!   (`{"snapshot": {"id", "format", "max_width", "after_seq"?}}` on its status queue) and the
-//!   page answers with binary `[KIND_SNAPSHOT][u32 BE meta length][meta JSON][image]`, meta
+//!   picture now. When a page shows the session it is asked, since it already has the picture
+//!   (`{"snapshot": {"id", "format", "max_width", "after_seq"?}}` on its status queue) and it
+//!   answers with binary `[KIND_SNAPSHOT][u32 BE meta length][meta JSON][image]`, meta
 //!   `{"id", "format", "width", "height", "captured_at_ms", "frame_at_ms", "frame_seq"}` or
 //!   `{"id", "error"}`. Only the page the session is shown on is asked, never a watcher or a
-//!   phone, and only its answer to that request counts. The image comes back as it is, with
-//!   `X-Frame-*` headers; `json=1` gives JSON with the image in base64.
+//!   phone, and only its answer to that request counts. With no page attached, or a page that
+//!   gives no picture (a hidden window), the next keyframe of the live feed is decoded with the
+//!   ffmpeg Go live uses (frame_decode.rs), at most once a second; without ffmpeg the answer says
+//!   how to get it. The image comes back as it is, with `X-Frame-*` headers; `json=1` gives JSON
+//!   with the image in base64.
 //! * `POST /api/ps5/rp/input {host, session, buttons, left, right, l2, r2, duration_ms}`: hold
 //!   that controller state for `duration_ms` (at most MAX_HOLD), then let go. It is one more
 //!   controller (AUTOMATION_SOURCE), merged with the page's (source 0) and phones' (1 and up),
@@ -21,10 +24,10 @@
 //!
 //! Errors are JSON `{"error": code}`: local_only (403), bad_request (400), no_session (404),
 //! stale_session / no_viewer (409), busy / rate_limited (429), viewer_busy / no_picture (503),
-//! timeout / no_newer_frame (504), page_error (502).
+//! timeout / no_newer_frame (504), page_error / decode_failed (502).
 
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -37,7 +40,9 @@ use base64::Engine as _;
 use ps5upload_core::rp_stream::{button, ControllerState};
 use tokio::sync::oneshot;
 
+use super::live_feed::FeedEvent;
 use super::{text, Live};
+use crate::ffmpeg_tool::{self, FfmpegCmd};
 
 /// Page → engine binary kind: the picture a frame request asked for.
 pub(crate) const KIND_SNAPSHOT: u8 = 9;
@@ -56,6 +61,10 @@ const MAX_HOLD_MS: u64 = 5000;
 const MAX_WIDTH_RANGE: std::ops::RangeInclusive<u32> = 16..=7680;
 /// The largest picture a page may answer with.
 const MAX_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
+/// How long a picture from the feed may wait for its keyframe (the console takes about a second).
+const FEED_KEY_WAIT: Duration = Duration::from_secs(4);
+/// Pictures from the feed at most this often: each makes the console send a keyframe.
+const FEED_EVERY: Duration = Duration::from_secs(1);
 
 struct Pending {
     id: u64,
@@ -78,6 +87,10 @@ pub(crate) struct AutoState {
     last_request: Mutex<Option<Instant>>,
     next_request: AtomicU64,
     hold: AtomicU64,
+    /// A picture from the feed is being made, and when the last one was.
+    feed_busy: AtomicBool,
+    last_feed: Mutex<Option<Instant>>,
+    feed_seq: AtomicU64,
 }
 
 impl AutoState {
@@ -147,7 +160,7 @@ fn now_ms() -> u64 {
 }
 
 /// The running session when it is `host`'s; otherwise the error to answer with.
-fn session_for(
+pub(super) fn session_for(
     live: Option<Arc<Live>>,
     host: &str,
     session: Option<u64>,
@@ -194,10 +207,22 @@ pub async fn frame(
     if !crate::vinput_api::host_is_local(&headers) {
         return crate::vinput_api::host_not_local();
     }
-    frame_for(peer.ip(), super::live(), q).await
+    let ffmpeg = ffmpeg_tool::find();
+    frame_with(peer.ip(), super::live(), q, ffmpeg).await
 }
 
+#[cfg(test)]
 async fn frame_for(peer: IpAddr, live: Option<Arc<Live>>, q: FrameQuery) -> Response {
+    frame_with(peer, live, q, None).await
+}
+
+async fn frame_with(
+    peer: IpAddr,
+    live: Option<Arc<Live>>,
+    mut q: FrameQuery,
+    ffmpeg: Option<FfmpegCmd>,
+) -> Response {
+    q.host = crate::consoles_api::resolve(&q.host);
     if !crate::vinput_api::local_allowed(peer) {
         return fail(StatusCode::FORBIDDEN, "local_only");
     }
@@ -216,13 +241,14 @@ async fn frame_for(peer: IpAddr, live: Option<Arc<Live>>, q: FrameQuery) -> Resp
         Ok(l) => l,
         Err(r) => return *r,
     };
+    super::control::touch(&live);
     let Some((viewer, ctl)) = live
         .viewer
         .lock()
         .ok()
         .and_then(|g| g.as_ref().map(|v| (v.id, v.ctl.clone())))
     else {
-        return fail(StatusCode::CONFLICT, "no_viewer");
+        return frame_from_feed(&live, ffmpeg.as_ref(), format, max_width, as_json).await;
     };
     // `after` names a picture as "<viewer>.<seq>": only the same page can tell newer from older;
     // a picture from another page is newer by definition.
@@ -285,10 +311,135 @@ async fn frame_for(peer: IpAddr, live: Option<Arc<Live>>, q: FrameQuery) -> Resp
                     *p = None;
                 }
             }
+            // A page that stopped drawing (a hidden window): the feed still has the picture.
+            if ffmpeg.is_some() {
+                return frame_from_feed(&live, ffmpeg.as_ref(), format, max_width, as_json).await;
+            }
             return fail(StatusCode::GATEWAY_TIMEOUT, "timeout");
         }
     };
+    if ffmpeg.is_some() && answer.meta.get("error").and_then(|v| v.as_str()) == Some("no_picture") {
+        return frame_from_feed(&live, ffmpeg.as_ref(), format, max_width, as_json).await;
+    }
     respond(&live, viewer, answer, as_json)
+}
+
+/// The picture of the feed's next keyframe, through ffmpeg.
+async fn frame_from_feed(
+    live: &Arc<Live>,
+    ffmpeg: Option<&FfmpegCmd>,
+    format: &str,
+    max_width: Option<u32>,
+    as_json: bool,
+) -> Response {
+    let Some(ffmpeg) = ffmpeg else {
+        return fail_with(
+            StatusCode::CONFLICT,
+            serde_json::json!({
+                "error": "no_viewer",
+                "message": "No app page shows this stream, and making a picture without one needs ffmpeg. Install it with POST /api/stream/tools/ffmpeg/install, or open the Play screen.",
+                "ffmpeg": ffmpeg_tool::status_json(),
+            }),
+        );
+    };
+    let auto = &live.auto;
+    if auto.feed_busy.swap(true, Ordering::SeqCst) {
+        return fail(StatusCode::TOO_MANY_REQUESTS, "busy");
+    }
+    /// Lets the next one in, however this one ends.
+    struct Done<'a>(&'a AtomicBool);
+    impl Drop for Done<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _done = Done(&auto.feed_busy);
+    {
+        let Ok(mut last) = auto.last_feed.lock() else {
+            return fail(StatusCode::INTERNAL_SERVER_ERROR, "internal");
+        };
+        if let Some(t) = *last {
+            let since = t.elapsed();
+            if since < FEED_EVERY {
+                let wait = (FEED_EVERY - since).as_millis() as u64 + 1;
+                return fail_with(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    serde_json::json!({"error": "rate_limited", "retry_ms": wait}),
+                );
+            }
+        }
+        *last = Some(Instant::now());
+    }
+    let hevc = live.hevc;
+    let Some((reader, mut rx, _stats)) = live.feed.add("frame request".to_string(), true) else {
+        return fail(StatusCode::NOT_FOUND, "no_session");
+    };
+    /// Off the feed again, however this ends.
+    struct Leave<'a>(&'a super::live_feed::LiveFeed, u64);
+    impl Drop for Leave<'_> {
+        fn drop(&mut self) {
+            self.0.remove_quiet(self.1);
+        }
+    }
+    let _leave = Leave(&live.feed, reader);
+    let key = tokio::time::timeout(FEED_KEY_WAIT, async {
+        loop {
+            match rx.recv().await {
+                Some(FeedEvent::Video {
+                    au,
+                    at,
+                    key: true,
+                    header,
+                    ..
+                }) => break Some((au, at, header)),
+                Some(_) => continue,
+                None => break None,
+            }
+        }
+    })
+    .await;
+    let (au, at, header) = match key {
+        Ok(Some(k)) => k,
+        Ok(None) => return fail(StatusCode::NOT_FOUND, "no_session"),
+        // The stream has not reached its first keyframe (still starting, or stalled).
+        Err(_) => return fail(StatusCode::SERVICE_UNAVAILABLE, "no_picture"),
+    };
+    let mut bitstream = header
+        .map(|h| h.to_vec())
+        .or_else(|| live.video_header.lock().ok().and_then(|g| g.clone()))
+        .unwrap_or_default();
+    bitstream.extend_from_slice(&au);
+    let image = match crate::frame_decode::decode(ffmpeg, bitstream, hevc, format, max_width).await
+    {
+        Ok(i) => i,
+        Err(e) => {
+            crate::log_warn!("rp_automation: {e}");
+            return fail_with(
+                StatusCode::BAD_GATEWAY,
+                serde_json::json!({"error": "decode_failed", "detail": e}),
+            );
+        }
+    };
+    let (width, height) = crate::frame_decode::image_size(format, &image).unwrap_or((0, 0));
+    let now = now_ms();
+    let meta = serde_json::json!({
+        "format": format,
+        "width": width,
+        "height": height,
+        "captured_at_ms": now,
+        "frame_at_ms": now.saturating_sub(at.elapsed().as_millis() as u64),
+        "frame_seq": auto.feed_seq.fetch_add(1, Ordering::Relaxed) + 1,
+    });
+    // Page ids start at 1: "0.<seq>" is a picture from the feed.
+    respond(
+        live,
+        0,
+        Answer {
+            meta,
+            image: Bytes::from(image),
+        },
+        as_json,
+    )
 }
 
 /// The page's answer as the client gets it.
@@ -465,7 +616,8 @@ pub async fn input(
     input_for(peer.ip(), super::live(), r)
 }
 
-fn input_for(peer: IpAddr, live: Option<Arc<Live>>, r: InputReq) -> Response {
+fn input_for(peer: IpAddr, live: Option<Arc<Live>>, mut r: InputReq) -> Response {
+    r.host = crate::consoles_api::resolve(&r.host);
     if !crate::vinput_api::local_allowed(peer) {
         return fail(StatusCode::FORBIDDEN, "local_only");
     }
@@ -480,6 +632,7 @@ fn input_for(peer: IpAddr, live: Option<Arc<Live>>, r: InputReq) -> Response {
         Ok(l) => l,
         Err(resp) => return *resp,
     };
+    super::control::touch(&live);
     let (state, ms) = match parse_input(&r) {
         Ok(v) => v,
         Err(e) => return fail_with(StatusCode::BAD_REQUEST, e),
@@ -532,7 +685,8 @@ pub async fn release(
     release_for(peer.ip(), super::live(), r)
 }
 
-fn release_for(peer: IpAddr, live: Option<Arc<Live>>, r: ReleaseReq) -> Response {
+fn release_for(peer: IpAddr, live: Option<Arc<Live>>, mut r: ReleaseReq) -> Response {
+    r.host = crate::consoles_api::resolve(&r.host);
     if !crate::vinput_api::local_allowed(peer) {
         return fail(StatusCode::FORBIDDEN, "local_only");
     }
@@ -702,6 +856,101 @@ mod tests {
             l.pad.lock().unwrap().is_empty(),
             "a refused input reached the console"
         );
+    }
+
+    #[tokio::test]
+    async fn no_page_and_no_ffmpeg_says_how_to_get_a_picture() {
+        let l = session("10.0.0.9");
+        let (st, v) = body_json(frame_for(ip(LOCAL), Some(l), q("10.0.0.9")).await).await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(v["error"], "no_viewer");
+        assert!(v["message"].as_str().unwrap().contains("ffmpeg"), "{v}");
+        assert!(v.get("ffmpeg").is_some());
+    }
+
+    /// What the frame request with no page does, end to end, with a stand-in for ffmpeg that keeps
+    /// what it was fed and answers with a picture's first bytes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_page_decodes_the_next_keyframe_with_its_header() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::remote::store::test_dir();
+        let fed = dir.join("fed");
+        let script = dir.join("ffmpeg");
+        // 8 signature bytes, an IHDR's length and name, then 640 x 360.
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ncat > '{}'\nprintf '\\211PNG\\r\\n\\032\\n\\000\\000\\000\\015IHDR\\000\\000\\002\\200\\000\\000\\001\\150'\n",
+                fed.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let ff = FfmpegCmd {
+            program: script,
+            lib_dir: None,
+        };
+        let l = session("10.0.0.9");
+        l.feed.video_header(b"HDR");
+        let feeder = {
+            let l = l.clone();
+            tokio::spawn(async move {
+                let mut i = 0u16;
+                loop {
+                    i = i.wrapping_add(1);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    // Not a keyframe, then a keyframe: only that one is decoded.
+                    let key = i % 5 == 4;
+                    l.feed
+                        .video(if key { b"KEY" } else { b"not" }, i, key, Instant::now());
+                }
+            })
+        };
+        let mut want = q("10.0.0.9");
+        want.json = Some("1".into());
+        let (st, v) =
+            body_json(frame_with(ip(LOCAL), Some(l.clone()), want, Some(ff.clone())).await).await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        assert_eq!(v["format"], "png");
+        assert_eq!(v["width"], 640);
+        assert_eq!(v["height"], 360);
+        assert!(v["frame_id"].as_str().unwrap().starts_with("0."), "{v}");
+        assert_eq!(std::fs::read(&fed).unwrap(), b"HDRKEY");
+        assert_eq!(l.feed.readers(), 0, "the frame request left the feed");
+        // Each picture makes the console send a keyframe: not more than one a second.
+        let (st, v) =
+            body_json(frame_with(ip(LOCAL), Some(l.clone()), q("10.0.0.9"), Some(ff)).await).await;
+        assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(v["error"], "rate_limited");
+        feeder.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs ffmpeg"]
+    async fn ffmpeg_makes_a_frame_for_a_session_with_no_page() {
+        let ff = crate::frame_decode::tests::real_ffmpeg();
+        let au = crate::frame_decode::tests::test_keyframe(&ff, "libx264", "h264")
+            .await
+            .expect("libx264");
+        let l = session("10.0.0.9");
+        let feeder = {
+            let l = l.clone();
+            tokio::spawn(async move {
+                let mut i = 0u16;
+                loop {
+                    i = i.wrapping_add(1);
+                    tokio::time::sleep(Duration::from_millis(30)).await;
+                    l.feed.video(&au, i, true, Instant::now());
+                }
+            })
+        };
+        let r = frame_with(ip(LOCAL), Some(l), q("10.0.0.9"), Some(ff)).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(r.headers()["x-frame-width"], "640");
+        assert_eq!(r.headers()["content-type"], "image/png");
+        feeder.abort();
     }
 
     #[tokio::test]

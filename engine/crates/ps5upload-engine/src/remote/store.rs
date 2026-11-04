@@ -314,7 +314,7 @@ fn new_id(name: &str, taken: &[(Connection, Secret)]) -> String {
     }
 }
 
-fn load_or_create_key(path: &Path) -> anyhow::Result<[u8; 32]> {
+pub(crate) fn load_or_create_key(path: &Path) -> anyhow::Result<[u8; 32]> {
     if let Ok(bytes) = std::fs::read(path) {
         if let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice()) {
             return Ok(key);
@@ -350,22 +350,31 @@ fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 }
 
 fn encrypt(key: &[u8; 32], secret: &Secret) -> anyhow::Result<String> {
+    seal(key, &serde_json::to_vec(secret)?)
+}
+
+fn decrypt(key: &[u8; 32], blob: &str) -> Option<Secret> {
+    serde_json::from_slice(&unseal(key, blob)?).ok()
+}
+
+/// `plain` encrypted with a fresh nonce: `base64(nonce || ciphertext)`.
+pub(crate) fn seal(key: &[u8; 32], plain: &[u8]) -> anyhow::Result<String> {
     use aes_gcm::aead::Aead;
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
     use base64::Engine;
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| anyhow::anyhow!("{e}"))?;
     let mut nonce = [0u8; 12];
     getrandom::fill(&mut nonce).map_err(|e| anyhow::anyhow!("reading OS randomness: {e}"))?;
-    let plain = serde_json::to_vec(secret)?;
     let sealed = cipher
-        .encrypt(&Nonce::from(nonce), plain.as_slice())
+        .encrypt(&Nonce::from(nonce), plain)
         .map_err(|_| anyhow::anyhow!("could not encrypt the secret"))?;
     let mut blob = nonce.to_vec();
     blob.extend_from_slice(&sealed);
     Ok(base64::engine::general_purpose::STANDARD.encode(blob))
 }
 
-fn decrypt(key: &[u8; 32], blob: &str) -> Option<Secret> {
+/// What [`seal`] made; None when it does not decrypt with this key.
+pub(crate) fn unseal(key: &[u8; 32], blob: &str) -> Option<Vec<u8>> {
     use aes_gcm::aead::Aead;
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
     use base64::Engine;
@@ -378,8 +387,7 @@ fn decrypt(key: &[u8; 32], blob: &str) -> Option<Secret> {
     let (nonce, sealed) = bytes.split_at(12);
     let nonce: [u8; 12] = nonce.try_into().ok()?;
     let cipher = Aes256Gcm::new_from_slice(key).ok()?;
-    let plain = cipher.decrypt(&Nonce::from(nonce), sealed).ok()?;
-    serde_json::from_slice(&plain).ok()
+    cipher.decrypt(&Nonce::from(nonce), sealed).ok()
 }
 
 #[cfg(test)]
