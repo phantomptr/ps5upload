@@ -73,7 +73,9 @@ impl JobStore {
         }
         let job = self.new_job_id();
         active.insert(cid, job.clone());
-        lock(&self.jobs).insert(job.clone(), InstallStatus::new(&job, ps5_addr, ""));
+        let st = InstallStatus::new(&job, ps5_addr, "");
+        publish_status(&st);
+        lock(&self.jobs).insert(job.clone(), st);
         Ok(job)
     }
 
@@ -157,12 +159,29 @@ impl JobStore {
         lock(&self.jobs).get(job).cloned()
     }
 
+    /// Every status still kept, running or finished.
+    pub fn all(&self) -> Vec<InstallStatus> {
+        lock(&self.jobs).values().cloned().collect()
+    }
+
     pub fn update(&self, job: &str, f: impl FnOnce(&mut InstallStatus)) {
         let mut jobs = lock(&self.jobs);
         if let Some(st) = jobs.get_mut(job) {
+            let (phase, verdict, stamp) = (st.phase, st.verdict, st.updated_at);
             f(st);
             st.updated_at = status::now_unix();
+            // On a change of phase or result, and at most once a second for progress.
+            if st.phase != phase || st.verdict != verdict || st.updated_at != stamp {
+                publish_status(st);
+            }
         }
+    }
+}
+
+/// The install's status as an `install` event on `/api/events`.
+fn publish_status(st: &InstallStatus) {
+    if let Ok(v) = serde_json::to_value(st) {
+        crate::event_bus::bus().publish_json("install", &v);
     }
 }
 
@@ -658,6 +677,7 @@ pub struct InstallOptions {
 
 #[derive(Debug, Deserialize)]
 pub struct InstallRequest {
+    #[serde(alias = "console", alias = "addr", alias = "host")]
     pub ps5_addr: String,
     pub source: Source,
     #[serde(default)]
@@ -677,7 +697,6 @@ pub struct InstallRequest {
 fn history_dir() -> std::path::PathBuf {
     crate::remote::store::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from(".ps5upload"))
-    #[serde(alias = "console", alias = "addr", alias = "host")]
         .join("install-history")
 }
 
@@ -797,6 +816,7 @@ pub async fn install_status_handler(
 
 #[derive(Debug, Deserialize)]
 pub struct AddrQuery {
+    #[serde(alias = "console", alias = "addr", alias = "host")]
     pub ps5_addr: String,
 }
 
@@ -816,7 +836,6 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     // without its category/version: read them off the package's own header
     // so the destructive-reinstall guard and the patch version check work.
     if let Source::ConsolePath(path) = &req.source {
-    #[serde(alias = "console", alias = "addr", alias = "host")]
         if req.category.is_none() || req.package_app_ver.is_none() || req.title_id.is_none() {
             let (m, p) = (mgmt.clone(), path.clone());
             let meta = tokio::task::spawn_blocking(move || {

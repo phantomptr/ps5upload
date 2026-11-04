@@ -383,16 +383,19 @@ function upsertJob(j) {
 
 // ── Initial load ─────────────────────────────────────────────────
 
-fetch('/api/jobs')
-  .then(r => r.json())
-  .then(list => Promise.all(
-    list.map(j =>
-      fetch('/api/jobs/' + j.job_id)
-        .then(r => r.json())
-        .then(d => upsertJob({ job_id: j.job_id, ...d }))
-    )
-  ))
-  .catch(() => {});
+function refreshJobs() {
+  fetch('/api/jobs')
+    .then(r => r.json())
+    .then(list => Promise.all(
+      list.map(j =>
+        fetch('/api/jobs/' + j.job_id)
+          .then(r => r.json())
+          .then(d => upsertJob({ job_id: j.job_id, ...d }))
+      )
+    ))
+    .catch(() => {});
+}
+refreshJobs();
 
 // ── SSE ──────────────────────────────────────────────────────────
 
@@ -414,6 +417,8 @@ function connectSSE() {
       upsertJob({ job_id, ...job });
     } catch (_) {}
   };
+  // Too far behind (or back after a restart): what was missed is gone, so read the jobs again.
+  sse.addEventListener('resync', () => { refreshJobs(); });
   sse.onerror = () => {
     sse.close();
     dot.className = 'dot err';

@@ -620,7 +620,12 @@ pub(crate) async fn inspect_folder(r: &Remote, remote: &str) -> Response {
     .await;
     match result {
         Ok(v) => Json(v).into_response(),
-        Err(e) => Json(json!({ "ok": false, "error": e })).into_response(),
+        // A folder it could not read. `ok` stays for the client's shared shape.
+        Err(e) => (
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "ok": false, "error": e })),
+        )
+            .into_response(),
     }
 }
 

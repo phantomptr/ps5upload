@@ -91,7 +91,9 @@ pub(crate) async fn devices(Query(q): Query<HostParams>) -> Response {
 
 #[derive(Deserialize)]
 pub(crate) struct ActionReq {
-    /// The console (`addr` here is the headset's Bluetooth address, see `ActionParams`).
+    /// The console (`addr` here is the headset's Bluetooth address, see `ActionParams`, so it is
+    /// no name for the console on this route).
+    #[serde(alias = "console")]
     host: String,
     action: String,
     #[serde(flatten)]

@@ -299,7 +299,15 @@ pub(crate) fn reach_ips(
 /// Where phones reach this engine, toward the console being played (or `console`).
 fn base_url(headers: &HeaderMap, console: Option<&str>) -> Option<String> {
     let ip = *lan_ips(console).first()?;
-    Some(format!("http://{ip}:{}", port_of(headers)))
+    Some(page_base(ip, port_of(headers), crate::base_path()))
+}
+
+/// The address the engine's pages and sockets hang off, under its URL prefix (`PS5UPLOAD_BASE_URL`).
+fn page_base(ip: std::net::IpAddr, port: u16, prefix: &str) -> String {
+    match ip {
+        std::net::IpAddr::V6(v6) => format!("http://[{v6}]:{port}{prefix}"),
+        v4 => format!("http://{v4}:{port}{prefix}"),
+    }
 }
 
 fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
@@ -320,7 +328,10 @@ fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
             "urls": match &l.key {
                 Some(k) => ips
                     .iter()
-                    .map(|ip| serde_json::Value::String(format!("http://{ip}:{port}/pad#t={k}")))
+                    .map(|ip| serde_json::Value::String(format!(
+                        "{}/pad#t={k}",
+                        page_base(*ip, port, crate::base_path())
+                    )))
                     .collect::<Vec<_>>(),
                 None => Vec::new(),
             },
@@ -353,6 +364,7 @@ fn diag_of(l: &Link, tailscale: bool) -> serde_json::Value {
 #[derive(serde::Deserialize, Default)]
 pub struct StatusQuery {
     #[serde(default)]
+    #[serde(alias = "addr", alias = "host")]
     console: Option<String>,
 }
 
@@ -364,11 +376,11 @@ pub async fn get_status(
     Json(status(&headers, q.console.as_deref()))
 }
 
-    #[serde(alias = "addr", alias = "host")]
 #[derive(serde::Deserialize)]
 pub struct OpenReq {
     open: bool,
     #[serde(default)]
+    #[serde(alias = "addr", alias = "host")]
     console: Option<String>,
 }
 
@@ -380,7 +392,6 @@ pub async fn set_open(headers: HeaderMap, Json(r): Json<OpenReq>) -> Json<serde_
             if l.key.is_none() {
                 l.key = random_key();
             }
-    #[serde(alias = "addr", alias = "host")]
         } else {
             l.key = None;
             for p in l.pads.drain(..) {
@@ -776,11 +787,25 @@ fn relay_target(url: &str) -> Option<String> {
     lan_ws_target(url, "api/pad/ws")
 }
 
-/// `url` when it is exactly `ws://<private IP>[:port]/<want>`: another engine's socket on the LAN
-/// (a home network, link-local, or a Tailscale-style shared 100.64/10 address). Rebuilt from the
-/// parsed address, so what is connected to is what was checked. Never a name (a name could
-/// resolve anywhere, and again differently at connect time), a public address, user info (`@`),
-/// a query or fragment, an escape, or another route.
+/// A URL prefix an engine is served under (`PS5UPLOAD_BASE_URL`): plain path segments, nothing
+/// that could step out of it.
+fn plain_prefix(prefix: &str) -> bool {
+    prefix.split('/').all(|seg| {
+        !seg.is_empty()
+            && seg != "."
+            && seg != ".."
+            && seg
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b))
+    })
+}
+
+/// `url` when it is exactly `ws://<private IP>[:port]/[<prefix>/]<want>`: another engine's socket
+/// on the LAN (a home network, link-local, or a Tailscale-style shared 100.64/10 address), under
+/// the URL prefix that engine may be served with. Rebuilt from the parsed address, so what is
+/// connected to is what was checked. Never a name (a name could resolve anywhere, and again
+/// differently at connect time), a public address, user info (`@`), a query or fragment, an
+/// escape, or another route.
 pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
     let rest = url.strip_prefix("ws://")?;
     if !rest
@@ -791,7 +816,10 @@ pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
     }
     let (authority, path) = rest.split_once('/')?;
     if path != want {
-        return None;
+        let prefix = path.strip_suffix(want)?.strip_suffix('/')?;
+        if !plain_prefix(prefix) {
+            return None;
+        }
     }
     let (ip, port): (std::net::IpAddr, Option<&str>) = if let Some(v6) = authority.strip_prefix('[')
     {
@@ -834,7 +862,7 @@ pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
         (v4, Some(p)) => format!("{v4}:{p}"),
         (v4, None) => v4.to_string(),
     };
-    Some(format!("ws://{addr}/{want}"))
+    Some(format!("ws://{addr}/{path}"))
 }
 
 /// `GET /api/ps5/rp/pad-relay?url=ws://<computer>/api/pad/ws&name=` (loopback only): the phone
@@ -1101,6 +1129,29 @@ mod tests {
         );
         assert_eq!(relay_target("ws://192.168.1.20:19113/api/ps5/rp/ws"), None);
         assert_eq!(relay_target("ws://8.8.8.8:19113/api/pad/ws"), None);
+        assert_eq!(
+            page_base("192.168.1.20".parse().unwrap(), 19113, "/ps5"),
+            "http://192.168.1.20:19113/ps5"
+        );
+        assert_eq!(
+            page_base("192.168.1.20".parse().unwrap(), 19113, ""),
+            "http://192.168.1.20:19113"
+        );
+        // An engine served under PS5UPLOAD_BASE_URL, and nothing that steps out of the prefix.
+        assert_eq!(
+            relay_target("ws://192.168.1.20:19113/ps5/api/pad/ws"),
+            Some("ws://192.168.1.20:19113/ps5/api/pad/ws".into())
+        );
+        for bad in [
+            "ws://192.168.1.20:19113/../api/pad/ws",
+            "ws://192.168.1.20:19113/a/../api/pad/ws",
+            "ws://192.168.1.20:19113//api/pad/ws",
+            "ws://192.168.1.20:19113/xapi/pad/ws",
+            "ws://192.168.1.20:19113/api/pad/ws/x",
+            "ws://192.168.1.20:19113/api/other",
+        ] {
+            assert_eq!(relay_target(bad), None, "{bad}");
+        }
         assert_eq!(relay_target("wss://192.168.1.20/api/pad/ws"), None);
         assert_eq!(relay_target("ws://example.com/api/pad/ws"), None);
         assert_eq!(

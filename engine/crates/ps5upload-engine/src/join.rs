@@ -1800,16 +1800,21 @@ fn reach_from(headers: &HeaderMap, peer: IpAddr) -> (u16, Option<String>) {
 /// The engine's addresses guests can use, best first: the name the host's browser used (a web
 /// UI), then this computer's LAN addresses toward the console.
 fn bases(console: &str, reach: &Reach) -> Vec<String> {
+    bases_under(console, reach, crate::base_path())
+}
+
+/// [`bases`] for an engine served under the URL prefix `prefix` (`PS5UPLOAD_BASE_URL`).
+fn bases_under(console: &str, reach: &Reach, prefix: &str) -> Vec<String> {
     let mut out: Vec<String> = reach
         .web_host
         .iter()
-        .map(|h| format!("http://{h}"))
+        .map(|h| format!("http://{h}{prefix}"))
         .collect();
     // Home network, then a VPN's (WireGuard…), then Tailscale's (pad_link::reach_ips).
     for ip in crate::pad_link::reach_ips(Some(console)).0 {
         let b = match ip {
-            IpAddr::V6(v6) => format!("http://[{v6}]:{}", reach.port),
-            IpAddr::V4(v4) => format!("http://{v4}:{}", reach.port),
+            IpAddr::V6(v6) => format!("http://[{v6}]:{}{prefix}", reach.port),
+            IpAddr::V4(v4) => format!("http://{v4}:{}{prefix}", reach.port),
         };
         if !out.contains(&b) {
             out.push(b);
@@ -1886,12 +1891,12 @@ fn state_json(console: &str) -> serde_json::Value {
 
 #[derive(serde::Deserialize)]
 pub struct AddrQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
 }
 
 /// `GET /api/join?addr=`: Play Together on that console (`open` false when it is not).
 pub async fn get_state(
-    #[serde(alias = "console", alias = "host")]
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Query(q): Query<AddrQuery>,
@@ -1905,12 +1910,12 @@ pub async fn get_state(
 
 #[derive(serde::Deserialize)]
 pub struct AddrBody {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
 }
 
 /// The host's request: how guests reach this engine now.
 fn touch_reach(console: &str, headers: &HeaderMap, peer: IpAddr) {
-    #[serde(alias = "console", alias = "host")]
     let (port, web_host) = reach_from(headers, peer);
     with_party(&host_key(console), |p| {
         p.reach.port = port;
@@ -1984,12 +1989,12 @@ pub async fn close(
 
 #[derive(serde::Deserialize)]
 pub struct InviteBody {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
     /// A new key (the old link stops working).
     #[serde(default)]
     new: bool,
 }
-    #[serde(alias = "console", alias = "host")]
 
 /// `POST /api/join/invite {addr, new?}`: `{key, code, code_display, url, urls, expires_in_s}`.
 /// The same invite again until it expires, unless `new` (the old link and code stop working).
@@ -2046,12 +2051,12 @@ pub async fn decide(
 
 #[derive(serde::Deserialize)]
 pub struct PlayerBody {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
     player: u8,
 }
 
 /// `POST /api/join/kick {addr, player}`: let a guest go (their token stops working).
-    #[serde(alias = "console", alias = "host")]
 pub async fn kick(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
@@ -2944,6 +2949,21 @@ pub(crate) mod link {
 mod tests {
     use super::link::{Cmd, Event, LinkState, OpenResult, Port, SlotIo, HOLD};
     use super::*;
+
+    #[test]
+    fn links_carry_the_url_prefix_the_engine_is_served_under() {
+        let reach = Reach {
+            port: 19113,
+            web_host: Some("nas.home:8080".to_string()),
+        };
+        let got = bases_under("192.0.2.1", &reach, "/ps5");
+        assert_eq!(got[0], "http://nas.home:8080/ps5");
+        assert!(got.iter().all(|b| b.ends_with("/ps5")), "{got:?}");
+        assert_eq!(
+            bases_under("192.0.2.1", &reach, "")[0],
+            "http://nas.home:8080"
+        );
+    }
 
     #[test]
     fn guest_keyframe_asks_are_spaced() {

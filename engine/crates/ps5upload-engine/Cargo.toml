@@ -78,6 +78,8 @@ if-addrs = "0.15"
 trash = "5.2"
 
 [dev-dependencies]
+# Requests through the real router in the tests (`ServiceExt::oneshot`). Already in the tree through axum.
+tower = { version = "0.5", default-features = false, features = ["util"] }
 # Writes the tiny archives the no-helper tests plan against (the decode side is ps5upload-core's).
 sevenz-rust2 = { version = "0.23", default-features = false, features = ["compress"] }
 # Paused time for the Remote Play automation tests (holds and timeouts without real waits).

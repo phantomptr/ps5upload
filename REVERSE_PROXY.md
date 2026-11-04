@@ -31,6 +31,10 @@ server {
 }
 ```
 
+Forward the `Host` header exactly as above. The engine compares it with the browser's
+`Origin` to refuse cross-site requests, and nginx rewrites `Host` by default, so without
+that line every browser request fails with a 403 that names the two values.
+
 Streaming responses (job events) need buffering off. Browser-selected files can
 be large, so disable nginx's default 1 MiB body limit or choose your own limit.
 If you add proxy authentication, apply it to the browser site and API together.
