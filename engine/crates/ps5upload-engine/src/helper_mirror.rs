@@ -147,6 +147,18 @@ fn last_status_call() -> &'static Mutex<Option<std::time::Instant>> {
     AT.get_or_init(Default::default)
 }
 
+/// The consoles that have answered a status call since this engine started, sorted.
+pub(crate) fn answered_consoles() -> Vec<String> {
+    let mut hosts: Vec<String> = consoles()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .cloned()
+        .collect();
+    hosts.sort();
+    hosts
+}
+
 /// Where the mirror reads a console's log files from: the console, or a fake in tests.
 pub trait LogSource {
     fn size(&self, path: &str) -> anyhow::Result<u64>;

@@ -71,6 +71,7 @@ mod link;
 mod link_lz4;
 mod local_fs;
 mod log_dedup;
+mod mcp;
 mod mesh_api;
 mod mesh_drive;
 mod mesh_drive_plan;
@@ -11505,7 +11506,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     }
 
     let state_jobs_for_presence = state.jobs.clone();
-    let app = build_app(state, pkg_state, guard_cfg, host_guard::base_path());
+    let (app, mcp_state) = build_app_and_mcp(state, pkg_state, guard_cfg, host_guard::base_path());
     // Mirror to stdout (terminal users) AND the engine.log ring
     // (post-mortem diagnosis from the desktop shell once the
     // terminal is closed). Printed only once the bind has succeeded:
@@ -11547,13 +11548,19 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             no_delay(listener),
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
-        .with_graceful_shutdown(async {
+        .with_graceful_shutdown(async move {
             shutdown_signal().await;
+            // An open MCP subscription would hold the drain up for as long as its client stays.
+            mcp_state.begin_shutdown();
             spawn_drain_ceiling();
         })
         .await
     } else {
-        serve_rebindable(&bind, listener, app, shutdown_signal()).await
+        serve_rebindable(&bind, listener, app, async move {
+            shutdown_signal().await;
+            mcp_state.begin_shutdown();
+        })
+        .await
     };
     ps5upload_core::events::emit(
         ps5upload_core::events::Cat::System,
@@ -11575,12 +11582,25 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
 
 /// The whole HTTP surface: every route and layer, nothing started. `base` is the URL prefix
 /// (`PS5UPLOAD_BASE_URL`), empty for the root.
+#[cfg(test)]
 fn build_app(
     state: AppState,
     pkg_state: pkg_install::PkgInstallStateHandle,
     guard_cfg: LoopbackGuardConfig,
     base: &str,
 ) -> Router {
+    build_app_and_mcp(state, pkg_state, guard_cfg, base).0
+}
+
+/// [`build_app`], and the MCP server in it: an open subscription must be told when the engine stops.
+fn build_app_and_mcp(
+    state: AppState,
+    pkg_state: pkg_install::PkgInstallStateHandle,
+    guard_cfg: LoopbackGuardConfig,
+    base: &str,
+) -> (Router, mcp::McpState) {
+    let mcp_events = state.events_tx.clone();
+    let ps5_addr = state.default_ps5_addr.clone();
     // Job snapshots onto the numbered feed of `GET /api/events`.
     event_bus::forward_jobs(&state.events_tx);
     let op_registry = std::sync::Arc::new(ops::OpRegistry::default());
@@ -12370,6 +12390,18 @@ fn build_app(
         )))
         .merge(ops_router);
 
+    // The MCP server drives this same API in-process: it holds a clone of the router as it stands
+    // here, without /mcp itself or the reverse-proxy prefix. The body limit and the request log are
+    // what the outer layers below give an HTTP client.
+    let mcp_state = mcp::McpState::new(
+        app.clone()
+            .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
+            .layer(middleware::from_fn(log_requests)),
+        mcp_events,
+        ps5_addr.clone(),
+    );
+    let app = app.merge(mcp::router(mcp_state.clone()));
+
     // SPA fallback: serve the embedded React bundle for every path that doesn't
     // match an explicit /api/* route above.  Only compiled when the `webui`
     // feature is on (Docker / self-hosted image); the regular build keeps the
@@ -12408,7 +12440,8 @@ fn build_app(
         // The renderer's JSON POST pollers would otherwise send a preflight before every request.
         .max_age(std::time::Duration::from_secs(600));
 
-    app.merge(pkg_install::host_router(pkg_state))
+    let app = app
+        .merge(pkg_install::host_router(pkg_state))
         // Explicit body-size cap. Axum's default DefaultBodyLimit is
         // 2 MiB, which is borderline for a TransferFileListReq carrying
         // tens of thousands of file paths and could silently change
@@ -12456,7 +12489,8 @@ fn build_app(
         ))
         // Outside the allowlist it feeds: behind a trusted proxy, the address that counts is the
         // client's.
-        .layer(middleware::from_fn(host_guard::apply_trusted_proxy))
+        .layer(middleware::from_fn(host_guard::apply_trusted_proxy));
+    (app, mcp_state)
 }
 
 fn rebind_signal() -> &'static tokio::sync::Notify {
@@ -12605,6 +12639,8 @@ pub fn healthcheck() -> i32 {
         1
     }
 }
+
+pub use mcp::stdio::run_cli as run_mcp_bridge;
 
 pub async fn run_cli() {
     install_panic_logger();

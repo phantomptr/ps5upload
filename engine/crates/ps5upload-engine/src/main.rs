@@ -23,5 +23,10 @@ async fn main() {
     if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
         std::process::exit(ps5upload_engine::healthcheck());
     }
+    // `mcp` bridges an MCP client's stdio to the running engine, and runs no engine of its own.
+    if std::env::args().nth(1).as_deref() == Some("mcp") {
+        let args = std::env::args().skip(2).collect();
+        std::process::exit(ps5upload_engine::run_mcp_bridge(args));
+    }
     ps5upload_engine::run_cli().await;
 }
