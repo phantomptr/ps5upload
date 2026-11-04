@@ -82,15 +82,6 @@
 #include "mesh.h"
 #include "ava1_server.h"
 
-/* Capacity policy mirrored by ps5upload-core::volumes. Keep a small working
- * margin -- 1 GiB, scaled down for small volumes -- out of every filesystem
- * for metadata and concurrent activity. The PS5 user-storage allocator can
- * still return ENOSPC while statfs(/data) advertises far more; that is not
- * predictable here and is handled after the fact, not by this gate. See
- * capacity_reserve_for_mount. */
-#define PS5UPLOAD2_GIB ((uint64_t)1024u * 1024u * 1024u)
-#define PS5UPLOAD2_EXTERNAL_SPACE_RESERVE (1u * PS5UPLOAD2_GIB)
-
 /* The frame numbers the management table (mgmt_table.def) carries per method. They are not on any wire now:
  * the number a handler runs under is written to g_inflight_frame_type, so the fatal-signal breadcrumb in
  * main.c ("while serving frame N") still names the operation, and the ACK/ERROR numbers name what a handler
@@ -1921,39 +1912,6 @@ static int is_user_storage_path(const char *path) {
     return 0;
 }
 
-/* Mirrors ps5upload-core::volumes::{safety_reserve_bytes,
- * external_reserve_for_total}. The host falls back to the SAME rule when an
- * older payload omits the published field, so the two must not drift.
- *
- * The margin is a CAP scaled to the volume, not a flat charge: a flat 1 GiB
- * on a 64 MiB mounted disk image reserves sixteen times its own capacity,
- * drives allocatable to zero, and refuses every write to it
- * (hardware-confirmed — a 29-byte write into a mounted 64 MiB image was
- * rejected as "have 0 bytes"). Internal storage is no longer a special case;
- * the body says why. */
-static uint64_t capacity_reserve_for_mount(const char *mnt_on,
-                                           const char *mnt_from,
-                                           uint64_t total_bytes) {
-    uint64_t scaled;
-    /* Internal storage (/data, /user) used to get a flat 80 GiB here, meant
-     * to model the PS5 content allocator's hidden pool. It was fitted to one
-     * FW 12.00 capture and did not generalise: this gate then rejected a
-     * 2.5 GiB pkg on a console with 86 GB free, and a 70 GB game on one with
-     * 136 GB free. The pool is real, but its size is not predictable from
-     * anything readable here -- and this gate REFUSES the transfer, so it now
-     * blocks only what is certainly impossible. A console that overstates its
-     * free space is caught mid-write instead, where the host turns that into
-     * a plain-language error (ps5upload-core::transfer::capacity_exhausted_body). */
-    (void)mnt_on;
-    (void)mnt_from;
-    /* A volume reporting no total reserves nothing — better to let the write
-     * be attempted than to block it on missing telemetry. */
-    scaled = total_bytes / 64u;
-    return scaled < PS5UPLOAD2_EXTERNAL_SPACE_RESERVE
-               ? scaled
-               : PS5UPLOAD2_EXTERNAL_SPACE_RESERVE;
-}
-
 static int handle_fs_list_volumes(runtime_state_t *state) {
     const size_t RESP_CAP = 64u * 1024u; /* heap; ~330 B per mount, was 16 KiB */
     char *resp = NULL;
@@ -2011,8 +1969,7 @@ static int handle_fs_list_volumes(runtime_state_t *state) {
         uint64_t avail = ((int64_t)mnts[i].f_bavail > 0)
                              ? (uint64_t)mnts[i].f_bavail * bs
                              : bfree;
-        uint64_t safety_reserve =
-            capacity_reserve_for_mount(mnt_on, mnt_from, total);
+        uint64_t safety_reserve = mgmt_fs_reserve_for(total);
         uint64_t allocatable =
             avail > safety_reserve ? avail - safety_reserve : 0;
         /* Reserve model: total is the FULL partition (f_blocks×f_bsize) and

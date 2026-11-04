@@ -242,10 +242,19 @@ int mgmt_run_fs_stat(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
 
 /* ---- fs.freespace ---- */
 
-/* The working margin kept back from a write on a drive: 1/64th of it, at most 1 GiB. The same rule as
- * runtime.c's capacity_reserve_for_mount (the console's own capacity gate) and the engine's
- * Volume::safety_reserve_bytes: small enough never to block an upload that fits, and nothing speculative
- * (the console's hidden allocator pool is not modelled; the memory admit budget is not disk). */
+/* The working margin kept back from a write on a drive: 1/64th of it, at most 1 GiB, and nothing for a
+ * drive reporting no total (better to attempt the write than block it on missing telemetry). The one
+ * rule on the console: fs.freespace and fs.list_volumes both ask here. The engine's
+ * ps5upload-core::volumes::{safety_reserve_bytes, external_reserve_for_total} is the same rule for an
+ * older helper that omits the published field, so the two must not drift.
+ *
+ * A cap scaled to the volume, not a flat charge: a flat 1 GiB on a 64 MiB mounted disk image reserves
+ * sixteen times its capacity and refuses every write to it (hardware-confirmed: a 29-byte write was
+ * rejected as "have 0 bytes"). Internal storage is no special case either: a flat 80 GiB, fitted to one
+ * FW 12.00 capture to model the content allocator's hidden pool, rejected a 2.5 GiB pkg with 86 GB free.
+ * The pool is real, but its size cannot be read here and this gate refuses transfers, so it blocks only
+ * what is certainly impossible. A console that overstates its free space is caught mid-write instead,
+ * where the host turns that into a plain-language error (ps5upload-core::transfer). */
 #define FS_RESERVE_CAP (1024ull * 1024ull * 1024ull)
 
 uint64_t mgmt_fs_reserve_for(uint64_t total_bytes) {
