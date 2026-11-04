@@ -1317,6 +1317,7 @@ upload_mirror_label: "الإرسال أيضًا إلى أجهزة PS5 الأخر
 upload_mirror_send: "المزامنة الآن",
 usb_wizard_done: "تمت كتابة {count} ملف",
 usb_err_not_enough_space: "هذه الحمولات لا تتسع على هذا القرص. لم يتغير شيء عليه.",
+usb_err_drive_gone: "لم يعد هذا القرص متاحًا. أعد توصيله، ثم اختره من القائمة.",
 usb_err_write_failed: "تعذّرت الكتابة على القرص، لذا لم يتغير شيء عليه. ({detail})",
 usb_skipped_unknown: "{id}: لم يعد في قائمة الحمولات",
 usb_wizard_include_us: "تضمين ‎ps5upload.elf أيضًا كي تُقلع الذاكرة بحمولة أداة سطح المكتب كذلك",

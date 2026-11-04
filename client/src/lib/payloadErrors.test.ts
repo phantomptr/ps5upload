@@ -27,6 +27,7 @@ describe("payloadErrorText", () => {
     expect(payloadErrorText(tr, "custom_repos_unreadable: /x/custom-repos.json: bad")).toBe(
       'payloads_err_custom_repos_unreadable:{"detail":"/x/custom-repos.json: bad"}',
     );
+    expect(payloadErrorText(english, "usb_drive_gone: /Volumes/X is not a folder")).toContain("Plug it in again");
     expect(payloadErrorText(english, "usb_write_failed: disk full")).toBe(
       "Couldn't write to the drive, so nothing on it was changed. (disk full)",
     );

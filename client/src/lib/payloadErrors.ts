@@ -37,6 +37,10 @@ const WORDED: Record<string, { key: string; fallback: string; detail?: boolean }
     key: "usb_err_not_enough_space",
     fallback: "These payloads don't fit on this drive. Nothing on it was changed.",
   },
+  usb_drive_gone: {
+    key: "usb_err_drive_gone",
+    fallback: "That drive isn't available any more. Plug it in again, then pick it from the list.",
+  },
   usb_write_failed: {
     key: "usb_err_write_failed",
     fallback: "Couldn't write to the drive, so nothing on it was changed. ({detail})",

@@ -184,10 +184,7 @@ mod tests {
     fn a_console_path_names_the_host_and_refuses_installed_games() {
         assert_eq!(
             console_target("ps5://192.0.2.99/mnt/ext0/g/X.exfat").unwrap(),
-            (
-                "192.0.2.99".to_string(),
-                "/mnt/ext0/g/X.exfat".to_string()
-            )
+            ("192.0.2.99".to_string(), "/mnt/ext0/g/X.exfat".to_string())
         );
         assert_eq!(
             console_target("ps5://10.0.0.2:8080/data/homebrew/G")

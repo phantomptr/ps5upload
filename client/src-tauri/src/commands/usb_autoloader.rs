@@ -490,7 +490,8 @@ fn write_autoloader_folder(
             }
         }
     }
-    std::fs::create_dir_all(folder).map_err(|e| format!("create ps5_autoloader/: {e}"))?;
+    std::fs::create_dir_all(folder)
+        .map_err(|e| format!("usb_write_failed: create ps5_autoloader/: {e}"))?;
     let previous = std::fs::read_to_string(folder.join("autoload.txt")).ok();
 
     let mut tmps = Tmps(Vec::with_capacity(files.len() + 1));
@@ -546,9 +547,13 @@ pub async fn usb_autoloader_install(
     // upfront rather than on first write so the user gets a single
     // clear error.
     let drive = PathBuf::from(&req.drive_path);
-    let drive_meta = std::fs::metadata(&drive).map_err(|e| format!("drive not accessible: {e}"))?;
+    let drive_meta = std::fs::metadata(&drive)
+        .map_err(|e| format!("usb_drive_gone: {}: {e}", req.drive_path))?;
     if !drive_meta.is_dir() {
-        return Err(format!("drive path is not a directory: {}", req.drive_path));
+        return Err(format!(
+            "usb_drive_gone: {} is not a folder",
+            req.drive_path
+        ));
     }
 
     // Re-validate server-side that the target is actually one of the
@@ -570,7 +575,7 @@ pub async fn usb_autoloader_install(
     });
     let Some(known_drive) = known_drive else {
         return Err(format!(
-            "refusing to write: {} is not a currently-mounted removable drive",
+            "usb_drive_gone: {} is not a currently-mounted removable drive",
             requested
         ));
     };

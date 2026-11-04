@@ -1978,6 +1978,7 @@ upload_mirror_label: "ارسال به سایر PS5های موجود در فهر�
 upload_mirror_send: "آینه‌سازی الان",
 usb_wizard_done: "{count} فایل نوشته شد",
 usb_err_not_enough_space: "این پیلودها در این درایو جا نمی‌شوند. چیزی در آن تغییر نکرد.",
+usb_err_drive_gone: "این درایو دیگر در دسترس نیست. دوباره آن را وصل کنید و سپس از فهرست انتخابش کنید.",
 usb_err_write_failed: "نوشتن روی درایو ممکن نشد، پس چیزی در آن تغییر نکرد. ({detail})",
 usb_skipped_unknown: "{id}: دیگر در فهرست پیلودها نیست",
 usb_wizard_include_us: "همچنین ps5upload.elf را شامل شو تا فلش payload ابزار دسکتاپ را هم بوت کند",

@@ -1319,6 +1319,7 @@ upload_mirror_label: "Gửi thêm tới các PS5 khác trong danh sách ({count}
 upload_mirror_send: "Nhân bản ngay",
 usb_wizard_done: "Đã ghi {count} tệp",
 usb_err_not_enough_space: "Các payload này không đủ chỗ trên ổ này. Không có gì trên ổ bị thay đổi.",
+usb_err_drive_gone: "Ổ đĩa đó không còn khả dụng. Hãy cắm lại rồi chọn trong danh sách.",
 usb_err_write_failed: "Không ghi được vào ổ nên không có gì trên ổ bị thay đổi. ({detail})",
 usb_skipped_unknown: "{id}: không còn trong danh sách payload",
 usb_wizard_include_us: "Kèm luôn ps5upload.elf để USB cũng khởi động payload của công cụ trên máy tính",

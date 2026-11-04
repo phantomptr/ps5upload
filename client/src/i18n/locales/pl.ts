@@ -1691,6 +1691,7 @@ upload_mirror_label: "Wyślij również do innych konsol PS5 na liście ({count}
 upload_mirror_send: "Utwórz kopię lustrzaną teraz",
 usb_wizard_done: "Zapisano pliki ({count})",
 usb_err_not_enough_space: "Te payloady nie zmieszczą się na tym dysku. Nic na nim nie zmieniono.",
+usb_err_drive_gone: "Ten dysk nie jest już dostępny. Podłącz go ponownie, a potem wybierz z listy.",
 usb_err_write_failed: "Nie udało się zapisać na dysku, więc nic na nim nie zmieniono. ({detail})",
 usb_skipped_unknown: "{id}: nie ma już na liście payloadów",
 usb_wizard_include_us: "Dołącz również ps5upload.elf, aby pendrive uruchamiał także payload narzędzia desktopowego",

@@ -1318,6 +1318,7 @@ upload_mirror_label: "सूची के अन्य PS5 पर भी भे�
 upload_mirror_send: "अभी मिरर करें",
 usb_wizard_done: "{count} फ़ाइलें लिखी गईं",
 usb_err_not_enough_space: "ये पेलोड इस ड्राइव पर नहीं आएँगे। इस पर कुछ नहीं बदला गया।",
+usb_err_drive_gone: "वह ड्राइव अब उपलब्ध नहीं है। उसे फिर से लगाएँ, फिर सूची से चुनें।",
 usb_err_write_failed: "ड्राइव पर लिखा नहीं जा सका, इसलिए उस पर कुछ नहीं बदला गया। ({detail})",
 usb_skipped_unknown: "{id}: अब पेलोड सूची में नहीं है",
 usb_wizard_include_us: "ps5upload.elf भी शामिल करें ताकि यह ड्राइव डेस्कटॉप टूल का पेलोड भी बूट कर सके",

@@ -1317,6 +1317,7 @@ upload_mirror_label: "তালিকার অন্য PS5-গুলোতে�
 upload_mirror_send: "এখনই মিরর করুন",
 usb_wizard_done: "{count}টি ফাইল লেখা হয়েছে",
 usb_err_not_enough_space: "এই পেলোডগুলো এই ড্রাইভে ধরবে না। এতে কিছুই বদলানো হয়নি।",
+usb_err_drive_gone: "ওই ড্রাইভটি আর পাওয়া যাচ্ছে না। আবার লাগান, তারপর তালিকা থেকে বেছে নিন।",
 usb_err_write_failed: "ড্রাইভে লেখা যায়নি, তাই এতে কিছুই বদলানো হয়নি। ({detail})",
 usb_skipped_unknown: "{id}: আর পেলোড তালিকায় নেই",
 usb_wizard_include_us: "ps5upload.elf-ও যুক্ত করুন যাতে স্টিকটি ডেস্কটপ সরঞ্জামের পেলোডও চালু করতে পারে",
