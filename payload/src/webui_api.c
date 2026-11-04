@@ -2966,6 +2966,7 @@ static const struct {
     { "/api/smb/mkdir", webui_smb_mkdir },
     { "/api/smb/copy", webui_smb_copy },
     { "/api/smb/delete", webui_smb_delete },
+    { "/api/smb/rename", webui_smb_rename },
     { "/api/smb/job", webui_smb_job },
     { "/api/smb/cancel", webui_smb_cancel },
     { "/api/smb/jobs", webui_smb_jobs },

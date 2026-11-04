@@ -287,6 +287,34 @@ static void t_paths_and_copy(void) {
     call(webui_smb_delete, body);
     CHECK(g_status == 400);
 
+    /* a Replace's swap: inside one folder of one share */
+    snprintf(body, sizeof body, "{\"from\":\"smb://%s/Games/G\",\"to\":\"smb://%s/Games/G.ps5u-old\"}", id, id);
+    call(webui_smb_rename, body);
+    CHECK(g_status == 200 && strstr(g_req, "\"op\":\"rename\"") && strstr(g_req, "\"path\":\"Games/G\"") &&
+          strstr(g_req, "\"to\":\"Games/G.ps5u-old\""));
+    snprintf(body, sizeof body, "{\"from\":\"smb://%s/G\",\"to\":\"smb://%s/G.ps5u-new\"}", id, id);
+    call(webui_smb_rename, body);
+    CHECK(g_status == 200 && strstr(g_req, "\"path\":\"G\"") && strstr(g_req, "\"to\":\"G.ps5u-new\""));
+    snprintf(body, sizeof body, "{\"from\":\"smb://%s/Games/G\",\"to\":\"smb://%s/Other/G\"}", id, id);
+    call(webui_smb_rename, body);
+    CHECK(g_status == 400 && strstr(g_body, "bad_path")); /* another folder */
+    snprintf(body, sizeof body, "{\"from\":\"smb://%s/\",\"to\":\"smb://%s/G\"}", id, id);
+    call(webui_smb_rename, body);
+    CHECK(g_status == 400); /* the share's top */
+    snprintf(body, sizeof body, "{\"from\":\"smb://%s/G\",\"to\":\"smb://ffffffff/G\"}", id);
+    call(webui_smb_rename, body);
+    CHECK(g_status == 400 && strstr(g_body, "bad_to")); /* another share */
+    snprintf(body, sizeof body, "{\"from\":\"smb://%s/G\",\"to\":\"/data/G\"}", id);
+    call(webui_smb_rename, body);
+    CHECK(g_status == 400 && strstr(g_body, "bad_to")); /* off the share */
+    call(webui_smb_rename, "{\"from\":\"/data/a\",\"to\":\"/data/b\"}");
+    CHECK(g_status == 400 && strstr(g_body, "bad_from"));
+    g_next_reply = "{\"error\":\"exists\"}";
+    snprintf(body, sizeof body, "{\"from\":\"smb://%s/G\",\"to\":\"smb://%s/H\"}", id, id);
+    call(webui_smb_rename, body);
+    CHECK(g_status == 409 && strstr(g_body, "exists")); /* never over something */
+    g_next_reply = NULL;
+
     /* jobs never start the daemon */
     g_daemon_up = 0;
     call(webui_smb_job, "{\"job\":\"0123456789abcdef0123456789abcdef\"}");
