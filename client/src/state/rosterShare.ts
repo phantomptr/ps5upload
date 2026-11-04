@@ -15,9 +15,13 @@
  *
  * Desktop and mobile apps keep their consoles themselves: their engine is theirs alone.
  */
+import { backupBeforeChange } from "../lib/settingsBackup";
+import { safeGetItem, safeRemoveItem, safeSetItem } from "../lib/safeStorage";
 import { isTauriEnv } from "../lib/tauriEnv";
+import { trStatic } from "../lib/trStatic";
 import { getEngineUrl } from "./engine";
 import { useRosterStore, type PS5Profile } from "./roster";
+import { useToastStore } from "./toasts";
 
 /** A console as the engine keeps it: everything but this browser's last-seen cache. */
 export type SharedProfile = Omit<PS5Profile, "last_seen_at" | "last_seen_kernel" | "last_seen_payload">;
@@ -120,6 +124,27 @@ export const engineShareApi: ShareApi = {
 const profilesOf = (doc: Doc): SharedProfile[] =>
   Array.isArray(doc.value?.profiles) ? doc.value!.profiles! : [];
 
+/** A document that actually holds a list. `rev` 0, or an answer with no list in it, says nothing
+ *  about which consoles exist; only a saved list can remove one. */
+const holdsList = (doc: Doc): boolean => doc.rev > 0 && Array.isArray(doc.value?.profiles);
+
+/**
+ * This browser has changes the engine does not have yet: what they were made from, so a reload can
+ * merge them instead of the engine's list replacing them. `base: null` is a restored backup, where
+ * this browser's list is the one the user asked for. Not part of a settings backup (OWN_KEYS).
+ */
+export const UNSAVED_KEY = "ps5upload.roster.share_unsaved.v1";
+
+function readUnsaved(): { base: SharedProfile[] | null } | null {
+  try {
+    const parsed = JSON.parse(safeGetItem(UNSAVED_KEY) ?? "null") as { base?: unknown } | null;
+    if (!parsed) return null;
+    return { base: Array.isArray(parsed.base) ? (parsed.base as SharedProfile[]) : null };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Keeps the roster store and the engine's copy the same. `pull()` takes the engine's copy when
  * it changed; `push()` saves this browser's changes. Both run one at a time.
@@ -160,19 +185,40 @@ export class RosterShare {
     return this.busy;
   }
 
+  /** The engine has no list, or not the one this browser last agreed with it: its store was lost
+   *  or replaced (a container recreated without its volume, a corrupt file). What the two hold
+   *  says nothing about what anyone removed, so nothing is dropped: both lists are kept and saved. */
+  private async handOver(doc: Doc): Promise<void> {
+    const theirs = profilesOf(doc);
+    const merged = mergeShared([], this.local(), theirs);
+    this.rev = doc.rev;
+    this.base = theirs;
+    this.apply(merged);
+    if (!same(merged, theirs)) await this.save();
+    else safeRemoveItem(UNSAVED_KEY);
+  }
+
   /** First contact: the engine's list wins; a browser with consoles and an engine that has never
-   *  had a list hands its consoles over (the list each browser kept before this shipped). */
+   *  had a list hands its consoles over (the list each browser kept before this shipped). Changes
+   *  a previous page load could not save, and a restored backup, are merged in rather than lost. */
   start(): Promise<void> {
     return this.queue(async () => {
       const doc = await this.api.get();
-      if (doc.rev === 0 && this.local().length > 0) {
-        this.rev = 0;
-        this.base = [];
-        await this.save();
+      if (!holdsList(doc) && this.local().length > 0) {
+        await this.handOver(doc);
         return;
       }
+      const unsaved = readUnsaved();
       this.rev = doc.rev;
       this.base = profilesOf(doc);
+      if (unsaved) {
+        const mine = this.local();
+        const merged = mergeShared(unsaved.base ?? this.base, mine, this.base);
+        this.apply(merged);
+        if (same(merged, this.base)) safeRemoveItem(UNSAVED_KEY);
+        else await this.save();
+        return;
+      }
       if (this.firstContact === "union") {
         const merged = mergeShared([], this.local(), this.base);
         this.apply(merged);
@@ -184,14 +230,27 @@ export class RosterShare {
   }
 
   /** Takes the engine's list when another browser changed it. Local edits not yet saved are kept
-   *  (merged in and saved). */
+   *  (merged in and saved), also when nothing changed there: a save that failed is retried here. */
   pull(): Promise<void> {
     return this.queue(async () => {
       const doc = await this.api.get();
-      if (doc.rev === this.rev) return;
       const theirs = profilesOf(doc);
+      // Revisions only go up. One that went back, or the same one holding another list, is a store
+      // that was lost or replaced, not a change someone made. Never apply that as a removal.
+      const lost =
+        doc.rev < this.rev || (doc.rev === this.rev && !same(theirs, this.base)) || (this.rev > 0 && !holdsList(doc));
+      if (lost) {
+        await this.handOver(doc);
+        return;
+      }
       const mine = this.local();
+      if (doc.rev === this.rev) {
+        if (!same(mine, this.base)) await this.save();
+        return;
+      }
       const merged = same(mine, this.base) ? theirs : mergeShared(this.base, mine, theirs);
+      // Everything removed at once by another browser: real, but keep a copy to bring it back from.
+      if (merged.length === 0 && mine.length > 0) await backupBeforeChange("before-sync");
       this.rev = doc.rev;
       this.base = theirs;
       this.apply(merged);
@@ -212,11 +271,19 @@ export class RosterShare {
   private async save(): Promise<void> {
     for (let attempt = 0; attempt < 4; attempt++) {
       const mine = this.local();
-      if (same(mine, this.base) && this.rev > 0) return;
+      if (same(mine, this.base) && this.rev > 0) {
+        safeRemoveItem(UNSAVED_KEY);
+        return;
+      }
+      // Before the attempt: a page closed mid-save, or an engine that is down, loses nothing.
+      if (readUnsaved()?.base !== null) {
+        safeSetItem(UNSAVED_KEY, JSON.stringify({ base: this.base }));
+      }
       const r = await this.api.put(this.rev, mine);
       if ("rev" in r) {
         this.rev = r.rev;
         this.base = mine;
+        safeRemoveItem(UNSAVED_KEY);
         return;
       }
       const theirs = profilesOf(r.conflict);
@@ -225,7 +292,7 @@ export class RosterShare {
       this.base = theirs;
       this.apply(merged);
     }
-    throw new Error("the console list kept changing elsewhere; it will be saved on the next change");
+    throw new Error("the console list kept changing elsewhere; it will be saved on the next check");
   }
 }
 
@@ -236,19 +303,36 @@ export const PULL_MS = 30_000;
 export function startRosterShare(api: ShareApi = engineShareApi): () => void {
   if (isTauriEnv()) return () => {};
   const share = new RosterShare(api);
-  const warn = (e: unknown) =>
+  let failures = 0;
+  const warn = (e: unknown) => {
     console.warn("[roster-share]", e instanceof Error ? e.message : String(e));
+    // Once per outage, and not for one blip: an engine restart is over before the next check.
+    failures += 1;
+    if (failures === 2 && readUnsaved()) {
+      useToastStore.getState().push({
+        tone: "warn",
+        message: trStatic(
+          "roster_share_unsaved",
+          "Your console list changes are not saved on the server yet. This page will keep trying.",
+        ),
+      });
+    }
+  };
+  const ok = () => {
+    failures = 0;
+  };
   let started = false;
   void share
     .start()
     .then(() => {
       started = true;
+      ok();
     })
     .catch(warn);
   const unsub = useRosterStore.subscribe((s, prev) => {
     if (!started || share.applyingRemote || s.profiles === prev.profiles) return;
     if (same(sharedForm(s.profiles), sharedForm(prev.profiles))) return; // last-seen only
-    void share.push().catch(warn);
+    void share.push().then(ok).catch(warn);
   });
   const pull = () => {
     if (!started) {
@@ -256,11 +340,12 @@ export function startRosterShare(api: ShareApi = engineShareApi): () => void {
         .start()
         .then(() => {
           started = true;
+          ok();
         })
         .catch(warn);
       return;
     }
-    if (document.visibilityState === "visible") void share.pull().catch(warn);
+    if (document.visibilityState === "visible") void share.pull().then(ok).catch(warn);
   };
   const timer = window.setInterval(pull, PULL_MS);
   window.addEventListener("focus", pull);

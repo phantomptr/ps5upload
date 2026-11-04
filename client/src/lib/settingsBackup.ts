@@ -25,7 +25,9 @@ const OWN_KEYS = new Set([
   "ps5upload.shared_prefs.meta.v1",
   "ps5upload.mesh_prefs.meta.v1",
   "ps5upload.mesh.client",
+  "ps5upload.roster.share_unsaved.v1",
 ]);
+const ROSTER_KEY = "ps5upload.roster.v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Before-sync backups at most this often (a busy sync must not rotate the daily ones out). */
 const BEFORE_SYNC_EVERY_MS = 60 * 60 * 1000;
@@ -72,6 +74,11 @@ export function applyBundle(parsed: unknown): number {
   for (const { key, value } of actions) {
     if (value === null) safeRemoveItem(key);
     else safeSetItem(key, value);
+  }
+  // The self-hosted web UI: the engine's list would replace the restored one at the next load
+  // (state/rosterShare.ts). This list is the one asked for, so it goes back to the engine.
+  if (typeof ls[ROSTER_KEY] === "string") {
+    safeSetItem("ps5upload.roster.share_unsaved.v1", JSON.stringify({ base: null }));
   }
   return actions.length;
 }
