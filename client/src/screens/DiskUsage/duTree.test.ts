@@ -18,6 +18,7 @@ import {
   forgetWalks,
   rememberWalk,
   runWalk,
+  sleep,
   POLL_MS,
   type DuDir,
   type DuStatus,
@@ -151,5 +152,23 @@ describe("running a walk", () => {
     ac.abort();
     expect(await p).toBeNull();
     expect(calls[calls.length - 1]).toEqual({ cmd: "ps5_disk_usage_cancel", args: { id: "w1" } });
+  });
+});
+
+describe("sleep", () => {
+  it("takes its abort listener off again when the wait ends", async () => {
+    const controller = new AbortController();
+    const add = vi.spyOn(controller.signal, "addEventListener");
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    await sleep(0, controller.signal);
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(remove.mock.calls[0][1]).toBe(add.mock.calls[0][1]);
+  });
+  it("ends at once on abort", async () => {
+    const controller = new AbortController();
+    const waited = sleep(60_000, controller.signal);
+    controller.abort();
+    await expect(waited).resolves.toBeUndefined();
   });
 });

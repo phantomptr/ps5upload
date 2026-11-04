@@ -3,6 +3,7 @@ import { AlertTriangle } from "lucide-react";
 
 import { Button } from ".";
 import { activateFocusTrap } from "../lib/focusTrap";
+import { useScrollLock } from "../lib/useScrollLock";
 import { useTr } from "../state/lang";
 
 /**
@@ -53,6 +54,7 @@ export function useConfirm(): {
 } {
   const tr = useTr();
   const [pending, setPending] = useState<PendingState | null>(null);
+  useScrollLock(!!pending);
   // Stable id pair so aria-labelledby/-describedby on the dialog wire
   // up to the right elements without colliding with other dialogs.
   const titleId = useId();
@@ -218,6 +220,7 @@ export function useAlert(): {
 } {
   const tr = useTr();
   const [pending, setPending] = useState<AlertPending | null>(null);
+  useScrollLock(!!pending);
   const titleId = useId();
   const bodyId = useId();
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -330,6 +333,7 @@ export function usePrompt(): {
 } {
   const tr = useTr();
   const [pending, setPending] = useState<PromptPending | null>(null);
+  useScrollLock(!!pending);
   const [value, setValue] = useState("");
   const titleId = useId();
   const bodyId = useId();

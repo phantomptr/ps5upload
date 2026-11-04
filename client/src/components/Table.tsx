@@ -84,6 +84,21 @@ export interface TableProps<T> {
   zebra?: boolean;
 }
 
+/**
+ * Enter or Space on a focused cell opens that row, as a click on it does. Not on the selection
+ * column (that cell is a checkbox's), and not when focus is on a control inside a cell: the
+ * control's own key press must still work.
+ */
+export function isRowActivationKey(
+  key: string,
+  target: Pick<Element, "getAttribute">,
+  activeCol: number,
+  firstDataCol: number,
+): boolean {
+  if (key !== "Enter" && key !== " ") return false;
+  return target.getAttribute("role") === "gridcell" && activeCol >= firstDataCol;
+}
+
 const ARROW_KEYS = new Set([
   "ArrowUp",
   "ArrowDown",
@@ -251,6 +266,14 @@ export function Table<T>({
   // ---- Keyboard grid navigation ----
   const handleGridKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (isRowActivationKey(e.key, e.target as Element, activeCell.col, colOffset)) {
+        const row = sortedRows[activeCell.row];
+        if (!onRowClick || row === undefined) return;
+        if (isRowDisabled?.(row, activeCell.row)) return;
+        e.preventDefault();
+        onRowClick(row, activeCell.row);
+        return;
+      }
       if (!ARROW_KEYS.has(e.key) && e.key !== "Home" && e.key !== "End") return;
       const maxRow = sortedRows.length - 1;
       const maxCol = totalCols - 1;
@@ -292,7 +315,7 @@ export function Table<T>({
         return { row, col };
       });
     },
-    [sortedRows.length, totalCols],
+    [sortedRows, totalCols, activeCell, colOffset, onRowClick, isRowDisabled],
   );
 
   // ---- Render ----
@@ -358,10 +381,16 @@ export function Table<T>({
         ].join(" ")}
         style={col.width ? { width: col.width } : undefined}
       >
-        <span className="inline-flex items-center gap-1">
-          {col.header}
-          {SortIcon && <SortIcon size={12} className={isSorted ? "" : "opacity-40"} />}
-        </span>
+        {col.sort ? (
+          // A real button, so a keyboard can reach it. Its click bubbles to the <th>'s handler,
+          // which covers the cell's padding too.
+          <button type="button" className="inline-flex items-center gap-1 uppercase">
+            {col.header}
+            {SortIcon && <SortIcon size={12} className={isSorted ? "" : "opacity-40"} />}
+          </button>
+        ) : (
+          <span className="inline-flex items-center gap-1">{col.header}</span>
+        )}
       </th>,
     );
   });

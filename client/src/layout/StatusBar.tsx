@@ -69,6 +69,10 @@ export default function StatusBar() {
       aria-hidden
     />
   );
+  // The dots are colour alone: say the state to a screen reader too.
+  const dotText = (light: ConsoleLight) => (
+    <span className="sr-only">{consoleLightLabel(light, tr)}</span>
+  );
   const engineLight: ConsoleLight =
     engineStatus === "up" ? "up" : engineStatus === "down" ? "down" : "unknown";
 
@@ -125,6 +129,7 @@ export default function StatusBar() {
       >
         {dot(engineLight)}
         <span>{tr("status_engine", undefined, "Engine")}</span>
+        {dotText(engineLight)}
       </div>
 
       <span className="h-3 w-px bg-[var(--color-border)]" aria-hidden />
@@ -135,8 +140,10 @@ export default function StatusBar() {
         <span className={ps5Connected ? undefined : "opacity-70"}>
           {ps5Name}
         </span>
-        {(ps5Light === "rest" || ps5Light === "unreachable") && (
+        {ps5Light === "rest" || ps5Light === "unreachable" ? (
           <span data-testid="status-ps5-power">{consoleLightLabel(ps5Light, tr)}</span>
+        ) : (
+          dotText(ps5Light)
         )}
         {ps5Connected && ps5Firmware && (
           <span className="rounded-full border border-[var(--color-border-strong)] px-2 font-mono text-[0.625rem]">
