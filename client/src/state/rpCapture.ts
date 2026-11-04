@@ -210,5 +210,7 @@ export const useRpCaptureStore = create<CaptureState>((set, get) => {
 
 // The stream ended or another one started: what was recorded so far is saved.
 useRemotePlayStore.subscribe((s, prev) => {
-  if (prev.stream && s.stream !== prev.stream) useRpCaptureStore.getState().stopRecording();
+  if (prev.stream && (s.stream !== prev.stream || (prev.pictureHere && !s.pictureHere))) {
+    useRpCaptureStore.getState().stopRecording();
+  }
 });

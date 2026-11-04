@@ -41,6 +41,7 @@ export function RemotePlayMini() {
   const pip = useRemotePlayStore((s) => s.pip);
   const prefs = useRemotePlayStore((s) => s.prefs);
   const setPrefs = useRemotePlayStore((s) => s.setPrefs);
+  const pictureHere = useRemotePlayStore((s) => s.pictureHere);
   const androidPip = useAndroidPipStore((s) => s.inPip);
   const [dismissed, setDismissed] = useState(false);
   const [corner, setCorner] = useState<MiniCorner>(loadCorner);
@@ -66,6 +67,7 @@ export function RemotePlayMini() {
     androidPip,
     enabled: prefs.miniPlayer !== false,
     dismissed,
+    pictureHere,
   });
 
   useEffect(() => {

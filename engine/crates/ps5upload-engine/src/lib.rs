@@ -11672,6 +11672,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/rp/frame", get(rp_stream_api::automation::frame))
         .route("/api/ps5/rp/input", post(rp_stream_api::automation::input))
         .route(
+            "/api/ps5/rp/picture",
+            post(rp_stream_api::automation::picture),
+        )
+        .route(
             "/api/ps5/rp/input/release",
             post(rp_stream_api::automation::release),
         )
@@ -12587,6 +12591,7 @@ mod loopback_guard_tests {
             "/api/ps5/rp/frame",
             "/api/ps5/rp/input",
             "/api/ps5/rp/input/release",
+            "/api/ps5/rp/picture",
             "/api/ps5/rp/live.ts",
             "/api/ps5/rp/live/status",
             "/pad/../api/jobs",

@@ -833,6 +833,29 @@ pub(crate) fn diag_summary() -> serde_json::Value {
     })
 }
 
+/// Play Together on `console` needs the Remote Play session: friends are in, or an invite is out
+/// (it lasts [`INVITE_TTL`], so a session nobody can reach does not run for ever).
+pub(crate) fn needs_session(console: &str) -> bool {
+    let now = Instant::now();
+    with_party(&host_key(console), |p| {
+        p.guests.iter().any(|g| g.active()) || p.invite.as_ref().is_some_and(|i| i.until > now)
+    })
+    .unwrap_or(false)
+}
+
+/// A party with an invite out, for other modules' tests.
+#[cfg(test)]
+pub(crate) fn test_open_party(console: &str) {
+    let mut p = Party::new(console, 1, "Desk".into(), Settings::default());
+    p.invite(false, Instant::now());
+    with_parties(|m| m.insert(host_key(console), p));
+}
+
+#[cfg(test)]
+pub(crate) fn test_close_party(console: &str) {
+    with_parties(|m| m.remove(&host_key(console)));
+}
+
 /// Play Together, by console (`host_key`).
 static PARTIES: Mutex<Option<HashMap<String, Party>>> = Mutex::new(None);
 

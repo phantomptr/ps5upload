@@ -169,6 +169,11 @@ fn current() -> Option<Arc<Run>> {
     RUN.lock().ok().and_then(|g| g.clone())
 }
 
+/// A broadcast is under way (or waiting for Play to come back): it needs the Remote Play session.
+pub(crate) fn run_needs_session() -> bool {
+    current().is_some_and(|r| !r.stopped() && !r.finished())
+}
+
 impl Run {
     fn set(&self, f: impl FnOnce(&mut RunState)) {
         if let Ok(mut g) = self.st.lock() {

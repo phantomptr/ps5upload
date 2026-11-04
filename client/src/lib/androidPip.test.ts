@@ -45,6 +45,10 @@ describe("aspectOf", () => {
 });
 
 describe("pipRequest", () => {
+  it("asks for nothing with the picture off on this device", () => {
+    const stream = { canvas: { width: 1920, height: 1080, style: { getPropertyValue: () => "" } } } as never;
+    expect(pipRequest({ stream, phase: "playing", prefs: { systemPip: true }, pictureHere: false }).active).toBe(false);
+  });
   it("asks for picture in picture only while a stream plays and the setting is on", () => {
     const stream = { canvas: canvas(16 / 9) };
     expect(pipRequest({ stream, phase: "playing", prefs: { systemPip: true } })).toEqual({ active: true, w: 16, h: 9 });
