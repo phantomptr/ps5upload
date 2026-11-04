@@ -73,6 +73,8 @@
 #include "index_glob.h"
 #include "mgmt_rpc.h"
 #include "mgmt_fs.h"
+#include "fan_servo.h"
+#include "json_escape.h"
 #include "sigpipe_guard.h"
 #include "path_policy.h"
 #include "cross_device.h"
@@ -533,7 +535,6 @@ int is_path_allowed(const char *p);
 int is_safe_unsafe_read_path(const char *p);
 /* JSON-escape helper. Used by ACK builders that embed user-controlled
  * paths/strings into JSON bodies. Defined alongside FS_LIST_VOLUMES. */
-static size_t json_escape_into(const char *src, char *dst, size_t dst_cap);
 static const char *json_string_end(const char *start, const char *limit);
 static int json_copy_unescaped_string(const char *start, const char *end,
                                       char *out, size_t out_len);
@@ -1801,25 +1802,6 @@ static void read_ps5_kernel_version(char *dst, size_t dst_cap) {
  * Returns the number of bytes written (excluding the NUL). Callers
  * can detect truncation by comparing the return value against the
  * source strlen — if every source char was consumed, no truncation. */
-static size_t json_escape_into(const char *src, char *dst, size_t dst_cap) {
-    size_t ei = 0, ni = 0;
-    if (!dst || dst_cap == 0) return 0;
-    while (src && src[ni] && ei + 2 < dst_cap) {
-        unsigned char c = (unsigned char)src[ni];
-        if (c == '"' || c == '\\') {
-            dst[ei++] = '\\';
-            dst[ei++] = (char)c;
-        } else if (c < 0x20) {
-            dst[ei++] = '?';
-        } else {
-            dst[ei++] = (char)c;
-        }
-        ni++;
-    }
-    dst[ei] = '\0';
-    return ei;
-}
-
 static const char *json_string_end(const char *start, const char *limit) {
     const char *p = start;
     if (!p) return NULL;
@@ -8617,45 +8599,26 @@ static int handle_hw_drive_sensors(runtime_state_t *state) {
                               MGMT_FRAME_HW_DRIVE_SENSORS_ACK, "hw_drive_sensors_failed");
 }
 
-/* Parse body as "NN" (ASCII decimal). Accepts an empty-body shortcut
- * meaning "reset to default 65 °C" so future UI can send a zero-body
- * frame as a quick reset. Leading whitespace and a trailing newline
- * are tolerated because some shells (lab CLI, curl) add them. */
+/* Body: "NN" or "NN reapply_sec" in ASCII decimal (fan_threshold_body_parse); 0 asks for the console's
+ * own fan setting back (hw_fan_restore_stock). The optional interval updates the watcher's too; a body
+ * with just the threshold leaves it unchanged. An invalid body changes nothing: it used to pin 65 C,
+ * and save it, from one typo. */
 static int handle_hw_set_fan_threshold(runtime_state_t *state, const char *body, uint64_t body_len) {
     if (!state) return -1;
 
-    uint8_t threshold = 65;
-    /* "0" asks for the console's own fan setting back (hw_fan_restore_stock). */
-    int restore = 0;
-    /* Optional reapply interval in seconds. If present in the body
-     * (as the second integer), update the watcher's interval too.
-     * Backward compat: a body with just the threshold ("65") leaves
-     * the interval unchanged. */
-    int has_reapply = 0;
-    int reapply_sec = 0;
-    if (body_len > 0 && body_len < 32) {
-        char buf[32];
-        memcpy(buf, body, (size_t)body_len);
-        buf[body_len] = '\0';
-        /* Parse "threshold" or "threshold reapply_sec". hw_fan_set_threshold
-         * clamps the threshold so a non-numeric payload degrades to a
-         * safe default rather than being rejected. */
-        int parsed = 0;
-        int second = 0;
-        int matched = sscanf(buf, "%d %d", &parsed, &second);
-        if (matched >= 1 && parsed > 0 && parsed < 255) {
-            threshold = (uint8_t)parsed;
-        } else if (matched >= 1 && parsed == 0) {
-            restore = 1;
-        }
-        if (matched >= 2 && second > 0) {
-            has_reapply = 1;
-            reapply_sec = second;
-        }
-    } else if (body_len >= 32) {
+    if (body_len >= 32) {
         static const char err[] = "body_too_long";
         return mgmt_reply(MGMT_FRAME_ERROR, err, (uint64_t)(sizeof(err) - 1));
     }
+    int value = 0, reapply_sec = 0;
+    if (fan_threshold_body_parse(body, (size_t)body_len, HW_FAN_THRESHOLD_MIN, HW_FAN_THRESHOLD_MAX, &value,
+                                 &reapply_sec) != 0) {
+        static const char err[] = "bad_threshold";
+        return mgmt_reply(MGMT_FRAME_ERROR, err, (uint64_t)(sizeof(err) - 1));
+    }
+    const int restore = value == 0;
+    const uint8_t threshold = (uint8_t)value;
+    const int has_reapply = reapply_sec > 0;
 
     const char *err_reason = NULL;
     if ((restore ? hw_fan_restore_stock(&err_reason) : hw_fan_set_threshold(threshold, &err_reason)) != 0) {

@@ -94,6 +94,12 @@ long fan_guard_last_ago(const fan_guard_t *g, int64_t now_s);
  * [HW_FAN_THRESHOLD_MIN, MAX] clamp is the caller's. */
 const char *fan_target_refusal(int c, int stock_c);
 
+/* An HW_FAN_THRESHOLD request: "<c>" or "<c> <reapply_s>" in ASCII, with optional surrounding
+ * spaces and a trailing newline (shells add them). <c> is a target in [lo, hi], or 0 for "give the
+ * fan back to the console". 0 with both set (*reapply_sec 0 = not given), or -1 for anything else:
+ * an invalid request must change nothing, so it never falls back to a default target. */
+int fan_threshold_body_parse(const char *body, size_t len, int lo, int hi, int *threshold, int *reapply_sec);
+
 /* fan_reapply.conf: the watcher's tick in seconds. "v3 <s>" is current. Anything older ("v2 <s>"
  * or a bare number, written while the tick was 15 s) reads as `def` when it says 15, the old
  * default, and as itself otherwise. Out of [lo, hi] or unreadable: `def`. The caller writes the

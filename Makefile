@@ -1161,6 +1161,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/backup_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-backup-selftest
 	@echo "✓ a snapshot restores byte for byte, the newest five are kept, the list stays valid and inside its buffer"
+	@echo "Running JSON string escape self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-json-escape-selftest \
+		$(PAYLOAD_DIR)/tests/json_escape_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-json-escape-selftest
+	@echo "✓ a quote, a backslash or a control byte in a string cannot break a reply"
 	@echo "Running left-behind extraction request self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-archive-request-selftest \

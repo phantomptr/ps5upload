@@ -1,6 +1,8 @@
 #include "fan_servo.h"
 
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 int fan_servo_get(fan_servo_io_fn io, void *ctx, uint8_t obj[FAN_SERVO_LEN]) {
@@ -77,6 +79,29 @@ const char *fan_target_refusal(int c, int stock_c) {
     /* A target above the console's own lets the chip run hotter than Sony's control would. */
     if (stock_c > 0 && c > stock_c) return "fan_above_stock";
     return NULL;
+}
+
+int fan_threshold_body_parse(const char *body, size_t len, int lo, int hi, int *threshold, int *reapply_sec) {
+    char buf[32], *end;
+    long v;
+    if (!body || len == 0 || len >= sizeof buf) return -1;
+    memcpy(buf, body, len);
+    buf[len] = '\0';
+    if (strlen(buf) != len) return -1; /* an embedded NUL */
+    errno = 0;
+    v = strtol(buf, &end, 10);
+    if (end == buf || errno != 0) return -1;
+    if (v != 0 && (v < lo || v > hi)) return -1;
+    *threshold = (int)v;
+    *reapply_sec = 0;
+    while (*end == ' ' || *end == '\t') end++;
+    if (*end >= '0' && *end <= '9') {
+        long r = strtol(end, &end, 10);
+        if (errno != 0 || r > 0x7fffffffL) return -1;
+        *reapply_sec = (int)r;
+    }
+    while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') end++;
+    return *end == '\0' ? 0 : -1;
 }
 
 int fan_reapply_parse(const char *text, int def, int lo, int hi) {
