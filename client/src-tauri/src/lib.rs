@@ -662,6 +662,7 @@ pub fn run() {
             // reachability checks and payload delivery.
             commands::port_check,
             commands::payload_send,
+            commands::payload_send_check,
             commands::payload_check,
             commands::payload_probe,
             // ── Self-update ─────────────────────────────────────────

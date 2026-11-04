@@ -41,6 +41,20 @@ describe("USB eject", () => {
     expect(d.onBusy.mock.calls).toEqual([[true], [false]]);
   });
 
+  it("says why when the engine refuses: its own job on the drive, or a game for a force", async () => {
+    const jobs = deps({ eject: vi.fn(async () => Promise.reject(new Error("usb_eject_refused_jobs"))) });
+    const out = await usbEjectFlow("h", "/mnt/usb0", jobs, tr);
+    expect(out).toMatchObject({ kind: "failed", message: expect.stringContaining("upload") });
+    // Refused outright: never offered as "eject anyway".
+    expect(jobs.confirm).toHaveBeenCalledTimes(1);
+    const eject = vi
+      .fn(async (_h: string, _m: string, force: boolean): Promise<unknown> => {
+        throw new Error(force ? "usb_eject_refused_game" : "usb_eject_busy");
+      });
+    const out2 = await usbEjectFlow("h", "/mnt/usb0", deps({ eject }), tr);
+    expect(out2).toMatchObject({ kind: "failed", message: expect.stringContaining("game") });
+  });
+
   it("does nothing when the user cancels", async () => {
     const d = deps({ confirm: vi.fn(async () => false) });
     expect(await usbEjectFlow("h", "/mnt/usb0", d, tr)).toEqual({ kind: "cancelled" });

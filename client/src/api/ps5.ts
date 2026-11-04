@@ -547,6 +547,32 @@ export async function sendPayload(
   return { viaPayloadManager: sentViaPayloadManager(resp?.status) };
 }
 
+/** A send the user started that should not go now, by the engine's reason (`pkg_install_busy`,
+ *  `helper_busy`, `loader_busy`): `payloadSendRefusalText` says it. */
+export class PayloadSendRefused extends Error {
+  constructor(readonly code: string) {
+    super(code);
+    this.name = "PayloadSendRefused";
+  }
+}
+
+/** `sendPayload` for a send the user started (Send, a catalogue card, a playlist step): asks the
+ *  engine first, so it does not land in an install or an elfldr swap, or stop the helper under a
+ *  running job. The app's own helper recovery uses `sendPayload` as it is. */
+export async function sendPayloadChecked(
+  ip: string,
+  elfPath: string,
+  port?: number,
+): Promise<{ viaPayloadManager: boolean }> {
+  const check = await invoke<{ ok?: boolean; status?: string }>("payload_send_check", {
+    ip,
+    path: elfPath,
+    port: port ?? null,
+  });
+  if (check?.ok === false) throw new PayloadSendRefused(check.status ?? "loader_busy");
+  return sendPayload(ip, elfPath, port);
+}
+
 /**
  * Send a payload that is already on the console (`path`, a .elf/.bin) to its
  * loader on :9021: the engine reads it back through the helper and sends it
@@ -5267,6 +5293,12 @@ export interface HealthCheck {
   detail: string;
   remedy: string;
   fix?: HealthFixAction;
+  /** Which sentence `detail` is, with its values: see screens/Health/checkText. Absent from an
+   *  older engine, and from a check that has only its English. */
+  detail_id?: string;
+  values?: Record<string, string>;
+  /** Which sentence `remedy` is. */
+  remedy_id?: string;
 }
 
 export interface HealthReport {
@@ -5309,10 +5341,13 @@ export async function healthJunk(
 export async function healthFix(
   action: HealthFixAction,
   addr?: string,
+  /** For `clean_junk`: the files the user was shown. Nothing else is deleted. */
+  paths?: string[],
 ): Promise<HealthFixOutcome> {
   const resp: HealthFixOutcome = await invoke("health_fix", {
     addr: addr ?? null,
     action,
+    paths: paths ?? null,
   });
   return assertOk(resp, `Repair (${action})`, (r) =>
     r.changed.length ? `Completed first: ${r.changed.join("; ")}` : undefined,

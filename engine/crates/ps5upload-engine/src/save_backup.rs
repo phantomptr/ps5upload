@@ -1563,6 +1563,26 @@ pub struct SettingsPatch {
     pub dir: Option<String>,
     pub keep: Option<u32>,
     pub hosts: Option<Vec<String>>,
+    /// Consoles to add to `hosts`, whatever else is on it: what a client knows of its own roster.
+    /// Several clients share one engine, so none of them sends the whole list.
+    #[serde(default)]
+    pub add_hosts: Vec<String>,
+    /// Consoles to take off `hosts`.
+    #[serde(default)]
+    pub remove_hosts: Vec<String>,
+}
+
+/// `hosts` with the additions and removals made, tidy.
+fn hosts_with(mut hosts: Vec<String>, add: Vec<String>, remove: &[String]) -> Vec<String> {
+    hosts.extend(add);
+    let mut hosts: Vec<String> = hosts
+        .into_iter()
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty() && !remove.iter().any(|r| r.trim() == x))
+        .collect();
+    hosts.sort();
+    hosts.dedup();
+    hosts
 }
 
 /// Whether the engine can write `dir` (made if missing).
@@ -1580,7 +1600,7 @@ fn writable(dir: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `PUT /api/save-backup` — change any of `{enabled, dir, keep, hosts}`.
+/// `PUT /api/save-backup` — change any of `{enabled, dir, keep, hosts, add_hosts, remove_hosts}`.
 pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
     let mut next = settings();
     if let Some(d) = patch.dir {
@@ -1593,14 +1613,10 @@ pub async fn put_settings(Json(patch): Json<SettingsPatch>) -> Response {
         next.keep = clamp_keep(k);
     }
     if let Some(h) = patch.hosts {
-        let mut h: Vec<String> = h
-            .into_iter()
-            .map(|x| x.trim().to_string())
-            .filter(|x| !x.is_empty())
-            .collect();
-        h.sort();
-        h.dedup();
-        next.hosts = h;
+        next.hosts = hosts_with(h, Vec::new(), &[]);
+    }
+    if !patch.add_hosts.is_empty() || !patch.remove_hosts.is_empty() {
+        next.hosts = hosts_with(next.hosts, patch.add_hosts, &patch.remove_hosts);
     }
     if next.enabled && next.dir.is_empty() {
         return json_error(
@@ -1733,6 +1749,20 @@ pub async fn get_note(Query(q): Query<NoteQuery>) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn one_client_adding_or_removing_leaves_the_others_consoles_alone() {
+        let strs = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let on = strs(&["10.0.0.1", "10.0.0.2"]);
+        assert_eq!(
+            hosts_with(on.clone(), strs(&["10.0.0.3", " 10.0.0.1 "]), &[]),
+            strs(&["10.0.0.1", "10.0.0.2", "10.0.0.3"])
+        );
+        assert_eq!(
+            hosts_with(on, Vec::new(), &strs(&["10.0.0.1"])),
+            strs(&["10.0.0.2"])
+        );
+    }
+
     use super::*;
 
     /// A backup says whose save it is; one of another user's is refused, unknown never.

@@ -16,14 +16,19 @@ export function useInstalledTitles(host: string | undefined): InstalledTitle[] |
     setTitles(cache.get(key) ?? null);
     if (!host) return;
     let live = true;
-    appsInstalled(transferAddr(host))
-      .then((r) => {
-        cache.set(key, r.titles);
-        if (live) setTitles(r.titles);
-      })
-      .catch(() => {});
+    const read = () =>
+      appsInstalled(transferAddr(host))
+        .then((r) => {
+          cache.set(key, r.titles);
+          if (live) setTitles(r.titles);
+        })
+        .catch(() => {});
+    void read();
+    // An install or uninstall that finishes while this is on screen changes the answer.
+    window.addEventListener("ps5upload:library:invalidate", read);
     return () => {
       live = false;
+      window.removeEventListener("ps5upload:library:invalidate", read);
     };
   }, [host, key]);
   return titles;

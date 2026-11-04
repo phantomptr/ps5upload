@@ -2458,6 +2458,43 @@ struct FsChmodReq {
     recursive: bool,
 }
 
+/// The registered game running now whose files are at or under `path`, if any. Asks the console
+/// only about what runs first, and more only when something does, so a delete with no game
+/// running costs one small call. A check that can't be made refuses nothing: the app's own rows
+/// check first, and this is the backstop for everything else that deletes.
+fn running_title_from(addr: &str, path: &str) -> Option<String> {
+    let running: Vec<String> = process_list(addr)
+        .ok()?
+        .processes
+        .into_iter()
+        .filter(|p| p.kind == "app" && !p.title_id.is_empty())
+        .map(|p| p.title_id)
+        .collect();
+    if running.is_empty() {
+        return None;
+    }
+    app_list_registered(addr)
+        .ok()?
+        .apps
+        .into_iter()
+        .find(|a| {
+            running.iter().any(|t| t.eq_ignore_ascii_case(&a.title_id))
+                && removes_source(path, &a.src)
+        })
+        .map(|a| a.title_id)
+}
+
+/// Whether deleting `path` takes away a game registered from `source`.
+fn removes_source(path: &str, source: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    let source = source.trim_end_matches('/');
+    !path.is_empty()
+        && (source == path
+            || source
+                .strip_prefix(path)
+                .is_some_and(|rest| rest.starts_with('/')))
+}
+
 async fn ps5_fs_delete(
     State(_state): State<AppState>,
     Json(req): Json<FsPathReq>,
@@ -2470,6 +2507,16 @@ async fn ps5_fs_delete(
     let op_id = req.op_id;
     let started = std::time::Instant::now();
     crate::log_info!("fs_delete: addr={addr} path={path} op_id={op_id}");
+    let (check_addr, check_path) = (addr.clone(), path.clone());
+    if let Ok(Some(title)) =
+        tokio::task::spawn_blocking(move || running_title_from(&check_addr, &check_path)).await
+    {
+        return json_err(
+            StatusCode::CONFLICT,
+            format!("{title} is running from this path. Close it first."),
+        )
+        .into_response();
+    }
     let path_for_log = path.clone();
     // 1-hour deadline: fs_delete is a single-shot RPC; the payload runs
     // a recursive `rm -rf` and only sends FS_DELETE_ACK at the end. A
@@ -3823,22 +3870,55 @@ struct UsbEjectReq {
 /// so it can be pulled. Without `force`, `usb_eject_busy` means something on the console
 /// holds it open; `force` unmounts anyway after a sync.
 async fn ps5_usb_eject(
-    State(state): State<AppState>,
-    Json(req): Json<UsbEjectReq>,
-) -> impl IntoResponse {
+    installs: pkg_install::PkgInstallStateHandle,
+    state: AppState,
+    req: UsbEjectReq,
+) -> axum::response::Response {
     let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
     let mp = req.mount_point;
     let force = req.force;
     crate::log_info!("usb_eject: addr={addr} mount_point={mp} force={force}");
-    let r =
-        tokio::task::spawn_blocking(move || ps5upload_core::fs_ops::usb_eject(&addr, &mp, force))
-            .await
-            .map_err(anyhow::Error::from)
-            .and_then(|r| r);
+    // Our own job writing to the drive holds it open too, and a forced unmount would cut it off:
+    // truncated files, and possibly a damaged exFAT volume.
+    if helper_stop::is_busy(&addr) || installs.jobs.active_for(&addr) {
+        return eject_refused(EJECT_REFUSED_JOBS);
+    }
+    let r = tokio::task::spawn_blocking(move || {
+        // A forced unmount also takes a drive from a game playing from it. The helper can't say
+        // which drive a game reads, so any game holds a force. Not being able to ask is no
+        // reason to refuse: the helper is what answers the eject as well.
+        if force && eject_game_running(&addr) {
+            anyhow::bail!(EJECT_REFUSED_GAME);
+        }
+        ps5upload_core::fs_ops::usb_eject(&addr, &mp, force)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
     match r {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
+        Err(e) if e.to_string() == EJECT_REFUSED_GAME => eject_refused(EJECT_REFUSED_GAME),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
+}
+
+/// An eject refused because this engine runs a transfer, file operation or install there.
+const EJECT_REFUSED_JOBS: &str = "usb_eject_refused_jobs";
+/// A forced eject refused because a game is running.
+const EJECT_REFUSED_GAME: &str = "usb_eject_refused_game";
+
+fn eject_refused(code: &str) -> axum::response::Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({ "error": code })),
+    )
+        .into_response()
+}
+
+fn eject_game_running(addr: &str) -> bool {
+    process_list(addr)
+        .map(|list| list.processes.iter().any(|p| p.kind == "app"))
+        .unwrap_or(false)
 }
 
 #[derive(Deserialize)]
@@ -6220,6 +6300,10 @@ async fn speed_test_cleanup_handler() -> impl IntoResponse {
 struct HealthFixReq {
     addr: Option<String>,
     action: ps5upload_core::health::FixAction,
+    /// For `clean_junk`: the files the user was shown. Anything else is left alone, and so is one
+    /// of these no longer on the list. Absent: everything on the list at this moment.
+    #[serde(default)]
+    paths: Option<Vec<String>>,
 }
 
 /// POST /api/ps5/health/fix
@@ -6228,15 +6312,32 @@ struct HealthFixReq {
 /// so an unknown or arbitrary value is rejected by serde before any
 /// console operation runs.
 async fn health_fix_handler(
-    State(_state): State<AppState>,
-    Json(req): Json<HealthFixReq>,
-) -> impl IntoResponse {
+    installs: pkg_install::PkgInstallStateHandle,
+    req: HealthFixReq,
+) -> axum::response::Response {
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
     let action = req.action;
+    // A staged install reads its package from a folder this cleans, and a queue can be between
+    // two of its items' steps with an old file there.
+    if matches!(action, ps5upload_core::health::FixAction::CleanJunk)
+        && (helper_stop::is_busy(&addr) || installs.jobs.active_for(&addr))
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "health_fix_busy" })),
+        )
+            .into_response();
+    }
+    let paths = req.paths;
     let result = tokio::task::spawn_blocking(move || {
-        ps5upload_core::health::apply_fix(&addr, &action, env!("CARGO_PKG_VERSION"))
+        ps5upload_core::health::apply_fix_of(
+            &addr,
+            &action,
+            paths.as_deref(),
+            env!("CARGO_PKG_VERSION"),
+        )
     })
     .await;
     match result {
@@ -11033,6 +11134,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
 
     let activity_installs = pkg_state.clone();
     let helper_stop_installs = pkg_state.clone();
+    let eject_installs = pkg_state.clone();
+    let browser_payload_installs = pkg_state.clone();
+    let health_fix_installs = pkg_state.clone();
     let cleanup_installs = pkg_state.clone();
     let app = Router::new()
         .route("/", get(ui_handler))
@@ -11058,7 +11162,12 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/speed-test/prepare", post(speed_test_prepare_handler))
         .route("/api/speed-test/cleanup", post(speed_test_cleanup_handler))
         .route("/api/ps5/health/junk", get(health_junk_handler))
-        .route("/api/ps5/health/fix", post(health_fix_handler))
+        .route(
+            "/api/ps5/health/fix",
+            post(move |Json(req): Json<HealthFixReq>| {
+                health_fix_handler(health_fix_installs.clone(), req)
+            }),
+        )
         .route("/api/ps5/cleanup", post(ps5_cleanup))
         .route("/api/ps5/volumes", get(ps5_volumes))
         .route("/api/ps5/pkg/scan-external", get(ps5_pkg_scan_external))
@@ -11217,11 +11326,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             post(save_backup::post_import_ps4),
         )
         .route("/api/save-backup/share", post(save_copy::post_share))
-        // A shared save's zip comes as the body: saves run from a few KB to a few hundred MB.
+        // A shared save's zip comes as the body, written to disk as it arrives (its own limit).
         .route(
             "/api/save-backup/use-shared",
-            post(save_copy::post_use_shared)
-                .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024)),
+            post(save_copy::post_use_shared),
         )
         // Another user's save of the same game on the same console (#612).
         .route("/api/save-backup/copy", post(save_copy::post_copy))
@@ -11238,6 +11346,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/games/{id}", get(games_api::get_game))
         .route("/api/games/{id}/refresh", post(games_api::refresh))
         .route("/api/console-snapshots/keep", post(games_api::keep))
+        .route("/api/console-snapshots/forget", post(games_api::forget))
         .route(
             "/api/collection/trash/preview",
             post(collection_tidy_api::post_trash_preview),
@@ -11297,7 +11406,14 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/fs/op-cancel", post(ps5_fs_op_cancel))
         .route("/api/ps5/fs/mount", post(ps5_fs_mount))
         .route("/api/ps5/fs/unmount", post(ps5_fs_unmount))
-        .route("/api/ps5/usb/eject", post(ps5_usb_eject))
+        .route(
+            "/api/ps5/usb/eject",
+            post(
+                move |State(state): State<AppState>, Json(req): Json<UsbEjectReq>| {
+                    ps5_usb_eject(eject_installs.clone(), state, req)
+                },
+            ),
+        )
         .route("/api/ps5/saves/open", post(ps5_save_open))
         .route("/api/ps5/saves/close", post(ps5_save_close))
         .route("/api/ps5/app/launch", post(ps5_app_launch))
@@ -11565,7 +11681,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             "/api/remote/connections/{id}/test",
             post(remote::api::test_saved_handler),
         )
-        .merge(browser_payload::router())
+        .merge(browser_payload::router(browser_payload_installs))
         .route("/api/remote/test", post(remote::api::test_form_handler))
         .route("/api/remote/list", post(remote::api::list_dir_handler))
         .route(
@@ -13083,6 +13199,18 @@ mod helpers_tests {
             failure_key("GET", "/api/jobs", None),
             failure_key("GET", "/api/jobs", Some(""))
         );
+    }
+
+    #[test]
+    fn a_delete_counts_for_a_game_at_or_inside_the_path_only() {
+        let src = "/data/homebrew/Game";
+        assert!(removes_source("/data/homebrew/Game", src));
+        assert!(removes_source("/data/homebrew/Game/", src));
+        assert!(removes_source("/data/homebrew", src));
+        assert!(!removes_source("/data/homebrew/Game/file.txt", src));
+        assert!(!removes_source("/data/homebrew/Gam", src));
+        assert!(!removes_source("/data/homebrew/Game2", src));
+        assert!(!removes_source("", src));
     }
 
     #[test]

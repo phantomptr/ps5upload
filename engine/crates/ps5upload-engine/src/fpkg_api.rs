@@ -996,7 +996,7 @@ pub(crate) async fn exfat_build_handler(
     // well fit in less, so the screen warns and it goes ahead.
     if !compress && packs.is_none() {
         if let Some(why) = build::free_bytes(&out_dir)
-            .and_then(|free| folder_build::shortfall(free, total, &out_dir))
+            .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
         {
             return json_err(StatusCode::BAD_REQUEST, why).into_response();
         }
@@ -1406,8 +1406,8 @@ pub(crate) async fn folder_build_handler(
         }
         Unpacked::File { size, .. } => *size,
     };
-    if let Some(why) =
-        build::free_bytes(&out_dir).and_then(|free| folder_build::shortfall(free, total, &out_dir))
+    if let Some(why) = build::free_bytes(&out_dir)
+        .and_then(|free| crate::folder_build::shortfall(free, total, &out_dir))
     {
         return json_err(StatusCode::BAD_REQUEST, why).into_response();
     }

@@ -35,7 +35,7 @@ const FILE: &str = "workshop.json";
 /// What a running Workshop job is making, for a client that did not start it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct Run {
-    pub job_id: Uuid,
+    pub job_id: String,
     /// `package`, `image`, `folder` or `extract`.
     pub kind: &'static str,
     /// What the user chose: the archive, for a game unpacked from one.
@@ -65,7 +65,7 @@ pub(crate) fn note_run(job_id: Uuid, kind: &'static str, source: &Path) {
             .cloned()
     });
     let run = Run {
-        job_id,
+        job_id: job_id.to_string(),
         kind,
         source: archive.unwrap_or_else(|| source.to_string_lossy().into_owned()),
         started_at_ms: crate::now_ms(),
@@ -265,21 +265,22 @@ mod tests {
         note_unpack(&root, Path::new("/dl/Game.rar"));
         note_run(a, "image", &root.join("Game"));
         note_run(b, "package", Path::new("/games/Other"));
-        let mine = |r: &Run| r.job_id == a || r.job_id == b;
+        let (id_a, id_b) = (a.to_string(), b.to_string());
+        let mine = |r: &Run| r.job_id == id_a || r.job_id == id_b;
         let listed: Vec<Run> = live_runs(|id| id == a || id == b)
             .into_iter()
             .filter(mine)
             .collect();
         assert_eq!(listed.len(), 2);
-        let image = listed.iter().find(|r| r.job_id == a).unwrap();
+        let image = listed.iter().find(|r| r.job_id == id_a).unwrap();
         assert_eq!(
             (image.kind, image.source.as_str()),
             ("image", "/dl/Game.rar")
         );
-        let pkg = listed.iter().find(|r| r.job_id == b).unwrap();
+        let pkg = listed.iter().find(|r| r.job_id == id_b).unwrap();
         assert_eq!(pkg.source, "/games/Other");
         // Once it ends it is gone, and the folder's note with its cleanup.
-        assert!(live_runs(|id| id == b).iter().all(|r| r.job_id != a));
+        assert!(live_runs(|id| id == b).iter().all(|r| r.job_id != id_a));
         forget_unpack(&root);
         note_run(a, "image", &root.join("Game"));
         assert!(live_runs(|id| id == a)

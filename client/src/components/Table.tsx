@@ -84,6 +84,11 @@ export interface TableProps<T> {
   zebra?: boolean;
 }
 
+/** One string for the rows' keys in order: equal when the same rows are listed the same way. */
+export function rowOrderKey<T>(rows: readonly T[], rowKey: (row: T, index: number) => string): string {
+  return rows.map((r, i) => rowKey(r, i)).join("\u0000");
+}
+
 const ARROW_KEYS = new Set([
   "ArrowUp",
   "ArrowDown",
@@ -143,10 +148,13 @@ export function Table<T>({
   const [renderCount, setRenderCount] = useState(pageSize);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  // Reset count when the data identity changes (new query, sort, etc.).
+  // Back to the first page when what is listed or its order changes (a new query, a sort), not
+  // whenever the array is rebuilt with the same rows in it: a value updating in a row (a play-time
+  // tick every 10 s) must not snap a list scrolled past the first page back under the user.
+  const rowOrder = useMemo(() => rowOrderKey(sortedRows, rowKey), [sortedRows, rowKey]);
   useEffect(() => {
     setRenderCount(pageSize);
-  }, [sortedRows, pageSize]);
+  }, [rowOrder, pageSize]);
 
   useEffect(() => {
     const el = sentinelRef.current;

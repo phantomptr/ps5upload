@@ -612,7 +612,7 @@ export default function SavesScreen() {
           `Restore ${entry.title_id} from a .zip backup?`,
         ),
         message: tr(
-          "saves_restore_confirm_body",
+          "saves_restore_confirm_body_v2",
           undefined,
           "Close the game first. Pick a .zip backup of this game made by this PS5 and this user. The save on the PS5 is copied, then replaced, and put back if the restore fails. That copy is kept afterwards only if a backup folder or server is set under Automatic backups." +
             (entry.kind === "ps4"
@@ -873,7 +873,7 @@ export default function SavesScreen() {
             `Restore ${entry.title_id} from USB backup ${latest}?`,
           ),
           message: tr(
-            "saves_restore_usb_confirm_body",
+            "saves_restore_usb_confirm_body_v2",
             { title: entry.title_id, timestamp: latest },
             `Close the game first. The save for ${entry.title_id} is copied, then replaced with the backup from ${latest}, and put back if the restore fails. That copy is kept afterwards only if a backup folder or server is set under Automatic backups.`,
           ),
@@ -945,7 +945,7 @@ export default function SavesScreen() {
           "Restore all saves from USB?",
         ),
         message: tr(
-          "saves_restore_usb_all_confirm_body",
+          "saves_restore_usb_all_confirm_body_v2",
           undefined,
           "Close any running game first. Each game's save is copied, then replaced with its latest USB backup, and put back if its restore fails. " +
             "Games with no backup on the USB drive are skipped. Those copies are kept afterwards only if a backup folder or server is set under Automatic backups.",

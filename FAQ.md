@@ -1745,6 +1745,17 @@ you trigger Unmount from a game's page or the Volumes screen.
 
 ---
 
+### How do I take out a USB or external drive safely?
+
+Press **Eject** on the drive in **Volumes** or in the File system's drive bar, or in Minion's
+Files page. It works for USB drives (`/mnt/usb0` to `/mnt/usb7`). The app refuses while an
+upload, file operation or install is running on that PS5, because cutting those off can damage
+files. The PS5's own services usually hold a drive open, so the app may then ask whether to eject
+anyway. That forced eject is refused while a game is running.
+
+An M.2 or extended storage drive (`/mnt/ext0`) has no Eject button: use **Storage** in the PS5's
+own Settings.
+
 ## My uploaded game won't launch
 
 This is almost never a bug in ps5upload: the transfer worked, and Sony's side

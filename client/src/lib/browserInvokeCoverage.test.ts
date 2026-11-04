@@ -145,6 +145,7 @@ const NATIVE_ONLY: Record<string, string> = {
   // Direct TCP to the console — need an engine route before they can work
   payload_probe: "direct-socket: probes the console's mgmt port",
   payload_send: "direct-socket: writes an ELF to the console's loader port",
+  payload_send_check: "direct-socket: asks before payload_send (the browser's own send is checked by the engine)",
   companion_probe: "direct-socket: raw TCP connect probe",
   discover_ps5: "direct-socket: mDNS multicast",
   proc_modules_get: "direct-socket: console mgmt port",

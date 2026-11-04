@@ -110,7 +110,7 @@ import {
   useLibraryStore,
   findOwningImage,
   libraryForHost,
-  refreshLibrary, refreshLibraryAfterChange,
+  refreshLibraryAfterChange,
   type RegisteredTitle,
 } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
@@ -2219,7 +2219,7 @@ function LibraryRowImpl({
                 icon: <PackageOpen size={12} />,
                 onSelect: () => openConsoleCopyInConvert(navigate, host, entry.path),
                 title: tr(
-                  "library_convert_hint_v2",
+                  "library_convert_hint_v3",
                   undefined,
                   "Open it in Workshop: an installable package or another game image, made from it on this computer.",
                 ),
@@ -2236,7 +2236,7 @@ function LibraryRowImpl({
                 onSelect: () =>
                   openConsoleCopyInConvert(navigate, host, entry.path, { compress: true }),
                 title: tr(
-                  "library_shrink_hint_v2",
+                  "library_shrink_hint_v3",
                   undefined,
                   "Open it in Workshop set to a compressed game image (.ffpfsc), made on this computer. This copy stays on the PS5: to free room, upload the image and then delete this copy.",
                 ),
@@ -2550,6 +2550,7 @@ function LibraryRowImpl({
       {confirm && (
         <ConfirmRow
           confirm={confirm}
+          tied={tiedToConsole}
           onCancel={() => setConfirm(null)}
           onRun={confirm.kind === "delete" ? runDelete : runChmod}
         />
@@ -3615,10 +3616,13 @@ function LibraryThumb({
 
 function ConfirmRow({
   confirm,
+  tied,
   onCancel,
   onRun,
 }: {
   confirm: PendingConfirm;
+  /** The row is registered or mounted on the console: a delete takes it off first. */
+  tied: boolean;
   onCancel: () => void;
   onRun: () => void;
 }) {
