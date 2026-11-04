@@ -154,11 +154,14 @@ export function ImageChoice({
   compress,
   onChoice,
   lz4,
+  level,
 }: {
   format: ImageFormat;
   compress: boolean;
   onChoice: (format: ImageFormat, compress: boolean) => void;
   lz4?: Lz4Choice;
+  /** One game's own compression level (a game in the queue); else the remembered one. */
+  level?: { value: FfpfscLevel; onChange: (level: FfpfscLevel) => void };
 }) {
   const tr = useTr();
   const setFormat = (f: ImageFormat) => onChoice(f, compress);
@@ -234,7 +237,7 @@ export function ImageChoice({
           </span>
         </span>
       </label>
-      {compress && !packing && <FfpfscLevelOption />}
+      {compress && !packing && <FfpfscLevelOption own={level} />}
       {lz4 && format === "exfat" && <Lz4Option lz4={lz4} />}
       <VerifyChunkOption />
     </div>
@@ -243,10 +246,16 @@ export function ImageChoice({
 
 /** How hard a .ffpfsc is compressed: Fast, Balanced (the default) or Smallest. Remembered like
  *  the other Convert options. */
-export function FfpfscLevelOption() {
+export function FfpfscLevelOption({
+  own,
+}: {
+  own?: { value: FfpfscLevel; onChange: (level: FfpfscLevel) => void };
+} = {}) {
   const tr = useTr();
-  const level = useConvertPrefs((s) => s.imageLevel);
-  const setLevel = useConvertPrefs((s) => s.setImageLevel);
+  const remembered = useConvertPrefs((s) => s.imageLevel);
+  const remember = useConvertPrefs((s) => s.setImageLevel);
+  const level = own?.value ?? remembered;
+  const setLevel = own?.onChange ?? remember;
   const levels: { id: FfpfscLevel; label: string; body: string }[] = [
     {
       id: "fast",
@@ -306,10 +315,19 @@ export function FfpfscLevelOption() {
 /** Fast (off, the default) or full verification of what Convert wrote: a package, an image or
  *  a compressed image. Fast always checks structure and sizes, whole small files and a random
  *  sample of the rest; full re-reads every byte. */
-export function FullVerifyOption({ disabled }: { disabled?: boolean }) {
+export function FullVerifyOption({
+  disabled,
+  own,
+}: {
+  disabled?: boolean;
+  /** One game's own choice (a game in the queue); else the remembered one. */
+  own?: { value: boolean; onChange: (full: boolean) => void };
+}) {
   const tr = useTr();
-  const full = useConvertPrefs((s) => s.fullVerify);
-  const set = useConvertPrefs((s) => s.setFullVerify);
+  const remembered = useConvertPrefs((s) => s.fullVerify);
+  const remember = useConvertPrefs((s) => s.setFullVerify);
+  const full = own?.value ?? remembered;
+  const set = own?.onChange ?? remember;
   return (
     <Toggle
       checked={full}

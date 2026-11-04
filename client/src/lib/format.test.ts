@@ -13,6 +13,8 @@ describe("formatBytes", () => {
     expect(formatBytes(0)).toBe("0 B");
     expect(formatBytes(1)).toBe("1 B");
     expect(formatBytes(1023)).toBe("1023 B");
+    // A speed is rarely a whole number of bytes (#669: "1.12224166314977 B/s" in the status bar).
+    expect(formatBytes(1.12224166314977)).toBe("1 B");
   });
 
   it("rolls over to KiB at 1024 bytes", () => {

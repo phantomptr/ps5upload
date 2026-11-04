@@ -256,13 +256,15 @@ fn copy_file(
     Ok(())
 }
 
-/// SHA-256 of `len` bytes at `offset` of `path` in `tree`.
+/// SHA-256 of `len` bytes at `offset` of `path` in `tree`. `read` is told each chunk's size, so
+/// a large file moves the bar while it is read rather than only when it ends (#669).
 fn hash_source(
     tree: &mut dyn SourceTree,
     path: &str,
     offset: u64,
     len: u64,
     cancel: &AtomicBool,
+    read: &mut dyn FnMut(u64),
 ) -> Result<[u8; 32], String> {
     let mut h = Sha256::new();
     let mut at = 0u64;
@@ -280,16 +282,18 @@ fn hash_source(
         let bytes = &bytes[..bytes.len().min(want)];
         h.update(bytes);
         at += bytes.len() as u64;
+        read(bytes.len() as u64);
     }
     Ok(h.finalize().into())
 }
 
-/// SHA-256 of `len` bytes at `offset` of a written file.
+/// SHA-256 of `len` bytes at `offset` of a written file. `read` is told each chunk's size.
 fn hash_written(
     file: &Path,
     offset: u64,
     len: u64,
     cancel: &AtomicBool,
+    read: &mut dyn FnMut(u64),
 ) -> Result<[u8; 32], String> {
     let mut f = std::fs::File::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
     f.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
@@ -305,8 +309,36 @@ fn hash_written(
             .map_err(|e| format!("{}: {e}", file.display()))?;
         h.update(&buf[..n]);
         left -= n as u64;
+        read(n as u64);
     }
     Ok(h.finalize().into())
+}
+
+/// Progress through one piece of the read-back: the piece is read twice (from the source, then
+/// from what was written), so each side moves the bar half as far, and `done` only reaches
+/// the end of the piece once both are read. Without this a large file showed nothing until it
+/// ended, and the speed fell to nothing while the disk was busy (#669).
+struct BothSides<'a> {
+    base: u64,
+    total: u64,
+    read: u64,
+    progress: &'a mut dyn FnMut(u64, u64),
+}
+
+impl<'a> BothSides<'a> {
+    fn new(base: u64, total: u64, progress: &'a mut dyn FnMut(u64, u64)) -> Self {
+        Self {
+            base,
+            total,
+            read: 0,
+            progress,
+        }
+    }
+
+    fn read(&mut self, n: u64) {
+        self.read += n;
+        (self.progress)(self.base + self.read / 2, self.total);
+    }
 }
 
 /// Reads the written folder back: every file at its size and every empty folder present, then
@@ -358,8 +390,12 @@ fn verify(
     progress(0, total);
     for (i, at, len) in pieces {
         let path = &listed[i].0;
-        let want = hash_source(fresh, path, at, len, cancel)?;
-        let got = hash_written(&written.join(path), at, len, cancel)?;
+        let (want, got) = {
+            let mut sides = BothSides::new(done, total, &mut *progress);
+            let want = hash_source(fresh, path, at, len, cancel, &mut |n| sides.read(n))?;
+            let got = hash_written(&written.join(path), at, len, cancel, &mut |n| sides.read(n))?;
+            (want, got)
+        };
         if want != got {
             let range = if len != listed[i].1 {
                 format!(" (bytes {at}..{})", at + len)
@@ -511,8 +547,13 @@ pub(crate) fn extract_file(
         }
         stage("verify", 0, size);
         let mut fresh = reopen()?;
-        let want = hash_source(&mut *fresh, path, 0, size, cancel)?;
-        let got = hash_written(&partial, 0, size, cancel)?;
+        let (want, got) = {
+            let mut report = |d: u64, t: u64| stage("verify", d, t);
+            let mut sides = BothSides::new(0, size, &mut report);
+            let want = hash_source(&mut *fresh, path, 0, size, cancel, &mut |n| sides.read(n))?;
+            let got = hash_written(&partial, 0, size, cancel, &mut |n| sides.read(n))?;
+            (want, got)
+        };
         if want != got {
             return Err(format!("{path} differs between the copy and the image"));
         }
@@ -778,6 +819,73 @@ mod tests {
     }
 
     /// A source tree with whatever paths a test wants, every file a few bytes long.
+    /// One file of `size` bytes, each byte its offset's low bits.
+    struct OneBigFile(Vec<SourceFile>, u64);
+
+    fn big_file_bytes(size: u64) -> Vec<u8> {
+        (0..size).map(|i| (i % 251) as u8).collect()
+    }
+
+    impl SourceTree for OneBigFile {
+        fn files(&self) -> &[SourceFile] {
+            &self.0
+        }
+        fn read(&mut self, _: &str) -> ps5upload_fpkg::Result<Vec<u8>> {
+            Ok(big_file_bytes(self.1))
+        }
+        fn describe(&self) -> String {
+            "one big file".into()
+        }
+    }
+
+    /// #669: the read-back of a big file moves the bar as it reads, not only when the file
+    /// ends, and always goes forward, up to exactly the total.
+    #[test]
+    fn the_read_back_moves_through_a_big_file() {
+        let root = scratch("verify-moves");
+        std::fs::create_dir_all(&root).unwrap();
+        let size = CHUNK * 3 + 7;
+        std::fs::write(root.join("big.bin"), big_file_bytes(size)).unwrap();
+        let mut source = OneBigFile(
+            vec![SourceFile {
+                path: "big.bin".into(),
+                size,
+            }],
+            size,
+        );
+        let mut seen: Vec<(u64, u64)> = Vec::new();
+        verify(
+            &root,
+            &[("big.bin".to_string(), size)],
+            &[],
+            &mut source,
+            VerifyMode::Full,
+            &AtomicBool::new(false),
+            &mut |d, t| seen.push((d, t)),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(seen.iter().all(|&(_, t)| t == size));
+        let dones: Vec<u64> = seen.iter().map(|&(d, _)| d).collect();
+        assert!(dones.windows(2).all(|w| w[0] <= w[1]), "{dones:?}");
+        assert_eq!(dones.first(), Some(&0));
+        assert_eq!(dones.last(), Some(&size));
+        // Four chunks from each side, then the final report for the piece.
+        let between = dones.iter().filter(|&&d| d > 0 && d < size).count();
+        assert!(between >= 6, "{dones:?}");
+    }
+
+    #[test]
+    fn each_side_of_a_piece_moves_the_bar_half_as_far() {
+        let mut seen = Vec::new();
+        let mut report = |d: u64, t: u64| seen.push((d, t));
+        let mut sides = BothSides::new(100, 1000, &mut report);
+        sides.read(50);
+        sides.read(50);
+        sides.read(100);
+        assert_eq!(seen, [(125, 1000), (150, 1000), (200, 1000)]);
+    }
+
     struct Listed(Vec<SourceFile>, Vec<String>);
 
     impl SourceTree for Listed {

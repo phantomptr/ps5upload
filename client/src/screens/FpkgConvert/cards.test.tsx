@@ -427,6 +427,13 @@ describe("QueueCard adding", () => {
     expect(card([waiting("handed")])).toContain("Open Upload &amp; Install");
   });
 
+  it("a game with a plain % in its name does not break the card", async () => {
+    const { nameOf } = await import("./QueueCard");
+    expect(nameOf("/games/100% Orange Juice")).toBe("100% Orange Juice");
+    expect(nameOf("smb://nas/games/My%20Game/")).toBe("My Game");
+    expect(card([{ ...waiting(), source: "/games/100% Orange Juice" }])).toContain("100% Orange Juice");
+  });
+
   it("says which file each queued game becomes", () => {
     const item = (id: string, build?: ConvertBuild): ConvertItem => ({
       id,
@@ -479,6 +486,90 @@ describe("queued game choices (#518)", () => {
   });
 });
 
+describe("a waiting game's own options (#669)", () => {
+  const waitingItem = (over: Partial<ConvertItem> = {}): ConvertItem => ({
+    id: "w1",
+    source: "/games/Astro Bot",
+    compression: "balanced",
+    then: "keep",
+    host: null,
+    status: "pending",
+    ...over,
+  });
+  const options = async (item: ConvertItem) => {
+    const { QueueItemOptions } = await import("./QueueItemOptions");
+    return renderToStaticMarkup(
+      <QueueItemOptions item={item} canInstall host="10.0.0.2" canBrowse onPickOutput={async () => null} onChange={() => {}} />,
+    );
+  };
+
+  it("a package has its output folder, compression, language, verification and what comes after", async () => {
+    const html = await options(waitingItem({ build: { kind: "pkg" }, outputDir: "F:\\out" }));
+    expect(html).toContain("Output folder");
+    expect(html).toContain('value="F:\\out"');
+    expect(html).toContain("Change");
+    expect(html).toContain("Save each next to its source");
+    expect(html).toContain("Compression");
+    expect(html).toContain("Game language");
+    expect(html).toContain("Full verification");
+    expect(html).toContain("Stream &amp; install");
+    expect(html).toContain("Upload &amp; install");
+  });
+
+  it("an image has its format and compression level instead, and a folder neither", async () => {
+    const image = await options(waitingItem({ build: { kind: "image", format: "ffpkg", compress: true } }));
+    expect(image).toContain('data-testid="image-choice"');
+    expect(image).toContain('data-testid="ffpfsc-level"');
+    expect(image).not.toContain("Game language");
+    const folder = await options(waitingItem({ source: "/dl/game.exfat", build: { kind: "folder" } }));
+    expect(folder).not.toContain('data-testid="image-choice"');
+    expect(folder).not.toContain("Game language");
+    expect(folder).toContain("Output folder");
+    expect(folder).toContain("Keep the folder");
+  });
+
+  it("a game on a server or the PS5 has no folder here to be saved next to", async () => {
+    const html = await options(waitingItem({ source: "ps5://10.0.0.2/data/game.exfat", build: { kind: "pkg" } }));
+    expect(html).not.toContain("Save each next to its source");
+    expect(html).toContain("Output folder");
+  });
+
+  it("switching next-to-source on and off moves the output with it", async () => {
+    const { changeForBeside } = await import("./QueueItemOptions");
+    expect(changeForBeside("/games/Astro Bot", true, "/out")).toEqual({ outputDir: "/games", keepBoth: true });
+    expect(changeForBeside("/games/Astro Bot", false, " /out ")).toEqual({ outputDir: "/out", keepBoth: undefined });
+    expect(changeForBeside("/games/Astro Bot", false, "")).toEqual({ outputDir: undefined, keepBoth: undefined });
+    expect(changeForBeside("ps5://10.0.0.2/data/x.exfat", true, "/out")).toEqual({});
+  });
+
+  it("while a game is being made, ② and ③ are open and say they are for the next game", () => {
+    const make = renderToStaticMarkup(
+      <MakeCard make="folder" onMake={() => {}} kernel={null} contentId={null} checked={false} forNext />,
+    );
+    expect(make).toContain('data-testid="next-game-note"');
+    expect(make).not.toMatch(/<button[^>]* disabled=""/);
+    expect(make).not.toContain("Check a game under ①");
+    const opts = renderToStaticMarkup(
+      <OptionsCard
+        outputDir="/out"
+        onChangeOutput={() => {}}
+        onOutputTyped={() => {}}
+        canBrowse
+        compression="balanced"
+        onCompression={() => {}}
+        estimates={null}
+        locked={false}
+        forNext
+      >
+        <span data-testid="extra" />
+      </OptionsCard>,
+    );
+    expect(opts).toContain('data-testid="next-game-note"');
+    expect(opts).toContain('data-testid="extra"');
+    expect(opts).not.toMatch(/id="fpkg-output"[^>]*disabled/);
+  });
+});
+
 describe("convert queue update", () => {
   it("changes a waiting game and leaves a running one alone", async () => {
     const { useConvertQueue } = await import("../../state/convertQueue");
@@ -488,6 +579,16 @@ describe("convert queue update", () => {
     const id = all[all.length - 1].id;
     expect(useConvertQueue.getState().update(id, { then: "stream", host: "h" })).toBe(true);
     expect(useConvertQueue.getState().items.find((i) => i.id === id)?.then).toBe("stream");
+    // #669: everything it was added with can change while it waits.
+    expect(
+      useConvertQueue.getState().update(id, { outputDir: "/mine", compression: "stored", language: "ja", fullVerify: true }),
+    ).toBe(true);
+    expect(useConvertQueue.getState().items.find((i) => i.id === id)).toMatchObject({
+      outputDir: "/mine",
+      compression: "stored",
+      language: "ja",
+      fullVerify: true,
+    });
     useConvertQueue.setState({ items: useConvertQueue.getState().items.map((i) => (i.id === id ? { ...i, status: "running" } : i)) });
     expect(useConvertQueue.getState().update(id, { then: "keep" })).toBe(false);
   });

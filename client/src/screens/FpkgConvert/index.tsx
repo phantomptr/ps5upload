@@ -32,7 +32,6 @@ import {
   isArchiveSource,
   isFolderableSource,
   makesFolder,
-  makesImage,
   useFpkgConversion,
 } from "../../state/fpkgConversion";
 import { useUploadStore } from "../../state/upload";
@@ -49,7 +48,7 @@ import { BROWSE_IMAGE_EXTENSIONS } from "../LocalImage/imageTypes";
 import { isRemotePath } from "../../lib/remotePath";
 import { MakeCard } from "./MakeCard";
 import { OptionsCard } from "./OptionsCard";
-import { RunCard, idleRun, lz4Active, type Lz4Choice, type RunCardProps } from "./RunCard";
+import { OutputChoice, RunCard, idleRun, lz4Active, type Lz4Choice, type RunCardProps } from "./RunCard";
 import { outputFor } from "../../lib/outputPlace";
 import { SwapJournals } from "./SwapJournals";
 import { QueueCard } from "./QueueCard";
@@ -148,23 +147,20 @@ export default function WorkshopScreen() {
   const [deleteAfter, setDeleteAfter] = useState(false);
   // Per game, not remembered: the wrong language carried into the next game would be a surprise.
   const [language, setLanguage] = useState("");
+  // The same, for the next game added while one is being made (#669): the game being made has
+  // its language already, and it is not the next game's.
+  const [nextLanguage, setNextLanguage] = useState("");
   // ③'s one choice of what to make: a package, or the image picked (format, compressed). The
   // queue builds exactly this, never a package in place of the image picked (#433 report).
-  // What to make is remembered (prefs), and while a build runs it follows the build: coming
-  // back to the screen mid-image must not show it as a package build.
+  // What to make is remembered (prefs). While a build runs, ④ shows that build as it is, and ②
+  // and ③ set what the next game added becomes (#669: they used to stay locked on the running
+  // build's choices, so a game folder could not be queued behind a build that makes a folder).
   const make = useConvertPrefs((s) => s.make);
   const setMake = useConvertPrefs((s) => s.setMake);
   const showMake = useConvertPrefs((s) => s.showMake);
   const imageFormat = useConvertPrefs((s) => s.imageFormat);
   const imageCompress = useConvertPrefs((s) => s.imageCompress);
   const setImageChoice = useConvertPrefs((s) => s.setImageChoice);
-  useEffect(() => {
-    if (pipeline.phase === "running") {
-      const building = makesFolder(pipeline.mode) ? "folder" : makesImage(pipeline.mode) ? "image" : "pkg";
-      if (building !== make) showMake(building);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pipeline.phase]);
   // AMPR LZ4 asset packs for this game's .exfat image, and the profile it packs with. Per game
   // (they depend on the game's own ampr_emu), so only the game checked here carries them into
   // the queue.
@@ -190,6 +186,9 @@ export default function WorkshopScreen() {
     if (build.kind === "folder" && !isFolderableSource(src)) return "not-folder";
     const u = useUploadStore.getState();
     const out = outFor(src);
+    const prefs = useConvertPrefs.getState();
+    const making = useFpkgConversion.getState().pipeline.phase === "running";
+    const lang = making ? nextLanguage : language;
     return useConvertQueue.getState().add({
       source: src,
       outputDir: out.outputDir,
@@ -200,10 +199,12 @@ export default function WorkshopScreen() {
         build.kind === "image"
           ? { volume: u.destinationVolume, subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH }
           : undefined,
-      language: language || undefined,
+      language: lang || undefined,
       then,
       host: then !== "keep" ? host : null,
       deleteAfterInstall: then !== "keep" && deleteAfter,
+      fullVerify: prefs.fullVerify,
+      imageLevel: build.kind === "image" && build.compress ? prefs.imageLevel : undefined,
     });
   };
   /** Queue what was picked or found, then say what was left out. */
@@ -225,7 +226,10 @@ export default function WorkshopScreen() {
     if (results.some((r) => r === false)) notes.push(tr("cq_already", undefined, "This game is already in the queue."));
     setError(notes.length ? notes.join(" ") : null);
     // Added while a game is being made (#621): made after it, without pressing Start.
-    if (results.some((r) => r === true)) startAfterBuild(useFpkgConversion.getState().pipeline.phase === "running");
+    if (results.some((r) => r === true)) {
+      startAfterBuild(useFpkgConversion.getState().pipeline.phase === "running");
+      setNextLanguage("");
+    }
   };
   /** Why a source was left out of the queue, said for a person. */
   const skippedText = (why: QueueSkip, n: number) =>
@@ -427,16 +431,25 @@ export default function WorkshopScreen() {
     if (picked) chooseOrQueue(picked);
   };
 
-  const browseOutput = useCallback(async () => {
+  /** The output folder picker: null when it was closed, or could not open (said under ④). */
+  const pickOutput = useCallback(async (): Promise<string | null> => {
     try {
       const picked = !isTauriEnv()
-        ? await pickLocalPath({ mode: "folder", title: "Choose an output folder on the engine host" })
-        : await pickPath({ mode: "folder", title: "Choose an output folder" });
-      if (picked) setOutputDir(picked);
+        ? await pickLocalPath({
+            mode: "folder",
+            title: tr("fpkg.pickOutputHost", undefined, "Choose an output folder on the engine host"),
+          })
+        : await pickPath({ mode: "folder", title: tr("fpkg.pickOutput", undefined, "Choose an output folder") });
+      return picked || null;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return null;
     }
-  }, [setOutputDir]);
+  }, [tr]);
+  const browseOutput = useCallback(async () => {
+    const picked = await pickOutput();
+    if (picked) setOutputDir(picked);
+  }, [pickOutput, setOutputDir]);
 
   /** Convert the current game as chosen under ③. */
   const run = () => {
@@ -820,10 +833,11 @@ export default function WorkshopScreen() {
               if (m === "image" && then === "stream") setThen("upload");
               if (m === "folder") setThen("keep");
             }}
-            kernel={kernel}
-            contentId={inspection?.content_id}
-            checked={inspection !== null}
-            locked={locked}
+            // While a game is being made, what is checked under ① is that game, not the next.
+            kernel={locked ? null : kernel}
+            contentId={locked ? null : inspection?.content_id}
+            checked={!locked && inspection !== null}
+            forNext={locked}
           />
 
           <OptionsCard
@@ -839,16 +853,21 @@ export default function WorkshopScreen() {
               format: imageFormat,
               compress: imageCompress,
               onChoice: (f, c) => setImageChoice(f, c),
-              lz4: lz4Choice,
+              // A game's own: nothing to offer until the next game is checked.
+              lz4: locked ? undefined : lz4Choice,
             }}
-            language={language}
-            onLanguage={setLanguage}
+            language={locked ? nextLanguage : language}
+            onLanguage={locked ? setNextLanguage : setLanguage}
             onCompression={setCompression}
-            estimates={estimates}
-            locked={locked}
-            plannedSize={inspection?.planned_size}
-            outputFree={inspection?.output_free}
-          />
+            // These are the game being made's; the next game has none yet.
+            estimates={locked ? null : estimates}
+            locked={false}
+            forNext={locked}
+            plannedSize={locked ? undefined : inspection?.planned_size}
+            outputFree={locked ? undefined : inspection?.output_free}
+          >
+            {locked && <OutputChoice {...runChoice} />}
+          </OptionsCard>
 
           <SwapJournals
             deps={swapDeps}
@@ -1008,6 +1027,8 @@ export default function WorkshopScreen() {
         onUpdate={(id, change) => void useConvertQueue.getState().update(id, change)}
         canInstall={canInstall}
         host={host}
+        canBrowse={canBrowse}
+        onPickOutput={pickOutput}
         onMove={(id, d) => useConvertQueue.getState().move(id, d)}
         onClearFinished={() => useConvertQueue.getState().clearFinished()}
       />

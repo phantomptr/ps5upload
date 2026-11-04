@@ -5,6 +5,20 @@ import { ps5FakeGameUnplayableFirmware } from "../../lib/ps5Firmware";
 import type { MakeKind } from "../../state/convertPrefs";
 import { useTr } from "../../state/lang";
 
+/** Said on ② and ③ while a game is being made: what is set there now is for what comes next. */
+export function NextGameNote() {
+  const tr = useTr();
+  return (
+    <div className="text-xs text-[var(--color-accent)]" data-testid="next-game-note">
+      {tr(
+        "fpkg.next_note",
+        undefined,
+        "A game is being made. What you set here is for the next game you add under ①; the one being made keeps its own.",
+      )}
+    </div>
+  );
+}
+
 /**
  * ② What to make: a package the PS5 installs, a game image ShadowMount+ mounts, or (#469) the
  * game's files back as a plain folder. They are explained side by side, and the one of the
@@ -19,6 +33,7 @@ export function MakeCard({
   contentId,
   checked,
   locked = false,
+  forNext = false,
 }: {
   make: MakeKind;
   onMake: (make: MakeKind) => void;
@@ -29,6 +44,8 @@ export function MakeCard({
   /** A game has been checked: the recommendation is about it. */
   checked: boolean;
   locked?: boolean;
+  /** A game is being made: this card sets what the next game added becomes (#669). */
+  forNext?: boolean;
 }) {
   const tr = useTr();
   const unplayableOn = checked ? ps5FakeGameUnplayableFirmware(kernel, contentId) : null;
@@ -72,6 +89,7 @@ export function MakeCard({
     <Card padded={false} className="p-3.5 sm:p-4">
       <div className="flex flex-col gap-2 text-sm">
         <div className="font-medium">{tr("fpkg.card.make", undefined, "② What to make")}</div>
+        {forNext && <NextGameNote />}
         <div className="grid grid-cols-3 gap-1.5 sm:gap-2" role="radiogroup" data-testid="make-choice">
           {tiles.map((t) => {
             const on = make === t.id;
@@ -109,7 +127,7 @@ export function MakeCard({
         <div className="text-xs leading-relaxed text-[var(--color-muted)]" data-testid="make-body">
           {chosen.body}
         </div>
-        <div className="text-xs text-[var(--color-muted)]">
+        {!forNext && <div className="text-xs text-[var(--color-muted)]">
           {!checked
             ? tr("fpkg.make.pick_game", undefined, "Check a game under ① and the better choice for it on your PS5 is marked.")
             : unplayableOn
@@ -119,7 +137,7 @@ export function MakeCard({
                   "This PS5 game would install as a package but not play on FW {fw}; as an image it does.",
                 )
               : tr("fpkg.make.why_pkg", undefined, "A package is the ordinary choice: it installs and plays like any other game.")}
-        </div>
+        </div>}
       </div>
     </Card>
   );

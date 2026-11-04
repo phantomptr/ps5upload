@@ -13,7 +13,7 @@
 
 export function formatBytes(n: number): string {
   if (!isFinite(n) || n < 0) return "—";
-  if (n < 1024) return `${n} B`;
+  if (n < 1024) return `${Math.round(n)} B`;
   const units = ["KiB", "MiB", "GiB", "TiB"];
   let v = n / 1024;
   let i = 0;

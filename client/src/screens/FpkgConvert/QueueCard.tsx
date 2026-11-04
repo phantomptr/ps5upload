@@ -1,6 +1,7 @@
 // Card ⑤ Queue: several games made one after another on this computer. Games are added under
 // ① (several picked, or a folder of games) or with ④'s "Add this game to the queue"; this card
-// only lists them. Each takes ②–④'s choices as they were when it was added. A game that should
+// lists them. Each takes ②–④'s choices as they were when it was added, and every one of them
+// can be changed while it waits (#669). A game that should
 // install or upload is handed to Upload & Install's queue once it is made: the transfer is
 // that screen's, never a second one here.
 
@@ -27,12 +28,23 @@ export interface QueueCardProps {
   /** A console answers: installing and uploading can be chosen. */
   canInstall: boolean;
   host: string | null;
+  /** A folder picker exists here. */
+  canBrowse?: boolean;
+  /** Pick a waiting game's output folder; null when the picker was closed. */
+  onPickOutput?: () => Promise<string | null>;
   onMove: (id: string, delta: -1 | 1) => void;
   onClearFinished: () => void;
 }
 
-function nameOf(source: string): string {
-  return decodeURIComponent(source.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? source);
+/** The game's name in its path. Paths on a server are percent-encoded; a local name may hold a
+ *  plain "%" ("100% Orange Juice"), which is not an encoding and must not break the screen. */
+export function nameOf(source: string): string {
+  const last = source.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? source;
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
 }
 
 export function QueueCard(p: QueueCardProps) {
@@ -120,7 +132,13 @@ export function QueueCard(p: QueueCardProps) {
                     {i.status === "running" && p.paused
                       ? tr("fpkg.paused_queue_waits", undefined, "Paused — the queue waits")
                       : statusText[i.status]}
-                    {i.error ? ` — ${i.error}` : i.packagePath ? ` — ${i.packagePath}` : ""}
+                    {i.error
+                      ? ` — ${i.error}`
+                      : i.packagePath
+                        ? ` — ${i.packagePath}`
+                        : i.status === "pending" && i.outputDir?.trim()
+                          ? ` — ${i.outputDir.trim()}`
+                          : ""}
                   </div>
                 </div>
                 {i.status === "pending" && (
@@ -171,6 +189,8 @@ export function QueueCard(p: QueueCardProps) {
                   item={i}
                   canInstall={p.canInstall}
                   host={p.host}
+                  canBrowse={p.canBrowse}
+                  onPickOutput={p.onPickOutput}
                   onChange={(change) => p.onUpdate(i.id, change)}
                 />
               )}
