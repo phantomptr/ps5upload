@@ -1261,13 +1261,18 @@ function BackupRestorePanel() {
     setInfo(null);
     try {
       const bundle = buildBundle("manual");
+      const noPairing = tr(
+        "settings_backup_no_pairing",
+        undefined,
+        "Remote Play pairing and Wake keys are not in this file. On a new device, pair the console again.",
+      );
       const fileName = `ps5upload-settings-${Date.now()}.json`;
       const json = JSON.stringify(bundle, null, 2);
       if (!isTauriEnv()) {
         const { browserDownloadText } = await import("../../lib/browserDownload");
         browserDownloadText(fileName, json, "application/json");
         setInfo(
-          tr("settings_backup_downloaded", { name: fileName }, `Downloaded ${fileName}`),
+          `${tr("settings_backup_downloaded", { name: fileName }, `Downloaded ${fileName}`)} ${noPairing}`,
         );
         return;
       }
@@ -1279,7 +1284,7 @@ function BackupRestorePanel() {
       });
       if (!dest || typeof dest !== "string") return;
       await writeTextFileToPath(dest, json, fileName);
-      setInfo(tr("settings_backup_saved", { path: dest }, `Saved to ${dest}`));
+      setInfo(`${tr("settings_backup_saved", { path: dest }, `Saved to ${dest}`)} ${noPairing}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

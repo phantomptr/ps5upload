@@ -9,6 +9,7 @@
 
 import { meshDocGet, meshDocPut } from "../api/mesh";
 import { getEngineUrl } from "../state/engine";
+import { hostOf } from "./addr";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
 
 export const NS_PREFIX = "ps5upload.";
@@ -26,6 +27,11 @@ const OWN_KEYS = new Set([
   "ps5upload.mesh_prefs.meta.v1",
   "ps5upload.mesh.client",
 ]);
+/** The keys that sign in to a console's user. A bundle goes places (a file someone shares, the
+ *  engine's folder, a slot on any console), so it never carries them. A restore keeps the ones
+ *  this app holds, and a console this app never paired is paired again. */
+const ROSTER_KEY = "ps5upload.roster.v1";
+const PAIRING_FIELDS = ["wake_credential", "wake_regist_key", "wake_rp_key"] as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Before-sync backups at most this often (a busy sync must not rotate the daily ones out). */
 const BEFORE_SYNC_EVERY_MS = 60 * 60 * 1000;
@@ -37,12 +43,59 @@ export interface Bundle {
   local_storage: Record<string, string | null>;
 }
 
+type RosterProfile = Record<string, unknown>;
+
+/** The profiles of a stored roster, or null when the value is not one. */
+function parseRoster(text: string | null): { doc: Record<string, unknown>; profiles: RosterProfile[] } | null {
+  try {
+    const doc = JSON.parse(text ?? "") as Record<string, unknown>;
+    return doc && Array.isArray(doc.profiles) ? { doc, profiles: doc.profiles as RosterProfile[] } : null;
+  } catch {
+    return null;
+  }
+}
+
+function withoutPairing(roster: string): string | null {
+  const r = parseRoster(roster);
+  if (!r) return null;
+  const profiles = r.profiles.map((p) => {
+    const copy = { ...p };
+    for (const f of PAIRING_FIELDS) delete copy[f];
+    return copy;
+  });
+  return JSON.stringify({ ...r.doc, profiles });
+}
+
+/** The restored roster, with the keys this app already holds for the same console. A bundle from
+ *  an older version may carry its own keys: those stand. */
+function keepingPairing(restored: string, current: string | null): string {
+  const incoming = parseRoster(restored);
+  const held = parseRoster(current);
+  if (!incoming || !held) return restored;
+  const profiles = incoming.profiles.map((p) => {
+    const mine =
+      held.profiles.find((h) => h.id === p.id) ??
+      held.profiles.find((h) => typeof h.host === "string" && typeof p.host === "string" && hostOf(h.host) === hostOf(p.host));
+    if (!mine) return p;
+    const merged = { ...p };
+    for (const f of PAIRING_FIELDS) if (!merged[f] && mine[f]) merged[f] = mine[f];
+    return merged;
+  });
+  return JSON.stringify({ ...incoming.doc, profiles });
+}
+
 export function buildBundle(reason = "manual", device = ""): Bundle {
   const local_storage: Record<string, string | null> = {};
   try {
     for (let i = 0; i < window.localStorage.length; i++) {
       const k = window.localStorage.key(i);
-      if (k && k.startsWith(NS_PREFIX) && !OWN_KEYS.has(k)) local_storage[k] = safeGetItem(k);
+      if (!k || !k.startsWith(NS_PREFIX) || OWN_KEYS.has(k)) continue;
+      const v = safeGetItem(k);
+      if (k === ROSTER_KEY && v !== null) {
+        // A roster it cannot read stays out: never a risk of copying keys along.
+        const clean = withoutPairing(v);
+        if (clean !== null) local_storage[k] = clean;
+      } else local_storage[k] = v;
     }
   } catch {
     // Storage blocked: an empty bundle, which nothing restores from.
@@ -65,7 +118,7 @@ export function applyBundle(parsed: unknown): number {
     // Only our own namespace: a hand-edited bundle can't write arbitrary keys.
     if (!k.startsWith(NS_PREFIX) || OWN_KEYS.has(k)) continue;
     const v = ls[k];
-    if (typeof v === "string") actions.push({ key: k, value: v });
+    if (typeof v === "string") actions.push({ key: k, value: k === ROSTER_KEY ? keepingPairing(v, safeGetItem(k)) : v });
     else if (v === null) actions.push({ key: k, value: null });
     else if (v !== undefined) throw new Error(`invalid value for ${k}`);
   }
