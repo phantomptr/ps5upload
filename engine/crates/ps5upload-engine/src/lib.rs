@@ -2098,7 +2098,7 @@ struct SevenzInspectReq {
 }
 
 /// `/api/transfer/rar` request. Like 7z plus an optional `password` for
-/// encrypted archives. (RAR is desktop-only — the Android build cfg's out both
+/// encrypted archives. (RAR is desktop-only — the phone builds cfg out both
 /// the real handler and this struct, so it lives behind the same gate.)
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[derive(Deserialize)]

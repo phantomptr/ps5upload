@@ -1724,8 +1724,9 @@ PY
 fi
 
 # --- (14) system Back goes to the page first ---------------------------
-# wry's own handling only moves the WebView's history: dialogs and pickers, which close on Escape
-# and which Android never sends, stayed up while the page changed behind them. The page's
+# Tauri's own handling (AppPlugin) only moves the WebView's history: dialogs and pickers, which
+# close on Escape and which Android never sends, stayed up while the page changed behind them. A
+# callback added later runs first, and AppPlugin adds its one before the WebView exists. The page's
 # window.__ps5uBack (client/src/lib/systemBack.ts) closes what is open on top and answers true;
 # otherwise this moves the history, and at the first entry leaves the app running (the engine and
 # any transfer live in this process). Idempotent via the function name.
@@ -1751,12 +1752,6 @@ src = src.replace(anchor, anchor + '''    // System Back: the page first (step 1
       }
     })
 ''', 1)
-members = '''
-  // Step 14 of android-postinit-patch.sh installs Back handling that asks the page first.
-  override val handleBackNavigation: Boolean = false
-'''
-brace = src.index("{", src.index("class MainActivity"))
-src = src[:brace + 1] + members + src[brace + 1:]
 open(path, "w", encoding="utf-8").write(src)
 print("patched MainActivity.kt to send Back to the page")
 PY

@@ -893,6 +893,7 @@ test-root:
 	@node scripts/check-lockfile.mjs --self-test
 	@echo "Checking the client lockfile kept its libc metadata..."
 	@node scripts/check-lockfile.mjs
+	@python3 scripts/release/verify-android-apk.py --self-test
 	@echo "✓ Root scripts valid"
 
 test-engine: setup-engine

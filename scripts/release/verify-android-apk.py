@@ -5,8 +5,9 @@
 missing line fails silently on a phone: no VIBRATE means haptics do nothing with no error, and a
 template change once broke every Android connection. Nothing else looks at the shipped manifest.
 
-usage: verify-android-apk.py <app.apk> [...]    (aapt2 from $ANDROID_HOME/build-tools, or --dump
-<file> with a saved `aapt2 dump xmltree --file AndroidManifest.xml` output, which the tests use)
+usage: verify-android-apk.py <app.apk> [...]    (aapt2 from $ANDROID_HOME/build-tools)
+       verify-android-apk.py --dump <file>      (a saved `aapt2 dump xmltree --file AndroidManifest.xml`)
+       verify-android-apk.py --self-test        (make test-root)
 """
 import os
 import re
@@ -80,10 +81,38 @@ def has_renderer_crash_handler(apk: Path) -> bool:
         )
 
 
+def self_test() -> None:
+    """The checker itself, on a small manifest in aapt2's format."""
+    a = "http://schemas.android.com/apk/res/android:"
+    lines = [f'{a}name(0x01010003)="{p}" (Raw: "{p}")' for p in sorted(PERMISSIONS)]
+    lines += [f'{a}name(0x01010003)="com.phantomptr.ps5upload{n}"' for n in NAMES]
+    lines += [
+        f'{a}scheme(0x01010027)="ps5upload" (Raw: "ps5upload")',
+        f"{a}networkSecurityConfig(0x01010527)=@0x7f120008",
+        f"{a}supportsPictureInPicture(0x010104f7)=true",
+    ]
+    good = "\n".join(lines)
+    assert problems(good) == [], problems(good)
+    # What each of these lines is there for: taking it away must be noticed.
+    for needle, expected in (
+        ("android.permission.VIBRATE", "missing permission android.permission.VIBRATE"),
+        (".TransferService", "missing .TransferService"),
+        ('="ps5upload"', "no ps5upload:// deep-link filter"),
+        ("networkSecurityConfig", "no networkSecurityConfig"),
+        ("supportsPictureInPicture", "no supportsPictureInPicture"),
+    ):
+        tree = "\n".join(l for l in lines if needle not in l)
+        assert any(p.startswith(expected) for p in problems(tree)), (needle, problems(tree))
+    print("verify-android-apk self-test ok")
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args:
         raise SystemExit(__doc__)
+    if args[0] == "--self-test":
+        self_test()
+        return
     if args[0] == "--dump":
         bad = problems(Path(args[1]).read_text())
         if bad:
