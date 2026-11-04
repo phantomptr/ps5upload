@@ -83,6 +83,44 @@ const READINESS = {
   registry_err: 0,
 };
 
+// Play Together (#641): the host's invite and two made-up friends, one playing as Player 2 and
+// one asking to join (the shapes of e2e/play-together.spec.ts and join.rs).
+const INVITE = "00112233445566778899aabbccddeeff";
+const COMPUTER = HOST.replace(/\.50$/, ".20");
+const LINK = `http://${COMPUTER}:19113/join#i=${INVITE}&n=Alex`;
+const TAILNET = "100.64.0.7";
+
+function joinState(path: string) {
+  const invite = {
+    key: INVITE,
+    code: "K7M2QX",
+    code_display: "K7M-2QX",
+    url: LINK,
+    urls: [LINK, `http://${TAILNET}:19113/join#i=${INVITE}&n=Alex`],
+    tailscale: TAILNET,
+    expires_in_s: 1800,
+  };
+  const settings = { block_system_buttons: true, max_players: 3 };
+  if (path === "/api/join/invite") return invite;
+  if (path === "/api/join/decide" || path === "/api/join/kick") return { ok: true };
+  if (path === "/api/join/settings") return { settings };
+  return {
+    open: true,
+    console: HOST,
+    playing: true,
+    host_away_s: null,
+    invite,
+    players_in: 1,
+    guests: [
+      { id: 4, name: "Sam", player: 2, state: "playing", connected: true, reconnect_left_s: null, rtt_ms: 24, queue: 0, skipped: 0, since_s: 640, why: null },
+    ],
+    pending: [{ id: 5, name: "Mia", state: "asking" }],
+    settings,
+    max_guests: 3,
+    ws: `ws://${COMPUTER}:19113/api/join/ws`,
+  };
+}
+
 /** The made-up console, as the engine would answer for it. */
 async function fakeConsole(page: Page, opts: { paired: boolean; theme: "light" | "dark"; lang: string }) {
   await page.addInitScript(
@@ -130,9 +168,10 @@ async function fakeConsole(page: Page, opts: { paired: boolean; theme: "light" |
     async (route) => {
       const path = new URL(route.request().url()).pathname;
       const json = (b: unknown) => route.fulfill({ contentType: "application/json", body: JSON.stringify(b) });
+      if (path.startsWith("/api/join")) return json(joinState(path));
       switch (path) {
         case "/api/version":
-          return json({ version: "10.0.0", caps: {} });
+          return json({ version: "11.0.4", caps: {} });
         case "/api/ps5/status":
           return json({ ok: true, command_count: 1, instance_id: 1, ps5_kernel: "releases/10.00", ucred_elevated: true });
         case "/api/ps5/rp/session":
@@ -318,7 +357,7 @@ const MAC_UA =
 /** A console that can make a keyboard and a mouse (FW 13.60), in the given mode for every game. */
 async function fakeKbm(page: Page, mode: "native" | "mixed" | "controller" | null) {
   const json = (body: unknown) => ({ contentType: "application/json", body: JSON.stringify(body) });
-  await page.route("**/api/version", (route) => route.fulfill(json({ version: "10.4.0", caps: {} })));
+  await page.route("**/api/version", (route) => route.fulfill(json({ version: "11.0.4", caps: {} })));
   await page.route("**/api/ps5/status*", (route) =>
     route.fulfill(json({ ok: true, command_count: 1, instance_id: 1, ps5_kernel: "releases/13.60", ucred_elevated: true })),
   );
@@ -402,6 +441,38 @@ for (const lang of LANGS) {
       });
     });
 
+    // Play Together's panel is tall: a bigger window (the same picture size) shows all of it.
+    test.describe(`${lang} play together ${theme}`, () => {
+      test.use({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1.2 });
+
+      test(`play together (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang });
+        await page.goto("/home", { waitUntil: "domcontentloaded" });
+        const frames = await streamOf(page, { w: 1920, h: 1080 });
+        await fakeStream(page, frames);
+        await page.getByRole("navigation").first().locator('a[href="/play"]').first().click();
+        await page.getByTestId("rp-start").click();
+        const canvas = page.getByTestId("rp-stage").filter({ visible: true }).getByTestId("rp-canvas");
+        await expect.poll(() => canvas.evaluate((c: HTMLCanvasElement) => c.width), { timeout: 20_000 }).toBe(1920);
+        await page.getByTestId("rp-toolbar").hover();
+        await page.getByTestId("rp-together").click();
+        const panel = page.getByTestId("pt-panel");
+        await expect(panel.getByTestId("pt-code")).toHaveText("K7M-2QX", { timeout: 10_000 });
+        await expect(panel.getByTestId("pt-player-2").getByTestId("pt-player-name")).toHaveText("Sam");
+        await expect(page.getByTestId("pt-ask")).toBeVisible({ timeout: 10_000 });
+        await page.mouse.move(8, 8);
+        await page.waitForTimeout(800);
+        // The whole panel in view, below the app's top bar (the picture is under it).
+        await panel.evaluate((el) => {
+          let box = el.parentElement;
+          while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+          if (box) box.scrollTop += el.getBoundingClientRect().top - 84;
+        });
+        await page.waitForTimeout(400);
+        await shot(page, "together", theme);
+      });
+    });
+
     test.describe(`${lang} keyboard & mouse ${theme}`, () => {
       test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1.5, userAgent: MAC_UA });
 
@@ -482,6 +553,48 @@ for (const lang of LANGS) {
         await page.waitForTimeout(800);
         await shot(page, "m-touchpad", theme);
       });
+
+      test(`a friend's phone (${theme})`, async ({ page }) => {
+        const html = readFileSync(new URL("../../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url), "utf8");
+        await page.route("**/join", (route) => route.fulfill({ contentType: "text/html", body: html }));
+        await page.addInitScript(
+          ([lang, theme]) => {
+            const ls = window.localStorage;
+            ls.setItem("ps5upload.lang", lang);
+            ls.setItem("ps5upload.theme", theme);
+            ls.setItem("ps5upload.openIn", "browser");
+            ls.setItem("ps5upload.join.guided", "1");
+          },
+          [lang, theme] as const,
+        );
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+        const frames = await streamOf(page, { w: 1280, h: 720 });
+        await page.routeWebSocket(/\/api\/join\/ws/, (ws) => {
+          let timer: ReturnType<typeof setInterval> | null = null;
+          ws.onClose(() => timer && clearInterval(timer));
+          ws.onMessage((m) => {
+            if (typeof m !== "string") return;
+            const v = JSON.parse(m) as { hello?: unknown; ping?: number };
+            if (v.ping !== undefined) ws.send(JSON.stringify({ pong: v.ping }));
+            if (!v.hello) return;
+            ws.send(JSON.stringify({ stage: "joined", player: 2, token: "T2", hevc: false }));
+            ws.send(JSON.stringify({ status: { player: 2, state: "playing", rtt_ms: 24, host: "Alex", block_system: true } }));
+            ws.send(rec(0, frames.header));
+            for (let i = 0; i < 3; i++) ws.send(rec(1, frames.au));
+            timer = setInterval(() => ws.send(rec(1, frames.au)), 100);
+          });
+        });
+        await page.goto(`/join#i=${INVITE}&n=Alex`, { waitUntil: "domcontentloaded" });
+        await page.getByTestId("join-name").fill("Sam");
+        await page.getByTestId("join-go").tap();
+        await expect(page.getByTestId("join-player")).toBeAttached({ timeout: 30_000 });
+        await expect.poll(() => page.getByTestId("watch-canvas").evaluate((c) => (c as HTMLCanvasElement).width), { timeout: 20_000 }).toBe(1280);
+        // The buttons start hidden on touch; the first-time hint goes after 6 s.
+        await expect(page.getByTestId("join-bar")).toHaveAttribute("data-shown", "0", { timeout: 10_000 });
+        await expect(page.getByTestId("join-hold-hint")).toHaveCount(0, { timeout: 10_000 });
+        await page.waitForTimeout(400);
+        await shot(page, "m-guest", theme);
+      });
     });
 
     test.describe(`${lang} phone ${theme}`, () => {
@@ -512,6 +625,15 @@ for (const lang of LANGS) {
         await expect.poll(() => canvas.evaluate((c: HTMLCanvasElement) => c.width), { timeout: 20_000 }).toBe(1280);
         await page.waitForTimeout(800);
         await shot(page, "m-play", theme);
+      });
+
+      test(`a friend's invite, opened in the app (${theme})`, async ({ page }) => {
+        await fakeConsole(page, { paired: true, theme, lang });
+        await page.addInitScript(() => window.localStorage.setItem("ps5upload.join.name", "Sam"));
+        await page.goto(`/play?join=${encodeURIComponent(LINK)}`, { waitUntil: "domcontentloaded" });
+        await expect(page.getByTestId("join-invite-name")).toHaveValue("Sam", { timeout: 30_000 });
+        await page.waitForTimeout(800);
+        await shot(page, "m-join", theme);
       });
 
     });

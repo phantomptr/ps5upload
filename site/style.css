@@ -1136,3 +1136,256 @@ code {
 }
 .thanks-anon { margin-top: 18px; text-align: center; }
 .thanks-note { text-align: center; }
+
+/* ── Play Together (11.0): the hero's "New" pill, then its own section ─────── */
+.hero-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 0 0 18px;
+}
+.hero-pills .eyebrow {
+  margin: 0;
+}
+.hero-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px 12px 4px 4px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.3;
+}
+.hero-new:hover {
+  text-decoration: none;
+  border-color: var(--accent);
+}
+.hero-new-tag {
+  flex: none;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: linear-gradient(100deg, #0a84ff, #b44dff 55%, #ff3d81);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+.hero-new-arrow {
+  flex: none;
+  color: var(--accent);
+  transition: transform 0.2s ease;
+}
+.hero-new:hover .hero-new-arrow {
+  transform: translateX(3px);
+}
+[dir="rtl"] .hero-new-arrow {
+  transform: scaleX(-1);
+}
+[dir="rtl"] .hero-new:hover .hero-new-arrow {
+  transform: scaleX(-1) translateX(3px);
+}
+
+.together {
+  position: relative;
+  overflow: hidden;
+  margin-top: 40px;
+  padding-bottom: 32px;
+  border-top: 1px solid var(--line);
+}
+.together-glow {
+  position: absolute;
+  inset: 0 -10% auto;
+  height: 900px;
+  background:
+    radial-gradient(35% 40% at 25% 30%, rgb(180 77 255 / 0.16), transparent 70%),
+    radial-gradient(35% 40% at 78% 45%, rgb(255 61 129 / 0.14), transparent 70%),
+    radial-gradient(40% 40% at 50% 10%, rgb(0 113 227 / 0.14), transparent 70%);
+  filter: blur(10px);
+  pointer-events: none;
+}
+.together-head {
+  position: relative;
+  text-align: center;
+}
+.together-head h2 {
+  font-size: clamp(30px, 4.6vw, 48px);
+  letter-spacing: -0.03em;
+}
+.together-head .section-lead {
+  max-width: 760px;
+  margin-inline: auto;
+}
+.together-stage {
+  position: relative;
+  max-width: 1040px;
+  margin-top: 44px;
+  padding-bottom: 36px;
+}
+.together-stage .laptop {
+  width: 84%;
+  margin-inline: 2% 0;
+}
+.together-phone {
+  position: absolute;
+  inset-inline-end: 0;
+  bottom: 0;
+  width: 19%;
+}
+.together-steps {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin: 40px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.together-steps .num {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #0a84ff, #b44dff);
+  color: #fff;
+  font-weight: 750;
+  font-size: 17px;
+  box-shadow: 0 8px 20px -8px #b44dff;
+}
+.together-steps h3 {
+  margin-top: 16px;
+  font-size: 19px;
+  font-weight: 700;
+}
+.together-steps p {
+  font-size: 15.5px;
+}
+.together-guest {
+  margin-top: 48px;
+}
+.together-guest .ticks li {
+  color: var(--text);
+  font-size: 15.5px;
+}
+.together-more {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin-top: 16px;
+}
+.together-more .ico {
+  font-size: 21px;
+}
+@media (max-width: 900px) {
+  .hero-pills {
+    justify-content: center;
+  }
+  .together-stage .laptop {
+    width: 88%;
+    margin: 0;
+  }
+  .together-phone {
+    width: 25%;
+  }
+}
+@media (max-width: 640px) {
+  .together-head {
+    text-align: start;
+  }
+  .together-stage {
+    margin-top: 32px;
+    padding-bottom: 28px;
+  }
+  .together-stage .laptop {
+    width: 92%;
+  }
+  .together-phone {
+    width: 27%;
+  }
+  .device.laptop .screen {
+    border-width: 6px;
+    border-radius: 12px 12px 4px 4px;
+  }
+}
+/* A step's number beside its heading, the text under both. */
+.together-steps li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 14px;
+  align-content: start;
+}
+.together-steps h3 {
+  margin-top: 0;
+}
+.together-steps p {
+  grid-column: 1 / -1;
+  margin-top: 12px;
+}
+@media (max-width: 640px) {
+  .together-steps,
+  .together-more {
+    gap: 12px;
+  }
+  .together-steps .card,
+  .together-more .card {
+    padding: 18px;
+  }
+  .together-more .card {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: 12px;
+  }
+  .together-more .ico {
+    margin: 0;
+  }
+  .together-more .card p {
+    grid-column: 1 / -1;
+  }
+}
+
+/* The header's sections never push the page sideways: the links stay on one line, the coffee
+ * button drops its words first, and in long languages the links scroll within their row. */
+.nav {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.nav::-webkit-scrollbar {
+  display: none;
+}
+.nav a {
+  flex: none;
+  white-space: nowrap;
+}
+.top-actions {
+  flex: none;
+}
+@media (max-width: 1280px) {
+  .coffee span {
+    display: none;
+  }
+}
+@media (max-width: 900px) {
+  .nav {
+    display: none;
+  }
+  .top-actions {
+    margin-inline-start: auto;
+  }
+}
+/* A soft edge where links run on, over the row's own end padding (unseen when all fit). */
+.nav {
+  padding-inline-end: 24px;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+[dir="rtl"] .nav {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 24px), transparent);
+}
