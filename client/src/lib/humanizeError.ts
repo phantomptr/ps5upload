@@ -80,6 +80,12 @@ export function humanizePs5Error(
     );
   }
 
+  // ─── Remote Play pairing ───────────────────────────────────────────
+  // The console refused the registration with "a pairing is pending" (rp_regist.rs), also when
+  // Enable Remote Play on its own screen is not on, whatever the registry says: unpairing and
+  // pairing again changes nothing, so the step is on the console.
+  if (/80108b03/i.test(raw)) return te("err_pair_pending");
+
   // ─── Source / local filesystem ─────────────────────────────────────
   // "can't read source folder: /Users/me/game" — the engine failed to
   // walk the user's local tree. We return verbatim because the path

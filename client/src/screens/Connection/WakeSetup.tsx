@@ -15,6 +15,7 @@ import { useRosterStore, withConsolePrefix } from "../../state/roster";
 import { pushNotification } from "../../state/notifications";
 import { audit } from "../../state/auditLog";
 import {
+import { humanizePs5Error } from "../../lib/humanizeError";
   WAKE_REQUIREMENTS,
   isValidWakeCredential,
   isValidSessionKey,
@@ -169,7 +170,7 @@ export default function WakeSetup({
       // The engine's pairing errors are already specific and actionable
       // ("no signed-in user with an activated PSN account…"), so show them
       // rather than a house-style "setup failed".
-      setPairError(e instanceof Error ? e.message : String(e));
+      setPairError(humanizePs5Error(e instanceof Error ? e.message : String(e)));
       setShowManual(true);
     } finally {
       setPairing(false);

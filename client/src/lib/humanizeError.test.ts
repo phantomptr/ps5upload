@@ -4,6 +4,13 @@ import { humanizePs5Error } from "./humanizeError";
 import en from "../i18n/locales/en";
 
 describe("humanizePs5Error", () => {
+  it("says the next step for a pairing the PS5 refuses as pending (80108b03)", () => {
+    const m = humanizePs5Error("registration failed (HTTP 403): anything (reason 80108B03)");
+    expect(m).toBe(en.err_pair_pending);
+    expect(m).toContain("Enable Remote Play");
+    expect(m).toContain("Pair again");
+  });
+
   it("returns empty input unchanged", () => {
     expect(humanizePs5Error("")).toBe("");
   });
