@@ -98,16 +98,55 @@ export function busyTasks(tasks: ReadonlyArray<{ kind: string; status: string }>
 }
 
 async function appIdle(): Promise<boolean> {
-  const [{ useUploadQueueStore }, { useTransferStore }, { useTaskStore }] = await Promise.all([
+  const [
+    { useUploadQueueStore },
+    { useTransferStore },
+    { useTaskStore },
+    { useRemotePlayStore },
+    { activeJoin },
+    { useGoLiveStore },
+    { isLive },
+  ] = await Promise.all([
     import("./uploadQueue"),
     import("./transfer"),
     import("./tasks"),
+    import("./remotePlay"),
+    import("./joinSession"),
+    import("./goLive"),
+    import("../lib/goLive"),
   ]);
   if (useUploadQueueStore.getState().running) return false;
   if (busyTasks(useTaskStore.getState().tasks)) return false;
+  // Someone is playing or broadcasting, and no task says so: the restart would end the stream
+  // (a host's Play Together friends with it), a friend's game, or the broadcast.
+  if (useRemotePlayStore.getState().stream) return false;
+  if (activeJoin()) return false;
+  if (isLive(useGoLiveStore.getState().status?.live)) return false;
   return !Object.values(useTransferStore.getState().phasesByHost).some(
     (p) => p.kind === "starting" || p.kind === "running",
   );
+}
+
+/** How often an app left running looks whether its daily check is due. */
+const CHECK_AGAIN_MS = 60 * 60 * 1000;
+
+/** Runs the TTL-gated check now, every hour, and when the window comes back to the front (a
+ *  hidden window's timers can be held up for as long as it stays hidden). The tray keeps the
+ *  app running for days, and one check per launch would never see a release. Returns a stop. */
+export function startUpdateChecks(ensureChecked: () => Promise<void> | void): () => void {
+  const check = () => void ensureChecked();
+  check();
+  const timer = setInterval(check, CHECK_AGAIN_MS);
+  const onFront = () => {
+    if (document.visibilityState === "visible") check();
+  };
+  document.addEventListener("visibilitychange", onFront);
+  window.addEventListener("focus", onFront);
+  return () => {
+    clearInterval(timer);
+    document.removeEventListener("visibilitychange", onFront);
+    window.removeEventListener("focus", onFront);
+  };
 }
 
 /** Read the auto-check preference. Defaults to ON when unset (first run) —
@@ -678,8 +717,8 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     },
 
     async ensureChecked() {
-      // Respect the user's opt-out: the launch auto-check is the only
-      // caller of this; manual "Check now" goes through checkNow().
+      // Respect the user's opt-out: the automatic checks are the only
+      // callers of this; manual "Check now" goes through checkNow().
       if (!get().autoCheckEnabled) return;
       // TOCTOU-safe: AppShell mounts fire this 1.5 s after paint, and
       // the user could navigate to Settings (which also calls the
@@ -692,6 +731,8 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       const cur = get();
       const age = Date.now() - cur.lastCheckedMs;
       if (cur.phase.kind !== "idle" && age < CHECK_TTL_MS) return;
+      // An app left running comes back here later: a download in progress or in hand stands.
+      if (cur.phase.kind === "downloading" || cur.phase.kind === "downloaded") return;
       // Skip if another check is already running in this tick. Synchronous
       // state read AFTER the set, so it correctly sees any concurrent
       // caller that's already flipped to "checking".

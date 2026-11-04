@@ -42,7 +42,7 @@ import {
   BLACK_BOX_SETTLE_MS,
   shouldCaptureBlackBox,
 } from "../lib/payloadBlackBox";
-import { useUpdateStore } from "../state/update";
+import { startUpdateChecks, useUpdateStore } from "../state/update";
 import { engineApi } from "../api/engine";
 import { fetchHwPower, payloadCheck, portCheck, procListGet } from "../api/ps5";
 import { keepAwakeTargets, powerFromCheck } from "../lib/consolePower";
@@ -1019,7 +1019,7 @@ function useAutoRedeployDownHelpers() {
   }, [visible]);
 }
 
-/** Fire a TTL-gated update check on mount. The store debounces to
+/** Fire the TTL-gated update checks from mount on. The store debounces to
  *  one check per day and caches in sessionStorage, so this is safe to
  *  call unconditionally — subsequent tab switches hit cache. */
 function useUpdateCheckOnMount() {
@@ -1028,10 +1028,14 @@ function useUpdateCheckOnMount() {
     // Defer past first paint so the app window renders before we
     // touch the network. The updater's endpoint is GitHub, so a slow
     // DNS would otherwise delay the initial UI by up to a few seconds.
+    let stop: (() => void) | null = null;
     const id = window.setTimeout(() => {
-      void ensureChecked();
+      stop = startUpdateChecks(ensureChecked);
     }, 1500);
-    return () => window.clearTimeout(id);
+    return () => {
+      window.clearTimeout(id);
+      stop?.();
+    };
   }, [ensureChecked]);
 }
 
