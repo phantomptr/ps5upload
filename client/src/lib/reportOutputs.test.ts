@@ -103,13 +103,13 @@ describe("reportMarkdown", () => {
 
 describe("publicOutputs", () => {
   const leaky = form({
-    console: "192.168.86.100",
-    whatHappened: "It lost 192.168.86.100 again at /Users/me/x",
-    pinned: [{ ts: 0, src: "engine", cat: "connection", level: "warn", code: "status_failed", console: "192.168.86.100", msg: "connect 192.168.86.100:9120 refused" }],
+    console: "192.0.2.100",
+    whatHappened: "It lost 192.0.2.100 again at /Users/me/x",
+    pinned: [{ ts: 0, src: "engine", cat: "connection", level: "warn", code: "status_failed", console: "192.0.2.100", msg: "connect 192.0.2.100:9120 refused" }],
   });
 
   it("redacts what goes to GitHub and Discord when redaction is on", () => {
-    const o = publicOutputs(leaky, ["status_failed connect 192.168.86.99:9120"], true);
+    const o = publicOutputs(leaky, ["status_failed connect 192.0.2.99:9120"], true);
     expect(decodeURIComponent(o.githubUrl)).not.toMatch(/192\.168/);
     expect(o.discordText).not.toMatch(/192\.168/);
     expect(decodeURIComponent(o.githubUrl)).toContain("<ip-1>");
@@ -117,6 +117,6 @@ describe("publicOutputs", () => {
   });
 
   it("leaves addresses when redaction is off", () => {
-    expect(decodeURIComponent(publicOutputs(leaky, [], false).githubUrl)).toContain("192.168.86.100");
+    expect(decodeURIComponent(publicOutputs(leaky, [], false).githubUrl)).toContain("192.0.2.100");
   });
 });

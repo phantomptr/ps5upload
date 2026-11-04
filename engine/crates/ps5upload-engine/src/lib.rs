@@ -12848,7 +12848,7 @@ mod list_dir_status_tests {
             StatusCode::BAD_GATEWAY
         );
         assert_eq!(
-            list_dir_error_status("connect 192.168.86.99:9120: timed out"),
+            list_dir_error_status("connect 192.0.2.99:9120: timed out"),
             StatusCode::BAD_GATEWAY
         );
     }

@@ -31,7 +31,7 @@ const VECTORS: { text: string; ecl: Ecl; version: number; mask: number; segnoMas
     ],
   },
   {
-    text: "http://192.168.86.99:9180/",
+    text: "http://192.0.2.99:9180/",
     ecl: "M",
     version: 2,
     mask: 2,

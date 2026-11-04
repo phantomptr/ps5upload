@@ -44,8 +44,8 @@ describe("Send to another console: Test connection", () => {
 describe("Tasks: a send from another device", () => {
   const base = {
     txId: "0".repeat(32),
-    from: "192.168.86.100",
-    to: "192.168.86.99",
+    from: "192.0.2.100",
+    to: "192.0.2.99",
     src: "/data/homebrew/GAME",
     dest: "/data/homebrew/GAME",
     route: "auto" as const,
@@ -57,7 +57,7 @@ describe("Tasks: a send from another device", () => {
     bytesTotal: 4 << 20,
     updatedMs: 1,
     error: null,
-    console: "192.168.86.99",
+    console: "192.0.2.99",
   };
   const row = (over: object) =>
     renderToStaticMarkup(

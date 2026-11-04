@@ -441,7 +441,7 @@ pub struct Observation {
     /// Stable identity of the console it was seen on.
     ///
     /// `console` is a DISPLAY name and is not stable: the same machine was
-    /// recorded as `phat-5.10` by one scan and `192.168.86.99` by the next,
+    /// recorded as `phat-5.10` by one scan and `192.0.2.99` by the next,
     /// which made `same_source` treat one console as two and inflate a set's
     /// own evidence. The host does not change when the user renames a roster
     /// entry, so the dedupe keys on this when both sides have it.
@@ -602,7 +602,7 @@ mod observation_tests {
     #[test]
     fn renaming_a_console_does_not_make_it_count_twice() {
         // Measured: one machine was recorded as `phat-5.10` by one scan and
-        // `192.168.86.99` by the next, and the dedupe — keyed on the DISPLAY
+        // `192.0.2.99` by the next, and the dedupe — keyed on the DISPLAY
         // name — treated them as two consoles. `distinctSightings` is a
         // ranking signal, so that inflated a set's own evidence.
         let root = scratch("rename");
@@ -610,14 +610,14 @@ mod observation_tests {
         corpus
             .add_set(
                 "Game A",
-                sighting_on("PPSA00001", "phat-5.10", "192.168.86.99"),
+                sighting_on("PPSA00001", "phat-5.10", "192.0.2.99"),
                 vec![lib("libSceAgc.sprx", 1)],
             )
             .expect("first add");
         corpus
             .add_set(
                 "Game A",
-                sighting_on("PPSA00001", "192.168.86.99", "192.168.86.99"),
+                sighting_on("PPSA00001", "192.0.2.99", "192.0.2.99"),
                 vec![lib("libSceAgc.sprx", 1)],
             )
             .expect("re-scan under a different display name");
@@ -636,14 +636,14 @@ mod observation_tests {
         corpus
             .add_set(
                 "Game A",
-                sighting_on("PPSA00001", "pro", "192.168.86.100"),
+                sighting_on("PPSA00001", "pro", "192.0.2.100"),
                 vec![lib("libSceAgc.sprx", 1)],
             )
             .expect("first");
         corpus
             .add_set(
                 "Game A",
-                sighting_on("PPSA00001", "phat", "192.168.86.99"),
+                sighting_on("PPSA00001", "phat", "192.0.2.99"),
                 vec![lib("libSceAgc.sprx", 1)],
             )
             .expect("second console");
@@ -1011,7 +1011,7 @@ mod tests {
             title_id: "PPSA30528".into(),
             title_name: "Red Dead Redemption".into(),
             console: "PS5-Pro".into(),
-            console_key: "192.168.86.100".into(),
+            console_key: "192.0.2.100".into(),
             image_backed: true,
             at: "2026-09-09T00:00:00Z".into(),
         }

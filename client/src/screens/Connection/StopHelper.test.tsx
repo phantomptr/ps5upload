@@ -29,7 +29,7 @@ describe("Stop helper", () => {
   it("asks first, saying what the helper is needed for", async () => {
     const confirm = vi.fn(async (_o: ConfirmOptions) => true);
     const d = deps({ confirm });
-    await stopHelperFlow("192.168.86.99", d, tr);
+    await stopHelperFlow("192.0.2.99", d, tr);
     expect(confirm).toHaveBeenCalledTimes(1);
     const opts = confirm.mock.calls[0][0];
     expect(opts.title).toBe("Stop the helper?");
@@ -40,16 +40,16 @@ describe("Stop helper", () => {
 
   it("does nothing when the user cancels", async () => {
     const d = deps({ confirm: vi.fn(async () => false) });
-    expect(await stopHelperFlow("192.168.86.99", d, tr)).toEqual({ kind: "cancelled" });
+    expect(await stopHelperFlow("192.0.2.99", d, tr)).toEqual({ kind: "cancelled" });
     expect(d.stop).not.toHaveBeenCalled();
     expect(d.onStopped).not.toHaveBeenCalled();
   });
 
   it("stops the helper and marks the console", async () => {
     const d = deps();
-    expect(await stopHelperFlow(" 192.168.86.99 ", d, tr)).toEqual({ kind: "stopped" });
-    expect(d.stop).toHaveBeenCalledWith("192.168.86.99");
-    expect(d.onStopped).toHaveBeenCalledWith("192.168.86.99");
+    expect(await stopHelperFlow(" 192.0.2.99 ", d, tr)).toEqual({ kind: "stopped" });
+    expect(d.stop).toHaveBeenCalledWith("192.0.2.99");
+    expect(d.onStopped).toHaveBeenCalledWith("192.0.2.99");
   });
 
   it("treats 'nothing was running' as stopped too", async () => {

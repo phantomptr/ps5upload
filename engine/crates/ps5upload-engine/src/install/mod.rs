@@ -2321,7 +2321,7 @@ mod tests {
 
     fn bare_req(source: Source) -> InstallRequest {
         InstallRequest {
-            ps5_addr: "192.168.86.99:9114".into(),
+            ps5_addr: "192.0.2.99:9114".into(),
             source,
             content_id: String::new(),
             title_id: None,
@@ -2425,9 +2425,9 @@ mod tests {
     fn unreachable_stream_names_the_address_and_the_firewall() {
         // Measured on the Phat: a firewall-blocked engine gave 0x80431064 with
         // 0 bytes served, and the UI said only "The PS5 declined the install."
-        let h = stream_unreachable_hint(Some("http://192.168.86.199:19200"), 0x80431064, None);
+        let h = stream_unreachable_hint(Some("http://192.0.2.199:19200"), 0x80431064, None);
         assert!(
-            h.contains("never reached this computer at http://192.168.86.199:19200"),
+            h.contains("never reached this computer at http://192.0.2.199:19200"),
             "{h}"
         );
         assert!(h.contains("0x80431064"), "{h}");

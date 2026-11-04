@@ -4,14 +4,14 @@ import { activityForHost } from "./activityScope";
 
 describe("activityForHost", () => {
   const entries = [
-    { id: "a", addr: "192.168.86.99:9120" },
-    { id: "b", addr: "192.168.86.100" },
+    { id: "a", addr: "192.0.2.99:9120" },
+    { id: "b", addr: "192.0.2.100" },
     { id: "c", addr: undefined },
   ];
 
   it("shows the selected console's work and local-only work", () => {
-    expect(activityForHost(entries, "192.168.86.100").map((e) => e.id)).toEqual(["b", "c"]);
-    expect(activityForHost(entries, "192.168.86.99").map((e) => e.id)).toEqual(["a", "c"]);
+    expect(activityForHost(entries, "192.0.2.100").map((e) => e.id)).toEqual(["b", "c"]);
+    expect(activityForHost(entries, "192.0.2.99").map((e) => e.id)).toEqual(["a", "c"]);
   });
 
   it("shows everything when no console is selected", () => {

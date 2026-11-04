@@ -97,7 +97,7 @@ pub fn console_addr(addr: &str) -> String {
 }
 
 /// The console's bare host, as a peer's IP prints: [`console_addr`] without the brackets.
-/// `192.168.86.100:9120` -> `192.168.86.100`, `[fe80::1]:9120` -> `fe80::1`.
+/// `192.0.2.100:9120` -> `192.0.2.100`, `[fe80::1]:9120` -> `fe80::1`.
 pub fn console_host(addr: &str) -> String {
     let a = console_addr(addr);
     match a.strip_prefix('[') {
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn console_host_strips_port_and_brackets() {
-        assert_eq!(console_host("192.168.86.100:9120"), "192.168.86.100");
+        assert_eq!(console_host("192.0.2.100:9120"), "192.0.2.100");
         assert_eq!(console_host("[fe80::1]:9120"), "fe80::1");
         assert_eq!(console_host("ps5.local"), "ps5.local");
         assert_eq!(console_host("fe80::1"), "fe80::1");

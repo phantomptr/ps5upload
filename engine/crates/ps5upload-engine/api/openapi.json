@@ -7764,7 +7764,7 @@
             "type": "string"
           },
           "console_key": {
-            "description": "Stable identity of the console it was seen on.\n\n`console` is a DISPLAY name and is not stable: the same machine was\nrecorded as `phat-5.10` by one scan and `192.168.86.99` by the next,\nwhich made `same_source` treat one console as two and inflate a set's\nown evidence. The host does not change when the user renames a roster\nentry, so the dedupe keys on this when both sides have it.",
+            "description": "Stable identity of the console it was seen on.\n\n`console` is a DISPLAY name and is not stable: the same machine was\nrecorded as `phat-5.10` by one scan and `192.0.2.99` by the next,\nwhich made `same_source` treat one console as two and inflate a set's\nown evidence. The host does not change when the user renames a roster\nentry, so the dedupe keys on this when both sides have it.",
             "type": "string"
           },
           "image_backed": {

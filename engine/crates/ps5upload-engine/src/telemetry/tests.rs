@@ -114,7 +114,7 @@ fn a_cross_device_refusal_carries_its_code_and_the_console_message() {
 fn the_record_holds_no_home_path_no_address_and_no_source_path() {
     let mut s = failed_state(
         None,
-        "open 7z /Users/alice/Games/Secret Game.7z: connect 192.168.86.99:9021 refused; also C:\\Users\\bob\\x.zip and /home/alice/y",
+        "open 7z /Users/alice/Games/Secret Game.7z: connect 192.0.2.99:9021 refused; also C:\\Users\\bob\\x.zip and /home/alice/y",
     );
     s["dest"] = "/data/homebrew/My Private Game Folder".into();
     s["src"] = "/Users/alice/Games/Secret".into();

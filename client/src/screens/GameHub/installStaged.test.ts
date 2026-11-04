@@ -13,13 +13,13 @@ describe("installing a staged update or DLC from the game page", () => {
   it("queues it through the package library, like Install Package", async () => {
     const confirm = vi.fn(async () => true);
     const r = await installStagedPkg({
-      host: "192.168.86.100",
+      host: "192.0.2.100",
       entry: { path: "/data/pkg/gp/patch.pkg" },
       baseInstalled: true,
       confirmWithoutBase: confirm,
     });
     expect(r).toEqual({ ok: true });
-    expect(install).toHaveBeenCalledWith("/data/pkg/gp/patch.pkg", "192.168.86.100");
+    expect(install).toHaveBeenCalledWith("/data/pkg/gp/patch.pkg", "192.0.2.100");
     expect(confirm).not.toHaveBeenCalled();
   });
 

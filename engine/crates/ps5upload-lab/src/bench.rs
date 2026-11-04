@@ -3035,7 +3035,7 @@ mod tests {
     /// guard, and — with BENCH_DUMP_LINES=FILE — writes them out so the report is
     /// generated from exactly what is tested.
     fn task28_lines() -> (Vec<String>, Vec<String>) {
-        let consoles = ["192.168.86.100", "192.168.86.99"];
+        let consoles = ["192.0.2.100", "192.0.2.99"];
         let drives = ["/data", "/mnt/usb0", "/mnt/ext1"];
         let (mut stage, mut bench) = (Vec::new(), Vec::new());
         for c in consoles {

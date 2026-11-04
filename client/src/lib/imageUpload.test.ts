@@ -10,8 +10,8 @@ vi.mock("../api/ps5", () => ({ fetchVolumes }));
 const drive = (path: string, over: Partial<Volume> = {}): Volume =>
   ({ path, writable: true, is_placeholder: false, free_bytes: 1000, total_bytes: 2000, ...over }) as Volume;
 const USB = "/mnt/usb0";
-const PRO = "192.168.86.100";
-const PHAT = "192.168.86.99";
+const PRO = "192.0.2.100";
+const PHAT = "192.0.2.99";
 
 describe("the drive a game goes to on the console (#673)", () => {
   beforeEach(() => {

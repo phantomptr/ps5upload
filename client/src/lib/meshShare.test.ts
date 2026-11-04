@@ -50,9 +50,9 @@ function device(name: string, profiles: PS5Profile[], settings: Record<string, s
 }
 
 const phat = (id: string, extra: Partial<PS5Profile> = {}): PS5Profile =>
-  ({ id, name: "Phat", host: "192.168.86.99", ...extra }) as PS5Profile;
+  ({ id, name: "Phat", host: "192.0.2.99", ...extra }) as PS5Profile;
 const pro = (id: string, extra: Partial<PS5Profile> = {}): PS5Profile =>
-  ({ id, name: "Pro", host: "192.168.86.100", ...extra }) as PS5Profile;
+  ({ id, name: "Pro", host: "192.0.2.100", ...extra }) as PS5Profile;
 
 describe("console list through the consoles", () => {
   it("the same PS5 on two devices stays one entry, under each device's own id", () => {
@@ -63,8 +63,8 @@ describe("console list through the consoles", () => {
     x = phone.sync(x);
     x = mac.sync(x);
     expect(mac.list.map((p) => [p.id, p.host])).toEqual([
-      ["m1", "192.168.86.99"],
-      ["mac-1", "192.168.86.100"],
+      ["m1", "192.0.2.99"],
+      ["mac-1", "192.0.2.100"],
     ]);
     expect(phone.list.map((p) => p.id)).toEqual(["p1", "p2"]);
     // Syncing again changes nothing.
@@ -92,7 +92,7 @@ describe("console list through the consoles", () => {
     y = phone.sync(y);
     mac.sync(y);
     expect(mac.list.map((p) => p.name)).toEqual(["Phat"]);
-    expect(y[consoleKey("192.168.86.100")].v).toBeNull();
+    expect(y[consoleKey("192.0.2.100")].v).toBeNull();
   });
 
   it("a rename on one device and a wake key set on another both survive", () => {
@@ -109,7 +109,7 @@ describe("console list through the consoles", () => {
     for (const d of [mac, phone]) {
       expect(d.list[0]).toMatchObject({ name: "Living room", wake_credential: "abc" });
     }
-    expect(x[fieldKey("192.168.86.99", "name")].v).toBe("Living room");
+    expect(x[fieldKey("192.0.2.99", "name")].v).toBe("Living room");
   });
 });
 
@@ -120,7 +120,7 @@ describe("set-ups from before sharing", () => {
       ["zzz", "aaa"],
     ]) {
       const mac = device(first, [phat("m1", { name: "Living room" })]);
-      const phone = device(second, [phat("p1", { name: "PS5 (192.168.86.99)" })]);
+      const phone = device(second, [phat("p1", { name: "PS5 (192.0.2.99)" })]);
       const x = phone.sync(mac.sync({}));
       mac.sync(x);
       for (const d of [mac, phone]) expect(d.list[0].name).toBe("Living room");
@@ -136,10 +136,10 @@ describe("set-ups from before sharing", () => {
     // The user also types the address in the browser before the list arrived: a default name.
     const fresh = device("web2", []);
     fresh.tick();
-    fresh.edit(() => [phat("w1", { name: "PS5 (192.168.86.99)" })]);
+    fresh.edit(() => [phat("w1", { name: "PS5 (192.0.2.99)" })]);
     x = fresh.sync(x);
     mac.sync(x);
-    for (const d of [mac, browser, fresh]) expect(d.list.find((p) => p.host === "192.168.86.99")?.name).toBe("Fat");
+    for (const d of [mac, browser, fresh]) expect(d.list.find((p) => p.host === "192.0.2.99")?.name).toBe("Fat");
   });
 
   it("re-adding a console removed elsewhere brings it back", () => {
@@ -153,7 +153,7 @@ describe("set-ups from before sharing", () => {
     phone.edit(() => [pro("p1", { name: "Pro again" })]);
     x = phone.sync(x);
     mac.sync(x);
-    expect(mac.list.map((p) => p.host)).toContain("192.168.86.100");
+    expect(mac.list.map((p) => p.host)).toContain("192.0.2.100");
   });
 
   it("a real change still beats any set-up", () => {

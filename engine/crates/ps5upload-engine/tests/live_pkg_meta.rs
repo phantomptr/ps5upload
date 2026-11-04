@@ -2,7 +2,7 @@
 //! CATEGORY (gd=base app, gp=patch/update, ac=DLC) + ids — the discriminator
 //! for "is this installable standalone or an update needing a base game".
 //!
-//!   PS5UPLOAD_LIVE_IP=192.168.86.100 \
+//!   PS5UPLOAD_LIVE_IP=192.0.2.100 \
 //!   PS5UPLOAD_LIVE_PKGPATH=/user/data/ps5upload/pkg_temp/PPSA01650.pkg \
 //!     cargo test -p ps5upload-engine --test live_pkg_meta -- --nocapture --ignored
 

@@ -888,7 +888,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             engine.join("engine.log"),
-            b"[engine:warn] connect 192.168.86.99:9021 refused\n",
+            b"[engine:warn] connect 192.0.2.99:9021 refused\n",
         )
         .unwrap();
         std::fs::write(
@@ -903,7 +903,7 @@ mod tests {
         let args = BugReportArgs {
             dest: dest.to_string_lossy().into_owned(),
             dest_filename: None,
-            report_json: r#"{"kind":"ps5upload-bug-report","error":"connect 192.168.86.99:9021"}"#
+            report_json: r#"{"kind":"ps5upload-bug-report","error":"connect 192.0.2.99:9021"}"#
                 .to_string(),
             redact: true,
             window_minutes: 30,
@@ -978,13 +978,13 @@ mod tests {
             .read_to_string(&mut engine_log)
             .unwrap();
         assert!(engine_log.contains("<ip-1>:9021"));
-        assert!(!engine_log.contains("192.168.86.99"));
+        assert!(!engine_log.contains("192.0.2.99"));
         let mut report = String::new();
         zip.by_name("report.json")
             .unwrap()
             .read_to_string(&mut report)
             .unwrap();
-        assert!(!report.contains("192.168.86.99"));
+        assert!(!report.contains("192.0.2.99"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1107,7 +1107,7 @@ mod tests {
             extra_entries: vec![
                 ExtraEntry {
                     path: "timeline.txt".into(),
-                    text: Some("18:27 [engine] 192.168.86.100 lost".into()),
+                    text: Some("18:27 [engine] 192.0.2.100 lost".into()),
                     base64: None,
                 },
                 ExtraEntry {

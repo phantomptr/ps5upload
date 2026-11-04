@@ -636,14 +636,14 @@ mod tests {
 
     #[test]
     fn lines_are_classified() {
-        let e = line_event("192.168.86.100", "[fatal] signal 11 while serving frame 88");
+        let e = line_event("192.0.2.100", "[fatal] signal 11 while serving frame 88");
         assert_eq!(
             (e.level, e.code.as_deref()),
             (Level::Error, Some("helper_fatal"))
         );
         assert!(matches!(e.src, Src::Helper));
         let ok = line_event(
-            "192.168.86.100",
+            "192.0.2.100",
             "ps5upload2 payload ready on port 9120 (instance=1)",
         );
         assert_eq!(

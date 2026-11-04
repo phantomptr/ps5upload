@@ -4108,7 +4108,7 @@ mod tests {
 
     // ── short aliases for over-long install links ──
 
-    const LONG: &str = "http://192.168.86.199:20080/3A5CA02AFD084A3B8445AC51D3EAE212/\
+    const LONG: &str = "http://192.0.2.199:20080/3A5CA02AFD084A3B8445AC51D3EAE212/\
 Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
 
     /// The link from the field that "let the PS5 download it" could not take.
@@ -4122,7 +4122,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     /// dependency on this computer staying up.
     #[test]
     fn a_link_that_fits_is_not_shortened() {
-        let short = "http://192.168.86.199:20081/UP9000-PPSA03016_00-MARVELSPIDERMAN2.pkg";
+        let short = "http://192.0.2.199:20081/UP9000-PPSA03016_00-MARVELSPIDERMAN2.pkg";
         assert_eq!(
             super::shorten_for_installer("127.0.0.1:9120", short).unwrap(),
             None
@@ -4249,10 +4249,10 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     /// already installed on the console.
     #[test]
     fn a_session_address_is_always_normalized_to_the_bare_host() {
-        assert_eq!(normalize_mgmt_addr("192.168.86.100"), "192.168.86.100");
-        assert_eq!(normalize_mgmt_addr("192.168.86.100:9120"), "192.168.86.100");
+        assert_eq!(normalize_mgmt_addr("192.0.2.100"), "192.0.2.100");
+        assert_eq!(normalize_mgmt_addr("192.0.2.100:9120"), "192.0.2.100");
         // An older client may hand us either retired port; the port is ignored.
-        assert_eq!(normalize_mgmt_addr("192.168.86.100:9120"), "192.168.86.100");
+        assert_eq!(normalize_mgmt_addr("192.0.2.100:9120"), "192.0.2.100");
         // Hostnames and IPv6 literals follow the same rule.
         assert_eq!(normalize_mgmt_addr("ps5.lan"), "ps5.lan");
         assert_eq!(normalize_mgmt_addr("[::1]"), "[::1]");
@@ -4479,11 +4479,11 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         // address the PS5 can't reach; PS5UPLOAD_PKG_HOST_IP pins the host's
         // LAN IP instead. It must win over lan_ip_for_ps5 regardless of the
         // ps5_addr, and an empty value must fall through to the guess.
-        std::env::set_var("PS5UPLOAD_PKG_HOST_IP", "192.168.86.199");
-        let url = pkg_host_url_for("192.168.86.100:9120", "s", "IV0001-X").expect("override ip");
+        std::env::set_var("PS5UPLOAD_PKG_HOST_IP", "192.0.2.199");
+        let url = pkg_host_url_for("192.0.2.100:9120", "s", "IV0001-X").expect("override ip");
         std::env::remove_var("PS5UPLOAD_PKG_HOST_IP");
         assert!(
-            url.starts_with("http://192.168.86.199:"),
+            url.starts_with("http://192.0.2.199:"),
             "URL must use the advertised-IP override: {url}"
         );
         // An empty override must not be treated as a valid IP.

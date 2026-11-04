@@ -1477,11 +1477,11 @@ mod tests {
             create_us: 2500,
             fsync_us: 3750,
         };
-        let row = super::calibration_record("192.168.86.100", "/data/cal", 2000, 4096, &[point]);
+        let row = super::calibration_record("192.0.2.100", "/data/cal", 2000, 4096, &[point]);
         assert_eq!(row["schema"], 1);
         assert_eq!(row["kind"], "calibrate");
         assert_eq!(row["protocol"], "ava1");
-        assert_eq!(row["console"], "192.168.86.100");
+        assert_eq!(row["console"], "192.0.2.100");
         assert_eq!(row["dir"], "/data/cal");
         assert_eq!(row["files"], 2000);
         assert_eq!(row["size_bytes"], 4096);
@@ -1495,16 +1495,16 @@ mod tests {
     #[test]
     fn ava1_commands_use_port_9120() {
         assert_eq!(
-            super::ava1_cmds::ava1_addr("192.168.86.100:9113"),
-            "192.168.86.100:9120"
+            super::ava1_cmds::ava1_addr("192.0.2.100:9113"),
+            "192.0.2.100:9120"
         );
         assert_eq!(
-            super::ava1_cmds::ava1_addr("192.168.86.100:9114"),
-            "192.168.86.100:9120"
+            super::ava1_cmds::ava1_addr("192.0.2.100:9114"),
+            "192.0.2.100:9120"
         );
         assert_eq!(
-            super::ava1_cmds::ava1_addr("192.168.86.100"),
-            "192.168.86.100:9120"
+            super::ava1_cmds::ava1_addr("192.0.2.100"),
+            "192.0.2.100:9120"
         );
     }
 

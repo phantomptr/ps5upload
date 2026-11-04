@@ -11,8 +11,8 @@ describe("saving a report in the browser", () => {
     await saveReport(
       {
         entries: [
-          { path: "timeline.txt", text: "lost 192.168.86.100, then 192.168.86.99" },
-          { path: "console/stderr.log", text: "ready 192.168.86.99 pairing_key=abc" },
+          { path: "timeline.txt", text: "lost 192.0.2.100, then 192.0.2.99" },
+          { path: "console/stderr.log", text: "ready 192.0.2.99 pairing_key=abc" },
           { path: "screenshots/a.png", base64: "iVBORw==" },
         ],
         missing: [],

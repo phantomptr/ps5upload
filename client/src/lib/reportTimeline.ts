@@ -39,7 +39,7 @@ function parts(ts: number, tz?: string) {
   return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}:${p.second}` };
 }
 
-/** One readable line: `2026-10-08 18:27:14 [engine] 192.168.86.100  connection WARN conn_lost: msg (×37 until 18:33:02)`. */
+/** One readable line: `2026-10-08 18:27:14 [engine] 192.0.2.100  connection WARN conn_lost: msg (×37 until 18:33:02)`. */
 export function formatLine(e: EventRecord, tz?: string): string {
   const { date, time } = parts(e.ts, tz);
   const who = e.console ? ` ${e.console} ` : "";

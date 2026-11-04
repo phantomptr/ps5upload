@@ -2,7 +2,7 @@
 //! console's /mnt/usb0, then runs scan_external_pkgs and asserts it's found
 //! with the right platform.
 //!
-//!   PS5UPLOAD_LIVE_IP=192.168.86.99 \
+//!   PS5UPLOAD_LIVE_IP=192.0.2.99 \
 //!   PS5UPLOAD_LIVE_PKG=/path/to/CUSA.pkg \
 //!     cargo test -p ps5upload-engine --test live_scan_external -- --nocapture --ignored
 

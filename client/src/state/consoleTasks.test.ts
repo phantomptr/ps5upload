@@ -18,7 +18,7 @@ import { anyAwakeWork } from "../lib/awakeWork";
 import { presenceItems } from "./mesh";
 import * as transfers from "../lib/ps5Transfers";
 
-const HOST = "192.168.86.100";
+const HOST = "192.0.2.100";
 
 const info = (over: Partial<ConsoleTaskInfo> = {}): ConsoleTaskInfo => ({
   id: "aa",
@@ -80,9 +80,9 @@ describe("applyConsoleTasks", () => {
 
   it("keeps each console's tasks to itself", () => {
     applyConsoleTasks(HOST, [info()]);
-    applyConsoleTasks("192.168.86.99", []);
+    applyConsoleTasks("192.0.2.99", []);
     expect(rows()[0].status).toBe("running");
-    applyConsoleTasks("192.168.86.99", [info()]);
+    applyConsoleTasks("192.0.2.99", [info()]);
     expect(rows()).toHaveLength(2);
   });
 

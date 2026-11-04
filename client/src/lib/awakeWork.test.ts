@@ -12,7 +12,7 @@ function task(over: Partial<Task>): Task {
     status: "running",
     attempts: 0,
     maxAttempts: 1,
-    consoleId: "192.168.86.99",
+    consoleId: "192.0.2.99",
     ...over,
   } as Task;
 }
@@ -23,7 +23,7 @@ describe("keeping the computer and the PS5 awake", () => {
     expect(anyAwakeWork([task({ kind: "pkg-dpi-install" })])).toBe(true);
     expect(anyAwakeWork([task({ kind: "upload-archive" })])).toBe(true);
     expect(awakeConsoles([task({ kind: "pkg-install" })])).toEqual(
-      new Set(["192.168.86.99"]),
+      new Set(["192.0.2.99"]),
     );
   });
 
@@ -46,12 +46,12 @@ describe("keeping the computer and the PS5 awake", () => {
 
   it("keeps every console that has work awake, and a local build only the computer", () => {
     const tasks = [
-      task({ consoleId: "192.168.86.99" }),
-      task({ kind: "fs-copy", consoleId: "192.168.86.100" }),
+      task({ consoleId: "192.0.2.99" }),
+      task({ kind: "fs-copy", consoleId: "192.0.2.100" }),
       task({ kind: "fpkg-convert", consoleId: "" }),
     ];
     expect(awakeConsoles(tasks)).toEqual(
-      new Set(["192.168.86.99", "192.168.86.100"]),
+      new Set(["192.0.2.99", "192.0.2.100"]),
     );
     expect(anyAwakeWork([task({ kind: "fpkg-convert", consoleId: "" })])).toBe(
       true,

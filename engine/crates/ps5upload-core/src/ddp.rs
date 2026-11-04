@@ -449,21 +449,21 @@ device-discovery-protocol-version:00030010\nsystem-version:09600004\n";
         let ip = |s: &str| s.parse::<Ipv4Addr>().unwrap();
         let m24 = ip("255.255.255.0");
         assert_eq!(
-            same_subnet_broadcast(ip("192.168.86.199"), m24, ip("192.168.86.99")),
-            Some(ip("192.168.86.255"))
+            same_subnet_broadcast(ip("192.0.2.199"), m24, ip("192.0.2.99")),
+            Some(ip("192.0.2.255"))
         );
         // Another subnet, the console itself, and point-to-point masks are not routes to it.
         assert_eq!(
-            same_subnet_broadcast(ip("10.0.0.2"), m24, ip("192.168.86.99")),
+            same_subnet_broadcast(ip("10.0.0.2"), m24, ip("192.0.2.99")),
             None
         );
         assert_eq!(
-            same_subnet_broadcast(ip("192.168.86.99"), m24, ip("192.168.86.99")),
+            same_subnet_broadcast(ip("192.0.2.99"), m24, ip("192.0.2.99")),
             None
         );
         for m in ["255.255.255.255", "255.255.255.254", "0.0.0.0"] {
             assert_eq!(
-                same_subnet_broadcast(ip("192.168.86.1"), ip(m), ip("192.168.86.99")),
+                same_subnet_broadcast(ip("192.0.2.1"), ip(m), ip("192.0.2.99")),
                 None
             );
         }

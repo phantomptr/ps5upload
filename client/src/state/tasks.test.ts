@@ -37,7 +37,7 @@ describe("taskStore lifecycle", () => {
       kind: "upload-file",
       origin: "files.upload",
       label: "Upload PPSA09519.exfat",
-      consoleId: "192.168.86.100:9113",
+      consoleId: "192.0.2.100:9113",
     });
     const t = useTaskStore.getState().getTask(id);
     expect(t).toBeDefined();
@@ -45,7 +45,7 @@ describe("taskStore lifecycle", () => {
     expect(t!.kind).toBe("upload-file");
     expect(t!.status).toBe("running");
     // hostOf strips the port → bare host is the canonical consoleId.
-    expect(t!.consoleId).toBe("192.168.86.100");
+    expect(t!.consoleId).toBe("192.0.2.100");
     expect(t!.endedAtMs).toBeUndefined();
   });
 
@@ -54,7 +54,7 @@ describe("taskStore lifecycle", () => {
       kind: "upload-dir",
       origin: "files.upload",
       label: "Upload saves",
-      consoleId: "192.168.86.100",
+      consoleId: "192.0.2.100",
     });
     const before = useTaskStore.getState().getTask(id)!.updatedAtMs;
     // Bump time so updatedAtMs strictly increases.
@@ -80,7 +80,7 @@ describe("taskStore lifecycle", () => {
       kind: "fs-delete",
       origin: "files.bulk",
       label: "Delete temp",
-      consoleId: "192.168.86.100",
+      consoleId: "192.0.2.100",
     });
     useTaskStore.getState().finishTask(id, "done");
     const before = useTaskStore.getState().getTask(id)!;
@@ -98,7 +98,7 @@ describe("taskStore lifecycle", () => {
       kind: "pkg-install",
       origin: "games.install",
       label: "Install game.pkg",
-      consoleId: "192.168.86.100",
+      consoleId: "192.0.2.100",
     });
     useTaskStore.getState().finishTask(id, "done", {
       progress: { current: 1, total: 1, unit: "items" },
@@ -114,7 +114,7 @@ describe("taskStore lifecycle", () => {
       kind: "download",
       origin: "files.download",
       label: "Download save",
-      consoleId: "192.168.86.100",
+      consoleId: "192.0.2.100",
     });
     useTaskStore.getState().finishTask(id, "done");
     const doneAt = useTaskStore.getState().getTask(id)!.endedAtMs;
@@ -133,7 +133,7 @@ describe("taskStore lifecycle", () => {
       kind: "fs-copy",
       origin: "files.paste",
       label: "Copy dir",
-      consoleId: "192.168.86.100",
+      consoleId: "192.0.2.100",
     });
     useTaskStore.getState().removeTask(id);
     expect(useTaskStore.getState().getTask(id)).toBeDefined();

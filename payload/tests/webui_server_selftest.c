@@ -451,9 +451,9 @@ static void restart_keeps_token_and_serves(void) {
 
 /* The listener watch's decisions (pure). */
 static void watch_decisions(void) {
-    char a[3][INET_ADDRSTRLEN] = { "127.0.0.1", "192.168.86.99", "169.254.3.4" };
-    char b[3][INET_ADDRSTRLEN] = { "192.168.86.99", "169.254.3.4", "127.0.0.1" };
-    char c[2][INET_ADDRSTRLEN] = { "127.0.0.1", "192.168.86.120" };
+    char a[3][INET_ADDRSTRLEN] = { "127.0.0.1", "192.0.2.99", "169.254.3.4" };
+    char b[3][INET_ADDRSTRLEN] = { "192.0.2.99", "169.254.3.4", "127.0.0.1" };
+    char c[2][INET_ADDRSTRLEN] = { "127.0.0.1", "192.0.2.120" };
     char d[2][INET_ADDRSTRLEN] = { "127.0.0.1", "169.254.9.9" };
     char e[1][INET_ADDRSTRLEN] = { "127.0.0.1" };
     char f[2][INET_ADDRSTRLEN] = { "8.8.4.4", "172.20.1.2" };
@@ -478,7 +478,7 @@ static void watch_decisions(void) {
     CHECK(webui_addrs_differ((const char (*)[INET_ADDRSTRLEN])e, 0, (const char (*)[INET_ADDRSTRLEN])e, 0) == 0);
 
     /* the address a phone opens */
-    CHECK(webui_pick_lan_addr((const char (*)[INET_ADDRSTRLEN])a, 3, out) == 1 && strcmp(out, "192.168.86.99") == 0);
+    CHECK(webui_pick_lan_addr((const char (*)[INET_ADDRSTRLEN])a, 3, out) == 1 && strcmp(out, "192.0.2.99") == 0);
     CHECK(webui_pick_lan_addr((const char (*)[INET_ADDRSTRLEN])d, 2, out) == 1 && strcmp(out, "169.254.9.9") == 0);
     CHECK(webui_pick_lan_addr((const char (*)[INET_ADDRSTRLEN])e, 1, out) == 0 && out[0] == '\0');
     CHECK(webui_pick_lan_addr((const char (*)[INET_ADDRSTRLEN])f, 2, out) == 1 && strcmp(out, "172.20.1.2") == 0);

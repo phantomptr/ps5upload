@@ -139,7 +139,7 @@ import { useTaskStore } from "./tasks";
 describe("link install input", () => {
   it("rejects unsafe URLs before contacting the console", async () => {
     vi.mocked(invoke).mockClear();
-    const host = "192.168.86.99";
+    const host = "192.0.2.99";
     const store = pkgLibraryStore(host);
     for (const source of [
       "file:///tmp/game.pkg",

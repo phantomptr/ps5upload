@@ -3,7 +3,7 @@ import { expect, test, type Route } from "@playwright/test";
 // The bug report page end to end in the web UI: describe it, pick how far back, create the report
 // (everything recorded in that window, redacted, with MISSING.txt), then Post to GitHub / Discord.
 
-const HOST = "192.168.86.100";
+const HOST = "192.0.2.100";
 
 test("one page builds a redacted report of the whole time frame and pre-fills GitHub", async ({ page }) => {
   await page.addInitScript((host) => {

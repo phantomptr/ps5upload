@@ -10,7 +10,7 @@ vi.mock("./reportTimeline", async (orig) => ({
   fetchTimeline: (...a: unknown[]) => timeline(...a),
 }));
 vi.mock("./browserBugBundle", () => ({
-  engineLogText: async () => "[engine] connect 192.168.86.100 refused",
+  engineLogText: async () => "[engine] connect 192.0.2.100 refused",
   appLogJsonl: () => "",
   currentAppLog: () => [],
 }));
@@ -22,7 +22,7 @@ import { EVENT_CATS } from "./eventRecord";
 import type { ReportForm } from "./reportOutputs";
 
 const form: ReportForm = {
-  console: "192.168.86.100",
+  console: "192.0.2.100",
   doing: "connecting",
   doingOther: "",
   whatHappened: "It disconnected and won't come back",
@@ -44,7 +44,7 @@ const opts = (over: Partial<BuildOptions> = {}): BuildOptions => ({
   until: Date.now(),
   cats: new Set(EVENT_CATS),
   sources: new Set<SourceId>(["engine_journal", "app_journal"]),
-  consoles: ["192.168.86.100"],
+  consoles: ["192.0.2.100"],
   images: [],
   platform: "browser",
   ...over,
@@ -58,7 +58,7 @@ describe("buildReport", () => {
     for (const f of [snapshot, engineDiag, timeline]) f.mockReset();
     timeline.mockResolvedValue({
       events: [
-        { ts: 1, src: "helper", cat: "helper", level: "error", code: "helper_fatal", console: "192.168.86.100", msg: "[fatal] signal 11" },
+        { ts: 1, src: "helper", cat: "helper", level: "error", code: "helper_fatal", console: "192.0.2.100", msg: "[fatal] signal 11" },
       ],
       engineDropped: 0,
       appDropped: 0,
@@ -105,7 +105,7 @@ describe("buildReport", () => {
 
     snapshot.mockResolvedValue({ snapshot: {}, klog: null, syslog: null, payload_logs: [] });
     const r = await buildReport(opts({ sources: new Set<SourceId>(["helper_log", "helper_ftp"]) }));
-    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/api/ps5/helper-log-ftp?addr=192.168.86.100"), expect.anything());
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/api/ps5/helper-log-ftp?addr=192.0.2.100"), expect.anything());
     expect(r.entries.find((e) => e.path.endsWith("stderr.log"))?.text).toBe("from ftp");
   });
 
@@ -189,8 +189,8 @@ describe("buildReport", () => {
   });
 
   it("reads the console the report is about, not the selected tab", async () => {
-    await buildReport(opts({ consoles: ["192.168.86.99"], sources: new Set<SourceId>(["console_logs"]) }));
-    expect(snapshot).toHaveBeenCalledWith(expect.objectContaining({ host: "192.168.86.99" }));
+    await buildReport(opts({ consoles: ["192.0.2.99"], sources: new Set<SourceId>(["console_logs"]) }));
+    expect(snapshot).toHaveBeenCalledWith(expect.objectContaining({ host: "192.0.2.99" }));
   });
 
   it("an unreachable console's missing kernel and system logs are named in MISSING.txt", async () => {

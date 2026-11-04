@@ -419,8 +419,8 @@ pub(crate) fn gate(probe: RoomProbe, console: String, dest: String, job: [u8; 16
 mod tests {
     #[test]
     fn the_volume_fallback_asks_by_host() {
-        assert_eq!(super::mgmt_addr("192.168.86.100"), "192.168.86.100");
-        assert_eq!(super::mgmt_addr("192.168.86.100:9020"), "192.168.86.100");
+        assert_eq!(super::mgmt_addr("192.0.2.100"), "192.0.2.100");
+        assert_eq!(super::mgmt_addr("192.0.2.100:9020"), "192.0.2.100");
         assert_eq!(super::mgmt_addr("[fe80::1]:9020"), "[fe80::1]");
     }
 

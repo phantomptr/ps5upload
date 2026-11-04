@@ -160,14 +160,14 @@ describe("isAutoRecoverable", () => {
   });
 
   // Real failure strings captured from a payload crash mid-upload on a Fat PS5
-  // (192.168.86.99) — both surface with error_reason=null, so they MUST be
+  // (192.0.2.99) — both surface with error_reason=null, so they MUST be
   // classified via the message and MUST be recoverable, or the auto-resume
   // feature is useless for the exact case it exists to handle.
   it("recovers the actual hardware crash signatures (regression)", () => {
     expect(
       isAutoRecoverable(
         null,
-        "transfer_file_list gave up after 2 retries. Prior: attempt 0: write frame split | attempt 1: read frame header: connect to 192.168.86.99:9113: Connection refused (os error 61)",
+        "transfer_file_list gave up after 2 retries. Prior: attempt 0: write frame split | attempt 1: read frame header: connect to 192.0.2.99:9113: Connection refused (os error 61)",
       ),
     ).toBe(true);
     // Crash landed during a stream's commit phase.
