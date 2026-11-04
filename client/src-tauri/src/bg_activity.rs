@@ -722,8 +722,11 @@ mod tests {
         assert!(
             matches!(a.as_slice(), [Action::StartFg(p)] if p.title == "Waiting for the next item")
         );
-        let a = step(&mut st, &snap(0, vec![], vec![]), true, 60_000);
+        // Nothing new to say under a minute; at a minute it renews the service's wake lock.
+        let a = step(&mut st, &snap(0, vec![], vec![]), true, 59_999);
         assert!(a.is_empty());
+        let a = step(&mut st, &snap(0, vec![], vec![]), true, 60_000);
+        assert!(matches!(a.as_slice(), [Action::Update(_)]), "{a:?}");
         assert!(st.fg);
     }
 

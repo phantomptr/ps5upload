@@ -315,7 +315,7 @@ async fn file_is_helper(path: &str) -> bool {
     {
         return false;
     }
-    is_ps5upload_payload(path, &window)
+    ps5upload_core::payload_lifecycle::is_ps5upload_payload(path, &window)
 }
 
 /// This engine's AVA1 public key and the launch token that goes with it (SPEC.md §5.2),
