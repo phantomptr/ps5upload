@@ -78,6 +78,7 @@ pub fn merge_pads<'a>(states: impl IntoIterator<Item = &'a ControllerState>) -> 
     };
     for s in states {
         m.buttons |= s.buttons;
+        m.turbo |= s.turbo;
         m.l2 = m.l2.max(s.l2);
         m.r2 = m.r2.max(s.r2);
         m.lx = far(m.lx, s.lx);

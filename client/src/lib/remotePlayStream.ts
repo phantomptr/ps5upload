@@ -61,6 +61,9 @@ export interface PadState {
   touch?: [number, number] | null;
   /** A phone's motion sensors in the controller's axes (lib/motion.ts), or none. */
   motion?: MotionReading | null;
+  /** The buttons the game's turbo is pressing above 10 a second: the engine holds them about a
+   *  frame instead of three (rp_stream/pad_pace.rs, lib/gameControls.ts). */
+  turbo?: number;
 }
 
 export const IDLE_PAD: PadState = { buttons: 0, l2: 0, r2: 0, lx: 0, ly: 0, rx: 0, ry: 0 };
