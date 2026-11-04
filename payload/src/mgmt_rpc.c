@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#include "mgmt_page_keep.h"
 
 #include "ava1_app_gen.h"
 #include "ava1_wire.h"
@@ -457,12 +460,18 @@ int mgmt_call_empty(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_
     return AVA1_STATUS_OK;
 }
 
+static uint64_t paged_now_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
+
 /* A paged text method: the request body is {"offset":N,"limit":M} (both optional); the reply
  * is the handler's JSON array cut to that window, `more` set when entries remain. */
 int mgmt_call_paged(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_fn fn) {
     const char *b;
     uint32_t bl;
-    uint64_t offset = 0, limit = 0;
+    uint64_t offset = 0, limit = 0, user = UINT64_MAX;
     mgmt_reply_t rep;
     char *page;
     size_t page_len = 0, cap = text_cap(cx);
@@ -476,18 +485,38 @@ int mgmt_call_paged(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_
         z[bl] = '\0';
         o_rc = mgmt_json_u64(z, "offset", &offset);
         l_rc = mgmt_json_u64(z, "limit", &limit);
+        /* The one other field a paged method takes: it selects whose list this is. */
+        if (mgmt_json_u64(z, "user_id", &user) <= 0) user = UINT64_MAX;
         free(z);
         if (o_rc < 0) return mgmt_reply_error(cx, AVA1_ERR_PROTOCOL, "bad offset");
         if (l_rc < 0) return mgmt_reply_error(cx, AVA1_ERR_PROTOCOL, "bad limit");
     }
-    rc = mgmt_legacy_call(cx, fn, b, bl, MGMT_PAGED_CAPTURE_MAX, &rep);
-    if (rc != AVA1_STATUS_OK) return rc;
+    /* The pages after the first come from the answer the first one walked (mgmt_page_keep.h). */
+    uint64_t now = paged_now_ms();
+    char *kept = NULL;
+    size_t kept_len = 0;
+    int from_keep = offset > 0 && mgmt_page_keep_take((const void *)fn, user, now, &kept, &kept_len);
+    memset(&rep, 0, sizeof rep);
+    if (!from_keep) {
+        rc = mgmt_legacy_call(cx, fn, b, bl, MGMT_PAGED_CAPTURE_MAX, &rep);
+        if (rc != AVA1_STATUS_OK) return rc;
+    }
+    const char *whole = from_keep ? kept : (const char *)rep.body;
+    size_t whole_len = from_keep ? kept_len : rep.len;
     page = malloc(cap + 1);
     if (!page) {
+        free(kept);
         mgmt_reply_free(&rep);
         return mgmt_reply_error(cx, AVA1_ERR_INTERNAL, "out of memory");
     }
-    rc = mgmt_page_json_array((const char *)rep.body, rep.len, offset, limit, page, cap, &page_len, &more);
+    rc = mgmt_page_json_array(whole, whole_len, offset, limit, page, cap, &page_len, &more);
+    if (rc == AVA1_STATUS_OK) {
+        if (!more)
+            mgmt_page_keep_clear();
+        else if (!from_keep)
+            mgmt_page_keep_store((const void *)fn, user, whole, whole_len, now);
+    }
+    free(kept);
     mgmt_reply_free(&rep);
     if (rc != AVA1_STATUS_OK) {
         free(page);
