@@ -63,6 +63,11 @@ impl RemotePkg {
         }
     }
 
+    /// The file behind a link changed under this install. Only a link can do that.
+    pub fn origin_changed(&self) -> bool {
+        matches!(self, RemotePkg::Http(r) if r.origin_changed())
+    }
+
     /// Fetch ahead of the console. Only the HTTP source needs it: its window
     /// cache is what lets the origin run ahead of the console. An SMB read on
     /// a LAN share answers well inside the console's own pacing.
@@ -3022,11 +3027,14 @@ async fn resolve_remote_source(
     // concurrent installs for other consoles keep being served.
     let (remote, meta) = tokio::task::spawn_blocking(move || {
         let probe = crate::remote_pkg::RemoteSource::probe_with_options(&owned, insecure_tls)?;
-        let remote = Arc::new(crate::remote_pkg::RemoteSource::new_with_options(
-            owned,
-            probe.total_size,
-            insecure_tls,
-        ));
+        let remote = Arc::new(
+            crate::remote_pkg::RemoteSource::new_with_options(
+                owned,
+                probe.total_size,
+                insecure_tls,
+            )
+            .with_validators(probe.validators()),
+        );
         let read_at = |offset: u64, len: u64| -> Option<Vec<u8>> {
             if len == 0 {
                 return Some(Vec::new());
@@ -3708,7 +3716,7 @@ fn read_split_range(s: &InstallSession, start: u64, end: u64) -> std::io::Result
 /// by hundreds of Range requests per install, so cache rather than re-parse the
 /// env on each. The value is fixed at process start (set by the container/host
 /// launcher), so a OnceLock snapshot is correct.
-fn parse_allow_ips_env() -> &'static [crate::AllowRule] {
+pub(crate) fn parse_allow_ips_env() -> &'static [crate::AllowRule] {
     static ALLOW: std::sync::OnceLock<Vec<crate::AllowRule>> = std::sync::OnceLock::new();
     ALLOW.get_or_init(|| {
         crate::parse_allow_ips(&std::env::var("PS5UPLOAD_ALLOW_IP").unwrap_or_default())

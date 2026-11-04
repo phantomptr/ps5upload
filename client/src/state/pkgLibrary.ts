@@ -211,6 +211,11 @@ const REASON_GUIDANCE: Record<string, [string, string, boolean]> = {
     "The package source was no longer available when the install ran.",
     false,
   ],
+  origin_changed: [
+    "pkg.reason.origin_changed",
+    "The file at this link changed during the install, so what the PS5 has so far can't be finished with it. Start the install again.",
+    true,
+  ],
   destructive_guard: [
     "pkg.reason.destructive_guard",
     "This would erase the installed game first; re-run allowing a destructive re-install.",

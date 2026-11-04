@@ -9206,7 +9206,7 @@ async fn link_probe_handler(Json(req): Json<LinkProbeReq>) -> impl IntoResponse 
     }
 }
 
-fn valid_link_url(url: &str) -> bool {
+pub(crate) fn valid_link_url(url: &str) -> bool {
     url.len() <= 4093
         && !url.bytes().any(|b| b < 0x20 || b == 0x7f)
         && !url.contains('#')
@@ -9280,6 +9280,7 @@ async fn link_download_handler(
         )
         .into_response();
     }
+    let validators = class.validators.clone();
     // An .lz4 link is unpacked on the way: the console gets the image, not the .lz4.
     let lz4 = class.lz4.clone().filter(|_| req.unpack);
     let packed = total;
@@ -9391,9 +9392,10 @@ async fn link_download_handler(
         cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
         attach_live_notes(&mut cfg, job_id);
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
-        let remote = Arc::new(crate::remote_pkg::RemoteSource::new_with_options(
-            url, packed, insecure,
-        ));
+        let remote = Arc::new(
+            crate::remote_pkg::RemoteSource::new_with_options(url, packed, insecure)
+                .with_validators(validators),
+        );
         // A plain file is read at any offset (resume continues where the console stopped); an
         // .lz4 is decoded forward on one thread and its decoded bytes are what is sent.
         let (source, seq): (

@@ -417,6 +417,9 @@ pre-release.
 - The API has **no password**. Set `PS5UPLOAD_ALLOW_IP` to the IPs or ranges allowed to use it
   (`192.168.1.0/24`); anything else gets a `403` naming the refused address. Trusted LAN only,
   never the internet.
+- With `PS5UPLOAD_ALLOW_IP` set, the engine does not fetch links that lead to its own machine or
+  to link-local addresses. A server on your LAN still works. `PS5UPLOAD_ALLOW_LOCAL_LINKS=1` turns
+  this off.
 - Start from [`engine/compose.yaml`](engine/compose.yaml) (set `PS5_ADDR`, `PS5UPLOAD_ALLOW_IP`
   and your package folder). It uses **host networking**: a stream install makes the PS5 download
   the package *from the engine*, and on Docker's bridge network the engine offers an address the

@@ -203,20 +203,13 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
             format!("{}: {e}", dest_dir.display()),
         );
     }
-    if let Some(free) = (deps.free_bytes)(&dest_dir) {
-        if free < total.saturating_add(HEADROOM) {
-            if made_dir {
-                let _ = std::fs::remove_dir_all(&dest_dir);
-            }
-            return err(
-                StatusCode::INSUFFICIENT_STORAGE,
-                format!(
-                    "Not enough space: needs {}, {} free.",
-                    ps5upload_core::units::iec_bytes(total.saturating_add(HEADROOM)),
-                    ps5upload_core::units::iec_bytes(free)
-                ),
-            );
+    if let Some(refusal) =
+        (deps.free_bytes)(&dest_dir).and_then(|free| no_room(free, total.saturating_add(HEADROOM)))
+    {
+        if made_dir {
+            let _ = std::fs::remove_dir_all(&dest_dir);
         }
+        return refusal;
     }
     let name = p
         .path
@@ -360,6 +353,21 @@ struct CopyJob<'a> {
     cancel: Arc<std::sync::atomic::AtomicBool>,
     backoff: super::pool::Backoff,
     report: &'a (dyn Fn(u64) + Send + Sync),
+}
+
+/// The refusal when `need` bytes do not fit in the `free` bytes of a folder on this computer, else
+/// `None`.
+pub(crate) fn no_room(free: u64, need: u64) -> Option<Response> {
+    (free < need).then(|| {
+        err(
+            StatusCode::INSUFFICIENT_STORAGE,
+            format!(
+                "Not enough space: needs {}, {} free.",
+                ps5upload_core::units::iec_bytes(need),
+                ps5upload_core::units::iec_bytes(free)
+            ),
+        )
+    })
 }
 
 /// `dest` + a relative path from a server listing, refusing anything that would land outside
@@ -634,6 +642,28 @@ fn total_size(sizes: impl IntoIterator<Item = u64>) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::remote::pool::testing::remote_with;
+
+    /// Legal names on a NAS or the PS5, and a device, a stream or another name on Windows.
+    #[test]
+    fn a_listed_name_this_computer_cannot_hold_is_refused() {
+        let dest = Path::new("/tmp/copy");
+        for rel in ["CON", "a/aux.dat", "x.", "a/b ", "a:b"] {
+            assert!(safe_join(dest, rel).is_err(), "{rel}");
+        }
+        assert_eq!(
+            safe_join(dest, "a/ゲーム.bin").unwrap(),
+            dest.join("a").join("ゲーム.bin")
+        );
+    }
+
+    #[test]
+    fn what_fits_exactly_fits() {
+        assert!(no_room(100, 100).is_none());
+        assert_eq!(
+            no_room(99, 100).unwrap().status(),
+            StatusCode::INSUFFICIENT_STORAGE
+        );
+    }
 
     #[test]
     fn sizes_that_overflow_are_refused_not_wrapped() {

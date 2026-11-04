@@ -4,6 +4,20 @@ import { humanizePs5Error } from "./humanizeError";
 import en from "../i18n/locales/en";
 
 describe("humanizePs5Error", () => {
+  it("words this computer's lack of room in the user's language", () => {
+    expect(humanizePs5Error("engine HTTP 507: Not enough space: needs 12.5 GiB, 1.0 GiB free.")).toBe(
+      "Not enough free space on this computer: it needs 12.5 GiB, and 1.0 GiB is free. Free some space and try again.",
+    );
+  });
+
+  it("says a link's file changed in the user's language", () => {
+    expect(
+      humanizePs5Error(
+        "the file at this link changed while it was being read, so what was read so far can't be finished with it; start again",
+      ),
+    ).toBe(en.err_link_changed);
+  });
+
   it("returns empty input unchanged", () => {
     expect(humanizePs5Error("")).toBe("");
   });

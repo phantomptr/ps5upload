@@ -1360,6 +1360,16 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         || (install_job_id.is_some() && matches!(req.source, Source::ConsolePath(_)));
     let mut last_served: u64 = 0;
     let mut last_move = std::time::Instant::now();
+    // The file behind the link changed: reading on would only hand the console errors until it gave
+    // up, and the job would read as a stall.
+    let origin_changed = || {
+        session_id.as_ref().is_some_and(|sid| {
+            let s = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            s.get(sid)
+                .and_then(|x| x.remote.as_ref())
+                .is_some_and(|r| r.origin_changed())
+        })
+    };
     let delivery = if !observable {
         DeliveryProgress::Complete
     } else {
@@ -1414,10 +1424,15 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             if state.jobs.is_cancelled(&job) {
                 break DeliveryProgress::Cancelled;
             }
+            if origin_changed() {
+                break DeliveryProgress::Stalled;
+            }
             let round = tokio::time::sleep(std::time::Duration::from_secs(2));
             let _ = unless_stopped(&state, &job, round).await;
         }
     };
+    // Asked before the release below, which lets go of the source.
+    let link_changed = delivery == DeliveryProgress::Stalled && origin_changed();
     // The console has finished with the stream source (pulled it all, or
     // stalled): release the pkg-host session so the same package can be
     // installed again. Its counters stay readable for the metrics below.
@@ -1439,6 +1454,19 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             s.verdict = Some(Verdict::Failed);
             s.reason = Some(FailReason::Cancelled);
             s.hint = Some(STOPPED_HINT.into());
+            s.shortened = shortened;
+            s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
+        });
+        finalize(&state, &job, &req, started).await;
+        return;
+    }
+    if link_changed {
+        crate::log_warn!("{tag}: the file behind the link changed at {last_served} bytes");
+        state.jobs.update(&job, |s| {
+            s.phase = Phase::Failed;
+            s.verdict = Some(Verdict::Failed);
+            s.reason = Some(FailReason::OriginChanged);
+            s.hint = Some(crate::remote_pkg::ORIGIN_CHANGED.into());
             s.shortened = shortened;
             s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
         });

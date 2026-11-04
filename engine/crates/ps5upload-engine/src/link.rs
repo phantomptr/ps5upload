@@ -66,6 +66,9 @@ pub struct LinkClass {
     /// `ufs`, `pfs`. Only for `File`; an `.lz4`'s image is in `lz4`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<crate::link_lz4::ImageKind>,
+    /// What identifies this revision of the file, for the requests that read it.
+    #[serde(skip)]
+    pub validators: crate::remote_pkg::OriginValidators,
 }
 
 /// What one probe request returned. Plain data so the decision is a pure function.
@@ -81,6 +84,17 @@ pub struct ProbeInput {
     pub head: Vec<u8>,
     /// The URL the answer came from, after redirects.
     pub final_url: String,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
+impl ProbeInput {
+    fn validators(&self) -> crate::remote_pkg::OriginValidators {
+        crate::remote_pkg::OriginValidators {
+            etag: self.etag.clone(),
+            last_modified: self.last_modified.clone(),
+        }
+    }
 }
 
 fn refused(
@@ -99,6 +113,7 @@ fn refused(
         content_type: input.content_type.clone(),
         lz4: None,
         image: None,
+        validators: input.validators(),
     }
 }
 
@@ -158,6 +173,7 @@ pub fn classify(input: &ProbeInput) -> LinkClass {
             content_type: input.content_type.clone(),
             lz4: None,
             image: None,
+            validators: input.validators(),
         };
     }
 
@@ -225,6 +241,7 @@ pub fn classify(input: &ProbeInput) -> LinkClass {
         content_type: input.content_type.clone(),
         lz4: None,
         image,
+        validators: input.validators(),
     }
 }
 
@@ -279,13 +296,20 @@ fn looks_like_login(input: &ProbeInput) -> bool {
 /// Content-Disposition `filename*=UTF-8''…` / `filename="…"`, else the last path segment of
 /// the final URL, percent-decoded and reduced to a console-safe name.
 fn filename_for(input: &ProbeInput) -> String {
-    let from_header = input
-        .content_disposition
-        .as_deref()
-        .and_then(filename_from_disposition);
+    let name = name_from_response(input.content_disposition.as_deref(), &input.final_url);
+    if name.is_empty() {
+        "download".to_string()
+    } else {
+        name
+    }
+}
+
+/// The name a response gives its file: Content-Disposition, else the last segment of the URL it
+/// came from, percent-decoded. Empty when neither says.
+pub(crate) fn name_from_response(content_disposition: Option<&str>, final_url: &str) -> String {
+    let from_header = content_disposition.and_then(filename_from_disposition);
     let raw = from_header.unwrap_or_else(|| {
-        input
-            .final_url
+        final_url
             .split(['?', '#'])
             .next()
             .unwrap_or("")
@@ -294,12 +318,7 @@ fn filename_for(input: &ProbeInput) -> String {
             .map(percent_decode)
             .unwrap_or_default()
     });
-    let name = sanitize_name(&raw);
-    if name.is_empty() {
-        "download".to_string()
-    } else {
-        name
-    }
+    sanitize_name(&raw)
 }
 
 fn filename_from_disposition(value: &str) -> Option<String> {
@@ -408,6 +427,7 @@ pub fn probe(url: &str, insecure_tls: bool) -> Result<LinkClass, String> {
     });
     let content_length = hdr("content-length").and_then(|v| v.trim().parse::<u64>().ok());
     let final_url = resp.get_uri().to_string();
+    let (etag, last_modified) = (hdr("etag"), hdr("last-modified"));
     let mut head = Vec::new();
     // A 200 to a ranged request streams the whole file: read only the sniff window and drop
     // the connection. Errors reading the body are not fatal to classification (an error page
@@ -425,6 +445,8 @@ pub fn probe(url: &str, insecure_tls: bool) -> Result<LinkClass, String> {
         content_length,
         head,
         final_url,
+        etag,
+        last_modified,
     };
     let mut class = classify(&input);
     // An LZ4 stream: read its first block(s) to learn what it unpacks to. Only worth asking

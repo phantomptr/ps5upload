@@ -209,6 +209,14 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
     expect(o.errMessage).toMatch(/^The PS5 stopped fetching/);
   });
 
+  it("a link whose file changed says that, in the app's words", () => {
+    const o = statusToOutcome(
+      status({ phase: "failed", verdict: "failed", reason: "origin_changed", hint: "the file at this link changed" }),
+    );
+    expect(o.installed).toBe(false);
+    expect(o.errMessage).toMatch(/^The file at this link changed during the install/);
+  });
+
   it("a regressed patch gets the update-specific copy, not a raw error", () => {
     const o = statusToOutcome(
       status({ phase: "failed", verdict: "failed", patch_verdict: "regressed" }),

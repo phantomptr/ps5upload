@@ -65,6 +65,9 @@ pub enum FailReason {
     NoBringup,
     NoImage,
     SourceGone,
+    /// The file behind the link changed during the install: what the console holds so far cannot
+    /// be finished with it.
+    OriginChanged,
     SonyRefused,
     DestructiveGuard,
     BadRequest,
