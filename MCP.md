@@ -15,14 +15,14 @@ of its own.
 
 ## What it can do
 
-121 tools, all of them thin layers over [the engine's API](API.md):
+More than 120 tools, all of them thin layers over [the engine's API](API.md):
 
 | Area | Tools (prefix) | For example |
 |---|---|---|
 | The engine | `engine_*` | Version, status, recent events |
 | Consoles | `consoles_*` | The known ones, find them on the network, how one stands, make sure the helper runs |
 | Files | `files_*` | List, read, write, copy, move, delete, hash, extract, mount, eject |
-| Moving things | `upload_*`, `files_download`, `sources_*`, `jobs_*` | Send a file or folder or archive, follow it, pause or stop it, fetch from a NAS |
+| Moving things | `upload_*`, `queue_*`, `files_download`, `sources_*`, `jobs_*` | Send a file or folder or archive, line work up per console, follow it, pause or stop it, fetch from a NAS |
 | Installs | `install_*` | Install a package by the best route, check first, wait for it |
 | Games | `games_*`, `processes_*`, `saves_*`, `cheats_*` | Installed titles, launch and stop, back up saves, cheats |
 | Hardware | `hw_*`, `power_*`, `notifications_*`, `health_*`, `disk_usage_*`, `cleanup_*`, `shell_run` | Temperatures, rest and wake, health checks and repairs, what fills the drive |
@@ -32,8 +32,8 @@ of its own.
 | Everything else | `settings_*`, `devices_list`, `drive_*`, `api_catalog`, `api_describe`, `api_request` | Settings, Mesh Drive, and any route of the API |
 
 `api_catalog` finds a route, `api_describe` gives its fields and answers, and `api_request` calls it,
-so what the other tools don't cover is still reachable. The only exceptions are the two routes that
-hand out console keys, which `api_request` refuses.
+so what the other tools don't cover is still reachable. The only exceptions hold console keys, and
+`api_request` refuses them: see [What never reaches a model](#what-never-reaches-a-model).
 
 It also offers:
 
@@ -206,7 +206,7 @@ clients let you allow tools one by one, so keep these on "ask".
 | `files_delete`, `files_move`, `files_copy`, `files_write` | Delete or overwrite files on the console |
 | `files_extract` | Unpack over what's already there |
 | `files_unmount`, `files_eject` | Pull a drive out from under a running game |
-| `upload_file`, `upload_dir`, `upload_archive` | Overwrite what's at the destination |
+| `upload_file`, `upload_dir`, `upload_archive`, `queue_add` | Overwrite what's at the destination |
 | `saves_restore` | Replace save data with a backup |
 | `games_unregister` | Remove a title from the console |
 | `games_stop`, `processes_kill` | End a game, losing what isn't saved |
@@ -225,9 +225,9 @@ Some tools aren't marked destructive but still matter: `install_pkg`, `payloads_
 
 ### What never reaches a model
 
-The keys that sign in to a console's users stay out: `/api/consoles/document` and
-`/api/settings-backup/get` are refused by `api_request` and left out of the catalog, and `/api/consoles`
-says only whether a console has keys. Stream keys for Go live show only their last four characters.
+The keys that sign in to a console's users stay out. `api_request` refuses `/api/consoles/document`,
+`/api/settings-backup/get` and a console's backup slots through `/api/mesh/doc`, and the first two are
+left out of the catalog too. `/api/consoles` says only whether a console has keys. Stream keys for Go live show only their last four characters.
 
 ## Things that need more than the engine
 
@@ -235,6 +235,9 @@ says only whether a console has keys. Stream keys for Go live show only their la
 attached, or a hidden window, it decodes the stream with ffmpeg, at most once a second. Without ffmpeg
 the answer says how to get it (`POST /api/stream/tools/ffmpeg/install`, or set `PS5UPLOAD_FFMPEG`). A
 page gives the freshest picture, so keep the app's Play screen open if the agent is playing.
+
+With the picture off on this device (`POST /api/ps5/rp/picture`), `rp_frame` answers `picture_off`
+until it's back on.
 
 **Starting a session.** `rp_start` needs a console paired for Remote Play in the app, because that is
 where its keys live.
@@ -247,7 +250,8 @@ on another machine needs `PS5UPLOAD_ALLOW_AUTOMATION=1` as well as `PS5UPLOAD_AL
 ([details](AUTOMATION.md#what-it-does-and-what-it-never-does)).
 
 **Long jobs.** Uploads and installs return a job at once; `jobs_wait` and `install_wait` follow it
-with a time limit.
+with a time limit. `queue_add` lines work up instead, `queue_wait` follows it, and [the queue's
+known gaps](API.md#the-queue) apply.
 
 **Not reachable at all.** Schedules, play time, the notification inbox, a phone as a controller, and a
 friend's side of Play Together live in the app or on that device. See

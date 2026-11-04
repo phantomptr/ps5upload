@@ -2637,7 +2637,7 @@ async fn the_route_search_is_a_tool_too() {
         .await;
     assert_eq!(
         result["structuredContent"]["routes"],
-        json!([{"method": "GET", "path": "/api/pkg/install/status"}])
+        json!([{"method": "GET", "path": "/api/pkg/install/status", "summary": "How an install job stands"}])
     );
 }
 
@@ -2787,4 +2787,170 @@ async fn the_console_list_prefers_the_apps_list_and_never_shows_a_key() {
     let paired = find("192.168.1.51");
     assert_eq!(paired["can_stream"], true);
     assert_eq!(paired["sources"], json!(["paired"]));
+}
+
+async fn call_tool(server: &Server, name: &str, arguments: Value) -> Value {
+    server
+        .modern("tools/call", json!({"name": name, "arguments": arguments}))
+        .await
+        .body["result"]
+        .clone()
+}
+
+#[tokio::test]
+async fn api_describe_gives_a_route_with_its_schemas() {
+    let server = server();
+    let result = call_tool(
+        &server,
+        "api_describe",
+        json!({"method": "POST", "path": "/api/ps5/fs/stat"}),
+    )
+    .await;
+    assert!(result.get("isError").is_none(), "{result}");
+    let data = &result["structuredContent"];
+    assert_eq!(data["path"], "/api/ps5/fs/stat");
+    let body = &data["operation"]["requestBody"]["content"]["application/json"]["schema"]["$ref"];
+    let name = body.as_str().unwrap().rsplit('/').next().unwrap();
+    assert!(data["schemas"][name]["properties"].get("path").is_some());
+
+    let missing = call_tool(&server, "api_describe", json!({"path": "/api/nope"})).await;
+    assert_eq!(missing["isError"], true);
+    let secret = call_tool(
+        &server,
+        "api_describe",
+        json!({"path": "/api/consoles/document"}),
+    )
+    .await;
+    assert_eq!(secret["isError"], true);
+}
+
+#[tokio::test]
+async fn api_catalog_says_what_a_route_does() {
+    let result = call_tool(&server(), "api_catalog", json!({"search": "api/version"})).await;
+    let routes = result["structuredContent"]["routes"].as_array().unwrap();
+    assert!(routes[0]["summary"].is_string(), "{routes:?}");
+}
+
+#[tokio::test]
+async fn helper_ensure_sends_nothing_to_a_helper_that_answers() {
+    let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = sent.clone();
+    let api = Router::new()
+        .route(
+            "/api/ps5/status",
+            get(|| async { Json(json!({"version": "x"})) }),
+        )
+        .route(
+            "/api/pkg/payload-restore",
+            post(move || async move {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Json(json!({"ok": true, "bytes": 1}))
+            }),
+        );
+    let server = server_with(api, false);
+    let result = call_tool(
+        &server,
+        "consoles_helper_ensure",
+        json!({"console": "9.9.9.9"}),
+    )
+    .await;
+    assert_eq!(result["structuredContent"]["running"], true, "{result}");
+    assert_eq!(result["structuredContent"]["sent"], false);
+    assert_eq!(sent.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn helper_ensure_sends_when_nothing_answers_and_says_when_the_send_fails() {
+    let api = |ok: bool| {
+        Router::new()
+            .route(
+                "/api/ps5/status",
+                get(|| async { (StatusCode::BAD_GATEWAY, Json(json!({"error": "no"}))) }),
+            )
+            .route(
+                "/api/pkg/payload-restore",
+                post(move |Json(body): Json<Value>| async move {
+                    assert_eq!(body["ps5_addr"], "9.9.9.9");
+                    Json(json!({"ok": ok, "error": if ok { "" } else { "no loader" }}))
+                }),
+            )
+    };
+    let args = json!({"console": "9.9.9.9"});
+    let sent = call_tool(
+        &server_with(api(true), false),
+        "consoles_helper_ensure",
+        args.clone(),
+    )
+    .await;
+    assert_eq!(sent["structuredContent"]["sent"], true, "{sent}");
+    // The route answers 200 with ok: false, which must not read as a success.
+    let failed = call_tool(
+        &server_with(api(false), false),
+        "consoles_helper_ensure",
+        args,
+    )
+    .await;
+    assert_eq!(failed["isError"], true, "{failed}");
+}
+
+#[tokio::test]
+async fn golive_start_turns_ids_into_the_routes_shape() {
+    let api = Router::new().route(
+        "/api/stream/start",
+        post(|Json(body): Json<Value>| async move { Json(json!({"ok": true, "got": body})) }),
+    );
+    let server = server_with(api, false);
+    let result = call_tool(
+        &server,
+        "golive_start",
+        json!({"destinations": ["a", "b"], "audio_kbps": 128}),
+    )
+    .await;
+    let got = &result["structuredContent"]["got"];
+    assert_eq!(
+        got["destinations"],
+        json!([{"key_id": "a"}, {"key_id": "b"}]),
+        "{result}"
+    );
+    assert_eq!(got["audio_kbps"], 128);
+    let none = call_tool(&server, "golive_start", json!({"destinations": []})).await;
+    assert_eq!(none["isError"], true);
+}
+
+#[tokio::test]
+async fn read_only_refuses_the_friends_and_viewers_tools() {
+    let server = server_with(fake_api(), true);
+    for (tool, args) in [
+        ("together_open", json!({"console": "9.9.9.9"})),
+        ("together_close", json!({"console": "9.9.9.9"})),
+        ("golive_start", json!({"destinations": ["a"]})),
+        (
+            "health_fix",
+            json!({"console": "9.9.9.9", "action": "clean_junk"}),
+        ),
+        ("consoles_helper_ensure", json!({"console": "9.9.9.9"})),
+    ] {
+        let result = call_tool(&server, tool, args).await;
+        assert_eq!(result["isError"], true, "{tool}");
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("read-only"));
+    }
+}
+
+#[tokio::test]
+async fn the_guides_and_the_document_are_resources() {
+    let server = server();
+    for uri in [
+        "ps5upload://docs/api",
+        "ps5upload://docs/mcp",
+        "ps5upload://openapi",
+    ] {
+        let answer = server.modern("resources/read", json!({"uri": uri})).await;
+        let text = answer.body["result"]["contents"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(text.len() > 1000, "{uri}");
+    }
 }

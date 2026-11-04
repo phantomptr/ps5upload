@@ -74,7 +74,8 @@ Every operation in the document carries `x-ps5upload.access`:
 
 Two routes are left out of the document and refused by the MCP tools, because they hand out the
 keys that sign in to a console's users: `/api/consoles/document` and `/api/settings-backup/get`. They
-are for the app's own use.
+are for the app's own use. MCP also refuses a console's backup slots through `/api/mesh/doc`, which
+hold the same keys.
 
 ## Naming a console
 
@@ -145,6 +146,9 @@ curl -s http://127.0.0.1:19113/api/jobs/<job_id>
 - **Following it without missing anything.** `?since_seq=<n>&limit=<m>` gives only what changed
   after `n`, oldest change first. The `x-ps5upload-last-seq` response header is the cursor for your
   next call, and the same numbers as `/api/events` ids.
+- **Tasks started on the console.** `GET /api/ps5/console-tasks?addr=` lists what someone started on
+  the console page, with its progress, and `POST /api/ps5/console-tasks/cancel {addr, id}` stops one
+  whose `cancellable` is true. A helper older than this feature answers `supported: false`.
 
 ### `Prefer: respond-async`
 
@@ -176,6 +180,49 @@ The answer holds an `op_id`. Then `GET /api/ops/{id}`:
 - Finished operations are kept for an hour, at most 256 of them, and an answer over 4 MiB is cut
   short with `body_truncated: true`.
 
+## The queue
+
+`/api/queue` is the engine's own line of work: one line per console, kept on disk and shared by
+everyone using this engine. An item is one call of an existing route, followed to its end.
+
+```sh
+curl -s -X POST http://127.0.0.1:19113/api/queue -H 'content-type: application/json' -d \
+  '{"console":"192.168.1.100","kind":"upload_dir","request":{"src_dir":"/games/x","dest_root":"/data/x"}}'
+curl -s 'http://127.0.0.1:19113/api/queue?console=192.168.1.100'
+```
+
+- **`kind`** picks the route, and `request` is that route's body without the console:
+  `upload_file`, `upload_dir`, `upload_zip`, `upload_7z`, `upload_rar`, `upload_file_list`,
+  `link_download`, `download`, `install`. Also `label`, `position` and `stop_on_failure` (if this
+  item fails, the ones after it are paused). An item's request can be at most 1 MiB; send a list of
+  100,000 files to `/api/transfer/file-list` directly.
+- **Order.** One at a time per console, in order; different consoles run side by side. The console is
+  required here, and `addr` and `host` work too.
+- **It waits.** While anything else uses the console (a job, an install, a hold) or its helper doesn't
+  answer, the line holds instead of failing. It never sends the helper or wakes a console.
+- **`status`** is `queued`, `running`, `paused`, `done`, `failed`, `cancelled` or `interrupted`.
+- **No retries of its own.** A failure may have come after the bytes landed, so a failed item stays
+  failed until `POST /api/queue/{id}/resume`, the only way an item runs twice.
+- **After a restart.** An item that was running comes back `interrupted`, not restarted. Items that
+  were waiting carry on.
+- **Controls.** `POST /api/queue/{id}/pause`, `/resume`, `/move {position}`, and `/remove`. Removing
+  a running upload or download needs `{"cancel": true}`. A running install can't be removed or paused:
+  the console goes on with it.
+- **Your own work on a console.** `POST /api/queue/hold {console, holder, ttl_s?}` keeps the queue from
+  starting anything there until `POST /api/queue/release` or the hold lapses (30 seconds unless you
+  say, 300 at most). It answers `409 queue_running` while an item runs; wait and ask again.
+- **Events.** Changes arrive on `/api/events` as `event: queue`.
+
+Known gaps:
+
+- **The app's Files uploads don't wait for a queue item.** The queue waits for them, but `fsUploadQueue`
+  in the app doesn't wait for the queue, so one can start while an item runs.
+- **Direct calls aren't refused.** `POST /api/transfer/*` during a running item goes ahead. Take a hold
+  first if you mean to share a console with the queue.
+- **Secrets aren't saved.** RAR passwords and link tokens are kept in memory only. After a restart
+  those items come back `interrupted` with the code `secret_not_kept`, and `resume` answers `409`: add
+  them again.
+
 ## Events
 
 `GET /api/events` is a server-sent event stream.
@@ -185,8 +232,8 @@ curl -N http://127.0.0.1:19113/api/events
 ```
 
 - Every event has an `id:`, a number that rises across restarts.
-- The default event (no `event:` line) is a job snapshot. Named events are `journal`, `install` and
-  `op`.
+- The default event (no `event:` line) is a job snapshot. Named events are `journal`, `install`,
+  `op` and `queue`.
 - **Reconnecting.** Send the last id as the `Last-Event-ID` header and you get what you missed.
 - **`resync`.** If the engine no longer has what you missed (it keeps the last 1000), or you fell too
   far behind, you get `event: resync` with `{"resync": true, "dropped": <n>}`. Fetch `/api/jobs`
@@ -205,7 +252,8 @@ places to start.
 | `consoles` | `/api/consoles`, `/api/discover`, `/api/ps5/status`, `/api/ps5/readiness`, `/api/ps5/volumes` | Which consoles there are and how they stand. |
 | `console-files` | `/api/ps5/list-dir`, `/api/ps5/fs/*`, `/api/ps5/disk-usage`, `/api/ps5/console-shares` | Files on the console. |
 | `transfer` | `/api/transfer/*`, `/api/files/upload`, `/api/link/*`, `/api/zip/*`, `/api/7z/*`, `/api/rar/*` | Uploads and downloads. |
-| `jobs` | `/api/jobs/*`, `/api/ops/*`, `/api/activity` | Following and stopping work. |
+| `jobs` | `/api/jobs/*`, `/api/ops/*`, `/api/ps5/console-tasks`, `/api/activity` | Following and stopping work. |
+| `queue` | `/api/queue/*` | The engine's own line of uploads, downloads and installs. |
 | `install` | `/api/pkg/*`, `/api/ps5/pkg/*`, `/pkg-host/*` | Package installs and links. |
 | `games` | `/api/games/*`, `/api/ps5/app/*`, `/api/ps5/apps/*`, `/api/ps5/appdb`, `/api/ps5/process/*`, `/api/ps5/dump`, `/api/ps5/sdk/*` | Titles, launching and stopping, processes. |
 | `saves` | `/api/ps5/saves/*`, `/api/save-backup/*`, `/api/ps5/backup/*` | Save data and backups. |
@@ -269,5 +317,9 @@ Other limits worth knowing:
 - **The picture needs a decoder.** `GET /api/ps5/rp/frame` takes the picture from an open app page.
   With no page attached it decodes the stream with ffmpeg, which `POST /api/stream/tools/ffmpeg/install`
   can fetch. Without either you get an error saying so.
+- **Picture off on this device.** `POST /api/ps5/rp/picture {host, session?, on}`, or `picture` on
+  `POST /api/ps5/rp/settings`, stops the page's picture, sound and controller for the session while
+  guests, phones and the live feed carry on. `GET /api/ps5/rp/session` says `picture`, and
+  `GET /api/ps5/rp/frame` answers `409 picture_off` until it's back on.
 - **Keys don't come back.** No route hands a console's Remote Play or wake key to anyone but the app.
   Stream keys for Go live show only their last four characters.

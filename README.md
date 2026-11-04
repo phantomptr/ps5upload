@@ -405,7 +405,7 @@ to install. The engine, in the desktop app or the Docker image, serves all of th
 - **[HTTP API](API.md):** `http://127.0.0.1:19113`, described route by route at `GET /api/openapi.json`
   (OpenAPI 3.1). The guide covers who it answers, errors, long calls and events.
 - **[MCP server](MCP.md):** `http://127.0.0.1:19113/mcp`, for Claude, Cursor, Codex, Gemini CLI and
-  other MCP clients: 121 tools, plus a generic one for any route.
+  other MCP clients: more than 120 tools, including a generic one for any route.
   `claude mcp add --transport http ps5upload http://127.0.0.1:19113/mcp` and you're connected.
 - **[Remote Play automation](AUTOMATION.md):** watch and play a session from a script, without taking
   it over.

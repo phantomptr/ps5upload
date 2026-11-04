@@ -111,8 +111,12 @@ fn split_doc(doc: &str) -> (Option<String>, Option<String>) {
         None => first.trim_end_matches('.'),
     };
     let summary = summary.trim();
-    let summary =
-        (!summary.is_empty() && summary.chars().count() <= 160).then(|| summary.to_string());
+    let summary = (!summary.is_empty() && summary.chars().count() <= 160).then(|| {
+        let mut chars = summary.chars();
+        chars.next().map_or(String::new(), |first| {
+            first.to_uppercase().collect::<String>() + chars.as_str()
+        })
+    });
     (summary, Some(doc.to_string()))
 }
 

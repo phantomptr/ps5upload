@@ -884,3 +884,38 @@ async fn every_route_in_the_source_is_mounted() {
     }
     assert!(unmounted.is_empty(), "not mounted: {unmounted:#?}");
 }
+
+#[tokio::test]
+async fn the_openapi_document_is_served_and_behind_the_guards() {
+    let app = app();
+    let resp = get(&app, "/api/openapi.json").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let doc = json_of(resp).await;
+    assert_eq!(doc["openapi"], "3.1.0");
+    assert_eq!(doc["info"]["version"], env!("CARGO_PKG_VERSION"));
+    assert!(doc["paths"]["/api/jobs"]["get"].is_object());
+    assert!(doc["paths"].get("/api/consoles/document").is_none());
+
+    let refused = call(
+        &app,
+        request(Method::GET, "/api/openapi.json", LAN)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn every_name_for_the_console_works_on_the_routes_that_lacked_them() {
+    // Two names for one field is the serde error, which only an alias can cause.
+    let app = app();
+    let resp = get(
+        &app,
+        "/api/ps5/console-tasks?addr=192.0.2.1&console=192.0.2.1",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let text = json_of(resp).await["error"].as_str().unwrap().to_string();
+    assert!(text.contains("duplicate field"), "{text}");
+}

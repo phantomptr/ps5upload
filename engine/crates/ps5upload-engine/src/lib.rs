@@ -10844,6 +10844,7 @@ struct PortCheckQuery {
 /// 2.2.7).
 #[derive(serde::Deserialize)]
 struct ToastBody {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     title: String,
     subtitle: Option<String>,

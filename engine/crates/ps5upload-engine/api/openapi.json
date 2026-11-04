@@ -10476,7 +10476,11 @@
         "properties": {
           "addr": {
             "description": "The console (bare IP).",
-            "type": "string"
+            "type": "string",
+            "x-aliases": [
+              "console",
+              "host"
+            ]
           },
           "save_path": {
             "description": "The save folder on the console (from the saves list).",
@@ -12477,6 +12481,10 @@
             "type": [
               "string",
               "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
             ]
           },
           "icon": {
@@ -13573,6 +13581,10 @@
             "type": [
               "string",
               "null"
+            ],
+            "x-aliases": [
+              "console",
+              "host"
             ]
           },
           "id": {
@@ -13996,7 +14008,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "full React SPA when the `webui` feature is compiled in; otherwise the minimal transfer-and-jobs dashboard baked into `static/index.html`",
+        "summary": "Full React SPA when the `webui` feature is compiled in; otherwise the minimal transfer-and-jobs dashboard baked into `static/index.html`",
         "tags": [
           "pages"
         ],
@@ -14047,7 +14059,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "counts/sizes only (the header is tiny even for a 124 GB archive)",
+        "summary": "Counts/sizes only (the header is tiny even for a 124 GB archive)",
         "tags": [
           "transfer"
         ],
@@ -14125,7 +14137,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "running jobs and the endings after `since`, for the app's background watcher (see `activity`)",
+        "summary": "Running jobs and the endings after `since`, for the app's background watcher (see `activity`)",
         "tags": [
           "jobs"
         ],
@@ -14243,7 +14255,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "forgets the sessions and the profile (the console is not touched: use stop for that)",
+        "summary": "Forgets the sessions and the profile (the console is not touched: use stop for that)",
         "tags": [
           "workshop"
         ],
@@ -14418,7 +14430,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "json-unknown"
         }
@@ -14529,7 +14541,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "json-unknown"
         }
@@ -14591,7 +14603,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "json-unknown"
         }
@@ -14640,7 +14652,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the public key an app stamps into the helper ELF, and a fresh launch token to go with it (SPEC.md §5.2)",
+        "summary": "The public key an app stamps into the helper ELF, and a fresh launch token to go with it (SPEC.md §5.2)",
         "tags": [
           "pairing"
         ],
@@ -14692,7 +14704,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "read-only: what is already known (`accepted` for a live session, `code` while a handshake is pending, `none` otherwise)",
+        "summary": "Read-only: what is already known (`accepted` for a live session, `code` while a handshake is pending, `none` otherwise)",
         "tags": [
           "pairing"
         ],
@@ -14843,7 +14855,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the dialog was dismissed: closes the pending handshake so it stops holding one of the console's two unconfirmed places",
+        "summary": "The dialog was dismissed: closes the pending handshake so it stops holding one of the console's two unconfirmed places",
         "tags": [
           "pairing"
         ],
@@ -14922,7 +14934,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the user typed the code the console shows (passkey entry, SPEC.md §5.5)",
+        "summary": "The user typed the code the console shows (passkey entry, SPEC.md §5.5)",
         "tags": [
           "pairing"
         ],
@@ -15044,7 +15056,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "starts (or re-reads) the pairing handshake with the console: the console shows its code, the user types it",
+        "summary": "Starts (or re-reads) the pairing handshake with the console: the console shows its code, the user types it",
         "tags": [
           "pairing"
         ],
@@ -15108,7 +15120,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "is the console answering at `new` the one paired at `old`? `{\"result\": \"same\" | \"different\" | \"unknown\"}`",
+        "summary": "Is the console answering at `new` the one paired at `old`? `{\"result\": \"same\" | \"different\" | \"unknown\"}`",
         "tags": [
           "pairing"
         ],
@@ -15175,7 +15187,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "what is in this folder?",
+        "summary": "What is in this folder?",
         "tags": [
           "workshop"
         ],
@@ -15254,7 +15266,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "take ONLY `fakelib/` into the corpus",
+        "summary": "Take ONLY `fakelib/` into the corpus",
         "tags": [
           "workshop"
         ],
@@ -15302,7 +15314,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "zip client-supplied entries and return the archive as a download",
+        "summary": "Zip client-supplied entries and return the archive as a download",
         "tags": [
           "engine"
         ],
@@ -15344,7 +15356,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "remove every cached image",
+        "summary": "Remove every cached image",
         "tags": [
           "engine"
         ],
@@ -15379,7 +15391,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "how much disk the artwork cache is using",
+        "summary": "How much disk the artwork cache is using",
         "tags": [
           "engine"
         ],
@@ -15412,7 +15424,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "every check this engine has run or is running",
+        "summary": "Every check this engine has run or is running",
         "tags": [
           "collection"
         ],
@@ -15461,7 +15473,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "checks these copies, one after another",
+        "summary": "Checks these copies, one after another",
         "tags": [
           "collection"
         ],
@@ -15775,7 +15787,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the scan's progress, then what it found",
+        "summary": "The scan's progress, then what it found",
         "tags": [
           "collection"
         ],
@@ -15852,7 +15864,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "removes what the finished scan found",
+        "summary": "Removes what the finished scan found",
         "tags": [
           "collection"
         ],
@@ -15887,7 +15899,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "looks for Finder's files under every root, in the background",
+        "summary": "Looks for Finder's files under every root, in the background",
         "tags": [
           "collection"
         ],
@@ -16065,7 +16077,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "needs an administrator, so macOS asks for the password itself (the engine never sees it)",
+        "summary": "Needs an administrator, so macOS asks for the password itself (the engine never sees it)",
         "tags": [
           "collection"
         ],
@@ -16118,7 +16130,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "runs the chosen moves of a preview",
+        "summary": "Runs the chosen moves of a preview",
         "tags": [
           "collection"
         ],
@@ -16157,7 +16169,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the plan, in one call, for a caller that does not want to follow it: starts or joins it, and answers when it is made",
+        "summary": "The plan, in one call, for a caller that does not want to follow it: starts or joins it, and answers when it is made",
         "tags": [
           "collection"
         ],
@@ -16227,7 +16239,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "starts a plan in the background, or joins the one running (a second click must not walk the same folders again)",
+        "summary": "Starts a plan in the background, or joins the one running (a second click must not walk the same folders again)",
         "tags": [
           "collection"
         ],
@@ -16313,7 +16325,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "undoes one run from its log",
+        "summary": "Undoes one run from its log",
         "tags": [
           "collection"
         ],
@@ -16349,7 +16361,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "past organizer runs, newest first, for Undo",
+        "summary": "Past organizer runs, newest first, for Undo",
         "tags": [
           "collection"
         ],
@@ -16589,7 +16601,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "moves a preview's copies to the OS trash (recoverable)",
+        "summary": "Moves a preview's copies to the OS trash (recoverable)",
         "tags": [
           "collection"
         ],
@@ -16644,7 +16656,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "what moving these copies to the trash would take",
+        "summary": "What moving these copies to the trash would take",
         "tags": [
           "collection"
         ],
@@ -16694,7 +16706,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "forgets these consoles (removed from a roster, or at a new IP)",
+        "summary": "Forgets these consoles (removed from a roster, or at a new IP)",
         "tags": [
           "consoles"
         ],
@@ -16744,7 +16756,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "forgets consoles the app no longer has",
+        "summary": "Forgets consoles the app no longer has",
         "tags": [
           "consoles"
         ],
@@ -16877,7 +16889,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "fault-injection for VALIDATING the crash-logging paths (panic hook → ring, stderr-EOF → engine-exit event)",
+        "summary": "Fault-injection for VALIDATING the crash-logging paths (panic hook → ring, stderr-EOF → engine-exit event)",
         "tags": [
           "engine"
         ],
@@ -17198,7 +17210,7 @@
             ],
             "in": "query",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -17277,7 +17289,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -17354,7 +17366,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -17505,7 +17517,7 @@
             ],
             "in": "query",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -17587,7 +17599,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -17662,7 +17674,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -17747,7 +17759,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -17822,7 +17834,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -17904,7 +17916,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -18032,7 +18044,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -18107,7 +18119,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -18186,7 +18198,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -18320,7 +18332,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "response_schema": "literal"
         }
@@ -18370,7 +18382,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "tail the engine log ring so the renderer can surface recent engine activity in its own Log tab",
+        "summary": "Tail the engine log ring so the renderer can surface recent engine activity in its own Log tab",
         "tags": [
           "engine"
         ],
@@ -18561,7 +18573,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "job snapshots (default event) and the named kinds",
+        "summary": "Job snapshots (default event) and the named kinds",
         "tags": [
           "engine"
         ],
@@ -18616,7 +18628,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "write a game folder as one `.exfat` or `.ffpkg` image ShadowMountPlus mounts (`format`)",
+        "summary": "Write a game folder as one `.exfat` or `.ffpkg` image ShadowMountPlus mounts (`format`)",
         "tags": [
           "workshop"
         ],
@@ -19141,7 +19153,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "discard browser-side temporary staging",
+        "summary": "Discard browser-side temporary staging",
         "tags": [
           "transfer"
         ],
@@ -19196,7 +19208,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "unpack a game image or a debug-key package into a plain folder (#469)",
+        "summary": "Unpack a game image or a debug-key package into a plain folder (#469)",
         "tags": [
           "workshop"
         ],
@@ -19308,7 +19320,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "start a conversion",
+        "summary": "Start a conversion",
         "tags": [
           "workshop"
         ],
@@ -19365,7 +19377,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "remove a package this engine built (the Convert screen's Delete package)",
+        "summary": "Remove a package this engine built (the Convert screen's Delete package)",
         "tags": [
           "workshop"
         ],
@@ -19416,7 +19428,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "package size and time at each compression level, from a sample of the game's blocks",
+        "summary": "Package size and time at each compression level, from a sample of the game's blocks",
         "tags": [
           "workshop"
         ],
@@ -19467,7 +19479,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "unpack a game archive into the output folder, as a job",
+        "summary": "Unpack a game archive into the output folder, as a job",
         "tags": [
           "workshop"
         ],
@@ -19528,7 +19540,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "remove an unpack folder once its build is over",
+        "summary": "Remove an unpack folder once its build is over",
         "tags": [
           "workshop"
         ],
@@ -19629,7 +19641,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "what a package, image or game folder is",
+        "summary": "What a package, image or game folder is",
         "tags": [
           "workshop"
         ],
@@ -19684,7 +19696,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the Files tab: a package's entries or the tree's files",
+        "summary": "The Files tab: a package's entries or the tree's files",
         "tags": [
           "workshop"
         ],
@@ -19744,7 +19756,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "one image of an inspected source",
+        "summary": "One image of an inspected source",
         "tags": [
           "workshop"
         ],
@@ -19780,7 +19792,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "what every saved console was last read to have installed, without asking any of them (`/api/ps5/apps/installed?addr=` reads one console now)",
+        "summary": "What every saved console was last read to have installed, without asking any of them (`/api/ps5/apps/installed?addr=` reads one console now)",
         "tags": [
           "games"
         ],
@@ -19888,7 +19900,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "reads this one title on that console now",
+        "summary": "Reads this one title on that console now",
         "tags": [
           "games"
         ],
@@ -19952,7 +19964,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "adds an inbound rule for this engine on one network profile through an elevated `netsh` (Windows asks for consent)",
+        "summary": "Adds an inbound rule for this engine on one network profile through an elevated `netsh` (Windows asks for consent)",
         "tags": [
           "install"
         ],
@@ -20004,7 +20016,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "opens Windows Settings at the network page (the person changes the category themselves)",
+        "summary": "Opens Windows Settings at the network page (the person changes the category themselves)",
         "tags": [
           "install"
         ],
@@ -20223,7 +20235,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "a transfer job, or an install by its own id (`<epoch>-<seq>`, the same status as `/api/pkg/install/status`)",
+        "summary": "A transfer job, or an install by its own id (`<epoch>-<seq>`, the same status as `/api/pkg/install/status`)",
         "tags": [
           "jobs"
         ],
@@ -20275,7 +20287,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "truly stop a running transfer",
+        "summary": "Truly stop a running transfer",
         "tags": [
           "jobs"
         ],
@@ -20329,7 +20341,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "a running job's planned file list (`{\"files\": [{\"rel_path\",\"size\"}...]}`), fetched once by the UI that shows it",
+        "summary": "A running job's planned file list (`{\"files\": [{\"rel_path\",\"size\"}...]}`), fetched once by the UI that shows it",
         "tags": [
           "jobs"
         ],
@@ -20385,7 +20397,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the job's workers stop at their next chunk and hold, using no processor or disk, until resumed or cancelled",
+        "summary": "The job's workers stop at their next chunk and hold, using no processor or disk, until resumed or cancelled",
         "tags": [
           "jobs"
         ],
@@ -20627,7 +20639,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "every guest out, invites void",
+        "summary": "Every guest out, invites void",
         "tags": [
           "play-together"
         ],
@@ -20684,7 +20696,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "answer a guest who asks",
+        "summary": "Answer a guest who asks",
         "tags": [
           "play-together"
         ],
@@ -20790,7 +20802,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "let a guest go (their token stops working)",
+        "summary": "Let a guest go (their token stops working)",
         "tags": [
           "play-together"
         ],
@@ -20907,7 +20919,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the host saw the guest pick a user (\"They're in\"): PS and Create are blocked for them from now (when the setting is on)",
+        "summary": "The host saw the guest pick a user (\"They're in\"): PS and Create are blocked for them from now (when the setting is on)",
         "tags": [
           "play-together"
         ],
@@ -21001,7 +21013,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the host's choices (every console)",
+        "summary": "The host's choices (every console)",
         "tags": [
           "play-together"
         ],
@@ -21027,7 +21039,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "a guest's socket (reached from the LAN; the socket checks the invite or the resume token itself)",
+        "summary": "A guest's socket (reached from the LAN; the socket checks the invite or the resume token itself)",
         "tags": [
           "play-together"
         ],
@@ -21113,7 +21125,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "download-only (R4, #368): the engine's ranged fetcher is the AVA1 source, so the link streams to a console folder with nothing staged on this computer",
+        "summary": "Download-only (R4, #368): the engine's ranged fetcher is the AVA1 source, so the link streams to a console folder with nothing staged on this computer",
         "tags": [
           "transfer"
         ],
@@ -21182,7 +21194,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "what a link actually serves: a package, some other real file, or something that is not a download (R4, #368)",
+        "summary": "What a link actually serves: a package, some other real file, or something that is not a download (R4, #368)",
         "tags": [
           "transfer"
         ],
@@ -21238,7 +21250,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "serve a local game's `sce_sys/icon0.png`",
+        "summary": "Serve a local game's `sce_sys/icon0.png`",
         "tags": [
           "this-computer"
         ],
@@ -21387,7 +21399,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "what is attached, and whether this platform can attach at all",
+        "summary": "What is attached, and whether this platform can attach at all",
         "tags": [
           "this-computer"
         ],
@@ -21475,7 +21487,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "preview a game folder on the engine's machine, matching the desktop command's response shape exactly so the renderer needs no branch of its own",
+        "summary": "Preview a game folder on the engine's machine, matching the desktop command's response shape exactly so the renderer needs no branch of its own",
         "tags": [
           "this-computer"
         ],
@@ -21573,7 +21585,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "classify a path on the engine's machine",
+        "summary": "Classify a path on the engine's machine",
         "tags": [
           "this-computer"
         ],
@@ -22487,7 +22499,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "operations, transfer jobs and installs, newest first, without bodies",
+        "summary": "Operations, transfer jobs and installs, newest first, without bodies",
         "tags": [
           "jobs"
         ],
@@ -22696,7 +22708,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "a phone's controller socket",
+        "summary": "A phone's controller socket",
         "tags": [
           "remote-play"
         ],
@@ -23163,7 +23175,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "reserve the console, start the async state machine, return the job id",
+        "summary": "Reserve the console, start the async state machine, return the job id",
         "tags": [
           "install"
         ],
@@ -23359,7 +23371,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "summarise every live install session",
+        "summary": "Summarise every live install session",
         "tags": [
           "install"
         ],
@@ -23497,7 +23509,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "stop a running install",
+        "summary": "Stop a running install",
         "tags": [
           "install"
         ],
@@ -23562,7 +23574,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the package files one title has on the console now (`/api/ps5/apps/installed` lists the titles; `/api/games/installed` what saved consoles last had)",
+        "summary": "The package files one title has on the console now (`/api/ps5/apps/installed` lists the titles; `/api/games/installed` what saved consoles last had)",
         "tags": [
           "install"
         ],
@@ -23726,7 +23738,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "who may fetch a shared link",
+        "summary": "Who may fetch a shared link",
         "tags": [
           "install"
         ],
@@ -24217,7 +24229,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "discard browser-side temporary staging",
+        "summary": "Discard browser-side temporary staging",
         "tags": [
           "install"
         ],
@@ -24407,7 +24419,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "read the user's CURRENT avatar image from Sony's profile cache so the UI can show it before a change",
+        "summary": "Read the user's CURRENT avatar image from Sony's profile cache so the UI can show it before a change",
         "tags": [
           "users"
         ],
@@ -24652,7 +24664,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "keep what np-fake-signin overwrites, before it runs",
+        "summary": "Keep what np-fake-signin overwrites, before it runs",
         "tags": [
           "users"
         ],
@@ -24720,7 +24732,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "put the kept sign-in state back (undo np-fake-signin)",
+        "summary": "Put the kept sign-in state back (undo np-fake-signin)",
         "tags": [
           "users"
         ],
@@ -24780,7 +24792,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the user's sign-in state and whether a backup is kept",
+        "summary": "The user's sign-in state and whether a backup is kept",
         "tags": [
           "users"
         ],
@@ -25251,7 +25263,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "suspend / resume / kill a running app",
+        "summary": "Suspend / resume / kill a running app",
         "tags": [
           "games"
         ],
@@ -25584,7 +25596,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "per-title rows from appinfo.db",
+        "summary": "Per-title rows from appinfo.db",
         "tags": [
           "games"
         ],
@@ -25700,7 +25712,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "copy a title's missing `/user/appmeta/<id>/` files from its game folder",
+        "summary": "Copy a title's missing `/user/appmeta/<id>/` files from its game folder",
         "tags": [
           "games"
         ],
@@ -25763,7 +25775,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the titles whose home-screen icon is hidden (#407), read live from app.db so the list never drifts from the console",
+        "summary": "The titles whose home-screen icon is hidden (#407), read live from app.db so the list never drifts from the console",
         "tags": [
           "games"
         ],
@@ -25821,7 +25833,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "hide or show a title's home-screen icon (#407)",
+        "summary": "Hide or show a title's home-screen icon (#407)",
         "tags": [
           "games"
         ],
@@ -25884,7 +25896,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "what is on the console now, read from it",
+        "summary": "What is on the console now, read from it",
         "tags": [
           "games"
         ],
@@ -25951,7 +25963,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "delete a snapshot",
+        "summary": "Delete a snapshot",
         "tags": [
           "saves"
         ],
@@ -26025,7 +26037,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "list snapshots (optionally filtered by tag)",
+        "summary": "List snapshots (optionally filtered by tag)",
         "tags": [
           "saves"
         ],
@@ -26092,7 +26104,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "restore a snapshot",
+        "summary": "Restore a snapshot",
         "tags": [
           "saves"
         ],
@@ -26161,7 +26173,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "snapshot a file or directory tree",
+        "summary": "Snapshot a file or directory tree",
         "tags": [
           "saves"
         ],
@@ -26866,7 +26878,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "asks the PS5 payload to rm -rf a path",
+        "summary": "Asks the PS5 payload to rm -rf a path",
         "tags": [
           "health"
         ],
@@ -27331,7 +27343,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "which third-party tools answer on their usual ports",
+        "summary": "Which third-party tools answer on their usual ports",
         "tags": [
           "consoles"
         ],
@@ -27652,7 +27664,11 @@
                 "string",
                 "null"
               ]
-            }
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
           }
         ],
         "responses": {
@@ -27723,13 +27739,17 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Tasks started on the console page, with their progress",
         "tags": [
-          "console-tools"
+          "jobs"
         ],
         "x-ps5upload": {
           "access": "loopback",
           "console": {
-            "aliases": [],
+            "aliases": [
+              "console",
+              "host"
+            ],
             "in": "query",
             "name": "addr",
             "required": false
@@ -27816,13 +27836,17 @@
             "description": "Any other failure, in the same shape."
           }
         },
+        "summary": "Stop a task started on the console page",
         "tags": [
-          "console-tools"
+          "jobs"
         ],
         "x-ps5upload": {
           "access": "loopback",
           "console": {
-            "aliases": [],
+            "aliases": [
+              "console",
+              "host"
+            ],
             "in": "body",
             "name": "addr",
             "required": true
@@ -28105,7 +28129,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "swap the console's stock elfldr for the patched one (see `elfldr_guard`)",
+        "summary": "Swap the console's stock elfldr for the patched one (see `elfldr_guard`)",
         "tags": [
           "consoles"
         ],
@@ -28170,7 +28194,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "whether the loader on :9021 answers (`healthy`), took the connection and never answered (`stuck`), or isn't there (`absent`)",
+        "summary": "Whether the loader on :9021 answers (`healthy`), took the connection and never answered (`stuck`), or isn't there (`absent`)",
         "tags": [
           "consoles"
         ],
@@ -28584,7 +28608,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "which app currently owns the screen",
+        "summary": "Which app currently owns the screen",
         "tags": [
           "games"
         ],
@@ -29390,7 +29414,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "read up to `max_bytes` of a console file, returned base64",
+        "summary": "Read up to `max_bytes` of a console file, returned base64",
         "tags": [
           "console-files"
         ],
@@ -29585,7 +29609,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "decompress a `.ffpfsc` on the console into the image it holds, beside it (#453)",
+        "summary": "Decompress a `.ffpfsc` on the console into the image it holds, beside it (#453)",
         "tags": [
           "console-files"
         ],
@@ -29645,7 +29669,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "atomic small-file write (≤256 KB)",
+        "summary": "Atomic small-file write (≤256 KB)",
         "tags": [
           "console-files"
         ],
@@ -30164,7 +30188,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "one of volume, mute, reconnect, select, scan, night, latency, stop",
+        "summary": "One of volume, mute, reconnect, select, scan, night, latency, stop",
         "tags": [
           "hearbridge"
         ],
@@ -30233,7 +30257,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the last scan's results `{ok, devices}`",
+        "summary": "The last scan's results `{ok, devices}`",
         "tags": [
           "hearbridge"
         ],
@@ -30303,7 +30327,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the paired headsets `{ok, devices}`",
+        "summary": "The paired headsets `{ok, devices}`",
         "tags": [
           "hearbridge"
         ],
@@ -31129,7 +31153,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "read buffered kernel log",
+        "summary": "Read buffered kernel log",
         "tags": [
           "console-tools"
         ],
@@ -31348,7 +31372,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "enumerate console network interfaces",
+        "summary": "Enumerate console network interfaces",
         "tags": [
           "console-tools"
         ],
@@ -31411,7 +31435,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the ports held on the console (Discord ask)",
+        "summary": "The ports held on the console (Discord ask)",
         "tags": [
           "console-tools"
         ],
@@ -31864,7 +31888,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "list `.pkg` files found on connected external/USB drives, parsed for platform + content id",
+        "summary": "List `.pkg` files found on connected external/USB drives, parsed for platform + content id",
         "tags": [
           "install"
         ],
@@ -32000,7 +32024,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "write the boot autoload switch and ordered list",
+        "summary": "Write the boot autoload switch and ordered list",
         "tags": [
           "payloads"
         ],
@@ -32061,7 +32085,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "remove a stored payload and its sidecar",
+        "summary": "Remove a stored payload and its sidecar",
         "tags": [
           "payloads"
         ],
@@ -32122,7 +32146,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "launch a listed payload",
+        "summary": "Launch a listed payload",
         "tags": [
           "payloads"
         ],
@@ -32188,7 +32212,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "store a local file in Payload Manager under `filename`",
+        "summary": "Store a local file in Payload Manager under `filename`",
         "tags": [
           "payloads"
         ],
@@ -32289,7 +32313,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "with the payload as the raw body: [`store`] for a file the caller holds (a browser picking a local ELF has no path the engine can read)",
+        "summary": "With the payload as the raw body: [`store`] for a file the caller holds (a browser picking a local ELF has no path the engine can read)",
         "tags": [
           "payloads"
         ],
@@ -32512,7 +32536,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "is the console awake, in standby, or gone?",
+        "summary": "Is the console awake, in standby, or gone?",
         "tags": [
           "power"
         ],
@@ -32572,7 +32596,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "pair with a console so it can be woken",
+        "summary": "Pair with a console so it can be woken",
         "tags": [
           "power"
         ],
@@ -32817,7 +32841,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "wake the console AND sign its user in",
+        "summary": "Wake the console AND sign its user in",
         "tags": [
           "power"
         ],
@@ -32963,7 +32987,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the user's answer for a held sign-in",
+        "summary": "The user's answer for a held sign-in",
         "tags": [
           "power"
         ],
@@ -33017,7 +33041,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "a light snapshot of running PS5 processes",
+        "summary": "A light snapshot of running PS5 processes",
         "tags": [
           "games"
         ],
@@ -33140,7 +33164,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "detailed process enumeration + kill support",
+        "summary": "Detailed process enumeration + kill support",
         "tags": [
           "games"
         ],
@@ -34583,7 +34607,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the link, the phones playing and the phones asking",
+        "summary": "The link, the phones playing and the phones asking",
         "tags": [
           "remote-play"
         ],
@@ -34631,7 +34655,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "open the QR link (a new key), or close it, which also lets every phone go",
+        "summary": "Open the QR link (a new key), or close it, which also lets every phone go",
         "tags": [
           "remote-play"
         ],
@@ -34686,7 +34710,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "hand a watcher the controller, or take it back",
+        "summary": "Hand a watcher the controller, or take it back",
         "tags": [
           "remote-play"
         ],
@@ -34734,7 +34758,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "answer a phone that asked",
+        "summary": "Answer a phone that asked",
         "tags": [
           "remote-play"
         ],
@@ -34782,7 +34806,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "let a phone go, and keep it out until the link closes (the link's key alone would let it back in with one tap)",
+        "summary": "Let a phone go, and keep it out until the link closes (the link's key alone would let it back in with one tap)",
         "tags": [
           "remote-play"
         ],
@@ -35008,7 +35032,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the instant replay's frames (rp_replay.rs), for the page to save as a clip",
+        "summary": "The instant replay's frames (rp_replay.rs), for the page to save as a clip",
         "tags": [
           "remote-play"
         ],
@@ -35487,7 +35511,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "unmounts the open save and writes it back",
+        "summary": "Unmounts the open save and writes it back",
         "tags": [
           "saves"
         ],
@@ -35561,7 +35585,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "user_id=0 (or absent) lists every user's saves",
+        "summary": "User_id=0 (or absent) lists every user's saves",
         "tags": [
           "saves"
         ],
@@ -35621,7 +35645,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the helper mounts the save decrypted (copied under /data first) and says where; the Files screen then reads and writes it",
+        "summary": "The helper mounts the save decrypted (copied under /data first) and says where; the Files screen then reads and writes it",
         "tags": [
           "saves"
         ],
@@ -36169,7 +36193,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "what, if anything, is checked out for editing",
+        "summary": "What, if anything, is checked out for editing",
         "tags": [
           "shadowmount"
         ],
@@ -36233,7 +36257,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "take an image out of ShadowMount+'s scan folders and mount it read-write so its contents can be edited",
+        "summary": "Take an image out of ShadowMount+'s scan folders and mount it read-write so its contents can be edited",
         "tags": [
           "shadowmount"
         ],
@@ -36298,7 +36322,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "unmount the edited image, put it back where ShadowMount+ will find it, and clear the journal",
+        "summary": "Unmount the edited image, put it back where ShadowMount+ will find it, and clear the journal",
         "tags": [
           "shadowmount"
         ],
@@ -36546,7 +36570,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "read-only ShadowMount+ snapshot (installed/running + config/autotune/debug.log + mounted images)",
+        "summary": "Read-only ShadowMount+ snapshot (installed/running + config/autotune/debug.log + mounted images)",
         "tags": [
           "shadowmount"
         ],
@@ -36960,14 +36984,17 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "a notification on the console's screen, over its management port",
+        "summary": "A notification on the console's screen, over its management port",
         "tags": [
           "console-tools"
         ],
         "x-ps5upload": {
           "access": "loopback",
           "console": {
-            "aliases": [],
+            "aliases": [
+              "console",
+              "host"
+            ],
             "in": "body",
             "name": "addr",
             "required": true
@@ -37044,7 +37071,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "unmount a USB drive (`/mnt/usbN`) so it can be pulled",
+        "summary": "Unmount a USB drive (`/mnt/usbN`) so it can be pulled",
         "tags": [
           "console-tools"
         ],
@@ -37111,7 +37138,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "create a new local user account",
+        "summary": "Create a new local user account",
         "tags": [
           "users"
         ],
@@ -37177,7 +37204,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "delete a local user account",
+        "summary": "Delete a local user account",
         "tags": [
           "users"
         ],
@@ -37240,7 +37267,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "same `{path,size,mtime}` shape as screenshots (payload walks `/user/av_contents/video` instead)",
+        "summary": "Same `{path,size,mtime}` shape as screenshots (payload walks `/user/av_contents/video` instead)",
         "tags": [
           "console-tools"
         ],
@@ -37657,7 +37684,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "this computer as the console's keyboard and mouse with no stream",
+        "summary": "This computer as the console's keyboard and mouse with no stream",
         "tags": [
           "remote-play",
           "strict-local"
@@ -37722,7 +37749,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "enumerate mounted PS5 storage volumes",
+        "summary": "Enumerate mounted PS5 storage volumes",
         "tags": [
           "consoles"
         ],
@@ -38677,7 +38704,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "change any of `{enabled, dir, keep, hosts, add_hosts, remove_hosts}`",
+        "summary": "Change any of `{enabled, dir, keep, hosts, add_hosts, remove_hosts}`",
         "tags": [
           "saves"
         ],
@@ -38743,7 +38770,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "one user's PS5 save into another user's save of the same game on the same console",
+        "summary": "One user's PS5 save into another user's save of the same game on the same console",
         "tags": [
           "saves"
         ],
@@ -38808,7 +38835,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "put a PS4 save onto the PS5 (see `import_ps4`)",
+        "summary": "Put a PS4 save onto the PS5 (see `import_ps4`)",
         "tags": [
           "saves"
         ],
@@ -38912,7 +38939,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "that game's backups, newest first",
+        "summary": "That game's backups, newest first",
         "tags": [
           "saves"
         ],
@@ -38932,7 +38959,11 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "x-aliases": [
+              "console",
+              "host"
+            ]
           },
           {
             "in": "query",
@@ -38969,14 +39000,17 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the comment for a backup zip the app writes itself (Saves › Back up, Save to USB), so a restore can tell where it came from",
+        "summary": "The comment for a backup zip the app writes itself (Saves › Back up, Save to USB), so a restore can tell where it came from",
         "tags": [
           "saves"
         ],
         "x-ps5upload": {
           "access": "loopback",
           "console": {
-            "aliases": [],
+            "aliases": [
+              "console",
+              "host"
+            ],
             "in": "query",
             "name": "addr",
             "required": true
@@ -39036,7 +39070,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "one user's save of a game, now",
+        "summary": "One user's save of a game, now",
         "tags": [
           "saves"
         ],
@@ -39174,7 +39208,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "puts one backup back",
+        "summary": "Puts one backup back",
         "tags": [
           "saves"
         ],
@@ -39239,14 +39273,17 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "puts a backup `.zip` from this computer back, with the refusals, the backup first and the putting back on failure of `restore`",
+        "summary": "Puts a backup `.zip` from this computer back, with the refusals, the backup first and the putting back on failure of `restore`",
         "tags": [
           "saves"
         ],
         "x-ps5upload": {
           "access": "loopback",
           "console": {
-            "aliases": [],
+            "aliases": [
+              "console",
+              "host"
+            ],
             "in": "body",
             "name": "addr",
             "required": true
@@ -39311,7 +39348,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "a backup of one user's save into another user's save of the game",
+        "summary": "A backup of one user's save into another user's save of the game",
         "tags": [
           "saves"
         ],
@@ -39349,7 +39386,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "a pass now (in the background)",
+        "summary": "A pass now (in the background)",
         "tags": [
           "saves"
         ],
@@ -39427,7 +39464,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "change any of the settings",
+        "summary": "Change any of the settings",
         "tags": [
           "saves"
         ],
@@ -39489,7 +39526,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "that game's backups on the server",
+        "summary": "That game's backups on the server",
         "tags": [
           "saves"
         ],
@@ -39592,7 +39629,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "back up now (in the background)",
+        "summary": "Back up now (in the background)",
         "tags": [
           "saves"
         ],
@@ -39728,7 +39765,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "back up a game's save now, while it may be running",
+        "summary": "Back up a game's save now, while it may be running",
         "tags": [
           "saves"
         ],
@@ -39797,7 +39834,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the emulator's saves on that console, each with whether the emulator runs now: `{saves, running}`",
+        "summary": "The emulator's saves on that console, each with whether the emulator runs now: `{saves, running}`",
         "tags": [
           "saves"
         ],
@@ -39956,7 +39993,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "with the shared zip as the body",
+        "summary": "With the shared zip as the body",
         "tags": [
           "saves"
         ],
@@ -40332,7 +40369,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "what the document holds, as JSON Schema",
+        "summary": "What the document holds, as JSON Schema",
         "tags": [
           "settings"
         ],
@@ -40370,7 +40407,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "removes the speed test's files from this computer",
+        "summary": "Removes the speed test's files from this computer",
         "tags": [
           "transfer"
         ],
@@ -41181,7 +41218,7 @@
             ],
             "in": "body",
             "name": "addr",
-            "required": true
+            "required": false
           },
           "long_running": {
             "cancel": "/api/jobs/{id}/cancel",
@@ -41327,7 +41364,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "pull a PS5 file/folder straight into a `.zip` on the host, streaming each file through Deflate as it downloads (no scratch dir, no second pass)",
+        "summary": "Pull a PS5 file/folder straight into a `.zip` on the host, streaming each file through Deflate as it downloads (no scratch dir, no second pass)",
         "tags": [
           "transfer"
         ],
@@ -41569,7 +41606,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "the sends into this console, each classified for this engine: `mine` (running here), `running_elsewhere`, `paused` or `interrupted`",
+        "summary": "The sends into this console, each classified for this engine: `mine` (running here), `running_elsewhere`, `paused` or `interrupted`",
         "tags": [
           "transfer"
         ],
@@ -41627,7 +41664,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "can the sending console reach the receiving one the way a send would dial it (and, for Auto or relay, can this computer reach both)?",
+        "summary": "Can the sending console reach the receiving one the way a send would dial it (and, for Auto or relay, can this computer reach both)?",
         "tags": [
           "transfer"
         ],
@@ -41743,7 +41780,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "start a zip-archive upload job",
+        "summary": "Start a zip-archive upload job",
         "tags": [
           "transfer"
         ],
@@ -41905,7 +41942,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "takes effect at once: running jobs' threads follow it at their next chunk, and jobs started from now on take the thread count it gives",
+        "summary": "Takes effect at once: running jobs' threads follow it at their next chunk, and jobs started from now on take the thread count it gives",
         "tags": [
           "workshop"
         ],
@@ -42184,7 +42221,7 @@
             "description": "Any other failure, in the same shape."
           }
         },
-        "summary": "redirect to the link the alias stands for",
+        "summary": "Redirect to the link the alias stands for",
         "tags": [
           "install"
         ],
@@ -42359,7 +42396,7 @@
       "name": "install"
     },
     {
-      "description": "Watch and stop jobs and long calls.",
+      "description": "Watch and stop jobs, long calls and tasks started on the console.",
       "name": "jobs"
     },
     {

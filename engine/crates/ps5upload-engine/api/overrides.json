@@ -56,6 +56,7 @@
   "/api/ps5/cleanup": "health",
   "/api/ps5/companions": "consoles",
   "/api/ps5/console-shares": "console-files",
+  "/api/ps5/console-tasks": "jobs",
   "/api/ps5/disk-usage": "console-files",
   "/api/ps5/dump": "games",
   "/api/ps5/elfldr": "consoles",
@@ -89,6 +90,7 @@
   "/api/ps5/users": "users",
   "/api/ps5/vinput": "remote-play",
   "/api/ps5/volumes": "consoles",
+  "/api/queue": "queue",
   "/api/rar": "transfer",
   "/api/remote": "remote-sources",
   "/api/save-backup": "saves",
@@ -278,6 +280,9 @@
   },
   "GET /api/ps5/console-shares": {
    "summary": "The network shares saved on the console"
+  },
+  "GET /api/ps5/console-tasks": {
+   "summary": "Tasks started on the console page, with their progress"
   },
   "GET /api/ps5/disk-usage/{id}": {
    "summary": "How a disk usage measurement stands"
@@ -683,6 +688,9 @@
   "POST /api/ps5/console-shares/save": {
    "summary": "Add or edit a share saved on the console (the console signs in first)"
   },
+  "POST /api/ps5/console-tasks/cancel": {
+   "summary": "Stop a task started on the console page"
+  },
   "POST /api/ps5/disk-usage": {
    "summary": "Start measuring a folder on the console"
   },
@@ -938,7 +946,7 @@
   "health": "Health checks, clean-up and network diagnosis.",
   "hearbridge": "The HearBridge payload's audio headset controls.",
   "install": "Package installs, and package links the console fetches.",
-  "jobs": "Watch and stop jobs and long calls.",
+  "jobs": "Watch and stop jobs, long calls and tasks started on the console.",
   "mcp": "The MCP endpoint.",
   "mesh": "Devices sharing a console, and Mesh Drive.",
   "pages": "Pages for people and for the console.",
@@ -946,6 +954,7 @@
   "payloads": "The helper and other payloads.",
   "play-together": "Friends joining a running session. The host's routes answer this computer and PS5UPLOAD_ALLOW_IP addresses.",
   "power": "Rest, reboot, wake.",
+  "queue": "The engine's own queue: uploads, downloads and installs, in order, one at a time per console.",
   "remote-play": "Remote Play sessions, frames, input and the phone controller link.",
   "remote-sources": "NAS and other servers.",
   "saves": "Save data and its backups.",

@@ -185,6 +185,9 @@ struct BodyScan<'s, 'a> {
     /// The status of the tuple being read, in `(StatusCode::X, Json(...))`.
     status: Option<u16>,
     calls: Vec<String>,
+    /// Reading the handler itself, not a helper it calls: a helper's rule may apply to some of
+    /// its callers only.
+    entry: bool,
 }
 
 fn status_number(name: &str) -> Option<u16> {
@@ -737,7 +740,7 @@ impl<'ast> Visit<'ast> for BodyScan<'_, '_> {
         match last_name(&expr).as_deref() {
             Some("host_is_local") => self.out.checks_host = true,
             Some("local_allowed") => self.out.checks_peer = true,
-            Some("required_console_addr") => self.out.requires_console = true,
+            Some("required_console_addr") if self.entry => self.out.requires_console = true,
             _ => {}
         }
         visit::visit_expr_path(self, path);
@@ -817,6 +820,7 @@ pub fn analyze<'a>(index: &'a Index, schemas: &mut Schemas<'a>, handler: &Handle
                 out: &mut out,
                 status: None,
                 calls: Vec::new(),
+                entry: true,
             };
             scan.visit_expr(&closure.body);
             let calls = std::mem::take(&mut scan.calls);
@@ -859,6 +863,7 @@ pub fn analyze<'a>(index: &'a Index, schemas: &mut Schemas<'a>, handler: &Handle
             out: &mut out,
             status: None,
             calls: Vec::new(),
+            entry: is_entry,
         };
         for input in &func.sig.inputs {
             if let FnArg::Typed(typed) = input {
