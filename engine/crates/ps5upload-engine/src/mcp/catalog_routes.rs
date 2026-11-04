@@ -714,9 +714,8 @@ mod tests {
                     .map(|method| (method.to_string(), "/mcp".to_string())),
             )
             .collect();
-        let documented: BTreeSet<(String, String)> = crate::openapi::operations()
-            .into_iter()
-            .collect();
+        let documented: BTreeSet<(String, String)> =
+            crate::openapi::operations().into_iter().collect();
         let missing: Vec<_> = mounted.difference(&documented).collect();
         assert!(
             missing.is_empty(),

@@ -441,6 +441,7 @@ same `code`, and one of the failure codes.
 
 ## An MCP adapter
 
-These endpoints map directly to tools an MCP (Model Context Protocol) server could expose:
-`status`, `frame` (returning the image plus its metadata), `input` and `release_all`. A thin
-local stdio adapter around the HTTP calls above is enough; PS5Upload does not ship one.
+PS5Upload ships one, inside the engine: see [MCP.md](MCP.md). The `rp_session`, `rp_start`, `rp_stop`,
+`rp_frame` (the image plus its metadata), `rp_input` and `rp_input_release` tools are these endpoints,
+under the same rules, and the `play_session` prompt walks an agent through watching and pressing. The
+rest of the engine's routes are in [API.md](API.md) and `GET /api/openapi.json`.

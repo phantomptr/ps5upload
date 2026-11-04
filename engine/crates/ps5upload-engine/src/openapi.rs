@@ -36,11 +36,7 @@ fn paths() -> &'static BTreeMap<String, Value> {
 
 /// `GET /api/openapi.json`.
 pub(crate) async fn serve() -> Response {
-    (
-        [(header::CONTENT_TYPE, "application/json")],
-        document(),
-    )
-        .into_response()
+    ([(header::CONTENT_TYPE, "application/json")], document()).into_response()
 }
 
 /// One route's description: what `api_describe` answers, and `ps5upload://openapi` in small.

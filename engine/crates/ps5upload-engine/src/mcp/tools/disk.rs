@@ -115,6 +115,50 @@ pub(super) fn tools() -> Vec<ToolDef> {
             run: route!(path: "/api/ps5/cleanup/apply/{id}", done: "The clean-up's state."),
         },
         ToolDef {
+            name: "health_scan",
+            title: "Check a console's health",
+            description: "Runs every health check on a console: the helper, folders it needs, \
+                          junk, Remote Play, the clock. Each check says what it found and which \
+                          repair applies; health_fix applies one.",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_optional() }), &[]),
+            run: route!(path: "/api/ps5/health/scan", done: "The health checks."),
+        },
+        ToolDef {
+            name: "health_junk",
+            title: "List junk files",
+            description: "The exact files health_fix's clean_junk would delete, with their sizes.",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_optional() }), &[]),
+            run: route!(path: "/api/ps5/health/junk", done: "The junk files."),
+        },
+        ToolDef {
+            name: "health_fix",
+            title: "Repair something on a console",
+            description: "Applies one named repair from health_scan: create_tool_dirs, clean_junk \
+                          (deletes the files health_junk lists; show them to the user first), \
+                          enable_remote_play, sync_clock.",
+            kind: Kind::Destructive { idempotent: true },
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "action": {
+                        "type": "string",
+                        "enum": ["create_tool_dirs", "clean_junk", "enable_remote_play", "sync_clock"],
+                        "description": "The repair.",
+                    },
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "For clean_junk: only these of the listed files. Left out, \
+                                        every file on the list at this moment.",
+                    },
+                }),
+                &["console", "action"],
+            ),
+            run: route!(method: "POST", path: "/api/ps5/health/fix", done: "Repaired."),
+        },
+        ToolDef {
             name: "cleanup_cancel",
             title: "Stop a clean-up",
             description: "Stops a running clean-up scan or clean-up. What was already deleted \
