@@ -342,7 +342,7 @@ export default function HealthScreen() {
           <div className="mt-4 flex items-center justify-between gap-3">
             <span className="text-xs text-[var(--color-muted)]">
               {junk?.length
-                ? `${junk.length} file(s), ${humanBytes(junkTotal)}`
+                ? tr("health_junk_total", { count: junk.length, size: humanBytes(junkTotal) }, "Files: {count} · {size}")
                 : ""}
             </span>
             <div className="flex gap-2">
