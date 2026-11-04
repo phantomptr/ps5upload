@@ -72,6 +72,7 @@ import { hostOf, mgmtAddr } from "../lib/addr";
 import { log } from "./logs";
 import { isRemotePath } from "../lib/remotePath";
 import { partialUploadPath } from "../lib/partialUpload";
+import { discardUploadLeftovers } from "../lib/uploadLeftovers";
 import { materializeRemote, releaseCopy } from "../lib/materialize";
 
 /** Failed status reads in a row (2 s apart) before a found install counts as lost. */
@@ -2789,6 +2790,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       releaseArchiveCopy(id);
       set((s) => ({ items: removeItem(s.items, id) }));
       scheduleSave();
+      if (removed && removed.status !== "running") void discardUploadLeftovers(removed, () => get().items);
       if (removed) settleSendNow(hostOf(removed.addr));
     },
 
@@ -2835,6 +2837,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       if (item.status !== "running") {
         set((s) => ({ items: removeItem(s.items, id) }));
         scheduleSave();
+        void discardUploadLeftovers(item, () => get().items);
         settleSendNow(h);
         return;
       }
@@ -2849,6 +2852,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       get().stopHost(h);
       set((s) => ({ items: removeItem(s.items, id) }));
       scheduleSave();
+      void discardUploadLeftovers(item, () => get().items);
       // Cancelling a row sent now ends that Send now: the row it paused goes back in line.
       settleSendNow(h);
       // Even with nothing waiting: a Resume while the cancelled job ends must wait for it.
@@ -2969,6 +2973,9 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       }
       set({ items: keep, runningHosts: rh, running: anyRunning(rh) });
       scheduleSave();
+      for (const it of cleared) {
+        if (!keep.includes(it)) void discardUploadLeftovers(it, () => get().items);
+      }
     },
 
     retryFailed(host) {

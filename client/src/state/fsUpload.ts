@@ -4,6 +4,8 @@ import type { JobSnapshot } from "../api/ps5";
 import { hostOf } from "../lib/addr";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { jobLiveFromSnapshot, type JobLive } from "../lib/jobLive";
+import { resumableTxId } from "../lib/resumeGuard";
+import { removeUploadPart } from "../lib/uploadPart";
 import { beginTask } from "./trackTask";
 import {
   baseNameOf,
@@ -93,6 +95,8 @@ export interface FsUploadState {
   cancelRequested: boolean;
   /** Counts finished runs, so a screen can re-list the folder when one ends. */
   finishedRuns: number;
+  /** Files of the last run the engine left out because this computer could not read them. */
+  unreadable?: string[];
 }
 
 interface FsUploadStore {
@@ -170,9 +174,12 @@ export function restoreFsUploads(): void {
 /** What the run needs from the app. Injected so the loop is testable without an engine. */
 export interface FsUploadDeps {
   pathKind: (path: string) => Promise<string>;
-  /** `capMbps`: the upload speed limit (0 = none), read as each job starts. */
-  startFile: (src: string, dest: string, addr: string, capMbps: number) => Promise<string>;
-  startDir: (src: string, dest: string, addr: string, capMbps: number) => Promise<string>;
+  /** `capMbps`: the upload speed limit (0 = none), read as each job starts. `txId`: the job's id,
+   *  the same on every retry and resume of a step, so the console continues its partial. */
+  startFile: (src: string, dest: string, addr: string, capMbps: number, txId?: string) => Promise<string>;
+  startDir: (src: string, dest: string, addr: string, capMbps: number, txId?: string) => Promise<string>;
+  /** Mints a job id for a step that has none. Absent: the engine picks one per try. */
+  newTxId?: () => string;
   /** Starts ONE file-list job (POST /api/transfer/file-list) under `txId`: every file to
    *  `dest` below `destRoot`. Absent: list steps go file by file. */
   startList?: (
@@ -181,9 +188,11 @@ export interface FsUploadDeps {
     addr: string,
     txId: string,
     capMbps: number,
-  ) => Promise<string>;
+  ) => Promise<string | { jobId: string; unreadable: string[] }>;
   /** The console folder's listing, to tell which files of a stopped list are in place. */
   listDir?: (addr: string, dir: string) => Promise<FsExistingEntry[]>;
+  /** Deletes a path on the console (what a stopped run left, when the person gives it up). */
+  deleteRemote?: (addr: string, path: string) => Promise<void>;
   /** A running job's planned files with their sizes (GET /api/jobs/{id}/files). */
   jobFiles?: (jobId: string) => Promise<{ rel_path: string; size: number }[] | null>;
   /** The user's upload speed limit in MiB/s, 0 = none. Absent: no limit. */
@@ -310,7 +319,7 @@ export async function runFsUpload(
     consoleId: hostOf(host),
     detail: destDir,
   });
-  store.patch(host, { stopped: null, cancelRequested: false });
+  store.patch(host, { stopped: null, cancelRequested: false, unreadable: [] });
   save();
 
   // The step the run is on (or about to start): where a resume picks up.
@@ -375,11 +384,16 @@ export async function runFsUpload(
   try {
     for (; at < steps.length; ) {
       if (cancelled()) break;
-      const step = steps[at];
+      let step = steps[at];
       // A list on an engine without the file-list job goes file by file (see listUnsupported).
       if (step.kind === "list" && !deps.startList) {
         steps.splice(at, 1, ...unlist(step));
         continue;
+      }
+      // Written back: `left` saves the step, so a resume runs under the same id.
+      if (step.kind === "one" && !step.txId && deps.newTxId) {
+        step = { ...step, txId: deps.newTxId() };
+        steps[at] = step;
       }
       const isList = step.kind === "list";
       const order = step.kind === "list" ? sendOrder(step.files) : [];
@@ -450,7 +464,7 @@ export async function runFsUpload(
               try {
                 // The same list under the same id every time (retry, resume): the console's
                 // journal then sends only what it does not have.
-                jobId = await deps.startList!(
+                const started = await deps.startList!(
                   destDir,
                   step.files.map((f) => ({
                     src: f.src,
@@ -460,6 +474,11 @@ export async function runFsUpload(
                   step.txId,
                   cap,
                 );
+                if (typeof started === "string") jobId = started;
+                else {
+                  jobId = started.jobId;
+                  if (started.unreadable.length > 0) store.patch(host, { unreadable: started.unreadable });
+                }
               } catch (e) {
                 if (!listUnsupported(e)) throw e;
                 fellBack = true;
@@ -467,9 +486,18 @@ export async function runFsUpload(
               }
             } else {
               const dest = joinRemote(destDir, step.name);
+              // A resume trusts the console's journal: not when the folder it wrote has been
+              // deleted since (the job would land with those files missing).
+              if (isFolder && at === 0 && attempt === 0 && req.doneBefore !== undefined && step.txId && deps.newTxId && deps.listDir) {
+                const txId = await resumableTxId(addr, dest, step.txId, deps.newTxId, deps.listDir);
+                if (txId !== step.txId) {
+                  step = { ...step, txId };
+                  steps[at] = step;
+                }
+              }
               jobId = isFolder
-                ? await deps.startDir(step.src, dest, addr, cap)
-                : await deps.startFile(step.src, dest, addr, cap);
+                ? await deps.startDir(step.src, dest, addr, cap, step.txId)
+                : await deps.startFile(step.src, dest, addr, cap, step.txId);
             }
           }
           base.jobId = jobId;
@@ -614,15 +642,72 @@ export async function resumeFsUpload(
   );
 }
 
-/** Forgets a stopped run (the user does not want the rest). The partial stays on the console
- *  until the helper clears it. */
+/** Clears the stopped card without giving anything up: its steps live on as a paused pick. */
 export function dismissFsUploadStopped(host: string): void {
   useFsUploadStore.getState().patch(host, { stopped: null });
   save();
 }
 
+/** Deletes what a given-up run left on the console: the partial of the step it stopped on. Only
+ *  that step can have one; the steps after it never started. Best effort: what cannot be deleted
+ *  now stays for the helper's job sweep. */
+export async function discardFsUploadPartial(
+  run: Pick<FsUploadStopped, "addr" | "destDir" | "steps"> & { jobId?: string },
+  deps: Pick<FsUploadDeps, "deleteRemote" | "listDir" | "jobStatus" | "jobCancel" | "sleep">,
+): Promise<void> {
+  const step = run.steps?.[0];
+  const { deleteRemote, listDir } = deps;
+  if (!step || !deleteRemote || !listDir) return;
+  try {
+    // What the app closed on may still be running: a part deleted under a live job comes back.
+    if (run.jobId) {
+      const state = await deps.jobStatus(run.jobId).catch(() => null);
+      if (state?.status === "running") {
+        await deps.jobCancel(run.jobId).catch(() => {});
+        for (let i = 0; i < 60; i++) {
+          const now = await deps.jobStatus(run.jobId).catch(() => null);
+          if (now?.status !== "running") break;
+          await deps.sleep(500);
+        }
+      }
+    }
+    if (step.kind === "one") {
+      await removeUploadPart(run.addr, joinRemote(run.destDir, step.name), {
+        listDir,
+        remove: deleteRemote,
+      });
+      return;
+    }
+    // A list merges into the folder: each file's part sits beside its final place.
+    const there = new Set((await listDir(run.addr, run.destDir)).map((e) => e.name));
+    for (const f of step.files) {
+      const part = `${f.name}.ava-part`;
+      if (there.has(part)) await deleteRemote(run.addr, joinRemote(run.destDir, part)).catch(() => {});
+    }
+  } catch {
+    /* the console is away, or nothing was there */
+  }
+}
+
+/** The person gives a stopped run up: the card goes, and so does the partial it would have
+ *  resumed, which otherwise holds its space for days. */
+export function giveUpFsUploadStopped(
+  host: string,
+  deps: Pick<FsUploadDeps, "deleteRemote" | "listDir" | "jobStatus" | "jobCancel" | "sleep">,
+): void {
+  const st = fsUploadForHost(useFsUploadStore.getState(), host).stopped;
+  dismissFsUploadStopped(host);
+  if (st) void discardFsUploadPartial(st, deps);
+}
+
+/** The person has seen which files could not be read. */
+export function clearFsUploadUnreadable(host: string): void {
+  useFsUploadStore.getState().patch(host, { unreadable: [] });
+}
+
 /** Stops the console's run: the engine ends the transfer job, and the batch stops before the
- *  next item. What already landed stays; the half-written file does not. */
+ *  next item. What landed stays, and so does the half-written file or folder, so Resume can
+ *  continue it. Giving the run up (`giveUpFsUploadStopped`) deletes that partial. */
 export function cancelFsUpload(
   host: string,
   deps: Pick<FsUploadDeps, "jobCancel">,

@@ -742,6 +742,7 @@ export default function UploadScreen({
         dest: batchItemFor(r)?.resolvedDest ?? r.path,
         size: batchSizeFor(r),
         needsPassword: r.status === "needs-password",
+        setIssue: r.setIssue,
       })),
     queueItems
       .filter(
@@ -794,8 +795,7 @@ export default function UploadScreen({
     if (startNow && host) queueStartAdded(hostOf(host), ids);
   };
   // Packages in the list stream & install from this computer (nothing copied to the PS5 first,
-  // as one package's main button does); the rest upload as Upload {count} now would. Packages
-  // need no room on the PS5 for a copy, so only the rest are held to the space check.
+  // as one package's main button does); the rest upload as Upload {count} now would.
   const batchPkgs = included.filter(
     (r) => r.source?.kind === "pkg" && r.status === "ready",
   );

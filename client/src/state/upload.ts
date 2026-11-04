@@ -16,6 +16,7 @@ import { isInstallPackagePath } from "../lib/pkgDropDedupe";
 import { remoteApi } from "../api/remote";
 import { materializeRemote } from "../lib/materialize";
 import { isRemotePath } from "../lib/remotePath";
+import { trStatic } from "../lib/trStatic";
 import { platformFromTitleId, titleIdFromContentId } from "./pkgLibrary";
 import { registerSettingReload } from "../lib/liveSettings";
 
@@ -322,8 +323,10 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         if ((meta.parts?.length ?? 1) > 1) {
           set({
             detecting: false,
-            detectError:
-              "Split .pkg sets aren't supported — pick the single lead .pkg.",
+            detectError: trStatic(
+              "upload_split_pkg_unsupported",
+              "Split .pkg sets aren't supported. Pick the single lead .pkg.",
+            ),
           });
           return;
         }
@@ -353,9 +356,10 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         if (get().source?.path !== path) return;
         set({
           detecting: false,
-          detectError: `Couldn't read .pkg header: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
+          detectError: trStatic(
+            "upload_pkg_header_unreadable",
+            "Couldn't read the .pkg header: {error}",
+          ).replace("{error}", () => (e instanceof Error ? e.message : String(e))),
         });
       }
       return;

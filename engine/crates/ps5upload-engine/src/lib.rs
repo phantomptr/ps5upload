@@ -2153,8 +2153,7 @@ struct LinkDownloadReq {
     unpack: bool,
 }
 
-/// `/api/rar/packages` request. Desktop-only, same gate as the handler.
-#[cfg(not(target_os = "android"))]
+/// `/api/rar/packages` request (every archive kind: the name predates ZIP and 7z).
 #[derive(Deserialize)]
 struct RarPackagesReq {
     archive_path: String,
@@ -9187,11 +9186,11 @@ async fn transfer_rar_handler() -> impl IntoResponse {
     .into_response()
 }
 
-/// POST /api/rar/packages — desktop only. The `.pkg` entries of a RAR (any folder depth), from
+/// POST /api/rar/packages — the `.pkg` entries of a ZIP, 7z or RAR (any folder depth), from
 /// the headers alone, so several packages in one archive can be found before anything is
 /// unpacked (R6, #370). `PKG_ALLOW` is the same allow-list the unpack passes as `excludes`, so
-/// what is listed here is exactly what `/api/transfer/rar` will send.
-#[cfg(not(target_os = "android"))]
+/// what is listed here is exactly what `/api/transfer/rar` will send. On Android only RAR is
+/// refused: ZIP and 7z are pure Rust and their unpack routes exist there.
 async fn rar_packages_handler(Json(req): Json<RarPackagesReq>) -> impl IntoResponse {
     let p = req.archive_path.clone();
     let pw = req.password.clone();
@@ -9218,22 +9217,11 @@ async fn rar_packages_handler(Json(req): Json<RarPackagesReq>) -> impl IntoRespo
     }
 }
 
-#[cfg(target_os = "android")]
-async fn rar_packages_handler() -> impl IntoResponse {
-    json_err(
-        StatusCode::NOT_IMPLEMENTED,
-        "RAR is not supported on this build",
-    )
-    .into_response()
-}
-
 /// The exclude entry that keeps only packages (see `ps5upload_core::excludes`).
-#[cfg(not(target_os = "android"))]
 const RAR_PKG_ALLOW: &str = "!*.pkg";
 
 /// Which archive reader a path's name asks for. A split RAR is recognised by any of its
 /// parts' names; a `.7z.001` style split 7z is not supported and is not claimed here.
-#[cfg(not(target_os = "android"))]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum ArchiveKind {
     Zip,
@@ -9241,7 +9229,6 @@ enum ArchiveKind {
     Rar,
 }
 
-#[cfg(not(target_os = "android"))]
 fn archive_kind_of(path: &str) -> Option<ArchiveKind> {
     let lower = path.to_ascii_lowercase();
     if lower.ends_with(".zip") {
@@ -9258,7 +9245,6 @@ fn archive_kind_of(path: &str) -> Option<ArchiveKind> {
 /// The `.pkg` files inside a ZIP, 7z or RAR (path inside the archive, unpacked size), read
 /// from the archive's listing without unpacking anything. `password` only applies to RAR:
 /// the ZIP and 7z readers here do not decrypt.
-#[cfg(not(target_os = "android"))]
 fn archive_package_entries(
     path: &str,
     password: Option<&str>,
@@ -9270,8 +9256,14 @@ fn archive_package_entries(
         Some(ArchiveKind::SevenZ) => {
             Ok(ps5upload_core::transfer::sevenz_plan_preview(p, &allow)?.1)
         }
+        #[cfg(not(target_os = "android"))]
         Some(ArchiveKind::Rar) => {
             Ok(ps5upload_core::transfer::rar_layout(p, password, &allow)?.files)
+        }
+        #[cfg(target_os = "android")]
+        Some(ArchiveKind::Rar) => {
+            let _ = password;
+            anyhow::bail!("RAR is not supported on this build")
         }
         None => anyhow::bail!("not a .zip, .7z or .rar archive: {path}"),
     }
@@ -9680,10 +9672,8 @@ async fn transfer_file_list_handler(
             }
         }
     };
-    if !planner_skipped.is_empty() {
-        for (src, err) in &planner_skipped {
-            log_warn!("planner: skipped {} (metadata failed: {})", src, err);
-        }
+    for (src, err) in &planner_skipped {
+        log_warn!("planner: skipped {} (metadata failed: {})", src, err);
     }
     if entries.is_empty() {
         // Nothing readable: no job, the first reason tells the user what is wrong.
@@ -9812,13 +9802,24 @@ async fn transfer_file_list_handler(
         fail_guard.mark_succeeded();
     });
 
+    // The job runs without these files, so the caller is told now: otherwise the run reports
+    // success with them simply absent.
     (
         StatusCode::ACCEPTED,
-        Json(JobCreated {
-            job_id: job_id.to_string(),
-        }),
+        Json(file_list_created(job_id, &planner_skipped)),
     )
         .into_response()
+}
+
+/// A file-list job's answer: its id and the sources it left out because they could not be read.
+fn file_list_created(job_id: Uuid, skipped: &[(String, String)]) -> serde_json::Value {
+    serde_json::json!({
+        "job_id": job_id.to_string(),
+        "skipped_unreadable": skipped
+            .iter()
+            .map(|(path, error)| serde_json::json!({ "path": path, "error": error }))
+            .collect::<Vec<_>>(),
+    })
 }
 
 // ─── Download (PS5 → host) ───────────────────────────────────────────────────

@@ -631,8 +631,11 @@ export async function startTransferFileList(
   addr: string,
   txId?: string | null,
   bandwidthCapMbps?: number,
-): Promise<string> {
-  const res = await invoke<{ job_id: string }>("transfer_file_list", {
+): Promise<{ jobId: string; unreadable: string[] }> {
+  const res = await invoke<{
+    job_id: string;
+    skipped_unreadable?: { path: string; error: string }[];
+  }>("transfer_file_list", {
     req: {
       dest_root: destRoot,
       files,
@@ -642,7 +645,10 @@ export async function startTransferFileList(
         bandwidthCapMbps && bandwidthCapMbps > 0 ? bandwidthCapMbps : null,
     },
   });
-  return res.job_id;
+  return {
+    jobId: res.job_id,
+    unreadable: (res.skipped_unreadable ?? []).map((s) => s.path),
+  };
 }
 
 /** Start a zip-archive upload. The engine decompresses on the host so files

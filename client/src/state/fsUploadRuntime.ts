@@ -1,5 +1,7 @@
 import {
+  fsDelete,
   fsListDir,
+  generateTxIdHex,
   jobCancel,
   jobStatus,
   pathKind,
@@ -33,14 +35,16 @@ const mayRetry = (reason: string | null | undefined, error: string) =>
 /** The Files screen's upload runner, wired to the real engine (see state/fsUpload). */
 export const fsUploadDeps: FsUploadDeps = {
   pathKind,
-  startFile: (src, dest, addr, cap) =>
-    startTransferFile(src, dest, addr, null, cap),
-  startDir: (src, dest, addr, cap) =>
-    startTransferDir(src, dest, addr, null, undefined, cap),
+  startFile: (src, dest, addr, cap, txId) =>
+    startTransferFile(src, dest, addr, txId ?? null, cap),
+  startDir: (src, dest, addr, cap, txId) =>
+    startTransferDir(src, dest, addr, txId ?? null, undefined, cap),
+  newTxId: generateTxIdHex,
   // Two or more files of a pick: one job for all of them (see state/fsUploadPlan).
   startList: (destRoot, files, addr, txId, cap) =>
     startTransferFileList(destRoot, files, addr, txId, cap),
   listDir: (addr, dir) => fsListDir(addr, dir),
+  deleteRemote: (addr, path) => fsDelete(addr, path),
   jobFiles: (id) => fetchJobFiles(id),
   // The same limit the upload queue passes (set in Settings or on the Upload screen).
   bandwidthCapMbps: () => useUploadSettingsStore.getState().bandwidthCapMbps,

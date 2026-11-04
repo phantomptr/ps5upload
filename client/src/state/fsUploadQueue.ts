@@ -15,9 +15,11 @@
  * pick sent now has finished. A pick the person paused is never resumed for them. */
 import { create } from "zustand";
 import { hostOf } from "../lib/addr";
+import { trStatic } from "../lib/trStatic";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import {
   cancelFsUpload,
+  discardFsUploadPartial,
   dismissFsUploadStopped,
   FS_UPLOAD_BUSY,
   fsUploadForHost,
@@ -98,10 +100,13 @@ export function enqueueFsUpload(req: FsUploadRequest, deps: FsUploadDeps, existi
   void drainFsUploadQueue(req.host, deps);
   return id;
 }
-export function removeFsUploadQueued(host: string, id: string) {
+export function removeFsUploadQueued(host: string, id: string, deps?: FsUploadDeps) {
   const slot = fsUploadQueueFor(host);
   if (slot.running && slot.currentId === id) return;
+  // A paused pick has run: what it wrote goes with it, or it holds its space for days.
+  const gone = slot.items.find((i) => i.id === id);
   patch(host, { items: slot.items.filter((i) => i.id !== id) });
+  if (gone?.paused && deps) void discardFsUploadPartial(gone.request, deps);
   settleSendNow(host);
 }
 
@@ -235,7 +240,13 @@ export async function drainFsUploadQueue(host: string, deps: FsUploadDeps): Prom
           const allowed = new Set(item.allowedExisting);
           const taken = new Set(present.map((e) => nameKey(e.name)));
           const conflict = names(item.request).find((n) => taken.has(nameKey(n)) && !allowed.has(nameKey(n)));
-          if (conflict) throw new Error(`Destination changed while queued: ${conflict}. Remove this queued pick and add it again to choose Replace, Keep both or Skip.`);
+          if (conflict)
+            throw new Error(
+              trStatic(
+                "fs_upload_dest_changed",
+                "Destination changed while queued: {name}. Remove this queued pick and add it again to choose Replace, Keep both or Skip.",
+              ).replace("{name}", () => conflict),
+            );
         }
         const result = await runFsUpload(item.request, deps);
         if (result.error === FS_UPLOAD_BUSY) break;

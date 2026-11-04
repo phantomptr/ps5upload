@@ -7,6 +7,7 @@ import { remoteApi } from "../api/remote";
 import { useConnectionsStore } from "../state/connections";
 import { useTaskStore } from "../state/tasks";
 import { isRemotePath, parseRemotePath } from "./remotePath";
+import { trStatic } from "./trStatic";
 
 /** Local copies this app made of server files, so only those are ever cleaned up. */
 const copies = new Set<string>();
@@ -66,14 +67,16 @@ export async function materializeRemote(
   if (!isRemotePath(path)) return path;
   const parsed = parseRemotePath(path);
   const name = parsed?.path.split("/").filter(Boolean).pop() ?? "file";
-  const server =
-    (parsed && useConnectionsStore.getState().nameOf(parsed.connectionId)) ?? "the server";
+  const server = parsed && useConnectionsStore.getState().nameOf(parsed.connectionId);
   const pollMs = opts.pollMs ?? 500;
   const tasks = useTaskStore.getState();
   const id = tasks.registerTask({
     kind: "download",
     origin: "remote.fetch",
-    label: `Copy ${name} from ${server}`,
+    label: (server
+      ? trStatic("remote_copy_task", "Copy {name} from {server}").replace("{server}", () => server)
+      : trStatic("remote_copy_task_unknown_server", "Copy {name} from the server")
+    ).replace("{name}", () => name),
     consoleId: "",
   });
   let local: string;

@@ -2,6 +2,8 @@ import { create } from "zustand";
 
 import type { RarPackage } from "../api/links";
 import { hostOf } from "../lib/addr";
+import { isAndroid } from "../lib/platform";
+import { isTauriEnv } from "../lib/tauriEnv";
 import type { RarPasswordProblem } from "../lib/rarPassword";
 import { useTaskStore } from "./tasks";
 import type { QueueItem } from "./uploadQueue";
@@ -49,7 +51,7 @@ export interface ArchiveInstallState {
   busy: boolean;
   phase: RarPhase | null;
   result: RarInstallResult | null;
-  /** A raw error, or `not_first` / `not_archive` / `no_first_part` for those the screen
+  /** A raw error, or `not_first` / `not_archive` / `no_first_part` / `rar_needs_desktop` for those the screen
    *  words itself. */
   error: string | null;
 }
@@ -169,6 +171,9 @@ export async function chooseArchive(host: string, path: string): Promise<void> {
     }));
   if (archiveKindOf(path) === null)
     return set({ ...state, error: "not_archive" });
+  // The Android engine has no RAR reader: say so here, before anything is read.
+  if (archiveKindOf(path) === "rar" && isAndroid() && isTauriEnv())
+    return set({ ...state, error: "rar_needs_desktop" });
   if (!isArchiveFirstVolume(path)) return set({ ...state, error: "not_first" });
   set(state);
   await inspect(host, path, null);
