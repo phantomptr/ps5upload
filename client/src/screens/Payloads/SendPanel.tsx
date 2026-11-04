@@ -453,7 +453,7 @@ export default function SendPanel() {
             </button>
             {portsOpen && (
               <>
-                <ul className="mt-2 ml-4 list-disc space-y-1">
+                <ul className="mt-2 ms-4 list-disc space-y-1">
                   <li>
                     <code>.elf</code> → <code>9021</code> ·{" "}
                     {tr("sendpayload_port_elf_desc", "elfldr (default)")}
@@ -676,14 +676,14 @@ function HistoryPanel({
           )}
         </div>
       ) : (
-        <ul className="grid max-h-[28rem] gap-1.5 overflow-y-auto pr-1">
+        <ul className="grid max-h-[28rem] gap-1.5 overflow-y-auto pe-1">
           {records.map((rec) => (
             <li key={`${rec.timestamp}-${rec.path}`}>
               <button
                 type="button"
                 onClick={() => onReplay(rec)}
                 title={rec.path}
-                className="group flex w-full items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-left text-xs hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-3)]"
+                className="group flex w-full items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-start text-xs hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-3)]"
               >
                 <StatusDot ok={rec.status === "success"} />
                 <div className="min-w-0 flex-1">

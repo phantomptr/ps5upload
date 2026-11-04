@@ -323,7 +323,7 @@ function PkgRow({
                 <button
                   type="button"
                   onClick={onView}
-                  className="ml-2 shrink-0 rounded-full px-1 text-[var(--color-accent)] hover:underline"
+                  className="ms-2 shrink-0 rounded-full px-1 text-[var(--color-accent)] hover:underline"
                 >
                   {tr("viewer_open", undefined, "View details")}
                 </button>
@@ -359,7 +359,7 @@ function PkgRow({
                     <button
                       type="button"
                       onClick={onView}
-                      className="ml-1 shrink-0 rounded-full px-1 text-[var(--color-accent)] hover:underline"
+                      className="ms-1 shrink-0 rounded-full px-1 text-[var(--color-accent)] hover:underline"
                     >
                       {tr("viewer_open", undefined, "View details")}
                     </button>
@@ -557,7 +557,7 @@ function PkgRow({
             {(!entry.lastResult.ok || entry.lastResult.warn) && (
               <button
                 type="button"
-                className="ml-1.5 underline underline-offset-2"
+                className="ms-1.5 underline underline-offset-2"
                 onClick={() =>
                   navigate(
                     entry.lastResult!.ok

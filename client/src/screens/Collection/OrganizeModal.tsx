@@ -245,7 +245,7 @@ export function OrganizeModal({
                   {tr("collection.org_none", undefined, "Select none")}
                 </button>
               </div>
-              <ul className="mt-2 flex max-h-[45vh] flex-col gap-1.5 overflow-y-auto pr-1">
+              <ul className="mt-2 flex max-h-[45vh] flex-col gap-1.5 overflow-y-auto pe-1">
                 {plan.moves.map((m, i) => (
                   <li
                     key={moveKey(m)}

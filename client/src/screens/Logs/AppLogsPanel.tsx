@@ -288,7 +288,7 @@ export default function AppLogsPanel() {
         <Button
           variant="ghost"
           size="sm"
-          className="ml-auto"
+          className="ms-auto"
           onClick={() => void openLogsDir()}
         >
           {tr("logs_open_folder", undefined, "Open logs folder")}
@@ -398,7 +398,7 @@ function LogRow({ entry }: { entry: LogEntry }) {
       <button
         type="button"
         onClick={() => hasDetail && setExpanded((v) => !v)}
-        className={`group flex w-full items-start gap-3 text-left max-md:min-h-11 max-md:items-center ${
+        className={`group flex w-full items-start gap-3 text-start max-md:min-h-11 max-md:items-center ${
           hasDetail ? "cursor-pointer" : "cursor-default"
         }`}
       >
@@ -424,7 +424,7 @@ function LogRow({ entry }: { entry: LogEntry }) {
         </span>
       </button>
       {expanded && entry.detail && (
-        <pre className="mt-2 ml-[54px] max-h-64 overflow-auto rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 font-mono text-xs text-[var(--color-muted)]">
+        <pre className="mt-2 ms-[54px] max-h-64 overflow-auto rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 font-mono text-xs text-[var(--color-muted)]">
           {entry.detail}
         </pre>
       )}

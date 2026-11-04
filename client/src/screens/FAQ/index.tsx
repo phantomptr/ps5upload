@@ -85,7 +85,7 @@ function Question({
         type="button"
         aria-expanded={open}
         onClick={onToggle}
-        className="flex w-full items-start gap-3 px-4 py-3 text-left"
+        className="flex w-full items-start gap-3 px-4 py-3 text-start"
       >
         <span className="min-w-0 flex-1">
           {topicLabel && (
@@ -325,7 +325,7 @@ export default function FAQScreen({ embedded = false }: { embedded?: boolean } =
                 >
                   <button
                     type="button"
-                    className="block w-full px-4 py-3 text-left"
+                    className="block w-full px-4 py-3 text-start"
                     onClick={() => {
                       setQuery("");
                       showTopic(h.topic.id);
@@ -387,7 +387,7 @@ export default function FAQScreen({ embedded = false }: { embedded?: boolean } =
                   >
                     {t.title}
                     {t.items.length > 0 && (
-                      <span className="ml-1.5 text-[11px] tabular-nums opacity-70">{t.items.length}</span>
+                      <span className="ms-1.5 text-[11px] tabular-nums opacity-70">{t.items.length}</span>
                     )}
                   </button>
                 ))}

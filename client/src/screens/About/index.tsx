@@ -146,7 +146,7 @@ export default function AboutScreen({ embedded = false }: { embedded?: boolean }
               <button
                 type="button"
                 onClick={() => openExternal(URLS.authorSite)}
-                className="ml-2 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] max-md:inline-flex max-md:min-h-11 max-md:items-center"
+                className="ms-2 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] max-md:inline-flex max-md:min-h-11 max-md:items-center"
               >
                 {AUTHOR_SITE}
               </button>

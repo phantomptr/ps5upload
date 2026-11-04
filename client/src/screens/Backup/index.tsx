@@ -505,7 +505,7 @@ export function SnapshotsPanel({ prefill }: { prefill?: SnapshotPrefill | null }
             )}
           </p>
           {/* What payload/src/backup.c actually does, so nobody finds out on restore. */}
-          <ul className="list-disc space-y-0.5 pl-4" data-testid="backup-limits">
+          <ul className="list-disc space-y-0.5 ps-4" data-testid="backup-limits">
             <li>
               {tr(
                 "backup_limit_keep",

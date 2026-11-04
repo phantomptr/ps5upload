@@ -92,11 +92,11 @@ export function KeptByAppView({
               <div className="min-w-0 flex-1">
                 <div className="font-medium">
                   {label(r.key)}
-                  <span className="ml-2 font-mono text-xs text-[var(--color-muted)]">{r.drive}</span>
+                  <span className="ms-2 font-mono text-xs text-[var(--color-muted)]">{r.drive}</span>
                 </div>
                 <div className="truncate font-mono text-xs text-[var(--color-muted)]">{r.path}</div>
               </div>
-              <div className="text-right text-xs text-[var(--color-muted)]">
+              <div className="text-end text-xs text-[var(--color-muted)]">
                 <div className="font-medium text-[var(--color-text)]">
                   {r.truncated
                     ? tr("kept_at_least", { size: formatBytes(r.bytes) }, "at least {size}")

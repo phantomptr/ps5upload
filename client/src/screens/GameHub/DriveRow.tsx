@@ -1785,7 +1785,7 @@ function LibraryRowImpl({
             {entry.path}
           </div>
         </div>
-        <div className="shrink-0 text-right text-xs text-[var(--color-muted)]">
+        <div className="shrink-0 text-end text-xs text-[var(--color-muted)]">
           <div>{kindLabel}</div>
           {entry.size > 0 && (
             <div className="tabular-nums">{formatBytes(entry.size)}</div>
@@ -1843,7 +1843,7 @@ function LibraryRowImpl({
           )}
           {alsoInstalled && (
             <div
-              className="mt-1 ml-1 inline-flex items-center gap-1 rounded-full border border-[var(--color-warn)] px-1.5 py-0.5 text-xs font-medium text-[var(--color-warn)]"
+              className="mt-1 ms-1 inline-flex items-center gap-1 rounded-full border border-[var(--color-warn)] px-1.5 py-0.5 text-xs font-medium text-[var(--color-warn)]"
               title={tr(
                 "library_badge_also_installed_hint",
                 undefined,
@@ -1854,7 +1854,7 @@ function LibraryRowImpl({
             </div>
           )}
         </div>
-        <div className="ml-auto flex shrink-0 flex-wrap items-center gap-1">
+        <div className="ms-auto flex shrink-0 flex-wrap items-center gap-1">
           {entry.kind === "image" ? (
             isMounted ? (
               <Button
@@ -2353,7 +2353,7 @@ function LibraryRowImpl({
               <button
                 type="button"
                 onClick={() => stopWatchedJob(dlKey, libraryWatchDeps)}
-                className="ml-auto rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)]"
+                className="ms-auto rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)]"
                 title={tr(
                   "library_download_stop_tooltip",
                   undefined,
@@ -2369,7 +2369,7 @@ function LibraryRowImpl({
                 onClick={() => {
                   stopLibraryMove(mvKey);
                 }}
-                className="ml-auto rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)]"
+                className="ms-auto rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)]"
                 title={tr(
                   "library_move_stop_tooltip",
                   undefined,

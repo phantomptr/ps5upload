@@ -44,7 +44,7 @@ export function FpkgNote({ className = "mb-4" }: { className?: string }) {
               "A PS5 fake package only installs when fake-package support is already loaded on the console. Load all three, in this order, before installing:",
             )}
           </div>
-          <ol className="ml-4 flex list-decimal flex-col gap-1">
+          <ol className="ms-4 flex list-decimal flex-col gap-1">
             <li>
               <strong className="text-[var(--color-text)]">kstuff</strong>{" "}
               {tr("pkglib.fpkgsupport.kstuff", "— the build with PS5 fake-package support")}

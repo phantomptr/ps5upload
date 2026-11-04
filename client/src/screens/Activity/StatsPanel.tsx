@@ -253,21 +253,21 @@ function TopTransfers({
       <table className="w-full min-w-[420px] text-xs">
         <thead className="text-[var(--color-muted)]">
           <tr>
-            <th className="px-1 py-0.5 text-left">{tr("stats_label", undefined, "Label")}</th>
-            <th className="px-1 py-0.5 text-right">{tr("stats_size", undefined, "Size")}</th>
-            <th className="px-1 py-0.5 text-right">{tr("stats_speed", undefined, "Speed")}</th>
-            <th className="px-1 py-0.5 text-right">{tr("stats_when", undefined, "When")}</th>
+            <th className="px-1 py-0.5 text-start">{tr("stats_label", undefined, "Label")}</th>
+            <th className="px-1 py-0.5 text-end">{tr("stats_size", undefined, "Size")}</th>
+            <th className="px-1 py-0.5 text-end">{tr("stats_speed", undefined, "Speed")}</th>
+            <th className="px-1 py-0.5 text-end">{tr("stats_when", undefined, "When")}</th>
           </tr>
         </thead>
         <tbody>
           {transfers.map((t) => (
             <tr key={`${t.label}-${t.whenMs}`} className="border-t border-[var(--color-border)]">
               <td className="truncate px-1 py-0.5">{t.label}</td>
-              <td className="px-1 py-0.5 text-right tabular-nums">{formatBytes(t.bytes)}</td>
-              <td className="px-1 py-0.5 text-right tabular-nums font-semibold">
+              <td className="px-1 py-0.5 text-end tabular-nums">{formatBytes(t.bytes)}</td>
+              <td className="px-1 py-0.5 text-end tabular-nums font-semibold">
                 {t.mbps.toFixed(1)} MiB/s
               </td>
-              <td className="px-1 py-0.5 text-right text-[var(--color-muted)]">
+              <td className="px-1 py-0.5 text-end text-[var(--color-muted)]">
                 {formatDate(t.whenMs, "date")}
               </td>
             </tr>

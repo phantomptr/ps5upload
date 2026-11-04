@@ -127,7 +127,7 @@ function ItemRow({
           {item.path}
         </div>
       </div>
-      <div className="shrink-0 text-right text-sm tabular-nums">{formatBytes(itemBytes(item))}</div>
+      <div className="shrink-0 text-end text-sm tabular-nums">{formatBytes(itemBytes(item))}</div>
       {item.cat === "G" ? (
         <Button size="sm" variant="ghost" leftIcon={<FolderOpen size={14} />} onClick={onShow}>
           {tr("cw_cleanup_show_in_files", undefined, "Show in Files")}
@@ -174,7 +174,7 @@ function GroupCard({
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold">
             {categoryTitle(tr, group.cat)}
-            <span className="ml-2 text-xs font-normal text-[var(--color-muted)]">
+            <span className="ms-2 text-xs font-normal text-[var(--color-muted)]">
               {tr("cw_cleanup_group_count", { count: group.items.length }, `${group.items.length} items`)}
             </span>
           </div>

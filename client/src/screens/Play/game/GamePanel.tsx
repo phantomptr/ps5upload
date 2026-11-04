@@ -107,7 +107,7 @@ export function GamePanel({
           : variant === "sheet"
             ? "absolute inset-x-0 bottom-0 z-40 max-h-[70%] rounded-t-2xl pb-[env(safe-area-inset-bottom)] backdrop-blur-md"
             : // Under the stream bar, which stays usable (the panel's own button closes it).
-              "absolute bottom-0 right-0 top-[calc(max(0.75rem,env(safe-area-inset-top))+3rem)] z-40 w-[min(24rem,100%)] rounded-tl-2xl pr-[env(safe-area-inset-right)] backdrop-blur-md"
+              "absolute bottom-0 right-0 top-[calc(max(0.75rem,env(safe-area-inset-top))+3rem)] z-40 w-[min(24rem,100%)] rounded-ss-2xl pr-[env(safe-area-inset-right)] backdrop-blur-md"
       }`}
       {...keep}
     >

@@ -157,7 +157,7 @@ export default function UsbAutoloaderModal({
               {drivesError && <ErrorCard title={drivesError} />}
               {!drives ? (
                 <div className="text-xs text-[var(--color-muted)]">
-                  <Spinner size={12} className="mr-2 inline" />
+                  <Spinner size={12} className="me-2 inline" />
                   {tr("usb_wizard_scanning", undefined, "Scanning…")}
                 </div>
               ) : drives.length === 0 ? (
@@ -198,7 +198,7 @@ export default function UsbAutoloaderModal({
                           {d.path}
                         </div>
                       </div>
-                      <div className="text-right text-xs text-[var(--color-muted)]">
+                      <div className="text-end text-xs text-[var(--color-muted)]">
                         {formatBytes(d.free_bytes)}{" "}
                         {tr("usbmodal_free_slash", "free /")}{" "}
                         {formatBytes(d.total_bytes)}
@@ -329,7 +329,7 @@ export default function UsbAutoloaderModal({
                           `Wrote ${result.written.length} files`,
                         )}
                       </div>
-                      <ul className="mt-1 list-disc pl-4 text-[var(--color-muted)]">
+                      <ul className="mt-1 list-disc ps-4 text-[var(--color-muted)]">
                         {result.written.map((w) => (
                           <li key={w}>{w}</li>
                         ))}
@@ -340,7 +340,7 @@ export default function UsbAutoloaderModal({
                         <div className="font-medium text-[var(--color-warn)]">
                           {tr("usb_wizard_skipped", undefined, "Skipped")}
                         </div>
-                        <ul className="mt-1 list-disc pl-4 text-[var(--color-muted)]">
+                        <ul className="mt-1 list-disc ps-4 text-[var(--color-muted)]">
                           {result.skipped.map((s) => (
                             <li key={s}>{s}</li>
                           ))}

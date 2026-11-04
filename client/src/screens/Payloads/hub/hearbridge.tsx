@@ -247,7 +247,7 @@ export function HearBridgePanel({
               className="flex-1"
               aria-label={tr("hb_volume_label", undefined, "Volume")}
             />
-            <span className="w-14 text-right font-mono tabular-nums">{gain}%</span>
+            <span className="w-14 text-end font-mono tabular-nums">{gain}%</span>
           </label>
           <Toggle
             checked={!!s.muted}
@@ -281,7 +281,7 @@ export function HearBridgePanel({
                 className="flex-1"
                 aria-label={tr("hb_latency_label", undefined, "Latency")}
               />
-              <span className="w-16 text-right font-mono tabular-nums">{lat} ms</span>
+              <span className="w-16 text-end font-mono tabular-nums">{lat} ms</span>
             </label>
           )}
         </div>

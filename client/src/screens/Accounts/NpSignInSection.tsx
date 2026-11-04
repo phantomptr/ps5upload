@@ -199,7 +199,7 @@ export function NpSignInSection({
           "Makes the PS5 treat the signed-in account as signed in to PlayStation Network, without contacting Sony. Some console features only open for a signed-in account, Remote Play among them. It uses np-fake-signin by earthonion, fetched from its project page when you press the button.",
         )}
       </p>
-      <ol className="mb-3 list-decimal space-y-1 pl-5 text-xs text-[var(--color-muted)]">
+      <ol className="mb-3 list-decimal space-y-1 ps-5 text-xs text-[var(--color-muted)]">
         <li>
           {tr(
             "profile.np.step_activate",

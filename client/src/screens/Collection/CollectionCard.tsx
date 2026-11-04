@@ -363,7 +363,7 @@ export const CollectionCard = memo(function CollectionCard({
   const tooNew = firmwareShortfall(game, consoleFw ?? null);
   const showPlay = !!play && !selecting && !!onPlay && !!onStop;
   const focusRing =
-    "rounded-[var(--radius-card)] text-left focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--color-accent)]";
+    "rounded-[var(--radius-card)] text-start focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--color-accent)]";
   return (
     <div className="group flex min-w-0 flex-col" data-testid="collection-card">
       <div className="relative flex min-w-0 flex-col">

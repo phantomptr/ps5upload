@@ -615,7 +615,7 @@ function HubCardView({
           </div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">{summary ? summary(detail) : detail}</div>
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+        <div className="ms-auto flex flex-wrap items-center gap-1.5">
           {link && (
             <Button
               variant="ghost"

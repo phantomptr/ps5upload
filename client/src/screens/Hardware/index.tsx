@@ -984,7 +984,7 @@ function StatRow({
     // with the value instead of floating between the value and the hint.
     <div className="metric-row min-w-0 py-2" style={{ alignItems: "baseline" }}>
       <dt className="min-w-0 text-[var(--color-muted)]">{label}</dt>
-      <dd className="min-w-0 max-w-[65%] shrink-0 text-right" title={tooltip ?? hint}>
+      <dd className="min-w-0 max-w-[65%] shrink-0 text-end" title={tooltip ?? hint}>
         <div className="whitespace-nowrap font-mono tabular-nums">{value}</div>
         {hint && (
           <div className="mt-0.5 text-xs leading-snug text-[var(--color-muted)]">
@@ -1813,7 +1813,7 @@ function SmpMetaCard({
         {busy && (
           <Spinner size={12} tone="accent" />
         )}
-        <span className="ml-auto flex items-center gap-1 text-xs font-medium">
+        <span className="ms-auto flex items-center gap-1 text-xs font-medium">
           {running ? (
             <>
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-good)]" />
@@ -1877,7 +1877,7 @@ function SmpMetaCard({
             <dd className="font-mono tabular-nums">
               {stats?.still_missing ?? 0}
               {stats?.last_missing && (
-                <span className="ml-1 text-[var(--color-muted)]">
+                <span className="ms-1 text-[var(--color-muted)]">
                   ({stats.last_missing})
                 </span>
               )}

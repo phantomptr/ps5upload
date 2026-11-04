@@ -121,7 +121,7 @@ function PlayingDot() {
   return (
     <span
       aria-hidden
-      className="absolute right-0 top-0 h-2 w-2 animate-pulse rounded-full bg-[var(--color-good)] ring-2 ring-[var(--color-float)]"
+      className="absolute end-0 top-0 h-2 w-2 animate-pulse rounded-full bg-[var(--color-good)] ring-2 ring-[var(--color-float)]"
     />
   );
 }

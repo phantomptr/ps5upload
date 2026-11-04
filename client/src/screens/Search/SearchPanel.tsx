@@ -407,7 +407,7 @@ export function SearchPanel({
             {saved.map((s) => (
               <span
                 key={s.id}
-                className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] inline-flex items-center gap-1 py-0.5 pl-2 pr-1"
+                className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] inline-flex items-center gap-1 py-0.5 ps-2 pe-1"
               >
                 <button
                   type="button"
@@ -526,7 +526,7 @@ export function SearchPanel({
             <button
               type="button"
               onClick={() => exportSearchResults(result.hits, "csv", tr)}
-              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] ml-auto border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-1 text-xs"
+              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] ms-auto border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-1 text-xs"
             >
               {tr("search_export_csv", undefined, "Export CSV")}
             </button>

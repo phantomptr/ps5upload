@@ -119,7 +119,7 @@ export function Button({
           span is a block for truncation, and a block-level svg would otherwise
           sit above the text. */}
       {children && (
-        <span className="truncate [&>svg]:mr-1.5 [&>svg]:inline-block [&>svg]:align-[-0.15em]">
+        <span className="truncate [&>svg]:me-1.5 [&>svg]:inline-block [&>svg]:align-[-0.15em]">
           {children}
         </span>
       )}

@@ -37,7 +37,7 @@ export function FakeGameFirmwareNotice({
   const help = inRouter ? (
     <Link
       to={faqLink(DOC_ANCHORS.wontLaunch)}
-      className="ml-1 underline underline-offset-2"
+      className="ms-1 underline underline-offset-2"
     >
       {tr("fakegame.fw.more", undefined, "Why?")}
     </Link>

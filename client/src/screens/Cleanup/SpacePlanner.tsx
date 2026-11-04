@@ -318,7 +318,7 @@ function StepRow({
         {bits.length > 0 ? <div className="text-xs text-[var(--color-muted)]">{bits.join(" · ")}</div> : null}
         {detail ? <div className="text-xs text-[var(--color-bad)]">{detail}</div> : null}
       </div>
-      <div className="shrink-0 text-right text-sm tabular-nums">{formatBytes(c.bytes)}</div>
+      <div className="shrink-0 text-end text-sm tabular-nums">{formatBytes(c.bytes)}</div>
     </li>
   );
 }

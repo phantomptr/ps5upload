@@ -292,13 +292,13 @@ export function DiskUsagePanel({
                 type="button"
                 onClick={() => drill(n.name, n.isDir)}
                 disabled={!n.isDir}
-                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-3)] disabled:cursor-default disabled:hover:bg-transparent"
+                className="flex w-full items-center justify-between px-3 py-2 text-start text-sm hover:bg-[var(--color-surface-3)] disabled:cursor-default disabled:hover:bg-transparent"
               >
                 <span className="truncate">
                   {n.isDir ? "📁 " : "📄 "}
                   {n.name}
                 </span>
-                <span className="ml-3 shrink-0 text-xs text-[var(--color-muted)]">
+                <span className="ms-3 shrink-0 text-xs text-[var(--color-muted)]">
                   {formatBytes(n.totalSize)}
                 </span>
               </button>

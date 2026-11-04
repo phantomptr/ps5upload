@@ -1599,7 +1599,7 @@ export default function SavesScreen() {
 
         {loading && saves === null && (
           <div className="mt-4 text-center text-xs text-[var(--color-muted)]">
-            <Spinner size={12} className="mr-2 inline" />
+            <Spinner size={12} className="me-2 inline" />
             {tr("saves_loading", undefined, "Reading saves…")}
           </div>
         )}
@@ -1735,7 +1735,7 @@ function ImagePicker({
             <li key={img}>
               <button
                 type="button"
-                className="w-full rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-raised)]"
+                className="w-full rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-start text-sm hover:bg-[var(--color-surface-raised)]"
                 onClick={() => onPick(img)}
               >
                 <span className="block">{partLabel(file, main)}</span>
