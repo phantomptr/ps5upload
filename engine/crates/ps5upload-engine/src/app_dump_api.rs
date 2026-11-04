@@ -28,6 +28,7 @@ const DUMP_DEADLINE: Duration = Duration::from_secs(12 * 60 * 60);
 
 #[derive(Deserialize)]
 pub struct DumpReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     title_id: String,
     dest: String,

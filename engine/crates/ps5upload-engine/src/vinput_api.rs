@@ -566,6 +566,7 @@ pub(crate) fn control(host: &str, owner: Owner, m: &KbmMsg, status: StatusFn) {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct CapsQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
 }
 
@@ -595,6 +596,7 @@ pub async fn caps(Query(q): Query<CapsQuery>) -> Response {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct WsQuery {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
 }
 

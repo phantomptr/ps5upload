@@ -24,11 +24,13 @@ use crate::{console_addr_or_default, required_console_addr, AppState};
 
 #[derive(Deserialize)]
 pub(crate) struct AddrQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct RemoveBody {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     id: String,
 }

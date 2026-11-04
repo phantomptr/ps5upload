@@ -195,6 +195,7 @@ fn pairing_body(
 
 #[derive(serde::Deserialize)]
 pub struct PairingQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
 }
 
@@ -230,6 +231,7 @@ pub async fn pairing_start_handler(
 
 #[derive(serde::Deserialize)]
 pub struct PairingConfirm {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     /// The six digits typed from the console's screen: a string (leading zeros) or a number.
     code: Option<serde_json::Value>,
@@ -273,6 +275,7 @@ pub async fn pairing_confirm_handler(
 
 #[derive(serde::Deserialize)]
 pub struct PairingAddr {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
 }
 

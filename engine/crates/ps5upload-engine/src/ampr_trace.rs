@@ -51,6 +51,7 @@ pub(crate) struct TitleQuery {
 
 #[derive(Deserialize)]
 pub(crate) struct TraceReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     game_path: String,
     title_id: String,

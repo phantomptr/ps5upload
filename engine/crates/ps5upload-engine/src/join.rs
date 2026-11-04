@@ -1891,6 +1891,7 @@ pub struct AddrQuery {
 
 /// `GET /api/join?addr=`: Play Together on that console (`open` false when it is not).
 pub async fn get_state(
+    #[serde(alias = "console", alias = "host")]
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Query(q): Query<AddrQuery>,
@@ -1909,6 +1910,7 @@ pub struct AddrBody {
 
 /// The host's request: how guests reach this engine now.
 fn touch_reach(console: &str, headers: &HeaderMap, peer: IpAddr) {
+    #[serde(alias = "console", alias = "host")]
     let (port, web_host) = reach_from(headers, peer);
     with_party(&host_key(console), |p| {
         p.reach.port = port;
@@ -1987,6 +1989,7 @@ pub struct InviteBody {
     #[serde(default)]
     new: bool,
 }
+    #[serde(alias = "console", alias = "host")]
 
 /// `POST /api/join/invite {addr, new?}`: `{key, code, code_display, url, urls, expires_in_s}`.
 /// The same invite again until it expires, unless `new` (the old link and code stop working).
@@ -2048,6 +2051,7 @@ pub struct PlayerBody {
 }
 
 /// `POST /api/join/kick {addr, player}`: let a guest go (their token stops working).
+    #[serde(alias = "console", alias = "host")]
 pub async fn kick(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,

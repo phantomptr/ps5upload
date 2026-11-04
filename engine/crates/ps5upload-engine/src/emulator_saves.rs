@@ -216,6 +216,7 @@ pub(crate) fn measure(
 #[derive(Deserialize)]
 pub struct SwitchQuery {
     /// The console (bare IP).
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
 }
 

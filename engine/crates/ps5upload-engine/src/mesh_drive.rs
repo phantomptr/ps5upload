@@ -3210,6 +3210,7 @@ fn addr_of(addr: Option<String>) -> Result<String> {
 
 #[derive(Deserialize)]
 pub struct ListQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
 }
 
@@ -3309,6 +3310,7 @@ fn hub_free(addr: &str, hub: &str) -> Option<u64> {
 
 #[derive(Deserialize)]
 pub struct CreateReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     name: String,
     /// The home folder on the console, or (with `hub_name`) the folder to make it in.
@@ -3399,6 +3401,7 @@ pub async fn create(Json(req): Json<CreateReq>) -> Response {
 
 #[derive(Deserialize)]
 pub struct CheckReq {
+    #[serde(alias = "host")]
     addr: Option<String>,
     /// The console folder (or the folder a new one goes in, with `hub_name`).
     hub: Option<String>,
@@ -3456,6 +3459,7 @@ pub async fn check(Json(req): Json<CheckReq>) -> Response {
 
 #[derive(Deserialize)]
 pub struct JoinReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     drive: String,
     path: String,
@@ -3530,6 +3534,7 @@ pub async fn join(Json(req): Json<JoinReq>) -> Response {
 
 #[derive(Deserialize)]
 pub struct PasswordReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     drive: String,
     /// The new password; empty or absent removes it.
@@ -3588,6 +3593,7 @@ pub async fn password(Json(req): Json<PasswordReq>) -> Response {
 
 #[derive(Deserialize)]
 pub struct LinkReq {
+    #[serde(alias = "host")]
     addr: Option<String>,
     drive: String,
     /// The other console.
@@ -3724,6 +3730,7 @@ pub async fn link(Json(req): Json<LinkReq>) -> Response {
 
 #[derive(Deserialize)]
 pub struct UnlinkReq {
+    #[serde(alias = "host")]
     addr: Option<String>,
     drive: String,
     console: String,
@@ -3774,6 +3781,7 @@ pub async fn unlink(Json(req): Json<UnlinkReq>) -> Response {
 
 #[derive(Deserialize)]
 pub struct ConflictsQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     drive: String,
 }
@@ -3822,6 +3830,7 @@ pub async fn conflicts(Query(q): Query<ConflictsQuery>) -> Response {
 
 #[derive(Deserialize)]
 pub struct ResolveReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     drive: String,
     /// The conflict copy's path in the drive.
@@ -3937,6 +3946,7 @@ pub async fn resolve(Json(req): Json<ResolveReq>) -> Response {
 
 #[derive(Deserialize)]
 pub struct MemberReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     drive: String,
     member: Option<String>,

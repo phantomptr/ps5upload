@@ -677,6 +677,7 @@ pub struct InstallRequest {
 fn history_dir() -> std::path::PathBuf {
     crate::remote::store::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from(".ps5upload"))
+    #[serde(alias = "console", alias = "addr", alias = "host")]
         .join("install-history")
 }
 
@@ -815,6 +816,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     // without its category/version: read them off the package's own header
     // so the destructive-reinstall guard and the patch version check work.
     if let Source::ConsolePath(path) = &req.source {
+    #[serde(alias = "console", alias = "addr", alias = "host")]
         if req.category.is_none() || req.package_app_ver.is_none() || req.title_id.is_none() {
             let (m, p) = (mgmt.clone(), path.clone());
             let meta = tokio::task::spawn_blocking(move || {

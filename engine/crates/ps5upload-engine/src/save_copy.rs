@@ -803,6 +803,7 @@ fn lacking(from: &[String], to: &[String]) -> Vec<String> {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CopyBody {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub title_id: String,
     pub from_user: u32,
@@ -1117,6 +1118,7 @@ async fn blocking<T: Send + 'static>(
 
 #[derive(Deserialize)]
 pub struct ShareBody {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     /// The save folder (every image of it).
     #[serde(default)]
@@ -1169,6 +1171,7 @@ pub async fn post_share(Json(b): Json<ShareBody>) -> Response {
 
 #[derive(Deserialize)]
 pub struct UseSharedQuery {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     #[serde(default)]
     pub folder: Option<String>,
@@ -1223,6 +1226,7 @@ pub async fn post_copy(Json(b): Json<CopyBody>) -> Response {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RestoreToUserBody {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub title_id: String,
     /// The backup's file name (`<title>_user<8 hex>_<stamp>.zip`).

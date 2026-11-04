@@ -12,6 +12,7 @@ use serde_json::json;
 
 #[derive(Deserialize)]
 struct Target {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     port: u16,
 }

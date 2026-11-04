@@ -322,6 +322,7 @@ pub fn spawn(busy: BusyCheck) {
 
 #[derive(Deserialize)]
 pub struct FtpLogQuery {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub max_bytes: Option<u64>,
 }

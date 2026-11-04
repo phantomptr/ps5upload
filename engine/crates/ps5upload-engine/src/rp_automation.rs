@@ -171,6 +171,7 @@ fn session_for(
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct FrameQuery {
     #[serde(default)]
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     #[serde(default)]
     session: Option<u64>,
@@ -374,6 +375,7 @@ fn respond(live: &Live, viewer: u64, a: Answer, as_json: bool) -> Response {
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct InputReq {
     #[serde(default)]
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     #[serde(default)]
     session: Option<u64>,
@@ -515,6 +517,7 @@ fn hold(live: &Arc<Live>, state: ControllerState, d: Duration) -> u64 {
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct ReleaseReq {
     #[serde(default)]
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     #[serde(default)]
     session: Option<u64>,

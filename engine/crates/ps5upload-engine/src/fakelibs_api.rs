@@ -191,6 +191,7 @@ pub struct ScanTitle {
 
 #[derive(Debug, Deserialize)]
 pub struct ScanRequest {
+    #[serde(alias = "host")]
     pub addr: String,
     #[serde(default)]
     pub console: String,
@@ -589,6 +590,7 @@ pub async fn import_pack(Json(req): Json<ImportPackReq>) -> impl IntoResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct SdkPairQuery {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     /// The title's source directory; `eboot.bin` is read from inside it.
     pub path: String,

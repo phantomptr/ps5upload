@@ -14,6 +14,7 @@ use ps5upload_core::payload_manager as pm;
 
 #[derive(Deserialize)]
 pub(crate) struct HostParams {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
 }
 
@@ -60,6 +61,7 @@ pub(crate) async fn overview(
 
 #[derive(Deserialize)]
 pub(crate) struct LaunchReq {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     path: String,
 }
@@ -81,6 +83,7 @@ pub(crate) async fn launch(
 
 #[derive(Deserialize)]
 pub(crate) struct DeleteReq {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     filename: String,
 }
@@ -102,6 +105,7 @@ pub(crate) async fn delete(
 
 #[derive(Deserialize)]
 pub(crate) struct AutoloadReq {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     enabled: bool,
     list: Vec<String>,
@@ -128,6 +132,7 @@ pub(crate) async fn autoload(
 
 #[derive(Deserialize)]
 pub(crate) struct StoreReq {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     /// The name Payload Manager files it under (its folder is derived from this).
     filename: String,
@@ -178,6 +183,7 @@ pub(crate) async fn store(
 
 #[derive(Deserialize)]
 pub(crate) struct UploadParams {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     filename: String,
     #[serde(default)]

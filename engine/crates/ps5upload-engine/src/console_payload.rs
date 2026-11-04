@@ -24,6 +24,7 @@ const LOADER_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Deserialize)]
 pub struct LoadRequest {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     path: String,
 }

@@ -483,6 +483,7 @@ fn find(id: &str) -> Option<Arc<Job>> {
 
 #[derive(Deserialize)]
 pub(crate) struct StartReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     path: String,
 }

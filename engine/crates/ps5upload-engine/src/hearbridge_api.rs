@@ -26,6 +26,7 @@ pub(crate) fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
 #[derive(Deserialize)]
 pub(crate) struct HostParams {
     #[serde(alias = "addr")]
+    #[serde(alias = "console")]
     host: String,
 }
 

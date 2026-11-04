@@ -700,6 +700,7 @@ fn mark_released(map: &mut HashMap<String, InstallSession>, sid: &str) -> bool {
 /// surface a red error over whatever prompted the refresh.
 #[derive(serde::Deserialize)]
 struct PayloadRestoreRequest {
+    #[serde(alias = "console", alias = "addr", alias = "host")]
     ps5_addr: String,
 }
 
@@ -865,6 +866,7 @@ pub fn host_router(state: PkgInstallStateHandle) -> Router {
 #[derive(Debug, Deserialize)]
 pub struct LinkCreateRequest {
     /// The console the link is for: picks the address of this computer it can reach.
+    #[serde(alias = "console", alias = "addr", alias = "host")]
     pub ps5_addr: String,
     pub path: String,
 }
@@ -1047,6 +1049,7 @@ pub struct InstalledPkgInventory {
 
 #[derive(Debug, Deserialize)]
 struct InstalledPkgQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
     title_id: String,
 }
@@ -1363,6 +1366,7 @@ async fn installed_pkg_inventory_handler(Query(q): Query<InstalledPkgQuery>) -> 
 
 #[derive(Debug, Deserialize)]
 pub struct PreflightQuery {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub content_id: String,
     #[serde(default)]
@@ -1601,6 +1605,7 @@ async fn parse_remote_handler(remote_path: &str) -> Response<Body> {
 #[derive(Debug, Deserialize)]
 pub struct InstallStartRequest {
     /// PS5 address, e.g. "192.168.1.42" (a `:port` suffix is dropped).
+    #[serde(alias = "console", alias = "addr", alias = "host")]
     pub ps5_addr: String,
     /// Proceed with a staged re-install of an already-installed full game.
     ///
@@ -3283,6 +3288,7 @@ async fn remote_probe_handler(Json(req): Json<RemoteProbeRequest>) -> Response<B
 #[derive(Debug, Deserialize)]
 pub struct ConsoleProbeRequest {
     /// The console, as the other install routes name it (`host` or `host:port`).
+    #[serde(alias = "console", alias = "addr")]
     pub host: String,
     /// Absolute path of a package already on the console.
     pub path: String,

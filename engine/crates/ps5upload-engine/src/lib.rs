@@ -1810,6 +1810,7 @@ struct TransferDirReq {
     skip_existing: Option<String>,
 }
 
+    #[serde(alias = "console", alias = "host")]
 /// Upload a `.zip`'s contents, decompressing on the host so files land
 /// already extracted on the PS5. Same shape as `TransferDirReq` but the
 /// source is an archive path instead of a directory.
@@ -1822,6 +1823,7 @@ struct TransferZipReq {
     #[serde(default)]
     excludes: Vec<String>,
     #[serde(default)]
+    #[serde(alias = "console", alias = "host")]
     bandwidth_cap_mbps: Option<f64>,
 }
 
@@ -1842,6 +1844,7 @@ struct Ps5ToPs5Req {
     /// place of the receiving console's own address: a local forward on the sending console
     /// (ps5-tailscale), or a NAT the consoles see differently from this computer.
     #[serde(default)]
+    #[serde(alias = "console", alias = "host")]
     direct_addr: Option<String>,
     /// #444, a send another device started (its `tx_id`): `take` ends both consoles' halves and
     /// sends again here, resuming from the receiving console's journal; `watch` follows a direct
@@ -2108,6 +2111,7 @@ struct TransferRarReq {
     dest_root: String,
     archive_path: String,
     #[serde(default)]
+    #[serde(alias = "console", alias = "host")]
     excludes: Vec<String>,
     #[serde(default)]
     bandwidth_cap_mbps: Option<f64>,
@@ -2130,6 +2134,7 @@ struct LinkDownloadReq {
     tx_id: Option<String>,
     url: String,
     /// Absolute console folder the file lands in.
+    #[serde(alias = "console", alias = "host")]
     dest_dir: String,
     /// Overrides the name the link supplies.
     #[serde(default)]
@@ -2153,6 +2158,7 @@ struct RarPackagesReq {
 }
 
 /// `/api/rar/inspect` request. Desktop-only, same gate as the handler.
+    #[serde(alias = "console", alias = "host")]
 #[cfg(not(target_os = "android"))]
 #[derive(Deserialize)]
 struct RarInspectReq {
@@ -2196,6 +2202,7 @@ struct TransferDirReconcileReq {
 pub(crate) struct JobCreated {
     job_id: String,
 }
+    #[serde(alias = "console", alias = "host")]
 
 #[derive(Deserialize)]
 struct AddrQuery {
@@ -2206,6 +2213,7 @@ struct AddrQuery {
 /// telemetry (SoC power / CPU usage / fan duty / product shape); any other
 /// value (or absent) is the basic, auto-poll-safe read.
 #[derive(Deserialize)]
+    #[serde(alias = "console", alias = "host")]
 struct HwTempsQuery {
     addr: Option<String>,
     #[serde(default)]
@@ -2226,6 +2234,7 @@ fn parse_or_random_tx_id(hex: Option<&str>) -> anyhow::Result<[u8; 16]> {
             }
             let mut out = [0u8; 16];
             for (i, chunk) in h.as_bytes().chunks(2).enumerate() {
+    #[serde(alias = "console", alias = "host")]
                 let hi = hex_val(chunk[0])?;
                 let lo = hex_val(chunk[1])?;
                 out[i] = (hi << 4) | lo;
@@ -2234,6 +2243,7 @@ fn parse_or_random_tx_id(hex: Option<&str>) -> anyhow::Result<[u8; 16]> {
         }
         None => Ok(*Uuid::new_v4().as_bytes()),
     }
+    #[serde(alias = "console", alias = "host")]
 }
 
 fn hex_val(b: u8) -> anyhow::Result<u8> {
@@ -2297,6 +2307,7 @@ async fn ps5_cleanup(
     };
     let path = req.path.clone();
     let started = std::time::Instant::now();
+    #[serde(alias = "console", alias = "host")]
     crate::log_info!("cleanup: addr={addr} path={path}");
     let result: Result<CleanupResult, anyhow::Error> =
         tokio::task::spawn_blocking(move || cleanup_path(&addr, &path))
@@ -2340,6 +2351,7 @@ async fn ps5_list_dir(
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
     let path = q.path.clone();
+    #[serde(alias = "console", alias = "host")]
     let opts = ListDirOptions {
         offset: q.offset.unwrap_or(0),
         limit: q.limit.unwrap_or(256),
@@ -2425,6 +2437,7 @@ struct FsPathReq {
 }
 
 #[derive(Deserialize)]
+    #[serde(alias = "console", alias = "host")]
 struct FsMoveReq {
     addr: Option<String>,
     from: String,
@@ -2441,6 +2454,7 @@ struct FsMoveReq {
     /// (`/api/ps5/fs/op-cancel`) the in-flight copy. The engine
     /// stamps this into the FS_COPY frame's trace_id so the payload's
     /// in-flight ops table is keyed on it. Pass 0 (or omit) when no
+    #[serde(alias = "console", alias = "host")]
     /// progress/cancel is needed; the operation runs the same way
     /// the old endpoint did.
     #[serde(default)]
@@ -2464,6 +2478,7 @@ async fn ps5_fs_delete(
 ) -> impl IntoResponse {
     // Destructive: acts only on the console the request names, never the default one.
     let Some(addr) = required_console_addr(req.addr) else {
+    #[serde(alias = "console", alias = "host")]
         return missing_console_addr();
     };
     let path = req.path;
@@ -2581,6 +2596,7 @@ struct FsExtractReq {
 
 /// POST /api/ps5/fs/extract `{addr, path, dest, password?, merge?, replace?, op_id}` — extract an
 /// archive on the console into `dest` there (the helper's extractor payload does the decoding).
+    #[serde(alias = "console", alias = "host")]
 /// Progress and cancel go through `op-status`/`op-cancel` with the same `op_id`. 200 `{ok, path,
 /// files, dirs, bytes, skipped, unsafe, links}`; 409 when cancelled; 502 with the helper's cause
 /// otherwise (`fs_extract_password_required`, `fs_extract_no_space: ...`, ...). The password is
@@ -2816,6 +2832,7 @@ struct FsMountReq {
     read_only: Option<bool>,
 }
 
+    #[serde(alias = "console", alias = "host")]
 async fn ps5_fs_mount(
     State(state): State<AppState>,
     Json(req): Json<FsMountReq>,
@@ -2882,6 +2899,7 @@ struct AppLaunchReq {
     title_id: String,
 }
 
+    #[serde(alias = "console", alias = "host")]
 async fn ps5_app_launch(
     State(state): State<AppState>,
     Json(req): Json<AppLaunchReq>,
@@ -2893,6 +2911,7 @@ async fn ps5_app_launch(
     let title_for_log = title_id.clone();
     match tokio::task::spawn_blocking(move || app_launch(&addr, &title_id))
         .await
+    #[serde(alias = "console", alias = "host")]
         .map_err(anyhow::Error::from)
         .and_then(|r| r)
     {
@@ -2937,6 +2956,7 @@ async fn ps5_app_register(
 ) -> impl IntoResponse {
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
+    #[serde(alias = "console", alias = "host")]
     };
     let src_path = req.src_path;
     let patch_drm_type = req.patch_drm_type.unwrap_or(false);
@@ -2991,6 +3011,7 @@ async fn ps5_app_unregister(
     let title_id = req.title_id;
     let started = std::time::Instant::now();
     crate::log_info!("app_unregister: addr={addr} title_id={title_id}");
+    #[serde(alias = "console", alias = "host")]
     let title_for_log = title_id.clone();
     // Uninstalling changes which artwork exists, so drop this console's
     // cached images now rather than letting them age out — the user would
@@ -3165,6 +3186,7 @@ async fn ps5_fs_op_status(
         return (
             StatusCode::OK,
             Json(serde_json::json!({
+    #[serde(alias = "console", alias = "host")]
                 "op_id": snap.op_id,
                 "kind": snap.kind,
                 "from": snap.from,
@@ -3230,6 +3252,7 @@ async fn ps5_fs_op_cancel(
             StatusCode::OK,
             Json(serde_json::json!({ "cancelled": true })),
         )
+    #[serde(alias = "console", alias = "host")]
             .into_response();
     }
     match tokio::task::spawn_blocking(move || fs_op_cancel(&addr, op_id))
@@ -3367,6 +3390,7 @@ struct TimeSyncReq {
     use_ntp: bool,
     /// Optional custom NTP server. Defaults to Cloudflare → Google →
     /// pool.ntp.org → Windows (first success wins).
+    #[serde(alias = "console", alias = "host")]
     ntp_server: Option<String>,
 }
 
@@ -3512,6 +3536,7 @@ async fn ps5_smp_meta_control_route(
         tokio::task::spawn_blocking(move || {
             ps5upload_core::smp_meta::smp_meta_control(&addr, &inner)
         })
+    #[serde(alias = "console", alias = "host")]
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r);
@@ -3632,6 +3657,7 @@ async fn ps5_elfldr_health(Query(q): Query<HostQuery>) -> impl IntoResponse {
         )
     })
     .await;
+    #[serde(alias = "console", alias = "addr")]
     match health {
         Ok(h) => (StatusCode::OK, Json(serde_json::json!({ "health": h }))).into_response(),
         Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
@@ -3701,6 +3727,7 @@ async fn ps5_klog(State(state): State<AppState>, Query(q): Query<KlogQuery>) -> 
     let cap = q.max_bytes.unwrap_or(64 * 1024).min(256 * 1024);
     let r = tokio::task::spawn_blocking(move || klog_read(&addr, cap))
         .await
+    #[serde(alias = "console", alias = "host")]
         .map_err(anyhow::Error::from)
         .and_then(|r| r);
     match r {
@@ -3757,6 +3784,7 @@ async fn ps5_appinfo_query(
     State(state): State<AppState>,
     Query(q): Query<AppInfoQueryParams>,
 ) -> impl IntoResponse {
+    #[serde(alias = "console", alias = "host")]
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
     let title_id = q.title_id;
     let keys = q.keys;
@@ -3789,6 +3817,7 @@ async fn ps5_hidden_icons(
         .map_err(anyhow::Error::from)
         .and_then(|r| r);
     match r {
+    #[serde(alias = "console", alias = "host")]
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
@@ -3828,6 +3857,7 @@ async fn ps5_usb_eject(
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
     let mp = req.mount_point;
+    #[serde(alias = "console", alias = "host")]
     let force = req.force;
     crate::log_info!("usb_eject: addr={addr} mount_point={mp} force={force}");
     let r =
@@ -3858,6 +3888,7 @@ async fn ps5_save_open(
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
     let image = req.image;
+    #[serde(alias = "console", alias = "host")]
     crate::log_info!("save_open: addr={addr} image={image}");
     let r = tokio::task::spawn_blocking(move || ps5upload_core::saves::save_open(&addr, &image))
         .await
@@ -3903,6 +3934,7 @@ async fn ps5_set_icon_hidden(
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
     let r = tokio::task::spawn_blocking(move || {
+    #[serde(alias = "console", alias = "host")]
         ps5upload_core::diagnostics::set_icon_hidden(&addr, &req.title_id, req.hidden)
     })
     .await
@@ -3949,6 +3981,7 @@ async fn ps5_app_lifecycle(
     State(_state): State<AppState>,
     Json(req): Json<AppLifecycleReq>,
 ) -> impl IntoResponse {
+    #[serde(alias = "console", alias = "host")]
     let action = match req.action.as_str() {
         "suspend" => AppAction::Suspend,
         "resume" => AppAction::Resume,
@@ -3993,6 +4026,7 @@ struct FsReadPreviewReq {
 /// Exists so the BROWSER build can collect the helper's on-console logs for a
 /// bug report. The desktop app reads these through a Tauri command that calls
 /// core directly, with no HTTP route — which meant web users' reports silently
+    #[serde(alias = "console", alias = "host")]
 /// contained no console logs at all, because the per-file fetch failures are
 /// (correctly) swallowed as "file absent" by the collector. Same missing-half
 /// bug as fs_write_bytes.
@@ -4067,6 +4101,7 @@ async fn ps5_process_kill(
     };
     let pid = req.pid;
     let r: Result<ProcessKillAck, anyhow::Error> =
+    #[serde(alias = "console", alias = "host")]
         tokio::task::spawn_blocking(move || process_kill(&addr, pid))
             .await
             .map_err(anyhow::Error::from)
@@ -4096,6 +4131,7 @@ async fn ps5_helper_stop(
 ) -> axum::response::Response {
     // Disruptive: acts only on the console the request names, never the default one.
     let Some(addr) = required_console_addr(req.addr) else {
+    #[serde(alias = "console", alias = "host")]
         return missing_console_addr();
     };
     let busy = helper_stop::is_busy(&addr) || installs.jobs.active_for(&addr);
@@ -4142,6 +4178,7 @@ async fn ps5_power_control(
         return missing_console_addr();
     };
     let action = match req.action.as_str() {
+    #[serde(alias = "console", alias = "host")]
         "reboot" => PowerAction::Reboot,
         "shutdown" => PowerAction::Shutdown,
         "standby" => PowerAction::Standby,
@@ -4185,6 +4222,7 @@ struct PowerWakeReq {
 ///
 /// Fire-and-forget: the console never acknowledges a WAKEUP, so a 200 here
 /// means the datagram was sent and nothing more. It also requires "Enable
+    #[serde(alias = "console", alias = "addr")]
 /// Remote Play" on the console; with that off nothing is listening at all.
 #[derive(Debug, serde::Deserialize)]
 struct PowerWakeLoginReq {
@@ -4203,6 +4241,7 @@ struct PowerWakeLoginReq {
 }
 
 /// POST /api/ps5/power/wake-login — wake the console AND sign its user in.
+    #[serde(alias = "console", alias = "addr")]
 ///
 /// A bare wake lands at user-select; this follows the wake with a Remote
 /// Play control session so the console comes up on the user's home screen,
@@ -4282,6 +4321,7 @@ struct PowerPairReq {
 
 /// POST /api/ps5/power/pair — pair with a console so it can be woken.
 ///
+    #[serde(alias = "console")]
 /// One call, nothing asked of the user: the payload supplies the PSN
 /// account id and mints the PIN, and the engine runs the registration
 /// handshake. Returns the wake credential for the client to store.
@@ -4337,6 +4377,7 @@ async fn ps5_power_ddp_status(Query(q): Query<DdpStatusQuery>) -> impl IntoRespo
     })
     .await;
     match r {
+    #[serde(alias = "console", alias = "addr")]
         Ok(Ok(status)) => (StatusCode::OK, Json(status)).into_response(),
         // Not an error the user can act on beyond the hint in the message:
         // a console that is off, or has Remote Play disabled, is silent.
@@ -4384,6 +4425,7 @@ async fn ps5_saves_list(
     let uid = q.user_id.unwrap_or(0);
     let r: Result<SaveList, anyhow::Error> =
         tokio::task::spawn_blocking(move || list_saves(&addr, uid))
+    #[serde(alias = "console", alias = "host")]
             .await
             .map_err(anyhow::Error::from)
             .and_then(|r| r);
@@ -4486,6 +4528,7 @@ struct SmpCheckoutBeginReq {
 /// `ps5upload_core::smp_checkout` for why the image has to be moved rather
 /// than simply unmounted.
 async fn ps5_smp_checkout_begin(
+    #[serde(alias = "console", alias = "host")]
     State(state): State<AppState>,
     Json(req): Json<SmpCheckoutBeginReq>,
 ) -> impl IntoResponse {
@@ -4555,6 +4598,7 @@ async fn ps5_smp_image_rw_begin(
         ps5upload_core::smp_image_rw::begin(&addr, &req.title_id)
     })
     .await
+    #[serde(alias = "console", alias = "host")]
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
     match r {
@@ -4595,6 +4639,7 @@ struct FsWriteBytesReq {
 /// Exists so the engine's browser UI can do what the desktop app already
 /// does through the `fs_write_bytes_run` Tauri command. Without it, anything
 /// that writes a small config file to the console — notably handing a game to
+    #[serde(alias = "console", alias = "host")]
 /// ShadowMount+ by appending to its `manual.lst` — simply failed in the web
 /// UI.
 ///
@@ -4648,6 +4693,7 @@ struct PeripheralReq {
 async fn ps5_peripheral(
     State(state): State<AppState>,
     Json(q): Json<PeripheralReq>,
+    #[serde(alias = "console", alias = "host")]
 ) -> impl IntoResponse {
     let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
     let (action, port) = (q.action, q.port);
@@ -4685,6 +4731,7 @@ async fn ps5_hw_set_fan_threshold(
     State(state): State<AppState>,
     Json(q): Json<FanThresholdReq>,
 ) -> impl IntoResponse {
+    #[serde(alias = "console", alias = "host")]
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
     let threshold = q.threshold_c;
     let reapply = q.reapply_sec;
@@ -4750,6 +4797,7 @@ struct GameMetaResponse {
     /// True iff `sce_sys/icon0.png` exists and is non-empty on the PS5.
     /// The UI uses this to decide whether to render an <img> pointing at
     /// /api/ps5/game-icon — skipping the request for folders without an
+    #[serde(alias = "console", alias = "host")]
     /// icon avoids a pointless 404 round-trip.
     has_icon: bool,
 }
@@ -5610,6 +5658,7 @@ async fn ps5_app_icon(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<AppIconQuery>,
+    #[serde(alias = "console", alias = "host")]
 ) -> impl IntoResponse {
     // title_id is interpolated into a filesystem path, so validate hard:
     // PS5 title-ids are [A-Za-z0-9_] only. This blocks `..` / `/` traversal
@@ -5870,6 +5919,7 @@ struct PkgMetadataQuery {
 /// APP_VER) via a few ranged `fs_read`s. This lazily enriches the External
 /// Packages listing — the bulk scan stays filename-fast; the client calls this
 /// per row, in the background, only for what's on screen. Returns an empty
+    #[serde(alias = "console", alias = "host")]
 /// object for a non-`\x7FCNT` / unreadable pkg (the row keeps its scan data).
 async fn ps5_pkg_metadata(
     State(state): State<AppState>,
@@ -6226,6 +6276,7 @@ async fn health_fix_handler(
         return missing_console_addr();
     };
     let action = req.action;
+    #[serde(alias = "console", alias = "host")]
     let result = tokio::task::spawn_blocking(move || {
         ps5upload_core::health::apply_fix(&addr, &action, env!("CARGO_PKG_VERSION"))
     })
@@ -7585,6 +7636,7 @@ struct ProfileNpReq {
     addr: Option<String>,
     #[serde(default)]
     slot: i32,
+    #[serde(alias = "console", alias = "host")]
     #[serde(default)]
     uid: u32,
 }
@@ -7592,6 +7644,7 @@ struct ProfileNpReq {
 #[derive(Deserialize)]
 struct ProfileActivateReq {
     addr: Option<String>,
+    #[serde(alias = "console", alias = "host")]
     slot: i32,
     /// Accepts a JSON string ("0x1a2b" or decimal) as well as a number.
     ///
@@ -7601,6 +7654,7 @@ struct ProfileActivateReq {
     /// The string form is what the client sends; the number form stays for
     /// any older caller.
     #[serde(default)]
+    #[serde(alias = "console", alias = "host")]
     id: Option<AccountIdInput>,
 }
 
@@ -7610,6 +7664,7 @@ enum AccountIdInput {
     Num(u64),
     Str(String),
 }
+    #[serde(alias = "console", alias = "host")]
 
 impl AccountIdInput {
     /// None when the text is not a usable id. Zero is rejected: it means "no
@@ -7655,6 +7710,7 @@ struct ProfilePreviewReq {
     image_path: String,
     #[serde(default)]
     mode: Option<String>,
+    #[serde(alias = "console", alias = "host")]
     #[serde(default)]
     crop: Option<ps5upload_core::profile::CropPosition>,
 }
@@ -7682,12 +7738,14 @@ struct BackupSnapshotReq {
     addr: Option<String>,
     tag: String,
     path: String,
+    #[serde(alias = "console", alias = "host")]
 }
 
 #[derive(Deserialize)]
 struct BackupListReq {
     addr: Option<String>,
     #[serde(default)]
+    #[serde(alias = "console", alias = "host")]
     tag: Option<String>,
 }
 
@@ -7698,6 +7756,7 @@ struct BackupRestoreReq {
     timestamp: i64,
 }
 
+    #[serde(alias = "console", alias = "host")]
 #[derive(Deserialize)]
 struct BackupDeleteReq {
     addr: Option<String>,
@@ -7705,6 +7764,7 @@ struct BackupDeleteReq {
     timestamp: i64,
 }
 
+    #[serde(alias = "console", alias = "host")]
 // ── v4.1: Remote Play ─────────────────────────────────────────────────
 #[derive(Deserialize)]
 struct RemotePlayReq {
@@ -7712,6 +7772,7 @@ struct RemotePlayReq {
     #[serde(default)]
     manual_account_id: Option<String>,
 }
+    #[serde(alias = "console", alias = "host")]
 
 // ── v4.1: Notifications ───────────────────────────────────────────────
 #[derive(Deserialize)]
@@ -7719,6 +7780,7 @@ struct NotifListReq {
     addr: Option<String>,
     #[serde(default)]
     since_seq: u64,
+    #[serde(alias = "console", alias = "host")]
 }
 
 async fn profile_info_handler(
@@ -7727,6 +7789,7 @@ async fn profile_info_handler(
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
     let r = tokio::task::spawn_blocking(move || ps5upload_core::profile::profile_info(&addr))
+    #[serde(alias = "console", alias = "host")]
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r);
@@ -7735,6 +7798,7 @@ async fn profile_info_handler(
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
+    #[serde(alias = "console", alias = "host")]
 
 async fn profile_username_handler(
     State(state): State<AppState>,
@@ -8163,6 +8227,7 @@ async fn remoteplay_cancel_handler(
     let r =
         tokio::task::spawn_blocking(move || ps5upload_core::remoteplay::remoteplay_cancel(&addr))
             .await
+        #[serde(alias = "console", alias = "host")]
             .map_err(anyhow::Error::from)
             .and_then(|r| r);
     match r {
@@ -8303,23 +8368,27 @@ struct CheatsDeleteQuery {
 struct CheatsToggleReq {
     addr: Option<String>,
     title_id: String,
+    #[serde(alias = "console", alias = "host")]
     index: i32,
     #[serde(default = "default_true")]
     on: bool,
 }
 
+    #[serde(alias = "console", alias = "host")]
 fn default_true() -> bool {
     true
 }
 
 #[derive(Deserialize)]
 struct CheatsEngineSetReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     enabled: bool,
 }
 
 async fn cheats_list_handler(
     State(state): State<AppState>,
+    #[serde(alias = "console", alias = "host")]
     Query(q): Query<CheatsAddrQuery>,
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
@@ -8333,6 +8402,7 @@ async fn cheats_list_handler(
     }
 }
 
+    #[serde(alias = "console", alias = "host")]
 async fn cheats_get_handler(
     State(state): State<AppState>,
     Query(q): Query<CheatsGetQuery>,
@@ -8491,6 +8561,7 @@ async fn cheats_repos_download_handler(
             &req.title_id,
         )
     })
+    #[serde(alias = "console", alias = "host")]
     .await
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
@@ -8523,6 +8594,7 @@ async fn activity_get_handler(
         .map_err(anyhow::Error::from)
         .and_then(|r| r);
     match r {
+    #[serde(alias = "console", alias = "host")]
         Ok(result) => (StatusCode::OK, Json(result)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
@@ -8584,6 +8656,7 @@ async fn sdk_patch_handler(
     let target_sdk = req.target_sdk;
     let patch_libc = req.patch_libc;
     let r = tokio::task::spawn_blocking(move || {
+    #[serde(alias = "console", alias = "host")]
         ps5upload_core::sdk_changer::sdk_patch(&addr, &title_id, &target_sdk, patch_libc)
     })
     .await
@@ -8616,6 +8689,7 @@ async fn sdk_restore_handler(
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
     match r {
+    #[serde(alias = "console", alias = "host")]
         Ok(result) => (StatusCode::OK, Json(result)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
@@ -8685,6 +8759,7 @@ async fn profile_avatar_current_handler(
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
     let uid = q.uid;
     let png: Option<Vec<u8>> = tokio::task::spawn_blocking(move || {
+    #[serde(alias = "console", alias = "host")]
         let dir = format!("/system_data/priv/cache/profile/0x{uid:08X}");
         for name in ["avatar.png", "picture.png"] {
             let path = format!("{dir}/{name}");
@@ -9835,6 +9910,7 @@ struct TransferDownloadReq {
     #[serde(default)]
     unsafe_read: bool,
 }
+    #[serde(alias = "console", alias = "host")]
 
 /// Where an AVA1 download lands (Task 25).
 enum Ava1DownloadTarget {
@@ -10178,6 +10254,7 @@ struct TransferDownloadZipReq {
 
 /// POST /api/transfer/download-zip — pull a PS5 file/folder straight into a
 /// `.zip` on the host, streaming each file through Deflate as it downloads (no
+    #[serde(alias = "console", alias = "host")]
 /// scratch dir, no second pass). Same job machinery as `/transfer/download`:
 /// returns a job_id immediately; progress lands in the shared bytes counter the
 /// ticker republishes over SSE. Sequential by nature (one zip stream).
@@ -10548,6 +10625,7 @@ struct PortCheckQuery {
 async fn engine_version() -> impl IntoResponse {
     (
         StatusCode::OK,
+    #[serde(alias = "console", alias = "addr", alias = "host")]
         Json(serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
             // Capability flags the UI feature-detects. `rar` is desktop-only

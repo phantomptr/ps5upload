@@ -364,6 +364,7 @@ pub async fn get_status(
     Json(status(&headers, q.console.as_deref()))
 }
 
+    #[serde(alias = "addr", alias = "host")]
 #[derive(serde::Deserialize)]
 pub struct OpenReq {
     open: bool,
@@ -379,6 +380,7 @@ pub async fn set_open(headers: HeaderMap, Json(r): Json<OpenReq>) -> Json<serde_
             if l.key.is_none() {
                 l.key = random_key();
             }
+    #[serde(alias = "addr", alias = "host")]
         } else {
             l.key = None;
             for p in l.pads.drain(..) {

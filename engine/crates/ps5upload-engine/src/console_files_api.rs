@@ -94,6 +94,7 @@ pub(crate) async fn prefs_get_handler(
 
 #[derive(Deserialize)]
 pub(crate) struct PrefsSetReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     op: PrefsOp,
     path: String,
@@ -112,6 +113,7 @@ pub(crate) async fn prefs_set_handler(
 
 #[derive(Deserialize)]
 pub(crate) struct HandoffPutReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     to: Side,
     path: String,
@@ -130,6 +132,7 @@ pub(crate) async fn handoff_put_handler(
 
 #[derive(Deserialize)]
 pub(crate) struct HandoffTakeReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     #[serde(rename = "for")]
     side: Side,
@@ -162,6 +165,7 @@ pub(crate) async fn stat_handler(
 
 #[derive(Deserialize)]
 pub(crate) struct StatReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     path: String,
 }
@@ -260,6 +264,7 @@ mod tests {
 
 #[derive(Deserialize)]
 pub(crate) struct MinionTileReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     tile: Option<bool>,
     enabled: Option<bool>,
@@ -284,6 +289,7 @@ pub(crate) async fn minion_tile_handler(
 
 #[derive(Deserialize)]
 pub(crate) struct CheatImportReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     path: String,
 }

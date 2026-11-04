@@ -433,6 +433,7 @@ pub async fn get_export(Query(q): Query<ExportQuery>) -> Response {
 
 #[derive(Deserialize)]
 pub struct ConsoleQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
 }
 
