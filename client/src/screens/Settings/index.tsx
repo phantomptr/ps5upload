@@ -59,7 +59,13 @@ import { useKeepAwakeStore } from "../../state/keepAwake";
 import { NotificationSettingsPanel } from "../Notifications/NotificationSettings";
 import { useLangStore, useTr, LANGUAGES } from "../../state/lang";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
-import { useEngineStore, DEFAULT_ENGINE_URL, setLiveEngineUrl } from "../../state/engine";
+import {
+  useEngineStore,
+  DEFAULT_ENGINE_URL,
+  engineUrlIsValid,
+  normalizeEngineUrl,
+  setLiveEngineUrl,
+} from "../../state/engine";
 import { engineRestart } from "../../lib/engineDiagnosis";
 import { useConnectionStore } from "../../state/connection";
 import { useSaveSettingsStore, DEFAULT_SAVE_PATH } from "../../state/saveSettings";
@@ -280,6 +286,7 @@ function EngineUrlSection() {
   const engineUrl = useEngineStore((s) => s.engineUrl);
   const setEngineUrl = useEngineStore((s) => s.setEngineUrl);
   const [draft, setDraft] = useState(engineUrl);
+  const [invalid, setInvalid] = useState(false);
 
   return (
     <Section title={tr("settings_card_engine", undefined, "Engine")}>
@@ -287,8 +294,27 @@ function EngineUrlSection() {
         label={tr("engine_url_label", undefined, "Engine URL")}
         type="text"
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => setEngineUrl(draft)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          setInvalid(false);
+        }}
+        onBlur={() => {
+          if (!engineUrlIsValid(draft)) {
+            setInvalid(true);
+            return;
+          }
+          setDraft(normalizeEngineUrl(draft));
+          setEngineUrl(draft);
+        }}
+        error={
+          invalid
+            ? tr(
+                "engine_url_invalid",
+                undefined,
+                "This is not an address the app can use. Example: http://192.168.1.10:19113",
+              )
+            : undefined
+        }
         placeholder={DEFAULT_ENGINE_URL}
         spellCheck={false}
         hint={tr(
@@ -304,6 +330,7 @@ function EngineUrlSection() {
               type="button"
               onClick={() => {
                 setDraft(DEFAULT_ENGINE_URL);
+                setInvalid(false);
                 setEngineUrl(DEFAULT_ENGINE_URL);
               }}
               className="text-xs text-[var(--color-muted)] hover:text-[var(--color-text)] max-md:inline-flex max-md:min-h-11 max-md:items-center max-md:px-2"

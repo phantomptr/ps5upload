@@ -3,7 +3,59 @@ import { describe, expect, it, vi } from "vitest";
 const { mockIsTauri } = vi.hoisted(() => ({ mockIsTauri: vi.fn(() => true) }));
 vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => mockIsTauri() }));
 
-import { engineIsOnThisDevice, getEngineUrl, isLoopbackUrl, setLiveEngineUrl, useEngineStore } from "./engine";
+import {
+  DEFAULT_ENGINE_URL,
+  engineIsOnThisDevice,
+  engineUrlIsValid,
+  getEngineUrl,
+  isLoopbackUrl,
+  normalizeEngineUrl,
+  setLiveEngineUrl,
+  useEngineStore,
+} from "./engine";
+
+describe("normalizeEngineUrl", () => {
+  it("fills in what a bare address leaves out", () => {
+    expect(normalizeEngineUrl("192.168.1.10")).toBe("http://192.168.1.10:19113");
+    expect(normalizeEngineUrl(" 192.168.1.10:19113/ ")).toBe("http://192.168.1.10:19113");
+    expect(normalizeEngineUrl("nas.local:8080")).toBe("http://nas.local:8080");
+    expect(normalizeEngineUrl("nas.local")).toBe("http://nas.local:19113");
+    expect(normalizeEngineUrl("nas.local:8080/ps5")).toBe("http://nas.local:8080/ps5");
+    expect(normalizeEngineUrl("[fd00::1]")).toBe("http://[fd00::1]:19113");
+    expect(normalizeEngineUrl("[fd00::1]:80")).toBe("http://[fd00::1]:80");
+    expect(normalizeEngineUrl("fd00::1")).toBe("http://[fd00::1]:19113");
+  });
+
+  it("leaves a full URL as it is", () => {
+    expect(normalizeEngineUrl("https://ps5.home/")).toBe("https://ps5.home");
+    expect(normalizeEngineUrl("http://nas.local")).toBe("http://nas.local");
+    expect(normalizeEngineUrl("")).toBe(DEFAULT_ENGINE_URL);
+  });
+});
+
+describe("engineUrlIsValid", () => {
+  it("takes addresses and refuses what cannot be fetched", () => {
+    for (const u of ["192.168.1.10:19113", "nas.local", "https://ps5.home", ""]) {
+      expect(engineUrlIsValid(u), u).toBe(true);
+    }
+    for (const u of ["ftp://nas.local", "file:///etc/hosts", "not a url", "http://"]) {
+      expect(engineUrlIsValid(u), u).toBe(false);
+    }
+  });
+});
+
+describe("setEngineUrl", () => {
+  it("does not drop the sidecar's fallback port when nothing changed", () => {
+    useEngineStore.getState().setEngineUrl(DEFAULT_ENGINE_URL);
+    setLiveEngineUrl("http://127.0.0.1:19114");
+    // focus and blur of the Engine URL field
+    useEngineStore.getState().setEngineUrl(`${DEFAULT_ENGINE_URL}/`);
+    expect(getEngineUrl()).toBe("http://127.0.0.1:19114");
+    useEngineStore.getState().setEngineUrl("http://127.0.0.1:19120");
+    expect(getEngineUrl()).toBe("http://127.0.0.1:19120");
+    useEngineStore.getState().setEngineUrl(DEFAULT_ENGINE_URL);
+  });
+});
 
 describe("isLoopbackUrl", () => {
   it("recognises this device's loopback in every spelling", () => {

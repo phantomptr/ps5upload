@@ -97,6 +97,17 @@ function snapshotCurrent(): SettingsSnapshot {
 }
 
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+/** What the file holds, as far as this page knows. A write that changes nothing is skipped: the
+ *  file is synced to the drive each time, and the stores fire for much that it does not hold. */
+let lastWritten: string | null = null;
+
+async function writeIfChanged(): Promise<void> {
+  const config = snapshotCurrent();
+  const text = JSON.stringify(config);
+  if (text === lastWritten) return;
+  await invoke("user_config_save", { config });
+  lastWritten = text;
+}
 
 /** Request a file-mirror write. Coalesces rapid changes into one write. */
 function schedulePersist() {
@@ -105,7 +116,7 @@ function schedulePersist() {
   pendingTimer = setTimeout(async () => {
     pendingTimer = null;
     try {
-      await invoke("user_config_save", { config: snapshotCurrent() });
+      await writeIfChanged();
     } catch (e) {
       // Silent: file-mirror is best-effort. localStorage is still the
       // source of truth, so a failed disk write doesn't lose anything.
@@ -134,11 +145,11 @@ export function installUserConfigMirror() {
   useKeepAwakeStore.subscribe(schedulePersist);
   useUploadSettingsStore.subscribe(schedulePersist);
   // `host` is the only field in useConnectionStore that persists across
-  // launches — status/step fields are transient. But Zustand.subscribe
-  // fires on any slice change, so we coarsely re-snapshot on every
-  // connection-store update; the debounce coalesces those into a
-  // single write.
-  useConnectionStore.subscribe(schedulePersist);
+  // launches — status/step fields are transient, and they change every
+  // few seconds (each status poll) for as long as the window is open.
+  useConnectionStore.subscribe((s, prev) => {
+    if (s.host !== prev.host) schedulePersist();
+  });
   // Engine URL: persist to disk AND push to the Rust shell so its command
   // proxies follow the change live (the spawn-mode switch still needs a
   // restart). Fires on any engine-store change.
@@ -170,7 +181,7 @@ async function persistNow(): Promise<void> {
     pendingTimer = null;
   }
   try {
-    await invoke("user_config_save", { config: snapshotCurrent() });
+    await writeIfChanged();
   } catch (e) {
     console.warn("[settings-mirror] initial persist failed:", e);
   }

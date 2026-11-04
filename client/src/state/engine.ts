@@ -16,10 +16,34 @@ import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 export const DEFAULT_ENGINE_URL = "http://127.0.0.1:19113";
 const KEY_ENGINE_URL = "ps5upload.engine_url";
 
-/** Trim and drop any trailing slash so callers can `${base}/api/...`. */
+const DEFAULT_ENGINE_PORT = "19113";
+
+/** Trim and drop any trailing slash so callers can `${base}/api/...`. A bare address gets what it
+ *  left out: `192.168.1.10` is `http://192.168.1.10:19113`, and `nas.local:8080` is
+ *  `http://nas.local:8080`. A full URL says what it means, so `https://ps5.home` keeps its port. */
 export function normalizeEngineUrl(raw: string): string {
   const v = raw.trim().replace(/\/+$/, "");
-  return v || DEFAULT_ENGINE_URL;
+  if (!v) return DEFAULT_ENGINE_URL;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) return v;
+  // No port after the name, whether or not there is a path after it.
+  const hostEnd = v.search(/[/?#]/);
+  const authority = hostEnd < 0 ? v : v.slice(0, hostEnd);
+  // A bare IPv6 address has several colons and no brackets; its last group is not a port.
+  const bareV6 = !authority.startsWith("[") && authority.split(":").length > 2;
+  const hasPort = !bareV6 && /:\d+$/.test(authority);
+  const bracketed = bareV6 ? `[${authority}]` : authority;
+  const rest = hostEnd < 0 ? "" : v.slice(hostEnd);
+  return `http://${bracketed}${hasPort ? "" : `:${DEFAULT_ENGINE_PORT}`}${rest}`;
+}
+
+/** Whether a typed Engine URL can be used: an http(s) address with a host. */
+export function engineUrlIsValid(raw: string): boolean {
+  try {
+    const u = new URL(normalizeEngineUrl(raw));
+    return (u.protocol === "http:" || u.protocol === "https:") && !!u.hostname;
+  } catch {
+    return false;
+  }
 }
 
 function loadEngineUrl(): string {
@@ -40,6 +64,8 @@ export const useEngineStore = create<EngineState>((set) => ({
   engineUrl: loadEngineUrl(),
   setEngineUrl: (url) => {
     const engineUrl = normalizeEngineUrl(url);
+    // Clicking into the field and out again is not a change, and must not drop the override below.
+    if (engineUrl === useEngineStore.getState().engineUrl) return;
     safeSetItem(KEY_ENGINE_URL, engineUrl);
     set({ engineUrl });
     // A deliberate user/settings change of the engine URL supersedes any
