@@ -142,7 +142,9 @@ export interface Ps2Save {
 
 export const saveBackupApi = {
   view: () => call<SaveBackupView>(""),
-  set: (patch: Partial<SaveBackupSettings>) =>
+  /** `add_hosts`/`remove_hosts` change the console list by what this client knows of its own
+   *  roster: several clients can share one engine. */
+  set: (patch: Partial<SaveBackupSettings> & { add_hosts?: string[]; remove_hosts?: string[] }) =>
     call<SaveBackupView>("", { method: "PUT", body: JSON.stringify(patch) }),
   runNow: () => call<SaveBackupView>("/run", { method: "POST" }),
   list: async (titleId: string) =>

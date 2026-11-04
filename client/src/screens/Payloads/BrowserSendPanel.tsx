@@ -4,6 +4,8 @@ import { useConnectionStore } from "../../state/connection";
 import { getEngineUrl } from "../../state/engine";
 import { hostOf } from "../../lib/addr";
 import { useTr } from "../../state/lang";
+import { PayloadSendRefused } from "../../api/ps5";
+import { payloadSendRefusalText } from "../../lib/payloadSendRefusal";
 
 /** An explicit send gesture forwards ELF bytes; no browser filesystem paths or TCP sockets. */
 export default function BrowserSendPanel() {
@@ -25,10 +27,12 @@ export default function BrowserSendPanel() {
         signal: AbortSignal.timeout(120_000),
       });
       const body = await response.json() as { bytes_sent?: number; error?: string };
+      // A refusal comes as a reason the app can say in the user's language.
+      if (response.status === 409) throw new PayloadSendRefused(body.error ?? "loader_busy");
       if (!response.ok) throw new Error(body.error || `engine HTTP ${response.status}`);
       if (typeof body.bytes_sent !== "number") throw new Error("Invalid send response");
       setSent(body.bytes_sent);
-    } catch (e) { setError(String(e)); }
+    } catch (e) { setError(e instanceof PayloadSendRefused ? payloadSendRefusalText(e) : String(e)); }
     finally { setBusy(false); }
   }
   return <div className="space-y-4">
