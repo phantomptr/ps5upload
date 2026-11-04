@@ -19,6 +19,7 @@
  *
  * Desktop and mobile apps keep their settings themselves, whichever engine they use.
  */
+import { pageBasePath } from "./basePath";
 import { onStorageWrite, safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
 import { reloadSettings } from "./liveSettings";
 

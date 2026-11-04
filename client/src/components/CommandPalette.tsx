@@ -249,7 +249,7 @@ function useCommands(close: () => void, open: boolean): Command[] {
                 void checkForUpdatesNow(tr, () => navigate("/settings"));
               },
             },
-          ]
+          ] satisfies Command[])
         : []),
       {
         id: "theme:toggle",
@@ -263,7 +263,7 @@ function useCommands(close: () => void, open: boolean): Command[] {
       },
       // Plain http has no navigator.clipboard, and nothing else can read it.
       ...(typeof navigator !== "undefined" && navigator.clipboard
-        ? [
+        ? ([
       {
         id: "conn:paste-host",
         label: tr(
@@ -328,7 +328,7 @@ function useCommands(close: () => void, open: boolean): Command[] {
           close();
         },
       },
-          ]
+          ] satisfies Command[])
         : []),
       ...pinCommands,
       // The Collection's games, each to its page. Listed only when searching.

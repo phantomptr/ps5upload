@@ -245,7 +245,7 @@ export default function PlaySetupScreen() {
       />
       {/* Before anyone pairs a console for nothing: a browser cannot decode video on this page. */}
       {typeof window !== "undefined" && window.isSecureContext === false && (
-        <Callout tone="warn" data-testid="play-setup-needs-https">
+        <Callout tone="warn" title={tr("rp_no_webcodecs", undefined, "This browser cannot play a stream")}>
           {tr(
             "play_setup_needs_https",
             undefined,

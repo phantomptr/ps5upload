@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 
 import { windowRange } from "./windowing";
 
@@ -59,8 +65,10 @@ function scrollerOf(el: HTMLElement): HTMLElement | null {
  * page around it, not in a box of its own. Put `listRef` on the list, `paddingTop: before` and
  * `paddingBottom: after` on its style, and render `items.slice(start, end)`.
  */
-export function useWindowedRows(count: number) {
-  const listRef = useRef<HTMLUListElement | null>(null);
+export function useWindowedRows(
+  count: number,
+  listRef: RefObject<HTMLUListElement | null>,
+) {
   const [win, setWin] = useState<RowWindow>({
     start: 0,
     end: Math.min(count, WINDOW_FROM),
@@ -89,7 +97,7 @@ export function useWindowedRows(count: number) {
     const height = scroller?.clientHeight ?? window.innerHeight;
     const next = rowWindow(top, height, rowPitch, count);
     setWin((cur) => (windowMoved(cur, next, count) ? next : cur));
-  }, [count]);
+  }, [count, listRef]);
 
   useEffect(() => {
     if (!windowed) return;
@@ -117,7 +125,7 @@ export function useWindowedRows(count: number) {
       target.removeEventListener("scroll", onScroll);
       ro?.disconnect();
     };
-  }, [windowed, measure]);
+  }, [windowed, measure, listRef]);
 
   // Rows have just been rendered, the first time or after a move: their real height is known now.
   useEffect(() => {
@@ -135,13 +143,12 @@ export function useWindowedRows(count: number) {
         list.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
       scroller.scrollTop += listTop + index * pitch - scroller.clientHeight / 2;
     },
-    [pitch],
+    [pitch, listRef],
   );
 
   const start = windowed ? Math.min(win.start, count) : 0;
   const end = windowed ? Math.min(Math.max(win.end, start), count) : count;
   return {
-    listRef,
     start,
     end,
     before: windowed ? start * pitch : 0,

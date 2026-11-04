@@ -1743,11 +1743,14 @@ export default function FileSystemScreen() {
     [entries, sort],
   );
   // A folder can hold 100,000 entries: only those near the screen are rendered.
-  const rowsWindow = useWindowedRows(sortedEntries.length);
+  const rowsListRef = useRef<HTMLUListElement | null>(null);
+  const { start: rowsStart, end: rowsEnd, before: rowsBefore, after: rowsAfter, scrollToRow } = useWindowedRows(
+    sortedEntries.length,
+    rowsListRef,
+  );
   useEffect(() => {
-    scrollToEntry.current = (name) =>
-      rowsWindow.scrollToRow(sortedEntries.findIndex((e) => e.name === name));
-  }, [rowsWindow.scrollToRow, sortedEntries]);
+    scrollToEntry.current = (name) => scrollToRow(sortedEntries.findIndex((e) => e.name === name));
+  }, [scrollToRow, sortedEntries]);
   // "Send to another console…" (#433): the items waiting for a console and folder.
   const [sendItems, setSendItems] = useState<SendItem[] | null>(null);
   // The console's own Files page: its pinned folders, and "Show on console".
@@ -4105,11 +4108,11 @@ export default function FileSystemScreen() {
             )}
 
             <ul
-              ref={rowsWindow.listRef}
+              ref={rowsListRef}
               className="grid gap-1.5"
-              style={{ paddingTop: rowsWindow.before, paddingBottom: rowsWindow.after }}
+              style={{ paddingTop: rowsBefore, paddingBottom: rowsAfter }}
             >
-              {sortedEntries.slice(rowsWindow.start, rowsWindow.end).map((e) => {
+              {sortedEntries.slice(rowsStart, rowsEnd).map((e) => {
                 const isDir = e.kind === "dir";
                 const Icon = isDir ? Folder : FileIcon;
                 const isRenaming = renaming === e.name;
