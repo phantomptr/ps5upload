@@ -52,6 +52,9 @@ mod bg_activity;
 // The JavaVM / Application context every Android JNI caller shares.
 #[cfg(target_os = "android")]
 mod android_jni;
+// Phones: stderr (the shell's and the engine's) to engine.log and logcat; panics to the same file.
+#[cfg(any(mobile, test))]
+mod mobile_log;
 // Quitting never hangs: the exit clean-up is time-boxed, children killed past it.
 #[cfg(desktop)]
 mod exit_guard;
@@ -267,6 +270,10 @@ pub fn run() {
                     }
                 }
             }
+
+            // Before the engine: its first lines go to the log file too.
+            #[cfg(mobile)]
+            mobile_log::start(app.handle());
 
             // Spawn the Rust engine binary as a sidecar. On failure we log and
             // keep the window open so the user can see diagnostic info — the
@@ -700,6 +707,9 @@ pub fn run() {
             // read). Harmless helpers on desktop.
             commands::local_list_dir,
             commands::local_storage_roots,
+            commands::local_downloads_dir,
+            commands::ios_inbox_sweep,
+            commands::ios_inbox_release,
             commands::storage_access_granted,
             commands::request_storage_access,
             // ── Background work (#457) ──────────────────────────────
@@ -746,6 +756,11 @@ pub fn run() {
         if let tauri::RunEvent::Reopen { .. } = &event {
             tray::show_main(_handle);
         }
+        // Back from the background: iOS may have reclaimed the engine's listening socket.
+        #[cfg(mobile)]
+        if let tauri::RunEvent::Resumed = &event {
+            tauri::async_runtime::spawn(engine::check_listener());
+        }
         if let tauri::RunEvent::Exit = event {
             // A downloaded update armed for the quit: its script waits for this process to end,
             // so it is started before the clean-up and never delays it.
@@ -776,4 +791,27 @@ pub fn run() {
             tauri::async_runtime::block_on(cleanup);
         }
     });
+}
+
+#[cfg(test)]
+mod profile_tests {
+    /// `panic = "abort"` in this package's release profile switches off every `catch_unwind` in
+    /// shipped builds, and `cargo test` ignores the setting, so no other test can notice.
+    #[test]
+    fn release_profile_keeps_unwinding() {
+        let manifest = include_str!("../Cargo.toml");
+        let profile = manifest
+            .split("[profile.release]")
+            .nth(1)
+            .expect("Cargo.toml has a release profile")
+            .split("\n[")
+            .next()
+            .unwrap();
+        assert!(
+            !profile
+                .lines()
+                .any(|l| l.trim_start().starts_with("panic") && l.contains("abort")),
+            "the release profile must not set panic = \"abort\""
+        );
+    }
 }

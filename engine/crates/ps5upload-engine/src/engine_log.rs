@@ -138,6 +138,15 @@ pub(crate) fn record(level: &'static str, mut msg: String) {
     // `stderr_sink`. try_send: if the parent is wedged and the queue is full,
     // drop the stderr mirror for this line rather than block the engine.
     let _ = stderr_sink().try_send(format!("[engine:{level}] ts={ts} {msg}"));
+    push(level, ts, msg);
+}
+
+/// Only the ring, not the stderr mirror: for a line the host has already written elsewhere.
+pub(crate) fn record_quiet(level: &'static str, msg: String) {
+    push(level, now_ms(), msg);
+}
+
+fn push(level: &'static str, ts: u64, msg: String) {
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let entry = LogEntry {
         seq,

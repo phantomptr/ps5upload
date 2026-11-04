@@ -213,7 +213,11 @@ opt-level = "s"
 # (~30 MB on Linux) and WebView2 (system-shared on Windows). If a
 # future size crunch ever justifies stripping, scope it to specific
 # packages via [profile.release.package.X] with `strip = true`.
-panic = "abort"
+#
+# No `panic = "abort"`: it would end the process before any `catch_unwind` or `Drop` runs. That
+# turned off the tray's guard on desktop and, because this profile builds the phone apps' whole
+# engine, every engine guard on phones (a panicking task took the app and its transfers down).
+# `cargo test` ignores the setting, so only `release_profile_keeps_unwinding` can see it.
 
 # No `unrar` here: UnRAR runs as the separate `ps5upload-unrar` program (built in
 # the engine workspace, embedded next to the engine by build.rs/engine.rs), never
