@@ -26,6 +26,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// of the two actually failed.
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 const SEND_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a refused :9021 is tried again before it counts as closed (see `connect_then`).
+const LOADER_REFUSED_RETRY: Duration = Duration::from_secs(8);
+const LOADER_REFUSED_POLL: Duration = Duration::from_millis(500);
 const PAYLOAD_SEND_MAX_BYTES: u64 = 128 * 1024 * 1024;
 const EMBEDDED_PAYLOAD_MAX_BYTES: u64 = 128 * 1024 * 1024;
 
@@ -290,42 +293,10 @@ async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, 
             .await
             .map_err(|e| format!("seek {path}: {e}"))?;
     }
-    // Best-effort old-payload eviction. When the user resends payload
-    // bytes to :9021, the PS5 ELF loader spawns a fresh process — but
-    // the OLD ps5upload payload is unaware and keeps running. The two
-    // contend for :9120 and the new bind fails, leaving the OLD
-    // payload still answering with whatever its (possibly stale)
-    // behaviour expects. Symptom users see: "I sent the payload but
-    // nothing changed." Send a node.shutdown to the existing helper
-    // first, give it a moment to free the port, THEN push the new
-    // ELF. No-op when nothing's listening on :9120 (first send of the
-    // session, console
-    // rebooted, etc) — shutdown_running_payload returns Ok(false)
-    // and we proceed normally.
-    //
-    // GATED on `sending_ps5upload`: we ONLY evict when the incoming ELF is
-    // itself a ps5upload payload (the only thing that contends for :9120).
-    // Loading a different-port daemon — e.g. the DPI installer (:9115) —
-    // leaves ps5upload running, so an install no longer drops the transfer
-    // connection. (On a single-payload loader the loader itself may still
-    // clobber ps5upload; that's outside our control, and the post-install
-    // payload restore — which IS a ps5upload send — cleans up the ports.)
-    if target_port == PS5_LOADER_PORT && sending_ps5upload {
-        let host = ip.to_string();
-        // Off the async runtime — the management call is blocking I/O.
-        let _ = tokio::task::spawn_blocking(move || {
-            ps5upload_core::payload_lifecycle::shutdown_running_payload(&host)
-        })
-        .await;
-        // Brief grace period for the OS to recycle :9120 after the
-        // old process exits. 600 ms is enough for the typical FreeBSD
-        // close-wait → unbind transition on the PS5 we've measured;
-        // anything more would noticeably slow the user-facing send.
-        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-    }
-
-    // A ps5upload helper is sent from memory so its AVA1 trust slot can be stamped.
-    let helper_bytes = if target_port == PS5_LOADER_PORT && sending_ps5upload {
+    // A ps5upload helper is sent from memory so its AVA1 trust slot can be stamped. Done before
+    // connecting: a connection the loader has taken must not wait on the engine.
+    let evict_helper = target_port == PS5_LOADER_PORT && sending_ps5upload;
+    let helper_bytes = if evict_helper {
         let mut v = Vec::with_capacity(size as usize);
         file.read_to_end(&mut v)
             .await
@@ -336,26 +307,31 @@ async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, 
         None
     };
 
-    // Resolve first, on the lookup budget, so a slow DNS answer for a host
-    // name does not eat the connect timeout (#272); then each address gets
-    // the full connect timeout, as `connect_probe` does.
-    let addr = format!("{ip}:{target_port}");
-    let targets = resolve_targets(ip, target_port).await?;
-    let mut stream = None;
-    let mut last = format!("connect {addr}: no addresses to try");
-    for sa in targets {
-        match timeout(CONNECT_TIMEOUT, TcpStream::connect(sa)).await {
-            Ok(Ok(s)) => {
-                stream = Some(s);
-                break;
-            }
-            Ok(Err(e)) => last = format!("connect {addr}: {e}"),
-            Err(_) => last = format!("connect {addr}: timeout"),
-        }
-    }
-    let Some(mut stream) = stream else {
-        return Err(last);
+    // When the user resends payload bytes to :9021, the PS5 ELF loader spawns a fresh process,
+    // but the OLD ps5upload payload is unaware and keeps running. The two contend for :9120.
+    // Symptom users see: "I sent the payload but nothing changed." So the running helper is asked
+    // to exit (best effort, no-op when nothing is listening).
+    //
+    // Only once the loader has taken the connection (see `connect_then`): a closed loader leaves
+    // the running helper alone.
+    //
+    // GATED on `evict_helper`: we ONLY evict when the incoming ELF is itself a ps5upload payload
+    // (the only thing that contends for :9120). Loading a different-port daemon, e.g. the DPI
+    // installer (:9115), leaves ps5upload running, so an install no longer drops the transfer
+    // connection. (On a single-payload loader the loader itself may still clobber ps5upload;
+    // that's outside our control, and the post-install payload restore, which IS a ps5upload
+    // send, cleans up the ports.)
+    let retry_refused = if target_port == PS5_LOADER_PORT {
+        LOADER_REFUSED_RETRY
+    } else {
+        Duration::ZERO
     };
+    let mut stream = connect_then(ip, target_port, retry_refused, async {
+        if evict_helper {
+            evict_running_helper(ip).await;
+        }
+    })
+    .await?;
     let sent = timeout(SEND_TIMEOUT, async {
         let mut buf = [0u8; 64 * 1024];
         let mut total = 0u64;
@@ -406,6 +382,72 @@ async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, 
     .await
     .map_err(|_| "send timed out".to_string())??;
     Ok(sent)
+}
+
+/// Connect to `ip:port`, retrying a refused connect for up to `retry_refused`, then run `before`
+/// and return the connection.
+///
+/// Why connect first: stopping the running helper and only then finding the loader closed left
+/// the console with neither, and the app with no way to bring either back. The caller writes the
+/// ELF on this same connection, so no bare connection is ever opened: a loader handed a
+/// connection and no bytes must not be left waiting on it. `before` is bounded (see
+/// `evict_running_helper`), well inside the patched elfldr's 15 s read deadline.
+///
+/// Why retry: elfldr leaves :9021 closed for about a second whenever it is replaced, and for 3 s
+/// after a failed accept. The engine's own loader sends wait on a lock for its swap; this socket
+/// is the desktop's own and cannot, so a send landing in that gap would fail (the auto-loader,
+/// or a playlist step). Only a refusal is retried: a timeout already took its full budget.
+async fn connect_then(
+    ip: &str,
+    port: u16,
+    retry_refused: Duration,
+    before: impl std::future::Future<Output = ()>,
+) -> Result<TcpStream, String> {
+    // Resolve first, on the lookup budget, so a slow DNS answer for a host
+    // name does not eat the connect timeout (#272); then each address gets
+    // the full connect timeout, as `connect_probe` does.
+    let addr = format!("{ip}:{port}");
+    let targets = resolve_targets(ip, port).await?;
+    let deadline = tokio::time::Instant::now() + retry_refused;
+    loop {
+        let mut last = format!("connect {addr}: no addresses to try");
+        let mut refused = false;
+        for sa in &targets {
+            match timeout(CONNECT_TIMEOUT, TcpStream::connect(sa)).await {
+                Ok(Ok(s)) => {
+                    before.await;
+                    return Ok(s);
+                }
+                Ok(Err(e)) => {
+                    refused = e.kind() == std::io::ErrorKind::ConnectionRefused;
+                    last = format!("connect {addr}: {e}");
+                }
+                Err(_) => {
+                    refused = false;
+                    last = format!("connect {addr}: timeout");
+                }
+            }
+        }
+        if !refused || tokio::time::Instant::now() >= deadline {
+            return Err(last);
+        }
+        tokio::time::sleep(LOADER_REFUSED_POLL).await;
+    }
+}
+
+/// Ask the running helper to exit, and give the port a moment to free. Bounded: the connection to
+/// the loader is waiting. An answer that comes later changes nothing, because a new helper that
+/// finds an old one alive takes over by itself.
+async fn evict_running_helper(ip: &str) {
+    use ps5upload_core::payload_lifecycle::{shutdown_running_payload, EVICT_BUDGET, EVICT_GRACE};
+    let host = ip.to_string();
+    // Off the async runtime: the management call is blocking I/O.
+    let _ = timeout(
+        EVICT_BUDGET,
+        tokio::task::spawn_blocking(move || shutdown_running_payload(&host)),
+    )
+    .await;
+    tokio::time::sleep(EVICT_GRACE).await;
 }
 
 /// Send an ELF (or other payload) to the PS5 payload loader. Matches
@@ -494,17 +536,9 @@ async fn payload_send_via_payload_manager(ip: &str, path: &str) -> Result<u64, S
         .await
         .map_err(|e| format!("read {path}: {e}"))?;
     stamp_ava1_trust(&mut bytes).await;
-    // Our own name, never the file's: Payload Manager files uploads under a
-    // folder derived from the name and its cleanup clears that folder, so a
-    // user's own "ps5upload" entry must not be the one we land in.
-    let name = "ps5upload-helper.elf".to_string();
     let (host, n) = (ip.to_string(), bytes.len() as u64);
     tokio::task::spawn_blocking(move || {
-        ps5upload_core::payload_manager::launch_elf(&host, &name, &bytes)?;
-        // Give it a moment to start before the stored copy goes.
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        ps5upload_core::payload_manager::forget(&host, &name);
-        Ok::<(), String>(())
+        ps5upload_core::payload_manager::launch_helper(&host, &bytes)
     })
     .await
     .map_err(|e| format!("launch task failed: {e}"))??;
@@ -1001,6 +1035,64 @@ mod payload_send_tests {
 
         let got = received.await.unwrap();
         assert_eq!(got, elf);
+    }
+
+    /// A closed loader must cost the console nothing: `before` (stopping the running helper)
+    /// runs only once the loader has taken the connection.
+    #[tokio::test]
+    async fn a_closed_loader_never_runs_the_eviction() {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let ran = std::sync::atomic::AtomicBool::new(false);
+        let err = connect_then("127.0.0.1", port, Duration::ZERO, async {
+            ran.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+        .await
+        .unwrap_err();
+        assert!(err.starts_with("connect "), "{err}");
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// The eviction runs with the connection already taken, and that connection carries the bytes.
+    #[tokio::test]
+    async fn evicts_with_the_connection_already_open() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut accepted = None;
+        let mut stream = connect_then("127.0.0.1", port, Duration::ZERO, async {
+            accepted = Some(listener.accept().await.unwrap().0);
+        })
+        .await
+        .unwrap();
+        stream.write_all(b"\x7FELF").await.unwrap();
+        stream.shutdown().await.unwrap();
+        let mut got = Vec::new();
+        accepted.unwrap().read_to_end(&mut got).await.unwrap();
+        assert_eq!(got, b"\x7FELF");
+    }
+
+    /// An elfldr swap closes :9021 for about a second: a send landing in that gap waits it out.
+    #[tokio::test]
+    async fn a_refused_connect_is_tried_again_within_the_window() {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let opens = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let l = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+            l.accept().await.unwrap();
+        });
+        connect_then("127.0.0.1", port, Duration::from_secs(5), async {})
+            .await
+            .expect("connects once the port opens");
+        opens.await.unwrap();
     }
 
     #[tokio::test]

@@ -13,13 +13,15 @@ export const LOOK_EVERY_MS = 5 * 60_000;
 /** At most this many addresses are asked about per look. */
 const MAX_CHECKS = 4;
 
-/** Time to look again? Only while the console is down, and not more often than `LOOK_EVERY_MS`. */
+/** Time to look again? Only while the console is down and not known to be asleep (its address is
+ *  fine then, and the scan is a sweep of the network), and not more often than `LOOK_EVERY_MS`. */
 export function shouldLook(
   status: "up" | "down" | "unknown",
   lastLookAt: number | undefined,
   now: number,
+  power?: string,
 ): boolean {
-  if (status !== "down") return false;
+  if (status !== "down" || power === "rest") return false;
   return lastLookAt === undefined || now - lastLookAt >= LOOK_EVERY_MS;
 }
 

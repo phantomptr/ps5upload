@@ -404,7 +404,10 @@ export default function SendPanel() {
                 clearSendBannerOnEdit();
               }}
               placeholder="192.168.1.50"
-              inputMode="decimal"
+              inputMode="url"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
             />
             <Input
               label={tr("sendpayload_port", undefined, "Port")}

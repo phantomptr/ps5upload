@@ -1,3 +1,4 @@
+import { useHelperReplaceGuard } from "./useHelperReplaceGuard";
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
@@ -273,12 +274,14 @@ export function PairingDialog() {
   const dismiss = usePairingStore((s) => s.dismiss);
   const host = usePairingStore((s) => s.host);
   const [sending, setSending] = useState(false);
+  const { guard, dialog: replaceDialog } = useHelperReplaceGuard();
   // The quickest way out of a closed pairing window: a helper this app sends pairs by itself,
   // so send it and ask again.
   // The web UI sends it too: the engine sends its own bundled helper (#415).
   const resend =
     host
       ? async () => {
+          if (!(await guard(host))) return;
           setSending(true);
           try {
             await sendHelperTo(host, tr);
@@ -289,23 +292,26 @@ export function PairingDialog() {
         }
       : undefined;
   return (
-    <Modal
-      open={open}
-      onClose={dismiss}
-      title={tr("pairing_title", undefined, "Pair with your PS5")}
-      size="sm"
-      closeOnScrim={false}
-    >
-      <PairingPanel
-        view={view}
-        busy={busy || sending}
-        error={error}
-        onResend={resend ? () => void resend() : undefined}
-        onConfirm={(code) => void confirm(code)}
-        onForget={() => void forgetAndPair()}
-        onRetry={() => void retry()}
-        onCancel={dismiss}
-      />
-    </Modal>
+    <>
+      {replaceDialog}
+      <Modal
+        open={open}
+        onClose={dismiss}
+        title={tr("pairing_title", undefined, "Pair with your PS5")}
+        size="sm"
+        closeOnScrim={false}
+      >
+        <PairingPanel
+          view={view}
+          busy={busy || sending}
+          error={error}
+          onResend={resend ? () => void resend() : undefined}
+          onConfirm={(code) => void confirm(code)}
+          onForget={() => void forgetAndPair()}
+          onRetry={() => void retry()}
+          onCancel={dismiss}
+        />
+      </Modal>
+    </>
   );
 }

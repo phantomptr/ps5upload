@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  addConsoleByAddress,
+  addressChoiceNeeded,
   profileNameForAddr,
   profileNameForHost,
   reorderProfiles,
@@ -132,6 +134,46 @@ describe("selectConsoleByAddress", () => {
     reset([profile({ id: "a", host: "192.168.0.5" })], "a");
     selectConsoleByAddress("   ");
     expect(useRosterStore.getState().profiles[0].host).toBe("192.168.0.5");
+  });
+});
+
+describe("an address the roster has not got", () => {
+  const A = "192.168.50.10";
+  const seen = (last_seen_at: number | null) =>
+    useRosterStore.setState({
+      profiles: [{ id: "a", name: "Living room", host: A, last_seen_at }],
+      active_id: "a",
+    });
+
+  it("asks when the active console has been seen: it may be a second PS5", () => {
+    seen(1_700_000_000);
+    expect(addressChoiceNeeded("192.168.50.11")).toBe(true);
+  });
+
+  it("does not ask for a console in the roster, whatever way it is written", () => {
+    seen(1_700_000_000);
+    expect(addressChoiceNeeded(A)).toBe(false);
+    expect(addressChoiceNeeded(`${A}:9021`)).toBe(false);
+    expect(addressChoiceNeeded(`http://${A}/`)).toBe(false);
+  });
+
+  it("just corrects a console that never answered: a typo has nothing to lose", () => {
+    seen(null);
+    expect(addressChoiceNeeded("192.168.50.11")).toBe(false);
+  });
+
+  it("adding keeps the first console in the roster", () => {
+    seen(1_700_000_000);
+    addConsoleByAddress("192.168.50.11:9021");
+    const { profiles, active_id } = useRosterStore.getState();
+    expect(profiles.map((p) => p.host)).toEqual([A, "192.168.50.11"]);
+    expect(profiles.find((p) => p.id === active_id)?.host).toBe("192.168.50.11");
+  });
+
+  it("selecting cleans the address first: a pasted URL never becomes a console called http", () => {
+    useRosterStore.setState({ profiles: [], active_id: null });
+    selectConsoleByAddress("http://192.168.50.12/");
+    expect(useRosterStore.getState().profiles.map((p) => p.host)).toEqual(["192.168.50.12"]);
   });
 });
 

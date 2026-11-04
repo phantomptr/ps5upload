@@ -4808,15 +4808,10 @@ export function humanizeJobErrorReason(
         "The PS5 sent a file list this app could not understand. Update the helper and this app to the same version, then retry.",
       );
     case "helper_not_ava1":
-      return isTauriEnv()
-        ? trStatic(
-            "joberr.helper_not_ava1",
-            "The PS5 helper is not running. Send it from the Connection screen, then retry.",
-          )
-        : trStatic(
-            "joberr.helper_not_ava1_web",
-            "The PS5 helper is not running. This web UI cannot send it: start the ps5upload payload on the console with your usual payload loader, then retry.",
-          );
+      return trStatic(
+        "joberr.helper_not_ava1",
+        "The PS5 helper is not running. Send it from the Connection screen, then retry.",
+      );
     case "ava1_not_paired":
     case "not_paired":
       return trStatic(
@@ -4836,7 +4831,7 @@ export function humanizeJobErrorReason(
     case "helper_not_running":
       return trStatic(
         "joberr.helper_not_running",
-        "No helper is running on the PS5. Send the helper first (Connection screen on the desktop app, or your payload loader), then retry.",
+        "No helper is running on the PS5. Send it from the Connection screen, then retry.",
       );
     case "tx_table_full":
       return trStatic(

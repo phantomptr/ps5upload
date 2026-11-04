@@ -188,7 +188,10 @@ export default function ConsoleTabs() {
               if (e.key === "Escape") setAdding(false);
             }}
             placeholder={tr("console_tab_ip", "PS5 IP")}
-            inputMode="decimal"
+            inputMode="url"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             className="w-28 rounded-full bg-[var(--color-surface)] px-3 py-1 text-sm outline-none"
           />
           <input

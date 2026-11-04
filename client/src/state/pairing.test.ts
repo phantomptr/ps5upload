@@ -175,7 +175,7 @@ describe("pairing store", () => {
     const s = usePairingStore.getState();
     expect(s.open).toBe(true);
     expect(s.view).toBeNull();
-    expect(s.error).toContain("unexpected");
+    expect(s.error).toContain("could not read");
     api.pairingStatus.mockResolvedValue(CODE);
     await s.retry();
     expect(usePairingStore.getState().view).toEqual(CODE);

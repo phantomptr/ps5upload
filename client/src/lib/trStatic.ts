@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import { useLangStore } from "../state/lang";
+import { useLangStore, type Translator } from "../state/lang";
 
 /**
  * Translate from a plain module (no React hook available).
@@ -25,3 +25,16 @@ export function trStatic(key: string, fallback: string): string {
     return fallback;
   }
 }
+
+/** `trStatic` in the shape of `useTr()`'s translator, for code shared with components. */
+export const staticTranslator: Translator = ((
+  key: string,
+  a?: Record<string, string | number> | string,
+  b?: string,
+) => {
+  const fallback = typeof a === "string" ? a : (b ?? key);
+  const text = trStatic(key, fallback);
+  return typeof a === "object"
+    ? Object.entries(a).reduce((out, [k, v]) => out.split(`{${k}}`).join(String(v)), text)
+    : text;
+}) as Translator;

@@ -1086,7 +1086,10 @@ function PlaylistCard({
                       undefined,
                       "default",
                     )}
-                    inputMode="decimal"
+                    inputMode="url"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
                     onChange={(e) =>
                       updateStep(playlist.id, i, {
                         ip: e.target.value.trim(),

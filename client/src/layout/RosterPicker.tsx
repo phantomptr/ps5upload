@@ -327,7 +327,10 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                         value={editHost}
                         onChange={(e) => setEditHost(e.target.value)}
                         placeholder="192.168.1.50"
-                        inputMode="decimal"
+                        inputMode="url"
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        spellCheck={false}
                         className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1"
                       />
                     </div>
@@ -475,7 +478,10 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                 value={newHost}
                 onChange={(e) => setNewHost(e.target.value)}
                 placeholder="192.168.1.50"
-                inputMode="decimal"
+                inputMode="url"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-xs"
               />
               <button
