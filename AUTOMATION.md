@@ -42,8 +42,22 @@ one is taken; the app's log says which).
 ```
 
 `host: null` (and `session: null`) means nothing is streaming. `attached` is whether an app page
-shows the stream now (a frame needs one). `session` changes every time a new stream starts; pass
-it to the other endpoints so a script never drives a session it did not mean to.
+shows the stream now (a frame needs one). `picture` is false while the picture is off on that page
+(see below; a frame needs it on). `session` changes every time a new stream starts; pass it to the
+other endpoints so a script never drives a session it did not mean to.
+
+### `POST /api/ps5/rp/picture`: the picture on this device
+
+```json
+{"host": "192.168.1.100", "session": 3, "on": false}
+```
+
+Off, the page gets no picture or sound, sends no controller and runs no decoder, for this session.
+Play Together guests, phones, the live feed (Go live, OBS) and instant replay carry on as before,
+and while Go live runs, friends are in or an invite is out, the session no longer needs a page at
+all. `on: true` brings it back without a restart: the page gets the codec headers again and the next
+keyframe. `session` is optional. Answers `{"ok": true, "session": 3, "picture": false}`, or 404
+`no_session`. While it is off, `GET /api/ps5/rp/frame` answers 409 `picture_off`.
 
 ### `GET /api/ps5/rp/frame`: the current picture
 

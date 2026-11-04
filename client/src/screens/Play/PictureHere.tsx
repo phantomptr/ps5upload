@@ -67,7 +67,7 @@ export function PlayOnTvNote() {
         {tr(
           "pt_tv_note",
           undefined,
-          "This stream is signed in as the PS5 user you paired with PS5Upload. Press PS on the console's DualSense and pick a different user: that is you on the TV. Picking the stream's own user ends the stream for everyone, friends included.",
+          "This stream is signed in as the PS5 user you paired with PS5Upload. Press PS on the console's DualSense and pick a different user: that is you on the TV. Picking the stream's own user ends the stream for everyone, friends included. Some games count the stream's user as a player too, which can leave one place less for a friend.",
         )}
       </Callout>
     </div>
