@@ -2,7 +2,7 @@
 // Convert and the queue use, with the start buttons; then the stage list while a run goes, then
 // the result with the actions that fit it. Every action targets the package the pipeline names.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 
 import { CheckCircle2, Circle, ListPlus, Loader2, Pause, Play, XCircle } from "lucide-react";
 
@@ -14,6 +14,7 @@ import type { InstallMethod, Pipeline, PipelineStage } from "../../state/fpkgCon
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
 import type { Task } from "../../state/tasks";
+import { ImageDestination } from "./ImageDestination";
 import type { ImageFormat } from "../../api/fpkg";
 import { overallProgress, stageRows, type StageRow } from "./stages";
 import { lz4Active, type Lz4Choice } from "./ImageOptions";
@@ -540,6 +541,7 @@ export function RunCard(props: RunCardProps) {
         {!p.deleted && makesImage(p.mode) && (
           <ImageUpload
             queued={!!p.uploadQueued}
+            dest={props.choice.dest}
             canUpload={props.canInstall && !!props.onUploadImage}
             onUpload={(deleteAfter) => props.onUploadImage?.(deleteAfter)}
             onOpen={props.onOpenUpload}
@@ -576,11 +578,13 @@ export function RunCard(props: RunCardProps) {
 /** A finished image: send it to the PS5 through the Upload queue. */
 function ImageUpload({
   queued,
+  dest,
   canUpload,
   onUpload,
   onOpen,
 }: {
   queued: boolean;
+  dest?: OutputChoiceProps["dest"];
   canUpload: boolean;
   onUpload: (deleteAfter: boolean) => void;
   onOpen?: () => void;
@@ -607,6 +611,7 @@ function ImageUpload({
   }
   return (
     <div className="flex flex-col gap-2">
+      {canUpload && dest && <ImageDestination {...dest} />}
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="primary" disabled={!canUpload} onClick={() => onUpload(deleteAfter)}>
           {tr("fpkg.uploadImage", undefined, "Upload to PS5")}
@@ -649,6 +654,8 @@ export interface OutputChoiceProps {
   canInstall: boolean;
   /** For a libSceAmpr game: the AMPR LZ4 asset-pack option of an .exfat image. */
   lz4?: Lz4Choice;
+  /** Where an image goes on the PS5, when one can be uploaded. */
+  dest?: ComponentProps<typeof ImageDestination>;
 }
 
 export function OutputChoice(c: OutputChoiceProps) {
@@ -699,6 +706,7 @@ export function OutputChoice(c: OutputChoiceProps) {
           />
         )}
       </div>
+      {image && c.then === "upload" && c.dest && <ImageDestination {...c.dest} />}
     </div>
   );
 }

@@ -235,6 +235,13 @@ const BLANK_DRAFT: UploadDraft = {
  *  no extra re-renders and the map survives as long as the app is open. */
 const draftStash = new Map<string, UploadDraft>();
 
+/** The drive picked for `host` on the Upload screen (each console has its own), or null. */
+export function destinationVolumeFor(host: string | null | undefined): string | null {
+  const key = draftKey(host);
+  if (key === draftKey(useConnectionStore.getState().host)) return useUploadStore.getState().destinationVolume;
+  return draftStash.get(key)?.destinationVolume ?? null;
+}
+
 const draftKey = (host: string | null | undefined): string =>
   hostOf(host ?? "") || "_unset_";
 

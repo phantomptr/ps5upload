@@ -273,6 +273,8 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/ps5/console-shares"),
     ("POST", "/api/ps5/console-shares/remove"),
     ("POST", "/api/ps5/console-shares/save"),
+    ("GET", "/api/ps5/console-tasks"),
+    ("POST", "/api/ps5/console-tasks/cancel"),
     ("POST", "/api/ps5/disk-usage"),
     ("GET", "/api/ps5/disk-usage/{id}"),
     ("POST", "/api/ps5/disk-usage/{id}/cancel"),

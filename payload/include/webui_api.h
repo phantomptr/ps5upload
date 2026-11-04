@@ -38,6 +38,14 @@ int webui_api_server_start(void);
  * confirmed Sony removal plus folder cleanup; -1 on any failure. */
 int webui_api_tile_off(void);
 
+/* The apps' view of what the console page started (mgmt console.tasks / console.task_cancel, #658).
+ * Reply JSON into out, its length. console.tasks: {"ok":true,"tasks":[console_tasks.h],"smb_jobs":
+ * [the SMB daemon's jobs, as /api/smb/jobs lists them],"now":<unix>}. console.task_cancel {"id":..},
+ * a hex job id of the page's or "smb:"<id>: {"ok":true} or {"ok":false,"err":"bad_job"|"unknown_job"|
+ * a daemon token}. A paired PC's job is not in the table, so it can be neither read nor stopped here. */
+int webui_console_tasks(char *out, size_t cap);
+int webui_console_task_cancel(const char *b, size_t n, char *out, size_t cap);
+
 /* At helper start, the tile was removed outside the helper (webui_tile_respect_outside_removal):
  * saves tile:false so the page and the PC show it off. No tile request. */
 void webui_api_tile_forget(void);

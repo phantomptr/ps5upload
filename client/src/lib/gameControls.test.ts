@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { IDLE_PAD, PadButton } from "./remotePlayStream";
 import {
   DEFAULT_CONTROLS,
+  L2_BIT,
   R2_BIT,
   applyControls,
   macroAt,
@@ -28,6 +29,25 @@ describe("per-game controls", () => {
     expect(applyControls(pad(held), c, none, st, 10).buttons).toBe(held);
     expect(applyControls(pad(held), c, none, st, 60).buttons).toBe(PadButton.R1);
     expect(applyControls(pad(held), c, none, st, 110).buttons).toBe(held);
+  });
+
+  it("tells the engine which buttons turbo presses only above 10 a second", () => {
+    const st = newControlsState();
+    const at = (turboHz: number, turbo: number = PadButton.CROSS) =>
+      applyControls(pad(PadButton.CROSS), ctl({ turbo, turboHz }), none, st, 10);
+    expect(at(10).turbo).toBeUndefined();
+    expect(at(11).turbo).toBe(PadButton.CROSS);
+    expect(at(30).turbo).toBe(PadButton.CROSS);
+    // L2 and R2 are not held by the engine: nothing to name.
+    expect(at(30, L2_BIT).turbo).toBeUndefined();
+    expect(at(30, 0).turbo).toBeUndefined();
+  });
+
+  it("at 30 a second a press and a release last about a frame each", () => {
+    const st = newControlsState();
+    const c = ctl({ turbo: PadButton.CROSS, turboHz: 30 });
+    const seen = [8, 25, 41, 58].map((t) => applyControls(pad(PadButton.CROSS), c, none, st, t).buttons);
+    expect(seen).toEqual([PadButton.CROSS, 0, PadButton.CROSS, 0]);
   });
 
   it("turns the mouse's movement into the right stick, fading when it stops", () => {
@@ -72,7 +92,7 @@ describe("per-game controls", () => {
   it("reads a stored profile safely", () => {
     expect(readControls(null)).toEqual(DEFAULT_CONTROLS);
     const r = readControls({ turboHz: 999, mouseSens: -1, macros: [{ key: "KeyE", steps: [{ buttons: 1, ms: 1 }] }, { nope: 1 }] });
-    expect(r.turboHz).toBe(10);
+    expect(r.turboHz).toBe(30);
     expect(r.mouseSens).toBe(0.1);
     expect(r.macros).toEqual([{ key: "KeyE", steps: [{ buttons: 1, ms: 16 }] }]);
   });

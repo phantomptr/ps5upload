@@ -5,7 +5,7 @@ import { fpkg } from "../api/fpkg";
 import { pipelinePhaseChanged, setConvertRunner, type ConvertItem } from "../state/convertQueue";
 import { useFpkgConversion } from "../state/fpkgConversion";
 import { pkgLibraryStore } from "../state/pkgLibrary";
-import { useUploadStore } from "../state/upload";
+import { destinationVolumeFor, useUploadStore } from "../state/upload";
 import { DEFAULT_IMAGE_SUBPATH } from "./imageUpload";
 
 /** Resolves once the pipeline is not running (a manual run started first finishes first). */
@@ -27,9 +27,12 @@ function outputOf(item: ConvertItem): string | undefined {
   return item.outputDir?.trim() || undefined;
 }
 
-function currentImageDest(): { volume: string | null; subpath: string } {
-  const u = useUploadStore.getState();
-  return { volume: u.destinationVolume, subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH };
+/** A game with no destination of its own: what is set for its console now. */
+function currentImageDest(host: string): { volume: string | null; subpath: string } {
+  return {
+    volume: destinationVolumeFor(host),
+    subpath: useUploadStore.getState().destinationSubpath || DEFAULT_IMAGE_SUBPATH,
+  };
 }
 
 /** How a pipeline run ended, for the queue. */
@@ -49,7 +52,7 @@ async function build(item: ConvertItem) {
     useFpkgConversion.setState({ pipeline: { ...left, attached: false } });
     const send = item.build?.kind === "image" && item.then !== "keep" && !!item.host;
     if (send) {
-      const dest = item.imageDest ?? currentImageDest();
+      const dest = item.imageDest ?? currentImageDest(item.host!);
       conv.uploadImage({ host: item.host!, volume: dest.volume, subpath: dest.subpath, deleteAfter: !!item.deleteAfterInstall });
     }
     return { ok: true, packagePath: left.packagePath, installed: !!item.build && item.build.kind !== "pkg" };
@@ -64,7 +67,7 @@ async function build(item: ConvertItem) {
     // A game image, in the format picked; sent on to the Upload queue when asked.
     const send = item.then !== "keep" && !!item.host;
     // A game changed to an image while it waited was added with no destination: the one set now.
-    const dest = send ? (item.imageDest ?? currentImageDest()) : null;
+    const dest = send ? (item.imageDest ?? currentImageDest(item.host!)) : null;
     await conv.buildImage(
       item.source,
       outputOf(item),

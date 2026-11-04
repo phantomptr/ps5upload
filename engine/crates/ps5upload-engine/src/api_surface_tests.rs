@@ -820,7 +820,9 @@ fn routes_in_source() -> Vec<String> {
             if p.is_dir() {
                 walk(&p, out);
             } else if p.extension().is_some_and(|x| x == "rs")
+                // Test routers and the MCP catalogue's own scanner, whose samples are not routes.
                 && !p.to_string_lossy().ends_with("_tests.rs")
+                && !p.file_name().is_some_and(|n| n == "tests.rs" || n == "catalog_routes.rs")
             {
                 out.push(p);
             }
@@ -837,7 +839,11 @@ fn routes_in_source() -> Vec<String> {
         for (i, _) in src.match_indices(".route(") {
             let rest = src[i + ".route(".len()..].trim_start();
             if let Some(lit) = rest.strip_prefix('"') {
-                routes.push(lit[..lit.find('"').unwrap()].to_string());
+                let path = &lit[..lit.find('"').unwrap()];
+                // Not a path: the text `".route("` itself, in a scanner like this one.
+                if path.starts_with('/') {
+                    routes.push(path.to_string());
+                }
             }
         }
     }

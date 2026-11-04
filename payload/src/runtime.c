@@ -352,6 +352,11 @@
 #define MGMT_FRAME_VPAD_OUTPUT_ACK 357u
 #define MGMT_FRAME_VPAD_STATUS 358u
 #define MGMT_FRAME_VPAD_STATUS_ACK 359u
+/* tasks started on the console page (console_tasks.c) */
+#define MGMT_FRAME_CONSOLE_TASKS 360u
+#define MGMT_FRAME_CONSOLE_TASKS_ACK 361u
+#define MGMT_FRAME_CONSOLE_TASK_CANCEL 362u
+#define MGMT_FRAME_CONSOLE_TASK_CANCEL_ACK 363u
 #define MGMT_FRAME_SDK_SCAN 214u
 #define MGMT_FRAME_SDK_SCAN_ACK 215u
 #define MGMT_FRAME_SDK_PATCH 216u
@@ -8384,6 +8389,30 @@ static int handle_smb_shares_save(runtime_state_t *state, const char *body, uint
 }
 static int handle_smb_shares_remove(runtime_state_t *state, const char *body, uint64_t body_len) {
     return smb_pc_reply(state, MGMT_FRAME_SMB_SHARES_REMOVE_ACK, webui_smb_pc_remove, body, body_len);
+}
+
+/* ── Tasks started on the console page, read by the apps (webui_api.c, #658) ─
+ * Only reads a table and the job lists; a refusal is {"ok":false,"err":..}. */
+#define CONSOLE_TASKS_OUT_MAX (128u * 1024u)
+
+static int handle_console_tasks(runtime_state_t *state) {
+    char *out;
+    int n, rc;
+    if (!state) return -1;
+    out = malloc(CONSOLE_TASKS_OUT_MAX);
+    if (!out) return mgmt_reply(MGMT_FRAME_ERROR, "out_of_memory", 13);
+    n = webui_console_tasks(out, CONSOLE_TASKS_OUT_MAX);
+    rc = mgmt_reply(MGMT_FRAME_CONSOLE_TASKS_ACK, out, (uint64_t)(n > 0 ? n : 0));
+    free(out);
+    return rc;
+}
+
+static int handle_console_task_cancel(runtime_state_t *state, const char *body, uint64_t body_len) {
+    char out[128];
+    int n;
+    if (!state || body_len > 1024u) return mgmt_reply(MGMT_FRAME_ERROR, "bad_request", 11);
+    n = webui_console_task_cancel(body ? body : "", (size_t)body_len, out, sizeof out);
+    return mgmt_reply(MGMT_FRAME_CONSOLE_TASK_CANCEL_ACK, out, (uint64_t)(n > 0 ? n : 0));
 }
 
 /* ── The devices that use this console (mesh.c) ─────────────────────────

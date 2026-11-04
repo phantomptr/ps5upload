@@ -86,7 +86,7 @@ describe("humanizePs5Error", () => {
     });
     it("maps the Android 501 body → unsupported copy", () => {
       expect(humanizePs5Error("RAR is not supported on this build")).toMatch(
-        /can't be opened on a phone/i,
+        /aren't supported on phones/i,
       );
     });
     it("maps an unsafe entry path → safety refusal copy", () => {
