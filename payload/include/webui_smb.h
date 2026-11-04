@@ -15,6 +15,7 @@
  *   /api/smb/copy {src,dest,overwrite}     -> {"job"}  one side "smb://<id>/<path>", the other a
  *       console path (checked against the helper's own read / write policy)
  *   /api/smb/delete {path}                 -> {"job"}  a file or folder tree on a share
+ *   /api/smb/rename {from,to}              -> {}  inside one folder, never over something (a Replace's swap)
  *   /api/smb/job {job} | /api/smb/cancel {job} | /api/smb/jobs
  * share = {"id","name","host","port","share","user","domain","start_path","has_password","path"}.
  * Errors: {"error":token}; a server that refused the sign-in is 403 smb_auth (never 401: the page
@@ -34,6 +35,7 @@ void webui_smb_stat(const char *b, size_t n, uint8_t *out, int fd);
 void webui_smb_mkdir(const char *b, size_t n, uint8_t *out, int fd);
 void webui_smb_copy(const char *b, size_t n, uint8_t *out, int fd);
 void webui_smb_delete(const char *b, size_t n, uint8_t *out, int fd);
+void webui_smb_rename(const char *b, size_t n, uint8_t *out, int fd);
 void webui_smb_job(const char *b, size_t n, uint8_t *out, int fd);
 void webui_smb_cancel(const char *b, size_t n, uint8_t *out, int fd);
 void webui_smb_jobs(const char *b, size_t n, uint8_t *out, int fd);

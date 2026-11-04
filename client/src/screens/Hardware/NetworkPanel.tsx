@@ -79,16 +79,16 @@ export default function NetworkPanel({ mgmtAddr }: { mgmtAddr: string }) {
         <table className="w-full min-w-[420px] text-xs">
           <thead className="text-[var(--color-muted)]">
             <tr>
-              <th className="px-1 py-0.5 text-left">
+              <th className="px-1 py-0.5 text-start">
                 {tr("network_panel_name", undefined, "Name")}
               </th>
-              <th className="px-1 py-0.5 text-left">
+              <th className="px-1 py-0.5 text-start">
                 {tr("network_panel_ipv4", undefined, "IPv4")}
               </th>
-              <th className="px-1 py-0.5 text-left">
+              <th className="px-1 py-0.5 text-start">
                 {tr("network_panel_mac", undefined, "MAC")}
               </th>
-              <th className="px-1 py-0.5 text-right">
+              <th className="px-1 py-0.5 text-end">
                 {tr("network_panel_mtu", undefined, "MTU")}
               </th>
             </tr>
@@ -102,7 +102,7 @@ export default function NetworkPanel({ mgmtAddr }: { mgmtAddr: string }) {
                 <td className="px-1 py-0.5">{i.name}</td>
                 <td className="px-1 py-0.5">{i.ipv4}</td>
                 <td className="px-1 py-0.5 text-xs">{i.mac}</td>
-                <td className="px-1 py-0.5 text-right tabular-nums">
+                <td className="px-1 py-0.5 text-end tabular-nums">
                   {i.mtu}
                 </td>
               </tr>

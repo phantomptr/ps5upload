@@ -45,7 +45,7 @@ function Requirements() {
     <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)]">
       <button
         type="button"
-        className="flex w-full items-center gap-1.5 p-2 text-left text-xs text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+        className="flex w-full items-center gap-1.5 p-2 text-start text-xs text-[var(--color-muted)] hover:text-[var(--color-fg)]"
         onClick={() => setOpen((v) => !v)}
       >
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} className="rtl:rotate-180" />}

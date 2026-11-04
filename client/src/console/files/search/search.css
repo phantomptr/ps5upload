@@ -9,10 +9,10 @@
 }
 .cw-search-scope {
   display: inline-flex;
-  margin-left: 0.4rem;
+  margin-inline-start: 0.4rem;
 }
 .cw-search-scope .cw-button {
-  margin-right: 0.4rem;
+  margin-inline-end: 0.4rem;
 }
 .cw-search-scope [aria-pressed="true"] {
   background: var(--color-accent-soft);
@@ -59,7 +59,7 @@
 .cw-usage-size {
   flex: none;
   width: 7.5rem;
-  text-align: right;
+  text-align: end;
 }
 .cw-usage-path {
   flex: 1 1 auto;
@@ -73,7 +73,7 @@
   flex: none;
   box-sizing: border-box;
   width: 2.8rem;
-  margin-left: 0.4rem;
+  margin-inline-start: 0.4rem;
   padding: 0.3rem 0;
   justify-content: center;
 }

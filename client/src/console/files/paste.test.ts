@@ -129,31 +129,37 @@ describe("paste conflicts", () => {
     ]);
   });
 
-  it("replace on a folder deletes it (and waits) before the copy: overwrite would merge", async () => {
+  it("replace on a folder copies beside it first, swaps, then deletes the old one: overwrite would merge", async () => {
     fakeConsole({ "/data/a/G": "dir", "/data/b/G": "dir" });
     const a = answers({ choice: "replace", all: false });
     const waited: string[] = [];
-    await pasteItems([{ path: "/data/a/G", dir: true }], "/data/b", "copy", { decide: a.decide }, {
+    const r = await pasteItems([{ path: "/data/a/G", dir: true }], "/data/b", "copy", { decide: a.decide }, {
       waitJob: async (id) => {
         waited.push(id);
         return "done";
       },
     });
     expect(routes()).toEqual([
-      '/api/fs/delete {"path":"/data/b/G"}',
-      '/api/fs/copy {"src":"/data/a/G","dest":"/data/b/G","move":false}',
+      '/api/fs/copy {"src":"/data/a/G","dest":"/data/b/G.ps5u-new","move":false}',
+      '/api/fs/rename {"from":"/data/b/G","to":"/data/b/G.ps5u-old"}',
+      '/api/fs/rename {"from":"/data/b/G.ps5u-new","to":"/data/b/G"}',
+      '/api/fs/delete {"path":"/data/b/G.ps5u-old"}',
     ]);
-    expect(waited).toEqual(["del1", "job2"]);
+    expect(waited).toEqual(["job1", "del2"]);
+    expect(r.done).toEqual(["/data/a/G"]);
+    expect(r.notes).toEqual([]);
   });
 
-  it("a failed replace delete fails the item; nothing is copied", async () => {
-    fakeConsole({ "/data/a/G": "dir", "/data/b/G": "dir" });
+  it("a failed replace copy fails the item; the old folder is never touched", async () => {
+    const fs = fakeConsole({ "/data/a/G": "dir", "/data/b/G": "dir" });
     const a = answers({ choice: "replace", all: false });
     const r = await pasteItems([{ path: "/data/a/G", dir: true }], "/data/b", "copy", { decide: a.decide }, {
       waitJob: async () => "failed",
     });
-    expect(routes()).toEqual(['/api/fs/delete {"path":"/data/b/G"}']);
+    expect(routes().filter((x) => x.includes('"/data/b/G"'))).toEqual([]);
+    expect(fs["/data/b/G"]).toBe("dir");
     expect(r.failed.map((f) => f.item)).toEqual(["/data/a/G"]);
+    expect(r.done).toEqual([]);
   });
 
   it("apply to all answers the later conflicts without asking", async () => {
@@ -215,16 +221,20 @@ describe("cut", () => {
     ]);
   });
 
-  it("replace on the same drive: delete, then rename (rename never overwrites)", async () => {
+  it("replace on the same drive: rename beside it, swap, then delete the old one (rename never overwrites)", async () => {
     fakeConsole({ "/data/a/x.txt": "file", "/data/b/x.txt": "file" });
-    await pasteItems([{ path: "/data/a/x.txt", dir: false }], "/data/b", "cut", {
+    const r = await pasteItems([{ path: "/data/a/x.txt", dir: false }], "/data/b", "cut", {
       decide: answers({ choice: "replace", all: false }).decide,
       volumes: VOLS,
     });
     expect(routes()).toEqual([
-      '/api/fs/delete {"path":"/data/b/x.txt"}',
-      '/api/fs/rename {"from":"/data/a/x.txt","to":"/data/b/x.txt"}',
+      '/api/fs/rename {"from":"/data/a/x.txt","to":"/data/b/x.txt.ps5u-new"}',
+      '/api/fs/rename {"from":"/data/b/x.txt","to":"/data/b/x.txt.ps5u-old"}',
+      '/api/fs/rename {"from":"/data/b/x.txt.ps5u-new","to":"/data/b/x.txt"}',
+      '/api/fs/delete {"path":"/data/b/x.txt.ps5u-old"}',
     ]);
+    expect(r.moved).toEqual(["/data/a/x.txt"]);
+    expect(r.done).toEqual(["/data/a/x.txt"]);
   });
 
   it("replace of a file across drives: move job with overwrite", async () => {
@@ -284,14 +294,19 @@ describe("stop", () => {
     expect(r.done).toEqual(["/data/a/1"]);
   });
 
-  it("stop while a replace delete runs: that item is not pasted", async () => {
-    fakeConsole({ "/data/a/G": "dir", "/data/b/G": "dir" });
+  it("stop while a replace copies: that item is not pasted, the old one is as it was", async () => {
+    const fs = fakeConsole({ "/data/a/G": "dir", "/data/b/G": "dir" });
     const r = await pasteItems([{ path: "/data/a/G", dir: true }], "/data/b", "copy", {
       decide: answers({ choice: "replace", all: false }).decide,
-    }, { waitJob: async () => "left" });
-    expect(routes()).toEqual(['/api/fs/delete {"path":"/data/b/G"}']);
+    }, { waitJob: async (_, unstoppable) => (unstoppable ? "done" : "cancelled") });
+    expect(routes()).toEqual([
+      '/api/fs/copy {"src":"/data/a/G","dest":"/data/b/G.ps5u-new","move":false}',
+      '/api/fs/delete {"path":"/data/b/G.ps5u-new"}',
+    ]);
     expect(r.skipped).toEqual(["/data/a/G"]);
     expect(r.done).toEqual([]);
+    expect(fs["/data/b/G"]).toBe("dir");
+    expect(fs["/data/b/G.ps5u-new"]).toBeUndefined();
   });
 });
 
@@ -427,13 +442,37 @@ describe("Stop leaves a job running", () => {
     expect(r.done).toEqual([]);
   });
 
-  it("Stop during a replace delete is reported as halted", async () => {
+  it("Stop during a replace's copy is reported as halted", async () => {
     fakeConsole({ "/data/a/G": "dir", "/data/b/G": "dir" });
     const r = await pasteItems([{ path: "/data/a/G", dir: true }], "/data/b", "copy", {
       decide: answers({ choice: "replace", all: false }).decide,
-    }, { waitJob: async () => "left" });
+    }, { waitJob: async () => "cancelled" });
     expect(r.halted).toEqual(["/data/a/G"]);
     expect(r.left).toEqual([]);
+  });
+
+  it("a plain copy Stop cancelled is not done (a cut stays in the clipboard) and says so", async () => {
+    fakeConsole({ "/mnt/usb0/G": "dir", "/mnt/usb0/H": "dir" });
+    let stop = false;
+    const r = await pasteItems(
+      [
+        { path: "/mnt/usb0/G", dir: true },
+        { path: "/mnt/usb0/H", dir: true },
+      ],
+      "/data/b",
+      "cut",
+      { decide: answers().decide, volumes: VOLS },
+      {
+        stopped: () => stop,
+        waitJob: async () => {
+          stop = true;
+          return "cancelled";
+        },
+      },
+    );
+    expect(r.cancelled).toEqual(["/mnt/usb0/G"]);
+    expect(r.skipped).toEqual(["/mnt/usb0/H"]);
+    expect(r.done).toEqual([]);
   });
 
   it("Stop / Files closing answers a waiting conflict with Skip for the rest", async () => {

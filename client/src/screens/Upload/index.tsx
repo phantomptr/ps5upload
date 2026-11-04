@@ -1857,7 +1857,7 @@ function Step2Options(props: {
             (possibly long) console name into the button label. Auto-hides for
             single-console users. Pushed to the left; actions stay right. */}
         {multiConsole && (
-          <span className="mr-auto inline-flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
+          <span className="me-auto inline-flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
             {tr("upload_target_label", "Uploading to")}
             <ConsoleChip addr={stepHost} />
           </span>
@@ -2130,7 +2130,7 @@ const ACTION_PRIMARY =
 
 /** The upload confirm's choices: one shape for all, the primary one filled with the accent. */
 const DIALOG_OPTION =
-  "flex items-start gap-3 rounded-[var(--radius-card)] border p-3.5 text-left text-sm transition";
+  "flex items-start gap-3 rounded-[var(--radius-card)] border p-3.5 text-start text-sm transition";
 const DIALOG_PRIMARY =
   "border-transparent bg-[image:var(--accent-fill)] text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105";
 const DIALOG_PLAIN =
@@ -2633,7 +2633,7 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
                   "Next: open the game in Games and, under On the PS5's drives, add it to the home screen or mount it.",
                 )}
           </span>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ms-auto flex items-center gap-2">
             {!phase.registeredAs && (
               <Button
                 variant="primary"
@@ -3106,7 +3106,7 @@ function PreflightEtaBanner({
           )}
         </span>
         {eta.throughputDefaulted && (
-          <span className="ml-2 italic">
+          <span className="ms-2 italic">
             (
             {tr(
               "upload_eta_default_qualifier",
@@ -3139,7 +3139,7 @@ function PreflightEtaBanner({
       <div className="mb-2 text-xs uppercase tracking-wide text-[var(--color-muted)]">
         {tr("upload_eta_section_title", undefined, "Estimated time")}
         {eta.throughputDefaulted && (
-          <span className="ml-2 normal-case tracking-normal italic">
+          <span className="ms-2 normal-case tracking-normal italic">
             (
             {tr(
               "upload_eta_default_qualifier",
@@ -3153,26 +3153,26 @@ function PreflightEtaBanner({
       <table className="text-xs">
         <tbody>
           <tr>
-            <td className="pr-3 text-[var(--color-muted)]">
+            <td className="pe-3 text-[var(--color-muted)]">
               {tr("upload_eta_row_transfer", undefined, "Transfer")}
             </td>
-            <td className="pr-3 tabular-nums">
+            <td className="pe-3 tabular-nums">
               ≈ {formatEtaSeconds(eta.transferSeconds)}
             </td>
           </tr>
           <tr>
-            <td className="pr-3 text-[var(--color-muted)]">
+            <td className="pe-3 text-[var(--color-muted)]">
               {tr("upload_eta_row_commit", undefined, "PS5 commit")}
             </td>
-            <td className="pr-3 tabular-nums">
+            <td className="pe-3 tabular-nums">
               ≈ {formatEtaSeconds(eta.commitSeconds)}
             </td>
           </tr>
           <tr className="border-t border-[var(--color-border)]">
-            <td className="pr-3 pt-1 font-medium">
+            <td className="pe-3 pt-1 font-medium">
               {tr("upload_eta_row_total", undefined, "Total")}
             </td>
-            <td className="pr-3 pt-1 font-medium tabular-nums">
+            <td className="pe-3 pt-1 font-medium tabular-nums">
               ≈ {formatEtaSeconds(eta.totalSeconds)}
             </td>
           </tr>
@@ -3622,7 +3622,7 @@ function ArchiveExtractModeCard({
               data-testid={`archive-mode-${opt.value}`}
               onClick={() => onChange(opt.value)}
               className={
-                "flex items-start gap-3 rounded-[var(--radius-card)] border p-3.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 " +
+                "flex items-start gap-3 rounded-[var(--radius-card)] border p-3.5 text-start transition-colors disabled:cursor-not-allowed disabled:opacity-50 " +
                 (selected
                   ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
                   : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]")
@@ -3795,7 +3795,7 @@ function MountAfterUploadCard({
           PS5 from silently writing save-data back into the image and
           corrupting it on next mount. */}
       <Toggle
-        className={`mt-3 ml-6 ${checked ? "" : "opacity-50"}`}
+        className={`mt-3 ms-6 ${checked ? "" : "opacity-50"}`}
         checked={readOnly}
         disabled={!checked}
         onChange={(c) => onChangeReadOnly(c)}
@@ -4140,7 +4140,7 @@ function ModeRadio({
         />
         <span className="font-medium">{label}</span>
       </div>
-      <div className="mt-0.5 pl-6 text-xs text-[var(--color-muted)]">
+      <div className="mt-0.5 ps-6 text-xs text-[var(--color-muted)]">
         {hint}
       </div>
     </label>

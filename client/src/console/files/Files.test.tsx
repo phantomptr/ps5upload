@@ -13,7 +13,7 @@ import { t } from "../strings";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ActionsSheet } from "./ActionsSheet";
 import { DirList } from "./DirList";
-import { batchMessage, failedNamesIn, filesErrorText, FilesView, pasteMessage, upFrom, viewKind, type FilesViewProps } from "./Files";
+import { batchMessage, busyText, failedNamesIn, filesErrorText, FilesView, pasteMessage, upFrom, viewKind, type FilesViewProps } from "./Files";
 import { clearClipboard, getClipboard, setClipboard } from "./clipboard";
 import { ConflictDialog } from "./ConflictDialog";
 import { IntoItselfError, renameEntry } from "./move";
@@ -210,12 +210,28 @@ describe("Files", () => {
     expect(elements(FilesView(stopping)).some((e) => e.props["data-action"] === "stop-batch")).toBe(false);
   });
 
+  it("a single copy, move or delete can be stopped too: Stop cancels the item running", () => {
+    for (const op of ["copy", "move", "delete", "chmod"] as const) {
+      const p = props({ busy: { op, at: 1, total: 1, stopping: false, cancels: true }, onStopBatch: vi.fn() });
+      expect(elements(FilesView(p)).some((e) => e.props["data-action"] === "stop-batch"), op).toBe(true);
+    }
+    // What it says while the job stops: the copy by name, the others in general, never "after this item".
+    expect(busyText({ op: "copy", at: 1, total: 1, stopping: true, cancels: true })).toBe(t("cw_files_smb_stopping"));
+    expect(busyText({ op: "delete", at: 1, total: 1, stopping: true, cancels: true })).toBe(t("cw_files_batch_cancelling"));
+    expect(busyText({ op: "move", at: 1, total: 3, stopping: true, cancels: true })).toBe(t("cw_files_batch_cancelling"));
+  });
+
   it("a finished batch says what failed, what a stop left out, else done", () => {
     const r = { started: [], moved: [], failed: [], jobFailed: [], skipped: [] };
     expect(batchMessage(r)).toEqual({ tone: "info", text: t("cw_files_done") });
     expect(batchMessage({ ...r, jobFailed: ["/a"] })?.text).toBe(t("cw_files_batch_failed", { n: 1 }));
     expect(batchMessage({ ...r, skipped: ["/a", "/b"] })?.text).toBe(t("cw_files_batch_stopped", { n: 2 }));
     expect(batchMessage({ ...r, failed: [{ item: "/a", error: new ApiError(403, "x") }] })?.tone).toBe("error");
+    // Stop cancelled the one running: it is named (it may be partly done), the rest counted.
+    expect(batchMessage({ ...r, cancelled: ["/data/G"] })).toEqual({ tone: "info", text: t("cw_files_batch_cut_short", { name: "G" }) });
+    expect(batchMessage({ ...r, cancelled: ["/data/G"], skipped: ["/data/H", "/data/I"] })?.text).toBe(
+      `${t("cw_files_batch_cut_short", { name: "G" })} ${t("cw_files_batch_stopped", { n: 2 })}`,
+    );
   });
 
   it("only images and text open in the viewer", () => {
@@ -379,6 +395,10 @@ describe("Files listing controls", () => {
     );
     expect(self).not.toContain('data-conflict="replace"');
     expect(self).not.toContain('data-action="conflict-all"');
+    // Confirming Replace: the dialog stays mounted under the confirm (○ returns to Replace).
+    const asked = renderToStaticMarkup(<ConflictDialog conflict={conflict} onAnswer={vi.fn()} asking />);
+    expect(asked).toContain('data-conflict="replace"');
+    expect(asked.indexOf('data-conflict="replace"')).toBeLessThan(asked.indexOf('role="alertdialog"'));
   });
 
   it("paste messages: skipped, already here, failures", () => {
@@ -390,8 +410,7 @@ describe("Files listing controls", () => {
     expect(pasteMessage({ ...base, failed: [{ item: "/a", error: new IntoItselfError("/a") }] })?.text).toContain(
       t("cw_files_err_into_itself"),
     );
-    expect(filesErrorText(new ApiError(500, "replace_delete_failed"))).toBe(t("cw_files_replace_failed"));
-    // Stop during a Replace's delete: that item is named, the rest counted.
+    // Stop during a Replace's copy: that item is named, the rest counted.
     expect(pasteMessage({ ...base, halted: ["/data/a/G"], skipped: ["/data/a/G"] })?.text).toBe(
       t("cw_files_paste_halted", { name: "G" }),
     );

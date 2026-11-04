@@ -631,7 +631,7 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
 
         {loading && items === null && (
           <div className="mt-4 text-center text-xs text-[var(--color-muted)]">
-            <Spinner size={12} className="mr-2 inline" />
+            <Spinner size={12} className="me-2 inline" />
             {tr("screenshots_loading", undefined, "Reading screenshots…")}
           </div>
         )}

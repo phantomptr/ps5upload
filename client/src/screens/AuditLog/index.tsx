@@ -65,16 +65,16 @@ export default function AuditLogScreen({ embedded = false }: { embedded?: boolea
           <table className="w-full min-w-[480px] text-xs">
             <thead className="glass-bar sticky top-0 text-xs uppercase tracking-wide text-[var(--color-muted)]">
               <tr>
-                <th className="px-4 py-2.5 text-left font-semibold">
+                <th className="px-4 py-2.5 text-start font-semibold">
                   {tr("audit_when", undefined, "When")}
                 </th>
-                <th className="px-4 py-2.5 text-left font-semibold">
+                <th className="px-4 py-2.5 text-start font-semibold">
                   {tr("audit_kind", undefined, "Action")}
                 </th>
-                <th className="px-4 py-2.5 text-left font-semibold">
+                <th className="px-4 py-2.5 text-start font-semibold">
                   {tr("audit_what", undefined, "Detail")}
                 </th>
-                <th className="px-4 py-2.5 text-left font-semibold">
+                <th className="px-4 py-2.5 text-start font-semibold">
                   {tr("audit_context", undefined, "Context")}
                 </th>
               </tr>

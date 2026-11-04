@@ -133,7 +133,7 @@ export default function NotificationInbox({
         {unread > 0 && (
           <span
             data-testid="notifications-badge"
-            className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--color-bad)] px-1 text-[10px] font-semibold tabular-nums text-[var(--color-accent-contrast)]"
+            className="absolute -end-0.5 -top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--color-bad)] px-1 text-[10px] font-semibold tabular-nums text-[var(--color-accent-contrast)]"
             title={unreadLabel}
           >
             {unread > 9 ? "9+" : unread}

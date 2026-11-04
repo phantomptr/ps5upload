@@ -207,7 +207,7 @@ export default function PowerControl({ host }: { host: string }) {
         <Power size={15} className="text-[var(--color-accent-bright)]" />
         {tr("power_control_title", undefined, "PS5 power")}
         {power !== "awake" ? (
-          <span className="ml-auto text-xs font-normal text-[var(--color-muted)]">
+          <span className="ms-auto text-xs font-normal text-[var(--color-muted)]">
             {asleep
               ? tr("status_ps5_rest_mode", undefined, "In rest mode")
               : tr("status_ps5_not_answering", undefined, "Not answering")}

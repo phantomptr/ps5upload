@@ -255,7 +255,7 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
                     key={g.titleId}
                     type="button"
                     onClick={() => void searchFor(g.titleId)}
-                    className="flex w-full items-center justify-between gap-3 border-b border-[var(--color-border)] px-3 py-2 text-left last:border-b-0 hover:bg-[var(--color-surface-2)]"
+                    className="flex w-full items-center justify-between gap-3 border-b border-[var(--color-border)] px-3 py-2 text-start last:border-b-0 hover:bg-[var(--color-surface-2)]"
                   >
                     <GameIcon host={hostOf(addr)} titleId={g.titleId} size={28} />
                     <span className="min-w-0 flex-1 truncate text-sm">

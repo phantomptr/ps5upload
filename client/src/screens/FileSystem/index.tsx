@@ -3408,7 +3408,7 @@ export default function FileSystemScreen() {
               + accent border so they stand out. The active drive is highlighted. */}
           {volumes && volumes.length > 0 && (
             <div className="mb-2 flex items-center gap-1 text-xs max-sm:overflow-x-auto sm:flex-wrap sm:gap-1.5">
-              <span className="mr-0.5 inline-flex items-center gap-1 text-[var(--color-muted)] max-sm:sr-only">
+              <span className="me-0.5 inline-flex items-center gap-1 text-[var(--color-muted)] max-sm:sr-only">
                 <HardDrive size={12} />
                 {tr("fs_drives_label", undefined, "Drives")}
               </span>
@@ -3579,7 +3579,7 @@ export default function FileSystemScreen() {
                     type="button"
                     onClick={() => setPathDraft(path)}
                     title={tr("fs_go_to_path", undefined, "Go to path")}
-                    className="ml-1 shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+                    className="ms-1 shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
                   >
                     <Pencil size={12} />
                   </button>
@@ -3632,7 +3632,7 @@ export default function FileSystemScreen() {
                   ? ` ${tr("fs_from", undefined, "from")} ${clipboard.sourceLabel}`
                   : ""}
               </span>
-              <div className="ml-auto flex items-center gap-1">
+              <div className="ms-auto flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => void runPaste()}
@@ -3829,7 +3829,7 @@ export default function FileSystemScreen() {
               {uploadQueue.items.map((item) => (
                 <div key={item.id} className="mt-2 flex items-center gap-2">
                   <span className="min-w-0 flex-1 break-all">
-                    {item.paused && <span className="mr-1 rounded bg-[var(--color-warn)]/15 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-[var(--color-warn)]" data-testid="fs-upload-paused">{tr("queue_paused", undefined, "Paused")}</span>}
+                    {item.paused && <span className="me-1 rounded bg-[var(--color-warn)]/15 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-[var(--color-warn)]" data-testid="fs-upload-paused">{tr("queue_paused", undefined, "Paused")}</span>}
                     {item.request.steps?.flatMap((s) => s.kind === "list" ? s.files.map((f) => f.name) : [s.name]).join(", ")} → {item.request.destDir}
                     {item.paused === "sendNow" && <span className="block text-[var(--color-muted)]">{tr("queue_paused_for_send_now", undefined, "Paused for a Send now. It carries on by itself after.")}</span>}
                     {item.error && <span className="block text-[var(--color-bad)]">{humanizePs5Error(item.error) || item.error}</span>}
@@ -4122,7 +4122,7 @@ export default function FileSystemScreen() {
                     `${entries.length} item${entries.length === 1 ? "" : "s"}`,
                   )}
                 </span>
-                <span className="ml-auto flex items-center gap-1">
+                <span className="ms-auto flex items-center gap-1">
                   {(
                     [
                       ["name", tr("fs_sort_name", undefined, "Name")],
@@ -4214,7 +4214,7 @@ export default function FileSystemScreen() {
                         }}
                         title={e.name}
                         className={
-                          "min-w-0 flex-1 truncate text-left text-sm " +
+                          "min-w-0 flex-1 truncate text-start text-sm " +
                           (isDir ? "font-medium hover:text-[var(--color-accent)]" : "")
                         }
                         disabled={!isDir}
@@ -4454,7 +4454,7 @@ function UploadProgressDetail({
             data-testid="fs-upload-pause"
             onClick={onPause}
             title={tr("queue_pause_tip", undefined, "Pause: keeps what is sent and lets the next item go")}
-            className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ml-auto px-3 py-1"
+            className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ms-auto px-3 py-1"
           >
             {tr("queue_pause", undefined, "Pause")}
           </button>
@@ -4462,7 +4462,7 @@ function UploadProgressDetail({
         <button
           type="button"
           onClick={onCancel}
-          className={`rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-1 ${onPause ? "" : "ml-auto"}`}
+          className={`rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-1 ${onPause ? "" : "ms-auto"}`}
         >
           {tr("cancel", undefined, "Cancel")}
         </button>
@@ -4587,7 +4587,7 @@ function BulkOpBanner({
           onClick={() => useFsBulkOpStore.getState().requestCancel(host)}
           disabled={cancelRequested}
           data-testid="fs-bulk-cancel"
-          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ml-auto px-3 py-1 text-xs disabled:opacity-50"
+          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ms-auto px-3 py-1 text-xs disabled:opacity-50"
           title={
             op === "delete"
               ? tr(
@@ -4759,7 +4759,7 @@ function DownloadOpBanner({
         <button
           type="button"
           onClick={() => useFsDownloadOpStore.getState().requestStop(host)}
-          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ml-auto px-3 py-1 text-xs"
+          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ms-auto px-3 py-1 text-xs"
           title={tr(
             "fs_download_stop_tooltip",
             undefined,

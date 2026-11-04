@@ -30,7 +30,7 @@ export function CaptureToolbar({
         {loading && <Spinner size={14} tone="accent" className="mt-1 shrink-0" />}
         <span className="min-w-0 flex-1">{description}</span>
       </p>
-      {right && <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">{right}</div>}
+      {right && <div className="ms-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">{right}</div>}
     </div>
   );
 }

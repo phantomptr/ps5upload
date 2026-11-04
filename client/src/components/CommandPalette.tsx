@@ -574,7 +574,7 @@ export function CommandPalette() {
                       tabIndex={-1}
                       onMouseEnter={() => setActiveIdx(flatIdx)}
                       onClick={() => void c.run()}
-                      className={`flex w-full items-center gap-2 rounded-full px-4 py-2 text-left text-sm ${
+                      className={`flex w-full items-center gap-2 rounded-full px-4 py-2 text-start text-sm ${
                         isActive
                           ? "bg-[var(--color-accent-soft)] font-medium text-[var(--color-text)]"
                           : "hover:bg-[var(--color-surface-3)]"

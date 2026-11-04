@@ -1582,7 +1582,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
             <dd className={valueClass}>
               v{payloadVersion}
               {!payloadProbing && appVersion && cmp === 0 && (
-                <span className="ml-2 text-xs font-normal text-[var(--color-good)]">
+                <span className="ms-2 text-xs font-normal text-[var(--color-good)]">
                   {tr(
                     "connection_block_match",
                     undefined,
@@ -1591,7 +1591,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
                 </span>
               )}
               {!payloadProbing && appVersion && cmp === 1 && (
-                <span className="ml-2 text-xs font-normal text-[var(--color-muted)]">
+                <span className="ms-2 text-xs font-normal text-[var(--color-muted)]">
                   {tr(
                     "connection_block_newer",
                     { app: appVersion },

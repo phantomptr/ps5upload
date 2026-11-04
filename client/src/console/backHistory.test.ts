@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { BACK_ECHO_MS, createBackHistory, isPs5Browser, type HistoryEnv } from "./backHistory";
+import { BACK_ECHO_MS, createBackHistory, type HistoryEnv } from "./backHistory";
+import { isPs5Browser } from "./fullscreen";
 
 /** A browser history in memory: entries, popstate, a clock and a deferred queue. */
 function fakeEnv(startsOnGuard = false) {

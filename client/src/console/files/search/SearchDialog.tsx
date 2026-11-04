@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { File, RotateCw, Search, Square } from "lucide-react";
 import { formatBytes } from "../../../lib/format";
 import { errorText, type Volume } from "../../home/Home";
-import { t } from "../../strings";
+import { getLanguage, t } from "../../strings";
 import { Modal } from "../../ui/Modal";
 import {
   createSearchFlow,
@@ -22,7 +22,7 @@ export function indexText(s: SearchState): string | null {
   if (s.unsupported) return t("cw_files_search_unsupported");
   const i = s.index;
   if (!i) return t("cw_home_loading");
-  const n = i.files.toLocaleString();
+  const n = i.files.toLocaleString(getLanguage());
   if (i.phase === "building") return s.stopping ? t("cw_files_search_stopping") : t("cw_files_search_building", { n });
   if (i.phase === "idle" || (i.phase === "ready" && !i.roots)) return t("cw_files_search_no_index");
   const notes = [t("cw_files_search_ready", { n })];

@@ -20,6 +20,13 @@ import de from "./locales/de.json";
 // @ts-expect-error plain .mjs build script shared with this test, no type declarations
 import { consoleStringFiles, extractConsoleStrings } from "../../../scripts/build-console-strings.mjs";
 
+/** The page's own sources, as text. */
+const sources = import.meta.glob(["./**/*.ts", "./**/*.tsx", "!./**/*.test.ts", "!./**/*.test.tsx"], {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
+
 /** The committed locales/<code>.json files, as text. */
 const committed = import.meta.glob("./locales/*.json", { query: "?raw", import: "default", eager: true }) as Record<
   string,
@@ -37,6 +44,16 @@ afterEach(() => {
   _setStringsLoaderForTests(null);
   chooseLanguage("");
   vi.unstubAllGlobals();
+});
+
+describe("dates and numbers", () => {
+  it("every date or count the page writes names the page's language (never the browser's default)", () => {
+    expect(Object.keys(sources).length).toBeGreaterThan(50);
+    const bare = Object.entries(sources).flatMap(([file, text]) =>
+      /\.toLocale(Date|Time)?String\(\s*\)/.test(text) ? [file] : [],
+    );
+    expect(bare).toEqual([]);
+  });
 });
 
 /** A loader that answers from the committed files and records what was asked. */

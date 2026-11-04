@@ -133,7 +133,7 @@ export function BatchReview(p: BatchReviewProps) {
           <div className="text-sm font-semibold">
             {tr("batch_title", { count: p.rows.length }, "{count} sources")}
             {inspecting > 0 && (
-              <span className="ml-2 font-normal text-[var(--color-muted)]">
+              <span className="ms-2 font-normal text-[var(--color-muted)]">
                 {tr("batch_inspecting", { count: inspecting }, "checking {count}…")}
               </span>
             )}

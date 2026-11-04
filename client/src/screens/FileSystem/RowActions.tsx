@@ -345,7 +345,7 @@ export function RowActionButtonList({ actions }: { actions: RowAction[] }) {
   return (
     <div
       data-testid="fs-row-actions"
-      className="ml-2 hidden shrink-0 items-center gap-1 sm:flex"
+      className="ms-2 hidden shrink-0 items-center gap-1 sm:flex"
     >
       {actions.filter((a) => !a.menuOnly).map((a) => (
         <button

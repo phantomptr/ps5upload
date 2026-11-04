@@ -99,14 +99,14 @@ button {
   width: 1.8rem;
   height: 1.8rem;
   border-radius: 28%;
-  margin-right: 0.6rem;
+  margin-inline-end: 0.6rem;
 }
 .cw-brand {
   font-weight: 600;
   font-size: 1.1rem;
 }
 .cw-chip {
-  margin-left: auto;
+  margin-inline-start: auto;
   padding: 0.2rem 0.8rem;
   border-radius: var(--radius-control);
   background: var(--color-good-soft);
@@ -133,7 +133,7 @@ button {
   flex-direction: column;
   align-items: center;
   background: var(--color-canvas);
-  border-right: 1px solid var(--color-border);
+  border-inline-end: 1px solid var(--color-border);
   overflow-y: auto;
 }
 .cw-rail-item {
@@ -183,14 +183,14 @@ button {
 .cw-hint {
   display: inline-flex;
   align-items: center;
-  margin-right: 1.4rem;
+  margin-inline-end: 1.4rem;
 }
 .cw-glyph {
   display: inline-block;
   min-width: 1.3rem;
   height: 1.3rem;
   padding: 0 0.3rem;
-  margin-right: 0.35rem;
+  margin-inline-end: 0.35rem;
   border-radius: var(--radius-control);
   background: var(--color-surface-3);
   color: var(--color-text);
@@ -203,7 +203,7 @@ button {
 /* ---- reload banner ---- */
 .cw-banner {
   position: fixed;
-  left: 50%;
+  left: 50%; /* physical: centred with the translate below, the same in either direction */
   top: 1.2rem;
   transform: translateX(-50%);
   width: min(36rem, calc(100vw - 2rem));
@@ -226,7 +226,7 @@ button {
 /* A short note at the bottom (e.g. how to leave the page); it reads itself out (role=status). */
 .cw-toast {
   position: fixed;
-  left: 50%;
+  left: 50%; /* physical: centred with the translate below, the same in either direction */
   bottom: 4.5rem;
   transform: translateX(-50%);
   width: max-content;
@@ -261,7 +261,7 @@ button {
   height: 1.1rem;
 }
 .cw-button svg + span {
-  margin-left: 0.4rem;
+  margin-inline-start: 0.4rem;
 }
 .cw-button[aria-pressed="true"] {
   background: var(--color-accent-soft);
@@ -307,7 +307,7 @@ button {
 .cw-tag {
   display: inline-block;
   padding: 0.05rem 0.5rem;
-  margin-left: 0.6rem;
+  margin-inline-start: 0.6rem;
   border-radius: var(--radius-control);
   background: var(--color-pill);
   color: var(--color-text);
@@ -344,9 +344,9 @@ button {
 .cw-scrim {
   position: fixed;
   top: 0;
-  right: 0;
+  right: 0; /* physical: both sides, the same in either direction */
   bottom: 0;
-  left: 0;
+  left: 0; /* physical: both sides, the same in either direction */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -375,7 +375,7 @@ button {
   justify-content: flex-end;
 }
 .cw-dialog-buttons .cw-button {
-  margin-left: 0.8rem;
+  margin-inline-start: 0.8rem;
 }
 
 /* ---- Home ---- */
@@ -399,7 +399,8 @@ button {
   margin-bottom: 0.6rem;
 }
 .cw-quick .cw-button {
-  margin: 0 0.7rem 0.5rem 0;
+  margin: 0 0 0.5rem;
+  margin-inline-end: 0.7rem;
 }
 .cw-card {
   border-radius: var(--radius-card);
@@ -416,14 +417,14 @@ button {
   flex: none;
   width: 4rem;
   height: 4rem;
-  margin-right: 0.9rem;
+  margin-inline-end: 0.9rem;
   border-radius: 0.5rem;
   background: var(--color-surface);
   object-fit: cover;
 }
 .cw-game .cw-button {
   flex: none;
-  margin-left: 0.7rem;
+  margin-inline-start: 0.7rem;
 }
 .cw-tasks-more {
   margin: 0;
@@ -432,7 +433,7 @@ button {
   flex: none;
   width: 2rem;
   height: 2rem;
-  margin-right: 0.9rem;
+  margin-inline-end: 0.9rem;
   color: var(--color-muted);
 }
 .cw-game-text {
@@ -462,7 +463,7 @@ button {
   display: flex;
   align-items: center;
   margin-bottom: 0.4rem;
-  padding-right: 0.8rem;
+  padding-inline-end: 0.8rem;
   border-radius: var(--radius-card);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -473,13 +474,13 @@ button {
   display: flex;
   align-items: center;
   padding: 0.45rem 0.9rem;
-  text-align: left;
+  text-align: start;
 }
 .cw-task-icon {
   flex: none;
   width: 1.5rem;
   height: 1.5rem;
-  margin-right: 0.8rem;
+  margin-inline-end: 0.8rem;
   color: var(--color-muted);
 }
 .cw-task-text {
@@ -500,7 +501,7 @@ button {
 }
 .cw-task > .cw-button {
   flex: none;
-  margin-left: 0.8rem;
+  margin-inline-start: 0.8rem;
 }
 .cw-volumes {
   display: grid;
@@ -527,7 +528,7 @@ button {
   flex: none;
   width: 1.3rem;
   height: 1.3rem;
-  margin-right: 0.5rem;
+  margin-inline-end: 0.5rem;
   color: var(--color-muted);
 }
 .cw-volume-name {
@@ -547,12 +548,14 @@ button {
 .cw-toolbar > .cw-button,
 .cw-toolbar > .cw-icon-button,
 .cw-toolbar > .cw-tag {
-  margin: 0 0.6rem 0.4rem 0;
+  margin: 0 0 0.4rem;
+  margin-inline-end: 0.6rem;
 }
 .cw-toolbar-path {
   flex: 1;
   min-width: 10rem;
-  margin: 0 0.8rem 0.4rem 0;
+  margin: 0 0 0.4rem;
+  margin-inline-end: 0.8rem;
 }
 .cw-path {
   overflow: hidden;
@@ -560,7 +563,8 @@ button {
   white-space: nowrap;
 }
 .cw-toolbar-free {
-  margin: 0 0 0.4rem auto;
+  margin: 0 0 0.4rem;
+  margin-inline-start: auto;
   font-size: 0.85rem;
 }
 .cw-pin.is-pinned svg {
@@ -576,7 +580,7 @@ button {
 }
 .cw-pathbar > .cw-button {
   flex: none;
-  margin-right: 0.6rem;
+  margin-inline-end: 0.6rem;
 }
 .cw-crumbs {
   display: flex;
@@ -653,13 +657,13 @@ button {
   display: flex;
   align-items: center;
   margin-bottom: 0.35rem;
-  padding-right: 0.5rem;
+  padding-inline-end: 0.5rem;
   border-radius: var(--radius-card);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
 }
 .cw-file.is-plain {
-  padding-right: 0;
+  padding-inline-end: 0;
 }
 .cw-file.is-selected {
   border-color: var(--color-accent);
@@ -673,13 +677,13 @@ button {
   padding: 0.55rem 0.9rem;
   color: inherit;
   font: inherit;
-  text-align: left;
+  text-align: start;
 }
 .cw-file-icon {
   flex: none;
   width: 1.4rem;
   height: 1.4rem;
-  margin-right: 0.8rem;
+  margin-inline-end: 0.8rem;
   color: var(--color-muted);
 }
 .cw-file-text {
@@ -697,8 +701,8 @@ button {
 .cw-file-meta {
   flex: none;
   min-width: 6rem;
-  margin-left: 0.8rem;
-  text-align: right;
+  margin-inline-start: 0.8rem;
+  text-align: end;
   font-size: 0.85rem;
 }
 .cw-file-meta .cw-bar {
@@ -712,7 +716,7 @@ button {
   margin-top: 0.4rem;
 }
 .cw-msg-action {
-  margin-left: 0.8rem;
+  margin-inline-start: 0.8rem;
 }
 .cw-sheet-title {
   overflow: hidden;
@@ -731,16 +735,16 @@ button {
   padding: 0.6rem 0.8rem;
   color: inherit;
   font: inherit;
-  text-align: left;
+  text-align: start;
 }
 .cw-sheet-item svg {
   flex: none;
   width: 1.2rem;
   height: 1.2rem;
-  margin-right: 0.7rem;
+  margin-inline-end: 0.7rem;
 }
 .cw-sheet-item .cw-mono {
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 .cw-sheet-item.is-danger {
   color: var(--color-bad);
@@ -761,7 +765,7 @@ button {
 .cw-picker-bar .cw-path {
   flex: 1;
   min-width: 0;
-  margin-right: 0.8rem;
+  margin-inline-end: 0.8rem;
 }
 .cw-picker-list {
   max-height: 50vh;
@@ -819,7 +823,8 @@ button {
   min-width: 0;
 }
 .cw-share-row .cw-button {
-  margin: 0 0 0.8rem 0.6rem;
+  margin: 0 0 0.8rem;
+  margin-inline-start: 0.6rem;
 }
 .cw-share-found {
   grid-column: 1 / -1;
@@ -832,7 +837,8 @@ button {
   overflow-y: auto;
 }
 .cw-share-found li {
-  margin: 0 0.4rem 0.4rem 0;
+  margin: 0 0 0.4rem;
+  margin-inline-end: 0.4rem;
 }
 .cw-info {
   margin: 0 0 1rem;
@@ -873,7 +879,8 @@ button {
 .cw-viewer-head h2 {
   flex: 1;
   min-width: 0;
-  margin: 0 0.8rem 0 0;
+  margin: 0;
+  margin-inline-end: 0.8rem;
 }
 .cw-viewer-body {
   flex: 1;
@@ -906,15 +913,15 @@ button {
 }
 .cw-fan-reading {
   min-width: 9rem;
-  margin-right: 1.5rem;
+  margin-inline-end: 1.5rem;
 }
 .cw-fan-value {
   font-size: 1.6rem;
   font-variant-numeric: tabular-nums;
 }
 .cw-fan-target {
-  margin-left: auto;
-  text-align: right;
+  margin-inline-start: auto;
+  text-align: end;
 }
 .cw-fan .cw-fan-choice {
   min-width: 6.5rem;
@@ -999,7 +1006,7 @@ button {
 .cw-home .cw-tasks-more {
   position: absolute;
   top: -0.35rem;
-  right: 0;
+  inset-inline-end: 0;
   min-height: 0;
   padding: 0.2rem 0.9rem;
 }
@@ -1045,7 +1052,7 @@ button {
   justify-content: space-between;
   min-height: 3.3rem;
   padding: 0.35rem 0.9rem;
-  text-align: left;
+  text-align: start;
   border-radius: var(--radius-card);
   background: var(--color-surface);
   box-shadow: inset 0 0 0 1px var(--color-border);
@@ -1116,14 +1123,14 @@ button {
 .cw-cheats-game-buttons {
   display: flex;
   flex: none;
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 .cw-cheats-empty-buttons {
   display: flex;
 }
 .cw-cheats-empty-buttons .cw-button + .cw-button,
 .cw-cheats-game-buttons .cw-button + .cw-button {
-  margin-left: 0.7rem;
+  margin-inline-start: 0.7rem;
 }
 
 /* ---- Games ---- */
@@ -1132,13 +1139,14 @@ button {
   align-items: center;
   flex: 1;
   min-width: 10rem;
-  margin: 0 0.6rem 0.4rem 0;
+  margin: 0 0 0.4rem;
+  margin-inline-end: 0.6rem;
 }
 .cw-games-search svg {
   flex: none;
   width: 1.2rem;
   height: 1.2rem;
-  margin-right: 0.5rem;
+  margin-inline-end: 0.5rem;
   color: var(--color-muted);
 }
 .cw-games-search .cw-input {
@@ -1168,7 +1176,7 @@ button {
   border-radius: var(--radius-card);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  text-align: left;
+  text-align: start;
 }
 .cw-gcard.is-running {
   border-color: var(--color-accent);
@@ -1188,14 +1196,14 @@ button {
 .cw-gcover svg {
   position: absolute;
   top: 0;
-  left: 0;
+  left: 0; /* physical: fills or is centred in its box, the same in either direction */
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 .cw-gcover svg {
   top: 30%;
-  left: 30%;
+  left: 30%; /* physical: fills or is centred in its box, the same in either direction */
   width: 40%;
   height: 40%;
   color: var(--color-muted);
@@ -1204,7 +1212,7 @@ button {
   flex: none;
   width: 5rem;
   padding-top: 5rem;
-  margin-right: 0.9rem;
+  margin-inline-end: 0.9rem;
 }
 .cw-gcard-name {
   display: block;
@@ -1218,7 +1226,8 @@ button {
   display: block;
 }
 .cw-gcard-tags .cw-tag {
-  margin: 0.25rem 0.3rem 0 0;
+  margin: 0.25rem 0 0;
+  margin-inline-end: 0.3rem;
 }
 .cw-game-sheet {
   width: 50rem;
@@ -1265,7 +1274,7 @@ button {
 .cw-libcard-installed {
   position: absolute;
   top: 0.9rem;
-  right: 0.9rem;
+  inset-inline-end: 0.9rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1302,15 +1311,15 @@ button {
 .cw-libview-tags .cw-tag svg {
   width: 0.8rem;
   height: 0.8rem;
-  margin-right: 0.25rem;
+  margin-inline-end: 0.25rem;
   vertical-align: -0.1rem;
 }
 .cw-dialog.cw-libview {
   position: fixed;
   top: 0;
-  right: 0;
+  right: 0; /* physical: both sides, the same in either direction */
   bottom: 0;
-  left: 0;
+  left: 0; /* physical: both sides, the same in either direction */
   width: auto;
   max-width: none;
   max-height: none;
@@ -1327,7 +1336,7 @@ button {
 .cw-libview-close {
   position: absolute;
   top: 1.2rem;
-  right: 1.6rem;
+  inset-inline-end: 1.6rem;
   z-index: 1;
 }
 .cw-libview-head {
@@ -1340,7 +1349,7 @@ button {
   position: relative;
   width: 14rem;
   height: 14rem;
-  margin-right: 1.6rem;
+  margin-inline-end: 1.6rem;
   border-radius: var(--radius-card);
   background: var(--color-surface-3);
   overflow: hidden;
@@ -1354,7 +1363,7 @@ button {
 .cw-libview-cover svg {
   position: absolute;
   top: 30%;
-  left: 30%;
+  left: 30%; /* physical: centred in its box (30% + 40% + 30%), the same in either direction */
   width: 40%;
   height: 40%;
   color: var(--color-muted);
@@ -1362,7 +1371,7 @@ button {
 .cw-libview-text {
   flex: 1;
   min-width: 0;
-  padding-right: 8rem;
+  padding-inline-end: 8rem;
 }
 .cw-dialog .cw-libview-title {
   margin: 0 0 0.4rem;
@@ -1374,7 +1383,8 @@ button {
   margin-bottom: 0.6rem;
 }
 .cw-libview-tags .cw-tag {
-  margin: 0 0.4rem 0.3rem 0;
+  margin: 0 0 0.3rem;
+  margin-inline-end: 0.4rem;
   font-size: 0.85rem;
 }
 .cw-libview-info {
@@ -1396,7 +1406,7 @@ button {
 .cw-libview-h3 svg {
   width: 1.2rem;
   height: 1.2rem;
-  margin-right: 0.5rem;
+  margin-inline-end: 0.5rem;
   color: var(--color-muted);
 }
 .cw-libparts {
@@ -1418,7 +1428,8 @@ button {
   min-width: 0;
 }
 .cw-libpart-tags .cw-tag {
-  margin: 0 0.4rem 0 0;
+  margin: 0;
+  margin-inline-end: 0.4rem;
 }
 .cw-libpart-name {
   font-weight: 600;
@@ -1439,10 +1450,11 @@ button {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  margin-left: 0.8rem;
+  margin-inline-start: 0.8rem;
 }
 .cw-libpart-actions .cw-button {
-  margin: 0.2rem 0 0.2rem 0.6rem;
+  margin: 0.2rem 0;
+  margin-inline-start: 0.6rem;
 }
 @media (max-width: 40rem) {
   .cw-libgrid {
@@ -1460,11 +1472,11 @@ button {
     margin: 0 0 0.8rem;
   }
   .cw-libview-text {
-    padding-right: 0;
+    padding-inline-end: 0;
   }
   .cw-libview-close {
     top: 0.8rem;
-    right: 0.8rem;
+    inset-inline-end: 0.8rem;
   }
   .cw-libview-info dt {
     width: 7rem;
@@ -1478,7 +1490,8 @@ button {
     margin: 0.4rem 0 0;
   }
   .cw-libpart-actions .cw-button {
-    margin: 0.2rem 0.5rem 0.2rem 0;
+    margin: 0.2rem 0;
+    margin-inline-end: 0.5rem;
   }
 }
 
@@ -1490,7 +1503,8 @@ button {
   min-width: 0;
 }
 .cw-saves-users .cw-button {
-  margin: 0 0.6rem 0.4rem 0;
+  margin: 0 0 0.4rem;
+  margin-inline-end: 0.6rem;
 }
 .cw-saves-users .cw-button[aria-pressed="true"] {
   background: var(--color-accent-soft);
@@ -1507,7 +1521,7 @@ button {
   max-height: none;
 }
 .cw-saves-list .cw-libpart-name + .cw-tag {
-  margin-left: 0.6rem;
+  margin-inline-start: 0.6rem;
 }
 .cw-saves-where {
   font-size: 0.75rem;
@@ -1526,7 +1540,7 @@ button {
   border-radius: var(--radius-card);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  text-align: left;
+  text-align: start;
 }
 .cw-proc .cw-task-title,
 .cw-proc .cw-task-sub {
@@ -1540,7 +1554,7 @@ button {
 }
 .cw-proc-stop {
   flex: none;
-  margin-left: 0.8rem;
+  margin-inline-start: 0.8rem;
 }
 
 /* ---- Cheats: Find cheats (a modal list of the repos' files for the running game) ---- */
@@ -1552,7 +1566,7 @@ button {
   font-size: 0.9rem;
 }
 .cw-finder-version {
-  margin-right: 1.2rem;
+  margin-inline-end: 1.2rem;
   color: var(--color-text);
   font-weight: 600;
 }
@@ -1570,7 +1584,7 @@ button {
   width: 100%;
   min-width: 0;
   padding: 0.45rem 0.9rem;
-  text-align: left;
+  text-align: start;
   border-radius: var(--radius-card);
   background: var(--color-surface);
   box-shadow: inset 0 0 0 1px var(--color-border);
@@ -1580,7 +1594,7 @@ button {
 }
 .cw-finder-entry > svg {
   flex: none;
-  margin-right: 0.8rem;
+  margin-inline-end: 0.8rem;
 }
 .cw-finder-entry[aria-disabled="true"] {
   cursor: progress;
@@ -1644,7 +1658,7 @@ button {
   font-size: 0.8rem;
 }
 .cw-dialog-buttons .cw-button:first-child {
-  margin-left: 0;
+  margin-inline-start: 0;
 }
 .cw-tour {
   width: 40rem;
@@ -1655,7 +1669,8 @@ button {
 }
 .cw-tour-lines {
   margin: 0 0 1.1rem;
-  padding: 0 0 0 1.1rem;
+  padding: 0;
+  padding-inline-start: 1.1rem;
 }
 .cw-tour-lines li {
   margin: 0 0 0.45rem;
@@ -1698,7 +1713,9 @@ button {
   color: var(--color-warn);
 }
 .cw-ctl-last .cw-glyph {
-  margin: 0 0.35rem 0 0.45rem;
+  margin: 0;
+  margin-inline-start: 0.45rem;
+  margin-inline-end: 0.35rem;
 }
 .cw-ctl-main {
   flex: 1;
@@ -1710,7 +1727,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-right: 1rem;
+  margin-inline-end: 1rem;
   padding: 0.3rem;
   border-radius: var(--radius-card);
 }
@@ -1797,7 +1814,7 @@ button {
   height: 1.15rem;
   line-height: 1.15rem;
   font-size: 0.55rem;
-  margin-right: 0.45rem;
+  margin-inline-end: 0.45rem;
 }
 /* Up to two lines (longer translations), never cut mid-word on one line. */
 .cw-ctl-job {
@@ -1812,7 +1829,7 @@ button {
 .cw-ctl-state {
   flex: none;
   max-width: 42%;
-  margin-left: 0.4rem;
+  margin-inline-start: 0.4rem;
   line-height: 1.2;
   text-align: end;
   color: var(--color-muted);
@@ -1845,7 +1862,7 @@ button {
   flex: none;
   width: 1.2rem;
   height: 1.2rem;
-  margin-right: 0.7rem;
+  margin-inline-end: 0.7rem;
 }
 
 /* ---- Files: one toolbar row, more rows on screen ---- */
@@ -1867,7 +1884,8 @@ button {
 .cw-toolbar-one .cw-pathbar {
   flex: 1 1 14rem;
   min-width: 0;
-  margin: 0 0.8rem 0 0;
+  margin: 0;
+  margin-inline-end: 0.8rem;
 }
 /* The tools wrap onto a second row rather than push the page wider than the screen
  * (the PS5 browser's page is 1540 px wide). */
@@ -1886,7 +1904,8 @@ button {
   justify-content: center;
   width: 2.6rem;
   height: 2.4rem;
-  margin: 0 0 0.3rem 0.3rem;
+  margin: 0 0 0.3rem;
+  margin-inline-start: 0.3rem;
   color: inherit;
   background: var(--color-surface-3);
 }
@@ -1919,7 +1938,7 @@ button {
   height: 2rem;
 }
 .cw-hint-tip {
-  margin-left: auto;
+  margin-inline-start: auto;
   color: var(--color-text);
   font-weight: 600;
 }
@@ -1943,8 +1962,10 @@ button {
   display: flex;
   flex: none;
   align-items: center;
-  margin-left: auto;
-  padding: 0.15rem 0.2rem 0.15rem 0.8rem;
+  margin-inline-start: auto;
+  padding: 0.15rem 0;
+  padding-inline-start: 0.8rem;
+  padding-inline-end: 0.2rem;
   border-radius: var(--radius-control);
   background: var(--color-accent-soft);
   font-size: 0.85rem;
@@ -1956,7 +1977,7 @@ button {
   white-space: nowrap;
 }
 .cw-clip-button {
-  margin-left: 0.5rem;
+  margin-inline-start: 0.5rem;
   padding: 0.25rem 0.8rem;
 }
 .cw-conflict {
@@ -1987,7 +2008,8 @@ button {
   margin-bottom: 0.9rem;
 }
 .cw-br-mode {
-  margin: 0 0.5rem 0.4rem 0;
+  margin: 0 0 0.4rem;
+  margin-inline-end: 0.5rem;
 }
 .cw-br-mode.is-on {
   background: var(--color-accent-soft);
@@ -1999,7 +2021,7 @@ button {
 }
 .cw-br-fields {
   flex: 0 0 22rem;
-  margin-right: 1.2rem;
+  margin-inline-end: 1.2rem;
 }
 .cw-br-hint {
   margin-top: 0.3rem;
@@ -2149,7 +2171,7 @@ button {
   flex: none;
   width: 6.5rem;
   height: 6.5rem;
-  margin-right: 0.9rem;
+  margin-inline-end: 0.9rem;
   border-radius: 4px;
 }
 .cw-phone strong {
@@ -2193,7 +2215,7 @@ button {
   .cw-chip {
     min-width: 0;
     max-width: 40vw;
-    margin-left: 0.5rem;
+    margin-inline-start: 0.5rem;
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -2226,11 +2248,11 @@ button {
     padding: 0.5rem 0.6rem;
   }
   .cw-file-icon {
-    margin-right: 0.5rem;
+    margin-inline-end: 0.5rem;
   }
   .cw-file-meta {
     min-width: 0;
-    margin-left: 0.5rem;
+    margin-inline-start: 0.5rem;
   }
   .cw-dialog {
     max-width: calc(100vw - 1rem);
@@ -2251,13 +2273,13 @@ button {
   max-width: 44rem;
   margin-top: 0.6rem;
   padding: 0.6rem 0.9rem;
-  text-align: left;
+  text-align: start;
 }
 .cw-cleanup-card svg {
   flex: none;
   width: 1.6rem;
   height: 1.6rem;
-  margin-right: 0.8rem;
+  margin-inline-end: 0.8rem;
 }
 .cw-cleanup-progress,
 .cw-cleanup-result {
@@ -2265,7 +2287,7 @@ button {
   margin-bottom: 0.8rem;
 }
 .cw-cleanup-progress .cw-button {
-  margin-left: 0.8rem;
+  margin-inline-start: 0.8rem;
 }
 .cw-cleanup-failed {
   color: var(--color-bad);
@@ -2292,7 +2314,7 @@ button {
   min-width: 0;
   min-height: 3.3rem;
   padding: 0.35rem 0.9rem;
-  text-align: left;
+  text-align: start;
   border-radius: var(--radius-card);
   background: var(--color-surface);
   box-shadow: inset 0 0 0 1px var(--color-border);
@@ -2307,7 +2329,7 @@ button {
   justify-content: center;
   width: 1.6rem;
   height: 1.6rem;
-  margin-right: 0.8rem;
+  margin-inline-end: 0.8rem;
   border-radius: var(--radius-control);
   box-shadow: inset 0 0 0 2px var(--color-border);
 }
@@ -2337,7 +2359,7 @@ button {
 }
 .cw-cleanup-size {
   flex: none;
-  margin-left: 0.8rem;
+  margin-inline-start: 0.8rem;
   font-weight: 600;
 }
 .cw-cleanup-path {
@@ -2360,7 +2382,7 @@ button {
   min-width: 0;
 }
 .cw-cleanup-bar .cw-button {
-  margin-left: 0.6rem;
+  margin-inline-start: 0.6rem;
 }
 
 /* Home: a USB stick just plugged in (Find games / Open in Files). */

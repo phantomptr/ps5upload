@@ -176,8 +176,8 @@ export function MenuList({
             data-testid={item.testId}
             className={[
               item.description
-                ? "flex w-full items-start gap-2 rounded-[var(--radius-field)] px-3 py-2 text-left text-xs transition-colors"
-                : "flex w-full items-center gap-2 whitespace-nowrap rounded-full px-3 py-2 text-left text-xs transition-colors",
+                ? "flex w-full items-start gap-2 rounded-[var(--radius-field)] px-3 py-2 text-start text-xs transition-colors"
+                : "flex w-full items-center gap-2 whitespace-nowrap rounded-full px-3 py-2 text-start text-xs transition-colors",
               "disabled:cursor-not-allowed disabled:opacity-50",
               activeIdx === i
                 ? "bg-[var(--color-surface-3)]"
@@ -203,7 +203,7 @@ export function MenuList({
               <span className="flex-1">{item.label}</span>
             )}
             {item.loading && (
-              <span className="ml-2 text-xs text-[var(--color-muted)]">…</span>
+              <span className="ms-2 text-xs text-[var(--color-muted)]">…</span>
             )}
           </button>
         </div>

@@ -103,32 +103,97 @@ function tokenExpired(): ApiError {
   return new ApiError(401, "token");
 }
 
-/** POST `body` (JSON, or raw bytes for a streamed route) to `route`; the Response when it is 2xx, else the ApiError. */
-async function post(route: string, body?: object, signal?: AbortSignal, keepalive?: boolean, raw?: Blob): Promise<Response> {
-  const tok = await token();
-  let res: Response;
-  try {
-    res = await fetch(route, {
-      method: "POST",
-      credentials: "same-origin",
-      cache: "no-store",
-      headers: { "Content-Type": raw ? "application/octet-stream" : "application/json", [TOKEN_HEADER]: tok },
-      body: raw ?? JSON.stringify(body ?? {}),
-      signal,
-      ...(keepalive ? { keepalive: true } : {}),
-    });
-  } catch {
-    throw new ApiError(0, "offline");
-  }
-  if (res.status === 401) throw tokenExpired();
-  if (!res.ok) throw errorOf(res.status, await res.json().catch(() => null));
-  return res;
+/**
+ * A request with no whole answer by then is given up on: ApiError(0, "timeout"), which reads as
+ * offline ("The console did not answer"), so a stuck helper or a dead link ends in a message and a
+ * retry instead of "Loading…" for ever. The engine's default for the same calls is 30 s too.
+ */
+export const CALL_TIMEOUT_MS = 30_000;
+
+/** The routes that answer only after real work on the helper (the rest answer well inside the default). */
+const SLOW_ROUTES: Readonly<Record<string, number>> = {
+  // JOB_COPY walks its source before it answers: minutes for a huge tree on a slow drive.
+  "/api/fs/copy": 600_000,
+  // Sony's launcher and installer queue behind one lock (the engine gives these 60 s), and the helper
+  // may then wait for a title's folders to go.
+  "/api/apps/launch": 90_000,
+  "/api/apps/register": 90_000,
+  "/api/apps/uninstall": 90_000,
+  "/api/app/close": 90_000,
+  "/api/volumes/eject": 60_000,
+  "/api/volumes/unmount": 60_000,
+  // Through the console's payload loader, which is retried.
+  "/api/payload/load": 60_000,
+  "/api/library/scan": 60_000,
+};
+
+/** A network-share call may start the SMB daemon first (loader retries, its start-up), then sign in. */
+const SMB_TIMEOUT_MS = 60_000;
+
+/** How long `route` is given. */
+export function callTimeoutMs(route: string): number {
+  return SLOW_ROUTES[route] ?? (route.startsWith("/api/smb/") ? SMB_TIMEOUT_MS : CALL_TIMEOUT_MS);
 }
+
+interface PostOptions {
+  /** JSON body. */
+  body?: object;
+  /** Raw bytes instead, for a streamed route. */
+  raw?: Blob;
+  signal?: AbortSignal;
+  keepalive?: boolean;
+}
+
+/**
+ * POST to `route` and `read` the 2xx reply; any other answer is its ApiError. The deadline covers the
+ * body too (a reply can stall half way), and is a race as well as an abort, so it holds where fetch
+ * ignores the signal.
+ */
+async function post<T>(route: string, o: PostOptions, read: (res: Response) => Promise<T>): Promise<T> {
+  const tok = await token();
+  const stop = typeof AbortController === "function" ? new AbortController() : null;
+  const onOuter = () => stop?.abort();
+  if (o.signal?.aborted) stop?.abort();
+  else o.signal?.addEventListener("abort", onOuter);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new ApiError(0, "timeout"));
+      stop?.abort();
+    }, callTimeoutMs(route));
+  });
+  const work = async () => {
+    let res: Response;
+    try {
+      res = await fetch(route, {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "Content-Type": o.raw ? "application/octet-stream" : "application/json", [TOKEN_HEADER]: tok },
+        body: o.raw ?? JSON.stringify(o.body ?? {}),
+        signal: stop?.signal ?? o.signal,
+        ...(o.keepalive ? { keepalive: true } : {}),
+      });
+    } catch {
+      throw new ApiError(0, "offline");
+    }
+    if (res.status === 401) throw tokenExpired();
+    if (!res.ok) throw errorOf(res.status, await res.json().catch(() => null));
+    return read(res);
+  };
+  try {
+    return await Promise.race([work(), deadline]);
+  } finally {
+    clearTimeout(timer);
+    o.signal?.removeEventListener("abort", onOuter);
+  }
+}
+
+const readJson = async <T>(res: Response): Promise<T> => (await res.json().catch(() => null)) as T;
 
 /** POST `body` as JSON to `route` and return the parsed JSON reply. */
 export async function call<T>(route: string, body?: object): Promise<T> {
-  const res = await post(route, body);
-  return (await res.json().catch(() => null)) as T;
+  return post<T>(route, { body }, readJson);
 }
 
 /**
@@ -137,19 +202,17 @@ export async function call<T>(route: string, body?: object): Promise<T> {
  * browser's keepalive limit; the input log sends ≤ 4 KiB).
  */
 export async function callKeepalive(route: string, body?: object): Promise<void> {
-  await post(route, body, undefined, true);
+  await post(route, { body, keepalive: true }, async () => undefined);
 }
 
 /** POST `body` as JSON to `route` and return the raw reply (/api/fs/read's bytes). `signal` aborts it. */
 export async function callBlob(route: string, body?: object, signal?: AbortSignal): Promise<Blob> {
-  const res = await post(route, body, signal);
-  return res.blob();
+  return post(route, { body, signal }, (res) => res.blob());
 }
 
 /** POST raw bytes to a streamed route (/api/fs/save-text) and return the parsed JSON reply. */
 export async function callRaw<T>(route: string, body: Blob): Promise<T> {
-  const res = await post(route, undefined, undefined, false, body);
-  return (await res.json().catch(() => null)) as T;
+  return post<T>(route, { raw: body }, readJson);
 }
 
 /**

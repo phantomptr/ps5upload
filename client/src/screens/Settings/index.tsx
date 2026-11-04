@@ -1181,7 +1181,7 @@ function SchedulesPanel() {
               <button
                 type="button"
                 onClick={() => remove(s.id)}
-                className="ml-auto text-xs text-[var(--color-muted)] hover:text-[var(--color-bad)]"
+                className="ms-auto text-xs text-[var(--color-muted)] hover:text-[var(--color-bad)]"
               >
                 {tr("schedules_remove", undefined, "remove")}
               </button>
@@ -1471,7 +1471,7 @@ function ThemePicker() {
           type="button"
           onClick={() => setTheme(o.value)}
           aria-pressed={theme === o.value}
-          className={`flex w-full items-start gap-2 rounded-[var(--radius-card)] border p-3 text-left transition-colors ${
+          className={`flex w-full items-start gap-2 rounded-[var(--radius-card)] border p-3 text-start transition-colors ${
             theme === o.value
               ? "border-[var(--glass-edge)] bg-[var(--color-pill)] shadow-[var(--edge-highlight),var(--shadow-1)]"
               : "border-[var(--color-border-strong)] hover:bg-[var(--color-surface)]"
@@ -1537,7 +1537,7 @@ function TextSizePicker() {
             >
               {uiScaleLabel(step)}
               {Math.abs(step - 1) < 0.001 && (
-                <span className="ml-1 text-xs text-[var(--color-muted)]">
+                <span className="ms-1 text-xs text-[var(--color-muted)]">
                   {tr("settings_text_size_default", undefined, "default")}
                 </span>
               )}

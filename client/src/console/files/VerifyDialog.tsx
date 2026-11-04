@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { formatBytes } from "../../lib/format";
 import { ApiError } from "../api";
-import { t } from "../strings";
+import { getLanguage, t } from "../strings";
 import { Modal } from "../ui/Modal";
 import { filesErrorText } from "./Files";
 import { crcHex, opResult, startOp, watchOp, type OpDeps, type OpStatus } from "./opJob";
@@ -149,7 +149,7 @@ export function VerifyDialog({
         <>
           <Value name="blake3" label={t("cw_files_verify_blake3")} value={state.hash} />
           <Value name="crc32" label={t("cw_files_verify_crc32")} value={state.crc} />
-          <p className="cw-dim">{t("cw_files_verify_size", { size: formatBytes(state.size), bytes: state.size.toLocaleString() })}</p>
+          <p className="cw-dim">{t("cw_files_verify_size", { size: formatBytes(state.size), bytes: state.size.toLocaleString(getLanguage()) })}</p>
         </>
       ) : null}
       {state.step === "cancelled" ? <p className="cw-dim">{t("cw_files_verify_cancelled")}</p> : null}

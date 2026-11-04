@@ -94,11 +94,11 @@ const CATEGORY_LABEL: Record<Category, string> = {
 };
 
 const CATEGORY_BORDER: Partial<Record<Category, string>> = {
-  ps5upload: "border-l-2 border-l-[var(--color-accent)]",
-  "shellui-crash": "border-l-2 border-l-[var(--color-bad)] bg-[var(--color-bad)]/5",
-  "kernel-error": "border-l-2 border-l-[var(--color-bad)] bg-[var(--color-bad)]/5",
-  "kstuff-payload": "border-l-2 border-l-[var(--color-warn)]",
-  "etahen-payload": "border-l-2 border-l-[var(--color-warn)]",
+  ps5upload: "border-s-2 border-s-[var(--color-accent)]",
+  "shellui-crash": "border-s-2 border-s-[var(--color-bad)] bg-[var(--color-bad)]/5",
+  "kernel-error": "border-s-2 border-s-[var(--color-bad)] bg-[var(--color-bad)]/5",
+  "kstuff-payload": "border-s-2 border-s-[var(--color-warn)]",
+  "etahen-payload": "border-s-2 border-s-[var(--color-warn)]",
 };
 
 /** Row height of one kernel-log line, in rem. */
@@ -324,7 +324,7 @@ export default function KernelLogPanel() {
           >
             {tr("klog_filters", undefined, "Filters")}
             {hiddenCats.size > 0 && (
-              <span className="ml-1 rounded bg-[var(--color-surface)] px-1 text-xs text-[var(--color-muted)]">
+              <span className="ms-1 rounded bg-[var(--color-surface)] px-1 text-xs text-[var(--color-muted)]">
                 −{hiddenCats.size}
               </span>
             )}

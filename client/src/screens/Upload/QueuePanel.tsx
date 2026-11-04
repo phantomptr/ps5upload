@@ -753,7 +753,7 @@ function ConsoleGroup({
         <button
           type="button"
           onClick={() => setCollapsed((c) => !c)}
-          className="flex min-w-0 items-center gap-2 rounded-full px-1 py-0.5 text-left transition-colors hover:bg-[var(--color-surface-3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+          className="flex min-w-0 items-center gap-2 rounded-full px-1 py-0.5 text-start transition-colors hover:bg-[var(--color-surface-3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
           title={
             collapsed
               ? tr("queue_group_expand", undefined, "Show this console's queue")
@@ -1075,7 +1075,7 @@ export function QueueRow({
             aria-hidden
             data-testid="queue-drag-handle"
             title={tr("queue_drag", undefined, "Drag to reorder")}
-            className="-ml-2 -mr-1 flex shrink-0 cursor-grab touch-none items-center self-stretch px-0.5 text-[var(--color-muted)] hover:text-[var(--color-text)] active:cursor-grabbing"
+            className="-ms-2 -me-1 flex shrink-0 cursor-grab touch-none items-center self-stretch px-0.5 text-[var(--color-muted)] hover:text-[var(--color-text)] active:cursor-grabbing"
           >
             <GripVertical size={14} />
           </span>

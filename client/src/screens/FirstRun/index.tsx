@@ -543,7 +543,7 @@ export default function FirstRunScreen() {
               <Button
                 variant="secondary"
                 size="md"
-                className="ml-2"
+                className="ms-2"
                 onClick={() => void handleInstall({ helperOnly: true })}
               >
                 {tr("first_run_helper_only", undefined, "Send only ps5upload")}
@@ -562,7 +562,7 @@ export default function FirstRunScreen() {
               <Button
                 variant="secondary"
                 size="md"
-                className="ml-2"
+                className="ms-2"
                 onClick={() => {
                   runs.cancel();
                   setStep3Detail((rows) => settleBusyRows(rows, "idle"));

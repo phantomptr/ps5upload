@@ -289,7 +289,7 @@ export function ProcessesPanel({ onCount }: { onCount: (n: number | undefined) =
             onChange={setAutoRefresh}
             label={tr("processes_auto_refresh", undefined, "Auto-refresh")}
           />
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ms-auto flex items-center gap-2">
             <Select
               value={sortKey}
               onChange={(e) => setSortKey(e.target.value as SortKey)}
@@ -529,7 +529,7 @@ function ProcessRowImpl({
             ))}
         </div>
       </div>
-      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+      <div className="ms-auto flex shrink-0 items-center gap-1.5">
         {isApp && proc.title_id && (
           <Button
             variant="secondary"

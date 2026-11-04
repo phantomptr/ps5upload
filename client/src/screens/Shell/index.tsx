@@ -302,7 +302,7 @@ function ShellHistoryRow({ entry }: { entry: HistoryEntry }) {
         )
       ) : (
         <div className="mt-1 italic text-[var(--color-muted)]">
-          <Spinner size={10} className="mr-1 inline" />
+          <Spinner size={10} className="me-1 inline" />
           {tr("shell_running", undefined, "running…")}
         </div>
       )}

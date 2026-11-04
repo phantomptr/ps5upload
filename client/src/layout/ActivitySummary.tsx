@@ -359,7 +359,7 @@ function RunningRow({ row, onOpen, onCancel, canCancel, consoleOf }: { row: Acti
           type="button"
           onClick={() => onOpen(routeForTask(task))}
           title={tr("activity_open_owner", undefined, "Open its screen")}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-[var(--color-accent)]"
+          className="flex min-w-0 flex-1 items-center gap-2 text-start hover:text-[var(--color-accent)]"
         >
           <KindIcon kind={task.kind} size={13} />
           <span className="shrink-0 text-[var(--color-muted)]">{kindName(tr, task.kind)}</span>
@@ -415,7 +415,7 @@ function QueuedRowView({
         type="button"
         onClick={() => onOpen(row.route)}
         title={tr("activity_open_owner", undefined, "Open its screen")}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-[var(--color-accent)]"
+        className="flex min-w-0 flex-1 items-center gap-2 text-start hover:text-[var(--color-accent)]"
       >
         <KindIcon kind={row.kind} size={13} />
         <span className="shrink-0 text-[var(--color-muted)]">{kindName(tr, row.kind)}</span>
@@ -473,7 +473,7 @@ function FinishedRowView({ row, onOpen, onRetry, canRetry, consoleOf }: { row: F
           type="button"
           onClick={() => onOpen(routeForTask(task))}
           title={tr("activity_open_owner", undefined, "Open its screen")}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-[var(--color-accent)]"
+          className="flex min-w-0 flex-1 items-center gap-2 text-start hover:text-[var(--color-accent)]"
         >
           <span className="shrink-0 text-[var(--color-muted)]">{kindName(tr, task.kind)}</span>
           <span className="min-w-0 truncate text-[var(--color-text)]">{task.label}</span>

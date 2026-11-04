@@ -8,6 +8,7 @@ vi.mock("../api", async (importOriginal) => {
 import { ApiError, call } from "../api";
 import { t } from "../strings";
 import type { Conflict, Decision } from "./paste";
+import { ReplaceError } from "./replace";
 import {
   isSmbPath,
   jobOfError,
@@ -18,6 +19,7 @@ import {
   smbSegments,
   smbUp,
   splitShare,
+  SmbJobError,
   transferItems,
   watchSmbJob,
   type SmbJob,
@@ -168,14 +170,22 @@ describe("watchSmbJob", () => {
 });
 
 /** A share and a console, as stat answers, and the copy jobs the transfer starts. */
-function world(local: Record<string, "file" | "dir">, remote: Record<string, "file" | "dir">) {
+function world(
+  local: Record<string, "file" | "dir">,
+  remote: Record<string, "file" | "dir">,
+  renameFails: (from: string, to: string) => boolean = () => false,
+) {
   const sent: string[] = [];
   const ends: Record<string, SmbJob> = {};
   let n = 0;
   const send = (async (route: string, body?: unknown) => {
     const b = body as Record<string, unknown>;
     sent.push(`${route} ${JSON.stringify(b)}`);
-    if (route === "/api/smb/copy") return { job: `c${++n}` };
+    if (route === "/api/smb/copy") {
+      const dest = b.dest as string;
+      if (!ends[`c${n + 1}`] || ends[`c${n + 1}`].state === "done") (dest.startsWith("smb://") ? remote : local)[dest] = "dir";
+      return { job: `c${++n}` };
+    }
     if (route === "/api/smb/delete") {
       delete remote[b.path as string];
       return { job: `d${++n}` };
@@ -183,6 +193,13 @@ function world(local: Record<string, "file" | "dir">, remote: Record<string, "fi
     if (route === "/api/fs/delete") {
       delete local[b.path as string];
       return { job: `l${++n}` };
+    }
+    if (route === "/api/fs/rename" || route === "/api/smb/rename") {
+      const side = route === "/api/fs/rename" ? local : remote;
+      if (renameFails(b.from as string, b.to as string)) throw new ApiError(409, "smb_not_supported");
+      side[b.to as string] = side[b.from as string];
+      delete side[b.from as string];
+      return {};
     }
     throw new Error(`unexpected ${route}`);
   }) as unknown as typeof call;
@@ -270,16 +287,73 @@ describe("transferItems", () => {
     expect(w.sent).toEqual([
       `/api/smb/copy ${JSON.stringify({ src: `smb://${ID}/a.txt`, dest: "/data/a (3).txt" })}`,
       `/api/smb/copy ${JSON.stringify({ src: `smb://${ID}/g`, dest: "/data/g", overwrite: true })}`,
-      `/api/fs/delete ${JSON.stringify({ path: "/data/f" })}`,
-      `/api/smb/copy ${JSON.stringify({ src: `smb://${ID}/f`, dest: "/data/f" })}`,
+      `/api/smb/copy ${JSON.stringify({ src: `smb://${ID}/f`, dest: "/data/f.ps5u-new" })}`,
+      `/api/fs/rename ${JSON.stringify({ from: "/data/f", to: "/data/f.ps5u-old" })}`,
+      `/api/fs/rename ${JSON.stringify({ from: "/data/f.ps5u-new", to: "/data/f" })}`,
+      `/api/fs/delete ${JSON.stringify({ path: "/data/f.ps5u-old" })}`,
     ]);
   });
 
-  it("replacing a folder on a share deletes it there first (a daemon job)", async () => {
-    const w = world({}, { [`smb://${ID}/f`]: "dir" });
-    await transferItems([{ path: "/data/f", dir: true }], `smb://${ID}`, w.deps(async () => ({ choice: "replace", all: false })));
-    expect(w.sent[0]).toBe(`/api/smb/delete ${JSON.stringify({ path: `smb://${ID}/f` })}`);
-    expect(w.sent[1]).toBe(`/api/smb/copy ${JSON.stringify({ src: "/data/f", dest: `smb://${ID}/f` })}`);
+  it("replacing a folder on a share goes through a temporary name there (daemon renames and a delete job)", async () => {
+    const remote: Record<string, "file" | "dir"> = { [`smb://${ID}/f`]: "dir" };
+    const w = world({}, remote);
+    const r = await transferItems([{ path: "/data/f", dir: true }], `smb://${ID}`, w.deps(async () => ({ choice: "replace", all: false })));
+    expect(w.sent).toEqual([
+      `/api/smb/copy ${JSON.stringify({ src: "/data/f", dest: `smb://${ID}/f.ps5u-new` })}`,
+      `/api/smb/rename ${JSON.stringify({ from: `smb://${ID}/f`, to: `smb://${ID}/f.ps5u-old` })}`,
+      `/api/smb/rename ${JSON.stringify({ from: `smb://${ID}/f.ps5u-new`, to: `smb://${ID}/f` })}`,
+      `/api/smb/delete ${JSON.stringify({ path: `smb://${ID}/f.ps5u-old` })}`,
+    ]);
+    expect(r.done).toEqual(["/data/f"]);
+    expect(Object.keys(remote)).toEqual([`smb://${ID}/f`]);
+  });
+
+  it("a share copy that fails during a Replace leaves the old folder: the reason and the name are reported", async () => {
+    const local: Record<string, "file" | "dir"> = { "/data/f": "dir" };
+    const w = world(local, {});
+    w.ends.c1 = job({ job: "c1", state: "failed", error: "no_space", failed: "f/big.bin" });
+    const r = await transferItems([{ path: `smb://${ID}/f`, dir: true }], "/data", w.deps(async () => ({ choice: "replace", all: false })));
+    expect(w.sent).toEqual([`/api/smb/copy ${JSON.stringify({ src: `smb://${ID}/f`, dest: "/data/f.ps5u-new" })}`]);
+    expect(local).toEqual({ "/data/f": "dir" });
+    const err = r.failed[0].error as ReplaceError;
+    expect(err).toBeInstanceOf(ReplaceError);
+    expect(err).toMatchObject({ what: "copy", item: "f", temp: null });
+    expect(err.why).toBeInstanceOf(SmbJobError);
+    expect(r.done).toEqual([]);
+  });
+
+  it("a dropped share during a Replace's copy is the same: nothing of the old folder goes", async () => {
+    const remote: Record<string, "file" | "dir"> = { [`smb://${ID}/f`]: "dir" };
+    const w = world({}, remote);
+    w.watch.mockImplementationOnce(async () => ({ end: "gone" }) as never);
+    const r = await transferItems([{ path: "/data/f", dir: true }], `smb://${ID}`, w.deps(async () => ({ choice: "replace", all: false })));
+    expect(w.sent.some((x) => x.startsWith("/api/smb/rename"))).toBe(false);
+    expect(remote[`smb://${ID}/f`]).toBe("dir");
+    expect((r.failed[0].error as ReplaceError).why).toMatchObject({ code: "smb_job_lost" });
+  });
+
+  it("Stop during a Replace's copy cancels it and clears the temporary; the old folder stays", async () => {
+    const remote: Record<string, "file" | "dir"> = { [`smb://${ID}/f`]: "dir", [`smb://${ID}/f.ps5u-new`]: "dir" };
+    const w = world({}, remote);
+    w.ends.c1 = job({ job: "c1", state: "cancelled", error: "cancelled" });
+    // A leftover from an earlier run takes the first name: it is kept, the next one is used.
+    const r = await transferItems([{ path: "/data/f", dir: true }], `smb://${ID}`, w.deps(async () => ({ choice: "replace", all: false })));
+    expect(w.sent).toEqual([
+      `/api/smb/copy ${JSON.stringify({ src: "/data/f", dest: `smb://${ID}/f.ps5u-new2` })}`,
+    ]);
+    expect(remote[`smb://${ID}/f.ps5u-new`]).toBe("dir");
+    expect(r.halted).toEqual(["/data/f"]);
+    expect(r.skipped).toEqual(["/data/f"]);
+    expect(r.done).toEqual([]);
+  });
+
+  it("a server that refuses the rename: the old folder keeps its name and the new copy goes", async () => {
+    const remote: Record<string, "file" | "dir"> = { [`smb://${ID}/f`]: "dir" };
+    const w = world({}, remote, (from) => from === `smb://${ID}/f`);
+    const r = await transferItems([{ path: "/data/f", dir: true }], `smb://${ID}`, w.deps(async () => ({ choice: "replace", all: false })));
+    expect(remote).toEqual({ [`smb://${ID}/f`]: "dir" });
+    expect(w.sent[w.sent.length - 1]).toBe(`/api/smb/delete ${JSON.stringify({ path: `smb://${ID}/f.ps5u-new` })}`);
+    expect(r.failed[0].error).toMatchObject({ what: "swap", temp: null });
   });
 
   it("Stop cancels the running item and leaves the rest", async () => {
@@ -302,7 +376,8 @@ describe("transferItems", () => {
       },
     );
     expect(r.done).toEqual([]);
-    expect(r.skipped).toEqual([`smb://${ID}/1.bin`, `smb://${ID}/2.bin`]);
+    expect(r.cancelled).toEqual([`smb://${ID}/1.bin`]);
+    expect(r.skipped).toEqual([`smb://${ID}/2.bin`]);
     expect(w.sent).toHaveLength(1);
   });
 

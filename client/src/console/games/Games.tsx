@@ -18,7 +18,7 @@ import { ApiError, call } from "../api";
 import { errorText, keepsDialogOpen, type Message } from "../home/Home";
 import { onNavAction } from "../nav";
 import type { SectionContext } from "../sections";
-import { t } from "../strings";
+import { getLanguage, t } from "../strings";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Modal } from "../ui/Modal";
 import { pollWhileVisible } from "../ui/visiblePoll";
@@ -94,7 +94,7 @@ export function uninstallErrorText(err: unknown): string | null {
 function lastPlayedText(ms: number | null): string {
   if (ms == null) return t("cw_games_never");
   try {
-    return new Date(ms).toLocaleDateString();
+    return new Date(ms).toLocaleDateString(getLanguage());
   } catch {
     return t("cw_games_never");
   }
@@ -170,7 +170,7 @@ function Tags({ g, p }: { g: Game; p: GamesViewProps }) {
   );
 }
 
-function GameSheet({ g, p }: { g: Game; p: GamesViewProps }) {
+function GameSheet({ g, p, children }: { g: Game; p: GamesViewProps; children?: ReactNode }) {
   const run = p.running.get(g.titleId) ?? null;
   const otherRunning = !run && p.running.size > 0;
   const starting = p.launching !== null;
@@ -266,6 +266,7 @@ function GameSheet({ g, p }: { g: Game; p: GamesViewProps }) {
           <span>{t("cw_files_close")}</span>
         </button>
       </div>
+      {children}
     </Modal>
   );
 }
@@ -293,6 +294,21 @@ export function GamesView(p: GamesViewProps) {
   );
   const open = p.openId ? (p.data?.games.find((g) => g.titleId === p.openId) ?? null) : null;
   const copy = p.ask ? askCopy(p.ask) : null;
+  // Inside the sheet, which stays mounted: ○ returns to the button that asked, and closing the sheet
+  // later to the game's card (useModalFocus remembers each opener; an opener that unmounts is lost).
+  const confirm =
+    p.ask && copy ? (
+      <ConfirmDialog
+        title={copy.title}
+        body={copy.body}
+        confirmLabel={copy.confirm}
+        danger
+        busy={p.busy}
+        error={p.askError}
+        onConfirm={p.onConfirm}
+        onCancel={p.onDismiss}
+      />
+    ) : null;
 
   let body;
   if (!p.data) {
@@ -380,19 +396,13 @@ export function GamesView(p: GamesViewProps) {
         </div>
       ) : null}
       {body}
-      {open && !p.ask ? <GameSheet g={open} p={p} /> : null}
-      {p.ask && copy ? (
-        <ConfirmDialog
-          title={copy.title}
-          body={copy.body}
-          confirmLabel={copy.confirm}
-          danger
-          busy={p.busy}
-          error={p.askError}
-          onConfirm={p.onConfirm}
-          onCancel={p.onDismiss}
-        />
-      ) : null}
+      {open ? (
+        <GameSheet g={open} p={p}>
+          {confirm}
+        </GameSheet>
+      ) : (
+        confirm
+      )}
     </div>
   );
 }
@@ -501,7 +511,7 @@ export function Games({ ctx, switcher }: { ctx: SectionContext; switcher?: React
   useEffect(() => {
     void load();
   }, [load]);
-  useEffect(() => pollWhileVisible(() => void pollRunning(), GAMES_POLL_MS), [pollRunning]);
+  useEffect(() => pollWhileVisible(pollRunning, GAMES_POLL_MS), [pollRunning]);
 
   // Create (refresh): read the list again; App's fallback re-reads the status.
   useEffect(

@@ -67,7 +67,7 @@ export function CheatGameList({
       <label className="relative block">
         <Search
           size={14}
-          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)]"
+          className="pointer-events-none absolute start-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)]"
         />
         <input
           type="search"
@@ -158,7 +158,7 @@ export function CheatGameList({
                 </span>
                 <ChevronDown
                   size={12}
-                  className={`ml-auto transition-transform ${folded ? "" : "rotate-180"}`}
+                  className={`ms-auto transition-transform ${folded ? "" : "rotate-180"}`}
                 />
               </button>
             ) : (
@@ -212,7 +212,7 @@ function GameRow({
         type="button"
         onClick={onSelect}
         aria-current={selected ? "true" : undefined}
-        className={`flex w-full items-center gap-3 rounded-[var(--radius-field)] border px-2.5 py-2 text-left transition-colors ${
+        className={`flex w-full items-center gap-3 rounded-[var(--radius-field)] border px-2.5 py-2 text-start transition-colors ${
           selected
             ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)]"
             : "border-transparent hover:border-[var(--color-border)] hover:bg-[var(--color-surface-2)]"
@@ -228,7 +228,7 @@ function GameRow({
             {version ? ` · v${version}` : ""}
           </span>
         </span>
-        <span className="shrink-0 text-right text-[11px] font-medium">
+        <span className="shrink-0 text-end text-[11px] font-medium">
           {game.running ? (
             <span className="inline-flex items-center gap-1 text-[var(--color-good)]">
               <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-good)]" />

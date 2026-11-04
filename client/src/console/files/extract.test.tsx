@@ -112,6 +112,12 @@ describe("extract dialog", () => {
     expect(html).toContain('data-action="extract-keep"');
     expect(html).toContain('data-action="extract-merge"');
     expect(html).toContain('data-action="extract-replace"');
+    // Confirming Merge and replace: the dialog stays mounted under the confirm.
+    const asked = renderToStaticMarkup(
+      <ExtractDialog dir="/data/x" name="g.zip" path="/data/x/g.zip" busy={false} onStart={vi.fn()} onCancel={vi.fn()} initial={{ ...INFO, exists: true }} confirming />,
+    );
+    expect(asked).toContain('data-action="extract-replace"');
+    expect(asked.indexOf('data-action="extract-replace"')).toBeLessThan(asked.indexOf('role="alertdialog"'));
     expect(html).not.toContain('data-action="extract-go"');
   });
 

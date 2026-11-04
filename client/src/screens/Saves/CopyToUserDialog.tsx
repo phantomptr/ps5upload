@@ -79,7 +79,7 @@ export function CopyToUserView({ game, source, targets, state, onPick, onConfirm
                   data-testid="copy-user-target"
                   data-has-save={t.save ? "true" : "false"}
                   onClick={() => onPick(t)}
-                  className="flex w-full items-start gap-2 rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-left text-sm enabled:hover:bg-[var(--color-surface-raised)] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="flex w-full items-start gap-2 rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-start text-sm enabled:hover:bg-[var(--color-surface-raised)] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <UserRound size={14} className="mt-0.5 shrink-0" aria-hidden />
                   <span className="min-w-0 flex-1">

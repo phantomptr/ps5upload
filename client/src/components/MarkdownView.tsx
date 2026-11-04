@@ -279,7 +279,7 @@ export function MarkdownView({ source }: { source: string }) {
                       {head.map((cell, j) => (
                         <th
                           key={`${key}-h-${j}`}
-                          className="border-b border-[var(--color-border)] px-3 py-2 text-left font-semibold"
+                          className="border-b border-[var(--color-border)] px-3 py-2 text-start font-semibold"
                         >
                           {renderInline(cell, `${key}-h-${j}`)}
                         </th>
@@ -308,10 +308,10 @@ export function MarkdownView({ source }: { source: string }) {
             return (
               <ul
                 key={key}
-                className="mb-5 ml-6 list-disc space-y-2 text-[15px] leading-7 marker:text-[var(--color-accent)]/60"
+                className="mb-5 ms-6 list-disc space-y-2 text-[15px] leading-7 marker:text-[var(--color-accent)]/60"
               >
                 {(b.items ?? []).map((item, j) => (
-                  <li key={`${key}-${j}`} className="pl-1.5">
+                  <li key={`${key}-${j}`} className="ps-1.5">
                     {renderInline(item, `${key}-${j}`)}
                   </li>
                 ))}
@@ -321,10 +321,10 @@ export function MarkdownView({ source }: { source: string }) {
             return (
               <ol
                 key={key}
-                className="mb-5 ml-6 list-decimal space-y-2 text-[15px] leading-7 marker:font-semibold marker:text-[var(--color-accent)]/80"
+                className="mb-5 ms-6 list-decimal space-y-2 text-[15px] leading-7 marker:font-semibold marker:text-[var(--color-accent)]/80"
               >
                 {(b.items ?? []).map((item, j) => (
-                  <li key={`${key}-${j}`} className="pl-1.5">
+                  <li key={`${key}-${j}`} className="ps-1.5">
                     {renderInline(item, `${key}-${j}`)}
                   </li>
                 ))}
@@ -341,7 +341,7 @@ export function MarkdownView({ source }: { source: string }) {
             return (
               <blockquote
                 key={key}
-                className="mb-5 rounded-r-md border-l-4 border-[var(--color-accent)] bg-[var(--color-surface-2)] px-4 py-3 text-[15px] italic leading-7 text-[var(--color-muted)]"
+                className="mb-5 rounded-e-md border-s-4 border-[var(--color-accent)] bg-[var(--color-surface-2)] px-4 py-3 text-[15px] italic leading-7 text-[var(--color-muted)]"
               >
                 {renderInline(b.content, key)}
               </blockquote>

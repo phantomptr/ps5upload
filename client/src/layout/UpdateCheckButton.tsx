@@ -111,7 +111,7 @@ export function UpdateCheckButton({ variant }: { variant: "orb" | "chip" }) {
         {waiting && (
           <span
             aria-hidden
-            className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-[var(--color-accent)]"
+            className="absolute end-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-[var(--color-accent)]"
           />
         )}
       </button>

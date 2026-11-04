@@ -242,7 +242,7 @@ export function PickerView(p: PickerViewProps) {
                         <button
                           type="button"
                           disabled={!selectable && !p.actions}
-                          className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left hover:bg-[var(--color-surface)] disabled:opacity-40"
+                          className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-start hover:bg-[var(--color-surface)] disabled:opacity-40"
                           onClick={() => {
                             if (e.is_dir) p.onOpenDir(e.path);
                             else if (p.mode !== "folder" && !p.actions) {

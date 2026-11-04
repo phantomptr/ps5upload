@@ -299,7 +299,7 @@ export function Table<T>({
   const rowH = density === "compact" ? "h-7" : "h-10";
   const cellPad = density === "compact" ? "px-2 py-0.5" : "px-3 py-2";
   const alignCls = (align?: string) =>
-    align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left";
+    align === "right" ? "text-end" : align === "center" ? "text-center" : "text-start";
 
   const headerCells: ReactNode[] = [];
 
@@ -309,7 +309,7 @@ export function Table<T>({
       <th
         key="__sel"
         role="columnheader"
-        className="sticky left-0 z-20 border-b border-[var(--color-border)] bg-[var(--color-float)] px-2 py-2"
+        className="sticky start-0 z-20 border-b border-[var(--color-border)] bg-[var(--color-float)] px-2 py-2"
         style={{ width: 36 }}
       >
         {selectionMode === "multi" ? (
@@ -353,7 +353,7 @@ export function Table<T>({
         className={[
           "border-b border-[var(--color-border)] px-3 py-2.5 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]",
           col.sort ? "cursor-pointer select-none hover:text-[var(--color-text)]" : "",
-          col.sticky ? "sticky left-0 z-20 bg-[var(--color-float)]" : "",
+          col.sticky ? "sticky start-0 z-20 bg-[var(--color-float)]" : "",
           alignCls(col.align),
         ].join(" ")}
         style={col.width ? { width: col.width } : undefined}
@@ -396,7 +396,7 @@ export function Table<T>({
             // Rounded ends on the band, and the hover tint, live on the cells:
             // a row's own background is not clipped by its cells' radii.
             const bandCls =
-              "first:rounded-l-2xl last:rounded-r-2xl group-hover/row:bg-[var(--color-surface-3)]";
+              "first:rounded-s-2xl last:rounded-e-2xl group-hover/row:bg-[var(--color-surface-3)]";
 
             const cells: ReactNode[] = [];
 
@@ -408,7 +408,7 @@ export function Table<T>({
                   key="__sel"
                   role="gridcell"
                   tabIndex={cellActive ? 0 : -1}
-                  className={`sticky left-0 z-10 bg-[var(--color-float)] px-2 ${bandCls} ${zebraCls}`}
+                  className={`sticky start-0 z-10 bg-[var(--color-float)] px-2 ${bandCls} ${zebraCls}`}
                   style={{ width: 36 }}
                 >
                   <input
@@ -442,7 +442,7 @@ export function Table<T>({
                     cellPad,
                     alignCls(col.align),
                     col.sticky
-                      ? "sticky left-0 z-10 bg-[var(--color-float)]"
+                      ? "sticky start-0 z-10 bg-[var(--color-float)]"
                       : "",
                     zebraCls,
                     onRowClick && !disabled ? "cursor-pointer" : "",

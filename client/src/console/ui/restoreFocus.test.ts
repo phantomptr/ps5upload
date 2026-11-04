@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { anchorOf, refocusIfLost, restoreFocus } from "./restoreFocus";
+import { anchorOf, closeModalFocus, modalFocusTarget, refocusIfLost, restoreFocus } from "./restoreFocus";
 
 /*
  * No DOM in vitest here: a fake with what restoreFocus touches (closest,
@@ -35,7 +35,8 @@ class El {
     if (sel === "[data-nav-modal]") return "data-nav-modal" in this.attrs;
     const act = /^\[data-action="([^"]+)"\]$/.exec(sel);
     if (act) return this.attrs["data-action"] === act[1];
-    return this.tagName === "BUTTON"; // the focusable selector
+    if (sel === "[data-nav-default]:not([disabled])") return "data-nav-default" in this.attrs && !("disabled" in this.attrs);
+    return this.tagName === "BUTTON" && !("disabled" in this.attrs); // the focusable selector
   }
   closest(sel: string): El | null {
     return this.matches(sel) ? this : (this.parent?.closest(sel) ?? null);
@@ -114,6 +115,73 @@ describe("ConfirmDialog focus restore", () => {
 
   it("nothing to remember: nothing happens", () => {
     expect(restoreFocus(anchorOf(null))).toBeNull();
+  });
+});
+
+describe("a modal's first focus", () => {
+  const button = (name: string, attrs: Record<string, string> = {}) => new El(name, attrs, "BUTTON");
+  const target = (modal: El) => modalFocusTarget(modal as unknown as HTMLElement) as unknown as El | null;
+
+  it("its default control", () => {
+    const a = button("a");
+    const b = button("b", { "data-nav-default": "" });
+    expect(target(new El("modal").add(a, b))).toBe(b);
+  });
+
+  it("a disabled default is passed over: the first control that can take focus", () => {
+    // A .pkg's sheet while a batch runs: Install comes first and is held.
+    const install = button("install", { "data-nav-default": "", disabled: "" });
+    const copy = button("copy");
+    expect(target(new El("modal").add(install, copy))).toBe(copy);
+  });
+
+  it("no default: its first control; nothing to focus: nothing", () => {
+    const a = button("a");
+    expect(target(new El("modal").add(new El("text"), a))).toBe(a);
+    expect(target(new El("modal"))).toBeNull();
+    expect(modalFocusTarget(null)).toBeNull();
+  });
+
+  it("a control given directly is the target", () => {
+    const safe = button("safe");
+    expect(target(safe)).toBe(safe);
+  });
+});
+
+describe("a modal closing", () => {
+  it("focus goes back to the opener", () => {
+    const a = anchorOf(btnOf(rows[1]) as unknown as HTMLElement);
+    doc.activeElement = up;
+    expect(closeModalFocus(a)).toBe(btnOf(rows[1]));
+    expect(doc.activeElement).toBe(btnOf(rows[1]));
+  });
+
+  it("the opener is gone and focus was lost: its stand-in", () => {
+    const a = anchorOf(btnOf(rows[1]) as unknown as HTMLElement);
+    rows[1].remove();
+    doc.activeElement = doc.body;
+    closeModalFocus(a);
+    expect(doc.activeElement).toBe(btnOf(rows[2]));
+  });
+
+  it("a sheet and its confirm close together: the stand-in never takes focus from the sheet's opener", () => {
+    // Confirm's opener was the sheet's button, gone with the sheet; the sheet already put focus back.
+    const sheet = new El("sheet", { "data-nav-modal": "" });
+    const uninstall = new El("uninstall", {}, "BUTTON");
+    content.add(sheet.add(uninstall));
+    const card = btnOf(rows[2]);
+    const confirm = anchorOf(uninstall as unknown as HTMLElement);
+    const opener = anchorOf(card as unknown as HTMLElement);
+    sheet.remove();
+    // Whichever cleanup React runs first, focus ends on the card.
+    doc.activeElement = doc.body;
+    closeModalFocus(opener);
+    closeModalFocus(confirm);
+    expect(doc.activeElement).toBe(card);
+    doc.activeElement = doc.body;
+    closeModalFocus(confirm);
+    closeModalFocus(opener);
+    expect(doc.activeElement).toBe(card);
   });
 });
 

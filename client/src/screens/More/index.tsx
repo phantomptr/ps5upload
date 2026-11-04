@@ -471,7 +471,7 @@ export function MoreRow({
               ? tr("nav_show_item", { name: label }, "Show {name} in the sidebar")
               : tr("nav_hide_item", { name: label }, "Hide {name} from the sidebar")
           }
-          className={`mr-2 hidden h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--color-surface-3)] md:flex ${
+          className={`me-2 hidden h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--color-surface-3)] md:flex ${
             hidden ? "text-[var(--color-muted)] opacity-60 hover:opacity-100" : "text-[var(--color-accent)]"
           }`}
         >

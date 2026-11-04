@@ -916,7 +916,7 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
                 "On this PS5",
               )}
             >
-              <span className="mr-1 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
+              <span className="me-1 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
                 {consoleEntry?.loading
                   ? tr(
                       "collection.console_reading",
@@ -1171,7 +1171,7 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
       {selecting && (
         // The selection's actions, kept in view while the grid scrolls.
         <div className="sticky bottom-3 z-20 mt-4 flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-float)] px-4 py-3 text-sm shadow-lg backdrop-blur">
-          <span className="mr-auto tabular-nums">
+          <span className="me-auto tabular-nums">
             {tr("collection.selected_n", { n: selected.size }, "{n} selected")}
           </span>
           <Button
