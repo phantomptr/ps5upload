@@ -25,10 +25,26 @@ pub struct LocalEntry {
 
 /// List a real local directory: directories first, then files, each
 /// alphabetical (case-insensitive). Unreadable entries are skipped rather
-/// than failing the whole listing.
+/// than failing the whole listing. With `limit`, one page of that order from `offset`: the in-app
+/// browser asks for pages, since a folder of 100k entries (a phone's camera backup, say) as one
+/// IPC reply is many MB of JSON. Off the async workers: a read and a stat per entry.
 #[tauri::command]
-pub async fn local_list_dir(path: String) -> Result<Vec<LocalEntry>, String> {
-    let rd = std::fs::read_dir(&path).map_err(|e| format!("read_dir {path}: {e}"))?;
+pub async fn local_list_dir(
+    path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<Vec<LocalEntry>, String> {
+    tokio::task::spawn_blocking(move || read_sorted(&path, offset, limit))
+        .await
+        .map_err(|e| format!("local_list_dir: {e}"))?
+}
+
+fn read_sorted(
+    path: &str,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<Vec<LocalEntry>, String> {
+    let rd = std::fs::read_dir(path).map_err(|e| format!("read_dir {path}: {e}"))?;
     let mut out: Vec<LocalEntry> = Vec::new();
     for ent in rd.flatten() {
         let md = match ent.metadata() {
@@ -47,6 +63,10 @@ pub async fn local_list_dir(path: String) -> Result<Vec<LocalEntry>, String> {
         (false, true) => std::cmp::Ordering::Greater,
         _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
+    let start = offset.unwrap_or(0).min(out.len());
+    let end = limit.map_or(out.len(), |n| start.saturating_add(n).min(out.len()));
+    out.truncate(end);
+    out.drain(..start);
     Ok(out)
 }
 
@@ -175,7 +195,7 @@ mod tests {
         std::fs::write(tmp.join("b.txt"), b"hello").unwrap();
         std::fs::write(tmp.join("A.bin"), b"xy").unwrap();
 
-        let out = local_list_dir(tmp.to_string_lossy().into_owned())
+        let out = local_list_dir(tmp.to_string_lossy().into_owned(), None, None)
             .await
             .unwrap();
         let names: Vec<&str> = out.iter().map(|e| e.name.as_str()).collect();
@@ -192,7 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_list_dir_errors_on_missing_dir() {
-        let r = local_list_dir("/no/such/ps5upload-test-dir-xyz".into()).await;
+        let r = local_list_dir("/no/such/ps5upload-test-dir-xyz".into(), None, None).await;
         assert!(r.is_err());
     }
 
@@ -474,5 +494,35 @@ mod android {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod paging_tests {
+    use super::read_sorted;
+
+    #[test]
+    fn pages_follow_the_listing_order_and_end_cleanly() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-local-page-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder")).unwrap();
+        for name in ["b.txt", "A.txt", "c.txt"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let path = dir.to_string_lossy().into_owned();
+        let names = |offset, limit| -> Vec<String> {
+            read_sorted(&path, offset, limit)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.name)
+                .collect()
+        };
+        // No limit: everything, as every caller but the browser wants it.
+        assert_eq!(names(None, None), ["folder", "A.txt", "b.txt", "c.txt"]);
+        assert_eq!(names(Some(0), Some(2)), ["folder", "A.txt"]);
+        assert_eq!(names(Some(2), Some(2)), ["b.txt", "c.txt"]);
+        assert_eq!(names(Some(3), Some(2)), ["c.txt"]);
+        assert!(names(Some(9), Some(2)).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

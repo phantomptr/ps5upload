@@ -32,9 +32,10 @@ use tokio::time::timeout;
 /// companion.
 #[derive(Clone, Copy)]
 struct Companion {
-    /// UI-facing short name. Shown as-is in the Connection strip chip.
+    /// UI-facing short name, in English: the Connection strip words it from the port
+    /// (`companionLabels` in screens/Connection) and falls back to this.
     name: &'static str,
-    /// Purpose blurb. Deliberately terse — the About page's tier writeup
+    /// Purpose blurb, the same way. Deliberately terse — the About page's tier writeup
     /// is where the longer story lives.
     role: &'static str,
     /// TCP port the tool listens on when running.
@@ -57,8 +58,16 @@ struct Companion {
 /// would just clutter the code without affecting the user's strip.
 const COMPANIONS: &[Companion] = &[
     Companion {
-        name: "Homebrew enabler",
+        name: "etaHEN",
         role: "Homebrew enabler + launcher",
+        port: 9028,
+        web: false,
+    },
+    // Both etaHEN and shsrv serve a telnet shell here, so this port alone says nothing about
+    // which is loaded (it used to read "Homebrew enabler" for a console with only shsrv).
+    Companion {
+        name: "Telnet shell",
+        role: "Telnet shell (etaHEN or shsrv)",
         port: 2323,
         web: false,
     },

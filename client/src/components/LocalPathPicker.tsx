@@ -445,8 +445,9 @@ export function LocalPathPicker() {
           setCursor(page.next_cursor);
           writeLastDir(connectionId, path);
         } else {
-          setEntries(await localFs.listDir(path));
-          setCursor(null);
+          const page = await localFs.listDirPage(path, more ? Number(more) : 0);
+          setEntries((prev) => (more ? [...prev, ...page.entries] : page.entries));
+          setCursor(page.next === null ? null : String(page.next));
         }
         setCwd(path);
       } catch (e) {

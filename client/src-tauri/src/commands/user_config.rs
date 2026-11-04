@@ -205,7 +205,10 @@ fn config_base_dir(app: &AppHandle) -> Result<PathBuf, String> {
 ///
 /// The engine sidecar keeps its connections and identity in memory and writes
 /// them back under the config base dir, so it is stopped before the wipe and
-/// started again afterwards (a remote engine is left alone). The renderer owns
+/// started again afterwards (a remote engine is left alone). On a phone the engine
+/// runs inside the app and cannot be stopped: its folder is wiped as well, and whatever
+/// it writes back from memory goes on the next launch (`mark_engine_data_for_reset`), so
+/// the renderer has the app close to finish. The renderer owns
 /// clearing its localStorage + reloading the window; this command only touches
 /// the filesystem. Returns a count of items removed.
 #[tauri::command]
@@ -252,6 +255,17 @@ fn wipe_app_data(app: &AppHandle) -> Result<usize, String> {
         let _ = std::fs::create_dir_all(&base);
     }
 
+    // Mobile: the in-process engine's folder (saved consoles, pairings, its identity).
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    if let Ok(data) = app.path().app_data_dir() {
+        let engine_data = std::env::var_os("PS5UPLOAD_DATA_DIR")
+            .filter(|v| !v.is_empty())
+            .map_or_else(|| data.join("ps5upload"), PathBuf::from);
+        mark_engine_data_for_reset(&data, &engine_data)
+            .map_err(|e| format!("reset {engine_data:?}: {e}"))?;
+        removed += 1;
+    }
+
     // 2. app_data stores — surgical (NOT the whole app_data_dir).
     let mut targets: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(data) = app.path().app_data_dir() {
@@ -283,4 +297,92 @@ fn wipe_app_data(app: &AppHandle) -> Result<usize, String> {
     }
 
     Ok(removed)
+}
+
+/// Beside the app's data: the engine's folder is to be emptied before the next start.
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+const ENGINE_RESET_MARKER: &str = "engine-data-reset-pending";
+
+/// Reset of an engine that is running in this process: empty its folder now, so nothing of it is
+/// left whatever happens next, and leave a marker first, because the running engine still holds
+/// its data in memory and may write some of it back before the app ends.
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+fn mark_engine_data_for_reset(data_dir: &Path, engine_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(data_dir)?;
+    std::fs::write(data_dir.join(ENGINE_RESET_MARKER), b"")?;
+    if engine_dir.exists() {
+        std::fs::remove_dir_all(engine_dir)?;
+    }
+    // Empty but there: the running engine's next write must not fail on a missing parent.
+    std::fs::create_dir_all(engine_dir)
+}
+
+/// Before the engine starts (`engine_mobile.rs`): finish a reset the last run marked.
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+pub(crate) fn finish_engine_data_reset(data_dir: &Path, engine_dir: &Path) {
+    let marker = data_dir.join(ENGINE_RESET_MARKER);
+    if !marker.exists() {
+        return;
+    }
+    // The marker goes only once the folder has: a failure is tried again on the next launch.
+    if !engine_dir.exists() || std::fs::remove_dir_all(engine_dir).is_ok() {
+        let _ = std::fs::remove_file(marker);
+    }
+}
+
+/// Phone apps: end the process so the reset finishes on the next launch (see `app_data_reset`).
+/// The engine shares the process, and leaving the app does not always end that. Does nothing on
+/// desktop, whose reset restarts the engine by itself.
+#[tauri::command]
+pub async fn app_close_after_reset() {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    std::process::exit(0);
+}
+
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ps5upload-reset-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn a_phone_reset_empties_the_engine_folder_and_what_it_writes_back_goes_next_launch() {
+        // F7: saved consoles, pairings and the identity survived "Reset all data" on a phone.
+        let data = scratch("phone");
+        let engine = data.join("ps5upload");
+        std::fs::create_dir_all(engine.join("cache")).unwrap();
+        std::fs::write(engine.join("connections.json"), b"saved").unwrap();
+
+        mark_engine_data_for_reset(&data, &engine).unwrap();
+        assert!(engine.is_dir(), "there for the running engine");
+        assert_eq!(std::fs::read_dir(&engine).unwrap().count(), 0, "emptied");
+
+        // The running engine still has it all in memory.
+        std::fs::write(engine.join("connections.json"), b"written back").unwrap();
+        finish_engine_data_reset(&data, &engine);
+        assert!(!engine.join("connections.json").exists());
+        assert!(!data.join(ENGINE_RESET_MARKER).exists(), "done");
+
+        // A normal launch after that touches nothing.
+        std::fs::create_dir_all(&engine).unwrap();
+        std::fs::write(engine.join("connections.json"), b"new").unwrap();
+        finish_engine_data_reset(&data, &engine);
+        assert!(engine.join("connections.json").exists());
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn a_reset_of_an_engine_that_never_wrote_anything_still_works() {
+        let data = scratch("empty");
+        let engine = data.join("ps5upload");
+        mark_engine_data_for_reset(&data, &engine).unwrap();
+        finish_engine_data_reset(&data, &engine);
+        assert!(!data.join(ENGINE_RESET_MARKER).exists());
+        let _ = std::fs::remove_dir_all(&data);
+    }
 }

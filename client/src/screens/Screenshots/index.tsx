@@ -49,6 +49,7 @@ import {
   joinDir,
   isJxrScreenshot,
 } from "../../lib/screenshotConvert";
+import { shellErrorText } from "../../lib/shellError";
 import { isMobile } from "../../lib/platform";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { formatDate } from "../../lib/formatDate";
@@ -285,7 +286,7 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
         await convertScreenshot(localJxr, localPng, true, mode);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(shellErrorText(e instanceof Error ? e.message : String(e), tr));
     } finally {
       setConvertingPaths((s) => {
         const next = new Set(s);
@@ -351,7 +352,7 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
         return p;
       });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = shellErrorText(e instanceof Error ? e.message : String(e), tr);
       if (tempDir) await saveArchiveCleanupTemp(tempDir).catch(() => {});
       setPreview((p) =>
         p && p.item.path === item.path

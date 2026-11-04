@@ -59,7 +59,16 @@ import { useKeepAwakeStore } from "../../state/keepAwake";
 import { NotificationSettingsPanel } from "../Notifications/NotificationSettings";
 import { useLangStore, useTr, LANGUAGES } from "../../state/lang";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
-import { useEngineStore, DEFAULT_ENGINE_URL, setLiveEngineUrl } from "../../state/engine";
+import {
+  useEngineStore,
+  DEFAULT_ENGINE_URL,
+  engineRunsElsewhere,
+  isLoopbackUrl,
+  setLiveEngineUrl,
+} from "../../state/engine";
+import { invoke } from "../../lib/invokeLogged";
+import { shellErrorText } from "../../lib/shellError";
+import { formatBytes } from "../../lib/format";
 import { engineRestart } from "../../lib/engineDiagnosis";
 import { useConnectionStore } from "../../state/connection";
 import { useSaveSettingsStore, DEFAULT_SAVE_PATH } from "../../state/saveSettings";
@@ -75,7 +84,7 @@ import { openExternalUrl } from "../../lib/openExternalUrl";
 import { releasePageUrl } from "../../layout/UpdateToast";
 import { isIOS, isMobile } from "../../lib/platform";
 import { apkUpdaterAvailable } from "../../state/apkUpdate";
-import { ApkUpdateStatus } from "../../layout/ApkUpdateStatus";
+import { ApkProgress, ApkUpdateStatus } from "../../layout/ApkUpdateStatus";
 import { settingsVisibility } from "./visibility";
 import type { LanguageCode } from "../../i18n";
 // Static imports for stores already pulled into the main bundle by
@@ -279,6 +288,8 @@ function EngineUrlSection() {
   const tr = useTr();
   const engineUrl = useEngineStore((s) => s.engineUrl);
   const setEngineUrl = useEngineStore((s) => s.setEngineUrl);
+  const runningAt = useEngineStore((s) => s.runningAt);
+  const elsewhere = engineRunsElsewhere({ engineUrl, runningAt });
   const [draft, setDraft] = useState(engineUrl);
 
   return (
@@ -313,7 +324,16 @@ function EngineUrlSection() {
           ) : null
         }
       />
-      {isTauriEnv() && engineUrl === DEFAULT_ENGINE_URL && <RestartEngineRow />}
+      {elsewhere && (
+        <p className="mt-2 text-xs text-[var(--color-warn)]" data-testid="engine-runs-elsewhere">
+          {tr(
+            "engine_url_runs_elsewhere",
+            { running: runningAt ?? "", wanted: engineUrl },
+            "This computer's engine is running at {running}. Restart the engine to move it to {wanted}.",
+          )}
+        </p>
+      )}
+      {isTauriEnv() && isLoopbackUrl(engineUrl) && <RestartEngineRow />}
     </Section>
   );
 }
@@ -344,7 +364,7 @@ function RestartEngineRow() {
       useConnectionStore.getState().setStatus({ engineStatus: "up", engineError: null });
       setNote({ ok: true, text: tr("engine_restart_done", undefined, "The engine restarted.") });
     } catch (e) {
-      setNote({ ok: false, text: e instanceof Error ? e.message : String(e) });
+      setNote({ ok: false, text: shellErrorText(e instanceof Error ? e.message : String(e), tr) });
     } finally {
       setBusy(false);
     }
@@ -668,9 +688,9 @@ export default function SettingsScreen() {
                     )}
               </div>
             )}
-            {lastError && (
+            {lastError && supported && (
               <div className="mt-1 text-xs text-[var(--color-bad)]">
-                {lastError}
+                {shellErrorText(lastError, tr)}
               </div>
             )}
           </div>
@@ -1713,6 +1733,26 @@ function ResetPanel() {
     setError(null);
     try {
       await resetAllAppData();
+      const resetAt = Date.now();
+      // A phone's engine runs inside the app and still holds its data in memory: the reset
+      // finishes when the process has ended and the app is opened again.
+      if (tauri && isMobile()) {
+        const close = await confirm({
+          title: tr("reset_mobile_finish_title", undefined, "One more step"),
+          message: tr(
+            "reset_mobile_finish_body",
+            undefined,
+            "Your data is deleted. PS5Upload has to close to finish the reset. Open it again afterwards.",
+          ),
+          confirmLabel: tr("reset_mobile_finish_action", undefined, "Close PS5Upload"),
+        });
+        if (close) {
+          // The WebView writes the cleared storage to disk a few seconds later; ended before
+          // that, the old settings would be back on the next launch.
+          await new Promise((r) => setTimeout(r, Math.max(0, 6000 - (Date.now() - resetAt))));
+          await invoke("app_close_after_reset").catch(() => {});
+        }
+      }
       // Reload so every store re-initialises from defaults.
       window.location.reload();
     } catch (e) {
@@ -1859,6 +1899,7 @@ function UpdatesPanel() {
   return (
     <div className="flex flex-col gap-3">
       <StatusRow phase={phase} />
+      {phase.kind === "downloading" && !mobile && <UpdateDownloadProgressRow />}
       {failed && (
         <div className="rounded-[var(--radius-card)] border border-[var(--color-warn)] bg-[var(--color-surface)] p-3 text-xs">
           <div className="mb-1 font-medium text-[var(--color-warn)]">
@@ -2260,6 +2301,40 @@ function pickInstallHint(
     "install_hint_generic",
     undefined,
     "Replace the existing PS5Upload with the newly downloaded file.",
+  );
+}
+
+/** The desktop download's bar, how much of how much, and the way to stop it. */
+function UpdateDownloadProgressRow() {
+  const tr = useTr();
+  const progress = useUpdateStore((s) => s.downloadProgress);
+  const cancelDownload = useUpdateStore((s) => s.cancelDownload);
+  const received = progress?.received ?? 0;
+  const total = progress?.total ?? 0;
+  return (
+    <div className="flex flex-col gap-1 text-xs">
+      <ApkProgress received={received} total={total} />
+      <div className="flex flex-wrap items-center gap-3 text-[var(--color-muted)]">
+        {received > 0 && (
+          <span>
+            {total > 0
+              ? tr(
+                  "update_download_size",
+                  { received: formatBytes(received), total: formatBytes(total) },
+                  "{received} of {total}",
+                )
+              : formatBytes(received)}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => void cancelDownload()}
+          className="underline-offset-2 hover:text-[var(--color-text)] hover:underline max-md:min-h-11"
+        >
+          {tr("update_download_cancel", undefined, "Cancel download")}
+        </button>
+      </div>
+    </div>
   );
 }
 
