@@ -68,7 +68,7 @@ export function metaSourceForTitleId(titleId: string): MetaSource | null {
 /** Extract the PS title id (4 letters + 5 digits, e.g. PPSA01342 / CUSA12345)
  *  from a ContentID like "EP4040-PPSA01342_00-DEADSPACEPS5BB00". Returns null
  *  when the id has no recognizable title id (headerless pkg, empty string). */
-export function titleIdFromContentId(
+export function findTitleId(
   contentId: string | null | undefined,
 ): string | null {
   if (!contentId) return null;
