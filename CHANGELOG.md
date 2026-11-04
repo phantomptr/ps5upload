@@ -4,6 +4,13 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.0.8
+
+- **A friend's buttons hide right away on a phone.** When a friend joins, the TV asks who's
+  using their controller; until someone picked a user, the card with the buttons stayed in the
+  middle of a phone's screen with no way to hide it. It now shows the ask once, and **Hide** (or
+  press and hold) puts it away at once.
+
 ## 11.0.7
 
 - **NAS connections with Chinese (or Japanese, Korean…) names work again (For #663).** Since

@@ -191,8 +191,14 @@ export function JoinView({
   // (away from the controller), the controller's menu button or Hide; full screen starts
   // without them. A mouse or keyboard keeps the quiet-moment hiding.
   const touch = coarsePointer();
-  const chrome = useAutoHide(autoHide, reconnecting || picking || barHover || barFocus, touch);
+  // Picking a user on the TV holds the buttons up for a mouse; on touch it only shows them
+  // once (below), and Hide works at once: a friend wasn't left with a card in the middle of
+  // the game until someone picked a user on the TV.
+  const chrome = useAutoHide(autoHide, reconnecting || (picking && !touch) || barHover || barFocus, touch);
   const { poke } = chrome;
+  useEffect(() => {
+    if (picking && touch) poke();
+  }, [picking, touch, poke]);
   const hold = useRef<{ id: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const endHold = () => {
     if (hold.current) clearTimeout(hold.current.timer);
@@ -374,7 +380,7 @@ export function JoinView({
   );
   const actions = (
     <>
-      {autoHide && touch && chrome.shown && !(reconnecting || picking) && (
+      {autoHide && touch && chrome.shown && !reconnecting && (
         <button
           type="button"
           onClick={chrome.hide}

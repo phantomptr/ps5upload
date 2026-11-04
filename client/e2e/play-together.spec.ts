@@ -363,7 +363,9 @@ test.describe("a friend's phone", () => {
   test("plays with the on-screen controller", async ({ page }) => {
     await serveJoinPage(page);
     const frames: number[][] = [];
+    let say: (m: object) => void = () => {};
     await page.routeWebSocket(/\/api\/join\/ws/, (ws) => {
+      say = (m) => ws.send(JSON.stringify(m));
       ws.onMessage((m) => {
         if (typeof m !== "string") return void frames.push([...m]);
         if (m.includes("hello")) ws.send(JSON.stringify({ stage: "joined", player: 3, token: "T3", hevc: false }));
@@ -411,6 +413,14 @@ test.describe("a friend's phone", () => {
     await press(700);
     await expect(bar).toHaveAttribute("data-shown", "1");
     await press(700);
+    await expect(bar).toHaveAttribute("data-shown", "0");
+
+    // The TV asks who's using the controller: the card shows with the ask, and Hide works at
+    // once (it used to stay pinned until someone picked a user on the TV).
+    say({ status: { player: 3, state: "picking_user", rtt_ms: 12, host: "Ann", block_system: true } });
+    await expect(bar).toHaveAttribute("data-shown", "1");
+    await expect(page.getByTestId("join-picking")).toBeVisible();
+    await page.getByTestId("join-hide-controls").tap();
     await expect(bar).toHaveAttribute("data-shown", "0");
   });
 });
