@@ -62,6 +62,12 @@ export function driveDetailText(
         a,
         "{path} changed on {console} while it was syncing. It syncs next time.",
       );
+    case "confirm_deletes":
+      return tr(
+        "drive_confirm_text",
+        a,
+        "{count} files would be deleted everywhere. Nothing was deleted yet.",
+      );
     case "too_many_files":
       return tr(
         "drive_detail_too_many_files",

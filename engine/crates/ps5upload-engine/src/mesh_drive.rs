@@ -26,7 +26,7 @@
 //! * `POST /api/drive/pause`   `{addr,drive,member,paused}`
 //! * `POST /api/drive/sync`    `{addr,drive}`                   (a pass now)
 //! * `POST /api/drive/confirm` `{addr,drive,member}`            (let a held-back mass delete run)
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -123,6 +123,11 @@ pub struct Link {
     pub state: String,
     #[serde(default)]
     pub error: String,
+    /// Which of the engine's sentences `error` is, for the reader's language (none: a raw error).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error_code: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub error_args: BTreeMap<String, String>,
     #[serde(default)]
     pub last_sync: u64,
     #[serde(default)]
@@ -199,6 +204,11 @@ pub struct Member {
     pub state: String,
     #[serde(default)]
     pub error: String,
+    /// Which of the engine's sentences `error` is, for the reader's language (none: a raw error).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error_code: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub error_args: BTreeMap<String, String>,
     #[serde(default)]
     pub files: u64,
     #[serde(default)]
@@ -235,8 +245,13 @@ fn doc_read(addr: &str) -> Result<Option<(u64, DriveDoc)>> {
     // A list this version cannot read is never taken as empty: writing it back would drop every
     // drive in it.
     let doc = match v.get("doc") {
-        Some(d) if d.is_object() => serde_json::from_value(d.clone())
-            .map_err(|e| anyhow!("the console's drive list cannot be read by this version: {e}"))?,
+        Some(d) if d.is_object() => serde_json::from_value(d.clone()).map_err(|e| {
+            said_err(
+                "list_unreadable",
+                &[],
+                format!("the console's drive list cannot be read by this version: {e}"),
+            )
+        })?,
         _ => DriveDoc::default(),
     };
     Ok(Some((rev, doc)))
@@ -353,7 +368,13 @@ pub struct Status {
     /// idle, syncing, waiting (another device is syncing), offline, paused, pending (not let in
     /// yet), confirm (a mass delete waits), error, removed.
     pub state: String,
+    /// In English; `detail_code` and `detail_args` say which sentence it is, for the client to
+    /// word in the user's language (no code: a raw error, shown as it is).
     pub detail: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub detail_code: String,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub detail_args: BTreeMap<String, String>,
     pub last_ok: u64,
     pub files: usize,
     pub uploaded: usize,
@@ -375,6 +396,105 @@ pub struct Status {
     /// console stands in.
     pub away: String,
     pub away_since: u64,
+}
+
+impl Status {
+    fn say(&mut self, said: Said) {
+        self.detail = said.text;
+        self.detail_code = said.code;
+        self.detail_args = said.args;
+    }
+
+    fn say_nothing(&mut self) {
+        self.say(Said::default());
+    }
+
+    fn said(&self) -> Said {
+        Said {
+            text: self.detail.clone(),
+            code: self.detail_code.clone(),
+            args: self.detail_args.clone(),
+        }
+    }
+}
+
+/// A sentence for a person: the English, and (for the engine's own sentences) a code and what goes
+/// in it, which the client words in the user's language. A raw error has no code.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Said {
+    text: String,
+    code: String,
+    args: BTreeMap<String, String>,
+}
+
+impl Said {
+    fn raw(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            ..Self::default()
+        }
+    }
+
+    fn coded(code: &str, args: &[(&str, &str)], text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            code: code.into(),
+            args: args
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+        }
+    }
+
+    /// What a failure says: its code if it carries one, else its words as they are.
+    fn of(e: &anyhow::Error) -> Self {
+        let text = format!("{e:#}");
+        match e.chain().find_map(|c| c.downcast_ref::<SaidError>()) {
+            Some(SaidError(said)) => Self {
+                text,
+                code: said.code.clone(),
+                args: said.args.clone(),
+            },
+            None => Self::raw(text),
+        }
+    }
+
+    /// For the console's document, which every device reads and writes back: kept short.
+    fn for_document(&self) -> Self {
+        Self {
+            text: self.text.chars().take(300).collect(),
+            code: self.code.clone(),
+            args: self
+                .args
+                .iter()
+                .map(|(k, v)| (k.clone(), v.chars().take(200).collect()))
+                .collect(),
+        }
+    }
+}
+
+/// A failure that is one of the engine's own sentences.
+#[derive(Debug)]
+struct SaidError(Said);
+
+impl std::fmt::Display for SaidError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.text)
+    }
+}
+
+impl std::error::Error for SaidError {}
+
+fn said_err(code: &str, args: &[(&str, &str)], text: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(SaidError(Said::coded(code, args, text)))
+}
+
+fn too_many_files() -> anyhow::Error {
+    said_err(
+        "too_many_files",
+        &[("limit", &MAX_FILES.to_string())],
+        format!("more than {MAX_FILES} files: too many for a Mesh Drive"),
+    )
 }
 
 /// What a member's engine remembers between passes (not saved: a restart lists everything again).
@@ -607,7 +727,8 @@ fn set_away_status(member: &str, addr: &str) {
         s.state = "offline".into();
         s.away = why.as_str().into();
         s.away_since = since;
-        s.detail = match why {
+        // The client words this from `away`.
+        s.say(Said::raw(match why {
             AwayWhy::Rest => {
                 format!("{addr} is in rest mode; changes made here sync when it wakes")
             }
@@ -617,7 +738,7 @@ fn set_away_status(member: &str, addr: &str) {
             AwayWhy::Helper => {
                 format!("{addr} is on but its helper is not running; send it and syncing resumes")
             }
-        };
+        }));
         s.todo = 0;
         s.done = 0;
         s.current.clear();
@@ -736,7 +857,7 @@ fn walk_local(root: &Path) -> Result<Listing> {
                     },
                 );
                 if out.len() > MAX_FILES {
-                    bail!("more than {MAX_FILES} files: too many for a Mesh Drive");
+                    return Err(too_many_files());
                 }
             }
         }
@@ -781,7 +902,7 @@ fn walk_hub(addr: &str, hub: &str) -> Result<Listing> {
                             },
                         );
                         if out.len() > MAX_FILES {
-                            bail!("more than {MAX_FILES} files: too many for a Mesh Drive");
+                            return Err(too_many_files());
                         }
                     }
                     _ => {}
@@ -1173,9 +1294,13 @@ impl Side for LocalSide {
                     std::fs::create_dir_all(parent)?;
                 }
                 if local_stat(&target) != expect {
-                    bail!(
-                        "{rel} changed on this device while it was syncing; it is synced next pass"
-                    );
+                    return Err(said_err(
+                        "changed_here",
+                        &[("path", rel)],
+                        format!(
+                            "{rel} changed on this device while it was syncing; it is synced next pass"
+                        ),
+                    ));
                 }
                 std::fs::rename(&got, &target).with_context(|| format!("place {rel}"))
             });
@@ -1397,10 +1522,14 @@ impl Side for ConsoleSide {
         let target = self.path(rel);
         let r = console_copy(hub_addr, &join_hub(hub, rel), &self.addr, &tmp).and_then(|_| {
             if self.stat(rel) != expect {
-                bail!(
-                    "{rel} changed on {} while it was syncing; it is synced next pass",
-                    self.addr
-                );
+                return Err(said_err(
+                    "changed_there",
+                    &[("path", rel), ("console", &self.addr)],
+                    format!(
+                        "{rel} changed on {} while it was syncing; it is synced next pass",
+                        self.addr
+                    ),
+                ));
             }
             if let Some(parent) = target.rsplit_once('/').map(|(d, _)| d) {
                 fs_ops::fs_mkdir(&self.addr, parent)?;
@@ -1457,13 +1586,22 @@ impl Side for ConsoleSide {
                 None => return Ok(Base::new()),
             },
         };
-        serde_json::from_slice(&bytes)
-            .map_err(|e| anyhow!("the link's record on {} is damaged: {e}", self.addr))
+        serde_json::from_slice(&bytes).map_err(|e| {
+            said_err(
+                "link_record_damaged",
+                &[("console", &self.addr)],
+                format!("the link's record on {} is damaged: {e}", self.addr),
+            )
+        })
     }
     fn save_base(&self, _drive: &str, _member: &str, base: &Base) -> Result<()> {
         let body = serde_json::to_vec(base)?;
         if body.len() > CONSOLE_BASE_MAX {
-            bail!("too many files for a drive folder on a second console");
+            return Err(said_err(
+                "too_many_for_console",
+                &[],
+                "too many files for a drive folder on a second console",
+            ));
         }
         let dir = join_hub(&self.root, TRASH);
         fs_ops::fs_mkdir(&self.addr, &dir)?;
@@ -1596,27 +1734,37 @@ impl Pass<'_> {
         if !self.side.has_marker() {
             set_status(member_id, |s| {
                 s.state = "offline".into();
-                s.detail = format!(
-                    "{} is missing its {MARKER} file (unplugged or moved?)",
-                    self.side.describe()
-                );
+                let path = self.side.describe();
+                s.say(Said::coded(
+                    "side_no_marker",
+                    &[("path", &path)],
+                    format!("{path} is missing its {MARKER} file (unplugged or moved?)"),
+                ));
             });
             return Ok(Changed::default());
         }
         if hub_stat(self.addr, &join_hub(&self.drive.hub, MARKER)).is_none() {
             set_status(member_id, |s| {
                 s.state = "offline".into();
-                s.detail = format!(
-                    "the drive's folder on the console ({}) is missing its {MARKER} file",
-                    self.drive.hub
-                );
+                s.say(Said::coded(
+                    "hub_no_marker",
+                    &[("path", &self.drive.hub)],
+                    format!(
+                        "the drive's folder on the console ({}) is missing its {MARKER} file",
+                        self.drive.hub
+                    ),
+                ));
             });
             return Ok(Changed::default());
         }
         if self.install_running() {
             set_status(member_id, |s| {
                 s.state = "waiting".into();
-                s.detail = "an install is running on the console".into();
+                s.say(Said::coded(
+                    "install_running",
+                    &[],
+                    "an install is running on the console",
+                ));
             });
             return Ok(Changed::default());
         }
@@ -1644,7 +1792,7 @@ impl Pass<'_> {
             set_status(member_id, |s| {
                 if s.state != "error" && s.state != "confirm" {
                     s.state = "idle".into();
-                    s.detail.clear();
+                    s.say_nothing();
                     s.last_ok = now_ms();
                 }
             });
@@ -1652,7 +1800,7 @@ impl Pass<'_> {
         }
         set_status(member_id, |s| {
             s.state = "syncing".into();
-            s.detail.clear();
+            s.say_nothing();
         });
         let hub = walk_hub(self.addr, &self.drive.hub)?;
         let mut base = self.side.load_base(&self.drive.id, member_id)?;
@@ -1723,7 +1871,7 @@ impl Pass<'_> {
         let mut touched: HashMap<String, (Option<Meta>, Option<Meta>)> = HashMap::new();
         // Uploaded while being edited: left for the next pass, never settled from a listing.
         let mut edited: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut first_error: Option<String> = None;
+        let mut first_error: Option<Said> = None;
         // Deleted here and on the hub: the folders they lay in go too once nothing is left in
         // them, so a folder deleted on one device leaves no empty copy of itself on the others.
         let (mut gone_member, mut gone_hub): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
@@ -1768,9 +1916,7 @@ impl Pass<'_> {
                 }
             }
             if self.lost.load(Ordering::SeqCst) {
-                first_error.get_or_insert_with(|| {
-                    "another device took over the drive's lock; this pass stopped".into()
-                });
+                first_error.get_or_insert_with(lock_taken);
                 break;
             }
             let rel = op.path().to_string();
@@ -1888,9 +2034,7 @@ impl Pass<'_> {
                 Err(e) => {
                     // Stopped because another device took the drive's lock: not the file's fault.
                     if self.lost.load(Ordering::SeqCst) {
-                        first_error.get_or_insert_with(|| {
-                            "another device took over the drive's lock; this pass stopped".into()
-                        });
+                        first_error.get_or_insert_with(lock_taken);
                         break;
                     }
                     if let Some((addr, why)) = self.gone(&e) {
@@ -1906,7 +2050,7 @@ impl Pass<'_> {
                         break;
                     }
                     crate::log_warn!("mesh drive {}: {e:#}", self.drive.name);
-                    first_error.get_or_insert_with(|| format!("{e:#}"));
+                    first_error.get_or_insert_with(|| Said::of(&e));
                     with_runtime(member_id, |rt| {
                         let f = rt
                             .fails
@@ -1995,13 +2139,17 @@ impl Pass<'_> {
             s.held_deletes = held;
             if let Some(e) = &first_error {
                 s.state = "error".into();
-                s.detail = e.clone();
+                s.say(e.clone());
             } else if held > 0 {
                 s.state = "confirm".into();
-                s.detail = format!("{held} files would be deleted everywhere");
+                s.say(Said::coded(
+                    "confirm_deletes",
+                    &[("count", &held.to_string())],
+                    format!("{held} files would be deleted everywhere"),
+                ));
             } else {
                 s.state = "idle".into();
-                s.detail.clear();
+                s.say_nothing();
                 s.last_ok = now_ms();
             }
         });
@@ -2015,6 +2163,14 @@ impl Pass<'_> {
             planned: true,
         })
     }
+}
+
+fn lock_taken() -> Said {
+    Said::coded(
+        "lock_taken",
+        &[],
+        "another device took over the drive's lock; this pass stopped",
+    )
 }
 
 /// Takes `drive:<id>` on `addr` for one pass. False (and a "waiting" status unless it was in
@@ -2039,12 +2195,19 @@ fn take_drive_lock(addr: &str, drive: &Drive, member_id: &str) -> Result<bool> {
             return;
         }
         s.state = "waiting".into();
-        s.detail = took
-            .as_ref()
-            .and_then(|v| v.get("by_name"))
-            .and_then(Value::as_str)
-            .map(|n| format!("{n} is syncing it"))
-            .unwrap_or_default();
+        s.say(
+            took.as_ref()
+                .and_then(|v| v.get("by_name"))
+                .and_then(Value::as_str)
+                .map(|n| {
+                    Said::coded(
+                        "other_syncing",
+                        &[("name", n)],
+                        format!("{n} is syncing it"),
+                    )
+                })
+                .unwrap_or_default(),
+        );
     });
     Ok(false)
 }
@@ -2087,7 +2250,7 @@ fn pass_on(
         }
         set_status(member_id, |s| {
             s.state = "error".into();
-            s.detail = format!("{e:#}");
+            s.say(Said::of(e));
         });
     }
     Ok(Some(r))
@@ -2109,17 +2272,22 @@ fn sync_member(lm: &LocalMember, me: &str) -> Result<()> {
         Ok(None) => {
             set_status(&lm.member, |s| {
                 s.state = "offline".into();
-                s.detail = "the console's helper is older than 8.0.0".into();
+                s.say(Said::coded(
+                    "helper_old",
+                    &[],
+                    "the console's helper is older than 8.0.0",
+                ));
             });
             return Ok(());
         }
         // Its own console is away: a linked console holds the same drive (after a second miss
         // in a row: one dropped read is not "away").
         Err(e) => {
-            if away_why(&e).is_none() && e.to_string().contains("cannot be read by this version") {
+            let said = Said::of(&e);
+            if away_why(&e).is_none() && said.code == "list_unreadable" {
                 set_status(&lm.member, |s| {
                     s.state = "error".into();
-                    s.detail = format!("{e:#}");
+                    s.say(said);
                 });
                 return Ok(());
             }
@@ -2252,7 +2420,10 @@ fn failover(lm: &LocalMember) -> Result<()> {
         let (why, since) = away_of(&lm.console).unwrap_or((AwayWhy::Unreachable, now_ms()));
         set_status(&lm.member, |s| {
             if s.state == "idle" {
-                s.detail = format!("{home_name} is away: synced through {b}");
+                // The client words this from `away`.
+                s.say(Said::raw(format!(
+                    "{home_name} is away: synced through {b}"
+                )));
                 s.away = why.as_str().into();
                 s.away_since = since;
             }
@@ -2352,7 +2523,7 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
     // Either end away: the link waits (its state says so on the end that answers).
     for (end, other) in [(lo, hi), (hi, lo)] {
         if !worth_trying(end) {
-            set_link_state(other, id, end, "offline", "", false, None);
+            set_link_state(other, id, end, "offline", &Said::default(), false, None);
             return Ok(());
         }
     }
@@ -2361,7 +2532,7 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
         Ok(None) => return Ok(()),
         Err(e) => {
             mark_away(lo, away_why(&e).unwrap_or(AwayWhy::Unreachable));
-            set_link_state(hi, id, lo, "offline", "", false, None);
+            set_link_state(hi, id, lo, "offline", &Said::default(), false, None);
             return Ok(());
         }
     };
@@ -2373,7 +2544,7 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
         Ok(None) => return Ok(()),
         Err(e) => {
             mark_away(hi, away_why(&e).unwrap_or(AwayWhy::Unreachable));
-            set_link_state(lo, id, hi, "offline", "", false, None);
+            set_link_state(lo, id, hi, "offline", &Said::default(), false, None);
             return Ok(());
         }
     };
@@ -2456,7 +2627,7 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
         } else {
             set_status(&member_id, |s| {
                 s.state = "error".into();
-                s.detail = format!("{e:#}");
+                s.say(Said::of(e));
             });
         }
     }
@@ -2480,12 +2651,17 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
             .unwrap_or_else(|e| e.into_inner())
             .remove(&member_id);
     }
+    let error = if state == "error" {
+        st.said()
+    } else {
+        Said::default()
+    };
     set_link_state(
         lo,
         id,
         hi,
         state,
-        if state == "error" { &st.detail } else { "" },
+        &error,
         changed.hub,
         Some((b.members.len() as u64, consumed)),
     );
@@ -2494,7 +2670,7 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
         id,
         lo,
         state,
-        if state == "error" { &st.detail } else { "" },
+        &error,
         changed.side,
         Some((a.members.len() as u64, consumed)),
     );
@@ -2508,7 +2684,7 @@ fn set_link_state(
     id: &str,
     other: &str,
     state: &str,
-    error: &str,
+    error: &Said,
     bump: bool,
     circle_and_consumed: Option<(u64, bool)>,
 ) {
@@ -2517,7 +2693,7 @@ fn set_link_state(
         return;
     }
     let now = now_ms();
-    let error: String = error.chars().take(300).collect();
+    let error = error.for_document();
     let r = doc_update(at, |doc| {
         let Some(d) = doc.drives.iter_mut().find(|d| d.id == id) else {
             return Ok(false);
@@ -2529,7 +2705,7 @@ fn set_link_state(
             return Ok(bump);
         };
         let reported = l.other.get("reported").and_then(Value::as_u64).unwrap_or(0);
-        let mut news = bump || l.state != state || l.error != error;
+        let mut news = bump || l.state != state || l.error != error.text;
         if let Some((circle, consumed)) = circle_and_consumed {
             news |= l.circle != circle || (consumed && l.allow_deletes);
             l.circle = circle;
@@ -2541,7 +2717,9 @@ fn set_link_state(
             return Ok(false);
         }
         l.state = state.to_string();
-        l.error = error.clone();
+        l.error = error.text.clone();
+        l.error_code = error.code.clone();
+        l.error_args = error.args.clone();
         if state == "idle" {
             l.last_sync = now;
         }
@@ -2587,13 +2765,13 @@ fn report(
     }
     .to_string();
     let error = if state == "error" {
-        st.detail.chars().take(300).collect()
+        st.said().for_document()
     } else {
-        String::new()
+        Said::default()
     };
     let now = now_ms();
     let news = seen.state != state
-        || seen.error != error
+        || seen.error != error.text
         || seen.files != st.files as u64
         || seen.bytes != st.bytes
         || seen.app != env!("CARGO_PKG_VERSION")
@@ -2624,7 +2802,9 @@ fn report(
         }
         if let Some(m) = d.members.iter_mut().find(|m| m.id == member_id) {
             m.state = state.clone();
-            m.error = error.clone();
+            m.error = error.text.clone();
+            m.error_code = error.code.clone();
+            m.error_args = error.args.clone();
             m.files = st.files as u64;
             m.bytes = st.bytes;
             m.app = env!("CARGO_PKG_VERSION").to_string();
@@ -2677,7 +2857,11 @@ pub fn tick() {
                 crate::log_warn!("mesh drive {}: the pass panicked", lm.drive);
                 set_status(&lm.member, |s| {
                     s.state = "error".into();
-                    s.detail = "the last pass stopped unexpectedly; it is tried again".into();
+                    s.say(Said::coded(
+                        "pass_stopped",
+                        &[],
+                        "the last pass stopped unexpectedly; it is tried again",
+                    ));
                 });
             }
             Ok(Ok(())) => {}
@@ -4441,6 +4625,55 @@ mod tests {
             .unwrap()
             .get("lock_changed")
             .is_none());
+    }
+
+    #[test]
+    fn the_engines_sentences_carry_a_code_and_raw_errors_do_not() {
+        let e = said_err("changed_here", &[("path", "a.txt")], "a.txt changed");
+        let said = Said::of(&e);
+        assert_eq!(said.code, "changed_here");
+        assert_eq!(said.args["path"], "a.txt");
+        // The code survives the context a caller adds, and the words keep it too.
+        let wrapped = e.context("copy");
+        let said = Said::of(&wrapped);
+        assert_eq!(said.code, "changed_here");
+        assert_eq!(said.text, "copy: a.txt changed");
+        // A raw error stays as it is.
+        let said = Said::of(&anyhow!("upload x: no space"));
+        assert_eq!(said.code, "");
+        assert_eq!(said.text, "upload x: no space");
+        // Too long for the document: cut, on a character.
+        let long = "é".repeat(500);
+        let doc = Said::coded("c", &[("path", &long)], long.clone()).for_document();
+        assert_eq!(doc.text.chars().count(), 300);
+        assert_eq!(doc.args["path"].chars().count(), 200);
+    }
+
+    #[test]
+    fn a_status_says_its_code_and_clears_it_with_the_words() {
+        let mut s = Status::default();
+        s.say(Said::coded("helper_old", &[], "old"));
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["detail"], "old");
+        assert_eq!(v["detail_code"], "helper_old");
+        s.say_nothing();
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["detail"], "");
+        assert!(v.get("detail_code").is_none() && v.get("detail_args").is_none());
+    }
+
+    #[test]
+    fn a_drive_list_from_before_error_codes_reads_and_stays_the_same() {
+        let doc: DriveDoc = serde_json::from_value(json!({"drives": [{
+            "id": "d", "name": "n", "hub": "/h",
+            "members": [{"id": "m", "device": "x", "path": "/p", "error": "boom"}],
+            "links": [{"console": "c", "hub": "/h2", "error": "boom"}],
+        }]}))
+        .unwrap();
+        assert_eq!(doc.drives[0].members[0].error_code, "");
+        let back = serde_json::to_value(&doc).unwrap();
+        assert!(back["drives"][0]["members"][0].get("error_code").is_none());
+        assert!(back["drives"][0]["links"][0].get("error_args").is_none());
     }
 
     #[test]

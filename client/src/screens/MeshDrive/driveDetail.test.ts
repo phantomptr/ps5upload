@@ -37,6 +37,7 @@ describe("driveDetailText", () => {
       "pass_stopped",
       "changed_here",
       "changed_there",
+      "confirm_deletes",
       "too_many_files",
       "list_unreadable",
       "link_record_damaged",
