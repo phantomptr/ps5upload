@@ -42,10 +42,28 @@ import {
 } from "../../lib/cheatGames";
 import { useToast } from "../../state/toasts";
 import { reapplyToast } from "./reapplyToast";
+import { usePoll } from "../../lib/usePoll";
 
-/** Game details by host + title id, for the session: a version doesn't
- *  change while you browse, and each is a round trip to the console. */
-const detailsCache = new Map<string, AppInfoDetails | null>();
+/** Game details by host + title id, for a few minutes: a version doesn't change while you browse,
+ *  and each is a round trip to the console, but a patch install does change it. A read that
+ *  failed is not remembered. */
+const DETAILS_FOR_MS = 5 * 60 * 1000;
+const detailsCache = new Map<string, { details: AppInfoDetails; at: number }>();
+
+export function cachedDetails(key: string, now: number): AppInfoDetails | null {
+  const hit = detailsCache.get(key);
+  return hit && now - hit.at < DETAILS_FOR_MS ? hit.details : null;
+}
+
+export function cacheDetails(key: string, details: AppInfoDetails | null, now: number): void {
+  if (details) detailsCache.set(key, { details, at: now });
+  else detailsCache.delete(key);
+}
+
+if (typeof window !== "undefined") {
+  // An install, uninstall or patch changed what a title's version is.
+  window.addEventListener("ps5upload:library:invalidate", () => detailsCache.clear());
+}
 
 export default function CheatsScreen() {
   const tr = useTr();
@@ -89,6 +107,17 @@ export default function CheatsScreen() {
       setLoading(false);
     }
   }, [addr, up]);
+
+  // A game starting or closing unlocks or locks the switches: followed while this is on screen.
+  // usePoll holds off during transfers and while the window is hidden.
+  usePoll(
+    () =>
+      cheatsStatus(addr)
+        .then(setStatus)
+        .catch(() => {}),
+    5000,
+    { host: host ?? undefined, enabled: up, immediate: false },
+  );
 
   useEffect(() => {
     void refresh();
@@ -142,14 +171,17 @@ export default function CheatsScreen() {
       for (const g of ordered) {
         if (cancelled) return;
         const key = `${h}/${g.titleId}`;
-        if (!detailsCache.has(key)) {
-          detailsCache.set(key, await appInfoDetails(addr, g.titleId));
+        let read = cachedDetails(key, Date.now());
+        if (!read) {
+          read = await appInfoDetails(addr, g.titleId);
+          cacheDetails(key, read, Date.now());
         }
         if (cancelled) return;
+        const fresh = read;
         setDetails((prev) => {
-          if (prev.get(g.titleId) === detailsCache.get(key)) return prev;
+          if (prev.get(g.titleId) === fresh) return prev;
           const next = new Map(prev);
-          next.set(g.titleId, detailsCache.get(key) ?? null);
+          next.set(g.titleId, fresh);
           return next;
         });
       }
