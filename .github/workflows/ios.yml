@@ -5,7 +5,7 @@
 # (Ralfmalph/ps5upload, branch codex/ios-signulous).
 #
 # Manual (Actions → ios → Run workflow) for trying an iOS change between releases; every release
-# also builds the .ipa (publish.yml, build-ios). Not yet run on a real iPhone against a PS5.
+# also builds the .ipa (publish.yml, build-ios). The FAQ says how much it has been tested.
 name: ios
 
 on:

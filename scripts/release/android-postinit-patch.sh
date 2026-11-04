@@ -8,9 +8,9 @@
 # Patches (each idempotent):
 #
 # 1) Loopback cleartext for the in-process engine.
-#    The mobile build links ps5upload-engine in-process and binds it to
-#    http://127.0.0.1:19113; the renderer fetches that URL like the
-#    desktop sidecar (engine_mobile.rs + client/src/api/engine.ts). Tauri
+#    The mobile build links ps5upload-engine in-process; the renderer fetches
+#    http://127.0.0.1:19113 like the desktop sidecar
+#    (engine_mobile.rs + client/src/api/engine.ts). Tauri
 #    sets android:usesCleartextTraffic=true for debug but FALSE for
 #    release, so a release APK silently blocks the loopback fetch and the
 #    UI shows the engine "red". We add a network-security-config that
@@ -18,19 +18,9 @@
 #    stays cleartext-forbidden. networkSecurityConfig takes precedence
 #    over the usesCleartextTraffic flag for those domains.
 #
-# 2) Explicit backup rules so user settings survive an uninstall/reinstall
-#    (cloud backup / device transfer). Settings already persist across
-#    normal restarts (app-private config dir) and in-place updates (now
-#    that releases share a stable signing key), but allowBackup + explicit
-#    include rules let Android restore them on a fresh reinstall too.
-#
-# 3) The PS5Upload launcher icons, copied from client/src-tauri/icons/android.
-#
-# Plus <uses-permission> injection: all-files storage access for the
-# in-app picker, and Wi-Fi multicast/state permissions so mDNS console
-# discovery can receive 224.0.0.251:5353 (see the perms list below).
-# The MulticastLock itself is acquired via JNI at runtime — see
-# local_fs.rs::acquire_multicast_lock, called from discover_ps5.
+# 2) Explicit backup rules: settings.json, and only that, goes with Android's cloud backup and
+#    device transfer, so consoles and settings survive a reinstall. Engine data (AVA1 identity,
+#    pairing, saved passwords) and the WebView's storage (Remote Play keys) stay on the device.
 #
 # 3) Pin WebView textZoom to 100% in MainActivity. Android WebView scales
 #    every font by the device's system **Font size** accessibility setting,
@@ -46,11 +36,21 @@
 #    (client/src/state/uiScale.ts), which rescales the rem root and so resizes
 #    the entire UI. The two fixes are complementary.
 #
-# 7) No Gradle or Kotlin daemon left running after a build (gradle.properties). See step (7).
+# Also: the launcher icons, copied from client/src-tauri/icons/android, and <uses-permission>
+# injection: all-files storage access for the in-app picker, and Wi-Fi multicast/state
+# permissions so mDNS console discovery can receive 224.0.0.251:5353 (see the perms list below).
+# The MulticastLock itself is acquired via JNI at runtime — see
+# local_fs.rs::acquire_multicast_lock, called from discover_ps5.
+#
+# 4) The system bar and cutout insets to the page (PS5UploadInsets). See step (4) below.
+#
+# 5) Android 17's local network permission (PS5UploadNet). See step (5) below.
 #
 # 6) TransferService, the foreground service that keeps a transfer running
 #    with the app in the background (#457), its manifest entry, permissions
 #    and R8 keep rules. See step (6) below.
+#
+# 7) No Gradle or Kotlin daemon left running after a build (gradle.properties). See step (7).
 #
 # 8) "Send to PS5" from Android's share menu: intent filters on MainActivity and
 #    ShareIntake.kt, which hands what was shared to the page. See step (8) below.
@@ -66,6 +66,11 @@
 #     plays keeps the picture floating over other apps. See step (12) below.
 # 13) The camera for Play Together's Scan QR, and PS5UploadCamera so the page can
 #     open the app's settings once Android stops asking. See step (13) below.
+# 14) System Back goes to the page first, which closes what is open on top. See step (14) below.
+# 15) Storage on Android 7 to 10: the runtime prompt (PS5UploadStorage). See step (15) below.
+#
+# A WebView renderer crash is handled in wry's generated RustWebViewClient, which this script
+# cannot patch (it is written during the Rust build): see client/src-tauri/.cargo/config.toml.
 
 
 set -euo pipefail
@@ -95,9 +100,11 @@ mkdir -p "$xmldir"
 # --- (1) loopback-only cleartext --------------------------------------
 cat >"$xmldir/network_security_config.xml" <<'XML'
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Loopback-only cleartext: the in-process ps5upload-engine binds
-     127.0.0.1:19113 and the WebView fetches it over plain HTTP. All
-     other traffic stays cleartext-forbidden. -->
+<!-- Loopback-only cleartext: the WebView fetches the in-process
+     ps5upload-engine at 127.0.0.1:19113 over plain HTTP. (The engine binds
+     every interface, so the PS5 can fetch packages from the phone; that is
+     the PS5's connection, not this app's.) All other traffic from this app
+     stays cleartext-forbidden. -->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">127.0.0.1</domain>
@@ -108,17 +115,20 @@ XML
 echo "wrote $xmldir/network_security_config.xml"
 
 # --- (2) backup rules -------------------------------------------------
-# Android 12+ uses dataExtractionRules; older uses fullBackupContent.
-# Include the whole app files domain (where settings.json lives) for both
-# cloud backup and device-to-device transfer.
+# Android 12+ uses dataExtractionRules; older uses fullBackupContent. An explicit include means
+# ONLY what it names is backed up, and domain="file" is getFilesDir(), which holds none of this
+# app's data: settings.json lives directly in the app's data folder (Tauri's app_config_dir on
+# Android is dataDir; commands/user_config.rs), so domain="root". Nothing else travels: the
+# engine's data under ps5upload/ has the AVA1 identity, pairing keys and saved server passwords,
+# and app_webview/ (localStorage) has the Remote Play keys.
 cat >"$xmldir/data_extraction_rules.xml" <<'XML'
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
     <cloud-backup>
-        <include domain="file" path="." />
+        <include domain="root" path="settings.json" />
     </cloud-backup>
     <device-transfer>
-        <include domain="file" path="." />
+        <include domain="root" path="settings.json" />
     </device-transfer>
 </data-extraction-rules>
 XML
@@ -127,7 +137,7 @@ echo "wrote $xmldir/data_extraction_rules.xml"
 cat >"$xmldir/backup_rules.xml" <<'XML'
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <include domain="file" path="." />
+    <include domain="root" path="settings.json" />
 </full-backup-content>
 XML
 echo "wrote $xmldir/backup_rules.xml"
@@ -143,6 +153,9 @@ wanted = {
     "android:allowBackup": "true",
     "android:fullBackupContent": "@xml/backup_rules",
     "android:dataExtractionRules": "@xml/data_extraction_rules",
+    # Android 10 only (later versions ignore it): real paths under /storage need the old storage
+    # model, or READ_EXTERNAL_STORAGE reads only media files.
+    "android:requestLegacyExternalStorage": "true",
 }
 inject = "".join(
     f' {k}="{v}"' for k, v in wanted.items() if k not in src
@@ -175,6 +188,9 @@ perms = [
     '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
     '<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />',
     '<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />',
+    # Haptics and rumble: the WebView's navigator.vibrate() runs under this app's permissions and
+    # does nothing, without an error, when the app lacks this one. A normal permission: no prompt.
+    '<uses-permission android:name="android.permission.VIBRATE" />',
 ]
 missing = [p for p in perms if 'android.permission.' + p.split('android.permission.')[1].split('"')[0] not in src]
 if missing:
@@ -198,6 +214,33 @@ mainactivity="$(find "$gen/java" -name MainActivity.kt -print -quit 2>/dev/null 
 if [ -z "$mainactivity" ]; then
   echo "::warning::MainActivity.kt not found under $gen/java — skipping textZoom patch" >&2
 else
+  # The steps below skip on a marker, so a change to one of them never reached a gen/ that an
+  # older script patched (CI always starts from a fresh `tauri android init`; a checkout does
+  # not). Bump the revision with every change to a MainActivity step: an older one goes back to
+  # the template and is patched again.
+  python3 - "$mainactivity" <<'PY'
+import sys
+REV = "// ps5upload-patch-rev: 2\n"
+TEMPLATE = """package com.phantomptr.ps5upload
+
+import android.os.Bundle
+import androidx.activity.enableEdgeToEdge
+
+class MainActivity : TauriActivity() {
+  override fun onCreate(savedInstanceState: Bundle?) {
+    enableEdgeToEdge()
+    super.onCreate(savedInstanceState)
+  }
+}
+"""
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if REV not in src:
+    if "PS5Upload" in src:
+        src = TEMPLATE
+        print("MainActivity.kt was patched by an older script: starting again from the template")
+    open(path, "w", encoding="utf-8").write(REV + src)
+PY
   python3 - "$mainactivity" <<'PY'
 import sys
 path = sys.argv[1]
@@ -226,13 +269,14 @@ print("patched MainActivity.kt with onWebViewCreate textZoom=100")
 PY
 fi
 
-# --- (4) hand the page the navigation-bar inset ----------------------
-# The app draws edge-to-edge (enableEdgeToEdge, targetSdk 36), and the CSS pads
-# the bottom nav with env(safe-area-inset-bottom). Android WebView does not
-# report the navigation bar there: measured in the app on the emulator
-# (Chrome 134), safe-area-inset-top was 49px but safe-area-inset-bottom was
-# 0px, so the bottom tab bar sat under the gesture bar and its labels were
-# covered. Expose the real inset through a JS interface the page reads.
+# --- (4) hand the page the system bar and cutout insets ---------------
+# The app draws edge-to-edge (enableEdgeToEdge), and the CSS pads the shell with the safe area.
+# Android WebView does not report all of it there: measured in the app on the emulator
+# (Chrome 134), safe-area-inset-top was 49px but safe-area-inset-bottom was 0px, so the bottom
+# tab bar sat under the gesture bar and its labels were covered. That is a cutout-only reading:
+# a device with no cutout would get top 0 as well, and a 3-button nav bar on the side of a phone
+# held sideways is not reported at all. Expose the real insets through a JS interface the page
+# reads; index.css takes the larger of the two on each side.
 #
 # Never install an insets listener on the WebView: it replaces the WebView's
 # own, and that is what computes the (correct) top inset. Idempotent via the
@@ -248,11 +292,11 @@ if "PS5UploadInsets" in src:
 anchor = "    super.onWebViewCreate(webView)\n"
 if anchor not in src:
     sys.exit("::error::onWebViewCreate not found in MainActivity.kt (step 3 must run first)")
-hook = anchor + '''    // WebView reports env(safe-area-inset-bottom) as 0 for the navigation
-    // bar (measured: top 49px, bottom 0px), so give the page the real value.
+hook = anchor + '''    // WebView reports only part of the safe area (measured: top 49px, bottom
+    // 0px), so give the page the real values: "top,right,bottom,left".
     webView.addJavascriptInterface(object {
       @android.webkit.JavascriptInterface
-      fun navBottomPx(): Int = navInsetBottomPx
+      fun systemInsetsPx(): String = systemInsetsPx
     }, "PS5UploadInsets")
     // Read the insets from the window root on each layout rather than
     // installing an insets listener on the WebView. A listener REPLACES the
@@ -264,11 +308,12 @@ hook = anchor + '''    // WebView reports env(safe-area-inset-bottom) as 0 for t
     root.viewTreeObserver.addOnGlobalLayoutListener {
       val insets = androidx.core.view.ViewCompat.getRootWindowInsets(root)
         ?: return@addOnGlobalLayoutListener
-      val bottom = insets
-        .getInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
-        .bottom
-      if (bottom != navInsetBottomPx) {
-        navInsetBottomPx = bottom
+      val type = androidx.core.view.WindowInsetsCompat.Type.systemBars() or
+        androidx.core.view.WindowInsetsCompat.Type.displayCutout()
+      val i = insets.getInsets(type)
+      val now = "${i.top},${i.right},${i.bottom},${i.left}"
+      if (now != systemInsetsPx) {
+        systemInsetsPx = now
         webView.evaluateJavascript(
           "window.dispatchEvent(new Event('ps5upload-insets'))", null)
       }
@@ -276,14 +321,14 @@ hook = anchor + '''    // WebView reports env(safe-area-inset-bottom) as 0 for t
 '''
 src = src.replace(anchor, hook, 1)
 field = '''
-  // Navigation-bar height in physical pixels, read by the page through
+  // System bars and cutout in physical pixels, "top,right,bottom,left", read by the page through
   // PS5UploadInsets. Written on the UI thread, read on WebView's binder thread.
-  @Volatile private var navInsetBottomPx: Int = 0
+  @Volatile private var systemInsetsPx: String = "0,0,0,0"
 '''
 brace = src.index("{", src.index("class MainActivity"))
 src = src[:brace + 1] + field + src[brace + 1:]
 open(path, "w", encoding="utf-8").write(src)
-print("patched MainActivity.kt to expose the navigation-bar inset")
+print("patched MainActivity.kt to expose the system insets")
 PY
 fi
 
@@ -440,8 +485,9 @@ class TransferService : Service() {
     return false
   }
 
-  // Held with a timeout and refreshed by every progress update, so a watcher that
-  // died without saying stop cannot keep the phone awake for long.
+  // Held with a timeout and refreshed by every progress update and by the watcher's once-a-minute
+  // keep-alive (bg_activity.rs), so a watcher that died without saying stop cannot keep the
+  // phone awake for long, and a stalled transfer with an unchanged line does not lose the lock.
   private fun refreshLocks() {
     try {
       val wl = wakeLock ?: (getSystemService(Context.POWER_SERVICE) as PowerManager)
@@ -487,11 +533,25 @@ class TransferService : Service() {
     @Volatile private var text = ""
     @Volatile private var percent = -1
     @Volatile private var instance: TransferService? = null
+    // Rust asked for the service and has not said stop. The service itself may be gone: Android
+    // refuses a start from the background, a promote can fail, the time limit can run out.
+    @Volatile private var wanted = false
 
     @JvmStatic
     fun start(ctx: Context, title: String, text: String, percent: Int, channelName: String) {
       set(title, text, percent)
+      wanted = true
       channel(ctx, CH_PROGRESS, channelName, NotificationManager.IMPORTANCE_LOW)
+      startService(ctx)
+    }
+
+    /** The app is in front again, the one moment Android allows a start: bring back a service
+     *  that was refused or stopped while the transfer went on without its protection. */
+    fun retryIfNeeded(ctx: Context) {
+      if (wanted && instance == null) startService(ctx)
+    }
+
+    private fun startService(ctx: Context) {
       try {
         ContextCompat.startForegroundService(ctx, Intent(ctx, TransferService::class.java))
       } catch (e: Exception) {
@@ -526,6 +586,7 @@ class TransferService : Service() {
 
     @JvmStatic
     fun stop(ctx: Context) {
+      wanted = false
       try {
         ctx.stopService(Intent(ctx, TransferService::class.java))
       } catch (e: Exception) {
@@ -998,11 +1059,18 @@ PY
 # --- (9) controllers to the page --------------------------------------
 # Remote Play reads controllers through the Gamepad API. Android WebView does
 # not always deliver them to the page (it depends on the WebView version and on
-# focus), so MainActivity also forwards every gamepad key and stick move, in the
-# W3C standard layout, to window.__ps5uNativePad; the page uses that only when
-# navigator.getGamepads() shows no controller (client/src/lib/nativePad.ts), so
-# a controller is never read twice. Events still go on to the WebView. Idempotent
-# via the function name.
+# focus), so MainActivity also forwards each controller's keys and stick moves, in
+# the W3C standard layout, to window.__ps5uNativePad under its own slot; the page uses
+# that only when navigator.getGamepads() shows no controller (client/src/lib/nativePad.ts),
+# so a controller is never read twice. A controller that goes away is reported with
+# connected:false: without it the page kept its last state as a live, held-down controller.
+#
+# All of this runs only while the page says a stream or a controller screen is up, through
+# PS5UploadPad.setActive (client/src/lib/androidPadBridge.ts). Then pad keys also count as
+# handled: left unhandled, Android's default key map turns ○ (BUTTON_B) into Back, PS
+# (BUTTON_MODE) into Home and A/Start into D-pad centre (Generic.kcm), and a pad that is not
+# being used for a game keeps those. Events still go on to the WebView. Idempotent via the
+# function name.
 if [ -n "$mainactivity" ]; then
   python3 - "$mainactivity" <<'PY'
 import sys
@@ -1012,16 +1080,80 @@ if "__ps5uNativePad" in src:
     print("MainActivity.kt already forwards controllers — skipping")
     sys.exit(0)
 anchor = "    super.onWebViewCreate(webView)\n"
-if anchor not in src:
-    sys.exit("::error::onWebViewCreate not found in MainActivity.kt (step 3 must run first)")
-src = src.replace(anchor, anchor + "    padWebView = webView\n", 1)
+create_anchor = "    super.onCreate(savedInstanceState)\n"
+if anchor not in src or create_anchor not in src:
+    sys.exit("::error::onCreate/onWebViewCreate not found in MainActivity.kt (step 3 must run first)")
+src = src.replace(create_anchor, create_anchor + "    padsWatch()\n", 1)
+src = src.replace(anchor, anchor + '''    padWebView = webView
+    webView.addJavascriptInterface(object {
+      @android.webkit.JavascriptInterface
+      fun setActive(active: Boolean) { runOnUiThread { setPadsActive(active) } }
+    }, "PS5UploadPad")
+''', 1)
 members = '''
-  // Controllers forwarded to the page (step 9 of android-postinit-patch.sh).
+  // Controllers forwarded to the page (step 9 of android-postinit-patch.sh). UI thread only.
   private var padWebView: android.webkit.WebView? = null
-  private val padButtons = FloatArray(17)
-  private val padAxes = FloatArray(4)
-  private var padName = ""
-  private var padDevice = -1
+  private var padsActive = false
+  private val pads = HashMap<Int, Pad>()
+
+  private class Pad(val slot: Int, device: android.view.InputDevice?) {
+    val name: String = device?.name ?: "Controller"
+    val buttons = FloatArray(17)
+    val axes = FloatArray(4)
+    // Only an axis the device has may write its button: a pad that reports the D-pad or L2/R2 as
+    // keys has no such axis, and reading the missing axis as 0 released them on every stick move.
+    private fun has(device: android.view.InputDevice?, axis: Int) = device?.getMotionRange(axis) != null
+    val axisL2 = device.let {
+      has(it, android.view.MotionEvent.AXIS_LTRIGGER) || has(it, android.view.MotionEvent.AXIS_BRAKE)
+    }
+    val axisR2 = device.let {
+      has(it, android.view.MotionEvent.AXIS_RTRIGGER) || has(it, android.view.MotionEvent.AXIS_GAS)
+    }
+    val axisHat = device.let {
+      has(it, android.view.MotionEvent.AXIS_HAT_X) || has(it, android.view.MotionEvent.AXIS_HAT_Y)
+    }
+  }
+
+  private val padListener = object : android.hardware.input.InputManager.InputDeviceListener {
+    override fun onInputDeviceAdded(deviceId: Int) {}
+    override fun onInputDeviceChanged(deviceId: Int) {}
+    override fun onInputDeviceRemoved(deviceId: Int) { padGone(deviceId) }
+  }
+
+  private fun padsWatch() {
+    (getSystemService(INPUT_SERVICE) as android.hardware.input.InputManager)
+      .registerInputDeviceListener(padListener, android.os.Handler(mainLooper))
+  }
+
+  override fun onDestroy() {
+    (getSystemService(INPUT_SERVICE) as android.hardware.input.InputManager)
+      .unregisterInputDeviceListener(padListener)
+    super.onDestroy()
+  }
+
+  // A controller may have gone while the app was in the background.
+  private fun padsOnResume() {
+    pads.keys.filter { android.view.InputDevice.getDevice(it) == null }.forEach { padGone(it) }
+  }
+
+  private fun padGone(deviceId: Int) {
+    val pad = pads.remove(deviceId) ?: return
+    padWebView?.evaluateJavascript(
+      "window.__ps5uNativePad&&window.__ps5uNativePad({slot:${pad.slot},connected:false})", null)
+  }
+
+  private fun setPadsActive(active: Boolean) {
+    if (active == padsActive) return
+    padsActive = active
+    // Nothing is tracked while inactive, so what the page holds would go stale.
+    if (!active) pads.keys.toList().forEach { padGone(it) }
+  }
+
+  private fun padFor(deviceId: Int): Pad = pads.getOrPut(deviceId) {
+    var slot = 0
+    while (pads.values.any { it.slot == slot }) slot += 1
+    Pad(slot, android.view.InputDevice.getDevice(deviceId))
+  }
 
   private fun isPad(source: Int): Boolean =
     (source and android.view.InputDevice.SOURCE_GAMEPAD) == android.view.InputDevice.SOURCE_GAMEPAD ||
@@ -1050,48 +1182,54 @@ members = '''
     else -> -1
   }
 
-  private fun sendPad(deviceId: Int) {
+  private fun sendPad(pad: Pad) {
     val w = padWebView ?: return
-    if (deviceId != padDevice) {
-      padDevice = deviceId
-      padName = android.view.InputDevice.getDevice(deviceId)?.name ?: "Controller"
-    }
-    val name = org.json.JSONObject.quote(padName)
-    val b = padButtons.joinToString(",")
-    val a = padAxes.joinToString(",")
+    val name = org.json.JSONObject.quote(pad.name)
+    val b = pad.buttons.joinToString(",")
+    val a = pad.axes.joinToString(",")
     w.evaluateJavascript(
-      "window.__ps5uNativePad&&window.__ps5uNativePad({id:$name,buttons:[$b],axes:[$a]})", null)
+      "window.__ps5uNativePad&&window.__ps5uNativePad({id:$name,slot:${pad.slot},buttons:[$b],axes:[$a]})", null)
   }
 
   override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
     val i = padIndex(event.keyCode)
     // A D-pad key from a keyboard or a TV remote is not a controller: only pads count.
-    if (i >= 0 && isPad(event.source) && event.repeatCount == 0) {
-      padButtons[i] = if (event.action == android.view.KeyEvent.ACTION_DOWN) 1f else 0f
-      sendPad(event.deviceId)
+    if (!padsActive || i < 0 || !isPad(event.source)) return super.dispatchKeyEvent(event)
+    if (event.repeatCount == 0) {
+      val pad = padFor(event.deviceId)
+      pad.buttons[i] = if (event.action == android.view.KeyEvent.ACTION_DOWN) 1f else 0f
+      sendPad(pad)
     }
-    return super.dispatchKeyEvent(event)
+    super.dispatchKeyEvent(event)
+    return true
   }
 
   override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean {
-    if (isPad(event.source) && event.action == android.view.MotionEvent.ACTION_MOVE) {
-      padAxes[0] = event.getAxisValue(android.view.MotionEvent.AXIS_X)
-      padAxes[1] = event.getAxisValue(android.view.MotionEvent.AXIS_Y)
-      padAxes[2] = event.getAxisValue(android.view.MotionEvent.AXIS_Z)
-      padAxes[3] = event.getAxisValue(android.view.MotionEvent.AXIS_RZ)
+    if (padsActive && isPad(event.source) && event.action == android.view.MotionEvent.ACTION_MOVE) {
+      val pad = padFor(event.deviceId)
+      pad.axes[0] = event.getAxisValue(android.view.MotionEvent.AXIS_X)
+      pad.axes[1] = event.getAxisValue(android.view.MotionEvent.AXIS_Y)
+      pad.axes[2] = event.getAxisValue(android.view.MotionEvent.AXIS_Z)
+      pad.axes[3] = event.getAxisValue(android.view.MotionEvent.AXIS_RZ)
       // Triggers: their own axes, or brake/gas on some pads.
-      padButtons[6] = maxOf(event.getAxisValue(android.view.MotionEvent.AXIS_LTRIGGER),
-        event.getAxisValue(android.view.MotionEvent.AXIS_BRAKE))
-      padButtons[7] = maxOf(event.getAxisValue(android.view.MotionEvent.AXIS_RTRIGGER),
-        event.getAxisValue(android.view.MotionEvent.AXIS_GAS))
+      if (pad.axisL2) {
+        pad.buttons[6] = maxOf(event.getAxisValue(android.view.MotionEvent.AXIS_LTRIGGER),
+          event.getAxisValue(android.view.MotionEvent.AXIS_BRAKE))
+      }
+      if (pad.axisR2) {
+        pad.buttons[7] = maxOf(event.getAxisValue(android.view.MotionEvent.AXIS_RTRIGGER),
+          event.getAxisValue(android.view.MotionEvent.AXIS_GAS))
+      }
       // The D-pad as a hat, as most Bluetooth pads report it.
-      val hx = event.getAxisValue(android.view.MotionEvent.AXIS_HAT_X)
-      val hy = event.getAxisValue(android.view.MotionEvent.AXIS_HAT_Y)
-      padButtons[12] = if (hy < -0.5f) 1f else 0f
-      padButtons[13] = if (hy > 0.5f) 1f else 0f
-      padButtons[14] = if (hx < -0.5f) 1f else 0f
-      padButtons[15] = if (hx > 0.5f) 1f else 0f
-      sendPad(event.deviceId)
+      if (pad.axisHat) {
+        val hx = event.getAxisValue(android.view.MotionEvent.AXIS_HAT_X)
+        val hy = event.getAxisValue(android.view.MotionEvent.AXIS_HAT_Y)
+        pad.buttons[12] = if (hy < -0.5f) 1f else 0f
+        pad.buttons[13] = if (hy > 0.5f) 1f else 0f
+        pad.buttons[14] = if (hx < -0.5f) 1f else 0f
+        pad.buttons[15] = if (hx > 0.5f) 1f else 0f
+      }
+      sendPad(pad)
     }
     return super.dispatchGenericMotionEvent(event)
   }
@@ -1204,14 +1342,15 @@ object AppUpdater {
     }
   }
 
-  /** Starts installing [path]; "" when started, else why not. Status follows in [status]. */
+  /** Starts installing [path]; "" when started, else a code the page translates (lib/apkUpdate).
+   *  Status follows in [status]. */
   @Synchronized
   fun install(ctx: Context, path: String): String {
     if (state == "writing") return ""
-    val f = try { File(path).canonicalFile } catch (_: Exception) { return "bad path" }
+    val f = try { File(path).canonicalFile } catch (_: Exception) { return "not-downloaded" }
     val dir = File(ctx.cacheDir, "updates").canonicalFile
     if (f.parentFile != dir || !f.name.endsWith(".apk", ignoreCase = true) || !f.isFile) {
-      return "not a downloaded update: $path"
+      return "not-downloaded"
     }
     checkApk(ctx, f)?.let { return it }
     if (!canInstall(ctx)) return "needs-permission"
@@ -1228,8 +1367,8 @@ object AppUpdater {
     } else {
       @Suppress("DEPRECATION") PackageManager.GET_SIGNATURES
     }
-    val apk = pm.getPackageArchiveInfo(f.path, flags) ?: return "the download is not an Android app"
-    if (apk.packageName != ctx.packageName) return "the download is a different app (${apk.packageName})"
+    val apk = pm.getPackageArchiveInfo(f.path, flags) ?: return "not-an-app"
+    if (apk.packageName != ctx.packageName) return "different-app"
     val mine = try { pm.getPackageInfo(ctx.packageName, flags) } catch (_: Exception) { return null }
     val a = signers(apk)
     val b = signers(mine)
@@ -1294,7 +1433,7 @@ class UpdateInstallReceiver : BroadcastReceiver() {
           @Suppress("DEPRECATION") intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
         }
         if (confirm == null) {
-          AppUpdater.set("failed", "Android did not show the install dialog")
+          AppUpdater.set("failed", "no-dialog")
           return
         }
         confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -1473,6 +1612,13 @@ members = '''
     } catch (e: Exception) {
       android.util.Log.w("PS5UploadPip", "picture-in-picture settings refused", e)
     }
+    // The stream ended in the small window: the page says so for a moment, then the window goes
+    // (it would otherwise stay open showing the app's ordinary screens, tiny).
+    if (!active && isInPictureInPictureMode) {
+      window.decorView.postDelayed({
+        if (!pipActive && isInPictureInPictureMode) moveTaskToBack(true)
+      }, 2500L)
+    }
   }
 
   override fun onUserLeaveHint() {
@@ -1574,6 +1720,121 @@ src = src.replace(anchor, anchor + """    // Scan QR: the app's settings, for a 
 """, 1)
 open(path, "w", encoding="utf-8").write(src)
 print("patched MainActivity.kt to expose PS5UploadCamera")
+PY
+fi
+
+# --- (14) system Back goes to the page first ---------------------------
+# wry's own handling only moves the WebView's history: dialogs and pickers, which close on Escape
+# and which Android never sends, stayed up while the page changed behind them. The page's
+# window.__ps5uBack (client/src/lib/systemBack.ts) closes what is open on top and answers true;
+# otherwise this moves the history, and at the first entry leaves the app running (the engine and
+# any transfer live in this process). Idempotent via the function name.
+if [ -n "$mainactivity" ]; then
+  python3 - "$mainactivity" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if "__ps5uBack" in src:
+    print("MainActivity.kt already sends Back to the page — skipping")
+    sys.exit(0)
+anchor = "    super.onWebViewCreate(webView)\n"
+if anchor not in src:
+    sys.exit("::error::onWebViewCreate not found in MainActivity.kt")
+src = src.replace(anchor, anchor + '''    // System Back: the page first (step 14).
+    onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+      override fun handleOnBackPressed() {
+        webView.evaluateJavascript("!!(window.__ps5uBack&&window.__ps5uBack())") { handled ->
+          if (handled != "true") {
+            if (webView.canGoBack()) webView.goBack() else moveTaskToBack(true)
+          }
+        }
+      }
+    })
+''', 1)
+members = '''
+  // Step 14 of android-postinit-patch.sh installs Back handling that asks the page first.
+  override val handleBackNavigation: Boolean = false
+'''
+brace = src.index("{", src.index("class MainActivity"))
+src = src[:brace + 1] + members + src[brace + 1:]
+open(path, "w", encoding="utf-8").write(src)
+print("patched MainActivity.kt to send Back to the page")
+PY
+fi
+
+# --- (15) storage on Android 7 to 10 -----------------------------------
+# All-files access is Android 11+. Below that the legacy storage permissions apply, and a
+# dangerous permission nobody asks for stays denied: the picker opened on "Permission denied"
+# with a Retry that could never work. commands/local_fs.rs now reports the real state on those
+# versions and the page (client/src/api/localFs.ts) shows the prompt through this bridge; once
+# Android stops showing it, the app's settings. Idempotent via the interface name.
+if [ -n "$mainactivity" ]; then
+  python3 - "$mainactivity" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if "PS5UploadStorage" in src:
+    print("MainActivity.kt already exposes PS5UploadStorage — skipping")
+    sys.exit(0)
+anchor = "    super.onWebViewCreate(webView)\n"
+if anchor not in src:
+    sys.exit("::error::onWebViewCreate not found in MainActivity.kt")
+src = src.replace(anchor, anchor + '''    // Android 7 to 10: the storage prompt (step 15).
+    webView.addJavascriptInterface(object {
+      @android.webkit.JavascriptInterface
+      fun usesPrompt(): Boolean = android.os.Build.VERSION.SDK_INT < 30
+      @android.webkit.JavascriptInterface
+      fun request() { runOnUiThread { requestLegacyStorage() } }
+    }, "PS5UploadStorage")
+''', 1)
+members = '''
+  // Android 7 to 10: storage is a runtime permission (step 15 of android-postinit-patch.sh).
+  private var legacyStorageAsked = false
+
+  private fun requestLegacyStorage() {
+    val perms = arrayOf(
+      "android.permission.READ_EXTERNAL_STORAGE",
+      "android.permission.WRITE_EXTERNAL_STORAGE",
+    )
+    // After "Don't ask again" Android no longer shows the prompt: the app's settings instead.
+    if (legacyStorageAsked && !shouldShowRequestPermissionRationale(perms[0])) {
+      startActivity(
+        android.content.Intent(
+          android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+          android.net.Uri.fromParts("package", packageName, null),
+        ),
+      )
+      return
+    }
+    legacyStorageAsked = true
+    requestPermissions(perms, 4218)
+  }
+'''
+brace = src.index("{", src.index("class MainActivity"))
+src = src[:brace + 1] + members + src[brace + 1:]
+open(path, "w", encoding="utf-8").write(src)
+print("patched MainActivity.kt with the storage prompt (PS5UploadStorage)")
+PY
+fi
+
+# The app in front again: bring back a transfer service Android refused or stopped.
+if [ -n "$mainactivity" ]; then
+  python3 - "$mainactivity" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if "retryIfNeeded" in src:
+    sys.exit(0)
+method = '''
+  override fun onResume() {
+    super.onResume()
+    TransferService.retryIfNeeded(this)
+    padsOnResume()
+  }
+'''
+idx = src.rstrip().rfind("}")
+src = src[:idx] + method + src[idx:]
+open(path, "w", encoding="utf-8").write(src)
 PY
 fi
 
