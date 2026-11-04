@@ -1,7 +1,7 @@
 /* Host test for mp1_clock.c with a fake /dev/mp1: good tables parse, out-of-range values read as
- * 0, the 2 s cache holds, the first open/ioctl failure latches "unsupported" for good (no further
- * driver calls), a driver writing past the 108-byte table is refused, and only the two read
- * requests ever reach the driver. */
+ * 0, the 2 s cache holds, the first refused open/ioctl latches "unsupported" for good (no further
+ * driver calls), "not now" (a busy SMU during a game) does not and keeps the last values, a driver
+ * writing past the 108-byte table is refused, and only the two read requests ever reach the driver. */
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,6 +20,7 @@ typedef struct {
     int64_t now;
     int opens, closes, gets, gfx_gets, core_gets, other_reqs;
     int open_fails, gfx_fails;
+    int err;          /* the errno of a failing call; 0 = each call's own (a refusal) */
     int core_fail_at; /* core index whose read fails; -1 never */
     int spill;        /* write a word past the 27-word table */
     int fd_open;      /* currently open fds */
@@ -32,7 +33,7 @@ static int fake_open(void *ctx) {
     fake_t *f = ctx;
     f->opens++;
     if (f->open_fails) {
-        errno = ENOENT;
+        errno = f->err ? f->err : ENOENT;
         return -1;
     }
     f->fd_open++;
@@ -47,7 +48,7 @@ static int fake_get(void *ctx, int fd, unsigned long req, void *buf) {
         f->gfx_gets++;
         if (((uintptr_t)buf & 7u) != 0) return -1; /* alignment promised by the reader */
         if (f->gfx_fails) {
-            errno = ENOTTY;
+            errno = f->err ? f->err : ENOTTY;
             return -1;
         }
         memcpy(buf, f->gfx, sizeof f->gfx); /* exactly IOCPARM_LEN = 108 bytes */
@@ -60,7 +61,7 @@ static int fake_get(void *ctx, int fd, unsigned long req, void *buf) {
         uint32_t core = q[0];
         if (q[1] != 0 || q[2] != 0 || core >= MP1_CORES) return -1; /* zeroed, core set */
         if (f->core_fail_at == (int)core) {
-            errno = EINVAL;
+            errno = f->err ? f->err : EINVAL;
             return -1;
         }
         q[1] = f->core_pstate[core];
@@ -253,6 +254,68 @@ static void test_latch(void) {
     expect_latched(&f, &ops);
 }
 
+/* "Not now": a game holds the SMU, and one Read sensors click must not cost the session its clocks. */
+static void test_not_now_does_not_latch(void) {
+    fake_t f;
+    mp1_ops_t ops;
+    mp1_clocks_t c;
+    static const int not_now[] = {EBUSY, EAGAIN, EDEADLK, EINTR, ETIMEDOUT, EMFILE, ENFILE, ENOMEM};
+    static const int refused[] = {ENOTTY, ENXIO, ENOENT, EPERM, EACCES, ENODEV, EINVAL, EFAULT, 163};
+
+    for (size_t i = 0; i < sizeof not_now / sizeof not_now[0]; i++) CHECK(mp1_errno_transient(not_now[i]));
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) CHECK(!mp1_errno_transient(refused[i]));
+
+    /* A good read, then the driver is busy: the last values stay the answer, on every failing step. */
+    fake_init(&f, &ops);
+    CHECK(mp1_clocks_read(&ops, &c) == MP1_OK);
+    CHECK(c.gpu_mhz == 2230);
+    f.err = EBUSY;
+    f.gfx_fails = 1;
+    f.now += MP1_CACHE_MS;
+    CHECK(mp1_clocks_read(&ops, &c) == MP1_OK);
+    CHECK(c.state == MP1_OK && c.gpu_mhz == 2230 && c.core_mhz[0] == 3500);
+    CHECK(f.fd_open == 0);
+    f.gfx_fails = 0;
+    f.core_fail_at = 5;
+    f.err = EAGAIN;
+    CHECK(mp1_clocks_read(&ops, &c) == MP1_OK);
+    CHECK(c.gpu_mhz == 2230);
+    f.core_fail_at = -1;
+    f.open_fails = 1;
+    f.err = EMFILE;
+    CHECK(mp1_clocks_read(&ops, &c) == MP1_OK);
+    CHECK(c.gpu_mhz == 2230);
+    f.open_fails = 0;
+    f.err = 0;
+    CHECK(f.fd_open == 0);
+
+    /* And once the driver answers, it is read again, with new values. */
+    f.gfx[MP1_GFX_MHZ_WORD] = 1800;
+    CHECK(mp1_clocks_read(&ops, &c) == MP1_OK);
+    CHECK(c.gpu_mhz == 1800);
+
+    /* Busy from the first read: no values to keep, so zeros = "unknown", not "unsupported". */
+    fake_init(&f, &ops);
+    f.gfx_fails = 1;
+    f.err = EBUSY;
+    CHECK(mp1_clocks_read(&ops, &c) == MP1_OK);
+    CHECK(c.state == MP1_OK && c.gpu_mhz == 0 && c.core_mhz[0] == 0);
+    char buf[512];
+    CHECK(mp1_clocks_format(&c, 0, buf, sizeof buf) > 0);
+    CHECK(strstr(buf, "gpu_clock_src=mp1\n") != NULL);
+    f.gfx_fails = 0;
+    f.err = 0;
+    CHECK(mp1_clocks_read(&ops, &c) == MP1_OK);
+    CHECK(c.gpu_mhz == 2230);
+
+    /* Busy does not excuse a real refusal later. */
+    f.now += MP1_CACHE_MS;
+    f.gfx_fails = 1;
+    CHECK(mp1_clocks_read(&ops, &c) == MP1_UNSUPPORTED);
+    f.gfx_fails = 0;
+    expect_latched(&f, &ops);
+}
+
 static void test_only_reads_reach_the_driver(void) {
     fake_t f;
     mp1_ops_t ops;
@@ -284,6 +347,7 @@ int main(void) {
     test_cache();
     test_out_of_range();
     test_latch();
+    test_not_now_does_not_latch();
     test_only_reads_reach_the_driver();
     if (fails) {
         printf("mp1_clock_selftest: %d failure(s)\n", fails);

@@ -3045,6 +3045,8 @@ roster_order_hint: "This order sets the console tabs and the picker.",
   "profile.username.cancel": "Cancel",
   "profile.username.deleteConfirm": "Delete this user profile?",
   "profile.username.deleteTitle": "Delete User",
+  "profile.username.deleteSignedIn": "This user is signed in on the PS5. Sign them out there, then delete them.",
+  "profile.username.deleteStateUnknown": "Could not check who is signed in on the PS5. Try again.",
   // ── v5 Tab navigation ──────────────────────────────────────────
   v5_tab_primary_nav: "Primary",
   v5_tab_home: "Home",

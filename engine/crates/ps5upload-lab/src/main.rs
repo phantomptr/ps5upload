@@ -225,6 +225,13 @@ fn do_clocks_raw(addr: &str) -> Result<()> {
     Ok(())
 }
 
+/// The helper's own loaded modules (PROC_MODULES): name, code base and size, as JSON.
+fn do_proc_modules(addr: &str) -> Result<()> {
+    let list = ps5upload_core::diagnostics::proc_modules(addr, 0)?;
+    println!("{}", serde_json::to_string_pretty(&list)?);
+    Ok(())
+}
+
 /// One ShadowMount+ read-write edit session end to end: open it, write and remove a small file
 /// at the image root, close it. Shows which path opened it (SMP's API or the config rule).
 fn do_smp_image_rw_test(addr: &str, title_id: &str) -> Result<()> {
@@ -907,6 +914,7 @@ fn usage() -> ! {
         "  processes                  detailed process list (pid/comm/title/mem/threads/kind)"
     );
     eprintln!("  process-kill <pid>         SIGKILL a process by pid");
+    eprintln!("  proc-modules               the helper's own loaded modules (JSON)");
     eprintln!("  saves                      list save-data folders + sizes");
     eprintln!("  fan-raw                    the helper's fan lines (HW_TEMPS \"f\"), servo profile hex included");
     eprintln!("  fan-set C                  set the fan target (45-85 C; 0 = the console's own)");
@@ -1290,6 +1298,7 @@ fn main() -> Result<()> {
         }
         "hw-temps" => do_hw_temps(addr, false),
         "hw-temps-x" => do_hw_temps(addr, true),
+        "proc-modules" => do_proc_modules(addr),
         "fan-raw" => do_fan_raw(addr),
         "clocks-raw" => do_clocks_raw(addr),
         // The cheat engine's remembered switch and crash guard (#550): read the status, set the

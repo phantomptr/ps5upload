@@ -26,6 +26,15 @@ inst_accept_action_t inst_accept_classify(int err);
  * for INST_LISTEN_BROKEN_MS by `now_ms`. */
 int inst_listen_broken(uint64_t err_since_ms, uint64_t now_ms);
 
+/* How long one install (its Sony calls, a fallback included) may stay in flight before the daemon gives
+ * up on itself. Past the engine's own 900 s deadline on the request (INSTALL_TIMEOUT in
+ * installer_client.rs): by then nobody is waiting for the answer, so this can only end a call that
+ * will never return. Monotonic: a console in rest mode does not count. */
+#define INST_SONY_CEILING_MS (16u * 60u * 1000u)
+
+/* 1 when a Sony call in flight since `since_ms` (0 = none) has passed INST_SONY_CEILING_MS by `now_ms`. */
+int inst_sony_wedged(uint64_t since_ms, uint64_t now_ms);
+
 /* CLOCK_MONOTONIC milliseconds; never 0 (0 means "not failing" above). */
 uint64_t inst_mono_ms(void);
 

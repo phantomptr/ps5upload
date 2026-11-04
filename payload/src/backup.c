@@ -23,7 +23,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifndef BACKUPS_ROOT
 #define BACKUPS_ROOT          "/data/ps5upload/backups"
+#endif
+/* The Backup screen says so too (SNAPSHOTS_KEPT_PER_NAME). */
 #define BACKUPS_KEEP_PER_TAG  5
 
 static pthread_mutex_t g_backup_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -165,6 +168,51 @@ int backup_validate_tag(const char *tag) {
 
 static int rm_rf(const char *path);
 
+/* 1 when `s` is what a snapshot folder is named: a Unix time. */
+static int is_snapshot_name(const char *s) {
+    size_t i;
+    for (i = 0; s[i]; i++)
+        if (s[i] < '0' || s[i] > '9') return 0;
+    return i > 0 && i <= 19;
+}
+
+/* Keeps the newest BACKUPS_KEEP_PER_TAG snapshots of a tag, deleting the oldest; the one just made
+ * always stays, whatever the clock says of it. Caller holds g_backup_lock. */
+static void prune_snapshots(const char *tag, const char *keep_path) {
+    char tagdir[640], victim[1024];
+    snprintf(tagdir, sizeof(tagdir), "%s/%s", BACKUPS_ROOT, tag);
+    for (;;) {
+        DIR *d = opendir(tagdir);
+        struct dirent *e;
+        long long oldest = 0;
+        int count = 0, have = 0;
+        if (!d) return;
+        while ((e = readdir(d))) {
+            char path[1024];
+            struct stat st;
+            long long ts;
+            if (!is_snapshot_name(e->d_name)) continue;
+            snprintf(path, sizeof(path), "%s/%s", tagdir, e->d_name);
+            if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+            count++;
+            if (strcmp(path, keep_path) == 0) continue;
+            ts = atoll(e->d_name);
+            if (!have || ts < oldest) {
+                oldest = ts;
+                have = 1;
+            }
+        }
+        closedir(d);
+        if (count <= BACKUPS_KEEP_PER_TAG || !have) return;
+        snprintf(victim, sizeof(victim), "%s/%lld", tagdir, oldest);
+        /* One that cannot be deleted would come round again for ever. */
+        if (rm_rf(victim) != 0) {
+            fprintf(stderr, "backup: could not delete the old snapshot %s\n", victim);
+            return;
+        }
+    }
+}
+
 int backup_snapshot(const char *tag, const char *src_path,
                     int64_t *out_timestamp, int *out_files,
                     uint64_t *out_bytes) {
@@ -234,6 +282,8 @@ int backup_snapshot(const char *tag, const char *src_path,
         char tagdir[640];
         snprintf(tagdir, sizeof(tagdir), "%s/%s", BACKUPS_ROOT, tag);
         rmdir(tagdir); /* only succeeds if now empty */
+    } else {
+        prune_snapshots(tag, snap);
     }
 
     pthread_mutex_unlock(&g_backup_lock);
@@ -242,16 +292,26 @@ int backup_snapshot(const char *tag, const char *src_path,
 
 int backup_list(const char *tag_filter, char *buf, size_t cap,
                 size_t *written) {
-    pthread_mutex_lock(&g_backup_lock);
+    /* Entries are composed apart and added only when they fit whole, leaving room for the tail, so
+     * a full buffer means fewer entries: never a reply longer than the buffer. */
+    static const char head[] = "{\"snapshots\":[", tail[] = "]}";
     size_t n = 0;
-    n += snprintf(buf + n, cap - n, "{\"snapshots\":[");
-    int wrote_one = 0;
+    int wrote_one = 0, full = 0;
+    if (cap < sizeof(head) + sizeof(tail)) {
+        if (written) *written = 0;
+        return -1;
+    }
+    pthread_mutex_lock(&g_backup_lock);
+    memcpy(buf, head, sizeof(head) - 1);
+    n = sizeof(head) - 1;
 
     DIR *root = opendir(BACKUPS_ROOT);
     if (root) {
         struct dirent *te;
-        while ((te = readdir(root))) {
-            if (te->d_name[0] == '.') continue;
+        while (!full && (te = readdir(root))) {
+            /* Only what a snapshot can be named. Any other folder here is not ours: no call can
+             * restore or delete it, and its name need not be short or fit in JSON. */
+            if (backup_validate_tag(te->d_name) != 0) continue;
             if (tag_filter && tag_filter[0] &&
                 strcmp(te->d_name, tag_filter) != 0)
                 continue;
@@ -264,15 +324,15 @@ int backup_list(const char *tag_filter, char *buf, size_t cap,
             DIR *td = opendir(tagdir);
             if (!td) continue;
             struct dirent *se;
-            while ((se = readdir(td))) {
-                if (se->d_name[0] == '.') continue;
+            while (!full && (se = readdir(td))) {
+                if (!is_snapshot_name(se->d_name)) continue;
                 char snapdir[768];
                 snprintf(snapdir, sizeof(snapdir), "%s/%s", tagdir,
                          se->d_name);
                 struct stat ss;
                 if (stat(snapdir, &ss) != 0 || !S_ISDIR(ss.st_mode))
                     continue;
-                /* Count manifest lines. */
+                /* Count manifest lines (a line longer than the buffer still counts once). */
                 int files = 0;
                 uint64_t bytes = 0;
                 char mpath[900];
@@ -280,7 +340,10 @@ int backup_list(const char *tag_filter, char *buf, size_t cap,
                 FILE *mf = fopen(mpath, "r");
                 if (mf) {
                     char ln[512];
-                    while (fgets(ln, sizeof(ln), mf)) files++;
+                    while (fgets(ln, sizeof(ln), mf)) {
+                        size_t L = strlen(ln);
+                        if (L && ln[L - 1] == '\n') files++;
+                    }
                     fclose(mf);
                 }
                 /* Sum file sizes. */
@@ -298,26 +361,28 @@ int backup_list(const char *tag_filter, char *buf, size_t cap,
                     }
                     closedir(sd);
                 }
-                if (n >= cap - 128) break;
-                if (wrote_one) {
-                    if (n < cap - 1) buf[n++] = ',';
-                }
-                wrote_one = 1;
-                n += snprintf(buf + n, cap - n,
-                    "{\"tag\":\"%s\",\"timestamp\":%lld,\"files\":%d,"
+                char ent[192];
+                int len = snprintf(ent, sizeof(ent),
+                    "%s{\"tag\":\"%s\",\"timestamp\":%lld,\"files\":%d,"
                     "\"bytes\":%llu}",
-                    te->d_name, (long long)atoll(se->d_name),
+                    wrote_one ? "," : "", te->d_name,
+                    (long long)atoll(se->d_name),
                     files, (unsigned long long)bytes);
+                if (len < 0 || (size_t)len >= sizeof(ent) ||
+                    n + (size_t)len + sizeof(tail) > cap) {
+                    full = 1;
+                    break;
+                }
+                memcpy(buf + n, ent, (size_t)len);
+                n += (size_t)len;
+                wrote_one = 1;
             }
             closedir(td);
         }
         closedir(root);
     }
-    if (n < cap - 2) {
-        buf[n++] = ']';
-        buf[n++] = '}';
-    }
-    buf[n] = 0;
+    memcpy(buf + n, tail, sizeof(tail)); /* with its NUL; the check above left the room */
+    n += sizeof(tail) - 1;
     if (written) *written = n;
     pthread_mutex_unlock(&g_backup_lock);
     return 0;

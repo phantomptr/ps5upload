@@ -4,8 +4,10 @@
  * bounded queue (depth 32; a connection that does not fit is closed at once).
  * Every connection carries a deadline of accept time + 5 s: reads and writes
  * stop there, and a worker that dequeues an already-expired connection closes
- * it without reading. A slow, silent or hostile client therefore holds one
- * worker for at most 5 s and can never stall the accept thread. */
+ * it without reading. A connection that has sent nothing waits on the accept
+ * thread and holds no worker; a slow or hostile client that has holds one for at
+ * most 5 s and can never stall the accept thread. One address gets 16 connections
+ * at most. */
 #ifndef PS5UPLOAD_WEBUI_SERVER_H
 #define PS5UPLOAD_WEBUI_SERVER_H
 

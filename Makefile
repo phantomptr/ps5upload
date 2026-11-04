@@ -1044,7 +1044,7 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/webui_server_selftest.c $(PAYLOAD_DIR)/src/webui_server.c \
 		$(PAYLOAD_DIR)/src/webui_http.c $(PAYLOAD_DIR)/src/webui_auth.c
 	@$(RUN_LIMITED) /tmp/ps5upload-webui-server-selftest
-	@echo "✓ silent, half-sent and flooding web clients never stall the helper"
+	@echo "✓ silent, half-sent and flooding web clients never stall the helper; an idle connection holds no worker"
 	@echo "Running webui codec self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
 		-o /tmp/ps5upload-webui-codec-selftest \
@@ -1155,6 +1155,48 @@ test-payload: payload
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) /tmp/ps5upload-webui-cheats-store-selftest
 	@echo "✓ a downloaded cheat is stored only under a plain name with its format's extension, through a same-folder temp + rename"
+	@echo "Running snapshots self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o /tmp/ps5upload-backup-selftest \
+		$(PAYLOAD_DIR)/tests/backup_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-backup-selftest
+	@echo "✓ a snapshot restores byte for byte, the newest five are kept, the list stays valid and inside its buffer"
+	@echo "Running file replace self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-atomic-file-selftest \
+		$(PAYLOAD_DIR)/tests/atomic_file_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-atomic-file-selftest
+	@echo "✓ a replaced file is on disk before its rename, and a failure leaves the old one"
+	@echo "Running PSN sign-in backup self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-profile-np-selftest \
+		$(PAYLOAD_DIR)/tests/profile_np_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-profile-np-selftest
+	@echo "✓ a sign-in backup restores byte for byte, stays the first one, and a damaged one writes nothing wrong"
+	@echo "Running notification store self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-notif-selftest \
+		$(PAYLOAD_DIR)/tests/notif_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-notif-selftest
+	@echo "✓ saved notifications come back exactly, the sequence never rewinds, a cut store keeps what it can"
+	@echo "Running JSON string escape self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-json-escape-selftest \
+		$(PAYLOAD_DIR)/tests/json_escape_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-json-escape-selftest
+	@echo "✓ a quote, a backslash or a control byte in a string cannot break a reply"
+	@echo "Running user delete gate self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-user-guard-selftest \
+		$(PAYLOAD_DIR)/tests/user_guard_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-user-guard-selftest
+	@echo "✓ a signed-in user is never deleted, and an unknown state counts as signed in"
+	@echo "Running left-behind extraction request self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-archive-request-selftest \
+		$(PAYLOAD_DIR)/tests/archive_request_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-archive-request-selftest
+	@echo "✓ a request an extractor never read (it can hold a password) is deleted, one it may still read is kept"
 	@echo "Running AVA1 in-flight RPC gate self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(AVA1_C) \
 		-o /tmp/ps5upload-ava1-rpc-gate-selftest \
@@ -1167,6 +1209,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/cheats_list_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-cheats-list-selftest
 	@echo "✓ a large or badly encoded cheat pack lists as valid, bounded JSON"
+	@echo "Running cheat JSON field self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-cheats-json-selftest \
+		$(PAYLOAD_DIR)/tests/cheats_json_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-cheats-json-selftest
+	@echo "✓ a cheat's name is never taken for the game's; escapes decode; slips in a file do not lose its fields"
 	@echo "Running cheat apply-plan self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-cheats-plan-selftest \
@@ -1219,13 +1267,25 @@ test-payload: payload
 		-o /tmp/ps5upload-mp1-clock-selftest \
 		$(PAYLOAD_DIR)/tests/mp1_clock_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-mp1-clock-selftest
-	@echo "✓ clock reads are bounded, cached for 2 s, stop for good after one refusal, and never change a clock"
+	@echo "✓ clock reads are bounded, cached for 2 s, stop for good after one refusal (not a busy moment), and never change a clock"
 	@echo "Running measured CPU clock self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-cpu-measure-selftest \
 		$(PAYLOAD_DIR)/tests/cpu_measure_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-cpu-measure-selftest
-	@echo "✓ each core measured once on a worker thread, best run wins, cached for 2 s, off for good when no CPU takes the pin"
+	@echo "✓ each core measured once on a worker thread, best run wins, cached for 2 s, tried again when no CPU takes the pin"
+	@echo "Running SIGPIPE guard self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-sigpipe-guard-selftest \
+		$(PAYLOAD_DIR)/tests/sigpipe_guard_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-sigpipe-guard-selftest
+	@echo "✓ with SIGPIPE at its default for one Sony call, a write to a closed peer on any other thread kills nothing"
+	@echo "Running basic sensor read self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-hw-temps-flight-selftest \
+		$(PAYLOAD_DIR)/tests/hw_temps_flight_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-hw-temps-flight-selftest
+	@echo "✓ one sensor read at a time, a stalled getter holds nobody up, a stale answer says so"
 	@echo "Running hw-guard fault-recovery self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-hw-guard-selftest \
 		$(PAYLOAD_DIR)/tests/hw_guard_selftest.c
@@ -1236,7 +1296,7 @@ test-payload: payload
 		-o /tmp/ps5upload-wake-watchdog-selftest \
 		$(PAYLOAD_DIR)/tests/wake_watchdog_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-wake-watchdog-selftest
-	@echo "✓ clock adjustments and unknown firmware state cannot trigger kernel writes"
+	@echo "✓ only a ucred that really changed is written again: a clock jump or a throttled thread never is"
 	@echo "Running process-identity self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-proc-identity-selftest \

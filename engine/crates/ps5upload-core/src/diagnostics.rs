@@ -133,6 +133,14 @@ pub struct ModuleList {
     pub modules: Vec<ModuleInfo>,
     #[serde(default)]
     pub err: Option<String>,
+    /// How many modules the console listed. `refused` of them have no row: Sony would not
+    /// describe them, and `refused_rc` is what it said. An older helper sends none of these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_rc: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,8 +159,9 @@ pub struct ShellRunResult {
     pub err: Option<String>,
 }
 
-/// Run a shell command on the PS5. `timeout_secs` clamps the
-/// payload-side wait. stdout (with stderr merged) capped at 256 KB.
+/// Run a shell command on the PS5. `timeout_secs` bounds how long the engine waits for the answer
+/// (at most `SHELL_MAX_SECS`); the helper cannot stop a built-in that is running and ignores it.
+/// stdout (with stderr merged) capped at 256 KB.
 pub fn shell_run(
     addr: &str,
     cmd: &str,

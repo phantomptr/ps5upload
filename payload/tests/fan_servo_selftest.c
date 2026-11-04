@@ -148,6 +148,39 @@ static void test_reapply_conf(void) {
     CHECK(fan_reapply_parse("garbage", 2, 1, 300) == 2);
 }
 
+static int parses(const char *body, int *t, int *r) {
+    return fan_threshold_body_parse(body, strlen(body), 45, 85, t, r) == 0;
+}
+
+/* A bad request has no side effect on the fan: it used to pin 65 C, and persist it. */
+static void test_threshold_body(void) {
+    int t = -1, r = -1;
+    CHECK(parses("65", &t, &r) && t == 65 && r == 0);
+    CHECK(parses("45", &t, &r) && t == 45);
+    CHECK(parses("85", &t, &r) && t == 85);
+    CHECK(parses("0", &t, &r) && t == 0 && r == 0); /* the console's own back */
+    CHECK(parses("70 30", &t, &r) && t == 70 && r == 30);
+    CHECK(parses("70 0", &t, &r) && t == 70 && r == 0);
+    CHECK(parses("  65\n", &t, &r) && t == 65); /* the lab CLI and curl add these */
+    CHECK(parses("65 2\r\n", &t, &r) && t == 65 && r == 2);
+
+    CHECK(!parses("", &t, &r));
+    CHECK(!parses("abc", &t, &r));
+    CHECK(!parses("-5", &t, &r));
+    CHECK(!parses("44", &t, &r));
+    CHECK(!parses("86", &t, &r));
+    CHECK(!parses("255", &t, &r));
+    CHECK(!parses("65abc", &t, &r));
+    CHECK(!parses("65 abc", &t, &r));
+    CHECK(!parses("65 -5", &t, &r));
+    CHECK(!parses("65 30 7", &t, &r));
+    CHECK(!parses("99999999999999999999", &t, &r));
+    CHECK(!parses("65 99999999999999999999", &t, &r));
+    CHECK(fan_threshold_body_parse(NULL, 0, 45, 85, &t, &r) == -1);
+    CHECK(fan_threshold_body_parse("65\0x", 4, 45, 85, &t, &r) == -1);
+    CHECK(fan_threshold_body_parse("65", 40, 45, 85, &t, &r) == -1); /* longer than any request */
+}
+
 static void test_range(void) {
     CHECK(fan_target_refusal(85, 91) == NULL);
     CHECK(fan_target_refusal(85, 0) == NULL); /* the console's own was never seen */
@@ -181,6 +214,7 @@ int main(void) {
     test_hex();
     test_watcher();
     test_reapply_conf();
+    test_threshold_body();
     test_range();
     test_decoding();
     if (fails) {

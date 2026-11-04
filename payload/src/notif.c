@@ -34,8 +34,10 @@ extern int sceNotificationSend(int32_t type, const char *msg);
  *
  * Written to a .tmp sibling then atomically renamed, so a crash mid-write
  * never corrupts the live file. Same durability pattern as the reference. */
+#ifndef NOTIF_STORE_PATH
 #define NOTIF_STORE_PATH PS5UPLOAD2_RUNTIME_ROOT "/notifications.dat"
 #define NOTIF_STORE_TMP  PS5UPLOAD2_RUNTIME_ROOT "/notifications.dat.tmp"
+#endif
 
 typedef struct {
     uint64_t seq;

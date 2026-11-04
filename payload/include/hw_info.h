@@ -14,10 +14,12 @@
  *               every subsequent call.
  *   - HW_TEMPS: live sensors (CPU temp, SoC temp, CPU freq, power).
  *               1-second cache so a fast-polling UI doesn't hammer
- *               the kernel APIs. Power API has a separate 5-second
- *               throttle because it's measurably heavier than the
- *               others and destabilizes the payload when queried
- *               too often.
+ *               the kernel APIs, and one reader at a time that nobody
+ *               waits for (hw_temps_flight.h). Besides the values it
+ *               says how the read went: cpu_temp_rc and soc_temp_rc
+ *               (the getters' return codes, or fault / missing / range /
+ *               none), read_ms, and stale=1 when another thread's read
+ *               was still running, so these are the last values it had.
  *   - HW_POWER: uptime + operating-time stats via kern.boottime.
  *               No Sony-specific APIs needed, so always-safe.
  *
@@ -28,7 +30,7 @@
  *
  * All three APIs are idempotent and thread-safe. Multiple concurrent
  * HW_TEMPS calls from different client connections share the 1-second
- * cache via pthread_mutex_t.
+ * cache and never wait for each other's Sony calls.
  */
 
 /* out[] must be >= 2048 bytes. Sets *out_written to the text length

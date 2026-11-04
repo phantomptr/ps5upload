@@ -2,6 +2,7 @@
    See profile.h for the design + the GPL-3.0 offact attribution. */
 
 #include "profile.h"
+#include "atomic_file.h"
 #include "sys_registry.h"
 
 #include <dlfcn.h>
@@ -315,11 +316,15 @@ static uint32_t np_slot_off(int slot) {
     return (slot >= 1 && slot <= PROFILE_SLOT_COUNT) ? (uint32_t)(slot - 1) * 65536u : 0u;
 }
 
+#ifndef PROFILE_NP_HOME_ROOT
+#define PROFILE_NP_HOME_ROOT "/system_data/priv/home"
+#endif
+
 static void np_file_path(char *out, size_t cap, uint32_t uid, int which) {
     if (which == 0)
-        snprintf(out, cap, "/system_data/priv/home/%x/np/auth.dat", uid);
+        snprintf(out, cap, "%s/%x/np/auth.dat", PROFILE_NP_HOME_ROOT, uid);
     else
-        snprintf(out, cap, "/system_data/priv/home/%x/config.dat", uid);
+        snprintf(out, cap, "%s/%x/config.dat", PROFILE_NP_HOME_ROOT, uid);
 }
 
 static void np_backup_path(char *out, size_t cap, uint32_t uid) {
@@ -396,8 +401,8 @@ static void np_write_rows(FILE *f, uint32_t off) {
 }
 
 /* Adds `slot`'s rows to an existing backup unless it holds them already. The restore takes
- * each "slot N" line as the slot of the rows after it. Written whole to a temporary copy, then
- * renamed, so a failed write leaves the old backup as it was. */
+ * each "slot N" line as the slot of the rows after it. Written whole to a temporary copy, on disk
+ * before the rename, so a failed write or a crash leaves the old backup as it was. */
 static int np_backup_add_slot(const char *path, int slot) {
     if (slot <= 1) return 0; /* slot 1's rows are always in the first section */
     FILE *in = fopen(path, "r");
@@ -423,7 +428,7 @@ static int np_backup_add_slot(const char *path, int slot) {
         fprintf(out, "slot %d\n", slot);
         np_write_rows(out, np_slot_off(slot));
     }
-    if (fclose(out) != 0) rc = -1;
+    if (atomic_file_close_stream(out) != 0) rc = -1;
     if (rc == 0 && !has && rename(tmp, path) != 0) rc = -1;
     if (rc != 0 || has) unlink(tmp);
     return rc;
@@ -463,7 +468,8 @@ int profile_np_backup(int slot, uint32_t uid, int *out_created) {
         fputc('\n', f);
     }
     free(buf);
-    if (fclose(f) != 0) rc = -1;
+    /* On disk before the rename: this is the one copy of the state from before any sign-in. */
+    if (atomic_file_close_stream(f) != 0) rc = -1;
     if (rc == 0 && rename(tmp, path) != 0) rc = -1;
     if (rc != 0) {
         unlink(tmp);
@@ -502,23 +508,7 @@ static const np_key_t *np_key_for(uint32_t key, int slot) {
 static int np_put_file(const char *path, const uint8_t *data, size_t n) {
     char tmp[112];
     snprintf(tmp, sizeof(tmp), "%s.ps5upload-tmp", path);
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
-    if (fd < 0) return -1;
-    size_t off = 0;
-    while (off < n) {
-        ssize_t w = write(fd, data + off, n - off);
-        if (w <= 0) {
-            close(fd);
-            unlink(tmp);
-            return -1;
-        }
-        off += (size_t)w;
-    }
-    if (close(fd) != 0 || rename(tmp, path) != 0) {
-        unlink(tmp);
-        return -1;
-    }
-    return 0;
+    return atomic_file_write(path, tmp, data, n, 0644);
 }
 
 int profile_np_restore(uint32_t uid, int *out_written, int *out_failed) {
@@ -538,9 +528,16 @@ int profile_np_restore(uint32_t uid, int *out_written, int *out_failed) {
         fclose(f);
         return -1;
     }
-    int slot = 0, written = 0, failed = 0, header = 0;
+    int slot = 0, written = 0, failed = 0, header = 0, files_seen = 0;
     uint32_t file_uid = 0;
     while (fgets(line, (int)cap, f)) {
+        /* Every row ends in a newline. Without one the file was cut here, and what is left of a number
+         * or a hex row reads as a shorter value: stop, and keep the backup. */
+        size_t line_len = strlen(line);
+        if (line_len == 0 || line[line_len - 1] != '\n') {
+            failed++;
+            break;
+        }
         if (strncmp(line, "ps5upload-np-backup 1", 21) == 0) {
             header = 1;
         } else if (sscanf(line, "slot %d", &slot) == 1) {
@@ -569,8 +566,9 @@ int profile_np_restore(uint32_t uid, int *out_written, int *out_failed) {
             } else {
                 char s[NP_STR_MAX + 1];
                 memset(s, 0, sizeof(s));
+                /* The writer always keeps the whole field. */
                 long n = hex_decode(line + 2 + used, (uint8_t *)s, nk->width);
-                if (n < 0) {
+                if (n != (long)nk->width) {
                     failed++;
                     continue;
                 }
@@ -584,6 +582,7 @@ int profile_np_restore(uint32_t uid, int *out_written, int *out_failed) {
             int which = -1, present = 0, used = 0;
             if (sscanf(line + 2, "%d %d %n", &which, &present, &used) < 2 || which < 0 || which > 1)
                 continue;
+            files_seen |= 1 << which;
             char fp[96];
             np_file_path(fp, sizeof(fp), uid, which);
             if (!present) {
@@ -602,6 +601,7 @@ int profile_np_restore(uint32_t uid, int *out_written, int *out_failed) {
     free(line);
     free(bin);
     if (!header || slot < 1 || file_uid != uid) return -1;
+    if (files_seen != 3) failed++; /* A backup always holds both file rows: the rest of it is missing. */
     if (out_written) *out_written = written;
     if (out_failed) *out_failed = failed;
     if (failed == 0) {

@@ -31,11 +31,12 @@ typedef struct {
 
 static void record_launch(entry_t *e, int64_t now) {
     if (e->session_started_ts > 0) {
-        if (now - e->last_launch_ts < LAUNCH_DEBOUNCE_SEC) {
+        if (now >= e->last_launch_ts && now - e->last_launch_ts < LAUNCH_DEBOUNCE_SEC) {
             e->last_seen_ts = now;
             return;
         }
-        e->total_seconds += (uint64_t)(e->last_seen_ts - e->session_started_ts);
+        if (e->last_seen_ts > e->session_started_ts)
+            e->total_seconds += (uint64_t)(e->last_seen_ts - e->session_started_ts);
         e->session_started_ts = 0;
     }
     e->launches++;
@@ -114,6 +115,21 @@ int main(void) {
     record_launch(&d, 5000);
     record_launch(&d, 5002);   /* inside the debounce window */
     check(d.launches == 1, "a bounced launch is not counted twice");
+
+    /* The clock moved back mid-session (this app can set it, and NTP can step it). The span is
+     * negative: cast to unsigned it was saved as 18 quintillion seconds. And a launch after the step
+     * is a launch, not a bounce: the debounce only applies when the clock ran forward. */
+    entry_t back = {0};
+    record_launch(&back, 10000);
+    back.last_seen_ts = 10600;
+    record_launch(&back, 3000);        /* an hour-odd earlier than the session's start */
+    check(back.total_seconds == 600, "the time played before the step is banked");
+    check(back.launches == 2, "a launch after the clock moved back still counts");
+    back.last_seen_ts = 2000;          /* seen before its own session began */
+    back.last_launch_ts = 2000;
+    record_launch(&back, 2010);
+    check(back.total_seconds == 600, "a span that runs backwards adds nothing");
+    check(back.total_seconds < 1000000, "the total never underflows");
 
     if (failures == 0) {
         printf("✓ play-time counts only launches it witnessed\n");

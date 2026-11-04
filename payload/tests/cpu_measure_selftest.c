@@ -1,8 +1,8 @@
 /* Host test for cpu_measure.c with a fake CPU: each physical core is measured once (its first
  * logical CPU that takes the pin), the best run wins, out-of-range clocks read as 0, the 2 s cache
- * holds, a missing worker thread is not fatal, and no CPU taking the pin latches "unsupported"
- * for good. Layout as measured on FW 13.60: only logical CPUs 9, 11, 13, 14, 15 take the pin,
- * and the APIC id is 15 - cpu. */
+ * holds, a missing worker thread is not fatal, and no CPU taking the pin answers "unsupported" (or
+ * what was measured earlier) for that read only: the next one tries again. Layout as measured on FW
+ * 13.60: only logical CPUs 9, 11, 13, 14, 15 take the pin, and the APIC id is 15 - cpu. */
 #include <stdio.h>
 #include <string.h>
 #include "../src/cpu_measure.c"
@@ -120,15 +120,28 @@ int main(void) {
     CHECK(cpu_measure_read(&o, &c) == CPUM_OK);
     CHECK(c.mhz[0] == 3100);
 
-    /* No CPU takes the pin: unsupported, and never tried again. */
+    /* No CPU takes the pin (a running game can hold them all): unsupported, for this read only. */
     setup(&f, &o);
+    int on_console[CPUM_LOGICAL];
+    memcpy(on_console, f.allowed, sizeof on_console);
     memset(f.allowed, 0, sizeof f.allowed);
     CHECK(cpu_measure_read(&o, &c) == CPUM_UNSUPPORTED);
+    CHECK(c.state == CPUM_UNSUPPORTED && c.mhz[0] == 0);
     int runs = f.runs;
     f.now += 10 * CPUM_CACHE_MS;
-    for (int i = 0; i < CPUM_LOGICAL; i++) f.allowed[i] = 1;
     CHECK(cpu_measure_read(&o, &c) == CPUM_UNSUPPORTED);
-    CHECK(f.runs == runs);
+    CHECK(f.runs == runs + 1); /* it tried again */
+    /* The game is gone: the next read measures. */
+    memcpy(f.allowed, on_console, sizeof on_console);
+    f.now += 10 * CPUM_CACHE_MS;
+    CHECK(cpu_measure_read(&o, &c) == CPUM_OK);
+    CHECK(c.mhz[0] == 3100);
+
+    /* It worked a minute ago, then a game holds the cores: what was measured stays the answer. */
+    memset(f.allowed, 0, sizeof f.allowed);
+    f.now += 10 * CPUM_CACHE_MS;
+    CHECK(cpu_measure_read(&o, &c) == CPUM_OK);
+    CHECK(c.state == CPUM_OK && c.mhz[0] == 3100);
 
     /* The lines. */
     char buf[256];

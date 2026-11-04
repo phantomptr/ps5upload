@@ -213,6 +213,82 @@ async fn list_reports_kinds_sizes_mtime_and_mode_and_defaults_the_limit() {
     assert_eq!(page.more, 0);
 }
 
+/// A directory `path_len` bytes long under `root`, made one component at a time from inside the
+/// previous one: on some hosts the whole path is already at the system's limit for a single call.
+fn deep_dir(root: &Path, path_len: usize) -> PathBuf {
+    let cwd = std::env::current_dir().unwrap();
+    let mut path = root.to_path_buf();
+    std::env::set_current_dir(&path).unwrap();
+    loop {
+        let left = path_len - path.as_os_str().len();
+        if left == 0 {
+            break;
+        }
+        // A component costs its name and a '/'; never leave a single byte (no room for both).
+        let take = match left {
+            0..=201 => left - 1,
+            202 => 199,
+            _ => 200,
+        };
+        let name = "d".repeat(take);
+        std::fs::create_dir(&name).unwrap();
+        std::env::set_current_dir(&name).unwrap();
+        path.push(&name);
+    }
+    std::env::set_current_dir(cwd).unwrap();
+    path
+}
+
+// The child's whole path passes 1024 bytes though the directory's does not: the entry was skipped
+// (measured against the path limit, not the buffer written), and with it every entry of a directory
+// that deep, with no error and no "more". It must be listed, and counted, wherever it falls.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deep_directorys_entries_are_listed_not_dropped() {
+    let r = rig("listdeep").await;
+    let dir = deep_dir(&r.root, 1000);
+    let dir_s = dir.to_str().unwrap().to_string();
+    assert_eq!(dir_s.len(), 1000);
+    // Whole path lengths 1000 + 1 + name: 1021, 1023 (under the limit), then past it.
+    let names: Vec<String> = [20usize, 22, 23, 24, 60, 255]
+        .iter()
+        .map(|n| "f".repeat(*n))
+        .collect();
+    let cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&dir).unwrap();
+    for n in &names {
+        std::fs::write(n, b"12345").unwrap();
+    }
+    std::env::set_current_dir(cwd).unwrap();
+
+    let page = r.list(&dir_s, 0, 0).await;
+    let got: std::collections::BTreeSet<String> =
+        page.entries.iter().map(|e| e.name.clone()).collect();
+    let want: std::collections::BTreeSet<String> = names.iter().cloned().collect();
+    assert_eq!(got, want, "every entry is listed");
+    assert_eq!(page.total_scanned, names.len() as u32);
+    assert_eq!(page.more, 0);
+    for e in &page.entries {
+        if dir_s.len() + 1 + e.name.len() < 1024 {
+            assert_eq!((e.kind, e.size), (gen::ENTRY_FILE, 5), "{}", e.name.len());
+        } else {
+            // Past the path limit it is read through the directory; a libc without fstatat lists
+            // it with no details, never leaves it out.
+            assert!(
+                e.kind == gen::ENTRY_UNKNOWN || (e.kind, e.size) == (gen::ENTRY_FILE, 5),
+                "{} {}",
+                e.name.len(),
+                e.kind
+            );
+        }
+    }
+    // Paging counts them too: offset past the first page still finds the rest.
+    let first = r.list(&dir_s, 0, 2).await;
+    assert_eq!((first.entries.len(), first.more), (2, 1));
+    let rest = r.list(&dir_s, 2, 0).await;
+    assert_eq!(rest.entries.len(), names.len() - 2);
+    assert_eq!(rest.more, 0);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn list_refuses_what_the_legacy_handler_refused() {
     let r = rig("listerr").await;

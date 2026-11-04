@@ -27,6 +27,10 @@ int inst_listen_broken(uint64_t err_since_ms, uint64_t now_ms) {
            now_ms - err_since_ms >= INST_LISTEN_BROKEN_MS;
 }
 
+int inst_sony_wedged(uint64_t since_ms, uint64_t now_ms) {
+    return since_ms != 0 && now_ms >= since_ms && now_ms - since_ms >= INST_SONY_CEILING_MS;
+}
+
 uint64_t inst_mono_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);

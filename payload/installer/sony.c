@@ -30,8 +30,9 @@ int inst_sony_init(inst_sony_state_t *st) {
  * The call stays on the connection's own thread. Running it on a thread started for it, to
  * put a time limit on it, was once measured as "refused every time" on FW 13.60; that was
  * before the bytes after `meta` were known to matter, so it may have been the same thing
- * and has not been measured again. Until it is, a call that never returns is bounded by the
- * engine's own deadline on the request, not from inside this process. */
+ * and has not been measured again. A call that never returns is bounded by the watchdog in
+ * main.c instead: the engine's deadline on the request only closes its socket, and the daemon
+ * would hold the Sony lock for good, refusing `stop` and queueing every later install. */
 static uint32_t call_install(const char *uri, const char *name_hint,
                              int swap_shellcore) {
     fprintf(stderr, "[installer] InstallByPackage uri=%s swap=%d\n", uri, swap_shellcore);
