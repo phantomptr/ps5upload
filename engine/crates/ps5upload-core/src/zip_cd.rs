@@ -64,6 +64,12 @@ const EOCD_SCAN_WINDOW: u64 = 65_557; // 64 KiB + 22 + small slack
 /// CDFH fixed-portion length (sig + 42 bytes of fields).
 const CDFH_FIXED_LEN: usize = 46;
 
+/// The largest central directory read into memory: millions of entries, far above any real
+/// archive (a 100k-file game dump has about 10 MiB). The size comes from the file, so a damaged or
+/// crafted one could otherwise ask for the whole multi-GB archive in one allocation, and a failed
+/// allocation aborts the engine with every console's jobs in it.
+const MAX_CENTRAL_DIR_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Sentinel value placed in 32-bit CDFH fields when the real value is in
 /// the ZIP64 extra field.
 const ZIP64_SENTINEL_U32: u32 = 0xFFFF_FFFF;
@@ -114,6 +120,12 @@ pub fn read_central_directory_with_progress(
         bail!(
             "central directory ({cd_size} bytes @ {cd_offset}) extends past end of file \
              ({file_len} bytes)"
+        );
+    }
+    if cd_size > MAX_CENTRAL_DIR_BYTES {
+        bail!(
+            "central directory claims {cd_size} bytes, more than any usable zip has \
+             (at most {MAX_CENTRAL_DIR_BYTES}); the archive is damaged"
         );
     }
 
@@ -395,6 +407,30 @@ mod tests {
     /// agrees on names + uncompressed sizes. Uses a temp file because
     /// the zip crate writes via a `Seek + Write` and we need to round-trip
     /// the EOCD locator search.
+    /// A forged EOCD on a large file must not become one huge allocation: this one asks for a
+    /// directory just past the limit, which the file (sparse) is big enough to hold.
+    #[test]
+    fn a_central_directory_size_past_the_limit_is_refused_without_allocating_it() {
+        let path = tmp_zip_path();
+        let cd_size = MAX_CENTRAL_DIR_BYTES + 1;
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.set_len(cd_size + 1024).unwrap();
+        f.seek(SeekFrom::End(-22)).unwrap();
+        let mut eocd = Vec::new();
+        eocd.extend_from_slice(&EOCD_SIG.to_le_bytes());
+        eocd.extend_from_slice(&[0u8; 4]); // disk numbers
+        eocd.extend_from_slice(&1u16.to_le_bytes()); // entries on this disk
+        eocd.extend_from_slice(&1u16.to_le_bytes()); // entries in total
+        eocd.extend_from_slice(&(cd_size as u32).to_le_bytes());
+        eocd.extend_from_slice(&0u32.to_le_bytes()); // central directory offset
+        eocd.extend_from_slice(&0u16.to_le_bytes()); // comment length
+        std::io::Write::write_all(&mut f, &eocd).unwrap();
+        drop(f);
+        let err = read_central_directory(&path).unwrap_err().to_string();
+        let _ = std::fs::remove_file(&path);
+        assert!(err.contains("damaged"), "{err}");
+    }
+
     #[test]
     fn parses_small_zip_matches_zip_crate() {
         use std::io::{Cursor, Write};

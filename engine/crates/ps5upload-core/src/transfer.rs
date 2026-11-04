@@ -529,20 +529,15 @@ pub fn zip_plan_preview_with_progress(
         }
         files.push((rel, entry.uncompressed_size));
     }
-    // Collapse duplicate paths keeping the last (the AVA1 zip
-    // source's manifest rule) so the preview's total + file count match
-    // exactly what the transfer sends — otherwise the progress bar's
-    // denominator would exceed the bytes actually streamed.
+    // Two entries that normalise to one path cannot both land, and the AVA1 zip source refuses
+    // the archive whole (a manifest holds unique paths). Refused here too, with its words, so
+    // the archive fails at planning and not as a job that was shown as fine.
     files.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut deduped: Vec<(String, u64)> = Vec::with_capacity(files.len());
-    for f in files {
-        if deduped.last().is_some_and(|(p, _)| *p == f.0) {
-            deduped.pop();
-        }
-        deduped.push(f);
+    if let Some(pair) = files.windows(2).find(|w| w[0].0 == w[1].0) {
+        bail!("{}: two zip entries name the same file", pair[0].0);
     }
-    let total = deduped.iter().map(|(_, s)| *s).sum();
-    Ok((total, deduped))
+    let total = files.iter().map(|(_, s)| *s).sum();
+    Ok((total, files))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
