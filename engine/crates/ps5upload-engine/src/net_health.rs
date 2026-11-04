@@ -346,6 +346,10 @@ pub(crate) fn network_checks(addr: &str, helper_up: bool) -> Vec<HealthCheck> {
         Err(_) => {
             let elf =
                 crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Installer).ok();
+            // Everything sent to a console's loader holds this lock: it serves one connection at
+            // a time, and a scan during an elfldr swap or an install start failed one of them.
+            let lock = crate::elfldr_guard::loader_lock(&host);
+            let _loader = lock.lock().unwrap_or_else(|e| e.into_inner());
             // protect_running: a daemon that is serving an install is never replaced here.
             let e = ps5upload_core::installer_client::ensure(&host, elf.as_deref(), true);
             if e.listening {

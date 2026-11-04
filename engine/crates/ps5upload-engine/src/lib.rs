@@ -2287,12 +2287,30 @@ struct CleanupReq {
     path: String,
 }
 
-/// POST /api/ps5/cleanup — asks the PS5 payload to rm -rf a path.
+/// Whether the routes that exist only for tests and benches answer: `PS5UPLOAD_ENGINE_DEBUG=1`.
+fn debug_routes_on() -> bool {
+    debug_routes_allowed(std::env::var("PS5UPLOAD_ENGINE_DEBUG").ok().as_deref())
+}
+
+fn debug_routes_allowed(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+/// What a route that is off answers: the same as one that does not exist.
+fn no_such_route() -> axum::response::Response {
+    json_err(StatusCode::NOT_FOUND, "no such route").into_response()
+}
+
+/// POST /api/ps5/cleanup — asks the PS5 payload to rm -rf a path. For tests and benches only:
+/// off unless `PS5UPLOAD_ENGINE_DEBUG=1`.
 /// Safe: payload refuses paths outside `/data/ps5upload-{bench,sweep,smoke}/`.
 async fn ps5_cleanup(
     State(_state): State<AppState>,
     Json(req): Json<CleanupReq>,
 ) -> impl IntoResponse {
+    if !debug_routes_on() {
+        return no_such_route();
+    }
     let Some(addr) = required_console_addr(req.addr) else {
         return missing_console_addr();
     };
@@ -2816,11 +2834,10 @@ struct FsMountReq {
     read_only: Option<bool>,
 }
 
-async fn ps5_fs_mount(
-    State(state): State<AppState>,
-    Json(req): Json<FsMountReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn ps5_fs_mount(Json(req): Json<FsMountReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let image_path = req.image_path;
     let mount_name = req.mount_name;
     let mount_point = req.mount_point;
@@ -2833,6 +2850,7 @@ async fn ps5_fs_mount(
     );
     let image_for_log = image_path.clone();
     let result: Result<MountResult, anyhow::Error> = tokio::task::spawn_blocking(move || {
+        let _busy = helper_stop::enter(&addr);
         fs_mount(
             &addr,
             &image_path,
@@ -2882,11 +2900,10 @@ struct AppLaunchReq {
     title_id: String,
 }
 
-async fn ps5_app_launch(
-    State(state): State<AppState>,
-    Json(req): Json<AppLaunchReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn ps5_app_launch(Json(req): Json<AppLaunchReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let title_id = req.title_id;
     let started = std::time::Instant::now();
     crate::log_info!("app_launch: addr={addr} title_id={title_id}");
@@ -2945,10 +2962,13 @@ async fn ps5_app_register(
         "app_register: addr={addr} src_path={src_path} patch_drm_type={patch_drm_type}"
     );
     let path_for_log = src_path.clone();
-    match tokio::task::spawn_blocking(move || app_register(&addr, &src_path, patch_drm_type))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r)
+    match tokio::task::spawn_blocking(move || {
+        let _busy = helper_stop::enter(&addr);
+        app_register(&addr, &src_path, patch_drm_type)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r)
     {
         Ok(result) => {
             crate::log_info!(
@@ -3117,6 +3137,8 @@ async fn ps5_fs_chmod(
         None
     };
     match tokio::task::spawn_blocking(move || {
+        // Marks the console busy for the job: a helper stop is refused meanwhile.
+        let _busy = helper_stop::enter(&addr);
         ps5upload_core::fs_ops::fs_chmod_with_timeout(&addr, &path, &mode, recursive, io_timeout)
     })
     .await
@@ -3218,11 +3240,10 @@ struct FsOpCancelReq {
     addr: Option<String>,
 }
 
-async fn ps5_fs_op_cancel(
-    State(state): State<AppState>,
-    Json(req): Json<FsOpCancelReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn ps5_fs_op_cancel(Json(req): Json<FsOpCancelReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let op_id = req.op_id;
     crate::log_info!("fs_op_cancel: op_id={op_id}");
     if ps5upload_ava1::copy::op_cancel(op_id) {
@@ -3246,11 +3267,10 @@ async fn ps5_fs_op_cancel(
     }
 }
 
-async fn ps5_fs_mkdir(
-    State(state): State<AppState>,
-    Json(req): Json<FsPathReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn ps5_fs_mkdir(Json(req): Json<FsPathReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let path = req.path;
     let started = std::time::Instant::now();
     crate::log_info!("fs_mkdir: addr={addr} path={path}");
@@ -3446,13 +3466,39 @@ async fn ps5_time_get_route(
     }
 }
 
-async fn ps5_time_sync_route(
-    State(state): State<AppState>,
-    Json(req): Json<TimeSyncReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+/// A host name or an IP address, nothing else: the engine sends this server a UDP packet.
+fn valid_ntp_server(server: &str) -> bool {
+    if server.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    !server.is_empty()
+        && server.len() <= 253
+        && server.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
+async fn ps5_time_sync_route(Json(req): Json<TimeSyncReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
 
     // Resolve the target time: either from NTP or from the client-provided value.
+    if let Some(server) = req.ntp_server.as_deref().filter(|_| req.use_ntp) {
+        if !valid_ntp_server(server) {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "ntp_server must be a host name or an IP address",
+            )
+            .into_response();
+        }
+    }
     let (target, source, ntp_server) = if req.use_ntp {
         let custom = req.ntp_server.clone();
         let ntp_result = tokio::task::spawn_blocking(move || {
@@ -3535,11 +3581,10 @@ struct SmpMetaControlReq {
     inner: ps5upload_core::smp_meta::SmpMetaControlRequest,
 }
 
-async fn ps5_smp_meta_control_route(
-    State(state): State<AppState>,
-    Json(req): Json<SmpMetaControlReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn ps5_smp_meta_control_route(Json(req): Json<SmpMetaControlReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let inner = req.inner;
     let r: Result<ps5upload_core::smp_meta::SmpMetaControlAck, anyhow::Error> =
         tokio::task::spawn_blocking(move || {
@@ -3855,11 +3900,10 @@ struct UsbEjectReq {
 /// POST /api/ps5/usb/eject `{addr, mount_point, force}` — unmount a USB drive (`/mnt/usbN`)
 /// so it can be pulled. Without `force`, `usb_eject_busy` means something on the console
 /// holds it open; `force` unmounts anyway after a sync.
-async fn ps5_usb_eject(
-    State(state): State<AppState>,
-    Json(req): Json<UsbEjectReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn ps5_usb_eject(Json(req): Json<UsbEjectReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let mp = req.mount_point;
     let force = req.force;
     crate::log_info!("usb_eject: addr={addr} mount_point={mp} force={force}");
@@ -3885,17 +3929,19 @@ struct SaveOpenReq {
 /// POST /api/ps5/saves/open `{addr, image}` — the helper mounts the save decrypted (copied
 /// under /data first) and says where; the Files screen then reads and writes it. One save
 /// open at a time; another one closes the first. Empty `image` reports what is open.
-async fn ps5_save_open(
-    State(state): State<AppState>,
-    Json(req): Json<SaveOpenReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn ps5_save_open(Json(req): Json<SaveOpenReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let image = req.image;
     crate::log_info!("save_open: addr={addr} image={image}");
-    let r = tokio::task::spawn_blocking(move || ps5upload_core::saves::save_open(&addr, &image))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r);
+    let r = tokio::task::spawn_blocking(move || {
+        let _busy = helper_stop::enter(&addr);
+        ps5upload_core::saves::save_open(&addr, &image)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
@@ -3903,16 +3949,18 @@ async fn ps5_save_open(
 }
 
 /// POST /api/ps5/saves/close `{addr}` — unmounts the open save and writes it back.
-async fn ps5_save_close(
-    State(state): State<AppState>,
-    Json(req): Json<SaveOpenReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn ps5_save_close(Json(req): Json<SaveOpenReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     crate::log_info!("save_close: addr={addr}");
-    let r = tokio::task::spawn_blocking(move || ps5upload_core::saves::save_close(&addr))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r);
+    let r = tokio::task::spawn_blocking(move || {
+        let _busy = helper_stop::enter(&addr);
+        ps5upload_core::saves::save_close(&addr)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
@@ -3930,11 +3978,10 @@ struct SetIconHiddenReq {
 /// icon (#407). Only app.db's `visible` flag changes; the title stays installed. A refusal
 /// (a system app, a title with no icon, app.db locked) is a 200 with `ok: false` and the
 /// helper's reason, so the app can show it.
-async fn ps5_set_icon_hidden(
-    State(state): State<AppState>,
-    Json(req): Json<SetIconHiddenReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn ps5_set_icon_hidden(Json(req): Json<SetIconHiddenReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::diagnostics::set_icon_hidden(&addr, &req.title_id, req.hidden)
     })
@@ -4324,12 +4371,12 @@ struct PowerPairReq {
 /// The console has to be awake with the payload running. That is not a
 /// limitation worth working around — pairing happens once, and what it
 /// buys is the ability to wake the console later, when it is not.
-async fn ps5_power_pair(
-    State(state): State<AppState>,
-    Json(req): Json<PowerPairReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn ps5_power_pair(Json(req): Json<PowerPairReq>) -> impl IntoResponse {
+    // `host` is the console being paired: it names one even without `addr`.
     let host = req.host.clone();
+    let Some(addr) = required_console_addr(req.addr.or_else(|| Some(host.clone()))) else {
+        return missing_console_addr();
+    };
     let manual = req.pin.filter(|p| !p.trim().is_empty());
     crate::log_info!(
         "power_pair: addr={addr} host={host} with={}",
@@ -4518,11 +4565,10 @@ struct SmpCheckoutBeginReq {
 /// to notice the source has gone and release its read-only mount. See
 /// `ps5upload_core::smp_checkout` for why the image has to be moved rather
 /// than simply unmounted.
-async fn ps5_smp_checkout_begin(
-    State(state): State<AppState>,
-    Json(req): Json<SmpCheckoutBeginReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn ps5_smp_checkout_begin(Json(req): Json<SmpCheckoutBeginReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::smp_checkout::begin(&addr, &req.image_path, &req.mount_point, &req.title_id)
     })
@@ -4541,11 +4587,10 @@ async fn ps5_smp_checkout_begin(
 
 /// POST /api/ps5/smp/checkout/finish — unmount the edited image, put it back
 /// where ShadowMount+ will find it, and clear the journal.
-async fn ps5_smp_checkout_finish(
-    State(state): State<AppState>,
-    Json(q): Json<AddrQuery>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+async fn ps5_smp_checkout_finish(Json(q): Json<AddrQuery>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(q.addr) else {
+        return missing_console_addr();
+    };
     let r = tokio::task::spawn_blocking(move || ps5upload_core::smp_checkout::finish(&addr))
         .await
         .map_err(anyhow::Error::from)
@@ -4596,11 +4641,10 @@ async fn ps5_smp_image_rw_begin(
     }
 }
 
-async fn ps5_smp_image_rw_finish(
-    State(state): State<AppState>,
-    Json(q): Json<AddrQuery>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+async fn ps5_smp_image_rw_finish(Json(q): Json<AddrQuery>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(q.addr) else {
+        return missing_console_addr();
+    };
     let r = tokio::task::spawn_blocking(move || ps5upload_core::smp_image_rw::finish(&addr))
         .await
         .map_err(anyhow::Error::from)
@@ -4678,11 +4722,10 @@ struct PeripheralReq {
 ///
 /// The disc drive, the USB ports, the beeper and the front light. Replies with the
 /// helper's own ack (`ok`, `action`, `code`); a transport failure is a 502.
-async fn ps5_peripheral(
-    State(state): State<AppState>,
-    Json(q): Json<PeripheralReq>,
-) -> impl IntoResponse {
-    let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+async fn ps5_peripheral(Json(q): Json<PeripheralReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(q.addr) else {
+        return missing_console_addr();
+    };
     let (action, port) = (q.action, q.port);
     match tokio::task::spawn_blocking(move || {
         ps5upload_core::diagnostics::peripheral_control(&addr, action, port)
@@ -4714,11 +4757,10 @@ struct FanThresholdReq {
 ///
 /// Out-of-range inputs return 400 with the specific range error —
 /// BAD_GATEWAY is reserved for payload/transport failures.
-async fn ps5_hw_set_fan_threshold(
-    State(state): State<AppState>,
-    Json(q): Json<FanThresholdReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+async fn ps5_hw_set_fan_threshold(Json(q): Json<FanThresholdReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(q.addr) else {
+        return missing_console_addr();
+    };
     let threshold = q.threshold_c;
     let reapply = q.reapply_sec;
     crate::log_info!(
@@ -6365,7 +6407,9 @@ async fn transfer_file_handler(
     State(state): State<AppState>,
     Json(req): Json<TransferFileReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     // A caller-supplied tx_id marks a resume-capable client; the job is reopened by id.
     let caller_supplied_tx_id = req.tx_id.is_some();
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
@@ -6605,7 +6649,9 @@ async fn transfer_dir_handler(
     State(state): State<AppState>,
     Json(req): Json<TransferDirReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     // A caller-supplied tx_id signals "reuse if already in the payload's
     // journal" — the cross-session resume flow. Engine-minted tx_ids
     // mean "fresh upload." Encode that into the initial BEGIN_TX flags
@@ -7281,7 +7327,9 @@ async fn transfer_zip_handler(
     State(state): State<AppState>,
     Json(req): Json<TransferZipReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let caller_supplied_tx_id = req.tx_id.is_some();
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
         Ok(id) => id,
@@ -7775,11 +7823,10 @@ async fn profile_info_handler(
     }
 }
 
-async fn profile_username_handler(
-    State(state): State<AppState>,
-    Json(req): Json<ProfileUsernameReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn profile_username_handler(Json(req): Json<ProfileUsernameReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let slot = req.slot;
     let name = req.name;
     crate::log_info!("profile_set_username: addr={addr} slot={slot}");
@@ -7796,10 +7843,11 @@ async fn profile_username_handler(
 }
 
 async fn profile_local_username_handler(
-    State(state): State<AppState>,
     Json(req): Json<ProfileLocalUsernameReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let uid = req.uid;
     let name = req.name;
     crate::log_info!("profile_set_local_username: addr={addr} uid={uid}");
@@ -7916,11 +7964,10 @@ async fn profile_np_restore_handler(Json(req): Json<ProfileNpReq>) -> impl IntoR
 }
 
 /// POST /api/ps5/users/create — create a new local user account.
-async fn user_create_handler(
-    State(state): State<AppState>,
-    Json(req): Json<UserCreateReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn user_create_handler(Json(req): Json<UserCreateReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let name = req.name;
     crate::log_info!("user_create: addr={addr} name={name}");
     let r = tokio::task::spawn_blocking(move || ps5upload_core::users::user_create(&addr, &name))
@@ -7973,11 +8020,10 @@ async fn user_delete_handler(
 }
 
 /// POST /api/ps5/backup/snapshot — snapshot a file or directory tree.
-async fn backup_snapshot_handler(
-    State(state): State<AppState>,
-    Json(req): Json<BackupSnapshotReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn backup_snapshot_handler(Json(req): Json<BackupSnapshotReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let tag = req.tag;
     let path = req.path;
     crate::log_info!("backup_snapshot: addr={addr} tag={tag} path={path}");
@@ -8085,11 +8131,10 @@ async fn backup_delete_handler(
 }
 
 // ── v4.1: Remote Play handlers ────────────────────────────────────────
-async fn remoteplay_request_handler(
-    State(state): State<AppState>,
-    Json(req): Json<RemotePlayReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn remoteplay_request_handler(Json(req): Json<RemotePlayReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let acct = req.manual_account_id;
     crate::log_info!("remoteplay_request: addr={addr}");
     let r = tokio::task::spawn_blocking(move || {
@@ -8148,11 +8193,12 @@ async fn remoteplay_readiness_handler(
 }
 
 async fn remoteplay_enable_handler(
-    State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
     Json(body): Json<RemotePlayEnableBody>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let Some(addr) = required_console_addr(q.addr) else {
+        return missing_console_addr();
+    };
     if body.scope != "service" && body.scope != "user" {
         return json_err(
             StatusCode::BAD_REQUEST,
@@ -8194,11 +8240,12 @@ fn post_addr(query: Option<String>, body: &[u8]) -> Option<String> {
 }
 
 async fn remoteplay_cancel_handler(
-    State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(post_addr(q.addr, &body), &state.default_ps5_addr);
+    let Some(addr) = required_console_addr(post_addr(q.addr, &body)) else {
+        return missing_console_addr();
+    };
     let r =
         tokio::task::spawn_blocking(move || ps5upload_core::remoteplay::remoteplay_cancel(&addr))
             .await
@@ -8285,11 +8332,10 @@ async fn local_image_status() -> impl IntoResponse {
 ///
 /// Discards ps5upload's recorded play time on the console. This is our
 /// own tracking, not the console's own records, which are not writable.
-async fn activity_reset_handler(
-    State(state): State<AppState>,
-    Query(q): Query<AddrQuery>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+async fn activity_reset_handler(Query(q): Query<AddrQuery>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(q.addr) else {
+        return missing_console_addr();
+    };
     let r = tokio::task::spawn_blocking(move || ps5upload_core::activity::activity_reset(&addr))
         .await
         .map_err(anyhow::Error::from)
@@ -8305,11 +8351,10 @@ async fn activity_reset_handler(
 /// Empties the payload's notification ring. These are messages
 /// ps5upload put on the console's screen, so this clears everything
 /// the Notifications screen can show.
-async fn notif_clear_handler(
-    State(state): State<AppState>,
-    Query(q): Query<AddrQuery>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+async fn notif_clear_handler(Query(q): Query<AddrQuery>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(q.addr) else {
+        return missing_console_addr();
+    };
     let r = tokio::task::spawn_blocking(move || ps5upload_core::notif::notif_clear(&addr))
         .await
         .map_err(anyhow::Error::from)
@@ -8389,11 +8434,10 @@ async fn cheats_get_handler(
     }
 }
 
-async fn cheats_toggle_handler(
-    State(state): State<AppState>,
-    Json(req): Json<CheatsToggleReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn cheats_toggle_handler(Json(req): Json<CheatsToggleReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let title_id = req.title_id;
     let index = req.index;
     let on = req.on;
@@ -8433,11 +8477,10 @@ async fn cheats_delete_handler(
 }
 
 /// POST /api/ps5/cheats/reload `{addr}` (a POST for the same reason as delete).
-async fn cheats_reload_handler(
-    State(state): State<AppState>,
-    Json(q): Json<CheatsAddrQuery>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+async fn cheats_reload_handler(Json(q): Json<CheatsAddrQuery>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(q.addr) else {
+        return missing_console_addr();
+    };
     let r = tokio::task::spawn_blocking(move || ps5upload_core::cheats::cheats_reload(&addr))
         .await
         .map_err(anyhow::Error::from)
@@ -8463,11 +8506,10 @@ async fn cheats_status_handler(
     }
 }
 
-async fn cheats_engine_set_handler(
-    State(state): State<AppState>,
-    Json(req): Json<CheatsEngineSetReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn cheats_engine_set_handler(Json(req): Json<CheatsEngineSetReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let enabled = req.enabled;
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::cheats::cheats_engine_set(&addr, enabled)
@@ -8518,10 +8560,11 @@ struct CheatsRepoDownloadReq {
 }
 
 async fn cheats_repos_download_handler(
-    State(state): State<AppState>,
     Json(req): Json<CheatsRepoDownloadReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::cheats::cheats_repo_download(
             &addr,
@@ -8750,11 +8793,10 @@ async fn profile_avatar_current_handler(
         .into_response()
 }
 
-async fn profile_avatar_handler(
-    State(state): State<AppState>,
-    Json(req): Json<ProfileAvatarReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+async fn profile_avatar_handler(Json(req): Json<ProfileAvatarReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let mode = ps5upload_core::profile::SquareMode::parse(req.mode.as_deref().unwrap_or("crop"))
         .with_crop(req.crop);
     let uid = req.uid.unwrap_or(0);
@@ -8798,7 +8840,9 @@ async fn transfer_7z_handler(
     State(state): State<AppState>,
     Json(req): Json<Transfer7zReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let caller_supplied_tx_id = req.tx_id.is_some();
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
         Ok(id) => id,
@@ -9022,7 +9066,9 @@ async fn transfer_rar_handler(
     State(state): State<AppState>,
     Json(req): Json<TransferRarReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let caller_supplied_tx_id = req.tx_id.is_some();
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
         Ok(id) => id,
@@ -9360,7 +9406,9 @@ async fn link_download_handler(
         Ok(d) => d,
         Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
     };
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
         Ok(id) => id,
         Err(e) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
@@ -9628,7 +9676,9 @@ async fn transfer_file_list_handler(
     if req.files.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "files list is empty").into_response();
     }
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
         Ok(id) => id,
         Err(e) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
@@ -10512,8 +10562,8 @@ struct DebugCrashQuery {
 /// Hard-gated behind `PS5UPLOAD_ENGINE_DEBUG=1`: with the env unset (every
 /// normal app launch) it 404s, so it can never be triggered in production.
 async fn debug_crash(Query(q): Query<DebugCrashQuery>) -> axum::response::Response {
-    if std::env::var("PS5UPLOAD_ENGINE_DEBUG").ok().as_deref() != Some("1") {
-        return (StatusCode::NOT_FOUND, "disabled").into_response();
+    if !debug_routes_on() {
+        return no_such_route();
     }
     match q.mode.as_deref() {
         // Unwinds the handler task; the global panic hook records the panic

@@ -37,7 +37,61 @@ fn asset_response(path: &str) -> Option<Response> {
         .first_raw()
         .unwrap_or("application/octet-stream");
     let body: Vec<u8> = file.data.into_owned();
-    Some(([(header::CONTENT_TYPE, mime)], body).into_response())
+    Some(
+        (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CACHE_CONTROL, cache_control_for(path)),
+            ],
+            body,
+        )
+            .into_response(),
+    )
+}
+
+/// `assets/` names carry a hash of their content, so a copy never goes stale. Anything else
+/// (`index.html` first of all) keeps its name across engine updates: ask each time.
+fn cache_control_for(path: &str) -> &'static str {
+    if path.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    }
+}
+
+/// A request path as the bundle names files: `my%20font.woff2` -> `my font.woff2`. A path that
+/// does not decode to text stays as it came, and is simply not found.
+fn decode_path(path: &str) -> std::borrow::Cow<'_, str> {
+    if !path.contains('%') {
+        return path.into();
+    }
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = (bytes[i] == b'%')
+            .then(|| bytes.get(i + 1..i + 3))
+            .flatten()
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match hex {
+            Some(b) => {
+                out.push(b);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).map_or(path.into(), Into::into)
+}
+
+/// A missing file, not a page of the app: the client's routes have no extension. The SPA shell
+/// with a 200 in place of a font or a script is what a browser then fails on.
+fn looks_like_a_file(path: &str) -> bool {
+    mime_guess::from_path(path).first().is_some()
 }
 
 /// Return a response for `path` inside the embedded bundle.  If the path is
@@ -48,7 +102,10 @@ pub fn spa_response(path: &str) -> Response {
         // recognise.  The React app's client-side router takes over from here.
         match WebAssets::get("index.html") {
             Some(index) => (
-                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                [
+                    (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                    (header::CACHE_CONTROL, cache_control_for("index.html")),
+                ],
                 index.data.into_owned(),
             )
                 .into_response(),
@@ -73,7 +130,8 @@ pub async fn spa_fallback(req: Request) -> Response {
     let raw = req.uri().path();
     // Strip the leading '/' — `RustEmbed` uses bare paths like "index.html"
     // and "assets/foo-abc123.js".
-    let path = raw.trim_start_matches('/');
+    let decoded = decode_path(raw);
+    let path = decoded.trim_start_matches('/');
 
     if path.is_empty() || path == "index.html" {
         return spa_response("index.html");
@@ -93,6 +151,15 @@ pub async fn spa_fallback(req: Request) -> Response {
     // Try the exact path first (for assets, favicon, etc.).
     if let Some(resp) = asset_response(path) {
         return resp;
+    }
+
+    if looks_like_a_file(path) {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            format!("no such file: {path}"),
+        )
+            .into_response();
     }
 
     // Not found → SPA shell.  The React router will render a 404 page if the

@@ -44,6 +44,11 @@ const DEFAULT_JOB_TIMEOUT_MS = 120_000;
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
+// PS5UPLOAD_ENGINE_DEBUG: /api/ps5/cleanup, which clears the test folder, answers only then.
+function engineEnv(opts) {
+  return { ...process.env, PS5_ADDR: opts.ps5Addr, PS5UPLOAD_ENGINE_DEBUG: '1' };
+}
+
 let passCount = 0;
 let failCount = 0;
 
@@ -194,14 +199,14 @@ async function main() {
       if (engineBin) {
         log(`spawning engine (pre-built: ${path.relative(repoRoot, engineBin)})...`);
         engineChild = spawn(engineBin, [], {
-          env: { ...process.env, PS5_ADDR: opts.ps5Addr },
+          env: engineEnv(opts),
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       } else {
         log('spawning engine (cargo run — may take a moment to compile)...');
         engineChild = spawn('cargo', ['run', '-p', 'ps5upload-engine'], {
           cwd: path.join(repoRoot, 'engine'),
-          env: { ...process.env, PS5_ADDR: opts.ps5Addr },
+          env: engineEnv(opts),
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       }

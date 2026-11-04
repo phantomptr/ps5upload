@@ -251,14 +251,10 @@ fn typed_code(v: &Option<serde_json::Value>) -> Option<u32> {
 /// shows (passkey entry, SPEC.md §5.5). The console checks it; a wrong one answers
 /// `wrong_code` with a new handshake pending, and five of them close the console's window
 /// (`closed`: the dialog then explains how to reopen it). A code that is not six digits is a 400.
-pub async fn pairing_confirm_handler(
-    State(state): State<crate::AppState>,
-    Json(req): Json<PairingConfirm>,
-) -> Response {
-    let addr = req
-        .addr
-        .clone()
-        .unwrap_or_else(|| state.default_ps5_addr.clone());
+pub async fn pairing_confirm_handler(Json(req): Json<PairingConfirm>) -> Response {
+    let Some(addr) = crate::required_console_addr(req.addr.clone()) else {
+        return crate::missing_console_addr();
+    };
     let Some(typed) = typed_code(&req.code) else {
         return (
             StatusCode::BAD_REQUEST,

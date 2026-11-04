@@ -102,9 +102,9 @@ committed defaults — those stay generic on purpose.
 |---|---|
 | `make validate` | Build, send, wait for `:9120`, smoke, sweep, write `bench/reports/<ts>-sweep.{json,md}` |
 | `make validate-xl` | Adds the 200k-file stress profile |
-| `node tests/smoke-hardware.mjs --no-spawn-engine` | Against an engine already running |
+| `node tests/smoke-hardware.mjs --no-spawn-engine` | Against an engine already running (started with `PS5UPLOAD_ENGINE_DEBUG=1`, or its cleanup step answers 404) |
 
-Clean up test uploads afterwards:
+Clean up test uploads afterwards. This route answers only on an engine started with `PS5UPLOAD_ENGINE_DEBUG=1`, which the test scripts do:
 
 ```sh
 curl -X POST http://127.0.0.1:19113/api/ps5/cleanup \

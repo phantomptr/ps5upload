@@ -16,7 +16,7 @@ use ps5upload_core::console_files::{self as cf, FilesPrefs, Handoff, PrefsOp, Si
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::{console_addr_or_default, json_err, AddrQuery, AppState};
+use crate::{console_addr_or_default, json_err, required_console_addr, AddrQuery, AppState};
 
 fn unsupported() -> Value {
     json!({ "supported": false })
@@ -99,14 +99,13 @@ pub(crate) struct PrefsSetReq {
     path: String,
 }
 
-pub(crate) async fn prefs_set_handler(
-    State(state): State<AppState>,
-    Json(req): Json<PrefsSetReq>,
-) -> axum::response::Response {
+pub(crate) async fn prefs_set_handler(Json(req): Json<PrefsSetReq>) -> axum::response::Response {
     if bad_path(&req.path) {
         return json_err(StatusCode::BAD_REQUEST, "bad_path").into_response();
     }
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    let Some(addr) = required_console_addr(req.addr) else {
+        return crate::missing_console_addr();
+    };
     answer(move || prefs_set(&addr, req.op, &req.path)).await
 }
 
@@ -118,13 +117,14 @@ pub(crate) struct HandoffPutReq {
 }
 
 pub(crate) async fn handoff_put_handler(
-    State(state): State<AppState>,
     Json(req): Json<HandoffPutReq>,
 ) -> axum::response::Response {
     if bad_path(&req.path) {
         return json_err(StatusCode::BAD_REQUEST, "bad_path").into_response();
     }
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    let Some(addr) = required_console_addr(req.addr) else {
+        return crate::missing_console_addr();
+    };
     answer(move || handoff_put(&addr, req.to, &req.path)).await
 }
 
@@ -135,11 +135,10 @@ pub(crate) struct HandoffTakeReq {
     side: Side,
 }
 
-pub(crate) async fn handoff_take_handler(
-    State(state): State<AppState>,
-    Json(req): Json<HandoffTakeReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+pub(crate) async fn handoff_take_handler(Json(req): Json<HandoffTakeReq>) -> impl IntoResponse {
+    let Some(addr) = required_console_addr(req.addr) else {
+        return crate::missing_console_addr();
+    };
     answer(move || handoff_take(&addr, req.side)).await
 }
 
@@ -269,10 +268,11 @@ pub(crate) struct MinionTileReq {
 }
 
 pub(crate) async fn minion_tile_handler(
-    State(state): State<AppState>,
     Json(req): Json<MinionTileReq>,
 ) -> axum::response::Response {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    let Some(addr) = required_console_addr(req.addr) else {
+        return crate::missing_console_addr();
+    };
     let change = cf::MinionChange {
         tile: req.tile,
         enabled: req.enabled,
@@ -289,10 +289,11 @@ pub(crate) struct CheatImportReq {
 }
 
 pub(crate) async fn cheat_import_handler(
-    State(state): State<AppState>,
     Json(req): Json<CheatImportReq>,
 ) -> axum::response::Response {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    let Some(addr) = required_console_addr(req.addr) else {
+        return crate::missing_console_addr();
+    };
     answer(move || {
         Ok(serde_json::to_value(
             ps5upload_core::cheats::cheats_import_local(&addr, std::path::Path::new(&req.path))?,
