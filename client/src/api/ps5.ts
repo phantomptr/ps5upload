@@ -2770,7 +2770,7 @@ export type ScreenshotPngMode = "sdr" | "hdr" | "hdr_plain";
 /** Create a scratch directory under the OS temp root. The returned
  *  absolute path is what the caller passes as `destDir` to
  *  `startTransferDownload` (for backup) or as `destDir` to
- *  `saveArchiveUnzip` (for restore). Always pair with
+ *  `saveArchiveBackupFinalize` (for a backup). Always pair with
  *  `saveArchiveCleanupTemp` in a `finally` block. */
 export async function saveArchiveMakeTemp(prefix: string): Promise<string> {
   return invoke<string>("save_archive_make_temp", { prefix });
@@ -2810,6 +2810,8 @@ export async function saveArchiveZip(
   // is a content:// URI with no usable name; pass this so the backend keeps
   // distinct backups from colliding on one fixed Downloads filename.
   fileName?: string,
+  // The zip's comment: which PS5 and user the backup came from (`saveBackupApi.note`).
+  note?: string,
 ): Promise<string> {
   // Where the zip landed: `destZip` on desktop, a Downloads file when Android redirected it.
   const written = await invoke<string | null>("save_archive_zip", {
@@ -2818,36 +2820,10 @@ export async function saveArchiveZip(
       inner_root: innerRoot,
       dest_zip: destZip,
       dest_filename: fileName,
+      note,
     },
   });
   return typeof written === "string" && written ? written : destZip;
-}
-
-export interface SaveArchiveUnzipResult {
-  inner_root: string;
-  file_count: number;
-}
-
-/** Strict-validate + extract `zipPath` into `destDir`. The zip must
- *  contain exactly one top-level folder named `expectedInner`; any
- *  other layout (flat files at root, multiple roots, wrong name) is
- *  rejected before any bytes are written.
- *
- *  After success, the extracted save lives at
- *  `<destDir>/<expectedInner>/…` and can be uploaded with
- *  `startTransferDir`. */
-export async function saveArchiveUnzip(
-  zipPath: string,
-  destDir: string,
-  expectedInner: string,
-): Promise<SaveArchiveUnzipResult> {
-  return invoke<SaveArchiveUnzipResult>("save_archive_unzip", {
-    req: {
-      zip_path: zipPath,
-      dest_dir: destDir,
-      expected_inner: expectedInner,
-    },
-  });
 }
 
 export interface SaveArchiveBackupFinalizeResult {
@@ -2869,25 +2845,6 @@ export async function saveArchiveBackupFinalize(
 ): Promise<SaveArchiveBackupFinalizeResult> {
   return invoke<SaveArchiveBackupFinalizeResult>(
     "save_archive_backup_finalize",
-    { req: { src_dir: srcDir, title_id: titleId } },
-  );
-}
-
-export interface SaveArchiveRestorePrepareResult {
-  renamed_count: number;
-}
-
-/** Pre-upload preparation after unzipping. Re-adds `sdimg_` prefix to
- *  bare top-level image files (those whose prefix was stripped during
- *  backup) so the PS5 sees the filename it expects. Files that already
- *  start with `sdimg_`, end in `.bin`, or live under `sce_sys/` pass
- *  through unchanged. */
-export async function saveArchiveRestorePrepare(
-  srcDir: string,
-  titleId: string,
-): Promise<SaveArchiveRestorePrepareResult> {
-  return invoke<SaveArchiveRestorePrepareResult>(
-    "save_archive_restore_prepare",
     { req: { src_dir: srcDir, title_id: titleId } },
   );
 }
@@ -3379,9 +3336,15 @@ export interface LibraryEntry {
  *  Permission-denied / non-existent paths are silently skipped — the
  *  PS5 has plenty of system-only directories a user payload can't
  *  read, and they're not library content. */
-export async function scanLibrary(
+export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]> {
+  return (await scanLibraryChecked(transferAddr)).entries;
+}
+
+/** The library as read, and whether some of it could not be read: an empty list from a scan that
+ *  read everything means the console really has nothing. */
+export async function scanLibraryChecked(
   transferAddr: string,
-): Promise<LibraryEntry[]> {
+): Promise<{ entries: LibraryEntry[]; incomplete: boolean }> {
   const addr = toMgmtAddr(transferAddr);
   const volumesRaw = await invoke<{ volumes?: Volume[] }>("ps5_volumes", {
     addr,
@@ -3437,6 +3400,7 @@ export async function scanLibrary(
   const dirMtime = new Map<string, number>();
 
   const scanLimit = createScanLimiter(6);
+  let unreadFolders = 0;
 
   const listDir = async (
     path: string,
@@ -3468,6 +3432,8 @@ export async function scanLibrary(
         });
         return out;
       } catch {
+        // A folder that could not be read: what is in it is unknown, not gone.
+        unreadFolders += 1;
         return [];
       }
     });
@@ -3645,7 +3611,8 @@ export async function scanLibrary(
     if (a.path !== b.path) return a.path.localeCompare(b.path);
     return a.name.localeCompare(b.name);
   });
-  return entries;
+  // No drive listed at all (mid-mount, say) is not a console with nothing on it.
+  return { entries, incomplete: unreadFolders > 0 || volumes.length === 0 };
 }
 
 /** Tiny async gate: cap in-flight work to `max`, queue the rest FIFO.

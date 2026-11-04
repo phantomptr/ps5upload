@@ -2,7 +2,7 @@ import { create } from "zustand";
 import {
   appsInstalled,
   fetchVolumes,
-  scanLibrary,
+  scanLibraryChecked,
   type LibraryEntry,
   type Volume,
 } from "../api/ps5";
@@ -94,6 +94,8 @@ interface LibraryStore {
     volumes: Volume[],
     registeredBySource: Map<string, RegisteredTitle>,
     pkgInstalled?: Set<string>,
+    /** Some of the console could not be read: what is missing is unknown, not gone. */
+    incomplete?: boolean,
   ) => void;
   setLoading: (host: string, loading: boolean) => void;
   setError: (host: string, error: string | null) => void;
@@ -146,7 +148,7 @@ export const useLibraryStore = create<LibraryStore>((set) => {
     });
   return {
     byHost: {},
-    setData: (host, entries, mountMap, volumes, registeredBySource, pkgInstalled) =>
+    setData: (host, entries, mountMap, volumes, registeredBySource, pkgInstalled, incomplete) =>
       set((s) => {
         const key = keyOf(host);
         const cur = s.byHost[key] ?? IDLE_LIBRARY;
@@ -160,13 +162,12 @@ export const useLibraryStore = create<LibraryStore>((set) => {
             prunedPending.set(imagePath, mountPoint);
           }
         }
-        // Don't blank the list on an empty rescan if we had entries — keep the
-        // old ones, refresh only mountMap + volumes, and let the next scan
-        // produce a real count. (The "library goes blank after mounting"
-        // symptom.)
+        // An empty scan that could not read everything keeps the old list (the "library goes
+        // blank after mounting" symptom); one that read everything means there is nothing, as
+        // after deleting the last game or ejecting the only drive with games.
         const hadEntries = (cur.entries ?? []).length > 0;
         const nextEntries =
-          entries.length === 0 && hadEntries ? cur.entries : entries;
+          entries.length === 0 && hadEntries && incomplete ? cur.entries : entries;
         return {
           byHost: {
             ...s.byHost,
@@ -243,6 +244,13 @@ export function libraryIsStale(host: string, now = Date.now()): boolean {
  * The result is written to the slot of the console that was scanned, never "the current one",
  * so a scan that lands after a console switch cannot paint one PS5's files under another's name.
  */
+/** A scan to run after a change here (a delete, a move): one in flight may have read the console
+ *  before the change and would paint the row back, so one more runs after it. */
+export function refreshLibraryAfterChange(host: string): Promise<void> {
+  const running = inflight.get(keyOf(host));
+  return running ? running.then(() => refreshLibrary(host)) : refreshLibrary(host);
+}
+
 export function refreshLibrary(host: string): Promise<void> {
   const key = keyOf(host);
   if (!key) return Promise.resolve();
@@ -255,7 +263,7 @@ export function refreshLibrary(host: string): Promise<void> {
     try {
       const addr = transferAddr(host);
       const [result, volumes, registered] = await Promise.all([
-        scanLibrary(addr),
+        scanLibraryChecked(addr),
         fetchVolumes(addr).catch((e) => {
           console.warn(
             "[library] volume probe failed; Move modal will offer no destinations:",
@@ -300,7 +308,7 @@ export function refreshLibrary(host: string): Promise<void> {
       const writable = volumes.filter((v) => v.writable && !v.is_placeholder);
       useLibraryStore
         .getState()
-        .setData(host, result, mountMap, writable, registeredBySource, pkgInstalled);
+        .setData(host, result.entries, mountMap, writable, registeredBySource, pkgInstalled, result.incomplete);
     } catch (e) {
       useLibraryStore
         .getState()

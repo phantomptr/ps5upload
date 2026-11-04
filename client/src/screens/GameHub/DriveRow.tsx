@@ -110,7 +110,7 @@ import {
   useLibraryStore,
   findOwningImage,
   libraryForHost,
-  refreshLibrary,
+  refreshLibrary, refreshLibraryAfterChange,
   type RegisteredTitle,
 } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
@@ -208,7 +208,7 @@ export function DriveRows({
   const [expanded, setExpanded] = useState(false);
   const changed = useCallback(() => {
     if (onChanged) onChanged();
-    else void refreshLibrary(host);
+    else void refreshLibraryAfterChange(host);
   }, [onChanged, host]);
   return (
     <CappedRows
@@ -644,6 +644,37 @@ function LibraryRowImpl({
     };
   }, [entry.kind, entry.path, host]);
 
+  // A game on this row runs now: the row's own title, or (an image) the ones registered from it.
+  const titlesOfRow = (): string[] => {
+    if (entry.kind === "game") return entry.titleId ? [entry.titleId] : [];
+    const libState = libraryForHost(useLibraryStore.getState(), host);
+    const inside = (libState.entries ?? [])
+      .filter((e) => e.kind === "game" && !!e.titleId && findOwningImage(libState, e.path) === entry.path)
+      .map((e) => e.titleId as string);
+    return registeredTitle ? [...new Set([registeredTitle.titleId, ...inside])] : inside;
+  };
+  const rowIsRunning = titlesOfRow().some((id) => runningTitleIds.has(id));
+  // The console's list points at this path: a home-screen tile, or a mount.
+  const registeredHere =
+    entry.kind === "game" ? registeredBySource.has(entry.path) : !!registeredTitle;
+  const tiedToConsole = registeredHere || !!currentMount;
+  /** Take the row off the console's lists before its files go, as Unmount does: left behind they
+   *  are a tile that does not launch ("ghost tiles", 0x80980103). Best effort: the row may
+   *  already be unregistered, and the delete or move decides the outcome. */
+  const releaseFromConsole = async () => {
+    const addr = consoleAddr(host);
+    if (registeredHere) {
+      for (const id of titlesOfRow()) {
+        await appUnregister(addr, id).catch((e: unknown) => console.warn(`appUnregister(${id}) failed:`, e));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+    if (currentMount) {
+      await fsUnmount(addr, currentMount).catch((e: unknown) => console.warn(`unmount before removal failed:`, e));
+      useLibraryStore.getState().removeMount(host, entry.path);
+    }
+  };
+
   const runDelete = async () => {
     setBusy("delete");
     setError(null);
@@ -661,6 +692,7 @@ function LibraryRowImpl({
     let okOutcome = true;
     let errMsg: string | null = null;
     try {
+      await releaseFromConsole();
       await fsDelete(consoleAddr(host), entry.path);
       audit("fs_delete", withConsolePrefix(host, entry.path));
       onChanged();
@@ -1028,6 +1060,11 @@ function LibraryRowImpl({
     setMoveUnsupportedSeen(null);
     setRetryMoveDest(null);
     const addr = consoleAddr(host);
+    // Registered at the old path: put back at the new one once the move is done.
+    const wasRegistered = registeredHere;
+    const wasMounted = !!currentMount;
+    const isFolderGame = entry.kind === "game";
+    if (wasRegistered || wasMounted) await releaseFromConsole();
     // The activity log shows the move from any screen; its Stop button cancels the
     // console's copy by op id, with no reference back to this row.
     const history = () => useActivityHistoryStore.getState();
@@ -1070,6 +1107,33 @@ function LibraryRowImpl({
           if (m.phase === "done") {
             // Clears a progress note left in the error field while it ran.
             history().finish(activityId, "done", { error: undefined });
+            if (wasRegistered && isFolderGame) {
+              void appRegister(addr, m.to).catch((e: unknown) =>
+                pushNotification(
+                  "error",
+                  withConsolePrefix(host, tr("library_move_register_failed_title", undefined, "Moved, but not registered")),
+                  {
+                    body: tr(
+                      "library_move_register_failed",
+                      { dest: m.to, error: e instanceof Error ? e.message : String(e) },
+                      "Moved to {dest}, but its home-screen tile could not be put back: {error}. Register it from its row.",
+                    ),
+                  },
+                ),
+              );
+            } else if (wasRegistered || wasMounted) {
+              pushNotification(
+                "info",
+                withConsolePrefix(host, tr("library_move_mount_again_title", undefined, "Mount it again")),
+                {
+                  body: tr(
+                    "library_move_mount_again",
+                    { dest: m.to },
+                    "Moved to {dest}. Mount it again from its row to play it.",
+                  ),
+                },
+              );
+            }
           } else if (m.phase === "cancelled") {
             history().finish(activityId, "stopped", {
               error: "cancelled by user",
@@ -2157,7 +2221,7 @@ function LibraryRowImpl({
                 title: tr(
                   "library_convert_hint_v2",
                   undefined,
-                  "Open it in Workshop: an installable package or another game image, made from it here on the PS5.",
+                  "Open it in Workshop: an installable package or another game image, made from it on this computer.",
                 ),
               });
             }
@@ -2174,7 +2238,7 @@ function LibraryRowImpl({
                 title: tr(
                   "library_shrink_hint_v2",
                   undefined,
-                  "Open it in Workshop set to a compressed game image (.ffpfsc), which replaces this copy on the PS5 and frees the difference. How much depends on the game.",
+                  "Open it in Workshop set to a compressed game image (.ffpfsc), made on this computer. This copy stays on the PS5: to free room, upload the image and then delete this copy.",
                 ),
               });
             }
@@ -2227,9 +2291,11 @@ function LibraryRowImpl({
               label: tr("library_move", undefined, "Move"),
               icon: <FolderInput size={12} />,
               onSelect: () => setMoveOpen(true),
-              disabled: busy !== null || volumes.length === 0,
+              disabled: busy !== null || volumes.length === 0 || rowIsRunning,
               title:
-                volumes.length === 0
+                rowIsRunning
+                  ? tr("library_close_game_first", undefined, "This game is running. Close it first.")
+                  : volumes.length === 0
                   ? tr(
                       "library_move_no_volumes_tooltip",
                       undefined,
@@ -2245,14 +2311,16 @@ function LibraryRowImpl({
               label: tr("library_delete", undefined, "Delete"),
               icon: <Trash2 size={12} />,
               onSelect: () => setConfirm({ kind: "delete", entry }),
-              disabled: busy !== null,
+              disabled: busy !== null || rowIsRunning,
               loading: busy === "delete",
               destructive: true,
-              title: tr(
-                "library_delete_tooltip",
-                undefined,
-                "Delete this path from the PS5",
-              ),
+              title: rowIsRunning
+                ? tr("library_close_game_first", undefined, "This game is running. Close it first.")
+                : tr(
+                    "library_delete_tooltip",
+                    undefined,
+                    "Delete this path from the PS5",
+                  ),
             });
             return (
               <OverflowMenu
@@ -3562,7 +3630,10 @@ function ConfirmRow({
           "library_confirm_delete",
           { name: entry.name },
           `Delete "${entry.name}"? This removes the path recursively from your PS5 and can't be undone.`,
-        )
+        ) +
+        (tied
+          ? ` ${tr("library_confirm_delete_tied", undefined, "It is registered or mounted on the PS5: it is taken off first, so its home-screen tile goes too.")}`
+          : "")
       : tr(
           "library_confirm_chmod",
           { name: entry.name },
