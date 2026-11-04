@@ -1081,7 +1081,6 @@ fn walk_plan_with(
                 .map_err(|e| format!("could not read {}: {e}", path.display()))?;
             {
                 total += m.len;
-                let rel = path.strip_prefix(root).unwrap_or(&path);
                 out.push(PlannedFile {
                     rel_path: rel.to_string_lossy().replace('\\', "/"),
                     size: m.len,
@@ -6901,12 +6900,16 @@ struct LocalPathQuery {
 /// browser UI has no such thing, so the Upload screen's drag-drop router
 /// had nothing to call and threw BrowserUnsupportedError (issue #262).
 async fn local_path_kind_handler(Query(q): Query<LocalPathQuery>) -> impl IntoResponse {
-    let kind = match std::fs::metadata(&q.path) {
+    // Off the async workers: a stat of a hung network mount parks its thread for the mount's
+    // timeout, and every console's requests share these workers.
+    let kind = tokio::task::spawn_blocking(move || match std::fs::metadata(&q.path) {
         Ok(md) if md.is_dir() => "folder",
         Ok(md) if md.is_file() => "file",
         Ok(_) => "other",
         Err(_) => "missing",
-    };
+    })
+    .await
+    .unwrap_or("missing");
     (StatusCode::OK, Json(serde_json::json!({ "kind": kind }))).into_response()
 }
 
@@ -10574,6 +10577,58 @@ fn bundle_path_ok(p: &str) -> bool {
             .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
 }
 
+/// Zips the bundle's entries, or says why not.
+fn build_bug_bundle(entries: &[BugBundleEntry]) -> Result<Vec<u8>, (StatusCode, String)> {
+    use base64::Engine as _;
+    use std::io::{Cursor, Write};
+
+    // A bundle is diagnostics, not a file transfer. Cap it so a malformed or
+    // hostile caller cannot drive the engine's memory through the roof.
+    const MAX_TOTAL: usize = 64 * 1024 * 1024;
+
+    let failed = |why: &str| (StatusCode::INTERNAL_SERVER_ERROR, why.to_string());
+    let mut buf = Cursor::new(Vec::<u8>::new());
+    let mut total = 0usize;
+    let mut zw = zip::ZipWriter::new(&mut buf);
+    let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for e in entries {
+        if !bundle_path_ok(&e.path) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("unsafe entry path: {}", e.path),
+            ));
+        }
+        let bytes: Vec<u8> = if let Some(t) = &e.text {
+            t.as_bytes().to_vec()
+        } else if let Some(b) = &e.base64 {
+            base64::engine::general_purpose::STANDARD
+                .decode(b)
+                .map_err(|_| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("entry {} has invalid base64", e.path),
+                    )
+                })?
+        } else {
+            Vec::new()
+        };
+        total = total.saturating_add(bytes.len());
+        if total > MAX_TOTAL {
+            return Err((
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "bundle too large".to_string(),
+            ));
+        }
+        zw.start_file(e.path.clone(), opts)
+            .map_err(|_| failed("zip entry failed"))?;
+        zw.write_all(&bytes)
+            .map_err(|_| failed("zip write failed"))?;
+    }
+    zw.finish().map_err(|_| failed("zip finish failed"))?;
+    Ok(buf.into_inner())
+}
+
 /// POST /api/bug-report/bundle — zip client-supplied entries and return the
 /// archive as a download.
 ///
@@ -10588,69 +10643,31 @@ fn bundle_path_ok(p: &str) -> bool {
 /// only has to do the two things a browser cannot: build the zip and hand it
 /// back as an attachment.
 async fn bug_report_bundle_handler(Json(req): Json<BugBundleReq>) -> axum::response::Response {
-    use base64::Engine as _;
-    use std::io::{Cursor, Write};
-
     if req.entries.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "entries is required").into_response();
     }
-    // A bundle is diagnostics, not a file transfer. Cap it so a malformed or
-    // hostile caller cannot drive the engine's memory through the roof.
-    const MAX_TOTAL: usize = 64 * 1024 * 1024;
-
-    let mut buf = Cursor::new(Vec::<u8>::new());
-    let mut total = 0usize;
-    {
-        let mut zw = zip::ZipWriter::new(&mut buf);
-        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-        for e in &req.entries {
-            if !bundle_path_ok(&e.path) {
-                return json_err(
-                    StatusCode::BAD_REQUEST,
-                    &format!("unsafe entry path: {}", e.path),
-                )
-                .into_response();
-            }
-            let bytes: Vec<u8> = if let Some(t) = &e.text {
-                t.as_bytes().to_vec()
-            } else if let Some(b) = &e.base64 {
-                match base64::engine::general_purpose::STANDARD.decode(b) {
-                    Ok(v) => v,
-                    Err(_) => {
-                        return json_err(
-                            StatusCode::BAD_REQUEST,
-                            format!("entry {} has invalid base64", e.path),
-                        )
-                        .into_response()
-                    }
-                }
-            } else {
-                Vec::new()
-            };
-            total = total.saturating_add(bytes.len());
-            if total > MAX_TOTAL {
-                return json_err(StatusCode::PAYLOAD_TOO_LARGE, "bundle too large").into_response();
-            }
-            if zw.start_file(e.path.clone(), opts).is_err() {
-                return json_err(StatusCode::INTERNAL_SERVER_ERROR, "zip entry failed")
-                    .into_response();
-            }
-            if zw.write_all(&bytes).is_err() {
-                return json_err(StatusCode::INTERNAL_SERVER_ERROR, "zip write failed")
-                    .into_response();
-            }
+    let filename = req.filename;
+    let entries = req.entries;
+    let count = entries.len();
+    // Deflating up to 64 MiB takes a while: not on an async worker, which serves every console.
+    let built = match tokio::task::spawn_blocking(move || build_bug_bundle(&entries)).await {
+        Ok(built) => built,
+        Err(e) => {
+            return json_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("bundle task failed: {e}"),
+            )
+            .into_response()
         }
-        if zw.finish().is_err() {
-            return json_err(StatusCode::INTERNAL_SERVER_ERROR, "zip finish failed")
-                .into_response();
-        }
-    }
+    };
+    let buf = match built {
+        Ok(buf) => buf,
+        Err((status, why)) => return json_err(status, why).into_response(),
+    };
 
     // Keep the leaf name simple: it lands in the user's Downloads folder and is
     // echoed into a Content-Disposition header.
-    let name = req
-        .filename
+    let name = filename
         .as_deref()
         .filter(|n| {
             !n.is_empty()
@@ -10660,10 +10677,10 @@ async fn bug_report_bundle_handler(Json(req): Json<BugBundleReq>) -> axum::respo
         })
         .unwrap_or("ps5upload-bugreport.zip");
 
-    let body = buf.into_inner();
+    let body = buf;
     crate::log_info!(
         "bug-report bundle: {} entries, {} bytes, name={}",
-        req.entries.len(),
+        count,
         body.len(),
         name
     );
