@@ -27,10 +27,14 @@ export function endText(tr: Tr, stage: JoinStage, host: string): string {
     switch (stage.why) {
       case "key":
         return tr("join_refused_key", { host }, `This invite has expired. Ask ${host} for a new link.`);
+      case "expired":
+        return tr("join_refused_expired", { host }, `Your place in the game was lost. Ask ${host} to let you in again.`);
       case "full":
         return tr("join_refused_full", undefined, "The game is full: four players already.");
       case "denied":
         return tr("join_refused_denied", { host }, `${host} didn't let you in this time.`);
+      case "no_answer":
+        return tr("join_refused_no_answer", { host }, `${host} didn't answer in time. Tell ${host}, then try again.`);
       case "closed":
         return tr("join_refused_closed", { host }, `${host} isn't hosting Play Together right now.`);
       case "old_helper":
@@ -53,6 +57,10 @@ export function endText(tr: Tr, stage: JoinStage, host: string): string {
         return tr("join_ended_closed", { host }, `${host} closed Play Together.`);
       case "host_stopped":
         return tr("join_ended_host_stopped", undefined, "The host stopped playing.");
+      case "replaced":
+        return tr("join_ended_replaced", undefined, "This game was opened in another tab or on another device, so it stopped here.");
+      case "pad_lost":
+        return tr("join_ended_pad_lost", { host }, `The PS5 lost your controller, so you're out of the game. Ask ${host} to let you in again.`);
       case "gave_up":
         return tr("join_ended_gave_up", { host }, `The connection to ${host} didn't come back in time.`);
       case "lost":

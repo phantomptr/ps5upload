@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
+import { padDeviceId } from "../../lib/padClient";
+import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { PadApp } from "../../pad/PadApp";
 import { Button } from "../../components";
 import { useTr } from "../../state/lang";
@@ -9,10 +11,10 @@ import { focusForControllers, holdPageStill, lockLandscape, setWindowFullscreen,
 
 /** This app's engine relays to another computer's controller socket (pad_link.rs relay): an
  *  app page may not open a plain ws:// to another machine, its own loopback it may. */
-export function relayUrl(engineUrl: string, target: string, link?: { key: string; watch: boolean }): string {
+export function relayUrl(engineUrl: string, target: string, link?: { key: string; watch: boolean }, device?: string): string {
   const base = engineUrl.replace(/^http/, "ws").replace(/\/$/, "");
   const extra = link ? `&t=${encodeURIComponent(link.key)}${link.watch ? "&w=1" : ""}` : "";
-  return `${base}/api/ps5/rp/pad-relay?url=${encodeURIComponent(target)}${extra}`;
+  return `${base}/api/ps5/rp/pad-relay?url=${encodeURIComponent(target)}${extra}${device ? `&d=${device}` : ""}`;
 }
 
 /** This phone as the controller of a Remote Play session another device runs
@@ -65,7 +67,7 @@ function PadRemoteLive() {
   const key = params.get("t");
   const watch = params.get("w") === "1";
   const url = useMemo(
-    () => relayUrl(getEngineUrl(), target, key ? { key, watch } : undefined),
+    () => relayUrl(getEngineUrl(), target, key ? { key, watch } : undefined, padDeviceId({ get: safeGetItem, set: safeSetItem })),
     [target, key, watch],
   );
 

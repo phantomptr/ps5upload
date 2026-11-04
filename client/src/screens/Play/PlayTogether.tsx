@@ -93,6 +93,11 @@ function TvHint() {
   );
 }
 
+/** A friend's name, or "Friend" in this app's language when they gave none. */
+function friendName(tr: ReturnType<typeof useTr>, name: string): string {
+  return name || tr("pt_friend_fallback", undefined, "Friend");
+}
+
 function PlayerCard({ addr, player, guest }: { addr: string; player: number; guest: JoinGuest | null }) {
   const tr = useTr();
   const tone = delayTone(guest?.rttMs);
@@ -110,7 +115,7 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
       {guest ? (
         <>
           <div className="truncate text-sm font-semibold" data-testid="pt-player-name">
-            {guest.name}
+            {friendName(tr, guest.name)}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${CHIP[guest.status]}`} data-testid="pt-player-status">
@@ -378,7 +383,7 @@ export function PlayTogetherPanel({
               <ul className="space-y-1.5" data-testid="pt-asks">
                 {state.asks.map((a) => (
                   <li key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
-                    <span className="min-w-0 flex-1 truncate font-medium">{a.name}</span>
+                    <span className="min-w-0 flex-1 truncate font-medium">{friendName(tr, a.name)}</span>
                     <Button size="sm" variant="primary" onClick={() => void joinApi.decide(addr, a.id, true)}>
                       {tr("pt_allow", undefined, "Allow")}
                     </Button>
@@ -420,8 +425,8 @@ export function PlayTogetherPanel({
             tone="warn"
             title={tr(
               "pt_slow",
-              { name: slow.name, ms: Math.round(slow.rttMs ?? 0) },
-              `${slow.name}'s connection is slow (${Math.round(slow.rttMs ?? 0)} ms).`,
+              { name: friendName(tr, slow.name), ms: Math.round(slow.rttMs ?? 0) },
+              `${friendName(tr, slow.name)}'s connection is slow (${Math.round(slow.rttMs ?? 0)} ms).`,
             )}
           >
             {tr(
@@ -492,7 +497,7 @@ export function JoinAsks({ addr, asks }: { addr: string | null; asks: JoinHostSt
       onPointerDown={(e) => e.stopPropagation()}
     >
       <Users size={14} />
-      <span>{tr("pt_asks", { name: a.name }, `${a.name} wants to play with you`)}</span>
+      <span>{tr("pt_asks", { name: friendName(tr, a.name) }, `${friendName(tr, a.name)} wants to play with you`)}</span>
       <button
         type="button"
         className="rounded-full bg-white px-3 py-1 text-xs font-medium text-black"

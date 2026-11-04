@@ -6,105 +6,22 @@
  *
  * - Localized, unlike /pad: state/lang is swapped for src/join/joinLang.ts, whose strings come
  *   from `virtual:join-strings`: every locale, but only the keys the page's own modules use
- *   (`tr("key"` in their sources), found after bundling and written into the page.
+ *   (`tr("key"` in their sources), found after bundling and written into the page (shared with
+ *   /pad, vite.pagePlugins.ts).
+ * - The built CSS goes through what the app's does (oneLangPerSelector): older Android WebViews
+ *   and Safari 14.0 are friends' phones too.
  * - Budget: the build fails over 900 KiB raw.
  */
-import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import path from "node:path";
-import vm from "node:vm";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { oneLangPerSelector, pageStrings } from "./vite.pagePlugins";
 
 const RAW_BUDGET = 900 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/join_page.html", import.meta.url));
-const SRC = fileURLToPath(new URL("./src/", import.meta.url));
-const LOCALES = fileURLToPath(new URL("./src/i18n/locales/", import.meta.url));
-const LANG = fileURLToPath(new URL("./src/state/lang.ts", import.meta.url));
-const JOIN_LANG = fileURLToPath(new URL("./src/join/joinLang.ts", import.meta.url));
-const TR_STATIC = fileURLToPath(new URL("./src/lib/trStatic.ts", import.meta.url));
-const TR_STATIC_JOIN = fileURLToPath(new URL("./src/join/trStaticJoin.ts", import.meta.url));
-const VIRTUAL = "virtual:join-strings";
-const PLACEHOLDER = "__PS5UPLOAD_JOIN_STRINGS__";
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/** Every locale file's object literal, evaluated the way scripts/i18n-coverage.mjs does (the
- *  files mix quoting styles, so no regex over their lines). */
-export function loadLocales(dir = LOCALES): Record<string, Record<string, string>> {
-  const out: Record<string, Record<string, string>> = {};
-  for (const f of readdirSync(dir)) {
-    if (!f.endsWith(".ts") || f.endsWith(".d.ts")) continue;
-    const src = readFileSync(path.join(dir, f), "utf8");
-    const start = src.match(/^const\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*Translations\s*=\s*/m);
-    if (!start || start.index === undefined) throw new Error(`${f}: no 'const <name>: Translations ='`);
-    const from = start.index + start[0].length;
-    const end = src.slice(from).match(/\n};\s*\n\s*export default/);
-    if (!end || end.index === undefined) throw new Error(`${f}: no end of the literal`);
-    const literal = src.slice(from, from + end.index + 2);
-    out[f.replace(/\.ts$/, "")] = vm.runInNewContext(`(${literal})`, {}) as Record<string, string>;
-  }
-  return out;
-}
-
-/** The keys a source file looks up (`tr("key"` / `trStatic("key"`, across lines too). */
-export function keysIn(source: string): string[] {
-  return [...source.matchAll(/\b(?:tr|trStatic)\(\s*"([\w.]+)"/g)].map((m) => m[1]);
-}
-
-/** state/lang and lib/trStatic → the page's own; the strings as a placeholder, filled after
- *  bundling with exactly the keys the bundled modules use. */
-function joinStrings(): Plugin {
-  return {
-    name: "ps5upload-join-strings",
-    enforce: "pre",
-    async resolveId(source, importer, opts) {
-      if (source === VIRTUAL) return `\0${VIRTUAL}`;
-      const r = await this.resolve(source, importer, { ...opts, skipSelf: true });
-      if (r?.id === LANG) return JOIN_LANG;
-      return r?.id === TR_STATIC ? TR_STATIC_JOIN : null;
-    },
-    load(id) {
-      return id === `\0${VIRTUAL}` ? `export default ${PLACEHOLDER};` : null;
-    },
-    generateBundle(_, bundle) {
-      const keys = new Set<string>();
-      for (const file of Object.values(bundle)) {
-        if (file.type !== "chunk") continue;
-        for (const id of Object.keys(file.modules)) {
-          const clean = id.split("?")[0];
-          if (!clean.startsWith(SRC) || !/\.(tsx?|jsx?)$/.test(clean)) continue;
-          for (const k of keysIn(readFileSync(clean, "utf8"))) keys.add(k);
-        }
-      }
-      const locales = loadLocales();
-      const en = locales.en ?? {};
-      const strings: Record<string, Record<string, string>> = {};
-      for (const [code, dict] of Object.entries(locales)) {
-        const picked: Record<string, string> = {};
-        for (const k of keys) {
-          const v = dict[k];
-          // Other languages carry only what differs from English (English is the fallback).
-          if (typeof v === "string" && (code === "en" || v !== en[k])) picked[k] = v;
-        }
-        strings[code] = picked;
-      }
-      const missing = [...keys].filter((k) => !(k in en));
-      if (missing.length) this.warn(`join: keys not in en.ts: ${missing.join(", ")}`);
-      const json = JSON.stringify(strings);
-      let placed = false;
-      for (const file of Object.values(bundle)) {
-        if (file.type === "chunk" && file.code.includes(PLACEHOLDER)) {
-          file.code = file.code.split(PLACEHOLDER).join(`(${json})`);
-          placed = true;
-        }
-      }
-      if (!placed) this.error("join: the strings placeholder is not in the bundle");
-      this.info(`join strings: ${keys.size} keys × ${Object.keys(strings).length} languages`);
-    },
-  };
-}
 
 /** Everything into index.html, written to the engine's join_page.html. */
 function singleFile(): Plugin {
@@ -141,7 +58,7 @@ export default defineConfig({
   // The client root, not src/join: Tailwind finds the classes it generates by scanning from the
   // root, and the controller (screens/Play/TouchControls.tsx) lives outside src/join.
   base: "./",
-  plugins: [joinStrings(), react(), tailwindcss(), singleFile()],
+  plugins: [pageStrings("join"), react(), tailwindcss(), oneLangPerSelector(), singleFile()],
   build: {
     outDir: fileURLToPath(new URL("./dist-join", import.meta.url)),
     emptyOutDir: true,
