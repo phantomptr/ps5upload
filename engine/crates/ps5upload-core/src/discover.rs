@@ -301,7 +301,7 @@ fn browse_mdns(budget: Duration) -> (BTreeMap<String, CandidateAccumulator>, Opt
     for svc in BROWSED_SERVICES {
         match daemon.browse(svc) {
             Ok(rx) => receivers.push((*svc, rx)),
-            Err(e) => eprintln!("[discover] browse({svc}) failed: {e}"),
+            Err(e) => crate::log::log(&format!("[discover] browse({svc}) failed: {e}")),
         }
     }
     let deadline = Instant::now() + budget;

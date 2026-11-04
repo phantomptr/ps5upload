@@ -603,3 +603,57 @@ mod tests {
             .all(|e| matches!(e.id, "shadowmountplus" | "elfldr")));
     }
 }
+
+/// Real network, real TLS and real redirects: run by hand after changing the HTTP client.
+/// `cargo test -p ps5upload-core payload_library::live -- --ignored --nocapture`
+#[cfg(test)]
+mod live {
+    use super::test_support::TempDir;
+    use super::*;
+
+    fn fetch_and_cache(id: &str) {
+        let d = TempDir::new("live");
+        let lib = Library::new(d.0.join("payloads"));
+        let list = lib.releases(id, false).expect("release list");
+        println!("{id}: {} releases, newest {}", list.len(), list[0].tag);
+        assert!(list[0].refresh_error.is_none());
+        let local = lib
+            .download_release(id, Some(&list[0].tag), false)
+            .expect("download");
+        println!("{id}: cached {} bytes at {}", local.size, local.path);
+        let bytes = std::fs::read(&local.path).unwrap();
+        assert_eq!(&bytes[..4], b"\x7FELF");
+        assert_eq!(bytes.len() as u64, local.size);
+        // One file and its VERSION: no temporary left behind.
+        assert_eq!(
+            std::fs::read_dir(d.0.join("payloads").join(id))
+                .unwrap()
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn github_through_its_asset_cdn() {
+        fetch_and_cache("kstuff-echostretch");
+    }
+
+    #[test]
+    #[ignore]
+    fn a_zip_release_on_github() {
+        fetch_and_cache("shadowmountplus");
+    }
+
+    #[test]
+    #[ignore]
+    fn a_gitea_host() {
+        fetch_and_cache("np-fake-signin");
+    }
+
+    #[test]
+    #[ignore]
+    fn a_release_with_a_checksum_list() {
+        fetch_and_cache("hush");
+    }
+}

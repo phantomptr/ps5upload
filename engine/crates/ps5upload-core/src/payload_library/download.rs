@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use super::http::{fetch, FetchKind};
 use super::{
-    atomic_write, elf_in_dir, mtime_secs, replace_file, unique_suffix, Library, LibraryError,
+    atomic_write, mtime_secs, replace_file, unique_suffix, Library, LibraryError,
     LocalInventoryEntry, ReleaseInfo, ResolvedEntry, TmpFile,
 };
 
@@ -357,7 +357,9 @@ impl Library {
         // The first URL is on the repo's own host, https (a request can name any URL); every
         // redirect after it is checked by `fetch`.
         let pinned = asset_url.parse::<ureq::http::Uri>().ok().is_some_and(|u| {
-            u.scheme_str() == Some("https") && u.host() == Some(entry.repo_host.as_str())
+            u.scheme_str() == Some("https")
+                && u.host()
+                    .is_some_and(|h| h.eq_ignore_ascii_case(&entry.repo_host))
         });
         if !pinned {
             return Err(LibraryError::new(
@@ -573,10 +575,7 @@ impl Library {
                 return Ok(PathBuf::from(local.path));
             }
         }
-        let entry = self.download_release(id, tag, false)?;
-        let path = PathBuf::from(entry.path);
-        // Cached under its final name by now; the folder has exactly one .elf.
-        Ok(path.parent().and_then(elf_in_dir).unwrap_or(path))
+        Ok(PathBuf::from(self.download_release(id, tag, false)?.path))
     }
 }
 
@@ -584,7 +583,7 @@ impl Library {
 mod tests {
     use super::super::catalogue::CATALOGUE;
     use super::super::http::{HttpClient, HttpResponse};
-    use super::super::test_support::{library, Scripted, TempDir};
+    use super::super::test_support::{library, TempDir};
     use super::*;
     use std::sync::Barrier;
 
@@ -920,14 +919,13 @@ mod tests {
         served: AtomicUsize,
     }
 
-    struct GatedBody<'a> {
+    struct GatedBody {
         gate: Arc<Gated>,
         bytes: std::io::Cursor<Vec<u8>>,
         first: bool,
-        _life: std::marker::PhantomData<&'a ()>,
     }
 
-    impl Read for GatedBody<'_> {
+    impl Read for GatedBody {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             if self.first {
                 self.first = false;
@@ -956,7 +954,6 @@ mod tests {
                     gate: self.0.clone(),
                     bytes: std::io::Cursor::new(self.1.clone()),
                     first: true,
-                    _life: std::marker::PhantomData,
                 }),
             })
         }
@@ -1073,8 +1070,6 @@ mod tests {
         assert_eq!(std::fs::read(&p2).unwrap(), elf(2, 200));
         let e = lib.ensure_cached(KSTUFF_ID, Some("v9")).unwrap_err();
         assert_eq!(e.code, "unknown_release");
-        let s = Scripted::default();
-        s.ok("x", b"");
         assert_eq!(
             lib.ensure_cached("nope", None).unwrap_err().code,
             "unknown_payload"

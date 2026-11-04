@@ -110,7 +110,9 @@ fn parse_repo_file(bytes: &[u8]) -> Result<RepoFile, String> {
             // A corrupt id must never reach a cache-folder path.
             Ok(r) if is_valid_custom_id(&r.id) => file.repos.push(r),
             _ => {
-                eprintln!("[payloads] custom-repos.json: keeping an entry this build can't use");
+                crate::log::log(
+                    "[payloads] custom-repos.json: keeping an entry this build can't use",
+                );
                 file.kept.push(v);
             }
         }
@@ -242,7 +244,7 @@ impl Library {
         match self.read_repo_file() {
             Ok(f) => f.repos,
             Err(e) => {
-                eprintln!("[payloads] {e}");
+                crate::log::log(&format!("[payloads] {e}"));
                 Vec::new()
             }
         }

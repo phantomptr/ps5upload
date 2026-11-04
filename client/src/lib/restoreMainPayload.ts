@@ -10,11 +10,11 @@ import { log } from "../state/logs";
  *
  *  - **Desktop** holds the ELF bytes and can open a socket to the loader, so
  *    it resolves the bundled path and sends it itself.
- *  - **Browser** can do neither. `payload_bundled_path` / `payload_send` are
- *    desktop-only commands; calling them from the web UI throws
- *    BrowserUnsupportedError, which is what made the whole DPI fallback — and
- *    therefore every patch install — fail from the web UI (#152). The engine
- *    owns the bytes and the socket there, via `payload_restore`.
+ *  - **Browser** can do neither. `payload_bundled_path` is a desktop-only
+ *    command; calling it from the web UI throws BrowserUnsupportedError, which
+ *    is what made the whole DPI fallback — and therefore every patch install —
+ *    fail from the web UI (#152). The engine owns the bytes and the socket
+ *    there, via `payload_restore`.
  *
  * Extracted from pkgLibrary so every caller that can displace the helper gets
  * the same environment-aware restore. Never throws: a failed restore is logged

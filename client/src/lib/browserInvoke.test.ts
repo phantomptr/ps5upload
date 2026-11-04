@@ -324,6 +324,163 @@ describe("engine-backed commands the web UI depends on (#300)", () => {
   });
 });
 
+describe("Payload Library and console tools in the web UI", () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const answer = (body: unknown, status = 200) =>
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(body), { status }),
+    );
+  const asked = () => {
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
+    return {
+      url: url.replace("http://engine.test:19113", ""),
+      method: init?.method ?? "GET",
+      body: init?.body ? JSON.parse(init.body as string) : undefined,
+    };
+  };
+
+  it("reads the catalogue and the cache from one route", async () => {
+    answer({ payloads: [{ id: "kstuff" }], local: [{ payload_id: "kstuff", path: "/d/k.elf" }] });
+    expect(await browserInvoke("payloads_catalog", {})).toEqual([{ id: "kstuff" }]);
+    answer({ payloads: [], local: [{ payload_id: "kstuff", path: "/d/k.elf" }] });
+    expect(await browserInvoke("payloads_local_inventory", {})).toEqual([
+      { payload_id: "kstuff", path: "/d/k.elf" },
+    ]);
+    answer({ payloads: [], local: [{ payload_id: "kstuff", path: "/d/k.elf" }] });
+    expect(await browserInvoke("payloads_local_path", { id: "kstuff" })).toBe("/d/k.elf");
+    answer({ payloads: [], local: [] });
+    expect(await browserInvoke("payloads_local_path", { id: "kstuff" })).toBeNull();
+  });
+
+  it("asks for releases, forced only when asked", async () => {
+    answer([]);
+    await browserInvoke("payloads_releases", { id: "a b", forceRefresh: false });
+    expect(asked().url).toBe("/api/payloads/a%20b/releases");
+    fetchMock.mockReset();
+    answer({ tag: "v1" });
+    await browserInvoke("payloads_release", { id: "k", forceRefresh: true });
+    expect(asked().url).toBe("/api/payloads/k/releases/latest?force=1");
+  });
+
+  it("downloads and cancels by id", async () => {
+    answer({ payload_id: "k" });
+    await browserInvoke("payloads_download", { id: "k", assetUrl: "https://x/a.elf", version: "v1" });
+    expect(asked()).toEqual({
+      url: "/api/payloads/k/download",
+      method: "POST",
+      body: { asset_url: "https://x/a.elf", version: "v1" },
+    });
+    fetchMock.mockReset();
+    answer({ cancelled: true });
+    expect(await browserInvoke("payloads_download_cancel", { id: "k" })).toBe(true);
+    expect(asked().url).toBe("/api/payloads/k/download/cancel");
+  });
+
+  it("adds and removes a repo", async () => {
+    answer({ id: "custom-0a" });
+    await browserInvoke("payloads_add_custom_repo", {
+      host: "github.com",
+      owner: "o",
+      name: "n",
+      displayName: null,
+      assetHint: null,
+      checksumFile: "SHA256SUMS",
+    });
+    expect(asked().body).toEqual({
+      host: "github.com",
+      owner: "o",
+      name: "n",
+      display_name: null,
+      asset_hint: null,
+      checksum_file: "SHA256SUMS",
+    });
+    fetchMock.mockReset();
+    answer({ removed: true });
+    expect(await browserInvoke("payloads_remove_custom_repo", { id: "custom-0a" })).toBe(true);
+    expect(asked()).toMatchObject({ url: "/api/payloads/repos/custom-0a", method: "DELETE" });
+  });
+
+  it("keeps a worded code in front of the engine's error, and only that", async () => {
+    answer({ error: "1.2.3.4 is an IP", code: "repo_host_is_ip" }, 400);
+    await expect(
+      browserInvoke("payloads_add_custom_repo", { host: "1.2.3.4", owner: "o", name: "n" }),
+    ).rejects.toThrow("repo_host_is_ip: 1.2.3.4 is an IP");
+    answer({ error: "fetch x: HTTP 404 (Not Found)", code: "fetch_failed" }, 502);
+    await expect(browserInvoke("payloads_release", { id: "k" })).rejects.toThrow(
+      /^fetch x: HTTP 404/,
+    );
+  });
+
+  it("sends a file by path, with the port only when one is given", async () => {
+    answer({ ok: true, status: "sent 5 bytes", bytes: 5 });
+    await browserInvoke("payload_send", { ip: "10.0.0.2", path: "/d/k.elf", port: null });
+    expect(asked().body).toEqual({ host: "10.0.0.2", path: "/d/k.elf" });
+  });
+
+  it("turns the desktop's arguments into the console routes", async () => {
+    answer({ exit_code: 0 });
+    await browserInvoke("shell_run_cmd", {
+      addr: "10.0.0.2",
+      cmd: "ls",
+      sessionId: "s",
+      cwd: "/data",
+      timeoutSecs: 5,
+    });
+    expect(asked().body).toEqual({
+      addr: "10.0.0.2",
+      cmd: "ls",
+      session_id: "s",
+      cwd: "/data",
+      timeout_s: 5,
+    });
+
+    fetchMock.mockReset();
+    answer({ modules: [] });
+    await browserInvoke("proc_modules_get", { addr: "10.0.0.2", pid: 77 });
+    expect(asked().url).toBe("/api/ps5/process/77/modules?addr=10.0.0.2");
+
+    fetchMock.mockReset();
+    answer({ apps: [] });
+    await browserInvoke("appdb_query_get", { addr: "10.0.0.2" });
+    expect(asked().url).toBe("/api/ps5/appdb?addr=10.0.0.2");
+
+    fetchMock.mockReset();
+    answer({ hash: "x" });
+    await browserInvoke("fs_blake3_hash", { addr: "a", path: "/f" });
+    expect(asked().body).toEqual({ addr: "a", path: "/f", algo: "blake3" });
+
+    fetchMock.mockReset();
+    answer({ crc32: 1 });
+    await browserInvoke("crc32_file_get", { addr: "a", path: "/f" });
+    expect(asked().body).toEqual({ addr: "a", path: "/f", algo: "crc32" });
+
+    fetchMock.mockReset();
+    answer({ copied: 1 });
+    await browserInvoke("heal_appmeta", { addr: "a", titleId: "CUSA00001", sourcePath: "/g" });
+    expect(asked().body).toEqual({ addr: "a", title_id: "CUSA00001", source_path: "/g" });
+
+    fetchMock.mockReset();
+    answer([]);
+    await browserInvoke("companion_probe", { host: "10.0.0.2" });
+    expect(asked().url).toBe("/api/ps5/companions?addr=10.0.0.2");
+
+    fetchMock.mockReset();
+    answer({ ok: true, candidates: [] });
+    await browserInvoke("discover_ps5", { timeoutSecs: 4 });
+    expect(asked()).toMatchObject({ url: "/api/discover", body: { timeout_ms: 4000 } });
+    fetchMock.mockReset();
+    answer({ ok: true, candidates: [] });
+    await browserInvoke("discover_ps5", { timeoutSecs: null });
+    expect(asked().body).toEqual({});
+  });
+});
+
 describe("streaming archive inspect over SSE", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
