@@ -457,11 +457,7 @@ pub async fn payload_send(ip: String, path: String, port: Option<u16>) -> serde_
 /// `{ok: true}` to go ahead, also when the engine can't be asked: the send itself says what is
 /// wrong then. `{ok: false, status}` with the engine's reason otherwise.
 #[tauri::command]
-pub async fn payload_send_check(
-    ip: String,
-    path: String,
-    port: Option<u16>,
-) -> serde_json::Value {
+pub async fn payload_send_check(ip: String, path: String, port: Option<u16>) -> serde_json::Value {
     if port.unwrap_or(PS5_LOADER_PORT) != PS5_LOADER_PORT {
         return serde_json::json!({ "ok": true });
     }
@@ -496,7 +492,12 @@ async fn file_is_helper(path: &str) -> bool {
         return false;
     };
     let mut window = Vec::new();
-    if file.take(PROBE_WINDOW).read_to_end(&mut window).await.is_err() {
+    if file
+        .take(PROBE_WINDOW)
+        .read_to_end(&mut window)
+        .await
+        .is_err()
+    {
         return false;
     }
     is_ps5upload_payload(path, &window)

@@ -1080,6 +1080,44 @@ function LibraryRowImpl({
       );
       history().finish(activityId, "failed", { error });
     };
+    /** What the row was on the console comes back with the files at `path`: a folder game is
+     *  registered there, an image has to be mounted by the user. */
+    const putBackAt = (path: string) => {
+      if (wasRegistered && isFolderGame) {
+        void appRegister(addr, path).catch((e: unknown) =>
+          pushNotification(
+            "error",
+            withConsolePrefix(host, tr("library_move_register_failed_title", undefined, "Moved, but not registered")),
+            {
+              body: tr(
+                "library_move_register_failed",
+                { dest: path, error: e instanceof Error ? e.message : String(e) },
+                "Moved to {dest}, but its home-screen tile could not be put back: {error}. Register it from its row.",
+              ),
+            },
+          ),
+        );
+      } else if (wasRegistered || wasMounted) {
+        pushNotification(
+          "info",
+          withConsolePrefix(host, tr("library_move_mount_again_title", undefined, "Mount it again")),
+          {
+            body:
+              path === entry.path
+                ? tr(
+                    "library_move_mount_again_here",
+                    { path },
+                    "The move did not finish, and {path} is where it was. Mount it again from its row to play it.",
+                  )
+                : tr(
+                    "library_move_mount_again",
+                    { dest: path },
+                    "Moved to {dest}. Mount it again from its row to play it.",
+                  ),
+          },
+        );
+      }
+    };
     await runLibraryMove(
       { host, addr, from: entry.path, to: destPath, payloadVersion },
       libraryMoveDeps,
@@ -1107,38 +1145,14 @@ function LibraryRowImpl({
           if (m.phase === "done") {
             // Clears a progress note left in the error field while it ran.
             history().finish(activityId, "done", { error: undefined });
-            if (wasRegistered && isFolderGame) {
-              void appRegister(addr, m.to).catch((e: unknown) =>
-                pushNotification(
-                  "error",
-                  withConsolePrefix(host, tr("library_move_register_failed_title", undefined, "Moved, but not registered")),
-                  {
-                    body: tr(
-                      "library_move_register_failed",
-                      { dest: m.to, error: e instanceof Error ? e.message : String(e) },
-                      "Moved to {dest}, but its home-screen tile could not be put back: {error}. Register it from its row.",
-                    ),
-                  },
-                ),
-              );
-            } else if (wasRegistered || wasMounted) {
-              pushNotification(
-                "info",
-                withConsolePrefix(host, tr("library_move_mount_again_title", undefined, "Mount it again")),
-                {
-                  body: tr(
-                    "library_move_mount_again",
-                    { dest: m.to },
-                    "Moved to {dest}. Mount it again from its row to play it.",
-                  ),
-                },
-              );
-            }
+            putBackAt(m.to);
           } else if (m.phase === "cancelled") {
             history().finish(activityId, "stopped", {
               error: "cancelled by user",
             });
+            putBackAt(entry.path);
           } else if (m.phase === "copy-failed") {
+            putBackAt(entry.path);
             failed(
               tr(
                 "library_move_copy_failed",
@@ -1148,7 +1162,9 @@ function LibraryRowImpl({
               raw,
             );
           } else {
-            // Copied but the source remains: a failure, so the duplicate is visible.
+            // Copied but the source remains: a failure, so the duplicate is visible. The copy
+            // is the one the move was for.
+            putBackAt(m.to);
             failed(
               moveDeleteFailedText(tr, m.to, m.from, raw),
               `copy ok, source delete failed: ${raw}`,
