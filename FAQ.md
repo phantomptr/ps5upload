@@ -17,7 +17,8 @@ everything you can do with it; **Manage → Dump games** is **Dump this game** o
 game's page. **Upload** and **Install Package** (later **Send to PS5**) are **Upload & Install**,
 **Convert Games** is **Workshop**, the PS5's **On-screen messages** are the **On the PS5** tab of
 **Notifications**, **Network shares** and **Mesh Drive** are **Shared Folders**,
-**Profile** and the Remote Play PIN screen are **Accounts**, and **Play** is **Remote Play**.
+**Profile** and the Remote Play PIN screen are **Accounts**, and **Remote Play** is **Play**,
+right under Home. **Bug Report** and **Thanks & Support** sit under Play, always shown.
 Game Activity's play time is in **Games**; **Search**, **Disk usage** ("What takes space?") and
 **Console snapshots** are in **Files**; processes and ports are the **Running** tab of
 **Payloads**; the **Firmware spoof check** is a card in **Console**; **Devices** and **Health
@@ -26,7 +27,7 @@ Check** are tabs of **Connection**; **Shell** is under Diagnostics; **Tasks**, *
 pinned screen shows only under Pinned.
 
 **Q: What is ps5upload?**
-An app (desktop, Android, or a self-hosted web UI) for moving games, apps and homebrew to a
+An app (desktop, Android, iPhone, or a self-hosted web UI) for moving games, apps and homebrew to a
 jailbroken PS5 and managing the console. A small payload on the PS5, the **helper**, talks to
 the app over **AVA1**, one encrypted connection on port 9120.
 
@@ -48,7 +49,9 @@ the app over **AVA1**, one encrypted connection on port 9120.
   them. Browse and manage files.
 - **Remote Play**: stream the PS5 into the app and play it with a controller, the keyboard or
   touch, or give the PS5 your keyboard and mouse as its own. It asks for a user's PS5 passcode
-  when the console wants one. Local scripts can watch and play too ([AUTOMATION.md](https://github.com/phantomptr/ps5upload/blob/main/AUTOMATION.md)).
+  when the console wants one. **Play Together** lets friends join your game as Player 2, 3 and 4
+  from a link, a QR code or a short code, in any browser or the app; **Go live** streams it to
+  YouTube, Twitch, Kick or Facebook. Local scripts can watch and play too ([AUTOMATION.md](https://github.com/phantomptr/ps5upload/blob/main/AUTOMATION.md)).
 - **Save Data**: automatic and on-demand backups, restore, copy a save to another user on the
   same PS5, or as a file for a friend or another PS5; PS1, PS2 and Switch emulator saves too.
 - **Cheats, fan curve, hardware view, power and wake, payload sender and backport tools.**
@@ -170,11 +173,49 @@ network, and plays your PS5 as Player 2, 3 or 4 while you play as Player 1.
 3. **On the TV**, your friend presses **PS** on their controller and picks **Quick Play** (or
    their own user) under "Who's using this controller?".
 
-They play with a controller connected to their device, or the on-screen controls on a phone. PS
-and Create are blocked for friends unless you turn that off in the panel. Up to three friends at
-once; stopping Play ends it for them, and the app asks first. If a friend's delay shows red, a
-lower Play quality (720p or 30 fps) makes it smoother for everyone. **Playing from somewhere
-else?** See the next question.
+They play with a controller connected to their device, the keyboard, or the on-screen controls on
+a phone, and hear the game. PS and Create are blocked for friends unless you turn that off in the
+panel (they can still press PS once in their first minute to pick a user on the TV). Up to three
+friends at once. Each friend has a card in the panel with what they're doing and their delay, and
+**Remove** takes them out. **New link** makes a fresh invite and the old one stops working. If a
+friend's delay shows red, a lower Play quality (720p or 30 fps) makes it smoother for everyone.
+**Playing from somewhere else?** See "Can a friend who isn't at my place play together".
+
+**Q: What does my friend see and press in Play Together?**
+Your friend types a name and waits while you press **Allow**. A **You are Player 2** chip (in the
+controller's light-bar colour) shows which player they are, and a note reminds them to press
+**PS** and pick **Quick Play** on the TV. On the PS5's home screen only you, the host, control
+the menus; in games their controller plays.
+
+- **Controls.** A controller connected to their device (USB or Bluetooth: press any button), or
+  the keyboard (11.0.2): **WASD** moves, the **arrows** are the D-pad, **Enter** ✕,
+  **Backspace** ○, **Q** □, **E** △, **Tab** Options. **Esc** stays the browser's and leaves full
+  screen. On a phone, tap full screen to get the on-screen controller (the phone turns sideways).
+- **Buttons on a phone or tablet** (11.0.4). The buttons over the game start hidden so taps go to
+  the game. **Press and hold** the picture (away from the controller) to show them; hold again or
+  tap **Hide** to put them away. On a computer, in full screen, they hide after 3 seconds; move
+  the mouse, press Esc or the controller's menu button to bring them back.
+- **Sound.** The first tap starts the sound (browsers need one; **Tap for sound** says so).
+  **Mute** turns the game's sound off for them and is remembered on that device. If a browser
+  can't play the sound at all, the page says **No sound in this browser**.
+- **Leave** is always one tap away, also while it waits or reconnects.
+
+In the PS5Upload app the same happens in **Play › Join a friend**: paste the link, type the short
+code, press **Scan QR** (the app asks for the camera the first time), or pick a host under
+**Playing nearby**. An invite opened on a phone with the app closed lands straight on the join
+screen with your last name filled in: one tap on **Join** (11.0.3).
+
+**Q: What happens in Play Together when the host stops, or a connection drops?**
+- **The host stops Play** (Stop, the banner or the mini player): Play Together ends with it, and
+  friends see "The host stopped playing" at once (11.0.4). If friends are playing, the host's app
+  asks before it stops. Joining a friend's game while your own Play runs, or starting Play while
+  you're in a friend's game, also asks first: one stream at a time.
+- **The host's stream drops by itself** (Wi-Fi, the console): friends wait for it to come back,
+  with a countdown and **Leave**.
+- **A friend's connection drops:** within half a second their controller lets go of every button
+  and stick, and their place is kept for a minute. Coming back in time, they are the same player,
+  still signed in on the TV, without asking again. After that, **Ask to join again**.
+- **The host closes Play Together or removes a friend:** the friend is told, and can ask again.
 
 **Q: Can a friend who isn't at my place play together, or use a phone controller?**
 Yes, with Tailscale (11.0.1). Your friend connects to your computer, not to the PS5, so only your
@@ -199,6 +240,16 @@ address (a WireGuard server on the computer, like `10.8.0.1`), Play Together and
 controller panel list that address too: pick it under "This computer is on more than one
 network". Let incoming TCP 19113 through the computer's firewall on the VPN's network (Windows
 often counts a WireGuard tunnel as a Public network and blocks it).
+
+**Q: A link asks "Open in the PS5Upload app?". What should I pick?**
+A Play Together invite, a phone controller link or a watch link opened in a browser asks first
+(11.0.1), the way Slack and Zoom links do. **Open in the app** opens the PS5Upload app on that
+device (Windows, macOS, Linux, Android or iPhone) through a `ps5upload://` link: an invite opens
+in **Play › Join a friend** ready to join, a controller link makes the device that computer's
+controller. **Continue in browser** plays in the page, no app needed. Tick **Remember my choice
+on this device** to skip the question next time. If **Open in the app** does nothing, the app
+isn't on that device: press **Continue in browser** (that also forgets a remembered "app").
+A remembered "browser" lasts until you clear that page's site data in the browser.
 
 **Q: Can the app wake the PS5 without turning on the TV?**
 Yes. The TV comes on because of HDMI-CEC: a PS5 that wakes up tells the TV to turn on and switch
@@ -2610,7 +2661,7 @@ Chrome and Chromium carry their own decoder, so Remote Play also works from them
 The app now checks for a decoder before it wakes the console and, without one, says what to install.
 
 **Q: What does Play (Remote Play) do, step by step?**
-Remote Play streams a PS5 into the app (desktop, web UI and Android) and lets you play it with a
+Remote Play streams a PS5 into the app (desktop, web UI, Android and iPhone) and lets you play it with a
 controller connected to the computer, the keyboard, or touch. It wakes a console in rest mode and
 signs your user in on its own, and keeps playing while you use other screens. One console streams
 at a time. **Play › Set up** has the same steps as a checklist that ticks itself and does what it
@@ -3231,38 +3282,45 @@ timestamp in place instead of piling up new rows.
 ## Reporting a bug / sending logs
 
 **Q: How do I report a bug so it actually gets fixed?**
-Open **Diagnostics → Bug report** in the sidebar. Write what happened
-(steps to reproduce, firmware, jailbreak/loader, file sizes), attach
-screenshots if you have them, then click **Create bug report (.zip)**.
-Post the `.zip` in the **#bugs-report** channel on the Discord. A zip
-with logs is worth ten "it doesn't work" messages — it usually has the
-exact error in it.
+Open **Bug Report** in the sidebar (right under Home and Play, in every app and the web UI).
+Say what went wrong and what you were doing, fill in your setup (firmware, other payloads loaded:
+**Read them from the console** fills them in), pick **when it happened**, attach screenshots if
+you have them, then press **Create report**. The `.zip` is saved, and **Post to GitHub** or **Post
+to Discord** (the **#bugs-report** channel) opens the place to send it, with the text ready to
+paste; drag the zip in. Both are read. A report with logs is worth ten "it doesn't work"
+messages: it usually has the exact error in it.
 
-**Q: What's in the bundle?**
-A single `.zip` containing only diagnostics (never your games or app
-data):
+**Q: What's in the report?**
+A single `.zip` with diagnostics only (never your games or app data):
 
-- `report.json` — app version, OS, your description, and a snapshot of
-  the connected PS5 (model, firmware, storage, running processes,
-  loaded modules).
-- `logs/app.jsonl` — the app's log for the time window you pick.
-- `logs/engine.log` — the transfer engine's full log (survives a crash).
-- `crash-reports/` — anything auto-collected when something errored.
-- `ps5/klog.txt`, `ps5/syslog.txt` — the PS5 kernel logs (if a console
-  was connected).
-- `images/` — the screenshots you attached.
+- `report.md` and `report.json`: your description, the app version and platform, the connected
+  PS5 (model, firmware, storage, running processes), and what each feature was doing: Remote
+  Play, Play Together, phone controllers and watch parties, Go live, Hush, the cheats engine,
+  `ps5upload://` links (counts and states only), and how the last Remote Play start ended.
+- `timeline.txt`: what the app and the engine recorded in the time you picked, in order.
+- `logs/`: the app's and the engine's logs; the PS5 helper's log and the console's kernel log
+  when a console was connected; crash reports (desktop app).
+- `settings.json` (no keys or tokens) and `screenshots/` you attached.
+- `MISSING.txt`: anything that couldn't be read, and why. The rest of the report is built anyway.
 
 **Q: It's intermittent / hard to reproduce. How do I capture it?**
-On the Bug report page set **Recording level** to **Debug** or
-**Trace**, reproduce the problem, then create the report. The app keeps
-a rolling on-disk log (under `~/.ps5upload/logs/`), so pick a **time
-window** (last 1–120 minutes) that covers when it happened — you don't
-have to catch it live. The level also lives on the **Logs** tab.
+You don't have to catch it live: the app keeps its logs on disk, so on the Bug Report page pick a
+time that covers when it happened (the last 15 minutes up to the last 7 days, or **From a time you
+choose**). For more detail, raise the **Recording level** on the **Logs** tab (Debug or Trace),
+reproduce the problem, then make the report.
+
+**Q: What are Detailed logs?**
+A switch on the **Logs** tab (11.0.1) for the hard Remote Play and Play Together cases, like a
+console that keeps refusing to start. While it is on, the app records much more: the console's
+replies, each start-up step's timing and retries, and each friend's join, reconnect and picture
+requests. It turns itself off after 24 hours and never records keys, codes, tokens or passwords.
+For a Remote Play or Play Together problem: turn it on, try again, then make the bug report; the
+Bug Report page says whether the extra detail is in it.
 
 **Q: Is it safe to post publicly?**
-Yes by default — **Redact IPs & serial** is on, which strips your PS5's
-IP address and serial number from the bundle. Untick it only if a
-maintainer asks for the raw values in a private channel.
+Yes. Every report has IP addresses, serial numbers, home folders and keys removed before it is
+saved (an address becomes `<ip-1>` and the like, the same everywhere in the zip), and it doesn't
+copy the Remote Play wake keys or the token part of saved links.
 
 **Q: Where are the logs kept, and do they fill my disk?**
 `~/.ps5upload/logs/` (one file per day). They're capped — files older

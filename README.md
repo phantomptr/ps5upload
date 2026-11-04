@@ -72,9 +72,11 @@
     PS5 shows), plus a PIN for Sony's PS Remote Play app or chiaki-ng if you prefer those.
   - **Play Together:** friends join your game as Player 2, 3 and 4, each with their own
     controller on the PS5, from any browser or the app. Share a QR code, a link or a short
-    code, allow each friend, and they pick Quick Play on the TV. A short drop keeps their
-    place. Friends away from home join over Tailscale, and a link opens in the PS5Upload app
-    when they have it.
+    code, allow each friend, and they pick Quick Play on the TV. They play with a controller,
+    the keyboard or the on-screen controls on a phone, and hear the game (with Mute). A short
+    drop keeps their place; when you stop Play, they're told at once. Friends away from home
+    join over Tailscale, WireGuard or another VPN, and a link opens in the PS5Upload app when
+    they have it.
   - **Go live** to YouTube, Twitch, Kick, Facebook or any RTMP/SRT server, several at once,
     straight from Play (desktop apps and the web UI), or add the stream to **OBS** for your own
     scenes and overlays.
@@ -82,6 +84,10 @@
     running session ([AUTOMATION.md](AUTOMATION.md)).
 - **Cheats, fan curve, hardware view,** payload sender with a catalogue and playlists, and
   backport tools.
+- **Bug reports in one place.** Bug Report (always in the sidebar) gathers the app's, the
+  engine's and the PS5 helper's logs for the time you pick into one `.zip`, with addresses,
+  serials and keys removed, ready to post on GitHub or Discord. **Detailed logs** (Logs tab)
+  record the hard Remote Play and Play Together cases for 24 hours.
 - **Power.** Rest mode, reboot, shut down, and wake over the network (optionally straight
   into your signed-in user).
 - **PS5Upload Minion.** A page the helper serves to the PS5's own browser (a tile on the home

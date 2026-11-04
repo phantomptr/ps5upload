@@ -7,7 +7,8 @@ export default defineConfig({
   timeout: 180_000,
   workers: 2,
   reporter: "line",
-  use: { ...devices["Desktop Chrome"], baseURL: "http://127.0.0.1:1420" },
+  // Never a sound from a screenshot run.
+  use: { ...devices["Desktop Chrome"], baseURL: "http://127.0.0.1:1420", launchOptions: { args: ["--mute-audio"] } },
   webServer: {
     command: "npm run dev:vite -- --host 127.0.0.1",
     url: "http://127.0.0.1:1420",

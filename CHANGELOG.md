@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.0.5
+
+- **Better translations in every language.** Every string added since 10.4 was re-read in all
+  20 languages and 216 were fixed: wrong words (Run, Host, Connected), mainland terms in
+  Traditional Chinese, labels that were sentences, and English left in a few places.
+- **The FAQ covers Play Together from a friend's side**: what they see and press, what happens
+  when the host stops or a connection drops, the "Open in the PS5Upload app?" question, and
+  Detailed logs. The bug report answer matches today's page.
+- **A new website** at ps5upload.phantomptr.com: a Play Together section, a how-to for playing
+  with a friend, and fresh screenshots in all 21 languages.
+
 ## 11.0.4
 
 - **Friends hear the game.** A friend's sound in Play Together (and on the watch page) never
