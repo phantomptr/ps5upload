@@ -410,12 +410,12 @@ export async function browserInvoke<T>(
         mode: string;
         recursive?: boolean;
       };
-      return postJson<T>("/api/ps5/fs/chmod", {
-        addr,
-        path,
-        mode,
-        recursive: recursive ?? false,
-      });
+      // Long, as the desktop proxy: a recursive chmod runs for up to 10 minutes.
+      return postJson<T>(
+        "/api/ps5/fs/chmod",
+        { addr, path, mode, recursive: recursive ?? false },
+        /*long=*/ true,
+      );
     }
 
     case "ps5_fs_mount": {
@@ -458,7 +458,7 @@ export async function browserInvoke<T>(
         addr?: string | null;
         title_id: string;
       };
-      return postJson<T>("/api/ps5/app/launch", { addr, title_id });
+      return postJson<T>("/api/ps5/app/launch", { addr, title_id }, /*long=*/ true);
     }
 
     case "ps5_app_register": {
@@ -467,11 +467,11 @@ export async function browserInvoke<T>(
         src_path: string;
         patch_drm_type?: boolean | null;
       };
-      return postJson<T>("/api/ps5/app/register", {
-        addr,
-        src_path,
-        patch_drm_type,
-      });
+      return postJson<T>(
+        "/api/ps5/app/register",
+        { addr, src_path, patch_drm_type },
+        /*long=*/ true,
+      );
     }
 
     case "ps5_app_unregister": {
@@ -479,7 +479,7 @@ export async function browserInvoke<T>(
         addr?: string | null;
         title_id: string;
       };
-      return postJson<T>("/api/ps5/app/unregister", { addr, title_id });
+      return postJson<T>("/api/ps5/app/unregister", { addr, title_id }, /*long=*/ true);
     }
 
     // ── Hardware monitoring ─────────────────────────────────────────────────
@@ -1643,12 +1643,16 @@ export async function browserInvoke<T>(
       });
 
     case "transfer_dir_diff_preview":
-      return postJson<T>("/api/transfer/dir-diff-preview", {
-        src_dir: args["srcDir"],
-        dest_root: args["destRoot"],
-        addr: args["addr"],
-        excludes: args["excludes"],
-      });
+      return postJson<T>(
+        "/api/transfer/dir-diff-preview",
+        {
+          src_dir: args["srcDir"],
+          dest_root: args["destRoot"],
+          addr: args["addr"],
+          excludes: args["excludes"],
+        },
+        /*long=*/ true,
+      );
 
     // ── Reachability ─────────────────────────────────────────────────────────
 

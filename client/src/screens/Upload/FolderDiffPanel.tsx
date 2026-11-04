@@ -12,6 +12,7 @@ import { useUploadQueueStore } from "../../state/uploadQueue";
 import { Spinner } from "../../components";
 import { useTransferStore, phaseForHost } from "../../state/transfer";
 import { hostOf } from "../../lib/addr";
+import { isRequestTimeout } from "../../lib/startRequestTimeout";
 
 /**
  * Pre-flight folder diff preview.
@@ -40,6 +41,7 @@ export default function FolderDiffPanel({
   const [data, setData] = useState<DirDiffPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
   // Mirror transferScreenBusy() reactively so the panel re-renders when a
@@ -66,6 +68,7 @@ export default function FolderDiffPanel({
     let cancelled = false;
     setData(null);
     setError(null);
+    setUnavailable(false);
     if (!srcDir || !destRoot || !transferAddr) return;
     // Don't walk the source while a transfer holds it; resume when busy clears
     // (transferBusy is a dep, so this effect re-runs and previews then).
@@ -92,6 +95,9 @@ export default function FolderDiffPanel({
               already_present_bytes: 0,
               sample_to_send: [],
             });
+          } else if (isRequestTimeout(msg)) {
+            // The preview is optional: the upload works it out again by itself.
+            setUnavailable(true);
           } else {
             setError(msg);
           }
@@ -125,7 +131,7 @@ export default function FolderDiffPanel({
     );
   }
 
-  if (!data && !loading && !error) return null;
+  if (!data && !loading && !error && !unavailable) return null;
 
   return (
     <section className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] p-3 text-xs">
@@ -147,6 +153,15 @@ export default function FolderDiffPanel({
           </button>
         )}
       </header>
+      {unavailable && (
+        <p className="mt-2 text-[var(--color-muted)]">
+          {tr(
+            "folder_diff_unavailable",
+            undefined,
+            "This preview took too long, so it is not shown. You can still upload.",
+          )}
+        </p>
+      )}
       {error && (
         <div className="mt-2 flex items-start gap-1 text-[var(--color-bad)]">
           <AlertTriangle size={11} className="mt-0.5 shrink-0" />

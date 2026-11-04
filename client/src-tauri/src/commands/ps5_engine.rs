@@ -1925,7 +1925,9 @@ pub struct AppLaunchReq {
 pub async fn ps5_app_launch(req: AppLaunchReq) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/ps5/app/launch");
-    post_json(
+    // A proxy deadline must exceed the engine's own 60 s for this call, or a launch that worked
+    // reads as failed. The same for register and unregister.
+    post_json_long(
         &url,
         &serde_json::json!({
             "addr": req.addr,
@@ -1952,7 +1954,7 @@ pub struct AppRegisterReq {
 pub async fn ps5_app_register(req: AppRegisterReq) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/ps5/app/register");
-    post_json(
+    post_json_long(
         &url,
         &serde_json::json!({
             "addr": req.addr,
@@ -1975,7 +1977,7 @@ pub struct AppUnregisterReq {
 pub async fn ps5_app_unregister(req: AppUnregisterReq) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/ps5/app/unregister");
-    post_json(
+    post_json_long(
         &url,
         &serde_json::json!({
             "addr": req.addr,
@@ -2003,7 +2005,8 @@ pub async fn ps5_fs_unmount(req: FsUnmountReq) -> Result<JsonValue, String> {
 pub async fn ps5_fs_chmod(req: FsChmodReq) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/ps5/fs/chmod");
-    post_json(
+    // The long client: the engine holds a recursive chmod open for up to 10 minutes.
+    post_json_long(
         &url,
         &serde_json::json!({
             "addr": req.addr,
@@ -2729,7 +2732,9 @@ pub async fn transfer_dir_diff_preview(
     excludes: Vec<String>,
 ) -> Result<JsonValue, String> {
     let url = format!("{}/api/transfer/dir-diff-preview", engine::url());
-    post_json(
+    // The long client: the engine walks both sides before it answers, and on a NAS that takes
+    // minutes. An upload that wants the same source or console makes it stop early.
+    post_json_long(
         &url,
         &serde_json::json!({
             "src_dir": src_dir,
