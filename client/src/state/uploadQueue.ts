@@ -61,6 +61,7 @@ import {
 } from "./pkgLibrary";
 import { useInstallSettingsStore } from "./installSettings";
 import type { UploadStrategy } from "./transfer";
+import { holdConsoleFromEngineQueue } from "../api/engineQueue";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useRecentHostMetricsStore } from "./recentHostMetrics";
 import { pushNotification } from "./notifications";
@@ -316,6 +317,9 @@ export interface QueueItem {
    *  wake and resumes by itself on the helper-up edge after it (resumeFailedRecoverable). Not
    *  a failure and not a spent recovery attempt. Cleared when it runs again. */
   waitingForWake?: boolean;
+  /** The next row of its console, while an item of the engine's own queue (/api/queue, used by
+   *  scripts and agents) runs there. Not saved: only a live run sets it. */
+  waitingForEngineQueue?: boolean;
   /** While running: how long nothing has moved, once that is STALL_AFTER_MS or more (the row then
    *  offers to restart the transfer, which resumes). Null otherwise. */
   stalledForMs?: number | null;
@@ -1101,6 +1105,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       // in-memory items (so the current run can extract) but never touch disk.
       const persistItems = items.map((it) => {
         let out = it.rarPassword ? { ...it, rarPassword: null } : it;
+        if (out.waitingForEngineQueue) out = { ...out, waitingForEngineQueue: false };
         // A link can carry a signed token: never persist it. The item is
         // dropped on the next hydrate.
         if (out.install?.via === "link") {
@@ -3283,11 +3288,33 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
         };
       });
       try {
-        await runDrainLoop(
-          () => pickPending(h),
+        // The engine's own queue and this one take turns on a console.
+        const giveBack = await holdConsoleFromEngineQueue(h, {
           isLive,
-          opts?.unattended ? "auto" : "explicit",
-        );
+          onWaiting: (waiting) => {
+            const next = waiting ? pickPending(h) : null;
+            set((s) => ({
+              items: s.items.map((it) =>
+                it.id === next?.id
+                  ? { ...it, waitingForEngineQueue: true }
+                  : it.waitingForEngineQueue && hostOf(it.addr) === h
+                    ? { ...it, waitingForEngineQueue: false }
+                    : it,
+              ),
+            }));
+          },
+        });
+        try {
+          if (isLive()) {
+            await runDrainLoop(
+              () => pickPending(h),
+              isLive,
+              opts?.unattended ? "auto" : "explicit",
+            );
+          }
+        } finally {
+          giveBack();
+        }
       } finally {
         // Only clear our own flag if we're still the live generation — a
         // stopHost() or a superseding startHost() already owns it otherwise.

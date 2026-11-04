@@ -1519,6 +1519,19 @@ export function QueueRow({
         </div>
       )}
 
+      {isPending && item.waitingForEngineQueue && (
+        <div
+          data-testid="queue-waiting-for-engine-queue"
+          className="mt-2 text-xs text-[var(--color-muted)]"
+        >
+          {tr(
+            "queue_waiting_for_engine_queue",
+            undefined,
+            "Waiting: a script or agent is using this PS5 through the engine's queue. This carries on by itself after.",
+          )}
+        </div>
+      )}
+
       {isPending && item.paused && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]">
           <span className="min-w-0 flex-1">
