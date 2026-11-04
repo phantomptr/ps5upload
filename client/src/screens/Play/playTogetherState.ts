@@ -108,7 +108,8 @@ export function readJoinState(v: unknown): JoinHostState {
 function socketOf(url: string): string | null {
   try {
     const u = new URL(url);
-    return `${u.protocol === "https:" ? "wss:" : "ws:"}//${u.host}/api/join/ws`;
+    const prefix = u.pathname.replace(/\/join\/?$/, "");
+    return `${u.protocol === "https:" ? "wss:" : "ws:"}//${u.host}${prefix}/api/join/ws`;
   } catch {
     return null;
   }

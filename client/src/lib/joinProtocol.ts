@@ -186,12 +186,14 @@ export function parseJoinLink(text: string): JoinLink | null {
     return null;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-  if (!/\/join\/?$/.test(u.pathname)) return null;
+  const path = /^(.*)\/join\/?$/.exec(u.pathname);
+  if (!path) return null;
   const hash = new URLSearchParams(u.hash.replace(/^#/, ""));
   const invite = hash.get("i") ?? "";
   if (!/^[A-Za-z0-9_-]{8,128}$/.test(invite)) return null;
   const name = hash.get("n")?.trim() || null;
-  return { origin: u.origin, invite, name, code: null };
+  // With the path the engine is served under (PS5UPLOAD_BASE_URL), if any.
+  return { origin: `${u.origin}${path[1]}`, invite, name, code: null };
 }
 
 /** "Open in the PS5Upload app": an invite link as the ps5upload:// link the app opens. */
@@ -232,7 +234,8 @@ export function linkFromSocket(ws: string, name: string | null, code: string | n
   try {
     const u = new URL(ws);
     if (u.protocol !== "ws:" && u.protocol !== "wss:") return null;
-    return { origin: `${u.protocol === "wss:" ? "https:" : "http:"}//${u.host}`, invite: null, code, name };
+    const prefix = u.pathname.replace(/\/api\/join\/ws\/?$/, "").replace(/\/$/, "");
+    return { origin: `${u.protocol === "wss:" ? "https:" : "http:"}//${u.host}${prefix}`, invite: null, code, name };
   } catch {
     return null;
   }
