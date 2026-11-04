@@ -74,6 +74,7 @@ impl ForwardTransport {
                     let status = r.status();
                     if !status.is_success() {
                         let text = r.text().await.unwrap_or_default();
+                        let text = crate::engine_http::plain_error_text(&text);
                         return Err(fwd(format!(
                             "engine refused the management call ({status}): {text}"
                         )));

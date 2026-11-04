@@ -85,7 +85,10 @@ async fn get_json(url: &str) -> Result<JsonValue, String> {
         .await
         .map_err(|e| format!("engine response body read failed: {e}"))?;
     if !status.is_success() {
-        return Err(format!("engine HTTP {status}: {body}"));
+        return Err(format!(
+            "engine HTTP {status}: {}",
+            crate::engine_http::plain_error_text(&body)
+        ));
     }
     serde_json::from_str::<JsonValue>(&body)
         .map_err(|e| format!("engine returned invalid JSON: {e}"))
@@ -1507,7 +1510,10 @@ async fn post_sse_inspect_with_watchdog(
             .text()
             .await
             .map_err(|e| format!("engine response body read failed: {e}"))?;
-        return Err(format!("engine HTTP {status}: {body_text}"));
+        return Err(format!(
+            "engine HTTP {status}: {}",
+            crate::engine_http::plain_error_text(&body_text)
+        ));
     }
 
     let mut stream = resp.bytes_stream();
@@ -2208,7 +2214,10 @@ pub async fn cache_artwork_clear() -> Result<JsonValue, String> {
         .await
         .map_err(|e| format!("engine response body read failed: {e}"))?;
     if !status.is_success() {
-        return Err(format!("engine HTTP {status}: {body}"));
+        return Err(format!(
+            "engine HTTP {status}: {}",
+            crate::engine_http::plain_error_text(&body)
+        ));
     }
     serde_json::from_str::<JsonValue>(&body)
         .map_err(|e| format!("engine returned invalid JSON: {e}"))
