@@ -1031,12 +1031,16 @@ fn holds_a_place(ip: IpAddr) -> bool {
 /// At most [`CONNECTS_PER_MIN`] guest sockets per address per minute (this computer itself, or an
 /// address with a guest in the game, [`LOOPBACK_CONNECTS_PER_MIN`]).
 fn connect_allowed(ip: IpAddr, now: Instant) -> bool {
+    connect_allowed_in(&CONNECTS, ip, now)
+}
+
+fn connect_allowed_in(table: &ConnectLimit, ip: IpAddr, now: Instant) -> bool {
     let limit = if holds_a_place(ip) {
         LOOPBACK_CONNECTS_PER_MIN
     } else {
         connects_per_min(ip)
     };
-    CONNECTS.allow(ip, limit, now)
+    table.allow(ip, limit, now)
 }
 
 /// `GET /api/join/ws`: a guest's socket (reached from the LAN; the socket checks the invite or
@@ -3205,19 +3209,25 @@ mod tests {
 
     #[test]
     fn connects_are_limited_per_address() {
+        // Its own table: `allow` prunes every address by the time it is given, so another test
+        // asking at t + 61 s would empty a shared one under this test.
+        let table = ConnectLimit::new();
         let ip: IpAddr = "192.0.2.90".parse().unwrap();
         let t = Instant::now();
         for _ in 0..CONNECTS_PER_MIN {
-            assert!(connect_allowed(ip, t));
+            assert!(connect_allowed_in(&table, ip, t));
         }
-        assert!(!connect_allowed(ip, t));
-        assert!(connect_allowed(ip, t + Duration::from_secs(61)));
+        assert!(!connect_allowed_in(&table, ip, t));
+        assert!(connect_allowed_in(&table, ip, t + Duration::from_secs(61)));
     }
 
     /// A flaky guest comes back every few seconds: those tries must not lock them out of the
     /// place the engine is keeping for them.
     #[test]
     fn an_address_with_a_place_may_come_back_often() {
+        // Its own table: `allow` prunes every address by the time it is given, so another test
+        // asking at t + 61 s would empty a shared one under this test.
+        let table = ConnectLimit::new();
         let ip: IpAddr = "192.0.2.91".parse().unwrap();
         let t = Instant::now();
         let mut p = party();
@@ -3226,22 +3236,25 @@ mod tests {
         let key = "192.0.2.200-place".to_string();
         with_parties(|m| m.insert(key.clone(), p));
         for _ in 0..(CONNECTS_PER_MIN * 2) {
-            assert!(connect_allowed(ip, t));
+            assert!(connect_allowed_in(&table, ip, t));
         }
         // Their place gone: the usual limit.
         with_parties(|m| m.remove(&key));
-        assert!(!connect_allowed(ip, t));
+        assert!(!connect_allowed_in(&table, ip, t));
     }
 
     #[test]
     fn this_computer_may_connect_more_often_but_not_without_end() {
+        // Its own table: `allow` prunes every address by the time it is given, so another test
+        // asking at t + 61 s would empty a shared one under this test.
+        let table = ConnectLimit::new();
         let ip: IpAddr = "127.0.0.2".parse().unwrap();
         let t = Instant::now();
         for _ in 0..LOOPBACK_CONNECTS_PER_MIN {
-            assert!(connect_allowed(ip, t));
+            assert!(connect_allowed_in(&table, ip, t));
         }
-        assert!(!connect_allowed(ip, t));
-        assert!(connect_allowed(ip, t + Duration::from_secs(61)));
+        assert!(!connect_allowed_in(&table, ip, t));
+        assert!(connect_allowed_in(&table, ip, t + Duration::from_secs(61)));
         const { assert!(LOOPBACK_CONNECTS_PER_MIN > CONNECTS_PER_MIN) };
     }
 
