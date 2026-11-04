@@ -59,6 +59,8 @@ RUN apk add --no-cache musl-dev g++ make
 WORKDIR /build
 COPY engine engine
 COPY third_party third_party
+# The engine serves this guide as an MCP resource (src/mcp/resources.rs).
+COPY AUTOMATION.md AUTOMATION.md
 # The PS5 helper ELFs the engine embeds (build.rs looks for them at
 # <repo root>/payload). Without this the image builds fine but installs
 # UPDATES and DLC with no installer to send — the exact #152 failure —

@@ -55,6 +55,13 @@ fn lock_consoles() -> std::sync::MutexGuard<'static, HashMap<String, ConsoleStat
     consoles().lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The consoles this engine has greeted or been asked about since it started, sorted.
+pub(crate) fn greeted_consoles() -> Vec<String> {
+    let mut consoles: Vec<String> = lock_consoles().keys().cloned().collect();
+    consoles.sort();
+    consoles
+}
+
 /// The mesh for a bug report: what kind of device this engine is and, per console it greets,
 /// how many app windows are active and whether the console took our presence. No names.
 pub(crate) fn diag_summary() -> Value {

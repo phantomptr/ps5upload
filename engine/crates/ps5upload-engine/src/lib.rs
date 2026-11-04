@@ -85,6 +85,7 @@ mod link;
 mod link_lz4;
 mod local_fs;
 mod log_dedup;
+mod mcp;
 mod mesh_api;
 mod mesh_drive;
 mod mesh_drive_plan;
@@ -10995,6 +10996,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // silently drops events — including terminal job events the UI
     // never recovers from. Headroom is cheap; lost terminals aren't.
     let (events_tx, _) = broadcast::channel(2048);
+    let mcp_events = events_tx.clone();
 
     let state = AppState {
         jobs: Arc::new(Mutex::new(HashMap::new())),
@@ -11722,6 +11724,18 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             remote_download::DownloadRegistry::default(),
         )));
 
+    // The MCP server drives this same API in-process: it holds a clone of the router as it stands
+    // here, without /mcp itself or the reverse-proxy prefix. The body limit and the request log are
+    // what the outer layers below give an HTTP client.
+    let mcp_state = mcp::McpState::new(
+        app.clone()
+            .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
+            .layer(middleware::from_fn(log_requests)),
+        mcp_events,
+        ps5_addr.clone(),
+    );
+    let app = app.merge(mcp::router(mcp_state.clone()));
+
     // SPA fallback: serve the embedded React bundle for every path that doesn't
     // match an explicit /api/* route above.  Only compiled when the `webui`
     // feature is on (Docker / self-hosted image); the regular build keeps the
@@ -11896,7 +11910,11 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         no_delay(listener),
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        // An open MCP subscription would hold the drain up for as long as its client stays.
+        mcp_state.begin_shutdown();
+    })
     .await;
     ps5upload_core::events::emit(
         ps5upload_core::events::Cat::System,
@@ -11995,6 +12013,8 @@ pub fn healthcheck() -> i32 {
         1
     }
 }
+
+pub use mcp::stdio::run_cli as run_mcp_bridge;
 
 pub async fn run_cli() {
     install_panic_logger();

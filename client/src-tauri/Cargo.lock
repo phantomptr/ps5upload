@@ -4590,6 +4590,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-stream",
  "tokio-tungstenite",
+ "tower",
  "tower-http 0.7.1",
  "trash",
  "unicode-normalization",
