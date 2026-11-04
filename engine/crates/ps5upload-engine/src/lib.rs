@@ -11964,9 +11964,8 @@ where
                 _ = stop_this_rx => {}
                 _ = all.wait_for(|stopped| *stopped) => {}
             }
-        })
-        .into_future();
-        let mut serving = tokio::spawn(serve);
+        });
+        let mut serving = tokio::spawn(async move { serve.await });
         tokio::select! {
             ended = &mut serving => {
                 return ended.unwrap_or_else(|e| Err(std::io::Error::other(e)));
