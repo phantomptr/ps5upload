@@ -42,7 +42,6 @@ common way to burn a cycle here.
 
 ```sh
 ( cd client/src-tauri && cargo fmt --all -- --check )   # validate only checks fmt in engine/
-( cd engine && cargo test -p ps5upload-ctest -- --test-threads=1 )
 make test-payload                                       # needs PS5_PAYLOAD_SDK
 make check-no-ftx2                                      # the retired protocol must stay gone
 ```
@@ -54,12 +53,12 @@ export PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk
 npm run validate:full          # or: make quality-full / make test-payload
 ```
 
-Builds `payload/ps5upload.elf` and the DPI daemon, checks both are PS5
+Builds `payload/ps5upload.elf` and the installer, checks both are PS5
 ELFs with valid gzip resources, then runs every host self-test with
-`-Wall -Wextra -Werror`:
+`-Wall -Wextra -Werror`.
 
 Each self-test lives in `payload/tests/*_selftest.c` (hardware guards, ptrace recovery,
-`app.db` reading, FTP, SDK param rewriting, installer, cheats, wake watchdog and more). The
+`app.db` reading, SDK param rewriting, installer, cheats, wake watchdog and more).
 The payload's AVA1 code (the management methods, the glue) is tested by `ps5upload-ctest`, which
 compiles it with the AVA1 C library on the host and checks it against the Rust side (see the full
 gate below). The AVA1 library itself is tested in its own repository (`third_party/ava1`:
@@ -80,7 +79,7 @@ run `make test-payload`, and commit the changed pin.
 
 **Adding payload logic?** If it can be separated from the console, put it
 header-only in `payload/include/` and give it a self-test here. That is
-the established convention and the reason the list above exists.
+the established convention.
 
 ## Layer 3 — live console
 
@@ -127,9 +126,8 @@ Before testing a payload change:
   `/api/ps5/status` between steps.
 - Some reads (temperatures, power telemetry) ptrace-pause the system UI.
   They are safe on demand and unsafe on a loop.
-- Expect blanks that are not bugs: SoC clock, SoC power, CPU usage, fan
-  duty, per-drive sensors and the console date/time are not exposed by
-  retail firmware.
+- Expect blanks that are not bugs: not every firmware answers every sensor
+  read (SoC power, clocks, per-drive sensors), and the helper has to be new enough to send each one.
 
 ## Layer 4 — fresh-install matrix, per release
 
@@ -168,7 +166,7 @@ and `coverage/engine/lcov.info`. Rust coverage needs `cargo-llvm-cov`
 
 CI checks the core crate for every shipped target
 (`x86_64`/`aarch64` × linux-gnu, apple-darwin, pc-windows-msvc) and runs
-the desktop Rust suite natively on `ubuntu-24.04`, `macos-14` and
+the desktop Rust suite natively on `ubuntu-24.04`, `macos-15` and
 `windows-2022` — that native matrix is what exercises the
 `#[cfg(target_os = ...)]` paths (keep-awake, update/download handling,
 launcher, sidecar extraction). A macOS dev box generally cannot build the
@@ -203,7 +201,8 @@ runtimes support (`PS5UPLOAD_IOS_SIM="iPhone 17 Pro"` picks another), and shuts 
 end if it booted it. Xcode needs its iOS platform once: `xcodebuild -downloadPlatform iOS`.
 The simulator shows how the app looks and works and can reach a PS5 on this Mac's network; the
 limits of a real iPhone (background suspension, the local-network prompt) only show on one. As on
-Android the engine runs in-process; unlike Android, `.rar` works.
+Android the engine runs in-process and `.rar` isn't available: the RAR helper is a separate program,
+which a phone app can't start.
 
 ## Self-hosted engine
 
@@ -250,8 +249,8 @@ This needed a fix: upstream `unrar 0.5.8` reads ~8 KB out of a much
 smaller buffer every time it crosses a volume boundary, which aborted any
 debug build that touched a multi-part `.rar` and was a latent
 out-of-bounds read in release. `0.5.8` is the latest release, so the crate
-is vendored at `third_party/unrar` with the fix and both workspaces
-redirect to it via `[patch.crates-io]`.
+is vendored at `third_party/unrar` with the fix and `engine/Cargo.toml`
+redirects to it via `[patch.crates-io]` (the desktop app gets it through the engine's helper).
 
 See `third_party/unrar/README.md` for the patch. If you bump
 the crate, re-apply the hunk or drop the vendoring once upstream ships the

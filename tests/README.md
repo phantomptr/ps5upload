@@ -41,6 +41,9 @@ The runner prefers the pre-built binary (`engine/target/release/` then `debug/`)
 |---|---|
 | engine reachable | GET /api/jobs returns 200 |
 | ps5 status | GET /api/ps5/status returns non-error |
+| volumes | GET /api/ps5/volumes; the usable ones are printed |
+| ps5 hw temps | GET /api/ps5/hw/temps gives sane readings within 4 s |
+| ps5 alive after sensor read | The helper still answers after that read |
 | single-file transfer | 256 KiB random file |
 | directory transfer | 8 × 32 KiB files → dir on PS5 |
 | larger single-file transfer | 4 MiB file |

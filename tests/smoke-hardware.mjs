@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * tests2/smoke-hardware.mjs
+ * tests/smoke-hardware.mjs
  *
  * Real-hardware smoke test for the engine + PS5 payload.
  * Requires a live PS5 at PS5_ADDR (default 192.168.137.2) and
  * ps5upload-engine running at ENGINE_URL (default http://127.0.0.1:19113).
  *
  * Usage:
- *   node tests2/smoke-hardware.mjs [options]
+ *   node tests/smoke-hardware.mjs [options]
  *
  * Options:
  *   --engine-url=URL       engine HTTP base URL  (default: http://127.0.0.1:19113)

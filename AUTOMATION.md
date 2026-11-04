@@ -16,9 +16,11 @@ Added in 10.6.0 for [#615](https://github.com/phantomptr/ps5upload/issues/615).
 
 ## What it does, and what it never does
 
-- **This computer only.** Every endpoint here answers only to the engine's own computer
-  (a loopback address: `127.0.0.1` or `::1`). `PS5UPLOAD_ALLOW_IP` does **not** open them to
-  other machines; from anywhere else they answer `403 {"error": "local_only"}`.
+- **This computer only.** The frame and input endpoints and the live feed answer only to the
+  engine's own computer (a loopback address: `127.0.0.1` or `::1`). `PS5UPLOAD_ALLOW_IP` does
+  **not** open them to other machines: a listed machine gets `403 {"error": "local_only"}`, and any
+  other machine is refused by the engine's guard with a `403` before that. The status endpoint is
+  also open to listed machines, without the session id (see below).
 - **Address it as localhost.** Requests must use `localhost`, `127.0.0.1` or `[::1]` as the host
   name (any port); any other name answers `403 {"error": "host_not_local"}`.
 - **It never starts a stream.** Start Remote Play in the app first (Play › Start). The session is
@@ -30,8 +32,9 @@ Added in 10.6.0 for [#615](https://github.com/phantomptr/ps5upload/issues/615).
   controller: you can still play, and letting go of the script's buttons never lets go of yours.
 - **It never sends anything twice.** A refused or failed request is not retried by the engine.
 
-The engine listens on `http://127.0.0.1:19113` by default (the app may pick another port if that
-one is taken; the app's log says which).
+The engine listens on `http://127.0.0.1:19113` by default. If that port is taken, the desktop app
+picks another and its log says which. A standalone engine takes the port from
+`PS5UPLOAD_ENGINE_PORT`.
 
 ## Endpoints
 
@@ -45,11 +48,15 @@ one is taken; the app's log says which).
 shows the stream now (a frame needs one). `session` changes every time a new stream starts; pass
 it to the other endpoints so a script never drives a session it did not mean to.
 
+There is no error for a request that isn't local here: `session` is simply left out when the request
+does not use a localhost name, or comes from another machine. If `host` is set and `session` is
+missing, address the engine as `127.0.0.1`.
+
 ### `GET /api/ps5/rp/frame`: the current picture
 
 | Query | Meaning |
 | --- | --- |
-| `host` | The console, as the session shows it (required). |
+| `host` | The console, as the session shows it. Required: without it the answer is `404 no_session`. `addr` and `console` mean the same. |
 | `session` | The session id (recommended). A different one answers `409 stale_session`. |
 | `format` | `png` (default) or `jpeg`. |
 | `max_width` | Scale down to at most this many pixels wide (16 to 7680), keeping the shape. |
@@ -87,7 +94,7 @@ At most one frame request runs at a time, and at most five a second.
 
 | Field | Meaning |
 | --- | --- |
-| `host`, `session` | Required. A stale session is refused (`409`), nothing is sent. |
+| `host`, `session` | Required. `addr` and `console` also name the console. A missing or wrong console is `404 no_session`, a missing `session` is `400 bad_request`, and a stale session is refused (`409`). In each case nothing is sent. |
 | `buttons` | Any of `cross`, `circle`, `square`, `triangle`, `up`, `down`, `left`, `right`, `l1`, `r1`, `l3`, `r3`, `options`, `create`, `touchpad`, `ps`. |
 | `left`, `right` | Sticks as `[x, y]`, each from -1 to 1 (right and down are positive). |
 | `l2`, `r2` | Triggers, 0 to 1. |
@@ -114,12 +121,13 @@ everything is let go with it.
 
 ## Errors
 
-Every error is JSON, `{"error": "<code>"}`:
+Every error is JSON. The endpoints' own refusals are `{"error": "<code>"}`:
 
 | Status | `error` | Meaning |
 | --- | --- | --- |
 | 400 | `bad_request` | A field is missing or out of range (`field` or `button` says which). |
 | 403 | `local_only` | Not from this computer. |
+| 403 | `host_not_local` | The request used a name other than `localhost`, `127.0.0.1` or `[::1]`. |
 | 404 | `no_session` | Nothing is streaming from that console. |
 | 409 | `stale_session` | Another session runs now (`session` gives its id). |
 | 409 | `no_viewer` | The stream runs but no app page shows it (left the Play screen), or the page left while answering. |
@@ -129,6 +137,12 @@ Every error is JSON, `{"error": "<code>"}`:
 | 504 | `timeout` | The page did not answer within 2 s. |
 | 504 | `no_newer_frame` | No picture newer than `after` came within 1.5 s. |
 | 502 | `page_error` | The page could not make the image. |
+| 500 | `internal` | The engine could not build the answer. |
+
+A request refused before it reaches these endpoints has text in `error` and the code in `code`:
+`{"error": "<text>", "code": "<status name>"}`. That covers a machine the guard refuses, a body that
+isn't JSON or lacks the `application/json` content type, and a query value of the wrong type
+(`session=abc`). Decide by the HTTP status first.
 
 ## Examples
 
@@ -221,8 +235,9 @@ ffmpeg -i http://127.0.0.1:19113/api/ps5/rp/live.ts -c copy recording.ts
   slows the session or the app's own picture.
 - Timestamps follow the console's frame numbers (one per frame at the session's frame rate,
   10 ms per sound frame), smoothed against arrival times, and always move forward.
-- `?addr=<console>`: only that console's session. No session (or another console's):
-  `503 {"error": "no_session"}` at once, so a player's own reconnect picks it up later.
+- `?addr=<console>`: only that console's session (`host` and `console` mean the same). No session
+  (or another console's): `503 {"error": "no_session"}` at once, so a player's own reconnect picks
+  it up later. The status 503 is on purpose here, where the frame and input endpoints say 404.
 - Up to 8 readers at once (`429 {"error": "too_many_readers"}` beyond that). The stream ends when
   the session does.
 
@@ -234,7 +249,7 @@ ffmpeg -i http://127.0.0.1:19113/api/ps5/rp/live.ts -c copy recording.ts
  "frames_held_after_loss": 0, "losses": 0, "keyframe_every_s": 2, "readers": [ … ]}
 ```
 
-`consumers` counts players reading `live.ts`; `go_live` is the app's own Go live, which reads
+`codec` is `h264`, `h265` or `h265_hdr`. `consumers` counts players reading `live.ts`; `go_live` is the app's own Go live, which reads
 the same feed inside the engine. `{"running": false, "consumers": 0}` when nothing streams.
 
 ## An MCP adapter
