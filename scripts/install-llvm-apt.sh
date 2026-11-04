@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # LLVM's Debian packaging key (Sylvestre Ledru), https://apt.llvm.org/
-KEY_FINGERPRINT="6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+KEY_FINGERPRINT="6084F3CF814B57C1CF12EFD515CF4D18AF4F7421" # gitleaks:allow (a public key's fingerprint)
 KEY_URL="https://apt.llvm.org/llvm-snapshot.gpg.key"
 KEYRING="/etc/apt/keyrings/apt.llvm.org.gpg"
 
