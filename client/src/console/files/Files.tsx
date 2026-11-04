@@ -64,7 +64,7 @@ import {
   type BatchOptions,
   type BatchResult,
 } from "./move";
-import { currentBatch, startBatch, stopBatch, useBatch, waitJob, type BatchProgress } from "./batch";
+import { batchOptions, currentBatch, startBatch, stopBatch, useBatch, waitJob, type BatchProgress } from "./batch";
 import {
   askConflict,
   clearClipboard,
@@ -79,6 +79,7 @@ import {
 } from "./clipboard";
 import { ConflictDialog } from "./ConflictDialog";
 import { pasteItems, type PasteMode, type PasteResult } from "./paste";
+import { ReplaceError } from "./replace";
 import { PathBar } from "./PathBar";
 import { DEFAULT_VIEW, invertShown, loadView, MESH_MARKER, saveView, selectAllShown, statusOf, visibleEntries, LOAD_ALL_CAP, type Status, type ViewPrefs } from "./listing";
 import { checkFolder, typedPath } from "./pathParts";
@@ -175,6 +176,10 @@ export function batchMessage(r: BatchResult, op?: Busy["op"]): Message | null {
     return why ? { tone: "error", text: t("cw_files_some_failed", { n: r.failed.length, reason: why }) } : null;
   }
   if (r.jobFailed.length) return { tone: "error", text: t("cw_files_batch_failed", { n: r.jobFailed.length }) };
+  if (r.cancelled?.length) {
+    const text = t("cw_files_batch_cut_short", { name: baseName(r.cancelled[0]) });
+    return { tone: "info", text: r.skipped.length ? `${text} ${t("cw_files_batch_stopped", { n: r.skipped.length })}` : text };
+  }
   if (r.skipped.length) return { tone: "info", text: t("cw_files_batch_stopped", { n: r.skipped.length }) };
   return { tone: "info", text: t(op === "chmod" ? "cw_files_fixperm_done" : "cw_files_done") };
 }
@@ -195,20 +200,52 @@ export function failedNamesIn(r: BatchResult, dir: string): string[] {
 }
 
 /** The line a finished paste leaves: batchMessage's, or what was skipped / already there. */
-export function pasteMessage(r: PasteResult): Message | null {
+function pasteLine(r: PasteResult): Message | null {
   if (r.halted.length && !r.failed.length && !r.jobFailed.length) {
     const rest = r.skipped.length - r.halted.length;
     const text = t("cw_files_paste_halted", { name: baseName(r.halted[0]) });
     return { tone: "info", text: rest > 0 ? `${text} ${t("cw_files_batch_stopped", { n: rest })}` : text };
   }
-  if (r.failed.length || r.jobFailed.length || r.skipped.length) return batchMessage(r);
+  if (r.failed.length || r.jobFailed.length || r.skipped.length || r.cancelled?.length) return batchMessage(r);
   if (!r.done.length && !r.declined.length && r.here.length) return { tone: "info", text: t("cw_files_paste_here_already") };
   if (r.declined.length) return { tone: "info", text: t("cw_files_paste_done_skipped", { n: r.declined.length }) };
   return batchMessage(r);
 }
 
+/** pasteLine, then what a Replace left behind: those stay on screen as errors, they ask for a look. */
+export function pasteMessage(r: PasteResult): Message | null {
+  const line = pasteLine(r);
+  const notes = (r.notes ?? []).map(replaceErrorText);
+  if (!line || !notes.length) return line;
+  return { tone: "error", text: [line.text, ...notes].join(" ") };
+}
+
+/** What a Replace that stopped short did, and what is where. */
+function replaceErrorText(e: ReplaceError): string {
+  const leftover = e.temp ? ` ${t("cw_files_replace_temp_left", { temp: baseName(e.temp) })}` : "";
+  const kept = t("cw_files_replace_kept", { name: e.item });
+  switch (e.what) {
+    case "copy": {
+      if (e.why instanceof ApiError && e.why.code === "no_space") return `${t("cw_files_replace_no_space", { name: e.item })}${leftover}`;
+      const why = e.why != null ? filesErrorText(e.why) : null;
+      return `${why ?? t("cw_files_replace_copy_failed")} ${kept}${leftover}`;
+    }
+    case "swap":
+      return `${t("cw_files_replace_failed")} ${kept}${leftover}`;
+    case "stuck":
+      return t("cw_files_replace_stuck", { name: e.item, old: baseName(e.old ?? ""), temp: baseName(e.temp ?? "") });
+    case "old_left":
+      return t("cw_files_replace_old_left", { name: e.item, old: baseName(e.old ?? "") });
+    case "source_left":
+      return t("cw_files_replace_source_left", { name: e.item });
+    case "temp_left":
+      return t("cw_files_replace_temp_left", { temp: baseName(e.temp ?? "") });
+  }
+}
+
 /** A failed call as a short line; null for a 401 (the reload banner says it). */
 export function filesErrorText(err: unknown): string | null {
+  if (err instanceof ReplaceError) return replaceErrorText(err);
   // A share copy's job failure is worded for a share whatever its token (no_space, bad_name…).
   const smb = err instanceof SmbJobError ? smbCallErrorText(err) : smbErrorText(err);
   if (smb) return smb;
@@ -218,7 +255,6 @@ export function filesErrorText(err: unknown): string | null {
     // 409 is "exists" or "busy" (and cross_mount, handled by moveItems): only an
     // "exist…" code says the name is taken.
     if (err.status === 409 && /exist/i.test(err.code)) return t("cw_files_err_exists");
-    if (err.code === "replace_delete_failed") return t("cw_files_replace_failed");
   }
   if (err instanceof IntoItselfError) return t("cw_files_err_into_itself");
   return errorText(err);
@@ -358,8 +394,11 @@ function withBytes(line: string, b: Busy): string {
 /** "Copying 3 of 40" (item `at` is being sent or is running), or "Stopping…". */
 export function busyText(b: Busy | null): string | null {
   if (!b) return null;
-  // A share copy's Stop cancels the item running too (batch.ts cancels), not only the ones after it.
-  if (b.stopping) return t(b.cancels ? "cw_files_smb_stopping" : "cw_files_batch_stopping");
+  // Stop cancels the item running too (batch.ts cancels), not only the ones after it.
+  if (b.stopping) {
+    if (!b.cancels) return t("cw_files_batch_stopping");
+    return t(b.op === "copy" ? "cw_files_smb_stopping" : "cw_files_batch_cancelling");
+  }
   const at = Math.max(1, b.at);
   if (b.op === "copy") return withBytes(t("cw_files_batch_copy", { at, total: b.total }), b);
   if (b.op === "move") return t("cw_files_batch_move", { at, total: b.total });
@@ -1244,7 +1283,7 @@ export function FilesView(p: FilesViewProps) {
   );
 }
 
-/** Stop: the batch ends before its next item, and a conflict it waits on is answered Skip. */
+/** Stop: the item running is cancelled, no more are sent, and a conflict the batch waits on is answered Skip. */
 export function stopBatchAndConflict(): void {
   stopBatch();
   skipPendingConflict();
@@ -1524,9 +1563,9 @@ export function Files({ ctx }: { ctx: SectionContext }) {
       const run = startBatch(
         op,
         items.length,
-        (ctl) =>
-          work(items, { onProgress: ctl.onProgress, stopped: ctl.stopped, waitJob: (id) => waitJob(id, ctl.stopped) }),
+        (ctl) => work(items, batchOptions(ctl)),
         destDir != null ? items.concat(destDir) : items,
+        true,
       );
       const batchDir = path;
       run?.then(
@@ -1570,12 +1609,7 @@ export function Files({ ctx }: { ctx: SectionContext }) {
         "copy",
         items.length,
         (ctl) =>
-          transferItems(
-            items,
-            dest,
-            { decide: askConflict, onBytes: ctl.onBytes },
-            { onProgress: ctl.onProgress, stopped: ctl.stopped, waitJob: (id) => waitJob(id, ctl.stopped) },
-          ),
+          transferItems(items, dest, { decide: askConflict, onBytes: ctl.onBytes }, batchOptions(ctl)),
         items.map((i) => i.path).concat(dest),
         true,
       );
@@ -1640,14 +1674,9 @@ export function Files({ ctx }: { ctx: SectionContext }) {
       c.mode === "cut" ? "move" : "copy",
       c.items.length,
       (ctl) =>
-        pasteItems(
-          c.items,
-          dest,
-          c.mode,
-          { decide: askConflict, volumes: volumes ?? undefined },
-          { onProgress: ctl.onProgress, stopped: ctl.stopped, waitJob: (id) => waitJob(id, ctl.stopped) },
-        ),
+        pasteItems(c.items, dest, c.mode, { decide: askConflict, volumes: volumes ?? undefined }, batchOptions(ctl)),
       c.items.map((i) => i.path).concat(dest),
+      true,
     );
     run?.then(
       (r) => {

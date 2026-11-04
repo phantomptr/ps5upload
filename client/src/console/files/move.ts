@@ -62,19 +62,27 @@ export interface BatchResult {
   jobFailed: string[];
   /** Items never sent: the batch was stopped (or the token went away) first. */
   skipped: string[];
+  /** Items whose running job Stop cancelled: what it already did stays. */
+  cancelled?: string[];
 }
 
-/** How a started job was left: its end state, gone from the list, or "left" (the batch stopped while it ran on). */
-export type JobEnd = "done" | "failed" | "gone" | "left";
+/**
+ * How a started job was left: its end state, gone from the list, "cancelled" (Stop cancelled it) or
+ * "left" (the batch stopped and the job runs on: it could not be cancelled).
+ */
+export type JobEnd = "done" | "failed" | "gone" | "left" | "cancelled";
 
 type Progress = (at: number, total: number) => void;
 
 export interface BatchOptions {
   /** Item `at` (1-based) of `total` is being sent. */
   onProgress?: Progress;
-  /** Resolves once job `id` is no longer running; without it the next item goes at once. */
-  waitJob?: (id: string) => Promise<JobEnd>;
-  /** Checked before each item: true stops the batch (the rest are skipped, nothing is cancelled). */
+  /**
+   * Resolves once job `id` is no longer running; without it the next item goes at once. Stop cancels
+   * the job waited on, unless `unstoppable`: a Replace's clean-up, which must finish whatever Stop says.
+   */
+  waitJob?: (id: string, unstoppable?: boolean) => Promise<JobEnd>;
+  /** Checked before each item: true stops the batch (the rest are skipped). */
   stopped?: () => boolean;
 }
 
@@ -105,7 +113,9 @@ export async function each(
     }
     if (!job || !opts?.waitJob) continue;
     try {
-      if ((await opts.waitJob(job)) === "failed") r.jobFailed.push(items[i]);
+      const end = await opts.waitJob(job);
+      if (end === "failed") r.jobFailed.push(items[i]);
+      else if (end === "cancelled") r.cancelled = (r.cancelled ?? []).concat(items[i]);
     } catch (error) {
       // The waiter gives up only when the token is gone (401).
       r.failed.push({ item: items[i], error });

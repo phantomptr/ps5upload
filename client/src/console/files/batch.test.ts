@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api";
 import type { Job } from "../home/useJobs";
-import { BATCH_ABSENT_READS, createJobWaiter, currentBatch, onBatchChange, startBatch, stopBatch } from "./batch";
+import { BATCH_ABSENT_READS, BATCH_CANCEL_READS, createJobWaiter, currentBatch, onBatchChange, startBatch, stopBatch } from "./batch";
 import type { BatchResult } from "./move";
 
 const job = (id: string, state: Job["state"]): Job => ({
@@ -50,7 +50,7 @@ describe("createJobWaiter", () => {
     await expect(gone("a")).rejects.toBeInstanceOf(ApiError);
   });
 
-  it("stop leaves the running job and returns", async () => {
+  it("stop leaves the running job and returns when it cannot cancel", async () => {
     let stop = false;
     const wait = createJobWaiter({
       fetchJobs: async () => [job("a", "running")],
@@ -60,9 +60,90 @@ describe("createJobWaiter", () => {
     });
     await expect(wait("a", () => stop)).resolves.toBe("left");
   });
+
+  it("stop cancels the job once and waits for its end: a copy leaves the list at once", async () => {
+    const cancel = vi.fn(async () => undefined);
+    let cancelled = false;
+    cancel.mockImplementation(async () => {
+      cancelled = true;
+    });
+    const wait = createJobWaiter({
+      fetchJobs: async () => (cancelled ? [] : [job("a", "running")]),
+      sleep: async () => undefined,
+      cancel,
+    });
+    await expect(wait("a", () => true)).resolves.toBe("cancelled");
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledWith("a");
+  });
+
+  it("a cancelled operation ends failed, and that reads as cancelled", async () => {
+    let cancelled = false;
+    const wait = createJobWaiter({
+      fetchJobs: async () => [job("a", cancelled ? "failed" : "running")],
+      sleep: async () => undefined,
+      cancel: async () => {
+        cancelled = true;
+      },
+    });
+    await expect(wait("a", () => true)).resolves.toBe("cancelled");
+  });
+
+  it("a job that finished before the cancel took is done", async () => {
+    const reads = [[job("a", "running")], [job("a", "done")]];
+    const wait = createJobWaiter({
+      fetchJobs: async () => reads.shift() ?? [],
+      sleep: async () => undefined,
+      cancel: async () => undefined,
+    });
+    await expect(wait("a", () => true)).resolves.toBe("done");
+  });
+
+  it("a job that runs on after the cancel is let go, after a bounded wait", async () => {
+    const fetchJobs = vi.fn(async () => [job("a", "running")]);
+    const cancel = vi.fn(async () => {
+      throw new ApiError(0, "offline");
+    });
+    const wait = createJobWaiter({ fetchJobs, sleep: async () => undefined, cancel });
+    await expect(wait("a", () => true)).resolves.toBe("left");
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(fetchJobs).toHaveBeenCalledTimes(BATCH_CANCEL_READS + 2);
+  });
+
+  it("a 401 on the cancel is thrown", async () => {
+    const wait = createJobWaiter({
+      fetchJobs: async () => [job("a", "running")],
+      sleep: async () => undefined,
+      cancel: async () => {
+        throw new ApiError(401, "token");
+      },
+    });
+    await expect(wait("a", () => true)).rejects.toMatchObject({ status: 401 });
+  });
+
+  it("no stop, no cancel", async () => {
+    const reads = [[job("a", "running")], [job("a", "done")]];
+    const cancel = vi.fn(async () => undefined);
+    const wait = createJobWaiter({ fetchJobs: async () => reads.shift() ?? [], sleep: async () => undefined, cancel });
+    await expect(wait("a", () => false)).resolves.toBe("done");
+    expect(cancel).not.toHaveBeenCalled();
+  });
 });
 
 describe("the page's one batch", () => {
+  it("a batch's options: a job waited on as unstoppable ignores Stop", async () => {
+    vi.resetModules();
+    const fetchJobs = vi.fn(async () => [job("del", "done")]);
+    const cancelJob = vi.fn(async () => undefined);
+    vi.doMock("../home/useJobs", () => ({ fetchJobs, cancelJob }));
+    const b = await import("./batch");
+    const o = b.batchOptions({ onProgress: () => {}, onBytes: () => {}, onPhase: () => {}, stopped: () => true });
+    await expect(o.waitJob?.("del", true)).resolves.toBe("done");
+    expect(cancelJob).not.toHaveBeenCalled();
+    vi.doUnmock("../home/useJobs");
+    vi.resetModules();
+  });
+
   it("one at a time, with progress and Stop", async () => {
     const seen: (string | null)[] = [];
     const off = onBatchChange(() => {
