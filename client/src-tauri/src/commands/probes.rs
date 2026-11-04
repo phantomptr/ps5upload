@@ -79,10 +79,20 @@ pub(crate) async fn resolve_targets(host: &str, port: u16) -> Result<Vec<SocketA
 /// Resolve then TCP-connect, reporting which step failed. `Ok(())` means the
 /// port accepted a connection.
 pub(crate) async fn connect_probe(host: &str, port: u16) -> Result<(), String> {
+    connect_probe_within(host, port, CONNECT_TIMEOUT).await
+}
+
+/// `connect_probe` allowing `per_address` for each address the host resolves to. A hostname still
+/// gets its own lookup budget, so a slow first lookup does not read as "not running" (#272).
+pub(crate) async fn connect_probe_within(
+    host: &str,
+    port: u16,
+    per_address: Duration,
+) -> Result<(), String> {
     let targets = resolve_targets(host, port).await?;
     let mut last = String::from("no addresses to try");
     for sa in targets {
-        match timeout(CONNECT_TIMEOUT, TcpStream::connect(sa)).await {
+        match timeout(per_address, TcpStream::connect(sa)).await {
             Ok(Ok(_)) => return Ok(()),
             Ok(Err(e)) => last = e.to_string(),
             Err(_) => last = "timeout".to_string(),

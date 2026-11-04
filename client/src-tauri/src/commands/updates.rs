@@ -9,7 +9,8 @@
 //!      which streams the platform-appropriate archive into the app's own
 //!      updates folder (`update_files`; since 10.5.1, #611), checked against
 //!      the manifest's SHA-256. An already-downloaded file that matches is
-//!      reused, not downloaded again.
+//!      reused, not downloaded again, and a transfer that was cut off carries
+//!      on where it stopped (`update_fetch`).
 //!   3. Where this copy can replace itself (`self_install`), "Install and
 //!      restart" does; the next launch deletes the download. Otherwise the
 //!      download goes to the user's Downloads folder, which opens, and the
@@ -41,11 +42,12 @@
 //! Missing platforms → the renderer reports "up to date" to users on
 //! that arch (same as if no new version exists for them).
 
-use std::io::Write;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
+
+use super::shell_error::{code_only, coded};
 
 /// Where to fetch the manifest. Stable URL — GitHub redirects
 /// `/releases/latest/download/<asset>` to the actual release's asset.
@@ -147,41 +149,10 @@ fn expected_sha256(raw: Option<&str>) -> Result<Option<String>, String> {
     if raw.len() == 64 && raw.chars().all(|c| c.is_ascii_hexdigit()) {
         Ok(Some(raw.to_ascii_lowercase()))
     } else {
-        Err(format!(
-            "the release manifest's SHA-256 for this download is malformed: {raw:?}"
+        Err(coded(
+            "update_bad_checksum",
+            serde_json::json!({ "value": raw }),
         ))
-    }
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// Lowercase hex SHA-256 of a file on disk.
-fn sha256_file(path: &std::path::Path) -> std::io::Result<String> {
-    use sha2::Digest;
-    use std::io::Read;
-    let mut f = std::fs::File::open(path)?;
-    let mut h = sha2::Sha256::new();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        h.update(&buf[..n]);
-    }
-    Ok(hex_lower(&h.finalize()))
-}
-
-/// Ok when `actual` matches `expected` (or nothing was published to check against).
-fn check_sha256(expected: Option<&str>, actual: &str, filename: &str) -> Result<(), String> {
-    match expected {
-        Some(exp) if !exp.eq_ignore_ascii_case(actual) => Err(format!(
-            "{filename} does not match the SHA-256 this release published (expected {exp}, got {actual}). \
-             The file was deleted and nothing was installed; try the download again."
-        )),
-        _ => Ok(()),
     }
 }
 
@@ -262,6 +233,14 @@ fn current_platform_key() -> &'static str {
 /// claims the file, it is portable and the plain key is right.
 #[cfg(target_os = "linux")]
 pub(crate) fn linux_package_kind() -> Option<&'static str> {
+    // Asked once: `dpkg -S` reads every package's file list (a good part of a second), and how
+    // this copy was installed cannot change while it runs.
+    static KIND: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
+    *KIND.get_or_init(ask_package_database)
+}
+
+#[cfg(target_os = "linux")]
+fn ask_package_database() -> Option<&'static str> {
     fn owns(tool: &str, args: &[&str]) -> bool {
         std::process::Command::new(tool)
             .args(args)
@@ -511,14 +490,16 @@ async fn prerelease_manifest_url(client: &reqwest::Client) -> Result<String, Str
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .map_err(|e| format!("fetch release list: {e}"))?;
+        .map_err(|e| network_error(&e))?;
     if !resp.status().is_success() {
-        return Err(format!("release list HTTP {}", resp.status()));
+        return Err(http_error(&resp));
     }
-    let releases: Vec<Release> = resp
-        .json()
-        .await
-        .map_err(|e| format!("parse release list: {e}"))?;
+    let releases: Vec<Release> = resp.json().await.map_err(|e| {
+        coded(
+            "update_bad_manifest",
+            serde_json::json!({ "detail": e.to_string() }),
+        )
+    })?;
     let url = releases
         .into_iter()
         .filter(|r| !r.draft)
@@ -528,7 +509,7 @@ async fn prerelease_manifest_url(client: &reqwest::Client) -> Result<String, Str
                 .find(|a| a.name == "latest.json")
                 .map(|a| a.browser_download_url)
         })
-        .ok_or_else(|| "no release with a latest.json asset was found".to_string())?;
+        .ok_or_else(|| code_only("update_no_manifest"))?;
     Ok(url)
 }
 
@@ -537,7 +518,7 @@ async fn fetch_manifest(channel: UpdateChannel) -> Result<Manifest, String> {
     let resolver = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| format!("updater client init: {e}"))?;
+        .map_err(|e| network_error(&e))?;
     let url = match (&env_override, channel) {
         (Some(u), _) => u.clone(),
         (None, UpdateChannel::Prerelease) => prerelease_manifest_url(&resolver).await?,
@@ -557,17 +538,18 @@ async fn fetch_manifest(channel: UpdateChannel) -> Result<Manifest, String> {
         is_safe_update_url(&url)
     };
     if !is_safe {
-        return Err(format!(
-            "refusing to fetch update manifest over insecure URL: {url}"
+        return Err(coded(
+            "update_unsafe_url",
+            serde_json::json!({ "url": url }),
         ));
     }
     let resp = resolver
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("fetch {url}: {e}"))?;
+        .map_err(|e| network_error(&e))?;
     if !resp.status().is_success() {
-        return Err(format!("manifest fetch HTTP {}: {url}", resp.status()));
+        return Err(http_error(&resp));
     }
     // Bound the body before JSON parsing. The Content-Length pre-check is
     // only an early-out: content_length() is None for chunked
@@ -577,24 +559,86 @@ async fn fetch_manifest(channel: UpdateChannel) -> Result<Manifest, String> {
     // so an absent Content-Length cannot defeat the limit.
     if let Some(len) = resp.content_length() {
         if len as usize > MANIFEST_MAX_BYTES {
-            return Err(format!(
-                "manifest body too large ({len} bytes > {MANIFEST_MAX_BYTES} cap)"
-            ));
+            return Err(code_only("update_too_large"));
         }
     }
     let mut stream = resp.bytes_stream();
     use futures_util::StreamExt;
     let mut body: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("read manifest body: {e}"))?;
+        let chunk = chunk.map_err(|e| network_error(&e))?;
         if body.len().saturating_add(chunk.len()) > MANIFEST_MAX_BYTES {
-            return Err(format!(
-                "manifest body too large (> {MANIFEST_MAX_BYTES} cap)"
-            ));
+            return Err(code_only("update_too_large"));
         }
         body.extend_from_slice(&chunk);
     }
-    serde_json::from_slice::<Manifest>(&body).map_err(|e| format!("parse manifest: {e}"))
+    serde_json::from_slice::<Manifest>(&body).map_err(|e| {
+        coded(
+            "update_bad_manifest",
+            serde_json::json!({ "detail": e.to_string() }),
+        )
+    })
+}
+
+/// A request that never got an answer, with every underlying cause for the log.
+fn network_error(e: &reqwest::Error) -> String {
+    coded(
+        "update_network",
+        serde_json::json!({ "detail": crate::engine_http::error_chain(e) }),
+    )
+}
+
+/// A non-success answer from GitHub: said as a rate limit when it is one.
+fn http_error(resp: &reqwest::Response) -> String {
+    let header = |name: &str| {
+        resp.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    let status = resp.status().as_u16();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    match rate_limit_reset(
+        status,
+        header("x-ratelimit-remaining").as_deref(),
+        header("x-ratelimit-reset").as_deref(),
+        header("retry-after").as_deref(),
+        now,
+    ) {
+        Some(reset_at) => coded(
+            "update_rate_limited",
+            serde_json::json!({ "reset_at": reset_at }),
+        ),
+        None => coded("update_http", serde_json::json!({ "status": status })),
+    }
+}
+
+/// When an answer is GitHub's rate limit: Some(the time it lifts, seconds since the epoch, 0 when
+/// not said). The pre-release channel asks api.github.com, which allows 60 requests an hour per
+/// address, so a shared network meets this limit, and "HTTP 403" told nobody to simply wait.
+fn rate_limit_reset(
+    status: u16,
+    remaining: Option<&str>,
+    reset: Option<&str>,
+    retry_after: Option<&str>,
+    now: u64,
+) -> Option<u64> {
+    if status != 403 && status != 429 {
+        return None;
+    }
+    let after = retry_after.and_then(|s| s.trim().parse::<u64>().ok());
+    if remaining.map(str::trim) != Some("0") && after.is_none() {
+        return None;
+    }
+    Some(
+        reset
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .or_else(|| after.map(|secs| now + secs))
+            .unwrap_or(0),
+    )
 }
 
 #[tauri::command]
@@ -604,8 +648,17 @@ pub async fn update_check(app: AppHandle, channel: Option<String>) -> Result<Upd
     let latest_version = manifest.version.clone();
     let available = is_newer(&current_version, &latest_version);
     // Most-specific-first: a packaged Linux install gets its own format,
-    // everything else gets the single platform key.
-    let (download_url, sha256) = pick_asset(&manifest, &preferred_asset_keys());
+    // everything else gets the single platform key. Off the async workers: on Linux the first
+    // answer comes from the package database.
+    let keys = tokio::task::spawn_blocking(preferred_asset_keys)
+        .await
+        .map_err(|e| {
+            coded(
+                "update_disk",
+                serde_json::json!({ "detail": e.to_string() }),
+            )
+        })?;
+    let (download_url, sha256) = pick_asset(&manifest, &keys);
     let download_filename = download_url.rsplit('/').next().unwrap_or("").to_string();
     Ok(UpdateCheck {
         available,
@@ -730,12 +783,75 @@ fn install_command(path: &str) -> Option<String> {
     None
 }
 
+/// Event the page listens on while an update downloads: `{ received, total }` in bytes (`total`
+/// 0 while the server has not said).
+pub const DOWNLOAD_PROGRESS_EVENT: &str = "update-download-progress";
+
+#[derive(Serialize, Clone)]
+struct DownloadProgress {
+    received: u64,
+    total: u64,
+}
+
+/// Bigger than this is no release of ours: the largest bundle is about 200 MB. Stops a
+/// misconfigured or hostile endpoint from dripping gigabytes onto the disk, with or without a
+/// Content-Length.
+const DOWNLOAD_MAX_BYTES: u64 = 500 * 1024 * 1024;
+
+/// The size a server gives for `url` without sending it, when it says.
+async fn published_size(client: &reqwest::Client, url: &str) -> Option<u64> {
+    let resp = client.head(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.headers()
+        .get(reqwest::header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse()
+        .ok()
+}
+
+/// What the renderer gets for the update file now at `target`. `reveal` is best-effort: the file
+/// is complete on disk, so a file manager that fails to open (a sandboxed session, no display
+/// server) must not read as a failed download. A copy that installs the file itself shows
+/// "Install and restart": opening the folder (or, on Windows, starting the setup, which then asks
+/// to close the running app) only gets in the way.
+async fn finished_download(
+    target: PathBuf,
+    bytes: u64,
+    verified: bool,
+) -> Result<UpdateDownload, String> {
+    tokio::task::spawn_blocking(move || {
+        let path = target.to_string_lossy().into_owned();
+        let (can_install, needs_password) = super::self_install::install_ability(&path);
+        if !can_install {
+            reveal(&target);
+        }
+        UpdateDownload {
+            install_command: install_command(&path),
+            can_install,
+            needs_password,
+            verified,
+            path,
+            bytes,
+        }
+    })
+    .await
+    .map_err(|e| {
+        coded(
+            "update_disk",
+            serde_json::json!({ "detail": e.to_string() }),
+        )
+    })
+}
+
 /// Download the platform-specific asset from the URL returned by
 /// `update_check` into the updates folder (or, for an install by hand,
-/// the Downloads folder, which is then revealed in the file manager). Skips re-downloading if the target file
-/// already exists with the same size reported by Content-Length — a
-/// user who closed the app mid-install shouldn't have to wait for the
-/// whole thing again on the next click.
+/// the Downloads folder, which is then revealed in the file manager). A complete copy already
+/// there is reused when it matches the release; a transfer that was cut off carries on where it
+/// stopped (`update_fetch`). Progress goes out as `DOWNLOAD_PROGRESS_EVENT`, and
+/// `update_download_cancel` stops it.
 #[tauri::command]
 pub async fn update_download(
     app: AppHandle,
@@ -745,24 +861,18 @@ pub async fn update_download(
 ) -> Result<UpdateDownload, String> {
     let expected = expected_sha256(sha256.as_deref())?;
     if url.is_empty() {
-        return Err("no download URL — this release has no bundle for your platform".into());
+        return Err(code_only("update_no_bundle"));
     }
     // Mirror the manifest-fetch scheme requirement. The download URL
     // comes from the remote manifest and we verify TLS via rustls, but
     // if a future misconfiguration ever let a plain-http URL slip into
     // `assets`, we'd happily download it over the clear. Refuse up
-    // front. Honour the same env-override relaxation as fetch_manifest:
-    // when the dev set PS5UPLOAD_UPDATE_MANIFEST_URL, asset URLs in the
-    // resulting manifest may legitimately point at non-GitHub hosts
-    // (the staging-internal CDN, etc.); pinning would block the
-    // download even though the manifest fetch was allowed.
-    let download_is_safe = if std::env::var("PS5UPLOAD_UPDATE_MANIFEST_URL").is_ok() {
-        is_safe_dev_url(&url)
-    } else {
-        is_safe_update_url(&url)
-    };
-    if !download_is_safe {
-        return Err(format!("refusing to download over insecure URL: {url}"));
+    // front.
+    if !is_allowed_download_url(&url) {
+        return Err(coded(
+            "update_unsafe_url",
+            serde_json::json!({ "url": url }),
+        ));
     }
     // Tight basename validation. The filename comes from the update
     // manifest's URL-last-segment, which we trust to be well-formed —
@@ -775,189 +885,100 @@ pub async fn update_download(
     //     create, but the error would be confusing).
     //   - leading dot rules out hidden-file shenanigans.
     if !is_plain_file_name(&filename) {
-        return Err(format!("invalid filename: {filename:?}"));
+        return Err(coded(
+            "update_bad_name",
+            serde_json::json!({ "name": filename }),
+        ));
     }
+    let active = super::update_fetch::ActiveDownload::begin()?;
     // Whether this copy installs it is known from the name alone (`self_install::plan`), so the
-    // folder is chosen before anything is downloaded.
-    let (can_install_here, _) = super::self_install::install_ability(&filename);
-    let dl_dir = match download_dir_for(can_install_here, install_command(&filename).is_some()) {
+    // folder is chosen before anything is downloaded. Off the async workers: the plan probes the
+    // app's folder with a write, and on Linux asks the package database.
+    let name = filename.clone();
+    let place = tokio::task::spawn_blocking(move || {
+        let (can_install_here, _) = super::self_install::install_ability(&name);
+        download_dir_for(can_install_here, install_command(&name).is_some())
+    })
+    .await
+    .map_err(|e| {
+        coded(
+            "update_disk",
+            serde_json::json!({ "detail": e.to_string() }),
+        )
+    })?;
+    let dl_dir = match place {
         DownloadPlace::Updates => super::update_files::updates_dir(&app)?,
         DownloadPlace::Downloads => resolve_downloads_dir(&app)?,
     };
     let target = dl_dir.join(&filename);
+    let client = super::update_fetch::client()?;
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60 * 10))
-        .build()
-        .map_err(|e| format!("download client init: {e}"))?;
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("download {url}: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("download HTTP {}: {url}", resp.status()));
-    }
-    let expected_len = resp.content_length();
-    // Reject obviously-too-large downloads up front. The full app is
-    // ~50 MB; a legitimate update would never approach 500 MB. A cap
-    // here stops a misconfigured or hostile endpoint from dripping
-    // gigabytes into the user's Downloads folder. The stream loop
-    // below does its own running-total check so a Content-Length=0 /
-    // unknown-length response is also bounded.
-    const DOWNLOAD_MAX_BYTES: u64 = 500 * 1024 * 1024;
-    if let Some(len) = expected_len {
-        if len > DOWNLOAD_MAX_BYTES {
-            return Err(format!(
-                "download too large ({len} bytes > {DOWNLOAD_MAX_BYTES} cap) — refusing"
-            ));
-        }
-    }
-
-    // Skip if we already have a complete copy from a prior run. We
-    // stream to `<target>.part` and atomic-rename only after the
-    // stream succeeds (see PartialDownloadGuard below), so `target`
-    // existing at all means a prior invocation finished end-to-end.
-    // Two cases to handle:
-    //   1. Server sent Content-Length → verify byte-exact match
-    //      (catches the rare "same filename, different size release"
-    //      edge case).
-    //   2. Server omitted Content-Length (GitHub CDN redirects to
-    //      release-assets.githubusercontent.com often drop it) → trust
-    //      that the file is complete because only the atomic-rename
-    //      path produces it. Without this branch the user re-downloads
-    //      the same bundle on every click.
+    // A complete copy from a prior run: we stream to `<target>.part` and rename only after the
+    // file checked out, so `target` existing at all means an earlier call finished. It is reused
+    // when it matches the published checksum (a release before 10.2 publishes none: when it has
+    // the size the server gives, or the server gives none, without which every click would
+    // download the same bundle again). One that does not match (a different build under the same
+    // name, a damaged file) is deleted and downloaded again.
     if let Ok(meta) = std::fs::metadata(&target) {
-        let skip = match expected_len {
-            Some(expected) => meta.len() == expected,
-            None => meta.len() > 0,
-        };
-        // A copy already here is only reused when it matches the published checksum; one
-        // that does not (a different build under the same name, a damaged file) is
-        // deleted and downloaded again.
-        let matches = match &expected {
-            _ if !skip => false,
-            None => true,
+        let reuse = match &expected {
             Some(exp) => {
                 let t = target.clone();
-                tokio::task::spawn_blocking(move || sha256_file(&t))
+                tokio::task::spawn_blocking(move || super::update_fetch::sha256_file(&t))
                     .await
                     .ok()
                     .and_then(Result::ok)
                     .is_some_and(|actual| actual == *exp)
             }
+            None => match published_size(&client, &url).await {
+                Some(size) => size == meta.len(),
+                None => meta.len() > 0,
+            },
         };
-        if skip && !matches {
-            let _ = std::fs::remove_file(&target);
+        if reuse {
+            return finished_download(target, meta.len(), expected.is_some()).await;
         }
-        if skip && matches {
-            // `reveal` is best-effort for the same reason as the fresh-download
-            // path below: the bundle is already complete on disk, so a failure
-            // to open the OS file manager must not be reported back to the
-            // renderer as a download failure (a user re-clicking "Download"
-            // would otherwise see a spurious error).
-            let path = target.to_string_lossy().into_owned();
-            let (can_install, needs_password) = super::self_install::install_ability(&path);
-            if !can_install {
-                reveal(&target);
-            }
-            return Ok(UpdateDownload {
-                install_command: install_command(&path),
-                can_install,
-                needs_password,
-                verified: expected.is_some(),
-                path,
-                bytes: meta.len(),
-            });
-        }
+        let _ = std::fs::remove_file(&target);
     }
 
-    // Stream to disk so a multi-hundred-MB bundle doesn't balloon
-    // process RAM. `.chunk()` yields network-sized buffers that we
-    // write straight through.
-    let tmp = target.with_extension("part");
-    // Cleanup guard: any early-return from here on removes the `.part`
-    // file. Without this, a mid-stream network error or a disk-full
-    // write failure would leak a partial file into ~/Downloads that
-    // would confuse the next call's "skip if already fully downloaded"
-    // optimization and waste user disk. The guard runs in its Drop
-    // impl, so every `?`-return path triggers cleanup.
-    struct PartialDownloadGuard<'a> {
-        path: &'a std::path::Path,
-        armed: bool,
-    }
-    impl Drop for PartialDownloadGuard<'_> {
-        fn drop(&mut self) {
-            if self.armed {
-                let _ = std::fs::remove_file(self.path);
-            }
-        }
-    }
-    let mut cleanup = PartialDownloadGuard {
-        path: &tmp,
-        armed: true,
+    let part = target.with_extension("part");
+    let progress_app = app.clone();
+    let mut report = move |received: u64, total: u64| {
+        let _ = progress_app.emit(
+            DOWNLOAD_PROGRESS_EVENT,
+            DownloadProgress { received, total },
+        );
     };
-
-    let mut file = std::fs::File::create(&tmp).map_err(|e| format!("create {tmp:?}: {e}"))?;
-    let mut stream = resp.bytes_stream();
-    use futures_util::StreamExt;
-    let mut total: u64 = 0;
-    let mut hasher = {
-        use sha2::Digest;
-        sha2::Sha256::new()
-    };
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("chunk read: {e}"))?;
-        total = total.saturating_add(chunk.len() as u64);
-        if total > DOWNLOAD_MAX_BYTES {
-            return Err(format!(
-                "download exceeded {DOWNLOAD_MAX_BYTES} bytes mid-stream — aborting"
-            ));
-        }
-        file.write_all(&chunk).map_err(|e| format!("write: {e}"))?;
-        sha2::Digest::update(&mut hasher, &chunk);
-    }
-    file.sync_all().map_err(|e| format!("fsync: {e}"))?;
-    drop(file);
-    // Checked before the rename: a file that does not match never takes the update's name,
-    // and the guard deletes the `.part`.
-    let actual = hex_lower(&sha2::Digest::finalize(hasher));
-    check_sha256(expected.as_deref(), &actual, &filename)?;
+    let done = super::update_fetch::download_verified(
+        &client,
+        &url,
+        &part,
+        DOWNLOAD_MAX_BYTES,
+        expected.as_deref(),
+        active.cancel_signal(),
+        &mut report,
+    )
+    .await?;
     if expected.is_none() {
         log_line(format_args!(
-            "[updates] the manifest publishes no SHA-256 for {filename} (a release before 10.2): not verified, sha256={actual}\n"
+            "[updates] the manifest publishes no SHA-256 for {filename} (a release before 10.2): not verified, sha256={}\n",
+            done.sha256
         ));
     }
-    super::replace_file(&tmp, &target).map_err(|e| format!("rename: {e}"))?;
-    // Rename succeeded — disarm the guard so it doesn't try to remove
-    // the already-moved file. (A Drop-safe `rename_if_exists` is
-    // another option, but the guard pattern is simpler here.)
-    cleanup.armed = false;
     // In the updates folder this is now the one update waiting: earlier versions' downloads go.
-    if super::update_files::updates_dir(&app).is_ok_and(|d| d == dl_dir) {
-        super::update_files::clean_dir(&dl_dir, Some(&target), None);
-    }
-
-    // `reveal` is best-effort. If the OS file manager fails to open
-    // (sandboxed session, display server unavailable, exotic DE), the
-    // download itself succeeded — we shouldn't convert that into a
-    // download-failed error for the user. Log + continue.
-    let path = target.to_string_lossy().into_owned();
-    let (can_install, needs_password) = super::self_install::install_ability(&path);
-    // A copy that installs it itself shows "Install and restart": opening the folder (or, on
-    // Windows, starting the setup, which then asks to close the running app) only gets in
-    // the way.
-    if !can_install {
-        reveal(&target);
-    }
-    Ok(UpdateDownload {
-        install_command: install_command(&path),
-        can_install,
-        needs_password,
-        verified: expected.is_some(),
-        path,
-        bytes: total,
+    let in_updates_folder = super::update_files::updates_dir(&app).is_ok_and(|d| d == dl_dir);
+    let (from, to) = (part, target.clone());
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        super::replace_file(&from, &to)?;
+        if in_updates_folder {
+            super::update_files::clean_dir(&dl_dir, Some(&to), None);
+        }
+        Ok(())
     })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r.map_err(|e| e.to_string()))
+    .map_err(|detail| coded("update_disk", serde_json::json!({ "detail": detail })))?;
+    finished_download(target, done.bytes, expected.is_some()).await
 }
 
 /// A bare file name to save an update as: no path separators, no `.` / `..`, no hidden file,
@@ -1139,26 +1160,36 @@ mod checksum_tests {
     }
 
     #[test]
-    fn a_file_is_checked_against_the_published_hash() {
-        let dir = std::env::temp_dir().join(format!("ps5upload-sha-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("update.bin");
-        std::fs::write(&f, b"abc").unwrap();
-        let actual = sha256_file(&f).unwrap();
-        // The well-known SHA-256 of "abc".
+    fn a_rate_limit_says_when_it_lifts_and_any_other_refusal_stays_a_status() {
+        let now = 1_000;
+        // GitHub's own headers.
         assert_eq!(
-            actual,
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            rate_limit_reset(403, Some("0"), Some("5000"), None, now),
+            Some(5000)
         );
-        assert!(check_sha256(Some(&actual), &actual, "update.bin").is_ok());
-        assert!(check_sha256(Some(&actual.to_ascii_uppercase()), &actual, "update.bin").is_ok());
-        assert!(check_sha256(None, &actual, "update.bin").is_ok());
-        let err = check_sha256(Some(&"0".repeat(64)), &actual, "update.bin").unwrap_err();
-        assert!(
-            err.contains("update.bin") && err.contains("deleted"),
-            "{err}"
+        // Secondary limit: Retry-After, 429 or 403.
+        assert_eq!(
+            rate_limit_reset(429, None, None, Some("60"), now),
+            Some(1060)
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            rate_limit_reset(403, None, None, Some(" 30 "), now),
+            Some(1030)
+        );
+        // A limit that does not say when.
+        assert_eq!(rate_limit_reset(403, Some("0"), None, None, now), Some(0));
+        // A plain 403 (a blocked network, a proxy), or requests still left.
+        assert_eq!(rate_limit_reset(403, None, None, None, now), None);
+        assert_eq!(
+            rate_limit_reset(403, Some("12"), Some("5000"), None, now),
+            None
+        );
+        // Not the limit's statuses.
+        assert_eq!(
+            rate_limit_reset(404, Some("0"), Some("5000"), None, now),
+            None
+        );
+        assert_eq!(rate_limit_reset(500, None, None, Some("60"), now), None);
     }
 }
 

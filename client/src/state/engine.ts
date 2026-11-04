@@ -34,10 +34,15 @@ function loadEngineUrl(): string {
 interface EngineState {
   engineUrl: string;
   setEngineUrl: (url: string) => void;
+  /** Where this device's own engine really is, when the shell has said: differs from
+   *  `engineUrl` while it runs somewhere else until its next start (the port was taken, or the
+   *  setting was changed). */
+  runningAt: string | null;
 }
 
 export const useEngineStore = create<EngineState>((set) => ({
   engineUrl: loadEngineUrl(),
+  runningAt: null,
   setEngineUrl: (url) => {
     const engineUrl = normalizeEngineUrl(url);
     safeSetItem(KEY_ENGINE_URL, engineUrl);
@@ -66,6 +71,14 @@ let liveEngineUrl: string | null = null;
 /** Follow the sidecar to wherever it actually bound (fallback port). */
 export function setLiveEngineUrl(url: string): void {
   liveEngineUrl = normalizeEngineUrl(url);
+  if (isLoopbackUrl(liveEngineUrl) && useEngineStore.getState().runningAt !== liveEngineUrl) {
+    useEngineStore.setState({ runningAt: liveEngineUrl });
+  }
+}
+
+/** The local engine runs somewhere other than the setting says, which a restart may change. */
+export function engineRunsElsewhere(s: Pick<EngineState, "engineUrl" | "runningAt">): boolean {
+  return !!s.runningAt && isLoopbackUrl(s.engineUrl) && s.runningAt !== s.engineUrl;
 }
 
 /** Non-hook accessor for module-scope callers (api/engine.ts, api/ps5.ts).

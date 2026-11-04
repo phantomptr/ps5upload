@@ -14,6 +14,7 @@ import {
 } from "../../api/ps5";
 import { Button, ErrorCard, Modal, Spinner, Toggle } from "../../components";
 import { useTr } from "../../state/lang";
+import { catalogText } from "../../lib/payloadCatalogText";
 import { formatBytes } from "../../lib/format";
 import { isMobile } from "../../lib/platform";
 
@@ -251,7 +252,7 @@ export default function UsbAutoloaderModal({
                         <div className="min-w-0 flex-1">
                           <div className="font-medium">{p.display_name}</div>
                           <div className="text-xs text-[var(--color-muted)]">
-                            {p.role} {tr("usbmodal_priority", "· priority")}{" "}
+                            {catalogText(tr, p).role} {tr("usbmodal_priority", "· priority")}{" "}
                             {p.autoload_priority}
                           </div>
                         </div>

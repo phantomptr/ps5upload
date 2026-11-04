@@ -28,8 +28,8 @@ async fn invoke_lifecycle(
     tokio::task::spawn_blocking(move || app_lifecycle(&addr, action, app_id))
         .await
         .map_err(|e| format!("app task: {e}"))?
-        .map(|a| serde_json::to_value(a).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("app: {e}"))
+        .and_then(super::reply_json)
 }
 
 #[tauri::command]
@@ -51,6 +51,6 @@ pub async fn toast_push(
     })
     .await
     .map_err(|e| format!("toast task: {e}"))?
-    .map(|a| serde_json::to_value(a).unwrap_or(serde_json::json!({})))
     .map_err(|e| format!("toast: {e}"))
+    .and_then(super::reply_json)
 }

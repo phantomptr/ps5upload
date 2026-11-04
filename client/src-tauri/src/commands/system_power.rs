@@ -38,14 +38,14 @@ pub async fn power_telemetry_get(addr: String) -> Result<JsonValue, String> {
     tokio::task::spawn_blocking(move || power_telemetry(&addr))
         .await
         .map_err(|e| format!("telemetry task: {e}"))?
-        .map(|t| serde_json::to_value(t).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("telemetry: {e}"))
+        .and_then(super::reply_json)
 }
 
 async fn invoke_action(addr: String, action: PowerAction) -> Result<JsonValue, String> {
     tokio::task::spawn_blocking(move || system_control(&addr, action))
         .await
         .map_err(|e| format!("power task: {e}"))?
-        .map(|ack| serde_json::to_value(ack).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("power: {e}"))
+        .and_then(super::reply_json)
 }

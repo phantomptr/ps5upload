@@ -12,6 +12,7 @@ import {
 import { isTauriEnv } from "../lib/tauriEnv";
 import { useConnectionStore } from "../state/connection";
 import { setLiveEngineUrl } from "../state/engine";
+import { shellErrorText } from "../lib/shellError";
 import { useTr } from "../state/lang";
 import { Button } from "./Button";
 
@@ -141,7 +142,7 @@ export function EngineProblem({ compact = false }: { compact?: boolean }) {
       setLiveEngineUrl(url);
       setStatus({ engineStatus: "up", engineError: null });
     } catch (e) {
-      setRestartError(e instanceof Error ? e.message : String(e));
+      setRestartError(shellErrorText(e instanceof Error ? e.message : String(e), tr));
       void engineDiagnose()
         .then(setDiag)
         .catch(() => {});
@@ -166,7 +167,8 @@ export function EngineProblem({ compact = false }: { compact?: boolean }) {
         ),
       };
   const canRestart = desktop && (diag?.local ?? true);
-  const stopReason = engineError && engineError !== diag?.probe_error ? engineError : null;
+  const stopReason =
+    engineError && engineError !== diag?.probe_error ? shellErrorText(engineError, tr) : null;
 
   return (
     <div

@@ -150,7 +150,7 @@ pub async fn keep_awake_set(enabled: bool) -> serde_json::Value {
             AcquireOutcome::Unsupported => serde_json::json!({
                 "enabled": false,
                 "supported": false,
-                "error": "keep-awake not supported on this platform",
+                "error": super::shell_error::code_only("keep_awake_unsupported"),
             }),
             AcquireOutcome::Failed(e) => serde_json::json!({
                 "enabled": false,
@@ -226,6 +226,13 @@ async fn release_inhibitor(handle: Handle) {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         Handle::Process(mut child) => {
             let pid = child.id();
+            // On Linux the hold's own processes go too: a kill reaches only systemd-inhibit,
+            // and the `sh` it started would loop on until the app quit, one more for every
+            // transfer and Remote Play session.
+            #[cfg(target_os = "linux")]
+            if let Some(pid) = pid {
+                kill_process_group(pid);
+            }
             let _ = child.kill().await;
             let _ = child.wait().await;
             if let Some(pid) = pid {
@@ -295,6 +302,8 @@ fn acquire_inhibitor() -> Result<Option<Handle>, String> {
             "-c",
             &hold_while_alive_script(std::process::id()),
         ])
+        // A process group of its own, which `release_inhibitor` ends as one.
+        .process_group(0)
         // See the caffeinate spawn — kill on Handle drop; exit-handler
         // release covers the never-dropped HOLDER static.
         .kill_on_drop(true)
@@ -402,6 +411,17 @@ fn acquire_inhibitor() -> Result<Option<Handle>, String> {
     Ok(None)
 }
 
+/// Ends the process group `leader` leads (it was started with `process_group(0)`).
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn kill_process_group(leader: u32) {
+    if let Ok(pgid) = i32::try_from(leader) {
+        // SAFETY: plain syscall; the group is one this app started and has not reaped the leader of.
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
+    }
+}
+
 /// The command `systemd-inhibit` runs: it holds the inhibitor until process `pid` (this app) is
 /// gone, checking every few seconds.
 #[cfg(any(target_os = "linux", test))]
@@ -412,6 +432,34 @@ fn hold_while_alive_script(pid: u32) -> String {
 #[cfg(test)]
 mod hold_tests {
     use super::hold_while_alive_script;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ending_the_group_ends_the_process_the_hold_started() {
+        // F23: killing systemd-inhibit alone left its `sh` and `sleep` behind, one pair per
+        // transfer. Stands in for it: a shell that starts a child and waits for it.
+        use super::kill_process_group;
+        use tokio::io::AsyncBufReadExt;
+        let mut leader = tokio::process::Command::new("sh")
+            .args(["-c", "sleep 300 & echo $!; wait"])
+            .stdout(std::process::Stdio::piped())
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut lines = tokio::io::BufReader::new(leader.stdout.take().unwrap()).lines();
+        let sleeper: i32 = lines.next_line().await.unwrap().unwrap().parse().unwrap();
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+        assert!(alive(sleeper));
+
+        kill_process_group(leader.id().unwrap());
+        leader.wait().await.unwrap();
+        let started = std::time::Instant::now();
+        while alive(sleeper) && started.elapsed() < std::time::Duration::from_secs(5) {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!alive(sleeper), "the child went with the group");
+    }
 
     #[test]
     fn the_hold_ends_when_the_app_is_gone() {

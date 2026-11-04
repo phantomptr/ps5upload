@@ -153,6 +153,8 @@ export function UpdateToast() {
   const [showNotes, setShowNotes] = useState(false);
   const phase = useUpdateStore((s) => s.phase);
   const download = useUpdateStore((s) => s.download);
+  const downloadProgress = useUpdateStore((s) => s.downloadProgress);
+  const cancelDownload = useUpdateStore((s) => s.cancelDownload);
   const install = useUpdateStore((s) => s.install);
   const installing = useUpdateStore((s) => s.installing);
   const skippedVersion = useUpdateStore((s) => s.skippedVersion);
@@ -192,10 +194,12 @@ export function UpdateToast() {
   // Android with the installer bridge: one tap downloads and opens Android's dialog.
   const apkInstall =
     isMobile() && "result" in phase && !!phase.result.download_url && apkUpdaterAvailable();
-  const apkPct =
+  const downloadPct =
     apkInstall && apkStep.kind === "downloading"
       ? progressPercent(apkStep.received, apkStep.total)
-      : null;
+      : downloadProgress
+        ? progressPercent(downloadProgress.received, downloadProgress.total)
+        : null;
 
   return (
     <div className="mx-3 mt-2 flex items-center gap-3 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] px-4 py-2 text-sm md:mx-6">
@@ -285,14 +289,23 @@ export function UpdateToast() {
             <Download size={13} />
           )}
           {downloading
-            ? apkPct != null
-              ? tr("update_apk_downloading_pct", { percent: apkPct }, "Downloading… {percent}%")
+            ? downloadPct != null
+              ? tr("update_apk_downloading_pct", { percent: downloadPct }, "Downloading… {percent}%")
               : tr("update_toast_downloading", undefined, "Downloading…")
             : failed
               ? tr("update_toast_retry", undefined, "Retry")
               : apkInstall
                 ? tr("update_apk_toast_install", undefined, "Install")
                 : tr("update_toast_download", undefined, "Download")}
+        </button>
+      )}
+      {downloading && !isMobile() && (
+        <button
+          type="button"
+          onClick={() => void cancelDownload()}
+          className="shrink-0 rounded px-2 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
+        >
+          {tr("cancel", undefined, "Cancel")}
         </button>
       )}
       {canInstall && !installFailed && (

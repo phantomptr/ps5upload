@@ -132,8 +132,9 @@ pub fn judge(record: &InstallRecord, current: &str, log_tail: Option<String>) ->
 
 /// What the last install came to, once per launch, and the clean-up that goes with it: after a
 /// success the record and the download go (the log says it worked); after a failure the download is kept for
-/// "Try again". A finished download of a newer version stays too (it is reused, not downloaded
-/// again); anything else in the updates folder (older downloads, a `.part` a crash left) goes.
+/// "Try again". A download of a newer version stays too: a finished one is reused, and a `.part`
+/// carries on where it stopped (a slow link may need more than one sitting). Anything else in the
+/// updates folder (older downloads, a `.part` of a version that is no longer new) goes.
 pub fn settle(dir: &Path, current: &str) -> Option<LastInstall> {
     let record = read_record(dir);
     let outcome = record
@@ -166,7 +167,7 @@ pub fn settle(dir: &Path, current: &str) -> Option<LastInstall> {
 }
 
 /// Delete the files in the updates folder except the record, the log, `keep` and, with
-/// `current`, finished downloads of a version newer than that.
+/// `current`, downloads of a version newer than that, finished or not.
 pub fn clean_dir(dir: &Path, keep: Option<&Path>, current: Option<&str>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -179,8 +180,7 @@ pub fn clean_dir(dir: &Path, keep: Option<&Path>, current: Option<&str>) {
         }
         let pending = current.is_some_and(|cur| {
             name.to_str().is_some_and(|n| {
-                !n.ends_with(".part")
-                    && release_file_version(n).is_some_and(|v| super::updates::is_newer(cur, v))
+                release_file_version(n).is_some_and(|v| super::updates::is_newer(cur, v))
             })
         });
         if pending {
@@ -268,47 +268,71 @@ pub struct OldDownloads {
     pub bytes: u64,
 }
 
+/// Runs file work off the main thread: a Downloads folder can hold thousands of entries (or be on
+/// a network home), and the temp folder more.
+async fn off_main_thread<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| format!("update file task: {e}"))?
+}
+
 /// The last install's outcome (once per launch; see `settle`), or None when there was none.
 #[tauri::command]
-pub fn update_last_install(app: AppHandle) -> Result<Option<LastInstall>, String> {
-    let dir = updates_dir(&app)?;
+pub async fn update_last_install(app: AppHandle) -> Result<Option<LastInstall>, String> {
     let current = app.package_info().version.to_string();
-    super::self_install::clean_leftovers();
-    Ok(settle(&dir, &current))
+    off_main_thread(move || {
+        let dir = updates_dir(&app)?;
+        super::self_install::clean_leftovers();
+        Ok(settle(&dir, &current))
+    })
+    .await
 }
 
 /// Forget a failed install, so it may be tried again by itself ("Try again").
 #[tauri::command]
-pub fn update_forget_failure(app: AppHandle) -> Result<(), String> {
-    forget_failure(&updates_dir(&app)?);
-    Ok(())
+pub async fn update_forget_failure(app: AppHandle) -> Result<(), String> {
+    off_main_thread(move || {
+        forget_failure(&updates_dir(&app)?);
+        Ok(())
+    })
+    .await
 }
 
 /// Update downloads earlier versions of the app left in the Downloads folder.
 #[tauri::command]
-pub fn update_old_downloads(app: AppHandle) -> Result<OldDownloads, String> {
+pub async fn update_old_downloads(app: AppHandle) -> Result<OldDownloads, String> {
     let Ok(dir) = app.path().download_dir() else {
         return Ok(OldDownloads { count: 0, bytes: 0 });
     };
-    let files = old_downloads(&dir, &app.package_info().version.to_string());
-    Ok(OldDownloads {
-        count: files.len(),
-        bytes: files.iter().map(|(_, n)| n).sum(),
+    let current = app.package_info().version.to_string();
+    off_main_thread(move || {
+        let files = old_downloads(&dir, &current);
+        Ok(OldDownloads {
+            count: files.len(),
+            bytes: files.iter().map(|(_, n)| n).sum(),
+        })
     })
+    .await
 }
 
 /// Delete them (the person asked: the "Remove" button). Returns how many were deleted.
 #[tauri::command]
-pub fn update_remove_old_downloads(app: AppHandle) -> Result<usize, String> {
+pub async fn update_remove_old_downloads(app: AppHandle) -> Result<usize, String> {
     let dir = app
         .path()
         .download_dir()
         .map_err(|e| format!("no Downloads folder: {e}"))?;
-    let files = old_downloads(&dir, &app.package_info().version.to_string());
-    Ok(files
-        .iter()
-        .filter(|(p, _)| std::fs::remove_file(p).is_ok())
-        .count())
+    let current = app.package_info().version.to_string();
+    off_main_thread(move || {
+        let files = old_downloads(&dir, &current);
+        Ok(files
+            .iter()
+            .filter(|(p, _)| std::fs::remove_file(p).is_ok())
+            .count())
+    })
+    .await
 }
 
 /// Open `update.log` in the system's viewer for it (Settings › Updates). False when there is
@@ -353,7 +377,7 @@ mod tests {
         let r = record(&dir, "10.5.1");
         std::fs::write(&r.file, b"zip").unwrap();
         std::fs::write(dir.join("PS5Upload-10.5.0-win-x64.zip"), b"older").unwrap();
-        std::fs::write(dir.join("PS5Upload-10.5.2-win-x64.part"), b"half").unwrap();
+        std::fs::write(dir.join("PS5Upload-10.5.1-win-x64.part"), b"half").unwrap();
         write_record(&dir, &r).unwrap();
         log(&dir, "replaced PS5Upload.exe");
         let out = settle(&dir, "10.5.1").unwrap();
@@ -415,13 +439,21 @@ mod tests {
             std::fs::write(dir.join(n), b"x").unwrap();
         }
         assert_eq!(settle(&dir, "10.5.1"), None);
-        let left: Vec<_> = std::fs::read_dir(&dir)
+        let mut left: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(left, ["PS5Upload-10.6.0-win-x64.zip"]);
-        // Once that version runs, it goes too.
+        left.sort();
+        // The `.part` stays too: a slow link's download carries on after a restart (F1).
+        assert_eq!(
+            left,
+            [
+                "PS5Upload-10.6.0-win-x64.part",
+                "PS5Upload-10.6.0-win-x64.zip"
+            ]
+        );
+        // Once that version runs, they go too.
         assert_eq!(settle(&dir, "10.6.0"), None);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&dir);

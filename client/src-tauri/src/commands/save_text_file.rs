@@ -19,7 +19,9 @@
 //! the OS dialog the user just interacted with, so it carries explicit
 //! user intent — we trust it the same way the zip-save path does.
 
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Cap for `read_text_file` so a user pointing the import dialog at a
 /// huge/binary file can't balloon renderer memory. The settings/bug
@@ -27,10 +29,93 @@ use std::path::Path;
 /// while still bounding the worst case.
 const READ_TEXT_FILE_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
+/// A file being written for `dest`, which only changes once the whole file is there: picking an
+/// existing file in the save dialog and running out of disk used to lose that file, truncated by
+/// the write and then deleted by its clean-up. The new bytes go to a temporary file beside it and
+/// `commit` renames that over it. Dropped uncommitted, the temporary file goes and `dest` is as
+/// it was.
+pub(super) struct ReplacingFile {
+    /// Where the bytes go now.
+    path: PathBuf,
+    /// Where they end up. None: `path` is the destination itself, in a folder where a file
+    /// cannot be created beside it (a save dialog can grant access to just the one file).
+    dest: Option<PathBuf>,
+    /// The destination did not exist before, so a failed write may delete what it left.
+    remove_on_drop: bool,
+}
+
+/// Tells this process's temporary files apart.
+static REPLACING_SEQ: AtomicU64 = AtomicU64::new(0);
+
+impl ReplacingFile {
+    pub(super) fn create(dest: &Path) -> std::io::Result<(Self, std::fs::File)> {
+        // Through a link, not over it: the save dialog named what the link points at.
+        let dest = std::fs::canonicalize(dest).unwrap_or_else(|_| dest.to_path_buf());
+        let seq = REPLACING_SEQ.fetch_add(1, Ordering::Relaxed);
+        let mut name = dest.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".{}-{seq}.tmp", std::process::id()));
+        let tmp = dest.with_file_name(name);
+        match std::fs::File::create(&tmp) {
+            Ok(file) => {
+                // The file it replaces may be private: the new one keeps that.
+                if let Ok(existing) = std::fs::metadata(&dest) {
+                    let _ = std::fs::set_permissions(&tmp, existing.permissions());
+                }
+                Ok((
+                    Self {
+                        path: tmp,
+                        dest: Some(dest),
+                        remove_on_drop: true,
+                    },
+                    file,
+                ))
+            }
+            Err(_) => {
+                let existed = dest.exists();
+                let file = std::fs::File::create(&dest)?;
+                Ok((
+                    Self {
+                        path: dest,
+                        dest: None,
+                        remove_on_drop: !existed,
+                    },
+                    file,
+                ))
+            }
+        }
+    }
+
+    /// All written: this is now the destination.
+    pub(super) fn commit(mut self) -> std::io::Result<()> {
+        if let Some(dest) = self.dest.take() {
+            super::replace_file(&self.path, &dest)?;
+        }
+        self.remove_on_drop = false;
+        Ok(())
+    }
+}
+
+impl Drop for ReplacingFile {
+    fn drop(&mut self) {
+        if self.remove_on_drop {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Write `bytes` to `dest`, replacing what is there only when all of them made it.
+fn write_replacing(dest: &Path, bytes: &[u8]) -> Result<(), String> {
+    let describe = |e: std::io::Error| format!("write {}: {e}", dest.display());
+    let (replacing, mut file) = ReplacingFile::create(dest).map_err(describe)?;
+    file.write_all(bytes).map_err(describe)?;
+    file.sync_all().map_err(describe)?;
+    drop(file);
+    replacing.commit().map_err(describe)
+}
+
 /// Write `contents` to `path` (an absolute path the user picked via the
-/// save dialog). On a mid-write failure the partial file is removed so
-/// the user never finds a truncated artifact at their chosen path —
-/// same belt-and-suspenders cleanup `save_archive_zip` does on ENOSPC.
+/// save dialog). A failed write leaves no truncated artifact at their chosen path, and an
+/// existing file there as it was (`ReplacingFile`).
 #[tauri::command]
 pub async fn save_text_file(
     path: String,
@@ -42,9 +127,8 @@ pub async fn save_text_file(
     // and overwrites the others. Optional; desktop ignores it.
     dest_filename: Option<String>,
 ) -> Result<(), String> {
-    // std::fs::write is one open+write+close; on a slow/networked disk
-    // that's enough to stutter the UI thread, so route it through the
-    // blocking pool like the rest of the file-save commands.
+    // On a slow/networked disk writing is enough to stutter the UI thread,
+    // so route it through the blocking pool like the rest of the file-save commands.
     tokio::task::spawn_blocking(move || {
         // Android save dialogs return content:// URIs std::fs can't write to;
         // redirect those to a real path under Downloads (desktop pass-through),
@@ -54,18 +138,7 @@ pub async fn save_text_file(
             .filter(|s| !s.trim().is_empty())
             .unwrap_or("ps5upload-export.txt");
         let dest_buf = super::save_dest::resolve_save_dest(&path, fallback)?;
-        let dest = dest_buf.as_path();
-        match std::fs::write(dest, contents.as_bytes()) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                // Best-effort: drop a half-written file so a failed
-                // export doesn't masquerade as a valid one. If the
-                // unlink itself fails, the original write error is
-                // still what we surface.
-                let _ = std::fs::remove_file(dest);
-                Err(format!("write {}: {e}", dest.display()))
-            }
-        }
+        write_replacing(dest_buf.as_path(), contents.as_bytes())
     })
     .await
     .map_err(|e| format!("save_text_file join: {e}"))?
@@ -124,13 +197,8 @@ pub async fn save_binary_file(request: tauri::ipc::Request<'_>) -> Result<String
             name.as_str()
         };
         let dest = super::save_dest::resolve_save_dest(&path, fallback)?;
-        match std::fs::write(&dest, &bytes) {
-            Ok(()) => Ok(dest.display().to_string()),
-            Err(e) => {
-                let _ = std::fs::remove_file(&dest);
-                Err(format!("write {}: {e}", dest.display()))
-            }
-        }
+        write_replacing(&dest, &bytes)?;
+        Ok(dest.display().to_string())
     })
     .await
     .map_err(|e| format!("save_binary_file join: {e}"))?
@@ -172,6 +240,115 @@ pub(super) fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod replacing_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let d =
+            std::env::temp_dir().join(format!("ps5upload-replacing-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_save_replaces_the_file_and_leaves_nothing_beside_it() {
+        let dir = scratch("ok");
+        let dest = dir.join("export.json");
+        std::fs::write(&dest, b"old").unwrap();
+        write_replacing(&dest, b"new").unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        assert_eq!(names_in(&dir), ["export.json"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_write_that_fails_leaves_the_existing_file_as_it_was() {
+        // F26: the old file was truncated by the failed write, then deleted by its clean-up.
+        let dir = scratch("failed");
+        let dest = dir.join("export.json");
+        std::fs::write(&dest, b"precious").unwrap();
+        let (replacing, mut file) = ReplacingFile::create(&dest).unwrap();
+        file.write_all(b"half").unwrap();
+        drop(file);
+        // Never committed: what a full disk comes to.
+        drop(replacing);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"precious");
+        assert_eq!(names_in(&dir), ["export.json"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_new_file_leaves_nothing() {
+        let dir = scratch("new");
+        let dest = dir.join("export.json");
+        let (replacing, file) = ReplacingFile::create(&dest).unwrap();
+        drop(file);
+        drop(replacing);
+        assert_eq!(names_in(&dir), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_is_written_through_not_replaced() {
+        let dir = scratch("link");
+        let real = dir.join("real.json");
+        let link = dir.join("link.json");
+        std::fs::write(&real, b"old").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_replacing(&link, b"new").unwrap();
+        assert_eq!(std::fs::read(&real).unwrap(), b"new");
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_file_stays_private_when_replaced() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("mode");
+        let dest = dir.join("export.json");
+        std::fs::write(&dest, b"old").unwrap();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_replacing(&dest, b"new").unwrap();
+        let mode = std::fs::metadata(&dest).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_that_takes_no_new_file_still_saves_over_the_one_it_was_given() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("readonly");
+        let dest = dir.join("export.json");
+        std::fs::write(&dest, b"old").unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root can write anywhere, so this only proves something for a normal user.
+        let result = write_replacing(&dest, b"new");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        result.unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        assert_eq!(names_in(&dir), ["export.json"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

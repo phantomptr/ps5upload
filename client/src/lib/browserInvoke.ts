@@ -959,14 +959,7 @@ export async function browserInvoke<T>(
     // Download-then-install: the engine pulls the package to ITS disk, which
     // for the browser build is the machine running the engine, not the one
     // running the browser. Same routes, so the mode works from the web UI.
-    case "pkg_remote_download_start":
-      return postJson<T>("/api/pkg/remote/download/start", {
-        url: args["url"],
-        insecure_tls: args["insecureTls"] ?? false,
-        dest_dir: args["destDir"],
-        keep_name: args["keepName"] ?? false,
-      });
-
+    // (lib/linkDownload.ts starts one over HTTP in both builds.)
     case "pkg_remote_download_status":
       return getJson<T>(
         `/api/pkg/remote/download/status?id=${uenc(args["id"] as string)}`,
@@ -1216,10 +1209,15 @@ export async function browserInvoke<T>(
     // ENGINE's own filesystem (e.g. a Docker container's mounted volumes),
     // backing the same in-app picker (LocalPathPicker) Android already uses.
 
-    case "local_list_dir":
-      return getJson<T>(
+    case "local_list_dir": {
+      // The route sends the whole folder; a page is cut from it here, as the command does it.
+      const all = await getJson<unknown[]>(
         `/api/local/list-dir?path=${uenc(args["path"] as string)}`,
       );
+      if (args["limit"] == null) return all as T;
+      const offset = Number(args["offset"] ?? 0);
+      return all.slice(offset, offset + Number(args["limit"])) as T;
+    }
 
     case "local_storage_roots":
       return getJson<T>("/api/local/storage-roots");
@@ -1455,12 +1453,6 @@ export async function browserInvoke<T>(
         action_url: args["actionUrl"],
       });
 
-    case "user_create":
-      return postJson<T>("/api/ps5/users/create", {
-        addr: args["req"]?.addr,
-        name: args["req"]?.name,
-      });
-
     case "user_delete":
       return postJson<T>("/api/ps5/users/delete", {
         addr: args["req"]?.addr,
@@ -1520,20 +1512,6 @@ export async function browserInvoke<T>(
         inner_path: args["innerPath"],
         dest_dir: args["destDir"],
       });
-
-    case "zip_inspect":
-      return postJson<T>(
-        "/api/zip/inspect",
-        { zip_path: args["req"]?.zip_path },
-        /*long=*/ true,
-      );
-
-    case "sevenz_inspect":
-      return postJson<T>(
-        "/api/7z/inspect",
-        { archive_path: args["req"]?.archive_path },
-        /*long=*/ true,
-      );
 
     case "rar_inspect":
       return postJson<T>(

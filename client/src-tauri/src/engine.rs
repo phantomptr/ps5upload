@@ -103,6 +103,15 @@ fn extract_unrar_helper(dir: &Path) -> Result<PathBuf> {
     extract_engine(dir, bin_name, EMBEDDED_UNRAR, &hex)
 }
 
+/// Where this app keeps its engine: `<app local data>/engine`.
+fn engine_folder(app: &AppHandle) -> Result<PathBuf> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .context("resolving app_local_data_dir")?
+        .join("engine"))
+}
+
 /// Extract the embedded engine binary into the app's local-data dir
 /// and return the extracted path. Caches across launches via a
 /// BLAKE3 hash stamp file (`<bin>.blake3`) sitting next to the
@@ -131,11 +140,7 @@ fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
         "ps5upload-engine"
     };
 
-    let cache_root = app
-        .path()
-        .app_local_data_dir()
-        .context("resolving app_local_data_dir")?;
-    let out_dir = cache_root.join("engine");
+    let out_dir = engine_folder(app)?;
     std::fs::create_dir_all(&out_dir).with_context(|| format!("mkdir {}", out_dir.display()))?;
     // Hash the embedded bytes once. blake3 is fast enough that this
     // is cheaper than ANY disk IO we'd otherwise do.
@@ -241,133 +246,269 @@ fn remove_stale_engines(dir: &Path, bin_name: &str, keep: Option<&Path>) {
     }
 }
 
-/// cmd.exe does not understand the backslash-escaped quotes Rust's argument quoting writes,
-/// which mangled the netstat | findstr line: it gets the line as written.
-#[cfg(target_os = "windows")]
-fn add_reaper_args(cmd: &mut tokio::process::Command, program: &str, args: &[&str]) {
-    if program == "cmd.exe" {
-        cmd.raw_arg(args.join(" "));
-    } else {
-        cmd.args(args);
-    }
+/// A process listening on the engine's port, as far as this OS tells.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Listener {
+    pid: u32,
+    /// The program it runs. None when it cannot be read (another user's process, say).
+    exe: Option<PathBuf>,
+    /// The process that started it is still running. None when that cannot be told.
+    parent_alive: Option<bool>,
 }
 
-#[cfg(not(target_os = "windows"))]
-fn add_reaper_args(cmd: &mut tokio::process::Command, _program: &str, args: &[&str]) {
-    cmd.args(args);
+/// Whether `listener` is an engine this app left behind, the only process the app may kill for
+/// its port. Its program must be in this app's own engine folder (`engine_dir`), which rules out
+/// anything else on the port: a Docker proxy, another app, an engine the user runs themselves. And
+/// the process that started it must be gone, which rules out another copy of PS5Upload in use (a
+/// stable and a pre-release side by side share that folder): killing that one's engine made its
+/// app start the engine again, which then got in this app's way, each killing the other's until
+/// one was left with none. Anything not known for certain is left alone: the app moves to a free
+/// port instead.
+fn is_our_orphan(listener: &Listener, engine_dir: &Path) -> bool {
+    listener.parent_alive == Some(false)
+        && listener
+            .exe
+            .as_deref()
+            .is_some_and(|exe| exe.parent() == Some(engine_dir) && is_engine_file_name(exe))
 }
 
-/// Recover from a leftover engine that some prior crashed launch left
-/// holding port 19113. The new (2.2.22+) engine has a stdin-EOF parent
-/// watcher that prevents this scenario going forward — but a user
-/// upgrading from an older build still has the orphan from their last
-/// session. Without this helper, every launch after that point fails
-/// with "engine did not become ready" until they manually
-/// `taskkill`/`pkill` the orphan from a terminal.
-///
-/// We shell out to a per-OS port-killer because that's far simpler
-/// than pulling in `sysinfo` / `windows-sys` / `/proc` parsing — the
-/// commands are universally present (PowerShell on Win10+, lsof on
-/// macOS by default, fuser/ss on every Linux distro). Each command is
-/// best-effort; any failure is swallowed because the worst case is
-/// the existing readiness probe times out and the user sees the same
-/// error they would have seen anyway.
-///
-/// Only called when the readiness probe finds *something* on 19113
-/// that isn't a healthy version-matched engine — i.e. when we already
-/// know the port is occupied by a bad citizen.
-async fn reap_orphan_listener_on(port: u16) {
-    use tokio::process::Command as TokioCommand;
-    eprintln!("[engine] attempting to reap orphan listener on :{port}");
+/// `ps5upload-engine`, or the hash-named copy `extract_engine` falls back to.
+fn is_engine_file_name(exe: &Path) -> bool {
+    let name = exe.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+    name == "ps5upload-engine" || name.starts_with("ps5upload-engine-")
+}
+
+/// Runs a short command and returns what it printed; None when it failed to run in time. A cold
+/// PowerShell that loads the NetTCPIP module can take several seconds, more with an antivirus
+/// scanning it; a wedged shell host still can't hold up engine startup for long.
+async fn command_output(program: &str, args: &[&str], port: u16) -> Option<String> {
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .env("PORT", port.to_string())
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    // No console window for a moment: the app has none of its own.
     #[cfg(target_os = "windows")]
-    let attempts: &[(&str, &[&str])] = &[
-        // PowerShell (Win10+ default). Get-NetTCPConnection +
-        // Stop-Process is the cleanest path; the wrapper script
-        // handles "no such connection" without erroring.
-        (
-            "powershell.exe",
-            &[
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                // Inline; the parent shell cmd substitutes {port} below.
-                "$ErrorActionPreference='SilentlyContinue'; \
-                 $c = Get-NetTCPConnection -LocalPort $env:PORT -State Listen -ErrorAction SilentlyContinue; \
-                 if ($c) { Stop-Process -Id $c.OwningProcess -Force }",
-            ],
-        ),
-        // Fallback: classic netstat + taskkill. Works on Server SKUs
-        // that may have PowerShell stripped down.
-        //
-        // `findstr LISTENING` runs FIRST so only listener rows survive
-        // (their foreign-address column is always `0.0.0.0:0`, which
-        // can't collide with our port). Then `findstr /C:":%PORT% "`
-        // is a *literal* match anchored by a trailing space: that
-        // pins it to the end of the local-address column and stops
-        // `:19113` from also matching a `:191130`-style neighbour or a
-        // bare `19113` substring elsewhere on the line. The old
-        // `findstr :%PORT%` was an unanchored substring search and
-        // could taskkill an unrelated PID.
-        (
-            "cmd.exe",
-            &[
-                "/C",
-                "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr LISTENING ^| findstr /C:\":%PORT% \"') do taskkill /F /PID %a",
-            ],
-        ),
-    ];
-    #[cfg(target_os = "macos")]
-    let attempts: &[(&str, &[&str])] = &[
-        // lsof + xargs kill -9. lsof is preinstalled.
-        (
-            "/bin/sh",
-            &["-c", "lsof -ti tcp:$PORT -sTCP:LISTEN | xargs -r kill -9"],
-        ),
-    ];
-    #[cfg(target_os = "linux")]
-    let attempts: &[(&str, &[&str])] = &[
-        // fuser is in psmisc, present on every distro we care about.
-        ("/bin/sh", &["-c", "fuser -k -n tcp $PORT"]),
-        // Fallback if fuser is missing for some reason.
-        ("/bin/sh", &["-c", "ss -ltnp \"sport = :$PORT\" 2>/dev/null | awk -F'pid=' 'NR>1 {split($2,a,\",\"); print a[1]}' | xargs -r kill -9"]),
-    ];
-    for (program, args) in attempts {
-        let mut cmd = TokioCommand::new(program);
-        cmd.env("PORT", port.to_string()).kill_on_drop(true);
-        add_reaper_args(&mut cmd, program, args);
-        // A cold PowerShell that loads the NetTCPIP module can take several seconds,
-        // more with an antivirus scanning it; a wedged shell host still can't hold up
-        // engine startup for long.
-        let res = tokio::time::timeout(Duration::from_secs(8), cmd.status()).await;
-        match res {
-            Ok(Ok(status)) if status.success() => {
-                eprintln!("[engine] orphan reaper ({program}) exited {status}");
-                break;
-            }
-            Ok(Ok(status)) => {
-                eprintln!("[engine] orphan reaper ({program}) exited {status} — trying next");
-            }
-            Ok(Err(e)) => {
-                eprintln!("[engine] orphan reaper ({program}) failed to spawn: {e}");
-            }
-            Err(_) => {
-                eprintln!("[engine] orphan reaper ({program}) timed out");
-            }
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    match tokio::time::timeout(Duration::from_secs(8), cmd.output()).await {
+        Ok(Ok(out)) => Some(String::from_utf8_lossy(&out.stdout).into_owned()),
+        Ok(Err(e)) => {
+            log_line(format_args!("[engine] could not run {program}: {e}"));
+            None
+        }
+        Err(_) => {
+            log_line(format_args!("[engine] {program} timed out"));
+            None
         }
     }
-    // Give the OS a beat to actually release the port — kill returns
-    // before the kernel finishes reaping the dead process's sockets.
-    sleep(Duration::from_millis(300)).await;
 }
 
-/// True if loopback `port` can be bound right now (nothing is holding
-/// it). Binds and immediately drops, so there's a tiny TOCTOU window
-/// before the engine itself binds — acceptable here: the only racer on
-/// the preferred port is a process we'd want to fall back away from
-/// anyway, and the engine's own bind failure is surfaced by the
-/// readiness path.
+/// One line to stderr, without the panic `eprintln!` has when our stderr is a closed pipe.
+fn log_line(args: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr(), "{args}");
+}
+
+/// `ps -o ppid=,comm= -p <pid>`: the parent's pid, then the program's path (which may hold spaces).
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn parse_ps_line(line: &str) -> Option<(u32, PathBuf)> {
+    let (ppid, exe) = line.trim().split_once(char::is_whitespace)?;
+    Some((ppid.parse().ok()?, PathBuf::from(exe.trim())))
+}
+
+/// The pids in `ss -ltnp` output: `users:(("name",pid=1234,fd=9),…)`.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn parse_ss_pids(output: &str) -> Vec<u32> {
+    let mut pids: Vec<u32> = output
+        .split("pid=")
+        .skip(1)
+        .filter_map(|rest| {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok()
+        })
+        .collect();
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+/// The parent pid in `/proc/<pid>/stat`: the field after the state, which follows the program's
+/// name in parentheses (a name that can itself hold spaces and parentheses).
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn parse_proc_stat_ppid(stat: &str) -> Option<u32> {
+    let after_name = &stat[stat.rfind(')')? + 1..];
+    after_name.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// One line of the PowerShell query below: `<pid>|<1 parent alive, else 0>|<program path>`.
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+fn parse_windows_listener(line: &str) -> Option<Listener> {
+    let mut fields = line.trim().splitn(3, '|');
+    let pid = fields.next()?.trim().parse().ok()?;
+    let parent_alive = match fields.next()?.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    };
+    let exe = fields
+        .next()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from);
+    Some(Listener {
+        pid,
+        exe,
+        parent_alive,
+    })
+}
+
+/// Who listens on `port`.
+#[cfg(target_os = "windows")]
+async fn listeners_on(port: u16) -> Vec<Listener> {
+    // A parent's pid can be reused on Windows, which reads as alive: the listener is then left
+    // alone, the safe way to be wrong.
+    // Single quotes only: Windows command lines have no one way to escape a double quote.
+    const QUERY: &str = "$ErrorActionPreference='SilentlyContinue'; \
+        Get-NetTCPConnection -LocalPort $env:PORT -State Listen | \
+        Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { \
+          $id = $_; \
+          $p = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $id); \
+          $alive = if ($p -and (Get-Process -Id $p.ParentProcessId)) { 1 } else { 0 }; \
+          '{0}|{1}|{2}' -f $id, $alive, $p.ExecutablePath \
+        }";
+    command_output(
+        "powershell.exe",
+        &["-NoProfile", "-NonInteractive", "-Command", QUERY],
+        port,
+    )
+    .await
+    .map(|out| out.lines().filter_map(parse_windows_listener).collect())
+    .unwrap_or_default()
+}
+
+#[cfg(target_os = "macos")]
+async fn listeners_on(port: u16) -> Vec<Listener> {
+    // Named by full path: a GUI app's PATH is not a shell's, and lsof lives in /usr/sbin.
+    let Some(out) = command_output(
+        "/bin/sh",
+        &["-c", "/usr/sbin/lsof -nP -t -iTCP:$PORT -sTCP:LISTEN"],
+        port,
+    )
+    .await
+    else {
+        return Vec::new();
+    };
+    let mut listeners = Vec::new();
+    for pid in out.lines().filter_map(|l| l.trim().parse::<u32>().ok()) {
+        let pid_arg = pid.to_string();
+        let line = command_output(
+            "/bin/ps",
+            &["-ww", "-o", "ppid=,comm=", "-p", &pid_arg],
+            port,
+        )
+        .await
+        .unwrap_or_default();
+        let parsed = parse_ps_line(&line);
+        listeners.push(Listener {
+            pid,
+            exe: parsed.as_ref().map(|(_, exe)| exe.clone()),
+            // An orphan is adopted by launchd, pid 1.
+            parent_alive: parsed.map(|(ppid, _)| ppid > 1),
+        });
+    }
+    listeners
+}
+
+#[cfg(target_os = "linux")]
+async fn listeners_on(port: u16) -> Vec<Listener> {
+    let Some(out) = command_output(
+        "/bin/sh",
+        &["-c", "ss -ltnpH \"sport = :$PORT\" 2>/dev/null"],
+        port,
+    )
+    .await
+    else {
+        return Vec::new();
+    };
+    parse_ss_pids(&out)
+        .into_iter()
+        .map(|pid| {
+            // Reads " (deleted)" once an update renamed a new engine over this one.
+            let exe = std::fs::read_link(format!("/proc/{pid}/exe"))
+                .ok()
+                .map(|p| {
+                    let text = p.to_string_lossy();
+                    PathBuf::from(text.strip_suffix(" (deleted)").unwrap_or(&text))
+                });
+            let ppid = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|stat| parse_proc_stat_ppid(&stat));
+            Listener {
+                pid,
+                exe,
+                // An orphan is adopted by init, or by the session's subreaper (systemd --user),
+                // which is no PS5Upload.
+                parent_alive: ppid.map(|ppid| {
+                    ppid > 1
+                        && std::fs::read_link(format!("/proc/{ppid}/exe"))
+                            .ok()
+                            .is_none_or(|parent| !is_init_like(&parent))
+                }),
+            }
+        })
+        .collect()
+}
+
+/// A process that adopts orphans rather than starting programs of ours.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn is_init_like(exe: &Path) -> bool {
+    let name = exe.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    matches!(name, "systemd" | "init" | "launchd")
+}
+
+/// Recover from an engine an earlier launch left behind on the preferred port (see
+/// `is_our_orphan`): it is stopped so this launch can have the port. The parent watch has kept
+/// that from happening since 2.2.22, so this is rare. Whatever else holds the port is never
+/// touched, and `start` moves to a free port. Failing to find out who listens is the same case.
+async fn reap_our_orphan_on(port: u16, engine_dir: &Path) {
+    // What the OS reports is the real path; the folder may have been named through a link.
+    let real_dir = std::fs::canonicalize(engine_dir).unwrap_or_else(|_| engine_dir.to_path_buf());
+    let mut reaped = false;
+    for listener in listeners_on(port).await {
+        if is_our_orphan(&listener, engine_dir) || is_our_orphan(&listener, &real_dir) {
+            log_line(format_args!(
+                "[engine] stopping the engine an earlier launch left on :{port}: {listener:?}"
+            ));
+            crate::exit_guard::kill(listener.pid);
+            reaped = true;
+        } else {
+            log_line(format_args!(
+                "[engine] leaving what listens on :{port} alone: {listener:?}"
+            ));
+        }
+    }
+    if reaped {
+        // Give the OS a beat to actually release the port: kill returns before the kernel
+        // finishes reaping the dead process's sockets.
+        sleep(Duration::from_millis(300)).await;
+    }
+}
+
+/// True if `port` can be bound right now (nothing is holding it). Binds
+/// and immediately drops, so there's a tiny TOCTOU window before the engine
+/// itself binds — acceptable here: the only racer on the preferred port is a
+/// process we'd want to fall back away from anyway, and the engine's own bind
+/// failure is surfaced by the readiness path.
+///
+/// Asked for both addresses the engine's port is reached on. The engine binds every interface
+/// (and is reached on loopback), and on macOS a bind to one of them shares the port with a socket
+/// on the other: a Docker engine listening on every interface looked like a free port there.
 fn loopback_port_free(port: u16) -> bool {
-    std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_ok()
+    use std::net::{Ipv4Addr, TcpListener};
+    // Separate statements: each listener must be gone before the next bind.
+    let loopback = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok();
+    let every_interface = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).is_ok();
+    loopback && every_interface
 }
 
 /// Ask the OS for a free loopback port (bind :0, read the assigned
@@ -430,16 +571,15 @@ fn engine_probe_client() -> reqwest::Client {
 
 /// Check that the engine answering the port reports the same version
 /// the desktop shell was built against. Returns true on match (use
-/// the existing engine), false otherwise (kill + respawn).
+/// the existing engine), false otherwise (start this app's own).
 ///
-/// Mismatch is the common-after-upgrade scenario: previous app
-/// instance left an orphaned engine bound to 19113 and the new
-/// shell's probe finds it. Without this check, the new shell talks
-/// to the old engine indefinitely — and any newly-added route
-/// surfaces as 404 to the user with no obvious explanation.
+/// Mismatch is what another engine on the port looks like: a previous app
+/// instance's orphan, or another copy or version of the app in use. Without
+/// this check, the new shell talks to that engine indefinitely — and any
+/// newly-added route surfaces as 404 to the user with no obvious explanation.
 ///
 /// Robust against the engine not implementing /api/version yet
-/// (returns false → respawn, which is correct behavior).
+/// (returns false, which is correct behavior).
 async fn engine_version_matches(url: &str, client: &reqwest::Client) -> bool {
     let expected = env!("CARGO_PKG_VERSION");
     let u = format!("{url}/api/version");
@@ -465,6 +605,10 @@ async fn engine_version_matches(url: &str, client: &reqwest::Client) -> bool {
 /// the log indefinitely; 1 MiB is enough for ~10k tagged lines and
 /// keeps the file readable in any text editor.
 const ENGINE_LOG_MAX_BYTES: u64 = 1024 * 1024;
+/// Rotated files kept besides engine.log: `engine.log.old` (the newest), then `.old.2` and on.
+/// A busy session writes 1 MiB in a few hours, so one old file lost what a report filed that
+/// evening was about, while the app's own log still had it (bug_report.rs ships them all).
+const ENGINE_LOG_OLD_FILES: usize = 4;
 
 /// Per-startup log file for the engine sidecar's stdout + stderr.
 ///
@@ -481,8 +625,8 @@ const ENGINE_LOG_MAX_BYTES: u64 = 1024 * 1024;
 /// Rotates when the file exceeds `ENGINE_LOG_MAX_BYTES` — at open and
 /// again whenever a line written during the session takes it past the
 /// cap, so a long session cannot grow it without bound. The previous
-/// file moves to `<name>.old` (single rotation generation is enough;
-/// the most recent failure is what users need).
+/// file moves to `<name>.old`, older ones along to `.old.2` and on
+/// (`ENGINE_LOG_OLD_FILES`).
 ///
 /// Logs the failure to `eprintln!` if open fails, so a developer
 /// running `cargo tauri dev` from a console at least sees why
@@ -508,8 +652,18 @@ fn open_engine_log(path: &Path) -> Option<Arc<Mutex<EngineLog>>> {
 /// larger log file, which is recoverable; the alternative of failing
 /// to open at all loses diagnostics entirely.
 fn rotate_engine_log(path: &Path) {
-    let old = path.with_extension("log.old");
-    let _ = std::fs::remove_file(&old);
+    let old_file = |n: usize| {
+        if n == 1 {
+            path.with_extension("log.old")
+        } else {
+            path.with_extension(format!("log.old.{n}"))
+        }
+    };
+    let _ = std::fs::remove_file(old_file(ENGINE_LOG_OLD_FILES));
+    for n in (1..ENGINE_LOG_OLD_FILES).rev() {
+        let _ = std::fs::rename(old_file(n), old_file(n + 1));
+    }
+    let old = old_file(1);
     if let Err(e) = std::fs::rename(path, &old) {
         eprintln!(
             "[engine-log] rotate {} -> {} failed: {e} (continuing)",
@@ -569,9 +723,12 @@ impl EngineLog {
 /// Idempotent: a second call is a no-op if the engine is already up.
 pub async fn start(app: &AppHandle) -> Result<String> {
     // Seed the configured URL from settings.json before the spawn
-    // decision — renderer hydration runs too late to gate it here.
-    if let Some(saved) = crate::commands::user_config::load_engine_url(app) {
-        set_url(saved);
+    // decision — renderer hydration runs too late to gate it here. Only
+    // when the renderer has not said yet: what it pushed may be newer than the
+    // file, whose writes are debounced, and a restart must not undo it.
+    let wanted = preferred_url().or_else(|| crate::commands::user_config::load_engine_url(app));
+    if let Some(wanted) = wanted {
+        apply_url(wanted);
     }
     let configured = url();
 
@@ -587,10 +744,10 @@ pub async fn start(app: &AppHandle) -> Result<String> {
             }
             sleep(READINESS_POLL).await;
         }
-        return Err(anyhow!(
-            "remote engine at {configured}{READINESS_PROBE} did not respond within {:?}",
-            READINESS_TIMEOUT
-        ));
+        return Err(anyhow!(crate::commands::shell_error::coded(
+            "engine_remote_unreachable",
+            serde_json::json!({ "url": configured, "seconds": READINESS_TIMEOUT.as_secs() }),
+        )));
     }
 
     // Preferred local engine location: the configured loopback URL
@@ -618,14 +775,13 @@ pub async fn start(app: &AppHandle) -> Result<String> {
 
         if port_responds {
             // The port responds, but it might be a stale-version
-            // engine left behind by a previous app instance (the
-            // process didn't reap on crash, so we inherited it
-            // on next start). Verify the version matches the
-            // shell's expectation; if not, kill it and respawn
-            // from the bundled bytes. A matching engine that is not
-            // our child — one the user runs themselves, or a sidecar
-            // whose shell died — is used as it is rather than killed:
-            // the reaper below is only for an engine we cannot use.
+            // engine left behind by a previous app instance, or
+            // another copy of the app's engine in use. Verify the
+            // version matches the shell's expectation; if not, this
+            // app runs its own from the bundled bytes. A matching engine
+            // that is not our child — one the user runs themselves, or a
+            // sidecar whose shell died — is used as it is rather than
+            // killed: the reaper below is only for an engine we cannot use.
             if engine_version_matches(&preferred_url, &client).await {
                 if guard.is_none() {
                     eprintln!(
@@ -635,7 +791,7 @@ pub async fn start(app: &AppHandle) -> Result<String> {
                 return Ok(preferred_url);
             }
             eprintln!(
-                "[engine] stale-version sibling engine detected on {preferred_url} — killing and respawning",
+                "[engine] another version's engine answers on {preferred_url}; this app runs its own",
             );
         }
 
@@ -650,36 +806,36 @@ pub async fn start(app: &AppHandle) -> Result<String> {
             mark_sidecar_stopped();
         }
 
-        // Belt-and-braces: even if our child handle was empty (no
-        // record of spawning) or already-killed, the port may still be
-        // held by an orphan from a previous crashed launch — and the
-        // 2.2.22 stdin-EOF watcher only protects against future
-        // crashes, not retroactively. If we still see a listener on the
-        // preferred port here, it's not ours; reap it so the bind below
-        // succeeds. No-op when the port is free.
+        // Even if our child handle was empty (no record of spawning) or
+        // already-killed, the port may still be held by an engine a
+        // previous crashed launch left behind. If we still see a listener
+        // on the preferred port here, it's not our child; only that orphan
+        // is stopped (`is_our_orphan`), nothing else ever.
         if port_responds {
             // Re-probe to confirm it's still listening (we might have
             // just killed our own child above, freeing the port).
             if probe(&preferred_url, &client).await {
-                reap_orphan_listener_on(preferred_port).await;
+                match engine_folder(app) {
+                    Ok(dir) => reap_our_orphan_on(preferred_port, &dir).await,
+                    Err(e) => eprintln!("[engine] no engine folder to compare with: {e:#}"),
+                }
             }
         }
     }
 
     // Decide where our engine will actually live. Normally the preferred
-    // port is now free (it always was, or we just reaped whatever was on
-    // it). If it's STILL held — a squatter we couldn't kill (another
-    // app, a permissions/AV block, or a standalone ps5upload-engine the
-    // user launched by mistake) — fall back to an OS-assigned free port
-    // so the desktop can ALWAYS bring up its own engine instead of being
-    // wedged on launch forever. Without this, anything camping on 19113
-    // permanently breaks "open the app".
+    // port is now free (it always was, or the orphan on it just went). If
+    // it's STILL held — another app, another copy of PS5Upload in use, a
+    // Docker engine, or a standalone ps5upload-engine the user launched —
+    // fall back to an OS-assigned free port so the desktop can ALWAYS bring
+    // up its own engine instead of being wedged on launch forever. Without
+    // this, anything camping on 19113 permanently breaks "open the app".
     let (engine_url, engine_port) = if loopback_port_free(preferred_port) {
         (preferred_url, preferred_port)
     } else if let Some(free) = pick_free_loopback_port() {
         eprintln!(
-            "[engine] preferred port {preferred_port} still occupied after reap attempt; \
-             falling back to free port {free} so the app can start",
+            "[engine] preferred port {preferred_port} is taken; \
+             using free port {free} so the app can start",
         );
         (format!("http://127.0.0.1:{free}"), free)
     } else {
@@ -705,7 +861,7 @@ pub async fn start(app: &AppHandle) -> Result<String> {
     // a settings push arriving before the child is marked running cannot
     // move the proxies back to the preferred port.
     set_sidecar_url(Some(engine_url.clone()));
-    set_url(engine_url.clone());
+    apply_url(engine_url.clone());
     // Log alongside the extracted binary so the user can reach it via
     // the same path that the engine binary lives at — surfaced in the
     // readiness-timeout error so support requests can include it.
@@ -871,25 +1027,28 @@ pub async fn start(app: &AppHandle) -> Result<String> {
             let mut guard = child_lock().await.lock().await;
             if let Some(child) = guard.as_mut() {
                 if let Ok(Some(status)) = child.try_wait() {
-                    return Err(anyhow!(
-                        "engine exited during startup: {status}\n  log: {}",
-                        log_path.display()
-                    ));
+                    return Err(anyhow!(crate::commands::shell_error::coded(
+                        "engine_exited_at_start",
+                        serde_json::json!({
+                            "detail": status.to_string(),
+                            "log": log_path.display().to_string(),
+                        }),
+                    )));
                 }
             } else if !LOCAL_CHILD_RUNNING.load(Ordering::SeqCst) {
                 // The stderr watcher saw it exit first and took it from the slot: still a
                 // crash, not a slow start to wait out.
-                return Err(anyhow!(
-                    "engine exited during startup\n  log: {}",
-                    log_path.display()
-                ));
+                return Err(anyhow!(crate::commands::shell_error::coded(
+                    "engine_exited_at_start",
+                    serde_json::json!({ "log": log_path.display().to_string() }),
+                )));
             }
         }
         sleep(READINESS_POLL).await;
     }
     // Readiness deadline reached without success. Reap the orphan
     // child explicitly here rather than leaving it in the slot for
-    // the next start() to clean up via reap_orphan_listener_on. The
+    // the next start() to clean up. The
     // child holds open FDs (stdin/stdout/stderr pipes, the listener
     // socket if it bound) for as long as it sits in the slot; a user
     // who hits "Retry" minutes later would otherwise have two engine
@@ -902,22 +1061,35 @@ pub async fn start(app: &AppHandle) -> Result<String> {
         }
         mark_sidecar_stopped();
     }
-    Err(anyhow!(
-        "engine did not become ready at {engine_url}{READINESS_PROBE} within {:?}.\n  last probe error: {last_probe_error}\n  log: {}\n  {}",
-        READINESS_TIMEOUT,
-        log_path.display(),
-        READINESS_HINT
-    ))
+    Err(anyhow!(not_ready_message(
+        &engine_url,
+        &last_probe_error,
+        &log_path
+    )))
 }
 
-/// Likely causes of a readiness timeout on this platform. The Windows list
-/// used to be shown everywhere, which told a Mac user about SmartScreen.
-#[cfg(target_os = "windows")]
-const READINESS_HINT: &str = "Common causes on Windows: SmartScreen / antivirus blocked the freshly-extracted .exe; a loopback firewall rule; or no loopback port was bindable at all.";
-#[cfg(target_os = "macos")]
-const READINESS_HINT: &str = "Common causes on macOS: security or firewall software (Little Snitch, LuLu, an antivirus with web protection) blocking ps5upload-engine; allow it and restart the app.";
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-const READINESS_HINT: &str = "Common causes: a firewall or security tool blocking loopback connections to ps5upload-engine, or no loopback port was bindable at all.";
+/// The renderer's words for a readiness timeout (`lib/shellError.ts`): the likely causes on this
+/// platform (`hint`; the Windows list used to be shown everywhere, which told a Mac user about
+/// SmartScreen) and the facts for a bug report.
+fn not_ready_message(url: &str, last_error: &str, log_path: &Path) -> String {
+    let hint = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "other"
+    };
+    crate::commands::shell_error::coded(
+        "engine_not_ready",
+        serde_json::json!({
+            "seconds": READINESS_TIMEOUT.as_secs(),
+            "url": url,
+            "error": last_error,
+            "log": log_path.display().to_string(),
+            "hint": hint,
+        }),
+    )
+}
 
 /// Best-effort wall-clock stamp for the log header. Avoids pulling in
 /// the `chrono` crate just for one timestamp — a SystemTime epoch
@@ -1180,15 +1352,39 @@ pub fn url() -> String {
         .clone()
 }
 
-/// Override the engine base URL (Settings → Engine URL). Empty/blank
-/// resets to the bundled-sidecar default.
-pub fn set_url(url: String) {
+/// What the renderer last asked for (Settings → Engine URL), as it asked: where the engine goes
+/// on its next start. None until it has said, when settings.json is what counts.
+static PREFERRED_URL: RwLock<Option<String>> = RwLock::new(None);
+
+fn preferred_url() -> Option<String> {
+    PREFERRED_URL
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+/// Empty/blank means the bundled-sidecar default.
+fn normalize_url(url: &str) -> String {
     let url = url.trim();
-    let next = if url.is_empty() {
+    if url.is_empty() {
         DEFAULT_ENGINE_URL.to_string()
     } else {
         url.to_string()
-    };
+    }
+}
+
+/// Override the engine base URL (Settings → Engine URL). Returns where the command proxies go
+/// now, which is not what was asked while the local sidecar runs elsewhere (`apply_url`): the
+/// renderer follows it and says so, and the next start of the engine honours the request.
+pub fn set_url(url: String) -> String {
+    let next = normalize_url(&url);
+    *PREFERRED_URL.write().unwrap_or_else(|e| e.into_inner()) = Some(next.clone());
+    apply_url(next);
+    self::url()
+}
+
+/// Point the command proxies at `next`, unless the local sidecar runs elsewhere.
+fn apply_url(next: String) {
     // Guard against a settings-sync relocating a RUNNING local sidecar.
     // The renderer mirrors its preferred URL to us on hydrate (e.g. the
     // default 127.0.0.1:19113); if our sidecar fell back to a different
@@ -1199,12 +1395,9 @@ pub fn set_url(url: String) {
     // while it's up. Remote (non-loopback) URLs still switch the target,
     // and the sidecar's own URL is always accepted, so Settings can come
     // back from a remote engine to the sidecar. start() pins the sidecar
-    // URL before its own set_url, so the fallback URL takes hold.
+    // URL before its own apply_url, so the fallback URL takes hold.
     if let Some(sidecar) = sidecar_url() {
         if is_loopback_url(&next) && next != sidecar {
-            eprintln!(
-                "[engine] ignoring engine-URL change to {next} — a local sidecar is running on {sidecar} (moving it needs a restart)",
-            );
             return;
         }
     }
@@ -1294,6 +1487,233 @@ mod engine_log_tests {
         log.write_line("after");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "after\n");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod engine_log_generation_tests {
+    use super::{rotate_engine_log, ENGINE_LOG_OLD_FILES};
+
+    #[test]
+    fn rotation_keeps_the_older_files_and_drops_only_the_oldest() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-englog-gen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("engine.log");
+        for round in 0..ENGINE_LOG_OLD_FILES + 2 {
+            std::fs::write(&path, format!("round {round}")).unwrap();
+            rotate_engine_log(&path);
+        }
+        let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
+        let last = ENGINE_LOG_OLD_FILES + 1;
+        assert_eq!(read("engine.log.old"), format!("round {last}"));
+        assert_eq!(read("engine.log.old.2"), format!("round {}", last - 1));
+        assert_eq!(
+            read(&format!("engine.log.old.{ENGINE_LOG_OLD_FILES}")),
+            format!("round {}", last + 1 - ENGINE_LOG_OLD_FILES)
+        );
+        assert!(!dir
+            .join(format!("engine.log.old.{}", ENGINE_LOG_OLD_FILES + 1))
+            .exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod reaper_tests {
+    use super::*;
+
+    const DIR: &str = "/home/me/.local/share/PS5Upload/engine";
+
+    fn listener(exe: Option<&str>, parent_alive: Option<bool>) -> Listener {
+        Listener {
+            pid: 42,
+            exe: exe.map(PathBuf::from),
+            parent_alive,
+        }
+    }
+
+    #[test]
+    fn only_an_engine_of_ours_with_no_parent_left_may_be_stopped() {
+        let dir = Path::new(DIR);
+        let engine = format!("{DIR}/ps5upload-engine");
+        let hashed = format!("{DIR}/ps5upload-engine-aaaa1111bbbb2222");
+        assert!(is_our_orphan(&listener(Some(&engine), Some(false)), dir));
+        assert!(is_our_orphan(&listener(Some(&hashed), Some(false)), dir));
+    }
+
+    #[test]
+    fn another_copy_of_the_app_in_use_keeps_its_engine() {
+        // F4: a stable and a pre-release side by side share the engine folder. Stopping the other
+        // one's engine made them take turns killing each other's.
+        let engine = format!("{DIR}/ps5upload-engine");
+        assert!(!is_our_orphan(
+            &listener(Some(&engine), Some(true)),
+            Path::new(DIR)
+        ));
+    }
+
+    #[test]
+    fn nothing_else_on_the_port_is_ever_stopped() {
+        let dir = Path::new(DIR);
+        // A Docker proxy, a browser, an engine the user runs themselves (even one with no
+        // parent left, a service): all outside this app's folder.
+        for exe in [
+            "/usr/bin/docker-proxy",
+            "/Applications/Docker.app/Contents/MacOS/com.docker.backend",
+            "/usr/local/bin/ps5upload-engine",
+            "/home/me/ps5upload/engine/target/release/ps5upload-engine",
+        ] {
+            assert!(
+                !is_our_orphan(&listener(Some(exe), Some(false)), dir),
+                "{exe}"
+            );
+        }
+        // In our folder but not an engine: the RAR helper.
+        let unrar = format!("{DIR}/ps5upload-unrar");
+        assert!(!is_our_orphan(&listener(Some(&unrar), Some(false)), dir));
+    }
+
+    #[test]
+    fn what_cannot_be_told_is_left_alone() {
+        let dir = Path::new(DIR);
+        let engine = format!("{DIR}/ps5upload-engine");
+        assert!(!is_our_orphan(&listener(None, Some(false)), dir));
+        assert!(!is_our_orphan(&listener(Some(&engine), None), dir));
+        assert!(!is_our_orphan(&listener(None, None), dir));
+    }
+
+    #[test]
+    fn windows_engine_names_count_too() {
+        let dir = Path::new(r"C:\Users\me\AppData\Local\PS5Upload\engine");
+        let exe = dir.join("ps5upload-engine.exe");
+        let l = Listener {
+            pid: 42,
+            exe: Some(exe),
+            parent_alive: Some(false),
+        };
+        assert!(is_engine_file_name(l.exe.as_deref().unwrap()));
+    }
+
+    #[test]
+    fn who_listens_is_read_from_each_tool() {
+        assert_eq!(
+            parse_ss_pids(
+                "LISTEN 0 1024 127.0.0.1:19113 0.0.0.0:* users:((\"ps5upload-engin\",pid=1234,fd=9),(\"x\",pid=1234,fd=10),(\"y\",pid=77,fd=3))\n"
+            ),
+            vec![77, 1234]
+        );
+        assert!(parse_ss_pids("").is_empty());
+        assert_eq!(
+            parse_ps_line(
+                "    1 /Users/me/Library/Application Support/PS5Upload/engine/ps5upload-engine\n"
+            ),
+            Some((
+                1,
+                PathBuf::from(
+                    "/Users/me/Library/Application Support/PS5Upload/engine/ps5upload-engine"
+                )
+            ))
+        );
+        assert_eq!(parse_ps_line(""), None);
+        // A program name can hold spaces and parentheses.
+        assert_eq!(
+            parse_proc_stat_ppid("1234 (ps5upload (x) y) S 987 1234 1234 0 -1"),
+            Some(987)
+        );
+        assert_eq!(parse_proc_stat_ppid("garbage"), None);
+        assert_eq!(
+            parse_windows_listener("1234|0|C:\\Apps\\ps5upload-engine.exe\r"),
+            Some(Listener {
+                pid: 1234,
+                exe: Some(PathBuf::from("C:\\Apps\\ps5upload-engine.exe")),
+                parent_alive: Some(false),
+            })
+        );
+        // Another user's process: no path to read.
+        assert_eq!(
+            parse_windows_listener("88|1|"),
+            Some(Listener {
+                pid: 88,
+                exe: None,
+                parent_alive: Some(true),
+            })
+        );
+        assert_eq!(parse_windows_listener("not a line"), None);
+        assert!(is_init_like(Path::new("/usr/lib/systemd/systemd")));
+        assert!(!is_init_like(Path::new("/opt/PS5Upload/ps5upload")));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[tokio::test]
+    async fn a_listener_that_is_not_ours_survives_the_reaper() {
+        // This test process listens on the port: wrongly killing what holds it would end the run.
+        let held = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = held.local_addr().unwrap().port();
+        let dir = std::env::temp_dir().join("ps5upload-no-such-engine-folder");
+        reap_our_orphan_on(port, &dir).await;
+        // Still bound, and the port still counts as taken: `start` moves to a free one.
+        assert!(!loopback_port_free(port));
+        drop(held);
+    }
+
+    #[test]
+    fn a_port_held_on_any_address_the_engine_uses_counts_as_taken() {
+        // A Docker engine listens on every interface: the app must move, not fail to bind.
+        let every = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        let port = every.local_addr().unwrap().port();
+        assert!(!loopback_port_free(port));
+        drop(every);
+        let loopback = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = loopback.local_addr().unwrap().port();
+        assert!(!loopback_port_free(port));
+        drop(loopback);
+        assert!(loopback_port_free(port), "both released");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn this_process_is_seen_listening_on_its_port() {
+        let held = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = held.local_addr().unwrap().port();
+        let found = listeners_on(port).await;
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].pid, std::process::id());
+        assert_eq!(found[0].parent_alive, Some(true));
+        assert!(found[0].exe.is_some());
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::*;
+
+    /// The one test that touches the process-wide URL state, so nothing races it.
+    #[test]
+    fn a_running_sidecar_stays_put_and_says_where_while_the_request_is_kept() {
+        set_sidecar_url(Some("http://127.0.0.1:51234".into()));
+        apply_url("http://127.0.0.1:51234".into());
+        // Another loopback URL: the proxies stay, and the caller is told so.
+        assert_eq!(
+            set_url("http://127.0.0.1:19113".into()),
+            "http://127.0.0.1:51234"
+        );
+        // F20: kept for the engine's next start, which reads it before the settings file.
+        assert_eq!(preferred_url().as_deref(), Some("http://127.0.0.1:19113"));
+        // A remote engine switches at once.
+        assert_eq!(
+            set_url("http://192.168.1.20:19113".into()),
+            "http://192.168.1.20:19113"
+        );
+        // Back to the sidecar's own URL.
+        assert_eq!(
+            set_url("http://127.0.0.1:51234".into()),
+            "http://127.0.0.1:51234"
+        );
+        // Stopped: the next loopback URL holds.
+        mark_sidecar_stopped();
+        assert_eq!(set_url("  ".into()), DEFAULT_ENGINE_URL);
+        assert_eq!(preferred_url().as_deref(), Some(DEFAULT_ENGINE_URL));
     }
 }
 

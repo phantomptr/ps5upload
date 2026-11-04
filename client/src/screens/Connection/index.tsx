@@ -1434,11 +1434,40 @@ function CompanionSuggestion() {
   );
 }
 
+/** A companion's name and purpose in the user's language, by the port that identifies it. The
+ *  shell's English text stands in for a tool this build has no words for. */
+function companionLabels(tr: ReturnType<typeof useTr>, row: CompanionStatus): { name: string; role: string } {
+  switch (row.port) {
+    case 9028:
+      return {
+        name: row.name,
+        role: tr("companion_role_etahen", undefined, row.role),
+      };
+    case 2323:
+      return {
+        name: tr("companion_name_telnet", undefined, row.name),
+        role: tr("companion_role_telnet", undefined, row.role),
+      };
+    case 2121:
+      return { name: row.name, role: tr("companion_role_ftp", undefined, row.role) };
+    case 8084:
+      return { name: row.name, role: tr("companion_role_payload_manager", undefined, row.role) };
+    case 5920:
+      return {
+        name: tr("companion_name_lz4", undefined, row.name),
+        role: tr("companion_role_lz4", undefined, row.role),
+      };
+    default:
+      return { name: row.name, role: row.role };
+  }
+}
+
 function CompanionPill({ row, host }: { row: CompanionStatus; host: string }) {
   const tr = useTr();
+  const { name, role } = companionLabels(tr, row);
   const tooltip = row.reachable
-    ? tr("connection_companion_listening", { role: row.role, port: row.port }, "{role}. Listening on port {port}.")
-    : row.error ?? tr("browse_not_reachable", undefined, "not reachable");
+    ? tr("companion_listening", { role, port: row.port }, "{role}: listening on port {port}")
+    : row.error ?? tr("companion_not_reachable", undefined, "Not reachable");
   // A tool with its own web UI opens in the browser: Payload Manager's and LZ4
   // Compression's pages are the tool, not a status readout.
   if (row.web && row.reachable) {
@@ -1447,12 +1476,12 @@ function CompanionPill({ row, host }: { row: CompanionStatus; host: string }) {
     return (
       <button
         type="button"
-        title={tr("connection_open_port_page", { tooltip }, "{tooltip}. Click to open its page.")}
+        title={tr("companion_open_page", { tooltip }, "{tooltip}. Open its page")}
         onClick={() => void openExternalUrl(url)}
         className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-good-soft)] px-2 py-0.5 text-[var(--color-good)] hover:underline"
       >
         <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-good)]" />
-        <span className="font-medium">{row.name}</span>
+        <span className="font-medium">{name}</span>
         <span className="font-mono text-xs opacity-70">:{row.port}</span>
         <ExternalLink size={10} aria-hidden />
       </button>

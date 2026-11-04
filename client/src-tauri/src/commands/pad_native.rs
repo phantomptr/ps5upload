@@ -17,6 +17,12 @@
 //! and everything else keep reading them. Controllers plugged in later are found within two
 //! seconds; one unplugged is reported gone at once.
 //!
+//! The readers run for the life of the app, since the page can want a controller at any moment
+//! and must find it there, so looking for a new one costs next to nothing: a node once found not
+//! to be a controller is not opened again (opening an input device can wake it from
+//! suspend), and on Windows the full HID enumeration, which opens every HID device,
+//! only runs when Windows' list of HID devices changed.
+//!
 //! The mapping follows the kernel's gamepad spec (Documentation/input/gamepad.rst), which names
 //! the face buttons by position, with one exception: the xpad driver (and controllers that copy
 //! it) reports Xbox X (left) as BTN_X, the code the spec calls BTN_NORTH, as SDL also knows.
@@ -93,6 +99,39 @@ pub fn is_gamepad(
     accelerometer: bool,
 ) -> bool {
     !accelerometer && has_key(BTN_SOUTH) && has_abs(ABS_X) && has_abs(ABS_Y)
+}
+
+/// Which event nodes to open this round: those not open already and not known as "not a
+/// controller". `nodes` is what the folder holds now, each with what identifies the device behind
+/// it. A node found out to be something else counts only for that identity, so a number reused
+/// for a controller plugged in later is looked at, and one that went is forgotten. A node that
+/// could not be read is never put in `not_pads`: udev gives this user access a moment after a node
+/// appears, and a controller must not be written off for being looked at too soon.
+pub fn nodes_to_open<P: Eq + std::hash::Hash + Clone, K: Eq + Clone>(
+    nodes: &[(P, K)],
+    open: &[P],
+    not_pads: &mut std::collections::HashMap<P, K>,
+) -> Vec<(P, K)> {
+    not_pads.retain(|p, _| nodes.iter().any(|(q, _)| q == p));
+    nodes
+        .iter()
+        .filter(|(p, id)| !open.contains(p) && not_pads.get(p) != Some(id))
+        .cloned()
+        .collect()
+}
+
+/// Whether to run the full HID enumeration now. Always when Windows' list of HID devices cannot
+/// be read, for a while after it changed (a pad coming up over Bluetooth is listed before it can
+/// be opened), and now and then in any case (one that could not be opened is tried again).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn enumeration_due(
+    list_known: bool,
+    since_change: std::time::Duration,
+    since_enumeration: std::time::Duration,
+) -> bool {
+    const SETTLE: std::time::Duration = std::time::Duration::from_secs(10);
+    const AT_LEAST_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+    !list_known || since_change < SETTLE || since_enumeration >= AT_LEAST_EVERY
 }
 
 /// Does the device report its face buttons the way xpad does (see the module notes)? The xpad
@@ -273,6 +312,64 @@ pub mod hid_reader {
         last_emit: Option<Instant>,
     }
 
+    /// Windows' list of HID device interfaces, as it comes. Asking takes a moment where an
+    /// enumeration opens every HID device. None when it cannot be read.
+    fn hid_interfaces() -> Option<Vec<u16>> {
+        #[repr(C)]
+        struct Guid(u32, u16, u16, [u8; 8]);
+        // GUID_DEVINTERFACE_HID
+        const HID: Guid = Guid(
+            0x4D1E_55B2,
+            0xF16F,
+            0x11CF,
+            [0x88, 0xCB, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30],
+        );
+        const PRESENT: u32 = 0; // CM_GET_DEVICE_INTERFACE_LIST_PRESENT
+        const SUCCESS: u32 = 0; // CR_SUCCESS
+        #[link(name = "cfgmgr32")]
+        extern "system" {
+            fn CM_Get_Device_Interface_List_SizeW(
+                len: *mut u32,
+                class: *const Guid,
+                device: *const u16,
+                flags: u32,
+            ) -> u32;
+            fn CM_Get_Device_Interface_ListW(
+                class: *const Guid,
+                device: *const u16,
+                buffer: *mut u16,
+                buffer_len: u32,
+                flags: u32,
+            ) -> u32;
+        }
+        // A device arriving between the two calls makes the buffer too small: ask again.
+        for _ in 0..3 {
+            let mut len = 0u32;
+            // SAFETY: `len` and the GUID outlive the call; a null device means all of them.
+            let got = unsafe {
+                CM_Get_Device_Interface_List_SizeW(&mut len, &HID, std::ptr::null(), PRESENT)
+            };
+            if got != SUCCESS || len == 0 {
+                return None;
+            }
+            let mut list = vec![0u16; len as usize];
+            // SAFETY: `list` holds the `len` characters the call is told it may write.
+            let got = unsafe {
+                CM_Get_Device_Interface_ListW(
+                    &HID,
+                    std::ptr::null(),
+                    list.as_mut_ptr(),
+                    len,
+                    PRESENT,
+                )
+            };
+            if got == SUCCESS {
+                return Some(list);
+            }
+        }
+        None
+    }
+
     /// DualSense game pad collections not open yet: (path, name).
     fn find(open: &[Pad]) -> Vec<(CString, String, hidapi::HidDevice)> {
         let known: Vec<CString> = open.iter().map(|p| p.path.clone()).collect();
@@ -314,23 +411,35 @@ pub mod hid_reader {
     pub fn run(stop: &AtomicBool, mut emit: impl FnMut(&NativePadEvent)) {
         let mut pads: Vec<Pad> = Vec::new();
         let mut next_scan = Instant::now();
+        let mut interfaces = None;
+        let mut changed_at = Instant::now();
+        let mut enumerated_at = Instant::now();
         let mut buf = [0u8; 128];
         while !stop.load(Ordering::Relaxed) {
             if Instant::now() >= next_scan {
-                for (path, id, dev) in find(&pads) {
-                    let slot = (0..)
-                        .find(|s| !pads.iter().any(|p| p.slot == *s))
-                        .unwrap_or(0);
-                    eprintln!("[pad-native] reading {id}");
-                    pads.push(Pad {
-                        path,
-                        dev,
-                        slot,
-                        id,
-                        state: None,
-                        sent: None,
-                        last_emit: None,
-                    });
+                let now_interfaces = hid_interfaces();
+                let known = now_interfaces.is_some();
+                if now_interfaces != interfaces {
+                    interfaces = now_interfaces;
+                    changed_at = Instant::now();
+                }
+                if enumeration_due(known, changed_at.elapsed(), enumerated_at.elapsed()) {
+                    enumerated_at = Instant::now();
+                    for (path, id, dev) in find(&pads) {
+                        let slot = (0..)
+                            .find(|s| !pads.iter().any(|p| p.slot == *s))
+                            .unwrap_or(0);
+                        eprintln!("[pad-native] reading {id}");
+                        pads.push(Pad {
+                            path,
+                            dev,
+                            slot,
+                            id,
+                            state: None,
+                            sent: None,
+                            last_emit: None,
+                        });
+                    }
                 }
                 next_scan = Instant::now() + RESCAN_EVERY;
             }
@@ -432,9 +541,9 @@ pub mod reader {
     use super::*;
     use evdev::raw_stream::RawDevice;
     use evdev::{AbsoluteAxisCode, EventType, KeyCode, PropType};
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -489,25 +598,52 @@ pub mod reader {
         }
     }
 
+    /// What looking at an event node found.
+    enum Probe {
+        Controller(Box<Pad>),
+        /// Some other input device: not worth opening again.
+        NotController,
+        /// Could not be read: try again (udev grants access a moment after a node appears).
+        Unreadable,
+    }
+
+    /// What identifies the device behind an event node: its device number, its inode, and when
+    /// that last changed (a node removed and made again gets new ones; an access change too,
+    /// which only means one more look).
+    type NodeId = (u64, u64, i64, i64);
+
+    fn node_id(path: &Path) -> Option<NodeId> {
+        let m = std::fs::metadata(path).ok()?;
+        Some((m.rdev(), m.ino(), m.ctime(), m.ctime_nsec()))
+    }
+
     /// Open `path` if it is a game controller. Read-only and never grabbed.
-    fn open_pad(path: &Path, slot: u32) -> Option<Pad> {
-        let file = std::fs::OpenOptions::new()
+    fn open_pad(path: &Path, slot: u32) -> Probe {
+        let Ok(file) = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(path)
-            .ok()?;
-        let dev = RawDevice::from_fd(file.into()).ok()?;
-        let keys = dev.supported_keys()?;
-        let axes = dev.supported_absolute_axes()?;
+        else {
+            return Probe::Unreadable;
+        };
+        let Ok(dev) = RawDevice::from_fd(file.into()) else {
+            return Probe::Unreadable;
+        };
+        // No keys or no absolute axes at all: a device these are absent from is no controller.
+        let (Some(keys), Some(axes)) = (dev.supported_keys(), dev.supported_absolute_axes()) else {
+            return Probe::NotController;
+        };
         let accel = dev.properties().contains(PropType::ACCELEROMETER);
         if !is_gamepad(
             |c| keys.contains(KeyCode::new(c)),
             |c| axes.contains(AbsoluteAxisCode(c)),
             accel,
         ) {
-            return None;
+            return Probe::NotController;
         }
-        let info = dev.get_abs_state().ok()?;
+        let Ok(info) = dev.get_abs_state() else {
+            return Probe::Unreadable;
+        };
         let mut layout = Layout::default();
         for (c, r) in layout.abs.iter_mut().enumerate() {
             if axes.contains(AbsoluteAxisCode(c as u16)) {
@@ -535,7 +671,7 @@ pub mod reader {
             last_emit: None,
         };
         pad.resync();
-        Some(pad)
+        Probe::Controller(Box::new(pad))
     }
 
     /// The kernel driver behind an event node ("xpad", "playstation", ...), or "".
@@ -552,28 +688,36 @@ pub mod reader {
             .unwrap_or_default()
     }
 
-    /// Open every controller in /dev/input not open yet.
-    fn rescan(pads: &mut Vec<Pad>) {
+    /// Open every controller in /dev/input not open yet, looking at each other node only once
+    /// (`nodes_to_open`).
+    fn rescan(pads: &mut Vec<Pad>, not_pads: &mut HashMap<PathBuf, NodeId>) {
         let Ok(dir) = std::fs::read_dir("/dev/input") else {
             return;
         };
-        let mut paths: Vec<PathBuf> = dir
+        let mut nodes: Vec<(PathBuf, NodeId)> = dir
             .flatten()
             .map(|e| e.path())
             .filter(|p| {
                 p.file_name()
                     .is_some_and(|n| n.to_string_lossy().starts_with("event"))
             })
-            .filter(|p| !pads.iter().any(|pad| &pad.path == p))
+            .filter_map(|p| node_id(&p).map(|id| (p, id)))
             .collect();
-        paths.sort();
-        for path in paths {
+        nodes.sort();
+        let open: Vec<PathBuf> = pads.iter().map(|p| p.path.clone()).collect();
+        for (path, id) in nodes_to_open(&nodes, &open, not_pads) {
             let slot = (0..)
                 .find(|s| !pads.iter().any(|p| p.slot == *s))
                 .unwrap_or(0);
-            if let Some(pad) = open_pad(&path, slot) {
-                eprintln!("[pad-native] controller {} at {}", pad.id, path.display());
-                pads.push(pad);
+            match open_pad(&path, slot) {
+                Probe::Controller(pad) => {
+                    eprintln!("[pad-native] controller {} at {}", pad.id, path.display());
+                    pads.push(*pad);
+                }
+                Probe::NotController => {
+                    not_pads.insert(path, id);
+                }
+                Probe::Unreadable => {}
             }
         }
     }
@@ -622,10 +766,11 @@ pub mod reader {
     /// Read controllers until `stop`, handing every change to `emit`.
     pub fn run(stop: &AtomicBool, mut emit: impl FnMut(&NativePadEvent)) {
         let mut pads: Vec<Pad> = Vec::new();
+        let mut not_pads: HashMap<PathBuf, NodeId> = HashMap::new();
         let mut next_scan = Instant::now();
         while !stop.load(Ordering::Relaxed) {
             if Instant::now() >= next_scan {
-                rescan(&mut pads);
+                rescan(&mut pads, &mut not_pads);
                 next_scan = Instant::now() + RESCAN_EVERY;
             }
             if RESEND.swap(false, Ordering::Relaxed) {
@@ -754,6 +899,61 @@ pub fn pad_native_stop_on_exit() {
     reader::stop();
     #[cfg(target_os = "windows")]
     hid_reader::stop();
+}
+
+#[cfg(test)]
+mod scan_tests {
+    use super::{enumeration_due, nodes_to_open};
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    #[test]
+    fn a_node_found_to_be_no_controller_is_not_opened_again() {
+        // F36: every /dev/input/event* that is not a pad was reopened every 2 s.
+        let mut not_pads = HashMap::new();
+        let nodes = [("event0", 1), ("event1", 2), ("event2", 3)];
+        assert_eq!(nodes_to_open(&nodes, &[], &mut not_pads), nodes);
+        not_pads.insert("event0", 1);
+        // event1 is an open controller; event2 could not be read last time, so it is tried again.
+        assert_eq!(
+            nodes_to_open(&nodes, &["event1"], &mut not_pads),
+            [("event2", 3)]
+        );
+    }
+
+    #[test]
+    fn a_number_reused_by_another_device_is_looked_at_again() {
+        let mut not_pads = HashMap::from([("event5", 1)]);
+        // Unplugged, and a controller plugged in took the number within the 2 s.
+        assert_eq!(
+            nodes_to_open(&[("event5", 2)], &[], &mut not_pads),
+            [("event5", 2)]
+        );
+    }
+
+    #[test]
+    fn a_node_that_went_is_forgotten() {
+        let mut not_pads = HashMap::from([("event5", 1), ("event6", 2)]);
+        assert_eq!(
+            nodes_to_open(&[("event6", 2)], &[], &mut not_pads),
+            Vec::<(&str, i32)>::new()
+        );
+        assert_eq!(not_pads, HashMap::from([("event6", 2)]));
+    }
+
+    #[test]
+    fn the_hid_enumeration_runs_when_something_changed_and_now_and_then() {
+        let secs = Duration::from_secs;
+        // Nothing changed, enumerated a moment ago: nothing to do.
+        assert!(!enumeration_due(true, secs(60), secs(2)));
+        // Just plugged in, and still for a few seconds (not ready to open at first).
+        assert!(enumeration_due(true, secs(0), secs(2)));
+        assert!(enumeration_due(true, secs(9), secs(2)));
+        // A pad that could not be opened gets another try in any case.
+        assert!(enumeration_due(true, secs(60), secs(30)));
+        // Windows' list cannot be read: as often as before.
+        assert!(enumeration_due(false, secs(60), secs(2)));
+    }
 }
 
 #[cfg(test)]

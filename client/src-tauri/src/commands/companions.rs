@@ -20,8 +20,6 @@
 use std::time::Duration;
 
 use serde::Serialize;
-use tokio::net::TcpStream;
-use tokio::time::timeout;
 
 /// A single well-known scene-tool listener.
 ///
@@ -32,9 +30,10 @@ use tokio::time::timeout;
 /// companion.
 #[derive(Clone, Copy)]
 struct Companion {
-    /// UI-facing short name. Shown as-is in the Connection strip chip.
+    /// UI-facing short name, in English: the Connection strip words it from the port
+    /// (`companionLabels` in screens/Connection) and falls back to this.
     name: &'static str,
-    /// Purpose blurb. Deliberately terse — the About page's tier writeup
+    /// Purpose blurb, the same way. Deliberately terse — the About page's tier writeup
     /// is where the longer story lives.
     role: &'static str,
     /// TCP port the tool listens on when running.
@@ -57,8 +56,16 @@ struct Companion {
 /// would just clutter the code without affecting the user's strip.
 const COMPANIONS: &[Companion] = &[
     Companion {
-        name: "Homebrew enabler",
+        name: "etaHEN",
         role: "Homebrew enabler + launcher",
+        port: 9028,
+        web: false,
+    },
+    // Both etaHEN and shsrv serve a telnet shell here, so this port alone says nothing about
+    // which is loaded (it used to read "Homebrew enabler" for a console with only shsrv).
+    Companion {
+        name: "Telnet shell",
+        role: "Telnet shell (etaHEN or shsrv)",
         port: 2323,
         web: false,
     },
@@ -136,47 +143,15 @@ pub async fn companion_probe(host: String) -> Vec<CompanionStatus> {
     for c in COMPANIONS.iter().copied() {
         let host = host.clone();
         handles.push(tokio::spawn(async move {
-            // Resolve through the shared helper so a hostname gets its own
-            // (longer) lookup budget instead of having to resolve AND connect
-            // inside PROBE_TIMEOUT — a slow first lookup used to render as
-            // "this tool isn't running" (#272).
-            let targets = match crate::commands::probes::resolve_targets(&host, c.port).await {
-                Ok(t) => t,
-                Err(e) => {
-                    return CompanionStatus {
-                        name: c.name,
-                        role: c.role,
-                        port: c.port,
-                        web: c.web,
-                        reachable: false,
-                        error: Some(e),
-                    }
-                }
-            };
-            let mut last = String::from("no addresses to try");
-            for sa in targets {
-                match timeout(PROBE_TIMEOUT, TcpStream::connect(sa)).await {
-                    Ok(Ok(_)) => {
-                        return CompanionStatus {
-                            name: c.name,
-                            role: c.role,
-                            port: c.port,
-                            web: c.web,
-                            reachable: true,
-                            error: None,
-                        }
-                    }
-                    Ok(Err(e)) => last = e.to_string(),
-                    Err(_) => last = "timeout".to_string(),
-                }
-            }
+            let probe = crate::commands::probes::connect_probe_within(&host, c.port, PROBE_TIMEOUT);
+            let error = probe.await.err();
             CompanionStatus {
                 name: c.name,
                 role: c.role,
                 port: c.port,
                 web: c.web,
-                reachable: false,
-                error: Some(last),
+                reachable: error.is_none(),
+                error,
             }
         }));
     }

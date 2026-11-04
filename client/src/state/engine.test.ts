@@ -3,7 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 const { mockIsTauri } = vi.hoisted(() => ({ mockIsTauri: vi.fn(() => true) }));
 vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => mockIsTauri() }));
 
-import { engineIsOnThisDevice, getEngineUrl, isLoopbackUrl, setLiveEngineUrl, useEngineStore } from "./engine";
+import {
+  engineIsOnThisDevice,
+  engineRunsElsewhere,
+  getEngineUrl,
+  isLoopbackUrl,
+  setLiveEngineUrl,
+  useEngineStore,
+} from "./engine";
 
 describe("isLoopbackUrl", () => {
   it("recognises this device's loopback in every spelling", () => {
@@ -52,5 +59,30 @@ describe("getEngineUrl", () => {
     setLiveEngineUrl("http://127.0.0.1:19113");
     expect(getEngineUrl()).toBe("http://192.168.1.20:19113");
     useEngineStore.getState().setEngineUrl("http://127.0.0.1:19113");
+  });
+});
+
+describe("engineRunsElsewhere", () => {
+  it("is true while this device's engine runs somewhere other than the setting says", () => {
+    // F20: Settings showed the typed URL while the requests kept going to the running engine.
+    useEngineStore.getState().setEngineUrl("http://127.0.0.1:19999");
+    setLiveEngineUrl("http://127.0.0.1:19113");
+    expect(engineRunsElsewhere(useEngineStore.getState())).toBe(true);
+    expect(useEngineStore.getState().runningAt).toBe("http://127.0.0.1:19113");
+    // This page's own requests go where the engine is, not where the field says.
+    expect(getEngineUrl()).toBe("http://127.0.0.1:19113");
+    // Restarted, it moved.
+    setLiveEngineUrl("http://127.0.0.1:19999");
+    expect(engineRunsElsewhere(useEngineStore.getState())).toBe(false);
+    useEngineStore.getState().setEngineUrl("http://127.0.0.1:19113");
+    setLiveEngineUrl("http://127.0.0.1:19113");
+  });
+
+  it("is false for a chosen remote engine, whatever the local one does", () => {
+    useEngineStore.getState().setEngineUrl("http://192.168.1.20:19113");
+    setLiveEngineUrl("http://127.0.0.1:51234");
+    expect(engineRunsElsewhere(useEngineStore.getState())).toBe(false);
+    useEngineStore.getState().setEngineUrl("http://127.0.0.1:19113");
+    setLiveEngineUrl("http://127.0.0.1:19113");
   });
 });

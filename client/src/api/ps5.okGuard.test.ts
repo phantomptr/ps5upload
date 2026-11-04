@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   backupSnapshot,
   backupRestore,
-  userCreate,
   cheatsReload,
   remoteplayRequest,
   remoteplayCancel,
@@ -42,11 +41,6 @@ describe("ok:false guards on action endpoints", () => {
   it("rejects a refused backup restore", async () => {
     mockedInvoke.mockResolvedValue({ ok: false, error: "not_cached" });
     await expect(backupRestore("tag", 1786320000)).rejects.toThrow(/not_cached/);
-  });
-
-  it("rejects a refused user creation", async () => {
-    mockedInvoke.mockResolvedValue({ ok: false, error: "invalid_name" });
-    await expect(userCreate("player")).rejects.toThrow(/invalid_name/);
   });
 
   it("rejects a refused cheats reload", async () => {

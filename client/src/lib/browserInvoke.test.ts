@@ -200,6 +200,16 @@ describe("engine-backed commands the web UI depends on (#300)", () => {
 
   const B = "http://engine.test:19113";
 
+  it("cuts a page of the engine's whole local listing, as the app's command does", async () => {
+    const all = [{ name: "a" }, { name: "b" }, { name: "c" }];
+    const calls = captureFetch(all);
+    await expect(browserInvoke("local_list_dir", { path: "/d", offset: 1, limit: 1 })).resolves.toEqual([
+      { name: "b" },
+    ]);
+    await expect(browserInvoke("local_list_dir", { path: "/d" })).resolves.toEqual(all);
+    expect(calls[0].url).toBe(`${B}/api/local/list-dir?path=%2Fd`);
+  });
+
   it("builds cheats_get with both query params, engine-encoded", async () => {
     const calls = captureFetch({ cheats: [] });
     await browserInvoke("cheats_get", {

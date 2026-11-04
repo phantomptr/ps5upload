@@ -137,6 +137,17 @@ fn is_valid_title_id(s: &str) -> bool {
         .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
 }
 
+/// What is in the folder, lowercased. A listing that failed is an error, never "empty": a 15 s
+/// timeout or a dropped connection read as an empty folder, and the heal then copied the game's
+/// files over whatever the user had put there.
+fn names_already_there<E: std::fmt::Display>(
+    listing: Result<Vec<String>, E>,
+    dir: &str,
+) -> Result<std::collections::HashSet<String>, String> {
+    let names = listing.map_err(|e| format!("list {dir}: {e}"))?;
+    Ok(names.iter().map(|n| n.to_ascii_lowercase()).collect())
+}
+
 fn run_heal(addr: &str, title_id: &str, source_path: &str) -> Result<HealResult, String> {
     if !is_valid_title_id(title_id) {
         return Err("title_id must be 4-16 chars of [A-Z0-9_] (e.g. CUSA00001)".into());
@@ -168,19 +179,16 @@ fn run_heal(addr: &str, title_id: &str, source_path: &str) -> Result<HealResult,
 
     // List what's already in /user/appmeta/<TID>/ so we don't
     // overwrite the user's manual customisations.
-    let existing: std::collections::HashSet<String> = match list_dir_with_timeout(
-        addr,
+    let existing = names_already_there(
+        list_dir_with_timeout(
+            addr,
+            &appmeta_dir,
+            ListDirOptions::default(),
+            Some(RPC_TIMEOUT),
+        )
+        .map(|listing| listing.entries.into_iter().map(|e| e.name).collect()),
         &appmeta_dir,
-        ListDirOptions::default(),
-        Some(RPC_TIMEOUT),
-    ) {
-        Ok(listing) => listing
-            .entries
-            .iter()
-            .map(|e| e.name.to_ascii_lowercase())
-            .collect(),
-        Err(_) => std::collections::HashSet::new(),
-    };
+    )?;
 
     let mut outcomes: Vec<HealOutcome> = Vec::with_capacity(HEAL_FILES.len());
     let mut copied = 0u32;
@@ -239,6 +247,31 @@ fn run_heal(addr: &str, title_id: &str, source_path: &str) -> Result<HealResult,
         already_present,
         errors,
     })
+}
+
+#[cfg(test)]
+mod listing_tests {
+    use super::names_already_there;
+
+    #[test]
+    fn a_failed_listing_stops_the_heal_instead_of_reading_as_an_empty_folder() {
+        // F11: a timeout read as "nothing there", and the user's own icon was copied over.
+        let err =
+            names_already_there::<String>(Err("timed out".into()), "/user/appmeta/X").unwrap_err();
+        assert_eq!(err, "list /user/appmeta/X: timed out");
+    }
+
+    #[test]
+    fn what_is_there_is_matched_without_regard_to_case() {
+        let names = names_already_there::<String>(
+            Ok(vec!["ICON0.PNG".into(), "param.json".into()]),
+            "/user/appmeta/X",
+        )
+        .unwrap();
+        assert!(names.contains("icon0.png"));
+        assert!(names.contains("param.json"));
+        assert!(!names.contains("snd0.at9"));
+    }
 }
 
 #[cfg(test)]

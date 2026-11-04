@@ -683,6 +683,11 @@ fn failure_key(method: &str, path: &str, console: Option<&str>) -> String {
     }
 }
 
+/// A route polled about once a second whatever the app is doing, not worth a debug line each.
+fn is_constant_poll(path: &str) -> bool {
+    matches!(path, "/api/engine-logs" | "/api/activity")
+}
+
 /// Log every (allowed) request: method, path, status, duration. Recorded at
 /// `debug` so it always lands in engine.log (rotated, crash-survivable) for a
 /// complete "what was the engine doing when it hung" trace, but only reaches
@@ -709,9 +714,12 @@ async fn log_requests(req: Request, next: Next) -> axum::response::Response {
     // about once a second, so logging it makes the log grow purely from
     // being watched — a self-feeding stream of `GET /api/engine-logs -> 200`
     // that crowds out real traffic and never stops. Reading the log is not
-    // an event worth recording. A failure still gets through: only this
-    // debug line is skipped, and the 5xx path below is untouched.
-    if path != "/api/engine-logs" {
+    // an event worth recording. The app's activity poll is the same, once a
+    // second for its whole life: it wore through a busy log in a few hours, and
+    // a failure from that morning was gone from a report filed that evening. A
+    // failure still gets through: only this debug line is skipped, and the 5xx
+    // path below is untouched.
+    if !is_constant_poll(&path) {
         log_debug!("{method} {path} -> {status} ({ms}ms)");
     }
 
@@ -12325,6 +12333,19 @@ pub async fn serve_in_process(bind: &str, ps5_addr: String) -> anyhow::Result<()
         allow_ips: Vec::new(),
     })
     .await
+}
+
+#[cfg(test)]
+mod request_log_tests {
+    use super::is_constant_poll;
+
+    #[test]
+    fn only_the_constant_polls_stay_out_of_the_debug_log() {
+        assert!(is_constant_poll("/api/engine-logs"));
+        assert!(is_constant_poll("/api/activity"));
+        assert!(!is_constant_poll("/api/ps5/status"));
+        assert!(!is_constant_poll("/api/activity/other"));
+    }
 }
 
 #[cfg(test)]

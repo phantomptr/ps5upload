@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import { updateDownloadApk, type UpdateCheck } from "../api/ps5";
 import { openExternalUrl } from "../lib/openExternalUrl";
+import { shellErrorText } from "../lib/shellError";
 import { t as translate } from "../i18n";
 import { useLangStore } from "./lang";
 import { trStatic } from "../lib/trStatic";
@@ -261,7 +262,9 @@ export async function downloadAndInstallApk(result: UpdateCheck): Promise<string
     );
     path = dl.path;
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = shellErrorText(e instanceof Error ? e.message : String(e), (key, _vars, fallback) =>
+      trFb(key, fallback),
+    );
     setStep({ kind: "failed", message, during: "download" });
     return message;
   } finally {

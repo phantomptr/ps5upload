@@ -7,7 +7,7 @@ import { useKeepAwakeStore } from "./keepAwake";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useConnectionStore } from "./connection";
 import { selectConsoleByAddress, useRosterStore } from "./roster";
-import { useEngineStore, normalizeEngineUrl } from "./engine";
+import { useEngineStore, normalizeEngineUrl, setLiveEngineUrl } from "./engine";
 import { useSaveSettingsStore, normalizeSavePath } from "./saveSettings";
 import { useAccessibilityStore } from "./accessibility";
 import { useNavSidebarStore } from "./navSidebar";
@@ -149,9 +149,9 @@ export function installUserConfigMirror() {
   // Engine URL: persist to disk AND push to the Rust shell so its command
   // proxies follow the change live (the spawn-mode switch still needs a
   // restart). Fires on any engine-store change.
-  useEngineStore.subscribe((s) => {
+  useEngineStore.subscribe((s, prev) => {
     schedulePersist();
-    pushEngineUrl(s.engineUrl);
+    if (s.engineUrl !== prev.engineUrl) pushEngineUrl(s.engineUrl);
   });
   useSaveSettingsStore.subscribe(schedulePersist);
   useAccessibilityStore.subscribe(schedulePersist);
@@ -159,12 +159,17 @@ export function installUserConfigMirror() {
   useBetaFeaturesStore.subscribe(schedulePersist);
 }
 
-/** Tell the Rust shell which engine URL its proxies should hit. */
+/** Tell the Rust shell which engine URL its proxies should hit. It answers where they hit now,
+ *  which a running local engine keeps until it restarts: this page's direct fetches go there too. */
 function pushEngineUrl(url: string): void {
   if (!isTauriEnv()) return;
-  invoke("engine_url_set", { url }).catch((e) => {
-    console.warn("[settings-mirror] engine_url_set failed:", e);
-  });
+  invoke<string>("engine_url_set", { url })
+    .then((effective) => {
+      if (typeof effective === "string" && effective) setLiveEngineUrl(effective);
+    })
+    .catch((e) => {
+      console.warn("[settings-mirror] engine_url_set failed:", e);
+    });
 }
 
 /** Force an immediate (non-debounced) write of the current snapshot.

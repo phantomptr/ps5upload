@@ -14,11 +14,12 @@
 //! The command builds on every platform (its checks are tested on the host),
 //! but only the Android page calls it.
 
-use std::io::Write;
 use std::path::PathBuf;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
+
+use super::shell_error::{code_only, coded};
 
 /// Event the page listens on for download progress.
 pub const PROGRESS_EVENT: &str = "update-apk-progress";
@@ -79,28 +80,6 @@ fn is_apk_filename(name: &str) -> bool {
         && name.to_ascii_lowercase().ends_with(".apk")
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn sha256_file(path: &std::path::Path) -> Result<String, String> {
-    use sha2::Digest;
-    use std::io::Read;
-    let mut f = std::fs::File::open(path).map_err(|e| format!("open {path:?}: {e}"))?;
-    let mut h = sha2::Sha256::new();
-    let mut buf = vec![0u8; 1 << 16];
-    loop {
-        let n = f
-            .read(&mut buf)
-            .map_err(|e| format!("read {path:?}: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        h.update(&buf[..n]);
-    }
-    Ok(hex(&h.finalize()))
-}
-
 /// Where update APKs live: inside the app's cache dir, which is where
 /// AppUpdater.kt accepts them from.
 fn updates_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -113,16 +92,35 @@ fn updates_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// Remove earlier downloads (older versions, interrupted `.part` files).
+/// `<name>.part`: what an interrupted download of `name` has so far.
+fn part_name(name: &str) -> String {
+    format!("{name}.part")
+}
+
+/// Remove earlier downloads (other versions, finished or interrupted). `keep` stays, and what an
+/// interrupted download of it has so far, which the next try carries on from.
 fn remove_others(dir: &std::path::Path, keep: &str) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
+    let part = part_name(keep);
     for e in rd.flatten() {
-        if e.file_name().to_str() != Some(keep) {
+        let name = e.file_name();
+        let name = name.to_str();
+        if name != Some(keep) && name != Some(part.as_str()) {
             let _ = std::fs::remove_file(e.path());
         }
     }
+}
+
+/// An APK is a zip: anything else is an error page or a wrong asset.
+fn looks_like_apk(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok()
+        && &head == b"PK\x03\x04"
 }
 
 #[derive(Serialize, Clone)]
@@ -143,7 +141,8 @@ pub struct ApkDownload {
 
 /// Download the update APK into the app's cache, with progress events, and
 /// check it. `sha256` is the release's hash for this APK when latest.json has
-/// one; a mismatch deletes the file and fails.
+/// one; a mismatch deletes the file and fails. A download that was cut off
+/// carries on where it stopped (`update_fetch`, which is the desktop's path too).
 #[tauri::command]
 pub async fn update_download_apk(
     app: AppHandle,
@@ -152,17 +151,25 @@ pub async fn update_download_apk(
     sha256: Option<String>,
 ) -> Result<ApkDownload, String> {
     if !super::updates::is_allowed_download_url(&url) {
-        return Err(format!("refusing to download from this address: {url}"));
+        return Err(coded(
+            "update_unsafe_url",
+            serde_json::json!({ "url": url }),
+        ));
     }
     if !is_apk_filename(&filename) {
-        return Err(format!("not an APK name: {filename:?}"));
+        return Err(coded(
+            "update_bad_name",
+            serde_json::json!({ "name": filename }),
+        ));
     }
     let expected = match sha256.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => Some(
-            normalize_sha256(raw).ok_or_else(|| format!("bad SHA-256 in latest.json: {raw}"))?,
+            normalize_sha256(raw)
+                .ok_or_else(|| coded("update_bad_checksum", serde_json::json!({ "value": raw })))?,
         ),
         None => None,
     };
+    let active = super::update_fetch::ActiveDownload::begin()?;
     let dir = updates_dir(&app)?;
     remove_others(&dir, &filename);
     let target = dir.join(&filename);
@@ -170,7 +177,12 @@ pub async fn update_download_apk(
     // Already downloaded and verified once: hand it over again (the person
     // cancelled Android's dialog and tapped again).
     if let (Some(want), Ok(meta)) = (&expected, std::fs::metadata(&target)) {
-        if sha256_file(&target).ok().as_ref() == Some(want) {
+        let t = target.clone();
+        let actual = tokio::task::spawn_blocking(move || super::update_fetch::sha256_file(&t))
+            .await
+            .ok()
+            .and_then(Result::ok);
+        if actual.as_ref() == Some(want) {
             return Ok(ApkDownload {
                 path: target.to_string_lossy().into_owned(),
                 bytes: meta.len(),
@@ -179,85 +191,46 @@ pub async fn update_download_apk(
         }
     }
 
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(20))
-        .timeout(std::time::Duration::from_secs(60 * 15))
-        .build()
-        .map_err(|e| format!("download client init: {e}"))?;
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("download {url}: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("download HTTP {}: {url}", resp.status()));
-    }
-    let total = resp.content_length().unwrap_or(0);
-    if total > APK_MAX_BYTES {
-        return Err(format!("download too large ({total} bytes)"));
-    }
+    let client = super::update_fetch::client()?;
+    let part = dir.join(part_name(&filename));
+    let progress_app = app.clone();
+    let mut report = move |received: u64, total: u64| {
+        let _ = progress_app.emit(PROGRESS_EVENT, Progress { received, total });
+    };
+    let done = super::update_fetch::download_verified(
+        &client,
+        &url,
+        &part,
+        APK_MAX_BYTES,
+        expected.as_deref(),
+        active.cancel_signal(),
+        &mut report,
+    )
+    .await?;
 
-    let tmp = dir.join(format!("{filename}.part"));
-    struct Cleanup(PathBuf, bool);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            if self.1 {
-                let _ = std::fs::remove_file(&self.0);
-            }
+    let to = target.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        if !looks_like_apk(&part) {
+            let _ = std::fs::remove_file(&part);
+            return Err(code_only("update_not_apk"));
         }
-    }
-    let mut cleanup = Cleanup(tmp.clone(), true);
-
-    use futures_util::StreamExt;
-    use sha2::Digest;
-    let mut file = std::fs::File::create(&tmp).map_err(|e| format!("create {tmp:?}: {e}"))?;
-    let mut hasher = sha2::Sha256::new();
-    let mut stream = resp.bytes_stream();
-    let mut received: u64 = 0;
-    let mut head: Vec<u8> = Vec::with_capacity(4);
-    let mut last_emit = std::time::Instant::now();
-    let _ = app.emit(PROGRESS_EVENT, Progress { received, total });
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("download interrupted: {e}"))?;
-        received = received.saturating_add(chunk.len() as u64);
-        if received > APK_MAX_BYTES {
-            return Err("download exceeded the size limit — aborting".into());
-        }
-        if head.len() < 4 {
-            let need = 4 - head.len();
-            head.extend_from_slice(&chunk[..need.min(chunk.len())]);
-        }
-        hasher.update(&chunk);
-        file.write_all(&chunk).map_err(|e| format!("write: {e}"))?;
-        if last_emit.elapsed() >= std::time::Duration::from_millis(200) {
-            last_emit = std::time::Instant::now();
-            let _ = app.emit(PROGRESS_EVENT, Progress { received, total });
-        }
-    }
-    let _ = app.emit(PROGRESS_EVENT, Progress { received, total });
-    file.sync_all().map_err(|e| format!("fsync: {e}"))?;
-    drop(file);
-
-    if total > 0 && received != total {
-        return Err(format!("download incomplete ({received} of {total} bytes)"));
-    }
-    // An APK is a zip: anything else is an error page or a wrong asset.
-    if head != b"PK\x03\x04" {
-        return Err("the download is not an APK".into());
-    }
-    let got = hex(&hasher.finalize());
-    if let Some(want) = &expected {
-        if &got != want {
-            return Err(format!(
-                "the download does not match the release checksum (got {got}, expected {want})"
-            ));
-        }
-    }
-    super::replace_file(&tmp, &target).map_err(|e| format!("rename: {e}"))?;
-    cleanup.1 = false;
+        super::replace_file(&part, &to).map_err(|e| {
+            coded(
+                "update_disk",
+                serde_json::json!({ "detail": e.to_string() }),
+            )
+        })
+    })
+    .await
+    .map_err(|e| {
+        coded(
+            "update_disk",
+            serde_json::json!({ "detail": e.to_string() }),
+        )
+    })??;
     Ok(ApkDownload {
         path: target.to_string_lossy().into_owned(),
-        bytes: received,
+        bytes: done.bytes,
         verified: expected.is_some(),
     })
 }
@@ -326,15 +299,37 @@ mod tests {
     }
 
     #[test]
-    fn sha256_of_a_file() {
-        let dir = std::env::temp_dir().join(format!("ps5u-apk-sha-{}", std::process::id()));
+    fn a_new_download_keeps_only_its_own_file_and_part() {
+        let dir = std::env::temp_dir().join(format!("ps5u-apk-others-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["new.apk", "new.apk.part", "old.apk", "old.apk.part"] {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        remove_others(&dir, "new.apk");
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["new.apk", "new.apk.part"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_a_zip_counts_as_an_apk() {
+        let dir = std::env::temp_dir().join(format!("ps5u-apk-head-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("x.apk");
-        std::fs::write(&p, b"abc").unwrap();
-        assert_eq!(
-            sha256_file(&p).unwrap(),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
+        std::fs::write(&p, b"PK\x03\x04rest").unwrap();
+        assert!(looks_like_apk(&p));
+        std::fs::write(&p, b"<html>").unwrap();
+        assert!(!looks_like_apk(&p));
+        std::fs::write(&p, b"PK").unwrap();
+        assert!(!looks_like_apk(&p), "shorter than the signature");
+        assert!(!looks_like_apk(&dir.join("missing.apk")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
