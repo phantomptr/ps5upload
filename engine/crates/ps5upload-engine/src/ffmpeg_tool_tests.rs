@@ -326,3 +326,24 @@ fn the_pinned_linux_build_unpacks() {
     assert!(libs.iter().any(|l| l.starts_with("libavcodec.so")));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// rtmps:// (YouTube) needs trusted roots the builds' OpenSSL can't find by itself.
+#[cfg(target_os = "macos")]
+#[test]
+fn ffmpeg_gets_the_system_ca_bundle() {
+    let ca = system_ca_bundle().expect("macOS has /etc/ssl/cert.pem");
+    assert_eq!(ca, std::path::Path::new("/etc/ssl/cert.pem"));
+    if std::env::var_os("SSL_CERT_FILE").is_none() {
+        let cmd = FfmpegCmd {
+            program: "ffmpeg".into(),
+            lib_dir: None,
+        };
+        let c = cmd.command();
+        let set = c
+            .as_std()
+            .get_envs()
+            .find(|(k, _)| *k == "SSL_CERT_FILE")
+            .and_then(|(_, v)| v.map(|v| v.to_owned()));
+        assert_eq!(set.as_deref(), Some(ca.as_os_str()));
+    }
+}

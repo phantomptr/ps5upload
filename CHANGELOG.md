@@ -4,6 +4,16 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.0.6
+
+- **Go live works on macOS.** Going live to YouTube, Twitch, Kick or Facebook from a Mac said
+  "Can't reach the site's server" every time: the streaming helper (ffmpeg) couldn't find the
+  Mac's trusted certificates, so every secure (`rtmps://`) connection failed. It now uses the
+  system's own. Linux systems that keep their certificates elsewhere (Fedora, openSUSE) are
+  covered too; Windows was not affected.
+- **Go live no longer says "Trying again in 0 s"** while it is already trying: it says
+  Connecting….
+
 ## 11.0.5
 
 - **Better translations in every language.** Every string added since 10.4 was re-read in all
