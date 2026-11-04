@@ -4,6 +4,361 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.1.0
+
+- Agents can now drive PS5Upload: the engine has an MCP server at `/mcp`, and `ps5upload-engine mcp` connects clients that only speak stdio. It covers files, uploads, installs, games, saves, cheats, payloads, power, hardware and Remote Play, and can call any route of the engine's API. It answers to this computer only, and `PS5UPLOAD_MCP_READ_ONLY=1` makes it read-only.
+- Engine API: a route that changes something on a console now answers `400` without `addr`, instead of acting on the default console: transfers, `/api/link/download`, app launch, file op cancel, peripherals, opening a save, cheats and Remote Play writes. Scripts must name the console. Test routes such as `POST /api/ps5/cleanup` need `PS5UPLOAD_ENGINE_DEBUG=1`.
+- Engine API: the engine now has its own queue for each console. `GET/POST /api/queue` and `POST /api/queue/{id}/pause|resume|remove|move` run uploads, downloads and installs in order, every client sees the same line, and it survives a restart. An item that was running when the engine stopped comes back as interrupted and only runs again if you ask. `/api/events` carries `queue` events, and agents get `queue_list`, `queue_add`, `queue_pause`, `queue_resume`, `queue_remove`, `queue_move` and `queue_wait`.
+- Queue: the app's queue and the engine's queue take turns on a console. If a script or agent is using a PS5 through the engine's queue, the app's next row says so and carries on by itself after.
+- Engine API: `GET /api/openapi.json` describes every route in OpenAPI 3.1, generated from the code, and CI fails when a route isn't in it. [API.md](API.md) covers who it answers, errors, long calls, events and what it can't do.
+- Agents: [MCP.md](MCP.md) has the setup for Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI and the Inspector, read-only mode and the tools to keep on "ask".
+- Agents: new MCP tools for Play Together, Go live, health checks and repairs, and making sure the helper runs. `api_describe` gives an agent any route's fields before it calls it, and the API and MCP guides are readable as resources.
+- Remote Play: a new switch, Picture on this device. Off, this computer or phone stops decoding and showing the stream and plays no sound, while friends and Go live keep getting it. One click brings the picture back without restarting. It's on the stream's bar, in the Stream and Play Together panels and in Settings. (#670, #649)
+- Play Together: you can play on your TV with the console's DualSense and use the app only to invite friends. Turn the picture off and pick a different PS5 user on the DualSense; the panel and the FAQ explain the two users step. (#649)
+- Activity: what you start on the PS5's own page (PS5Upload Minion) now shows in the app on your PC or phone: its name, progress and speed, marked "Started on the PS5", with Cancel, and how it ended. NAS copies started on the PS5 are included. A copy you started from the app still has one row. Needs the helper from this version. (#658)
+- PS5 page: a long NAS copy no longer drops off Tasks the moment it finishes. It stays listed for 15 minutes from when it ended. (#658)
+- Remote Play: pairing refused with 80108b03 now says the real next step: turn on Enable Remote Play on the console (or run the offline sign-in and restart when it is greyed out). The app also tries again by itself with a fresh PIN first.
+- Touchpad mode no longer freezes the page on the first drag. A fractional movement looped for ever, on a phone and on the phone link's Touchpad tab.
+- Save replay works: the sound frame's index went to the decoder with the packet, which failed the save or recorded noise. H.264 clips also save on the Linux app.
+- Remote Play: starting from rest no longer leaves Keyboard & mouse blocked with "Update the PS5 helper". It says the helper isn't back yet and comes on by itself.
+- Remote Play: a device that vanishes mid-press (out of Wi-Fi range, a laptop lid, a phone asleep) lets go of its buttons within seconds, not minutes.
+- Remote Play: Stop during a wake or the handshake now ends it, instead of carrying on for a minute and holding the console's slot. Start right after doesn't join the dying session.
+- Remote Play: the 4-hour limit on a session is gone.
+- Remote Play: when the console ends the stream, its reason is shown, and a stream that ended while the page was away says so. The picture no longer just disappears.
+- Remote Play: Start right after a stop waits for the PS5 with a countdown and Cancel, instead of an error that asks you to count. Another device using the console has its own message.
+- Remote Play: Start on a sleeping console shows "Getting ready…" at once.
+- Remote Play: a lost discovery packet on Wi-Fi no longer reads as "the PS5 does not answer".
+- Remote Play: the passcode the PS5 asks for, and friends or phones asking to join, now show on any screen and in picture in picture, with a notification. Before, a start could wait three minutes with nothing to act on.
+- Remote Play: Switch to 720p and Go live's Restart Play no longer end Play Together. Stop on the banner and in picture in picture ask first while friends are in. A paused Hush stays paused through a restart, and packages dropped on the stream wait for it.
+- Remote Play: a failed "Play on the stream" stops spinning and says why. Reloading the app closes a leftover picture-in-picture window. Web UI over plain http now says what's wrong rather than telling a Chrome user to use Chrome.
+- Remote Play: a controller's vibration falls back to the browser's pad when the app's own reader can't reach the motors, and Settings says when nothing can. Pad states from a long wake are no longer replayed as stale presses, and held input comes back after a reconnect.
+- Controllers: pads whose d-pad is a single axis (generic USB pads, arcade sticks) now play and map correctly in Chrome and Firefox.
+- Linux: the .deb and .rpm install a udev rule for the DualSense, so touchpad, motion and adaptive triggers work; with the AppImage, Settings says so and the FAQ has the line to add.
+- Play setup: a failed read no longer says "Do the steps above first" or closes the PIN form while you type.
+- Play Together: guests get the right message when the same place opens in another tab, when the PS5 loses their controller, when their place is gone, or when the host didn't answer (not "didn't let you in"). A guest on a flaky link keeps their place instead of hitting the connect limit. A slow guest no longer makes the console send keyframes for everyone, and the host's panel shows who can't keep up. A guest's picture comes back after a decoder failure.
+- Play Together: in the app, a friend's game no longer takes the keyboard on other screens, a banner says you're in it with Leave, and on /join Shift+Tab reaches Leave.
+- Phone controller: the page is in the phone's language. It reconnects after a Wi-Fi blip, lets go when the screen goes off, and a phone the host disconnected is told so and stays out until the link closes. Phone names show in the host's language.
+- Phone and friend pages: pinch zoom works again, and older Android WebViews and Safari 14 get the same layout fixes as the app.
+- Go live: the tick next to a site and Twitch's "Test without going public" switch work again (they failed with HTTP 422, so a Twitch site could never go public).
+- Go live: Stop shows "Stopping…", and stop-then-start works. Going live with several sites and one wrong key no longer cuts the good sites five times. If a broadcast fails you get a notification on any screen, and the banner shows Live.
+- Go live: a damaged sites file no longer disables it until a restart, and the panel names the file. A replaced key file no longer wipes saved stream keys. Custom servers with a token in the URL work.
+- Go live: the Docker image says it needs its own ffmpeg instead of offering a download that can't run. Certificate problems have their own message, old ffmpeg versions are removed, and every error is in your language.
+- Remote Play and Go live API: errors for disk and unsupported systems are no longer 400, and AUTOMATION.md documents the Go live routes and codes.
+- **Install:** after one stalled or stopped install, later installs are no longer refused as "busy" until a reboot.
+- **Install:** a download paused on the PS5, or a lost reply, no longer makes the PS5 throw away what it downloaded.
+- **Install:** the app asks before an install replaces an installed game, or re-applies an update the game already has. Nobody there means no.
+- **Install:** "Installed" now means it was seen on a drive. An update the PS5 ignored no longer reads as verified, and a package stays until an install is confirmed.
+- **Install:** a PS4 update without its base game, and a game with a live ShadowMount+ image, are refused on every route with their own reason.
+- **Install:** the failure says what really failed: another install, a missing base game, the app's engine, or the PS5. Only a real network code blames the firewall.
+- **Install:** Stop is no longer shown as a failure, and a Stop ends the install job at every step.
+- **Install:** whether a package fits is judged on the roomiest drive, on every route, and you can choose to install anyway.
+- **Install:** a queue of installs waits for the PS5 to be ready on every route, not only one.
+- **Install:** PS5 updates and DLC installed through the app no longer read "Install" forever.
+- **Install:** packages with long names, Chinese names for example, install from the PS5's own storage.
+- **Install:** restarting the app during an install says the PS5 may still be installing, instead of "no such job".
+- **Upload & install:** a reconnect no longer re-runs a failed install or starts the whole queue, and Stop, Cancel, Clear and a page reload treat a running install as an install.
+- **Upload & install:** an install that fails no longer re-uploads the package. Retry installs the copy already on the PS5.
+- **Upload:** cancelling or removing a row deletes the part it left on the PS5. An 80 GB cancelled package no longer stays as "Other".
+- **Upload:** after you delete a half-copied folder and press Retry, the files are sent again instead of the row saying done with files missing.
+- **Upload:** a row looking too big for the drive is a warning, not a block, and the parts of one archive can share a folder.
+- **Upload:** a missing source, a file too big for FAT32 or a NAS name problem stops with its reason, instead of re-sending the helper three times.
+- **Upload:** hashing and skipping no longer say "Nothing has moved", and finished rows show why a game did not reach the home screen.
+- **Upload:** Resume on a NAS folder resumes, and Override says what it does: same names are replaced, other files stay.
+- **Upload:** a queued NAS archive still works after the app restarts, and a window reload no longer loses a running upload.
+- **Files:** a single file or folder resumes instead of starting over, and a multi-file copy says which files it could not read.
+- **Archives:** an unpack can be stopped, survives a failed status read, and non-Latin archive names keep their folder.
+- **Android:** installing packages from a .zip or .7z works. Only .rar needs the desktop app.
+- **Helper:** replacing it checks the loader first, so a closed loader no longer leaves the console with no helper. Payload Manager is used when the loader is closed.
+- **Helper:** starting a queue no longer replaces a newer helper, one waiting to be paired, or one other devices are using.
+- **Setup:** the wizard's first Check click works, a current helper is left alone, it downloads the newest kstuff instead of reusing an old copy, and Cancel then Run no longer sends twice.
+- **Connection:** Check on a connected console stays connected, rest mode and a missing loader say so, and an address can be pasted as ip:port or a URL.
+- **Connection:** typing a new address on a console that has answered asks whether it moved or is another PS5, so wake and Remote Play keys are not moved by a typo.
+- **Web UI:** no developer error on Find PS5s, and no false "cannot send the helper".
+- **Translations:** Home, Connection, install rows, the queue and Tasks show install messages in your language.
+- Files: editing a game that runs from an image no longer says "no space" with 0 bytes allocatable. An attached image keeps no working margin now, and a file too big for its spare room gets a message that says why and what to do.
+- Space refusals: an upload refused for lack of room now reads in your language, with its figures.
+- Install: consoles added by name (ps5.local, a DNS name) can stream-install. Every range request used to be refused, and the install then blamed the firewall.
+- Docker: a container published on another port can stream-install with the new PS5UPLOAD_PKG_HOST_PORT setting.
+- Install: Stop now works at every step, at once. It used to do nothing for minutes during the daemon call and the version check, and a retry was refused as busy.
+- Install: a large update that is still writing is no longer called failed after 4 minutes. It waits longer the bigger it is, then says to check the PS5 and keeps the package. A link the PS5 fetches by itself says the same instead of "installed".
+- Install from a link: if the file behind the link changes during a download, the job now stops and says so, instead of mixing two files into one package. A server answering the wrong range is no longer taken at its word.
+- Web UI and Docker: packages uploaded from a browser and copies from a saved server now wait in the engine's data folder, not in the temp folder. PS5UPLOAD_STAGING_DIR moves them. An upload that cannot fit is refused before its bytes arrive.
+- Upload: excluding a folder whose name also occurs above the source (data, Games) no longer shows "N bytes of 0" and an empty file list.
+- Zip: an archive with two entries for one file is refused when you review it, instead of failing after Start.
+- RAR: an archive that does not give its file sizes now shows that it is being read first, can be stopped during that time, and counts those files in its progress.
+- Download from a link: names in Japanese, Korean, Chinese, Cyrillic and other scripts are kept. Parts of a set still find each other, and a second package no longer reads as already downloaded.
+- Download from a link: a file too big for the folder is refused at once, with the sizes, instead of filling the disk.
+- Download: a name Windows cannot hold (CON, a:b, a trailing dot) is refused with a message at the top level too, instead of being written somewhere else.
+- Download as .zip: over the API, an existing archive is no longer overwritten unless the request says replace. The app's own save dialog still asks.
+- Copy install link: two quick clicks give one link instead of "an install is already running".
+- Resumed zip, 7z and RAR uploads report the real number of files sent and skipped.
+- API: a second install on a busy console is now a 409. /api/jobs lists installs next to transfers, and /api/jobs/{id} and its cancel take either id. Pausing a job that cannot pause says so.
+- Engine: links on a network-open engine no longer reach the engine's own machine or link-local addresses, at any redirect hop. PS5UPLOAD_ALLOW_LOCAL_LINKS=1 opts out.
+- Engine: a damaged zip that claims a huge central directory is refused, instead of risking the whole engine.
+- Engine: slow disk work (old upload sweep, stat of a hung network mount, building a bug report) no longer stalls every console's requests.
+- Install from a link: a file that changes during the install now ends the job with its own message at once, instead of reading as a stall.
+- Saves: Restore from a .zip, Restore from USB and Restore all from USB now work like Restore…: they refuse a shared-save file, another console's or user's backup and a running game, copy the save first, and put it back if the restore fails. Before, a wrong zip or a dropped network could leave you with no save.
+- Saves: restoring a backup no longer deletes that backup or a neighbour through "Versions to keep". The copy taken before a restore shows as "Before a restore".
+- Saves: Close & write back no longer writes over a restore or over what the game saved meanwhile. A save can't be opened while its game runs, and if the save changed, your edits are kept in a .unsaved copy.
+- Saves: backups taken before a copy or a shared save say so in the list.
+- Saves: with only a backup server set, a failed restore now puts the save back, and Copy and Load a save file work.
+- Saves: a shared save over 1 GB now works, and no longer takes its whole size in memory in the engine.
+- Games: deleting the last game on a console, or ejecting the only drive with games, now clears it from the list.
+- Games: Delete and Move are off while the game runs. A registered or mounted game is taken off the console first, and a moved folder game gets its home-screen tile back at the new place.
+- Games: the grid follows what changes while it is open: a scan the engine finished by itself, and an install that ended.
+- Games: the list no longer jumps back to the top every 10 seconds while a game runs.
+- Make it smaller now says what it does: the image is made on this computer and the copy on the PS5 stays until you delete it. It no longer changes what Workshop opens with next time.
+- Workshop: a queued .rar with a password can be built. The queue keeps the password in memory only, and a refused one asks for it on its row.
+- Workshop: Add games from a folder takes a multi-part .rar as one game.
+- Workshop: LZ4 with a remembered Compress no longer fails every queued image, and the queue row says what will be made.
+- Workshop: a reload or a second window now finds a running build again, with its progress, Pause and Cancel. The unpack folder goes when the build ends, page or no page.
+- Workshop: an uncompressed image build checks for room before it starts. A compressed one warns if the drive looks short.
+- Workshop: a server copy left by a closed app (.ps5upload-source) is now cleaned up.
+- Workshop: Cancel says Cancelled, not failed, and "Cancel and stop the queue" holds the games behind it.
+- Workshop: the "Stored" compression choice is remembered.
+- Workshop: the result card and bottom bar name the game being made in a queue, not the one under ①.
+- Workshop: Compress to .ffpfsc now uses the level you chose and adds (2) to a name that is taken, like Make compressed image.
+- Workshop: an archive holding a .ffpfs, .ufs2 or .pkg is accepted. An archive no longer shows a "Check a game" hint it can't meet, and after unpacking you are told if a package would not play on your firmware.
+- Workshop: a folder named like Some.Game.2024 can be made into an image from the queue.
+- Workshop: the level tiles say that Fast, Balanced and Smallest make the same game and only Stored skips compression.
+- Cheats: switches follow a game starting or closing without Refresh, and "for your version" is read again after a patch.
+- Clean up: Remove keeps running when you leave the screen. Come back and you see its progress, Stop and what was skipped or failed.
+- Temperatures: Home and the Play tab keep the last reading when a read fails, show when it was taken, and say why when reads fail or are paused, instead of spinning for ever.
+- Eject: a USB drive can't be ejected while an upload, file operation or install runs on that PS5, and a forced eject is refused while a game runs. Extended storage rows say to use the PS5's Settings. The FAQ explains it.
+- Payloads: Send, the catalogue, the hub, playlists and sign-in wait for the loader, refuse during an install, and sending the helper asks first when something is using it.
+- Health: Fix for leftovers deletes only the files you were shown, and is refused while a transfer or install runs. The report reads in your language, apart from the network checks.
+- Several clients on one engine: opening a game page in another browser no longer wipes what the others know about their consoles, and a second client no longer removes a console from automatic save backups.
+- Mesh Drive: Review the deletes lists the files before you confirm.
+- Play Together: friends see who is hosting nearby, and a typed short code joins again.
+- ShadowMount+ hand-off: a failed read no longer replaces your manual list with one line, and two hand-offs at once both stay on the list.
+- Upload: a folder or file already on the PS5 is always noticed, also past the first 256 items, so nothing is overwritten without asking.
+- Library: folders that could not be read no longer make games disappear; the list says when it may be incomplete.
+- Automatic updates wait while you are in Remote Play, Play Together or Go live, and an app left running now finds new versions.
+- Remote Play: "Switch to 720p" and Go live's restart now last for that session; your settings stay as you set them.
+- Upload: after a failed mount, Retry repeats only the mount instead of sending the whole game again.
+- Files: Cancel now ends the wait before a retry straight away.
+- Save backups: the console list reaches the engine once it is up, without needing a change to your consoles.
+- Dump swap: when the console cannot answer, the swap no longer says the dump is back or forgets what it still has to do.
+- Saves: Restore from USB no longer reports "no backup" when the USB could not be read.
+- Convert, Saves, link downloads and clean-up: a brief hiccup reading a job's status no longer shows the job as failed while it carries on.
+- Collection: scans and copy checks keep updating after a failed read, instead of staying on "running".
+- Queue: stopping an install that did not stop keeps its row and says so, instead of showing "Stopped."
+- Queue: Restart waits for the old transfer to end instead of failing as "still stopping".
+- Web UI: Start all right after a reload no longer freezes the tab, a second tab's progress moves, and Open Tasks works behind a sub-path.
+- Web UI: PS5 upload notifications now appear on the console.
+- Web UI: plain-text errors from the engine or a proxy are shown instead of a bare status code.
+- Install Package: "skip certificate check" now also applies to the desktop app's link check.
+- Cheats: a refused delete or engine switch now shows as an error.
+- Saves: the free-space check before a restore uses the space that can really be used.
+- Launch: if the running game could not be read, starting another game no longer closes both.
+- Screens no longer spin forever when the engine stops answering; they say what happened.
+- Settings backups and exports no longer contain Remote Play pairing and Wake keys. Restoring keeps the keys this device already has.
+- Notifications, Tasks, queue messages and toasts are now translated in every language.
+- Long uploads write less to storage, and settings.json is only written when something changed.
+- Languages: Games, Save Data, Upload, Files, Kernel log, Backport, Health and Activity no longer show English results, task names and tooltips in other languages.
+- Languages: the app picks the closest language on first launch (Hong Kong and Taiwan Chinese, Portuguese from Portugal), and retries once if a language file does not load.
+- Languages: dates, numbers, durations and "time ago" follow the app's language instead of the system's, and the Saves folder count no longer shows an English "s".
+- Keyboard: the upload "already exists" dialog, the file preview and the Game details, Move and Mount dialogs close with Escape and keep focus inside. Escape in a folder picker no longer closes the dialog behind it.
+- Keyboard: tables can be sorted and rows opened from the keyboard, and focus returns to the button after a menu or the notifications panel closes.
+- Screen readers: console and engine status is read out, and form fields that had no name now have one.
+- Home: a tile that is not ready shows the reason on screen, so it can be read on a phone too.
+- Top bar: Reload page asks first when a stream or task is running.
+- Backport: asks before closing a running game, because unsaved progress is lost.
+- Games: Remove from home screen now asks first, and Hide from home screen no longer does: it can be undone from the same menu.
+- Errors: more screens show a plain sentence instead of an engine code.
+- Macros: removing a macro no longer moves "Press a key" to a different row.
+- Minion, Files: Replace no longer deletes what is there first. The new copy is made beside the old one, the two swap, and only then is the old one deleted. If the copy fails or you stop it, the old one stays as it was. It needs room for both until the end; when there is none the page says so. This works on network shares too.
+- Minion, Files: Stop now cancels the copy, move or delete that is running, also for a single item. It used to be offered only for several items and only ended the batch before the next one.
+- Minion: a call that gets no answer now ends in a message and a retry after a while, instead of "Loading…" for ever. Status, Games, Processes and Cheats no longer pile up reads on a slow helper, so what you press is not left waiting behind them.
+- Minion, Cheats: the card only mentions □ where it has been confirmed to work on the console.
+- Minion: after ○ on a confirm you are back on the button that asked, and a sheet no longer opens with focus on a button you cannot press, which used to eat your first ✕.
+- Minion: dates and counts in Games, Saves and Files follow the page's language, not the console's.
+- Minion: covers that cannot be read no longer hold on to memory for as long as the page is open.
+- Minion and the app in Arabic and Persian: gaps, side borders, text alignment, menus and search icons now mirror with the layout.
+- Collection: a split package (`Game_0.pkg`, `Game_1.pkg`, or `Game.pkg`, `Game.pkg.0`) is one copy now. It no longer shows as a duplicate of itself, and Move to Trash takes all its parts together.
+- Collection: a folder that holds a `.rar` no longer hides everything else in it, and Move to Trash no longer takes the whole folder with the `.rar`.
+- Collection: a folder that cannot be read during a scan (a dropped connection, a sleeping drive) keeps its games and is named on the page, instead of its games vanishing.
+- Collection: stopping a scan early no longer empties the library.
+- Collection: fewer requests to the title sites. A game they do not know is asked about once a day, and a site that is down is left alone for an hour.
+- Collection: scans list each folder once and write the index only when something changed.
+- Organizer: the preview shows progress and can be cancelled, and only one runs at a time.
+- Organizer: packages that only look like parts (`Bloodborne_1.pkg`, `Bloodborne_2.pkg`) keep their own names, and a split package moves as one, all of it or none of it.
+- Organizer: a run whose undo log cannot be read now shows in Earlier runs instead of vanishing.
+- Mesh Drive: while a console is away, syncing through a linked console no longer brings back files you deleted or turns your edits into conflict copies. Anything it replaces there goes to the drive's trash.
+- Mesh Drive: settling a conflict no longer lets go of the lock a running sync still needs. It says the drive is busy instead.
+- Mesh Drive: "Delete everywhere" acts right away, and is not lost if the console goes away partway.
+- Mesh Drive: Pause, Leave and Delete drive now stop a running sync, and a long first sync no longer holds up drives on other consoles.
+- Mesh Drive: status messages now appear in your language.
+- Mesh Drive: one unreadable file or folder no longer fails the whole sync. It is left out and listed, and is never taken as deleted.
+- Mesh Drive: changing a drive's password says which linked consoles did not answer. They get the new password on the next sync between the consoles.
+- Mesh Drive: a folder that is too broad is called that when refused, and a refused new drive leaves no folders or marker files behind.
+- Mesh Drive: syncing now waits for every install this app runs on the console, not only those from the upload queue.
+- Android: restoring settings from a file and importing a playlist work again. Choosing a folder on the Backport page now opens the app's picker on both phone apps.
+- Android 7 to 10: the file picker now asks for the storage permission, so uploads from these phones can read your files.
+- Android: turning a controller off mid-game brings the on-screen controller back, and its last buttons no longer stay held on the PS5. Two controllers no longer merge into one.
+- Android: a controller's stick moves no longer release D-pad or trigger keys on pads that report them as keys.
+- Android: ○ and PS on a controller no longer also act as Android's Back and Home during a stream.
+- Remote Play on phones: the screen stays on for Play Together guests, the phone controller and watch pages, and when the stream moves to the small player.
+- Android: haptics and rumble work in the app.
+- Android: a text field low on a page is no longer hidden behind the keyboard. The page makes room for it, and the tab bar steps aside while you type.
+- Android: the Back button closes an open dialog, picker or sheet first, instead of changing the page behind it. At the first page the app moves to the background and keeps running.
+- Phones: Back in a friend's full screen returns to the normal view, and the phone controller asks for a second Back before it leaves.
+- Android updates: a refused install now shows why in the update bar, with the download page next to it, and the text wraps so it can be read on a phone. Update messages appear in your language.
+- Android updates: pressing Install during a transfer now warns that the update will stop it.
+- iPhone updates: the update bar says to install the new .ipa with your sideloading app.
+- Phones: Settings explains why there is no Engine URL, and an old remote address saved by an earlier version is ignored.
+- Phones: the engine problem card no longer talks about a computer or offers a Restart button that can't work. It says to close and reopen the app.
+- Phones: bug reports now include the engine's log and any crash message, also from when the app was in the background.
+- iPhone and iPad: a failed connection now points to the app's Local Network switch in iOS Settings, not to macOS.
+- iPhone: the app listens again if iOS closed its connection to the built-in engine while the app was in the background.
+- iPhone: copies iOS makes when you pick a file from the Files sheet are removed after the upload and at the next start. The FAQ explains the extra space they need.
+- iPhone: .rar now says it isn't supported on phones, instead of asking for a password and then saying "not installed".
+- iPhone: the app no longer offers or asks for the camera; point the Camera app at a Play Together code instead.
+- Android: a crash of the app's web view no longer closes the whole app or stops a running transfer.
+- Android: settings and consoles now come back after a reinstall through Android's backup. Keys and saved passwords stay on the device.
+- Tablets and phones held sideways: the app keeps clear of the notch, the status bar and a side navigation bar. The status bar is hidden on a phone held sideways.
+- Android: a transfer that makes no progress for a while keeps its wake lock, and the background service comes back if Android refused it.
+- Android: Picture in picture closes by itself when the stream ends.
+- Android: backups and exports work in a work profile or on a second user.
+- Saves: the phone browser no longer says backups go to the phone's Download folder.
+- FAQ: why Play Protect warns about the APK, and how to check a file is really from this project.
+- Desktop: Engine URL now works with any port and with https. A remote engine on another port no longer half works.
+- Crash safety: the app's panic guards are back on. An error in one engine task on a phone no longer takes the whole app down, and a tray failure on Linux no longer closes the app.
+- Updates: a slow connection can now finish the download. There is no time limit on the whole download any more, and a download that was cut off carries on where it stopped, also after you restart the app.
+- Updates: the desktop download shows a progress bar with its size, and you can cancel it.
+- Updates: a GitHub rate limit now says so and when to try again, instead of "HTTP 403". Update errors appear in your language.
+- Engine: two versions of PS5Upload on one computer no longer stop each other's engine. The app also never stops a program it does not own, such as a Docker engine on the same port: it moves to a free port.
+- Engine: errors when the engine cannot start appear in your language, with the likely causes for your system.
+- Settings: changing the engine address while this computer's engine runs now tells you where it is running, and Restart engine moves it there. A restart no longer loses a change made a moment before.
+- Reset all data on a phone now also deletes saved PS5s, pairings and the engine's identity. The app closes to finish the reset.
+- Game metadata repair no longer overwrites your own icon or sound when the PS5 does not answer the folder listing in time.
+- Exports: saving over an existing file no longer loses it if the disk is full or the write fails. A crash-report zip that fails leaves nothing behind.
+- Screenshots: a damaged capture that the decoder cannot finish is stopped after a minute instead of holding up the app.
+- Linux: keeping the computer awake no longer leaves one background process behind per transfer or Remote Play session.
+- Linux and Windows: looking for a newly plugged-in controller no longer keeps reopening every input device.
+- Bug reports cover about five times as much engine history, so a problem from this morning is still there this evening.
+- Connection: the tool list now names etaHEN on its own port, and port 2323 as a Telnet shell, in your language.
+- Linux: the app no longer pauses for a moment when a transfer starts or ends while an update waits. Windows, macOS and Linux: dragging a file out and opening Settings no longer stall the window on a big clean-up or a large Downloads folder.
+- The in-app file browser opens very large folders a page at a time.
+- "Show files" now opens the folder itself instead of showing it in its parent.
+- Payloads: what each payload does now appears in your language in the Catalog and the USB wizard.
+- USB wizard: USB SSDs and hard drives now show on Windows. Network shares and read-only volumes no longer appear on macOS and Linux, and a Linux stick named like your user shows again.
+- Files: moving a file onto a name that already exists on the same drive no longer replaces it without asking. It is refused unless you pressed Replace, and a Replace on a folder now merges on one drive as it already did across drives.
+- Shares on the PS5: a share typed with folders after it (Media/Games/PS5, or a pasted \\nas\Media\Games) now connects. The first name is the share and the rest goes in the start folder, and the "no share of that name" message says so.
+- Backport: the library scan now reads libraries bigger than 2 MiB whole. Sets it stored cut short are removed, so a backport can no longer install a cut library and leave the game dying at load. Scan again to get them back whole.
+- Backport: a finished library scan can be read again for ten minutes, so a second tab or a retry no longer says "no such scan".
+- Save backups: "Back up now" while a game runs now checks every file of a big save before keeping the copy, and "Use a shared save" clears all the old files first, not only the first 256.
+- Save backups: automatic backups keep running after an unexpected error in one pass, and they wait for installs and console file jobs instead of slowing them down.
+- Settings backups: the keys that wake a PS5 and sign in to it are now stored encrypted. Only this computer gets them back. Another device reaching a Docker engine gets the backup without them, and a restore keeps the keys that device already has. A PS5's own copy holds only its own keys.
+- Network servers: a WebDAV upload no longer fails after two minutes, and a WebDAV server typed as nas:5006 or a pasted https://nas:5006/dav address now connects.
+- Network servers: an FTP or SFTP upload to a server that stops answering now fails instead of hanging, and Cancel stops it at once. SFTP reads on a slow link no longer fail after 30 seconds.
+- Network servers: copying a folder from a server starts at once with a job you can cancel, instead of waiting for the whole folder to be listed. Errors on transfers now say what to check.
+- Network servers: saved passwords are no longer lost when the key file can't be read for a moment, and a damaged connections file no longer breaks saved servers until a restart. Test on an edited connection keeps the saved password when only the capitals or spaces in the host changed.
+- Temperatures: when one sensor fails or stalls, Read sensors now shows the temperatures it did read and says the other sensors did not answer.
+- Fix permissions, register, uninstall and launch no longer report a timeout at 60 seconds while the console finishes the job. The folder preview no longer shows a timeout error, and an upload you start no longer waits for it.
+- Health scan no longer disturbs an install that is starting.
+- Disk usage: one count per PS5 at a time, so a second tab or a retry no longer slows the console. A second count for the same folder joins the first.
+- API: requests that change a console must now name it with addr. They used to fall back to the default console, which could act on the wrong PS5. Test-only routes are off in normal runs.
+- Self-hosted web UI: pages load faster after the first visit, a page never shows an old version after an engine update, and a missing file now answers 404.
+- Payloads: the Catalog now works in the web UI and in Docker. It downloads and sends payloads through the engine.
+- Payloads: a slow connection can finish a download now. There is no time limit while data keeps arriving, and you can cancel a download.
+- Payloads: two downloads of the same payload at once could cache a broken file. They now take turns.
+- Payloads: a download can no longer be redirected to a plain http address or a device on your network.
+- Payloads: one bad line in your added repos no longer wipes the whole list.
+- Payloads: www.github.com links work when adding a repo, the same repo in another case is not added twice, and adding a repo that is already in the catalogue no longer makes a second card.
+- Payloads: an added repo can name a checksum file, and a download that doesn't match it is refused.
+- USB payload stick: payloads from added repos are written to the stick. They used to be left out without a word.
+- USB payload stick: a full or failing drive keeps what it had, and payloads you unticked are removed from the stick.
+- Game icons: repairing a title's icon no longer overwrites your own files when the console is slow to answer.
+- Connection: the tool strip checks etaHEN on its own port and shows port 2323 as a telnet shell.
+- Web UI: Find PS5s and the tool strip work in a browser, and ShadowMount+ can be sent from the games page.
+- Files: a folder deep in a long path now lists all its files and folders. Past a certain length they used to vanish with no error.
+- Installs: an install call stuck inside the PS5 no longer blocks every later install until a reboot. The install helper restarts itself after 16 minutes.
+- Extract on the console: if the helper dies just after an extraction starts, the archive password is now removed from the console the next time it starts.
+- Sensors: "Read sensors" can no longer take the helper down on a console where one of the newer readings misbehaves. That reading just comes back empty.
+- Sensors: temperatures no longer queue behind a slow reading, so the page answers with the last values. Bug reports now say why a reading failed while a game runs.
+- Sensors: the CPU and GPU clocks no longer turn off for the whole session after one busy moment during a game.
+- Helper: after rest mode with a game open, the helper now gets its rights back, so cheats and other features that need them keep working without sending the helper again.
+- Helper: opening a save can no longer end the helper if another connection drops at that moment.
+- Play time: moving the console clock back during a game no longer saves an impossible total. A total already broken this way is cleared.
+- Backup: only the newest five snapshots of each name are kept, as the screen says, and a folder with a strange name no longer breaks the list.
+- Cheats: a game no longer shows one of its cheats' names as its own. Accented names read correctly.
+- Cheats: a game with hundreds of cheats on now shows them as on in the list too.
+- Fans: a bad fan request is now refused. It used to set the fan to 65 °C and save that.
+- Minion: idle connections on your network can no longer stop the console page from answering.
+- Accounts: a user who is signed in can no longer be deleted. Sign them out on the PS5 first.
+- Accounts: a crash or power cut can no longer leave an empty sign-in file or sign-in backup, and a damaged backup is no longer put back in part.
+- API: `GET|PUT /api/consoles` lists the consoles the app shows, on every platform; the desktop and mobile apps mirror their list to their own engine. Remote Play keys are stored encrypted and never shown. Routes that take `addr` or `host` also take a console's id or name.
+- API: `GET|PATCH /api/settings` reads and changes the app's upload, install and convert settings by name, with types and defaults. The apps pick up a change within a minute.
+- Remote Play can run with no app open: `POST /api/ps5/rp/start`, `stop`, `settings`, `passcode`, `keyboard` and `mic`. Pairing keeps the keys in the engine, so `start` needs only the console.
+- A Remote Play frame request works with no app page attached: the picture comes from the stream through the ffmpeg Go live uses. Without ffmpeg, the error says how to install it.
+- API: the console's keyboard and mouse work over plain HTTP: `PUT /api/ps5/vinput` and `POST /api/ps5/vinput/report`.
+- Self-hosted engines can open the automation routes to their allowed addresses with `PS5UPLOAD_ALLOW_AUTOMATION=1`. Off by default.
+- Wake and Wake & sign in use the keys the engine stored when a request sends none.
+- Web UI: an open tab no longer erases your console list when the engine's data is lost or recreated, on that browser or on your other devices. Both lists are kept and saved back.
+- Web UI: a console list change that could not be saved is tried again and survives a reload. Restoring a settings backup brings your consoles back.
+- Web UI: `PS5_ADDR` is listed for the first browser, so the console is not typed in twice.
+- Web UI: one published Docker image now runs below a path. Set `PS5UPLOAD_BASE_URL=/ps5/`; a value that is not a path is ignored with a warning.
+- Web UI behind a proxy: phone and friend links name the address people can actually reach (scheme, name and port), Remote Play's sockets are documented, and links opened from another site open. `PS5UPLOAD_TRUSTED_PROXY` makes the allowlist and limits see the real client.
+- Security: a web page can no longer reach the engine by pointing its own domain at it. Public names need `PS5UPLOAD_ALLOW_HOST`, and the refusal says so.
+- Play Together: the app can join a host reached by name or over https, and a link it refuses says why. Copy link works on plain http.
+- Web UI: uploading a file from this device shows its percent and has a Cancel, in Files and Install too, and the server deletes its copy when the upload is done.
+- Web UI: a single file re-added after a failed upload resumes, and "Upload complete" appears on the TV.
+- Web UI: the page loads about four times smaller on each visit, and `/join` and `/pad` drop the desktop app's styles. Reloads no longer re-download what has not changed.
+- Devices: what another device shows ends when the work does, even with no window open, and an upload with its tab closed still shows.
+- Docker: `docker logs` no longer grows by a line per request, and the container stops within 8 seconds.
+- Log tab: warnings stay for hours instead of about two minutes. A slow engine no longer repeats lines.
+- Files: folders of tens of thousands of entries open and scroll without freezing. Sorting a big folder is 20 times faster.
+- Upload queue: long batches no longer slow the app down on every progress tick.
+- Uploads run faster with Files uploads, copies and installs: background checks now wait for them too.
+- Remote Play: no GPU work for a picture nobody can see, while the window is hidden or on another screen.
+- Collection: the grid loads small covers, which scroll faster and use far less memory.
+- Idle use: the app no longer rewrites settings every few seconds, the helper no longer rewrites play time when nothing changed, and an idle engine asks the console for less.
+- Settings: the Engine URL field takes a bare address such as `192.168.1.10`, and clicking in and out of it no longer points the app at the wrong port.
+- Phone apps: Remote Play's per-packet encryption runs about four times faster.
+- Self-hosted behind a path (`PS5UPLOAD_BASE_URL`): phone controller and Play Together links now work. They pointed at the root and were refused.
+- Reverse proxy: a blocked browser request now says which Origin and Host did not match and that the Host header needs forwarding.
+- Engine API: every failed `/api/*` call now answers JSON with `error` and `code`, including malformed requests, unknown routes and refused callers.
+- Engine API: a drive action the console refuses (eject, disc power, beep, light) and a folder that cannot be read are now real errors, not a success with `ok: false`.
+- Engine API: `addr`, `host` and `console` now all name the console on every route.
+- Engine API: add `Prefer: respond-async` to any POST and it answers at once with an `op_id`. `GET /api/ops` lists running calls, jobs and installs in one place, and `POST /api/ops/{id}/cancel` stops them where the route can.
+- Engine API: `/api/events` now numbers its events, replays what a reconnecting client missed, says when it cannot (`resync`), and also carries `journal`, `install` and `op` events.
+- Engine API: `/api/jobs` and `/api/event-journal` take `limit` and `since_seq`.
+- Self-hosted without a data directory: shared settings now report that they could not be saved instead of saying "saved" and losing them on restart.
+- Starting a second engine by accident no longer touches the running engine's data or log.
+- **Workshop:** while a game is being made, What to make and Options stay open and set the next game you add, so a game folder can be queued behind a build that makes a folder. (#669)
+- **Workshop:** a game waiting in the queue can have every choice changed: output folder, next to its source, compression, language, image format and level, verification and what happens after. (#669)
+- **Workshop:** "Read the folder back" now moves as a big file is read, instead of looking stuck until the file ends, and the status bar no longer shows a speed such as "1.12 B/s". (#669)
+- **Remote Play on Linux:** the DualSense d-pad works, and L2 and R2 no longer move the sticks, in the AppImage, the .zip and on Ubuntu 24.04. The app now reads the controller itself there, in Play and Play Together, and keeps its rumble. (#668)
+- **Windows:** if the app has to close on start, it now says why in a message box and saves a report in `.ps5upload\crash-reports` that the bug report zip picks up. A problem with WebView2 tells you to repair it, and shows the error. (#672)
+- **Windows:** one USB or Bluetooth device that reports something odd can no longer close the app at launch; controllers read through the app may stop on that PC, and everything else works. (#672)
+- **Workshop:** an image you upload goes to the drive set under Volumes › Use for packages, on the console it is going to. You can pick the drive and folder before it runs, on a game in the queue too, and you see the real path and the free space. Send to PS5 on a game page and sending from your Collection follow the same drive. (#673)
+- **Remote Play:** turbo goes up to 30 presses a second again. Above 10, only games running fast see every press. (#671)
+- **FAQ:** what to do when your PC goes silent as you plug in a DualSense on Windows. (#671, #655)
+- **FAQ search finds names with underscores.** The help link on Stream & install errors searched for `PS5UPLOAD_PKG_HOST_IP` and opened "No matches"; it now opens the answer.
+- **FAQ answers read properly in the app.** Commands stay on their own lines, step numbers keep counting across a code block, and links to files in the project open on GitHub.
+- **FAQ corrected against the app:** buttons and menu paths that moved, how updates work now, Linux packages that install on Debian 13, moving saves between users and consoles, and where app settings are kept. New answers for Hush, DualSense effects, HDR, typing into the PS5's keyboard, and save backups to a NAS.
+- **Feather: how to add the source.** The FAQ gives the steps: Sources, +, paste the address into Source URL, press Save. A raw GitHub link can't work, and Import only reads the clipboard.
+- **iPhone source at the website's address.** `https://ps5upload.phantomptr.com/altstore.json` serves it, and the website has Add to Feather and Add to AltStore buttons.
+- **AltStore no longer warns on every install from the source.** The source lists the permissions the app asks for.
+- **An iOS build that fails no longer cuts off source users.** A release without one keeps listing the last good version, and earlier versions stay listed.
+- **Play on a plain http:// page says why it can't play.** It used to tell people on a current Chrome to get a current browser. Open it over https, on the engine's computer as localhost, or use an app.
+- **Website offers the stable release first.** It names a newer pre-release beside it, instead of giving first-time visitors a build still being tested.
+- **Website offers the right download.** iPads no longer get a Mac app, ARM Linux and Windows get ARM builds, Fedora gets the .rpm, and a Mac whose chip the browser can't tell gets both choices.
+- **The website's Docker command pastes as it is,** with the games folder included.
+- **The licence is the real GPL-3.0 text,** and every release carries it. It was a stub.
+- **iPhone: a .rar shows a clear message** instead of an internal error.
+- **About and What's new.** About lists Play, Play Together, Go live, Minion and Mesh Drive. What's new shows the newest 20 versions, with Show older versions for the rest.
+- **The FAQ tab says when it is showing English,** and Copy a link says whether it worked.
+- **Security policy and the reverse-proxy guide corrected.** SECURITY.md describes who can connect by default. The nginx example now has what WebSockets need, so Play, phone controllers, watching and Play Together work through it.
+- Remote Play: after pressing Got it on the "your keyboard & mouse control the PS5" card, keys keep reaching the PS5.
+- Windows setup script: `make payload` works after it, because it now installs the SQLite sources and the portable prospero-nid.
+- Release files: `latest.json` and `altstore.json` now carry a build attestation too, so `gh attestation verify` works on them.
+- Translations: dozens of messages that still said the old thing in other languages now match the English, for example the download cancel button, RAR and install errors, and moving games between drives.
+- Translations: fixed garbled text in Indonesian (SMP status), Arabic (Upload), Hindi (stopping a bulk action) and Japanese (a new playlist's name).
+- Translations: Remote Play now has its proper name in Russian, and the website no longer shows English words like "sideload" and "Pre-release" in other languages.
+- Website: download sizes follow the page's language, such as 1,2 Go in French.
+
 ## 11.0.8
 
 - **A friend's buttons hide right away on a phone.** When a friend joins, the TV asks who's
@@ -106,7 +461,7 @@ What's new in ps5upload, written for humans.
   (`Media/Games`), or with a whole address pasted into Server or Share (`\\nas\Media\Games`,
   `smb://nas/Media`), is split into server, share and start folder for you. A share that doesn't
   exist is now named in the error, with what to type instead.
-- **NAS copies in Activity can be cancelled**, and the PS5's own PS5Upload page lists its NAS
+- **NAS copies in Activity can be cancelled**, and PS5Upload Minion on the PS5 lists its NAS
   copies under Tasks (For #658).
 
 ## 11.0.1
@@ -746,20 +1101,6 @@ What's new in ps5upload, written for humans.
   large network receive buffer (it did on Windows only), and logs the size it got.
 
 ## 10.1.0
-- **Updates are checked before they install.** Each release now publishes the SHA-256 of every
-  download, and the app checks the file against it; a file that doesn't match is deleted and
-  nothing is installed.
-- **One-click updates for a .deb or .rpm install on Linux.** Install and restart asks for your
-  password with the desktop's own prompt, installs the package and opens the new version. If you
-  close the prompt (or your desktop can't show one), the command to run is shown as before.
-  rpm-ostree systems (Bazzite, Silverblue) still get the command, since the change applies after
-  a reboot.
-- **Install updates when you quit** (Settings › Updates, on by default). A downloaded update is
-  installed as you quit PS5Upload, never while something is transferring, and the app stays
-  closed. Not for a .deb or .rpm, which needs your password.
-- **What's new after an update:** the first launch of a new version shows its release notes once.
-- **Skip this version** in the update banner and in Settings › Updates: no banner, badge or
-  automatic install for that version until a newer one comes out.
 
 - **Remap controller buttons in Play.** Settings › Controller buttons: choose which PS5 button each
   button on your controller sends (swap ✕ and ○, turn a button off, put Create on L3...). It works
