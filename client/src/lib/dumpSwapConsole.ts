@@ -15,13 +15,7 @@ import { pkgLibraryStore } from "../state/pkgLibrary";
 import { mgmtAddr, transferAddr } from "./addr";
 import type { SwapDeps } from "./dumpSwap";
 import { fetchRunningGames } from "./runningGames";
-
-function decodeBase64Text(b64: string): string {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
-}
+import { decodeBase64Text } from "./base64Text";
 
 export function consoleSwapDeps(host: string): SwapDeps {
   const tx = transferAddr(host);

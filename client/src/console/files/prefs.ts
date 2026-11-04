@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, call } from "../api";
+import { cleanConsolePath as cleanPath } from "../../lib/consolePath";
 
 export interface FilesPrefs {
   favorites: string[];
@@ -39,10 +40,7 @@ export async function changePrefs(op: PrefsOp, path: string): Promise<FilesPrefs
 }
 
 /** A path as the helper stores it: '//' collapsed, no trailing '/' (except "/"). */
-export function cleanPath(p: string): string {
-  const c = p.replace(/\/{2,}/g, "/");
-  return c.length > 1 ? c.replace(/\/$/, "") : c;
-}
+export { cleanPath };
 
 export function isPinned(prefs: FilesPrefs | null, path: string | null): boolean {
   return !!prefs && path != null && prefs.favorites.includes(cleanPath(path));

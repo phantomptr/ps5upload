@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { linkHost, splitByNetwork } from "./NetworkChoice";
+import { urlHost, splitByNetwork } from "./NetworkChoice";
 
 describe("splitByNetwork", () => {
   const lan = "http://192.168.1.20:19113/join#i=abcdefgh";
@@ -16,7 +16,7 @@ describe("splitByNetwork", () => {
   });
 
   it("reads hosts of links and bare addresses", () => {
-    expect(linkHost(ts)).toBe("100.101.102.103");
-    expect(linkHost("10.0.0.5:19113")).toBe("10.0.0.5");
+    expect(urlHost(ts)).toBe("100.101.102.103");
+    expect(urlHost("10.0.0.5:19113")).toBe("10.0.0.5");
   });
 });

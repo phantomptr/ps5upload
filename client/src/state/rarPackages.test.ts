@@ -36,7 +36,7 @@ import {
   type Volume,
 } from "../api/ps5";
 import {
-  archiveFolderName,
+  unpackFolderName,
   archiveKindOf,
   archiveNeedBytes,
   archiveSpaceCheck,
@@ -102,9 +102,9 @@ describe("helpers", () => {
   });
 
   it("names the console folder after the archive, deterministically", () => {
-    expect(archiveFolderName("/x/My Game [v1].part1.rar")).toBe("rar_My_Game_v1");
-    expect(archiveFolderName("/x/My Game [v1].part1.rar")).toBe(archiveFolderName("/y/My Game [v1].rar"));
-    expect(archiveFolderName("..rar")).toBe("rar_archive");
+    expect(unpackFolderName("/x/My Game [v1].part1.rar")).toBe("rar_My_Game_v1");
+    expect(unpackFolderName("/x/My Game [v1].part1.rar")).toBe(unpackFolderName("/y/My Game [v1].rar"));
+    expect(unpackFolderName("..rar")).toBe("rar_archive");
   });
 
   it("orders base, then patch (older first), then DLC", () => {
@@ -300,7 +300,7 @@ describe("space and clean-up", () => {
   });
 
   it("knows its own folders and skips those in use", () => {
-    expect(isArchiveFolderName(archiveFolderName("/x/Game.part1.rar"))).toBe(true);
+    expect(isArchiveFolderName(unpackFolderName("/x/Game.part1.rar"))).toBe(true);
     expect(isArchiveFolderName("zip_A")).toBe(true);
     expect(isArchiveFolderName("7z_A")).toBe(true);
     expect(isArchiveFolderName("Game.pkg")).toBe(false);
@@ -371,9 +371,9 @@ describe("archives of any kind", () => {
   });
 
   it("names the console folder after the archive and its kind", () => {
-    expect(archiveFolderName("/x/My Game.zip")).toBe("zip_My_Game");
-    expect(archiveFolderName("/x/My Game.7z")).toBe("7z_My_Game");
-    expect(archiveFolderName("/x/Multi.part01.rar")).toBe("rar_Multi");
+    expect(unpackFolderName("/x/My Game.zip")).toBe("zip_My_Game");
+    expect(unpackFolderName("/x/My Game.7z")).toBe("7z_My_Game");
+    expect(unpackFolderName("/x/Multi.part01.rar")).toBe("rar_Multi");
   });
 
   it("unpacks a ZIP's packages with the ZIP reader, and a 7z's with the 7z reader", async () => {

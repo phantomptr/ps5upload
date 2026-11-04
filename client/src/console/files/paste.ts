@@ -40,6 +40,7 @@ import {
   type BatchOptions,
   type BatchResult,
 } from "./move";
+import { keepBothName } from "../../lib/consolePath";
 
 export type PasteMode = "copy" | "cut";
 export type ConflictChoice = "skip" | "replace" | "keep";
@@ -116,14 +117,7 @@ export async function statOrNull(path: string): Promise<Stat | null> {
   }
 }
 
-/** "name.ext" → "name (n).ext" (a folder keeps its dots); a " (k)" it already ends with is replaced. */
-export function keepBothName(name: string, n: number, dir: boolean): string {
-  const dot = dir ? -1 : name.lastIndexOf(".");
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : "";
-  const m = /^(.+) \((\d+)\)$/.exec(stem);
-  return `${m ? m[1] : stem} (${n})${ext}`;
-}
+export { keepBothName };
 
 /** The first free Keep both name for `name` in `dir`. */
 export async function freeName(

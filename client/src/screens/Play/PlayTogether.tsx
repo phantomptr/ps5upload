@@ -15,14 +15,9 @@ import {
   type JoinHostState,
 } from "./playTogetherState";
 import { NetworkChoice } from "./NetworkChoice";
+import { clock } from "../../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
-
-/** 42 → "0:42". */
-const clock = (s: number) => {
-  const t = Math.max(0, Math.ceil(s));
-  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
-};
 
 /** What a friend is doing, in words. */
 export function guestStatusText(tr: Tr, g: JoinGuest): string {

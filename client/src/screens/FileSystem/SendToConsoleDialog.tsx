@@ -12,12 +12,7 @@ import { useRosterStore } from "../../state/roster";
 import { useC2cRoutes, type C2cRoute, type C2cRouteMode } from "../../state/c2cRoutes";
 import { testPs5Connection } from "../../api/ava1";
 import { testLines, type TestLine } from "../../lib/c2cTest";
-
-function parentDir(p: string): string {
-  if (p === "/" || p === "") return "/";
-  const i = p.lastIndexOf("/");
-  return i <= 0 ? "/" : p.slice(0, i);
-}
+import { consoleParentDir as parentDir } from "../../lib/consolePath";
 
 /** Send the selection to another console in the roster (#433): pick the console and the folder
  *  on it, see before anything runs whether it fits and what it replaces, then queue it there. */

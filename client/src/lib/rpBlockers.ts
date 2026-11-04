@@ -41,6 +41,7 @@ import {
 } from "../screens/Hush/hushConfig";
 import { mgmtAddr } from "./addr";
 import { isTauriEnv } from "./tauriEnv";
+import { decodeBase64Text } from "./base64Text";
 
 /** Our own folder on the console for "this app paused it" markers (one file per blocker). */
 export const RP_PAUSED_DIR = "/data/ps5upload/rp-paused";
@@ -120,13 +121,6 @@ export interface RpBlocker {
   pause(ctx: BlockerCtx, opts?: PollOpts): Promise<PauseOutcome>;
   /** Switch it back on (loading it again when it exited), and clear our marker. */
   resume(ctx: BlockerCtx): Promise<ResumeOutcome>;
-}
-
-function decodeBase64Text(base64: string): string {
-  const bin = atob(base64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
 }
 
 /** A small text file on the console, or null when it is not there (or unreadable). */

@@ -1,4 +1,5 @@
 import { isRemotePath } from "../lib/remotePath";
+import { keepBothName } from "../lib/consolePath";
 
 /**
  * Turns a pick on the Files screen ("Add files", "Add folder", a drop from the computer) into
@@ -101,15 +102,7 @@ export function baseNameOf(p: string): string {
   return t.split(/[\\/]/).pop() || t || "file";
 }
 
-/** "name.ext" → "name (n).ext" (a folder keeps its dots); a " (k)" it already ends with is
- *  replaced. The same rule the console's own Files page uses for Keep both. */
-export function keepBothName(name: string, n: number, dir: boolean): string {
-  const dot = dir ? -1 : name.lastIndexOf(".");
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : "";
-  const m = /^(.+) \((\d+)\)$/.exec(stem);
-  return `${m ? m[1] : stem} (${n})${ext}`;
-}
+export { keepBothName };
 
 /** The first Keep both name for `name` that is not in `taken`. */
 export function freeKeepBothName(

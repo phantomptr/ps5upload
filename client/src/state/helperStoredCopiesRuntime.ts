@@ -13,18 +13,12 @@ import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { isTauriEnv } from "../lib/tauriEnv";
 import type { Translator } from "./lang";
 import { pushNotification } from "./notifications";
-
-function decodeText(b64: string): string {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
-}
+import { decodeBase64Text } from "../lib/base64Text";
 
 export const liveCopyDeps: CopyDeps = {
   pmOverview,
   listDir: (host, path) => fsListDir(host, path),
-  readText: async (host, path) => decodeText((await fsReadPreview(host, path, 64 * 1024)).base64),
+  readText: async (host, path) => decodeBase64Text((await fsReadPreview(host, path, 64 * 1024)).base64),
 };
 
 function liveReplaceDeps(): ReplaceDeps {

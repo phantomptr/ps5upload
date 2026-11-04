@@ -181,7 +181,7 @@ import { nameKey, type FsExistingEntry } from "../../state/fsUploadPlan";
 import { fsUploadDeps } from "../../state/fsUploadRuntime";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
-import { formatBytes } from "../../lib/format";
+import { formatDuration, formatBytes } from "../../lib/format";
 import { formatEtaSeconds } from "../../lib/uploadEta";
 import { useRateEta } from "../../lib/useRateEta";
 import { resumedShown } from "../../lib/resumedProgress";
@@ -212,16 +212,6 @@ interface DirEntry {
   size: number;
   /** Seconds since the epoch; older helpers omit it. */
   mtime?: number;
-}
-
-function formatDuration(sec: number): string {
-  if (!isFinite(sec) || sec < 0) return "—";
-  if (sec < 60) return `${Math.ceil(sec)}s`;
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  if (m < 60) return `${m}m ${s}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
 }
 
 // formatBytes moved to lib/format.ts.
