@@ -362,9 +362,9 @@ with **Settings → Engine URL**.
   `ghcr.io/phantomptr/ps5upload-engine` (engine only). Every release tag pushes `:<version>`;
   `:latest` and `:<major.minor>` move only when a pre-release is promoted to a release.
 - Start from [`engine/compose.yaml`](engine/compose.yaml). It uses host networking (stream
-  installs need the PS5 to reach the engine). `PS5_ADDR` (the console) and `PS5UPLOAD_ALLOW_IP`
-  (who may use the page) are required for a web UI used from other devices on the LAN; without
-  the allowlist every browser but the host's own gets a `403`.
+  installs need the PS5 to reach the engine). `PS5UPLOAD_ALLOW_IP` (who may use the page) is required
+  for a web UI used from other devices on the LAN; without it every browser but the host's own gets
+  a `403`. `PS5_ADDR` (the console) is listed for the first browser, so it need not be typed in again.
 - Open `http://<host>:19113`. The file picker browses the engine's disk; mount your games
   folder into the container and set `PS5UPLOAD_BROWSE_ROOTS`.
 - Map `/data` to a host folder (on Unraid, `/mnt/user/appdata/ps5upload`): it holds the

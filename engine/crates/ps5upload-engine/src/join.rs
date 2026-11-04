@@ -408,11 +408,11 @@ pub(crate) struct Party {
 /// How guests reach this engine.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Reach {
-    /// The port the host's request came in on.
+    /// The port guests use at this engine's own addresses.
     pub port: u16,
-    /// The name the host's browser used, when it is not this computer's loopback (the web UI
-    /// of an engine on a NAS): guests on the LAN can likely use it too.
-    pub web_host: Option<String>,
+    /// Scheme, name and port the host's browser used, when it is not this computer's loopback (the
+    /// web UI of an engine on a NAS or behind a proxy): guests can likely use it too.
+    pub web_base: Option<String>,
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -810,7 +810,7 @@ impl Party {
             "asking": self.pending.len(),
             "guests": guests,
             "settings": self.settings,
-            "reach_web_host": self.reach.web_host.is_some(),
+            "reach_web_host": self.reach.web_base.is_some(),
         })
     }
 }
@@ -1014,8 +1014,11 @@ pub async fn relay(
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
+    // Said on the socket: a page's WebSocket cannot read the body of a refused upgrade.
     let Some(target) = crate::pad_link::lan_ws_target(&q.url, "api/join/ws") else {
-        return bad(StatusCode::BAD_REQUEST, "address");
+        return upgrade.on_upgrade(|mut s| async move {
+            let _ = s.send(refused("address")).await;
+        });
     };
     // What the guest sends is held to a guest socket's limit; the host's pictures coming back
     // are read by the relay's own client socket, which keeps its large one.
@@ -1774,7 +1777,10 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
 /// `PS5UPLOAD_ALLOW_IP` admits (the web UI of an engine on a NAS or in Docker, reached from a
 /// browser on the LAN: loopback_guard in lib.rs let only those through, as for every other API).
 fn host_allowed(peer: IpAddr, headers: &HeaderMap) -> bool {
-    !peer.is_loopback() || crate::vinput_api::host_is_local(headers)
+    !peer.is_loopback()
+        || crate::vinput_api::host_is_local(headers)
+        // A reverse proxy on this computer, under the name its operator listed.
+        || crate::host_guard::host_named_by_operator(headers)
 }
 
 fn guard(peer: &std::net::SocketAddr, headers: &HeaderMap) -> Option<Response> {
@@ -1782,35 +1788,28 @@ fn guard(peer: &std::net::SocketAddr, headers: &HeaderMap) -> Option<Response> {
 }
 
 /// What the host's request says about how guests reach this engine.
-fn reach_from(headers: &HeaderMap, peer: IpAddr) -> (u16, Option<String>) {
-    let port = crate::pad_link::port_of(headers);
-    let web_host = (!peer.is_loopback())
-        .then(|| headers.get("host").and_then(|h| h.to_str().ok()))
-        .flatten()
-        .map(|h| h.trim().to_string())
-        .filter(|h| {
-            !h.is_empty()
-                && h.len() <= 255
-                && h.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b".-:[]".contains(&b))
-        });
-    (port, web_host)
+fn reach_from(headers: &HeaderMap) -> (u16, Option<String>) {
+    (
+        crate::pad_link::lan_port(headers),
+        crate::pad_link::web_base(headers),
+    )
 }
 
-/// The engine's addresses guests can use, best first: the name the host's browser used (a web
+/// This computer's addresses guests can use: home network, then a VPN's (WireGuard…), then
+/// Tailscale's (pad_link::reach_ips).
+fn ip_bases(console: &str, reach: &Reach) -> Vec<String> {
+    crate::pad_link::reach_ips(Some(console))
+        .0
+        .into_iter()
+        .map(|ip| crate::pad_link::ip_base(ip, reach.port))
+        .collect()
+}
+
+/// The engine's addresses guests can use, best first: what the host's browser used (a web
 /// UI), then this computer's LAN addresses toward the console.
 fn bases(console: &str, reach: &Reach) -> Vec<String> {
-    let mut out: Vec<String> = reach
-        .web_host
-        .iter()
-        .map(|h| format!("http://{h}"))
-        .collect();
-    // Home network, then a VPN's (WireGuard…), then Tailscale's (pad_link::reach_ips).
-    for ip in crate::pad_link::reach_ips(Some(console)).0 {
-        let b = match ip {
-            IpAddr::V6(v6) => format!("http://[{v6}]:{}", reach.port),
-            IpAddr::V4(v4) => format!("http://{v4}:{}", reach.port),
-        };
+    let mut out: Vec<String> = reach.web_base.iter().cloned().collect();
+    for b in ip_bases(console, reach) {
         if !out.contains(&b) {
             out.push(b);
         }
@@ -1833,9 +1832,10 @@ fn invite_json(
     let Some(inv) = inv else {
         return serde_json::Value::Null;
     };
+    let prefix = crate::host_guard::base_path();
     let urls: Vec<String> = bases(console, reach)
         .iter()
-        .map(|b| format!("{b}/join#i={}", inv.key))
+        .map(|b| format!("{b}{prefix}/join#i={}", inv.key))
         .collect();
     serde_json::json!({
         "key": inv.key,
@@ -1863,10 +1863,14 @@ fn state_json(console: &str) -> serde_json::Value {
     match snap {
         Some((c, reach, inv, mut v)) => {
             v["invite"] = invite_json(&c, &reach, inv, now);
-            // the LAN socket guests connect to (nearby apps get it from the mesh presence)
-            v["ws"] = bases(&c, &reach)
+            // the LAN socket guests connect to (nearby apps get it from the mesh presence): an
+            // address when there is one, which an app's relay can use as it is
+            let prefix = crate::host_guard::base_path();
+            v["ws"] = ip_bases(&c, &reach)
                 .first()
-                .map(|b| format!("{}/api/join/ws", b.replacen("http://", "ws://", 1)))
+                .cloned()
+                .or_else(|| reach.web_base.clone())
+                .map(|b| format!("{}{prefix}/api/join/ws", b.replacen("http", "ws", 1)))
                 .into();
             v
         }
@@ -1898,7 +1902,7 @@ pub async fn get_state(
     if let Some(r) = guard(&peer, &headers) {
         return r;
     }
-    touch_reach(&q.addr, &headers, peer.ip());
+    touch_reach(&q.addr, &headers);
     Json(state_json(&q.addr)).into_response()
 }
 
@@ -1908,11 +1912,11 @@ pub struct AddrBody {
 }
 
 /// The host's request: how guests reach this engine now.
-fn touch_reach(console: &str, headers: &HeaderMap, peer: IpAddr) {
-    let (port, web_host) = reach_from(headers, peer);
+fn touch_reach(console: &str, headers: &HeaderMap) {
+    let (port, web_base) = reach_from(headers);
     with_party(&host_key(console), |p| {
         p.reach.port = port;
-        p.reach.web_host = web_host;
+        p.reach.web_base = web_base;
     });
 }
 
@@ -1954,7 +1958,7 @@ pub async fn open(
         );
         true
     });
-    touch_reach(&b.addr, &headers, peer.ip());
+    touch_reach(&b.addr, &headers);
     if created {
         let now = Instant::now();
         with_party(&key, |p| p.invite(false, now));
@@ -1999,7 +2003,7 @@ pub async fn invite(
         return r;
     }
     let now = Instant::now();
-    touch_reach(&b.addr, &headers, peer.ip());
+    touch_reach(&b.addr, &headers);
     match with_party(&host_key(&b.addr), |p| {
         (p.invite(b.new, now), p.console.clone(), p.reach.clone())
     }) {
@@ -3160,10 +3164,14 @@ mod tests {
         // a peer loopback_guard admitted (PS5UPLOAD_ALLOW_IP: the web UI on a NAS)
         assert!(host_allowed(lan, &h("nas.local:19113")));
         // and its name is where guests are sent first
-        let (port, web) = reach_from(&h("nas.local:19113"), lan);
-        assert_eq!((port, web.as_deref()), (19113, Some("nas.local:19113")));
-        assert_eq!(reach_from(&h("127.0.0.1:19113"), lo).1, None);
-        assert_eq!(reach_from(&h("bad host/x"), lan).1, None);
+        let (port, web) = reach_from(&h("nas.local:19113"));
+        assert_eq!(
+            (port, web.as_deref()),
+            (19113, Some("http://nas.local:19113"))
+        );
+        assert_eq!(reach_from(&h("127.0.0.1:19113")).1, None);
+        assert_eq!(reach_from(&h("localhost:19113")).1, None);
+        assert_eq!(reach_from(&h("bad host/x")).1, None);
     }
 
     // ── the party ──

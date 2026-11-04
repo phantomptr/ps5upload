@@ -137,7 +137,9 @@ pub(crate) fn record(level: &'static str, mut msg: String) {
     // Mirror to stderr off the calling (possibly reactor) thread — see
     // `stderr_sink`. try_send: if the parent is wedged and the queue is full,
     // drop the stderr mirror for this line rather than block the engine.
-    let _ = stderr_sink().try_send(format!("[engine:{level}] ts={ts} {msg}"));
+    if mirrors_to_stderr(level) {
+        let _ = stderr_sink().try_send(format!("[engine:{level}] ts={ts} {msg}"));
+    }
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let entry = LogEntry {
         seq,
@@ -159,6 +161,18 @@ pub(crate) fn record(level: &'static str, mut msg: String) {
         g.pop_front();
     }
     g.push_back(entry);
+}
+
+/// In a container, stderr is `docker logs`: a file nothing rotates by default, while an open tab
+/// adds a debug line per request. The mirror exists for the desktop shell to tee, so there it only
+/// takes what someone reading `docker logs` wants, unless "Detailed logs" is on. The debug ring
+/// and the Log tab are not affected.
+fn mirrors_to_stderr(level: &str) -> bool {
+    use std::sync::OnceLock;
+    static QUIET: OnceLock<bool> = OnceLock::new();
+    !matches!(level, "debug" | "trace")
+        || !*QUIET.get_or_init(crate::pkg_install::in_container)
+        || ps5upload_core::log::verbose()
 }
 
 /// Return every entry whose `seq` is strictly greater than `since`.

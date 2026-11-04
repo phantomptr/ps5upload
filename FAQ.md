@@ -447,8 +447,8 @@ Since 7.4.2 it does: the web UI keeps your consoles (names, addresses, order, no
 keys) in the container's `/data`, so every browser that opens it sees the same list, and a change
 made in one shows up in the others within about 30 seconds (at once when you switch back to that
 tab). The first browser to open 7.4.2 hands over the consoles it had saved. What stays in each
-browser: which console is selected, theme, language, text size and the sidebar. Before 7.4.2 the
-list lived in each browser only. Anyone who can open the web UI can see the Wake keys, so keep
+browser: which console is selected, theme, language and text size. The sidebar's pins, hidden items
+and folded sections are shared too. Before 7.4.2 the list lived in each browser only. Anyone who can open the web UI can see the Wake keys, so keep
 `PS5UPLOAD_ALLOW_IP` to your own devices.
 
 **Q: How do automatic save backups work, and how do I restore one?**
@@ -535,14 +535,18 @@ phone or another computer?" below walks through it from start to finish.
   engine, then opens the normal review before sending to the PS5. Keep the tab open until
   staging finishes. This needs free space on the engine; temporary uploads expire after seven
   days. A package staged this way offers **Stream & install** on its card like any other.
-- An upload keeps running when you close the tab; reopening shows it. Only one tab runs the queue.
+- The running upload keeps going when you close the tab; reopening shows it. What comes after it
+  runs in the page: the next item in the queue, the install, the register and rest after upload
+  wait until a tab is open. Only one tab runs the queue.
 - **Payloads → Send payload** accepts an ELF from your browser machine and forwards it through
   the engine to the selected console's loader (9021 by default). Sending bytes does not confirm
   execution. Catalog downloads and the other payload formats still use the native app.
-- Desktop-only and hidden in the browser: archive uploads, saving a save backup or downloading files to your
-  computer, and attaching files to a bug
-  report. Everything that works on the PS5 itself is the same as on desktop.
-- The docker image can be built using `PS5UPLOAD_BASE_URL` to change the root path of the app.
+- Desktop-only in the browser: choosing an archive from this device (an archive on the engine's
+  disk uploads as usual), saving a save backup or downloading files to your computer, and attaching
+  files to a bug report. Right-click **Copy to the server…** in **Files** saves to the engine's disk,
+  not to the computer in front of you. Everything that works on the PS5 itself is the same as on desktop.
+- `PS5UPLOAD_BASE_URL` hosts the app below a path (`/ps5/`) with the published image: see
+  [REVERSE_PROXY.md](REVERSE_PROXY.md).
 
 **Q: How do I use PS5Upload from my phone or another computer?**
 Run PS5Upload on one machine, for example a Mac tucked away next to the router, and use the whole
@@ -607,11 +611,12 @@ so they don't change.
 Home Screen** to get an app icon. If the page says **"loopback only: this engine refused"**
 followed by an address, the engine saw your phone as that address. Add it to `PS5UPLOAD_ALLOW_IP`
 (comma-separated, for example `"192.168.1.0/24,192.168.65.1"`) and run `docker compose up -d`
-again. Docker Desktop often shows every device as one internal address like that one, which is
-also the address the PS5's downloads come from, so stream installs need it allowed too.
+again. Docker Desktop often shows every device as one internal address like that one. The PS5's own
+package downloads skip this list, so it does not need to be on it.
 
-**6. Connect to the PS5.** On the **Connection** screen press **Check**; if the helper isn't
-running yet, press **Send helper**. The web UI connects by itself.
+**6. Connect to the PS5.** The first browser finds the console from `PS5_ADDR` already listed. On
+the **Connection** screen press **Check**; if the helper isn't running yet, press **Send helper**.
+The web UI connects by itself.
 
 **7. Keep the computer awake.** A sleeping computer takes the engine with it, and the page stops
 answering. On a Mac, turn on **System Settings → Battery → Options → Prevent automatic sleeping on
@@ -1474,8 +1479,9 @@ the part not sent yet; meanwhile the progress reads "Skipping data the console a
   (`name.part1.rar`, or the plain `.rar` for `.r00` sets) and keep every part in one folder. A RAR
   holding several packages is unpacked straight to the console and each package installed in turn
   (base, then patch, then DLC).
-- **`.rar` needs the desktop app.** The Android build and the web UI say so. `.zip` and `.7z` work
-  on Android; no archive format works in the browser.
+- **`.rar` needs the desktop app, or the Docker image.** The Android build says so. `.zip` and `.7z`
+  work on Android. In the web UI, an archive on the engine's disk goes through the normal flow;
+  only **From this device…** refuses archives.
 
 **Q: I want the `.zip` itself on the PS5, not unpacked (a jailbreak or payload update).**
 Upload asks what to do with each archive: **unpack it** (into a new folder, or straight into the
@@ -2974,8 +2980,8 @@ fixes away from every device.
 
 **Q: Do my settings follow me to a new device?**
 Yes. Your consoles, sidebar pins and upload, install, convert and link settings are shared through
-each console. A new device picks them up the first time it connects (the app offers to reload so
-they take effect). Theme, language, text size, the save folder and the bandwidth cap stay per
+each console. A new device picks them up the first time it connects, and they apply at once. Theme,
+language, text size, the save folder and the bandwidth cap stay per
 device.
 
 **Q: Two devices changed the same setting. Which one wins?**

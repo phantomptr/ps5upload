@@ -13,7 +13,7 @@
  * edits since the last common copy) before saving again, so two people editing at once both keep
  * their change.
  *
- * Desktop and mobile apps keep their consoles themselves: their engine is theirs alone.
+ * Desktop and mobile apps keep their consoles themselves, whichever engine they use.
  */
 import { backupBeforeChange } from "../lib/settingsBackup";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "../lib/safeStorage";
@@ -185,6 +185,11 @@ export class RosterShare {
     return this.busy;
   }
 
+  /** The engine has never held a list (a brand new store). */
+  engineHasNoList(): boolean {
+    return this.rev === 0;
+  }
+
   /** The engine has no list, or not the one this browser last agreed with it: its store was lost
    *  or replaced (a container recreated without its volume, a corrupt file). What the two hold
    *  says nothing about what anyone removed, so nothing is dropped: both lists are kept and saved. */
@@ -300,6 +305,27 @@ export class RosterShare {
 export const PULL_MS = 30_000;
 
 /** Starts sharing the console list with the engine. The browser build only; returns a stop. */
+/**
+ * A first browser on a brand new engine: the console the setup named (`PS5_ADDR`) goes on the list,
+ * so it is not typed in again. Only when both lists are empty, so a console someone removed does
+ * not come back.
+ */
+export async function seedDefaultConsole(
+  isEmpty: () => boolean,
+  read: () => Promise<{ default_console?: unknown }> = async () => {
+    const r = await fetch(`${getEngineUrl()}/api/version`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return (await r.json()) as { default_console?: unknown };
+  },
+): Promise<void> {
+  if (!isEmpty()) return;
+  const info = await read();
+  const host = typeof info.default_console === "string" ? info.default_console.trim() : "";
+  if (!host || !isEmpty()) return;
+  const roster = useRosterStore.getState();
+  roster.setActive(roster.add({ name: `PS5 (${host})`, host }));
+}
+
 export function startRosterShare(api: ShareApi = engineShareApi): () => void {
   if (isTauriEnv()) return () => {};
   const share = new RosterShare(api);
@@ -322,11 +348,14 @@ export function startRosterShare(api: ShareApi = engineShareApi): () => void {
     failures = 0;
   };
   let started = false;
+  const seed = () =>
+    seedDefaultConsole(() => share.engineHasNoList() && useRosterStore.getState().profiles.length === 0).catch(warn);
   void share
     .start()
     .then(() => {
       started = true;
       ok();
+      return seed();
     })
     .catch(warn);
   const unsub = useRosterStore.subscribe((s, prev) => {

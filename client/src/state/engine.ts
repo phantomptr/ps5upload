@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { pageBasePath } from "../lib/basePath";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
@@ -50,7 +51,7 @@ function loadEngineUrl(): string {
   if (typeof window === "undefined") return DEFAULT_ENGINE_URL;
   // In the browser build the UI is served from the engine origin, so use
   // window.location.origin rather than a persisted 127.0.0.1 address.
-  if (!isTauriEnv()) return window.location.origin + (import.meta.env.VITE_BASE_URL || "").replace(/\/+$/, "");
+  if (!isTauriEnv()) return window.location.origin + pageBasePath();
   const v = safeGetItem(KEY_ENGINE_URL);
   return v ? normalizeEngineUrl(v) : DEFAULT_ENGINE_URL;
 }

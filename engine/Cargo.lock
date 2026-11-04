@@ -2155,6 +2155,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "blake3",
+ "flate2",
  "futures-util",
  "getrandom 0.4.3",
  "if-addrs",
@@ -2183,11 +2184,13 @@ dependencies = [
  "tokio-rustls",
  "tokio-stream",
  "tokio-tungstenite",
+ "tower",
  "tower-http",
  "trash",
  "unicode-normalization",
  "ureq",
  "uuid",
+ "webpki-roots",
  "zip",
 ]
 

@@ -46,7 +46,9 @@ RUN npm ci --silent
 # Now copy the rest of the client source and build
 COPY client/ .
 COPY FAQ.md CHANGELOG.md ../
-ARG PS5UPLOAD_BASE_URL=/
+# Left empty, the bundle's paths are relative and one image runs at any prefix: the engine writes
+# PS5UPLOAD_BASE_URL into the page when it serves it. A value here bakes that prefix in instead.
+ARG PS5UPLOAD_BASE_URL=
 ENV VITE_BASE_URL=$PS5UPLOAD_BASE_URL
 RUN npm run build:vite
 
@@ -91,7 +93,7 @@ RUN mkdir -p /rootfs/tmp /rootfs-data/data && chmod 1777 /rootfs/tmp /rootfs-dat
 
 # ── Stage 3: minimal scratch image ───────────────────────────────────────────
 FROM scratch
-ARG PS5UPLOAD_BASE_URL=/
+ARG PS5UPLOAD_BASE_URL=
 COPY --from=builder /build/engine/target/release/ps5upload-engine /ps5upload-engine
 # The engine looks for the RAR helper next to its own binary.
 COPY --from=builder /build/engine/target/release/ps5upload-unrar /ps5upload-unrar

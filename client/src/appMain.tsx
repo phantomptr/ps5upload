@@ -1,3 +1,4 @@
+import { pageBasePath } from "./lib/basePath";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
@@ -102,7 +103,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <RootErrorBoundary>
       {/* react-router 8 removed the react-router-dom package;
           imports come from react-router and react-router/dom. */}
-      <BrowserRouter basename={(import.meta.env.VITE_BASE_URL || "/").replace(/\/+$/, "") || "/"}>
+      <BrowserRouter basename={pageBasePath() || "/"}>
         <App />
       </BrowserRouter>
     </RootErrorBoundary>

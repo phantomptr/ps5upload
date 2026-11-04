@@ -28,7 +28,8 @@
 #          -e PS5_ADDR=192.168.1.50 \
 #          -e PS5UPLOAD_ALLOW_IP=172.17.0.1 \
 #          ps5upload-engine
-#   2. On Linux hosts, use --network host (connections are true loopback):
+#   2. On Linux hosts, use --network host (true loopback from the same machine only; other
+#      machines still need PS5UPLOAD_ALLOW_IP):
 #        docker run --rm --network host \
 #          -e PS5_ADDR=192.168.1.50 \
 #          ps5upload-engine

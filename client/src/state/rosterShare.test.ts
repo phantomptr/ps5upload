@@ -6,6 +6,7 @@ import {
   asDoc,
   mergeShared,
   RosterShare,
+  seedDefaultConsole,
   sharedForm,
   UNSAVED_KEY,
   type ShareApi,
@@ -281,6 +282,40 @@ describe("RosterShare with a save that failed", () => {
     expect(ids()).toEqual(["r"]);
     expect(e.doc.value?.profiles?.map((x) => x.id)).toEqual(["r"]);
     expect(safeGetItem(UNSAVED_KEY)).toBeNull();
+  });
+});
+
+describe("seedDefaultConsole", () => {
+  beforeEach(() => {
+    stubStorage();
+    useRosterStore.setState({ profiles: [], active_id: null });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+  const empty = () => useRosterStore.getState().profiles.length === 0;
+
+  it("lists the console the setup named, for a first browser", async () => {
+    await seedDefaultConsole(empty, async () => ({ default_console: "192.168.1.50" }));
+    expect(useRosterStore.getState().profiles.map((x) => x.host)).toEqual(["192.168.1.50"]);
+    expect(useRosterStore.getState().active_id).toBe(useRosterStore.getState().profiles[0].id);
+  });
+
+  it("adds nothing when none was named, or the engine does not say", async () => {
+    await seedDefaultConsole(empty, async () => ({}));
+    await seedDefaultConsole(empty, async () => ({ default_console: "  " }));
+    expect(ids()).toEqual([]);
+  });
+
+  it("does not ask, and does not bring a console back, once there is a list", async () => {
+    let asked = false;
+    await seedDefaultConsole(
+      () => false,
+      async () => {
+        asked = true;
+        return { default_console: "192.168.1.50" };
+      },
+    );
+    expect(asked).toBe(false);
+    expect(ids()).toEqual([]);
   });
 });
 

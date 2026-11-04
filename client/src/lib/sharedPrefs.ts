@@ -14,10 +14,10 @@
  * Each key carries the time it was last changed; two browsers saving at once keep, per key, the
  * newer change. The shared values are read before the app starts (see `preloadSharedPrefs`), so
  * every store reads them as its own; while a page is open, its changes are saved as they happen and
- * other browsers' changes are fetched on focus and every minute (applied live for the sidebar, at
- * the next page load for the rest).
+ * other browsers' changes are fetched on focus and every minute, and every store reads them at
+ * once (lib/liveSettings).
  *
- * Desktop and mobile apps keep their settings themselves: their engine is theirs alone.
+ * Desktop and mobile apps keep their settings themselves, whichever engine they use.
  */
 import { onStorageWrite, safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
 import { reloadSettings } from "./liveSettings";
@@ -224,7 +224,7 @@ export interface PrefsApi {
 
 /** The engine is the server the page came from (under its base path, behind a proxy). */
 function engineBase(): string {
-  return window.location.origin + (import.meta.env.VITE_BASE_URL || "").replace(/\/+$/, "");
+  return window.location.origin + pageBasePath();
 }
 
 export const enginePrefsApi: PrefsApi = {
@@ -303,11 +303,22 @@ export async function syncOnce(api: PrefsApi, signal?: AbortSignal, ch: Channel 
  */
 export async function preloadSharedPrefs(api: PrefsApi = enginePrefsApi, timeoutMs = 2000): Promise<void> {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // The whole sync, not only its GET: the app's import waits on this, and a PUT that stalled left
+  // the page blank. What finishes after the bound still lands for the next load.
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      ctl.abort();
+      resolve();
+    }, timeoutMs);
+  });
   try {
-    await syncOnce(api, ctl.signal);
-  } catch (e) {
-    console.warn("[shared-prefs]", e instanceof Error ? e.message : String(e));
+    await Promise.race([
+      bound,
+      syncOnce(api, ctl.signal).catch((e) => {
+        console.warn("[shared-prefs]", e instanceof Error ? e.message : String(e));
+      }),
+    ]);
   } finally {
     clearTimeout(timer);
   }
@@ -317,6 +328,17 @@ export async function preloadSharedPrefs(api: PrefsApi = enginePrefsApi, timeout
 export const PULL_MS = 60_000;
 /** Changes here are sent this long after the last one (a burst of toggles is one save). */
 const PUSH_DEBOUNCE_MS = 500;
+
+/**
+ * The time for a change made now: later than anything this browser has seen, as well as being the
+ * time. A browser whose clock runs ahead would otherwise win every key until real time caught up,
+ * and another's change made after it would lose (mesh uses the same kind of clock, for the same reason).
+ */
+export function nextStamp(seen: Record<string, number>, now: number): number {
+  let newest = 0;
+  for (const at of Object.values(seen)) if (at > newest) newest = at;
+  return Math.max(now, newest + 1);
+}
 
 /**
  * While the page is open: stamp and send this browser's changes to shared keys, and fetch other
@@ -345,7 +367,7 @@ export function startSharedPrefs(
   const stopWrites = onStorageWrite((key) => {
     if (applying || !ch.keys.has(key)) return;
     const meta = loadMeta(ch);
-    meta.at[key] = Date.now();
+    meta.at[key] = nextStamp(meta.at, Date.now());
     saveMeta(meta, ch);
     window.clearTimeout(timer);
     timer = window.setTimeout(run, PUSH_DEBOUNCE_MS);

@@ -167,7 +167,92 @@ pub(crate) fn port_of(headers: &HeaderMap) -> u16 {
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.rsplit_once(':'))
         .and_then(|(_, p)| p.parse().ok())
+        .unwrap_or_else(listen_port)
+}
+
+/// The port this engine listens on, as the rest of the engine reads it (pkg_install.rs).
+fn listen_port() -> u16 {
+    std::env::var("PS5UPLOAD_ENGINE_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
         .unwrap_or(19113)
+}
+
+/// The request came through a reverse proxy: its `Host` port is the proxy's, and nothing listens
+/// on that port at this engine's own addresses. (The engine has no TLS of its own, so an https
+/// page is always proxied.)
+fn proxied(headers: &HeaderMap) -> bool {
+    [
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "forwarded",
+    ]
+    .iter()
+    .any(|h| headers.contains_key(*h))
+        || headers
+            .get("origin")
+            .and_then(|o| o.to_str().ok())
+            .is_some_and(|o| o.to_ascii_lowercase().starts_with("https://"))
+}
+
+/// The port for links that name this engine's own addresses.
+pub(crate) fn lan_port(headers: &HeaderMap) -> u16 {
+    if proxied(headers) {
+        listen_port()
+    } else {
+        port_of(headers)
+    }
+}
+
+/// `http://<ip>:<port>`, IPv6 in brackets.
+pub(crate) fn ip_base(ip: std::net::IpAddr, port: u16) -> String {
+    format!("http://{}", std::net::SocketAddr::new(ip, port))
+}
+
+/// What the page's own address says to send people to: scheme, name and port as the browser sees
+/// them, from `Origin` (already compared with `Host` by the origin guard), else from `Host` and a
+/// proxy's `X-Forwarded-*`. None for this computer's loopback names, which mean something else on
+/// every other device, and for what cannot be part of a link.
+pub(crate) fn web_base(headers: &HeaderMap) -> Option<String> {
+    let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    let base = text("origin")
+        .filter(|o| {
+            let o = o.to_ascii_lowercase();
+            o.starts_with("http://") || o.starts_with("https://")
+        })
+        .map(str::to_string)
+        .or_else(|| {
+            let host = crate::host_guard::first_forwarded(headers, "x-forwarded-host")
+                .or_else(|| text("host"))?
+                .trim();
+            let scheme = crate::host_guard::first_forwarded(headers, "x-forwarded-proto")
+                .filter(|p| p.eq_ignore_ascii_case("https"))
+                .map_or("http", |_| "https");
+            Some(format!("{scheme}://{host}"))
+        })?;
+    let (_, authority) = base.split_once("://")?;
+    let usable = !authority.is_empty()
+        && authority.len() <= 255
+        && authority
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".-:[]".contains(&b));
+    let (name, _) = crate::host_guard::split_authority(authority);
+    let local = name == "localhost"
+        || name.ends_with(".localhost")
+        || name
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback() || ip.is_unspecified());
+    (usable && !local).then_some(base)
+}
+
+/// `PS5UPLOAD_PKG_HOST_IP`, when it is an address.
+fn pinned_ip() -> Option<std::net::IpAddr> {
+    std::env::var("PS5UPLOAD_PKG_HOST_IP")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// A home network's address (10/8, 172.16/12, 192.168/16): where a phone on the same Wi-Fi
@@ -185,8 +270,18 @@ pub(crate) fn lan_ips(console: Option<&str>) -> Vec<std::net::IpAddr> {
         .map(str::to_string)
         .or_else(crate::rp_stream_api::live_host);
     let mut out = Vec::new();
-    if let Some(ip) = toward.as_deref().and_then(lan_ip_toward) {
+    // The address the operator pinned for this machine (a bridged container: the routing guesses
+    // below only find the container's own address, which nothing outside it can reach).
+    if let Some(ip) = pinned_ip() {
         out.push(ip);
+        if crate::pkg_install::in_container() {
+            return out;
+        }
+    }
+    if let Some(ip) = toward.as_deref().and_then(lan_ip_toward) {
+        if !out.contains(&ip) {
+            out.push(ip);
+        }
     }
     // Any outside address picks the default route's interface; nothing is sent.
     if let Some(ip) = lan_ip_toward("1.1.1.1").filter(|ip| is_home_lan(*ip)) {
@@ -289,43 +384,73 @@ pub(crate) fn reach_ips(
     let tailscale = tailscale_ip();
     let mut skip = ips.clone();
     skip.extend(tailscale);
-    ips.extend(other_private_ips(&skip));
+    // Inside a container with a pinned address, its other addresses are its own.
+    if !(pinned_ip().is_some() && crate::pkg_install::in_container()) {
+        ips.extend(other_private_ips(&skip));
+    }
     if let Some(ip) = tailscale.filter(|ip| !ips.contains(ip)) {
         ips.push(ip);
     }
     (ips, tailscale)
 }
 
-/// Where phones reach this engine, toward the console being played (or `console`).
-fn base_url(headers: &HeaderMap, console: Option<&str>) -> Option<String> {
-    let ip = *lan_ips(console).first()?;
-    Some(format!("http://{ip}:{}", port_of(headers)))
+/// Where a phone is sent, best first. A QR code goes to this machine's address, since a phone may
+/// not resolve the name the computer's browser used (`.local` on Android). The name comes first
+/// when those addresses cannot work (a bridged container with no pinned address) or when the page
+/// is on https, which only the name's certificate can serve.
+fn phone_bases(web: Option<String>, ip_bases: Vec<String>, name_first: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    let web_first = name_first || web.as_deref().is_some_and(|w| w.starts_with("https://"));
+    if web_first {
+        out.extend(web.clone());
+    }
+    for b in ip_bases {
+        if !out.contains(&b) {
+            out.push(b);
+        }
+    }
+    if let Some(w) = web {
+        if !out.contains(&w) {
+            out.push(w);
+        }
+    }
+    out
 }
 
 fn status(headers: &HeaderMap, console: Option<&str>) -> serde_json::Value {
-    let base = base_url(headers, console);
-    let port = port_of(headers);
+    let port = lan_port(headers);
     // Home network first (the QR code's), then a VPN's, Tailscale's last: the host picks.
     let (ips, tailscale) = reach_ips(console);
+    let ip_bases: Vec<String> = ips.iter().map(|ip| ip_base(*ip, port)).collect();
+    let prefix = crate::host_guard::base_path();
+    // What the phone app connects to: an address, which its engine's relay accepts as is.
+    let pad_ws = ip_bases
+        .first()
+        .map(|b| format!("{}{prefix}/api/pad/ws", b.replacen("http://", "ws://", 1)));
+    let bases = phone_bases(
+        web_base(headers),
+        ip_bases,
+        crate::pkg_install::bridged_container_without_pkg_host_ip(),
+    );
     with_link(|l| {
         serde_json::json!({
             "open": l.key.is_some(),
-            "url": match (&base, &l.key) {
-                (Some(b), Some(k)) => serde_json::Value::String(format!("{b}/pad#t={k}")),
+            "url": match (bases.first(), &l.key) {
+                (Some(b), Some(k)) => serde_json::Value::String(format!("{b}{prefix}/pad#t={k}")),
                 _ => serde_json::Value::Null,
             },
             // This computer's Tailscale address (one of `urls`), for the page to label.
             "tailscale": tailscale.map(|ip| ip.to_string()),
             // Every address, best first (the first is `url`): for a computer on two networks.
             "urls": match &l.key {
-                Some(k) => ips
+                Some(k) => bases
                     .iter()
-                    .map(|ip| serde_json::Value::String(format!("http://{ip}:{port}/pad#t={k}")))
+                    .map(|b| serde_json::Value::String(format!("{b}{prefix}/pad#t={k}")))
                     .collect::<Vec<_>>(),
                 None => Vec::new(),
             },
             // What the phone app connects to (it asks; the computer allows).
-            "pad_ws": base.as_ref().map(|b| format!("{}/api/pad/ws", b.replacen("http://", "ws://", 1))),
+            "pad_ws": pad_ws,
             "pads": l.pads.iter().map(|p| serde_json::json!({"id": p.id, "name": p.name, "since_ms": p.since_ms, "watch": p.watch, "control": p.control})).collect::<Vec<_>>(),
             "pending": l.pending.iter().map(|p| serde_json::json!({"id": p.id, "name": p.name})).collect::<Vec<_>>(),
         })
@@ -774,46 +899,9 @@ fn relay_target(url: &str) -> Option<String> {
     lan_ws_target(url, "api/pad/ws")
 }
 
-/// `url` when it is exactly `ws://<private IP>[:port]/<want>`: another engine's socket on the LAN
-/// (a home network, link-local, or a Tailscale-style shared 100.64/10 address). Rebuilt from the
-/// parsed address, so what is connected to is what was checked. Never a name (a name could
-/// resolve anywhere, and again differently at connect time), a public address, user info (`@`),
-/// a query or fragment, an escape, or another route.
-pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
-    let rest = url.strip_prefix("ws://")?;
-    if !rest
-        .bytes()
-        .all(|b| b.is_ascii_graphic() && !matches!(b, b'@' | b'?' | b'#' | b'%' | b'\\'))
-    {
-        return None;
-    }
-    let (authority, path) = rest.split_once('/')?;
-    if path != want {
-        return None;
-    }
-    let (ip, port): (std::net::IpAddr, Option<&str>) = if let Some(v6) = authority.strip_prefix('[')
-    {
-        let (h, tail) = v6.split_once(']')?;
-        let port = match tail {
-            "" => None,
-            t => Some(t.strip_prefix(':')?),
-        };
-        (std::net::IpAddr::V6(h.parse().ok()?), port)
-    } else {
-        let (h, port) = match authority.split_once(':') {
-            Some((h, p)) => (h, Some(p)),
-            None => (authority, None),
-        };
-        (std::net::IpAddr::V4(h.parse().ok()?), port)
-    };
-    let port = match port {
-        None => None,
-        Some(p) if !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()) => {
-            Some(p.parse::<u16>().ok().filter(|&n| n != 0)?)
-        }
-        Some(_) => return None,
-    };
-    let private = match ip {
+/// A private address: a home network, link-local, or a Tailscale-style shared 100.64/10 one.
+fn is_lan_ip(ip: std::net::IpAddr) -> bool {
+    match ip.to_canonical() {
         std::net::IpAddr::V4(v) => {
             v.is_private()
                 || v.is_link_local()
@@ -822,17 +910,154 @@ pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
         std::net::IpAddr::V6(v) => {
             (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80
         }
+    }
+}
+
+/// A DNS name a relay may look up: letters, digits and hyphens in dot-separated labels, and not
+/// a number in disguise (`192.168.010.5`, `3232235781`) or this computer's own name.
+fn lan_name(name: &str) -> bool {
+    let labels_ok = !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        });
+    let last_is_word = name
+        .rsplit('.')
+        .next()
+        .is_some_and(|l| l.bytes().any(|b| !b.is_ascii_digit()));
+    let lower = name.to_ascii_lowercase();
+    labels_ok && last_is_word && lower != "localhost" && !lower.ends_with(".localhost")
+}
+
+/// `url` when it is exactly `ws[s]://<private IP or name>[:port][/<prefix>]/<want>`: another
+/// engine's socket on the LAN. Rebuilt from what was parsed, so what is connected to is what was
+/// checked. Never a public address, user info (`@`), a query or fragment, an escape, or another
+/// route. A name is looked up at connect time and every address it has must be private
+/// ([`connect_lan`] connects to the address it checked, not to the name again).
+pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
+    let (scheme, rest) = match url.strip_prefix("wss://") {
+        Some(rest) => ("wss", rest),
+        None => ("ws", url.strip_prefix("ws://")?),
     };
-    if !private {
+    if !rest
+        .bytes()
+        .all(|b| b.is_ascii_graphic() && !matches!(b, b'@' | b'?' | b'#' | b'%' | b'\\'))
+    {
         return None;
     }
-    let addr = match (ip, port) {
-        (std::net::IpAddr::V6(v), Some(p)) => format!("[{v}]:{p}"),
-        (std::net::IpAddr::V6(v), None) => format!("[{v}]"),
-        (v4, Some(p)) => format!("{v4}:{p}"),
-        (v4, None) => v4.to_string(),
+    let (authority, path) = rest.split_once('/')?;
+    // An engine hosted below a path (PS5UPLOAD_BASE_URL): its prefix, then the route.
+    let prefix = path.strip_suffix(want)?;
+    if !prefix.is_empty()
+        && crate::host_guard::normalize_base(prefix)
+            .is_none_or(|p| format!("{}/", &p[1..]) != prefix)
+    {
+        return None;
+    }
+    let (host, port): (String, Option<&str>) = if let Some(v6) = authority.strip_prefix('[') {
+        let (h, tail) = v6.split_once(']')?;
+        let port = match tail {
+            "" => None,
+            t => Some(t.strip_prefix(':')?),
+        };
+        let ip: std::net::Ipv6Addr = h.parse().ok()?;
+        if !is_lan_ip(std::net::IpAddr::V6(ip)) {
+            return None;
+        }
+        (format!("[{ip}]"), port)
+    } else {
+        let (h, port) = match authority.split_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (authority, None),
+        };
+        match h.parse::<std::net::Ipv4Addr>() {
+            Ok(ip) if is_lan_ip(std::net::IpAddr::V4(ip)) => (ip.to_string(), port),
+            Ok(_) => return None,
+            Err(_) if lan_name(h) => (h.to_ascii_lowercase(), port),
+            Err(_) => return None,
+        }
     };
-    Some(format!("ws://{addr}/{want}"))
+    let port = match port {
+        None => None,
+        Some(p) if !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()) => {
+            Some(p.parse::<u16>().ok().filter(|&n| n != 0)?)
+        }
+        Some(_) => return None,
+    };
+    let authority = match port {
+        Some(p) => format!("{host}:{p}"),
+        None => host,
+    };
+    Some(format!("{scheme}://{authority}/{prefix}{want}"))
+}
+
+/// A relay's connection refused by its address, or not reached at all.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum RelayRefusal {
+    Address,
+    Unreachable,
+}
+
+impl RelayRefusal {
+    fn why(self) -> &'static str {
+        match self {
+            RelayRefusal::Address => "address",
+            RelayRefusal::Unreachable => "unreachable",
+        }
+    }
+}
+
+/// Every address a name has must be private: one public answer among them could be the one that
+/// gets used, and a name can be made to answer anything.
+fn only_lan(addrs: Vec<std::net::SocketAddr>) -> Result<Vec<std::net::SocketAddr>, RelayRefusal> {
+    if addrs.is_empty() {
+        return Err(RelayRefusal::Unreachable);
+    }
+    if addrs.iter().all(|a| is_lan_ip(a.ip())) {
+        Ok(addrs)
+    } else {
+        Err(RelayRefusal::Address)
+    }
+}
+
+/// A TCP connection to the address `host` was checked to have.
+async fn connect_lan(host: &str, port: u16) -> Result<tokio::net::TcpStream, RelayRefusal> {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let addrs = match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => vec![std::net::SocketAddr::new(ip, port)],
+        Err(_) => tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|_| RelayRefusal::Unreachable)?
+            .collect(),
+    };
+    for addr in only_lan(addrs)? {
+        if let Ok(stream) = tokio::net::TcpStream::connect(addr).await {
+            let _ = stream.set_nodelay(true);
+            return Ok(stream);
+        }
+    }
+    Err(RelayRefusal::Unreachable)
+}
+
+/// TLS for a `wss://` engine behind a proxy, checked against the public roots as any browser's
+/// visit would be. A private CA's certificate is refused here; the host's LAN address still works.
+fn relay_tls() -> Option<tokio_rustls::TlsConnector> {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .ok()?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    Some(tokio_rustls::TlsConnector::from(std::sync::Arc::new(
+        config,
+    )))
 }
 
 /// `GET /api/ps5/rp/pad-relay?url=ws://<computer>/api/pad/ws&name=` (loopback only): the phone
@@ -863,26 +1088,64 @@ async fn relay_session(mut socket: WebSocket, q: RelayQuery) {
 
 /// Connects to `url` (another engine's socket, already checked) and passes every text and binary
 /// message both ways unchanged until either side closes; `{"stage": "refused", "why":
-/// "unreachable"}` when it cannot connect.
+/// "unreachable"}` when it cannot connect, `"address"` when a name turned out to lead off the LAN.
 pub(crate) async fn relay_to(mut socket: WebSocket, url: &str) {
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message as TMsg;
-    let far = match tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio_tungstenite::connect_async(url),
-    )
+    let opened = tokio::time::timeout(Duration::from_secs(5), async {
+        let uri: axum::http::Uri = url.parse().map_err(|_| RelayRefusal::Address)?;
+        let host = uri.host().ok_or(RelayRefusal::Address)?;
+        let tls = uri.scheme_str() == Some("wss");
+        let port = uri.port_u16().unwrap_or(if tls { 443 } else { 80 });
+        let tcp = connect_lan(host, port).await?;
+        if !tls {
+            let (far, _) = tokio_tungstenite::client_async(url, tcp)
+                .await
+                .map_err(|_| RelayRefusal::Unreachable)?;
+            return Ok(Far::Plain(Box::new(far)));
+        }
+        let name = rustls::pki_types::ServerName::try_from(host.to_string())
+            .map_err(|_| RelayRefusal::Address)?;
+        let stream = relay_tls()
+            .ok_or(RelayRefusal::Unreachable)?
+            .connect(name, tcp)
+            .await
+            .map_err(|_| RelayRefusal::Unreachable)?;
+        let (far, _) = tokio_tungstenite::client_async(url, stream)
+            .await
+            .map_err(|_| RelayRefusal::Unreachable)?;
+        Ok(Far::Tls(Box::new(far)))
+    })
     .await
-    {
-        Ok(Ok((s, _))) => s,
-        _ => {
+    .unwrap_or(Err(RelayRefusal::Unreachable));
+    match opened {
+        Ok(Far::Plain(far)) => pump(socket, *far).await,
+        Ok(Far::Tls(far)) => pump(socket, *far).await,
+        Err(why) => {
             let _ = socket
                 .send(say(
-                    serde_json::json!({"stage": "refused", "why": "unreachable"}),
+                    serde_json::json!({"stage": "refused", "why": why.why()}),
                 ))
                 .await;
-            return;
         }
-    };
+    }
+}
+
+enum Far {
+    Plain(Box<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>>),
+    Tls(
+        Box<
+            tokio_tungstenite::WebSocketStream<
+                tokio_rustls::client::TlsStream<tokio::net::TcpStream>,
+            >,
+        >,
+    ),
+}
+
+async fn pump<S>(mut socket: WebSocket, far: tokio_tungstenite::WebSocketStream<S>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as TMsg;
     let (mut far_tx, mut far_rx) = far.split();
     loop {
         tokio::select! {
@@ -1099,8 +1362,17 @@ mod tests {
         );
         assert_eq!(relay_target("ws://192.168.1.20:19113/api/ps5/rp/ws"), None);
         assert_eq!(relay_target("ws://8.8.8.8:19113/api/pad/ws"), None);
-        assert_eq!(relay_target("wss://192.168.1.20/api/pad/ws"), None);
-        assert_eq!(relay_target("ws://example.com/api/pad/ws"), None);
+        assert_eq!(relay_target("wss://8.8.8.8/api/pad/ws"), None);
+        assert_eq!(
+            relay_target("wss://192.168.1.20/api/pad/ws").as_deref(),
+            Some("wss://192.168.1.20/api/pad/ws")
+        );
+        assert_eq!(
+            relay_target("ws://192.168.1.20:19113/ps5/api/pad/ws").as_deref(),
+            Some("ws://192.168.1.20:19113/ps5/api/pad/ws")
+        );
+        assert_eq!(relay_target("ws://192.168.1.20/a//api/pad/ws"), None);
+        assert_eq!(relay_target("ws://192.168.1.20/../api/pad/ws"), None);
         assert_eq!(
             lan_ws_target("ws://100.101.2.3:19113/api/join/ws", "api/join/ws").as_deref(),
             Some("ws://100.101.2.3:19113/api/join/ws")
@@ -1137,9 +1409,20 @@ mod tests {
         assert_eq!(j("ws://192.168.1.5:+80/api/join/ws"), None);
         assert_eq!(j("ws://192.168.1.5:/api/join/ws"), None);
         assert_eq!(j("ws://192.168.1.5:1:2/api/join/ws"), None);
-        // names (MagicDNS too) and odd address spellings
-        assert_eq!(j("ws://my-pc.tail1234.ts.net:19113/api/join/ws"), None);
+        // names are taken as far as this: what they resolve to decides (only_lan)
+        assert_eq!(
+            j("ws://My-PC.tail1234.ts.net:19113/api/join/ws").as_deref(),
+            Some("ws://my-pc.tail1234.ts.net:19113/api/join/ws")
+        );
+        assert_eq!(
+            j("wss://ps5upload.home/api/join/ws").as_deref(),
+            Some("wss://ps5upload.home/api/join/ws")
+        );
+        assert_eq!(j("ws://bad_name!/api/join/ws"), None);
+        assert_eq!(j("ws://-x.lan/api/join/ws"), None);
+        // and odd address spellings, and this computer
         assert_eq!(j("ws://localhost:19113/api/join/ws"), None);
+        assert_eq!(j("ws://a.localhost:19113/api/join/ws"), None);
         assert_eq!(j("ws://192.168.010.5:19113/api/join/ws"), None);
         assert_eq!(j("ws://3232235781:19113/api/join/ws"), None);
         assert_eq!(j("ws://[::ffff:8.8.8.8]:19113/api/join/ws"), None);
@@ -1160,6 +1443,123 @@ mod tests {
         // the pad relay reads them the same way
         assert_eq!(relay_target("ws://192.168.1.5:80@8.8.8.8/api/pad/ws"), None);
         assert_eq!(relay_target("ws://192.168.1.5:19113/api/pad/ws?t=k"), None);
+    }
+
+    #[test]
+    fn a_name_counts_only_when_every_address_it_has_is_private() {
+        let a = |s: &str| s.parse::<std::net::SocketAddr>().unwrap();
+        let lan = a("192.168.1.5:80");
+        assert_eq!(only_lan(vec![lan]), Ok(vec![lan]));
+        assert_eq!(
+            only_lan(vec![lan, a("[fd00::1]:80")]).map(|v| v.len()),
+            Ok(2)
+        );
+        assert_eq!(
+            only_lan(vec![lan, a("8.8.8.8:80")]),
+            Err(RelayRefusal::Address)
+        );
+        assert_eq!(
+            only_lan(vec![a("127.0.0.1:80")]),
+            Err(RelayRefusal::Address)
+        );
+        assert_eq!(
+            only_lan(vec![a("[::ffff:8.8.8.8]:80")]),
+            Err(RelayRefusal::Address)
+        );
+        assert_eq!(only_lan(Vec::new()), Err(RelayRefusal::Unreachable));
+    }
+
+    fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(*k, v.parse().unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn links_use_what_the_browser_used_except_this_computers_own_names() {
+        let web = |p: &[(&'static str, &'static str)]| web_base(&headers(p));
+        assert_eq!(
+            web(&[("host", "nas.local:19113")]).as_deref(),
+            Some("http://nas.local:19113")
+        );
+        // the bridged engine used from its own computer: the first invite was localhost
+        assert_eq!(web(&[("host", "localhost:19113")]), None);
+        assert_eq!(web(&[("host", "127.0.0.1:19113")]), None);
+        assert_eq!(web(&[("host", "[::1]:19113")]), None);
+        assert_eq!(web(&[("host", "bad host/x")]), None);
+        // behind https: scheme and port as the browser sees them
+        assert_eq!(
+            web(&[("host", "x:80"), ("origin", "https://ps5.home:8443")]).as_deref(),
+            Some("https://ps5.home:8443")
+        );
+        assert_eq!(
+            web(&[("host", "ps5.home"), ("x-forwarded-proto", "https")]).as_deref(),
+            Some("https://ps5.home")
+        );
+        assert_eq!(
+            web(&[
+                ("host", "10.0.0.2:19113"),
+                ("x-forwarded-host", "ps5.home"),
+                ("x-forwarded-proto", "https, http"),
+            ])
+            .as_deref(),
+            Some("https://ps5.home")
+        );
+        // the app's own renderer is not an address for anyone else
+        assert_eq!(
+            web(&[
+                ("host", "127.0.0.1:19113"),
+                ("origin", "http://tauri.localhost")
+            ]),
+            None
+        );
+        assert_eq!(
+            web(&[("host", "127.0.0.1:19113"), ("origin", "tauri://localhost")]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_proxied_request_says_nothing_about_this_machines_port() {
+        let direct = headers(&[("host", "192.168.1.10:8080")]);
+        assert_eq!(lan_port(&direct), 8080);
+        let proxied = headers(&[("host", "ps5.home:8443"), ("x-forwarded-proto", "https")]);
+        assert_eq!(lan_port(&proxied), listen_port());
+        let https = headers(&[
+            ("host", "ps5.home:8443"),
+            ("origin", "https://ps5.home:8443"),
+        ]);
+        assert_eq!(lan_port(&https), listen_port());
+        assert_eq!(
+            ip_base("192.168.1.5".parse().unwrap(), 19113),
+            "http://192.168.1.5:19113"
+        );
+        assert_eq!(
+            ip_base("fd00::1".parse().unwrap(), 80),
+            "http://[fd00::1]:80"
+        );
+    }
+
+    #[test]
+    fn a_qr_code_prefers_the_address_unless_it_cannot_work() {
+        let ip = || vec!["http://10.0.0.2:1".to_string()];
+        let name = || Some("http://nas.local:1".to_string());
+        let https = || Some("https://ps5.home".to_string());
+        assert_eq!(
+            phone_bases(name(), ip(), false),
+            vec!["http://10.0.0.2:1", "http://nas.local:1"]
+        );
+        assert_eq!(
+            phone_bases(name(), ip(), true),
+            vec!["http://nas.local:1", "http://10.0.0.2:1"]
+        );
+        assert_eq!(
+            phone_bases(https(), ip(), false),
+            vec!["https://ps5.home", "http://10.0.0.2:1"]
+        );
+        assert_eq!(phone_bases(None, ip(), true), vec!["http://10.0.0.2:1"]);
     }
 
     #[test]

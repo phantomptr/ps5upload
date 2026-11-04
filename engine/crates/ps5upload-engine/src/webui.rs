@@ -36,20 +36,24 @@ fn asset_response(path: &str) -> Option<Response> {
     let mime = mime_guess::from_path(path)
         .first_raw()
         .unwrap_or("application/octet-stream");
-    let body: Vec<u8> = file.data.into_owned();
+    // `Cow::Borrowed` in a release build: the file goes out with no copy made per request.
+    let body = axum::body::Body::from(file.data);
     Some(([(header::CONTENT_TYPE, mime)], body).into_response())
 }
 
 /// Return a response for `path` inside the embedded bundle.  If the path is
 /// not found, serve `index.html` instead (SPA client-side-routing fallback).
 pub fn spa_response(path: &str) -> Response {
-    asset_response(path).unwrap_or_else(|| {
+    let found = (path != "index.html")
+        .then(|| asset_response(path))
+        .flatten();
+    found.unwrap_or_else(|| {
         // Serve index.html as the SPA shell for any path the router doesn't
         // recognise.  The React app's client-side router takes over from here.
         match WebAssets::get("index.html") {
             Some(index) => (
                 [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-                index.data.into_owned(),
+                crate::web_pages::page_shell(&index.data, crate::host_guard::base_path()),
             )
                 .into_response(),
             // index.html is embedded at build time when the webui feature is
@@ -58,9 +62,9 @@ pub fn spa_response(path: &str) -> Response {
             // instead of panicking so the engine stays up for API use.
             None => (
                 [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-                "webui index.html not found — rebuild with the client assets bundled."
-                    .to_string()
-                    .into_bytes(),
+                axum::body::Body::from(
+                    "webui index.html not found — rebuild with the client assets bundled.",
+                ),
             )
                 .into_response(),
         }
