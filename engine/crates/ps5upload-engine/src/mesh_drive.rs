@@ -87,6 +87,10 @@ pub struct Drive {
     /// Set when the drive asks a password of a device joining it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lock: Option<DriveLock>,
+    /// When the password last changed (unix ms; 0 before 11.1): between linked consoles that
+    /// disagree, the newer one stands and the next link pass copies it over.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub lock_changed: u64,
     /// Bumped by a pass that changed the home folder: the others list it again only then (or
     /// every FULL_SCAN), instead of on every pass.
     #[serde(default)]
@@ -205,6 +209,10 @@ pub struct Member {
     pub reported: u64,
     #[serde(flatten)]
     pub other: serde_json::Map<String, Value>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 fn now_ms() -> u64 {
@@ -2316,6 +2324,24 @@ fn sync_links(me: &str) {
     }
 }
 
+/// Two linked consoles disagree on the password: which holds the newer one, which the older, and
+/// the address of the older. No date on either (changed before 11.1): neither is known to be newer,
+/// and none moves.
+fn newer_password<'a>(
+    a: &'a Drive,
+    b: &'a Drive,
+    b_addr: &'a str,
+    a_addr: &'a str,
+) -> Option<(&'a Drive, &'a Drive, &'a str)> {
+    if a.lock == b.lock || a.lock_changed == b.lock_changed {
+        None
+    } else if a.lock_changed > b.lock_changed {
+        Some((a, b, b_addr))
+    } else {
+        Some((b, a, a_addr))
+    }
+}
+
 fn link_member_id(drive: &str, hi: &str) -> String {
     format!("link:{drive}:{hi}")
 }
@@ -2366,6 +2392,24 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
         drop_link(hi, id, lo);
         return Ok(());
     };
+    // A password changed while the other console was away reaches it now.
+    if let Some((from, to, to_addr)) = newer_password(a, b, hi, lo) {
+        let (lock, changed) = (from.lock.clone(), from.lock_changed);
+        let r = doc_update(to_addr, |doc| {
+            if let Some(d) = doc
+                .drives
+                .iter_mut()
+                .find(|d| d.id == to.id && d.lock_changed < changed)
+            {
+                d.lock = lock.clone();
+                d.lock_changed = changed;
+            }
+            Ok(())
+        });
+        if let Err(e) = r {
+            crate::log_warn!("mesh drive link {lo}-{hi}: password: {e:#}");
+        }
+    }
     if to_hi.allow_deletes || to_lo.allow_deletes {
         confirmed()
             .lock()
@@ -2652,36 +2696,90 @@ fn kick() {
 
 // ---- setting up ----
 
+/// What setting a folder up made, so a request refused afterwards leaves nothing behind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Prepared {
+    folder: bool,
+    marker: bool,
+}
+
 /// The folder this device keeps for a drive: made, and marked as the drive's.
-fn prepare_local(path: &str) -> Result<()> {
+fn prepare_local(path: &str) -> Result<Prepared> {
     let p = Path::new(path);
     if !p.is_absolute() {
-        bail!("choose a full folder path");
+        return Err(refuse(StatusCode::BAD_REQUEST, "choose a full folder path"));
     }
+    let folder = !p.exists();
     std::fs::create_dir_all(p).with_context(|| format!("make {path}"))?;
     let marker = p.join(MARKER);
+    let mut made = Prepared {
+        folder,
+        marker: false,
+    };
     if !marker.exists() {
-        std::fs::write(
+        let wrote = std::fs::write(
             &marker,
             b"PS5Upload Mesh Drive. This folder is kept the same on your devices.\n",
         )
-        .with_context(|| format!("write {}", marker.display()))?;
+        .with_context(|| format!("write {}", marker.display()));
+        if let Err(e) = wrote {
+            unprepare_local(path, made);
+            return Err(e);
+        }
+        made.marker = true;
     }
-    Ok(())
+    Ok(made)
 }
 
-fn prepare_hub(addr: &str, hub: &str) -> Result<()> {
-    if !hub.starts_with('/') || hub.split('/').any(|c| c == "..") {
-        bail!("the console folder must be a full path");
+/// Takes back what `prepare_local` made. A folder goes only if it made it and nothing else came
+/// into it since.
+fn unprepare_local(path: &str, made: Prepared) {
+    let p = Path::new(path);
+    if made.marker {
+        let _ = std::fs::remove_file(p.join(MARKER));
     }
+    if made.folder {
+        let _ = std::fs::remove_dir(p);
+    }
+}
+
+fn prepare_hub(addr: &str, hub: &str) -> Result<Prepared> {
+    if !hub.starts_with('/') || hub.split('/').any(|c| c == "..") {
+        return Err(refuse(
+            StatusCode::BAD_REQUEST,
+            "the console folder must be a full path",
+        ));
+    }
+    let mut made = Prepared {
+        folder: fs_ops::fs_stat(addr, hub).is_err(),
+        marker: false,
+    };
     fs_ops::fs_mkdir(addr, hub)?;
-    ps5upload_core::diagnostics::fs_write_bytes(
+    made.marker = hub_stat(addr, &join_hub(hub, MARKER)).is_none();
+    let wrote = ps5upload_core::diagnostics::fs_write_bytes(
         addr,
         &join_hub(hub, MARKER),
         b"PS5Upload Mesh Drive home folder.\n",
         false,
-    )?;
-    Ok(())
+    );
+    if let Err(e) = wrote {
+        unprepare_hub(addr, hub, made);
+        return Err(e);
+    }
+    Ok(made)
+}
+
+/// Takes back what `prepare_hub` made. A folder goes only if it made it and it is empty.
+fn unprepare_hub(addr: &str, hub: &str, made: Prepared) {
+    if made.marker {
+        let _ = fs_ops::fs_delete(addr, &join_hub(hub, MARKER));
+    }
+    if made.folder
+        && fs_ops::list_dir(addr, hub, ListDirOptions::default())
+            .is_ok_and(|l| l.entries.iter().all(|e| e.name == "." || e.name == ".."))
+    {
+        let _ = fs_ops::fs_delete(addr, hub);
+    }
 }
 
 /// Where this device's copy goes unless the user picks another folder.
@@ -3033,6 +3131,10 @@ fn refuse_unless_ok(c: &FolderCheck, what: &str) -> Result<()> {
             c.detail.clone().unwrap_or_default()
         ),
         Some("app_data") => "it is the app's own data folder".to_string(),
+        Some("too_broad") => {
+            "that is too much for one drive: choose a folder inside it".to_string()
+        }
+        Some("already_linked") => "that console already holds this drive".to_string(),
         Some("not_writable") => format!(
             "it cannot be written ({})",
             c.detail.clone().unwrap_or_default()
@@ -3042,7 +3144,10 @@ fn refuse_unless_ok(c: &FolderCheck, what: &str) -> Result<()> {
             .clone()
             .unwrap_or_else(|| "it cannot be read".into()),
     };
-    bail!("{what} {}: {why}", c.path)
+    Err(refuse(
+        StatusCode::BAD_REQUEST,
+        format!("{what} {}: {why}", c.path),
+    ))
 }
 
 /// This device as a new member of a drive.
@@ -3133,7 +3238,12 @@ fn lock_opens(lock: &DriveLock, password: &str) -> bool {
 }
 
 fn me_or_err() -> Result<String> {
-    crate::mesh_api::id_hex().ok_or_else(|| anyhow!("this engine has no identity"))
+    crate::mesh_api::id_hex().ok_or_else(|| {
+        refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "this engine has no identity",
+        )
+    })
 }
 
 fn add_local(addr: &str, drive: &str, member: &str, path: &str, name: &str) -> Result<()> {
@@ -3193,6 +3303,42 @@ fn unsupported() -> Value {
     json!({ "supported": false })
 }
 
+/// A request this engine turns down itself, with the status that says why. Anything else that
+/// fails a route came from the console: 502.
+#[derive(Debug)]
+struct Refused(StatusCode, String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.1)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+fn refuse(status: StatusCode, text: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(Refused(status, text.into()))
+}
+
+fn drive_gone() -> anyhow::Error {
+    refuse(StatusCode::NOT_FOUND, "that drive is gone")
+}
+
+/// The status for a failed route. The client reads the `token: words` messages by their token.
+fn refusal_status(e: &anyhow::Error) -> StatusCode {
+    if let Some(r) = e.chain().find_map(|c| c.downcast_ref::<Refused>()) {
+        return r.0;
+    }
+    let text = e.to_string();
+    match text.split_once(':').map(|(token, _)| token) {
+        Some("wrong_password" | "password_needed") => StatusCode::FORBIDDEN,
+        Some("kept_elsewhere" | "already_linked" | "busy") => StatusCode::CONFLICT,
+        Some("gone") => StatusCode::NOT_FOUND,
+        Some("bad_name") => StatusCode::BAD_REQUEST,
+        _ => StatusCode::BAD_GATEWAY,
+    }
+}
+
 async fn answer(f: impl FnOnce() -> Result<Value> + Send + 'static) -> Response {
     match tokio::task::spawn_blocking(f)
         .await
@@ -3200,12 +3346,17 @@ async fn answer(f: impl FnOnce() -> Result<Value> + Send + 'static) -> Response 
         .and_then(|r| r)
     {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+        Err(e) => json_err(refusal_status(&e), format!("{e:#}")).into_response(),
     }
 }
 
 fn addr_of(addr: Option<String>) -> Result<String> {
-    crate::required_console_addr(addr).ok_or_else(|| anyhow!("addr is required: say which console"))
+    crate::required_console_addr(addr).ok_or_else(|| {
+        refuse(
+            StatusCode::BAD_REQUEST,
+            "addr is required: say which console",
+        )
+    })
 }
 
 #[derive(Deserialize)]
@@ -3327,7 +3478,7 @@ pub async fn create(Json(req): Json<CreateReq>) -> Response {
         let me = me_or_err()?;
         let name: String = req.name.trim().chars().take(60).collect();
         if name.is_empty() {
-            bail!("give the drive a name");
+            return Err(refuse(StatusCode::BAD_REQUEST, "give the drive a name"));
         }
         // Checked before anything is made: a refusal leaves no folder behind.
         let Some((_, current)) = doc_read(&addr)? else {
@@ -3339,10 +3490,23 @@ pub async fn create(Json(req): Json<CreateReq>) -> Response {
         refuse_unless_ok(&local_check, "This device's folder")?;
         let hub = hub_check.path.clone();
         let local = Some(local_check.path.clone());
-        prepare_hub(&addr, &hub)?;
+        let hub_made = prepare_hub(&addr, &hub)?;
+        let mut local_made = Prepared::default();
         if let Some(p) = &local {
-            prepare_local(p)?;
+            local_made = match prepare_local(p) {
+                Ok(m) => m,
+                Err(e) => {
+                    unprepare_hub(&addr, &hub, hub_made);
+                    return Err(e);
+                }
+            };
         }
+        let take_back = || {
+            unprepare_hub(&addr, &hub, hub_made);
+            if let Some(p) = &local {
+                unprepare_local(p, local_made);
+            }
+        };
         let id = new_id();
         let member_id = new_id();
         let r = doc_update(&addr, |doc| {
@@ -3355,10 +3519,13 @@ pub async fn create(Json(req): Json<CreateReq>) -> Response {
                 .iter()
                 .find(|d| inside(&hub, &d.hub) || inside(&d.hub, &hub))
             {
-                bail!(
-                    "{hub} is inside, or holds, the folder of the Mesh Drive {}",
-                    d.name
-                );
+                return Err(refuse(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "{hub} is inside, or holds, the folder of the Mesh Drive {}",
+                        d.name
+                    ),
+                ));
             }
             doc.drives.push(Drive {
                 id: id.clone(),
@@ -3377,8 +3544,17 @@ pub async fn create(Json(req): Json<CreateReq>) -> Response {
                 ..Default::default()
             });
             Ok(())
-        })?;
+        });
+        // Refused, or the console could not take it: what was made for it goes again.
+        let r = match r {
+            Ok(r) => r,
+            Err(e) => {
+                take_back();
+                return Err(e);
+            }
+        };
         if r.is_none() {
+            take_back();
             return Ok(unsupported());
         }
         if let Some(p) = &local {
@@ -3388,6 +3564,7 @@ pub async fn create(Json(req): Json<CreateReq>) -> Response {
                     doc.drives.retain(|d| d.id != id);
                     Ok(())
                 });
+                take_back();
                 return Err(e);
             }
             kick();
@@ -3489,7 +3666,7 @@ pub async fn join(Json(req): Json<JoinReq>) -> Response {
             .drives
             .iter()
             .find(|d| d.id == req.drive)
-            .ok_or_else(|| anyhow!("that drive is gone"))?;
+            .ok_or_else(drive_gone)?;
         if let Some(lock) = &d.lock {
             match req.password.as_deref() {
                 Some(pw) if lock_opens(lock, pw) => {}
@@ -3497,20 +3674,28 @@ pub async fn join(Json(req): Json<JoinReq>) -> Response {
                 None => bail!("password_needed: this drive asks for a password"),
             }
         }
-        prepare_local(&path)?;
+        let local_made = prepare_local(&path)?;
         let member_id = new_id();
         let joined = doc_update(&addr, |doc| {
             let d = doc
                 .drives
                 .iter_mut()
                 .find(|d| d.id == req.drive)
-                .ok_or_else(|| anyhow!("that drive is gone"))?;
+                .ok_or_else(drive_gone)?;
             // This device joining again with the same folder replaces its old entry.
             d.members.retain(|m| !(m.device == me && m.path == path));
             d.members.push(new_member(&member_id, &me, &path));
             Ok(d.name.clone())
-        })?;
+        });
+        let joined = match joined {
+            Ok(j) => j,
+            Err(e) => {
+                unprepare_local(&path, local_made);
+                return Err(e);
+            }
+        };
         let Some(drive_name) = joined else {
+            unprepare_local(&path, local_made);
             return Ok(unsupported());
         };
         if let Err(e) = add_local(&addr, &req.drive, &member_id, &path, &drive_name) {
@@ -3520,6 +3705,7 @@ pub async fn join(Json(req): Json<JoinReq>) -> Response {
                 }
                 Ok(())
             });
+            unprepare_local(&path, local_made);
             return Err(e);
         }
         kick();
@@ -3548,12 +3734,13 @@ pub async fn password(Json(req): Json<PasswordReq>) -> Response {
             Some(pw) if !pw.is_empty() => Some(make_lock(pw)?),
             _ => None,
         };
+        let changed = now_ms();
         let r = doc_update(&addr, |doc| {
             let d = doc
                 .drives
                 .iter_mut()
                 .find(|d| d.id == req.drive)
-                .ok_or_else(|| anyhow!("that drive is gone"))?;
+                .ok_or_else(drive_gone)?;
             let member = d.members.iter().any(|m| m.device == me);
             let knows = match (&d.lock, req.current.as_deref()) {
                 (None, _) => true,
@@ -3564,22 +3751,32 @@ pub async fn password(Json(req): Json<PasswordReq>) -> Response {
                 bail!("wrong_password: only a device in the drive, or one that knows its password, can change it");
             }
             d.lock = next.clone();
+            d.lock_changed = changed;
             Ok(d.links.iter().map(|l| l.console.clone()).collect::<Vec<_>>())
         })?;
         let Some(linked) = r else {
             return Ok(unsupported());
         };
-        // The same password on every linked console (best effort: one that is away keeps the old
-        // one until it is set again).
+        // The same password on every linked console. One that does not answer keeps the old one
+        // until a link pass, which copies the newer one over; the caller hears which.
+        let mut pending: Vec<String> = Vec::new();
         for c in linked {
-            let _ = doc_update(&c, |doc| {
-                if let Some(d) = doc.drives.iter_mut().find(|d| d.id == req.drive) {
-                    d.lock = next.clone();
-                }
-                Ok(())
-            });
+            let took = away_of(&c).is_none()
+                && matches!(
+                    doc_update(&c, |doc| {
+                        if let Some(d) = doc.drives.iter_mut().find(|d| d.id == req.drive) {
+                            d.lock = next.clone();
+                            d.lock_changed = changed;
+                        }
+                        Ok(())
+                    }),
+                    Ok(Some(()))
+                );
+            if !took {
+                pending.push(c);
+            }
         }
-        Ok(json!({ "supported": true, "ok": true }))
+        Ok(json!({ "supported": true, "ok": true, "pending": pending }))
     })
     .await
 }
@@ -3609,7 +3806,10 @@ pub async fn link(Json(req): Json<LinkReq>) -> Response {
         let me = me_or_err()?;
         let other = crate::console_addr(&req.console);
         if other.is_empty() || other == addr {
-            bail!("choose another console to link with");
+            return Err(refuse(
+                StatusCode::BAD_REQUEST,
+                "choose another console to link with",
+            ));
         }
         let Some((_, here)) = doc_read(&addr)? else {
             return Ok(unsupported());
@@ -3618,10 +3818,13 @@ pub async fn link(Json(req): Json<LinkReq>) -> Response {
             .drives
             .iter()
             .find(|d| d.id == req.drive)
-            .ok_or_else(|| anyhow!("that drive is gone"))?
+            .ok_or_else(drive_gone)?
             .clone();
         if !a.members.iter().any(|m| m.device == me) && a.by != me {
-            bail!("only a device in this drive can link it to another console");
+            return Err(refuse(
+                StatusCode::FORBIDDEN,
+                "only a device in this drive can link it to another console",
+            ));
         }
         let there = match doc_read(&other) {
             Ok(Some((_, d))) => d,
@@ -3665,6 +3868,7 @@ pub async fn link(Json(req): Json<LinkReq>) -> Response {
                     ..Default::default()
                 });
                 d.lock = a.lock.clone();
+                d.lock_changed = a.lock_changed;
                 return Ok(());
             }
             doc.drives.push(Drive {
@@ -3674,6 +3878,7 @@ pub async fn link(Json(req): Json<LinkReq>) -> Response {
                 created: now,
                 by: me.clone(),
                 lock: a.lock.clone(),
+                lock_changed: a.lock_changed,
                 links: vec![Link {
                     console: addr.clone(),
                     console_name: name_here.clone(),
@@ -3691,7 +3896,7 @@ pub async fn link(Json(req): Json<LinkReq>) -> Response {
                 .drives
                 .iter_mut()
                 .find(|d| d.id == a.id)
-                .ok_or_else(|| anyhow!("that drive is gone"))?;
+                .ok_or_else(drive_gone)?;
             d.links.retain(|l| l.console != other);
             d.links.push(Link {
                 console: other.clone(),
@@ -3790,7 +3995,7 @@ pub async fn conflicts(Query(q): Query<ConflictsQuery>) -> Response {
             .drives
             .iter()
             .find(|d| d.id == q.drive)
-            .ok_or_else(|| anyhow!("that drive is gone"))?;
+            .ok_or_else(drive_gone)?;
         let hub = walk_hub(&addr, &d.hub)?;
         let mut out: Vec<Value> = hub
             .iter()
@@ -3858,12 +4063,16 @@ pub async fn resolve(Json(req): Json<ResolveReq>) -> Response {
             .drives
             .iter()
             .find(|d| d.id == req.drive)
-            .ok_or_else(|| anyhow!("that drive is gone"))?
+            .ok_or_else(drive_gone)?
             .clone();
         if !safe_rel(&req.copy) {
-            bail!("that is not a file of the drive");
+            return Err(refuse(
+                StatusCode::BAD_REQUEST,
+                "that is not a file of the drive",
+            ));
         }
-        let c = parse_conflict(&req.copy).ok_or_else(|| anyhow!("that is not a conflict copy"))?;
+        let c = parse_conflict(&req.copy)
+            .ok_or_else(|| refuse(StatusCode::BAD_REQUEST, "that is not a conflict copy"))?;
         if hub_stat(&addr, &join_hub(&d.hub, &req.copy)).is_none() {
             bail!("gone: that copy is no longer there (another device settled it)");
         }
@@ -3919,7 +4128,10 @@ pub async fn resolve(Json(req): Json<ResolveReq>) -> Response {
                 fs_ops::fs_move(&addr, &join_hub(&d.hub, &req.copy), &join_hub(&d.hub, &rel))?;
                 Ok(rel)
             }
-            _ => bail!("choose keep_copy, keep_original or keep_both"),
+            _ => Err(refuse(
+                StatusCode::BAD_REQUEST,
+                "choose keep_copy, keep_original or keep_both",
+            )),
         })();
         drop(lease);
         let kept = r?;
@@ -3948,17 +4160,23 @@ pub async fn approve(Json(req): Json<MemberReq>) -> Response {
     answer(move || {
         let addr = addr_of(req.addr)?;
         let me = me_or_err()?;
-        let member = req.member.clone().ok_or_else(|| anyhow!("which member?"))?;
+        let member = req
+            .member
+            .clone()
+            .ok_or_else(|| refuse(StatusCode::BAD_REQUEST, "which member?"))?;
         let approve = req.approve.unwrap_or(true);
         let r = doc_update(&addr, |doc| {
             let d = doc
                 .drives
                 .iter_mut()
                 .find(|d| d.id == req.drive)
-                .ok_or_else(|| anyhow!("that drive is gone"))?;
+                .ok_or_else(drive_gone)?;
             // Only a device already in can let another in.
             if !d.members.iter().any(|m| m.device == me && m.approved) && d.by != me {
-                bail!("only a device that is in this drive can let others in");
+                return Err(refuse(
+                    StatusCode::FORBIDDEN,
+                    "only a device that is in this drive can let others in",
+                ));
             }
             if approve {
                 if let Some(m) = d.members.iter_mut().find(|m| m.id == member) {
@@ -3980,7 +4198,10 @@ pub async fn approve(Json(req): Json<MemberReq>) -> Response {
 pub async fn leave(Json(req): Json<MemberReq>) -> Response {
     answer(move || {
         let addr = addr_of(req.addr)?;
-        let member = req.member.clone().ok_or_else(|| anyhow!("which member?"))?;
+        let member = req
+            .member
+            .clone()
+            .ok_or_else(|| refuse(StatusCode::BAD_REQUEST, "which member?"))?;
         let r = doc_update(&addr, |doc| {
             if let Some(d) = doc.drives.iter_mut().find(|d| d.id == req.drive) {
                 d.members.retain(|m| m.id != member);
@@ -4025,7 +4246,10 @@ pub async fn delete(Json(req): Json<MemberReq>) -> Response {
 pub async fn pause(Json(req): Json<MemberReq>) -> Response {
     answer(move || {
         let addr = addr_of(req.addr)?;
-        let member = req.member.clone().ok_or_else(|| anyhow!("which member?"))?;
+        let member = req
+            .member
+            .clone()
+            .ok_or_else(|| refuse(StatusCode::BAD_REQUEST, "which member?"))?;
         let paused = req.paused.unwrap_or(true);
         let r = doc_update(&addr, |doc| {
             if let Some(m) = doc
@@ -4164,6 +4388,129 @@ mod tests {
         let doc: DriveDoc = serde_json::from_str(raw).unwrap();
         let lock = doc.drives[0].lock.as_ref().unwrap();
         assert!(!lock_opens(lock, "anything"));
+    }
+
+    #[test]
+    fn the_newer_password_crosses_a_link_and_no_date_moves_nothing() {
+        let lock = |hash: &str| {
+            Some(DriveLock {
+                hash: hash.into(),
+                ..Default::default()
+            })
+        };
+        let a = Drive {
+            lock: lock("old"),
+            lock_changed: 5,
+            ..Default::default()
+        };
+        let mut b = Drive {
+            lock: lock("new"),
+            lock_changed: 9,
+            ..Default::default()
+        };
+        let (from, to, addr) = newer_password(&a, &b, "b", "a").unwrap();
+        assert_eq!(from.lock, lock("new"));
+        assert_eq!(to.lock, lock("old"));
+        assert_eq!(addr, "a");
+        let (from, _, addr) = newer_password(&b, &a, "a", "b").unwrap();
+        assert_eq!(from.lock, lock("new"));
+        assert_eq!(addr, "b");
+        // Removing the password is a change too.
+        b.lock = None;
+        assert!(newer_password(&a, &b, "b", "a").unwrap().0.lock.is_none());
+        // The same password, or neither dated: nothing to carry.
+        let same = Drive {
+            lock: lock("old"),
+            lock_changed: 1,
+            ..Default::default()
+        };
+        assert!(newer_password(&a, &same, "b", "a").is_none());
+        let (x, y) = (
+            Drive {
+                lock: lock("one"),
+                ..Default::default()
+            },
+            Drive {
+                lock: lock("two"),
+                ..Default::default()
+            },
+        );
+        assert!(newer_password(&x, &y, "b", "a").is_none());
+        // A drive never given a date writes none, so older versions read the document the same.
+        assert!(serde_json::to_value(&x)
+            .unwrap()
+            .get("lock_changed")
+            .is_none());
+    }
+
+    #[test]
+    fn a_refused_route_says_why_with_its_status() {
+        use axum::http::StatusCode as S;
+        let status = |e: anyhow::Error| refusal_status(&e);
+        assert_eq!(status(anyhow!("wrong_password: no")), S::FORBIDDEN);
+        assert_eq!(status(anyhow!("password_needed: type it")), S::FORBIDDEN);
+        assert_eq!(status(anyhow!("kept_elsewhere: in /x")), S::CONFLICT);
+        assert_eq!(status(anyhow!("already_linked: yes")), S::CONFLICT);
+        assert_eq!(status(anyhow!("busy: syncing")), S::CONFLICT);
+        assert_eq!(status(anyhow!("gone: settled")), S::NOT_FOUND);
+        assert_eq!(status(anyhow!("bad_name: no")), S::BAD_REQUEST);
+        assert_eq!(status(drive_gone()), S::NOT_FOUND);
+        assert_eq!(
+            status(refuse(S::BAD_REQUEST, "which member?").context("in a route")),
+            S::BAD_REQUEST
+        );
+        // What the console said stays a bad gateway, whatever it holds.
+        assert_eq!(status(anyhow!("connection reset")), S::BAD_GATEWAY);
+        assert_eq!(status(anyhow!("read /data/x: it failed")), S::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn a_folder_too_broad_is_called_that() {
+        let c = fail_check("/data", "too_broad", None);
+        let e = refuse_unless_ok(&c, "The console folder").unwrap_err();
+        assert!(e.to_string().contains("too much for one drive"), "{e}");
+        assert!(!e.to_string().contains("cannot be read"), "{e}");
+        assert_eq!(refusal_status(&e), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn a_refused_request_takes_back_only_what_it_made() {
+        let root = std::env::temp_dir().join(format!("ps5u-mesh-prep-{}", new_id()));
+        std::fs::create_dir_all(&root).unwrap();
+        // A new folder: all of it goes.
+        let fresh = root.join("fresh");
+        let made = prepare_local(fresh.to_str().unwrap()).unwrap();
+        assert_eq!(
+            made,
+            Prepared {
+                folder: true,
+                marker: true
+            }
+        );
+        assert!(fresh.join(MARKER).is_file());
+        unprepare_local(fresh.to_str().unwrap(), made);
+        assert!(!fresh.exists());
+        // A folder of the user's: only the marker goes, and the files stay.
+        let theirs = root.join("theirs");
+        std::fs::create_dir_all(&theirs).unwrap();
+        std::fs::write(theirs.join("keep.txt"), b"x").unwrap();
+        let made = prepare_local(theirs.to_str().unwrap()).unwrap();
+        assert!(!made.folder && made.marker);
+        unprepare_local(theirs.to_str().unwrap(), made);
+        assert!(theirs.join("keep.txt").is_file() && !theirs.join(MARKER).exists());
+        // Already a drive's folder: nothing goes.
+        std::fs::write(theirs.join(MARKER), b"m").unwrap();
+        let made = prepare_local(theirs.to_str().unwrap()).unwrap();
+        assert_eq!(made, Prepared::default());
+        unprepare_local(theirs.to_str().unwrap(), made);
+        assert!(theirs.join(MARKER).is_file());
+        // A new folder something came into meanwhile stays, with what came.
+        let busy = root.join("busy");
+        let made = prepare_local(busy.to_str().unwrap()).unwrap();
+        std::fs::write(busy.join("new.txt"), b"x").unwrap();
+        unprepare_local(busy.to_str().unwrap(), made);
+        assert!(busy.join("new.txt").is_file());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
