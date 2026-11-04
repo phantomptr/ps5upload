@@ -108,7 +108,8 @@ if (isWin) {
   runInline("per-console isolation", "sh", ["scripts/check-per-console-isolation.sh"]);
 }
 runInline("script inventory", "node", ["scripts/audit-scripts.mjs", "--strict"]);
-runInline("i18n coverage", "node", ["scripts/i18n-coverage.mjs"]);
+runInline("i18n coverage", "node", ["scripts/i18n-coverage.mjs", "--strict"]);
+runInline("i18n orphan keys", "node", ["scripts/find-orphan-i18n.mjs", "--max", "0"]);
 runInline("dead exports", "node", ["scripts/check-dead-exports.mjs"]);
 runInline("git whitespace", "git", ["diff", "--check"]);
 

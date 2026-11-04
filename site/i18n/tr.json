@@ -47,7 +47,7 @@
   "community.x": "Sürümler için @phantomptr'ı takip edin.",
   "dl.android": "Telefonlar ve tabletler",
   "dl.android_armv7": "Eski 32 bit telefonlar",
-  "dl.ios": "iPhone, sideload",
+  "dl.ios": "iPhone, elle kurulum",
   "dl.linux_arm64_deb": "ARM64 Debian, Ubuntu",
   "dl.linux_arm64_rpm": "ARM64 Fedora, openSUSE",
   "dl.linux_arm64_zip": "ARM64 her dağıtım",

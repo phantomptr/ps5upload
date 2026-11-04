@@ -51,8 +51,8 @@ describe("translate (i18n.ts t())", () => {
   });
 
   it("falls back to English when the active locale is missing the key", () => {
-    const en = translate("en", "install.empty.requirements");
-    const ja = translate("ja", "install.empty.requirements");
+    const en = translate("en", "install.title");
+    const ja = translate("ja", "install.title");
     expect(en).toBeTruthy();
     expect(ja).toBeTruthy();
     expect(en).not.toBe(ja);
@@ -71,13 +71,13 @@ describe("translate (i18n.ts t())", () => {
   });
 
   it("substitutes single-variable interpolation", () => {
-    const out = translate("en", "install.counts.total", { n: 5 });
+    const out = translate("en", "pkglib.group.count", { n: 5 });
     expect(out).toContain("5");
     expect(out).not.toContain("{n}");
   });
 
   it("leaves unknown placeholders unchanged", () => {
-    const out = translate("en", "install.counts.total", { unrelated: 1 });
+    const out = translate("en", "pkglib.group.count", { unrelated: 1 });
     expect(out).toContain("{n}");
   });
 
@@ -88,7 +88,7 @@ describe("translate (i18n.ts t())", () => {
   it("does not mutate the vars object", () => {
     const vars = { n: 5 };
     const before = { ...vars };
-    translate("en", "install.counts.total", vars);
+    translate("en", "pkglib.group.count", vars);
     expect(vars).toEqual(before);
   });
 });

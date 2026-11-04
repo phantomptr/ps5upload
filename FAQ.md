@@ -3242,8 +3242,9 @@ first connect. Only when **Ask before a new device can connect** is on does it s
 code, and your client must display the same code.
 
 **Q: How do I contribute a translation?**
-Edit `client/src/i18n/locales/` (English, `en.ts`, is the source of truth) or use
-`scripts/translate-i18n.py`. PRs welcome.
+Edit the file for your language in `client/src/i18n/locales/` (English, `en.ts`, is the source of
+truth), change only the lines you translate, then run `npm run i18n:hashes` and `npm run i18n:check`.
+PRs welcome.
 
 **Q: Why is my anti-virus flagging the app?**
 Tauri apps often trigger false positives because they bundle a

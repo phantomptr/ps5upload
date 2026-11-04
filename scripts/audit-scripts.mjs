@@ -8,14 +8,12 @@ const strict = process.argv.includes("--strict");
 
 const manualEntrypoints = new Set([
   "scripts/bundle-fonts.py",
-  "scripts/find-orphan-i18n.mjs",
   // Research tool for comparing a built package against a reference one by hand.
   "scripts/fpkg-diff.py",
   "scripts/hw-test-loop.sh",
   "scripts/i18n-fill-missing.mjs",
   "scripts/i18n-prune-unused.mjs",
   "scripts/release-posts.js",
-  "scripts/translate-i18n.py",
   "tests/lab/README.md",
 ]);
 

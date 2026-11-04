@@ -239,6 +239,11 @@ must exist there or the gate fails. Then either translate it into the 20
 other locales (21 locale files in all) or add it to `scripts/i18n-known-missing.json` as a deliberate,
 scoped deferral.
 
+When you change the English of an existing key, retranslate it too. `i18n:check` compares against
+`scripts/i18n-source-hashes.json` and fails when English moved but a translation did not. After
+retranslating run `npm run i18n:hashes`; if a translation is still right (only the case changed, say)
+run `npm run i18n:ack -- <key>`. The site's strings are covered the same way.
+
 **Do not run `i18n:bootstrap`.** It rewrites the allowlist to the current
 state, silencing every gap at once — including whatever you were about to
 forget.

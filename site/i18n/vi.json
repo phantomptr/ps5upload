@@ -47,7 +47,7 @@
   "community.x": "Theo dõi @phantomptr để nhận tin phát hành.",
   "dl.android": "Điện thoại và máy tính bảng",
   "dl.android_armv7": "Điện thoại 32-bit đời cũ",
-  "dl.ios": "iPhone, sideload",
+  "dl.ios": "iPhone, cài thủ công",
   "dl.linux_arm64_deb": "ARM64 Debian, Ubuntu",
   "dl.linux_arm64_rpm": "ARM64 Fedora, openSUSE",
   "dl.linux_arm64_zip": "ARM64 mọi bản phân phối",

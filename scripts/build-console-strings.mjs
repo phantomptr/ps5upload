@@ -11,10 +11,10 @@
  * build:console` runs this first; the files are committed so typecheck and
  * tests work without a build, and strings.test.ts fails when they are stale.
  *
- * Locale files are read the way scripts/i18n-coverage.mjs reads them: the
- * `const <id>: Translations = { … }` literal evaluated in an isolated vm
- * context, never regex-parsed for values. Keep the matcher in sync with that
- * script if the locale-file shape changes.
+ * Locale files are read as the `const <id>: Translations = { … }` literal
+ * evaluated in an isolated vm context, never regex-parsed for values.
+ * scripts/i18n-locale-file.mjs is the other reader: keep them in step if the
+ * locale-file shape changes.
  *
  * Usage: node scripts/build-console-strings.mjs [--check]
  *   --check  exit 1 when the committed file differs, write nothing.

@@ -47,7 +47,7 @@
   "community.x": "Ikuti @phantomptr untuk kabar rilis.",
   "dl.android": "Ponsel dan tablet",
   "dl.android_armv7": "Ponsel 32-bit lama",
-  "dl.ios": "iPhone, sideload",
+  "dl.ios": "iPhone, pasang manual",
   "dl.linux_arm64_deb": "ARM64 Debian, Ubuntu",
   "dl.linux_arm64_rpm": "ARM64 Fedora, openSUSE",
   "dl.linux_arm64_zip": "ARM64 distro apa pun",
