@@ -150,6 +150,14 @@ impl FfmpegCmd {
             }
             c.env("LD_LIBRARY_PATH", v);
         }
+        // The builds' OpenSSL looks for trusted roots where its build machine kept them and finds
+        // none here: every rtmps:// site (YouTube) failed "certificate verify failed". The
+        // system's own bundle, unless the person set one.
+        if std::env::var_os("SSL_CERT_FILE").is_none() {
+            if let Some(ca) = system_ca_bundle() {
+                c.env("SSL_CERT_FILE", ca);
+            }
+        }
         #[cfg(windows)]
         {
             // No console window flashing up for the child.
@@ -157,6 +165,27 @@ impl FfmpegCmd {
         }
         c
     }
+}
+
+/// Where systems keep their bundle of trusted root certificates (PEM): macOS, then Debian,
+/// Ubuntu and Arch, Fedora and RHEL, openSUSE, Alpine. Windows builds use the system's store.
+const CA_BUNDLES: &[&str] = &[
+    "/etc/ssl/cert.pem",
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/ssl/ca-bundle.pem",
+];
+
+/// This system's trusted roots for ffmpeg's TLS (rtmps://), if it has a bundle we know of.
+pub(crate) fn system_ca_bundle() -> Option<&'static std::path::Path> {
+    if cfg!(windows) {
+        return None;
+    }
+    CA_BUNDLES
+        .iter()
+        .map(std::path::Path::new)
+        .find(|p| p.is_file())
 }
 
 /// Binaries already hashed this run: (path, length, modified) → fine.

@@ -434,7 +434,10 @@ function LiveView({ run }: { run: LiveRun }) {
       {run.phase === "reconnecting" && (
         <p className="text-xs text-[var(--color-warn)]" role="status" data-testid="golive-reconnecting">
           {run.error ? problemText(tr, run.error.code, run.error.message) + " " : ""}
-          {tr("golive_retry_in", { s: String(run.retry_in_s ?? 0) }, `Trying again in ${run.retry_in_s ?? 0} s.`)}
+          {/* The wait is over and the attempt is under way: not "again in 0 s". */}
+          {run.retry_in_s
+            ? tr("golive_retry_in", { s: String(run.retry_in_s) }, `Trying again in ${run.retry_in_s} s.`)
+            : tr("golive_state_connecting", undefined, "Connecting…")}
         </p>
       )}
       {run.phase === "waiting_for_play" && (
