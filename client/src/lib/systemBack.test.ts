@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { activateFocusTrap, closeTopModal, openModalCount } from "./focusTrap";
+import { activateFocusTrap, closeTopModal, openModalCount, registerBackDismiss } from "./focusTrap";
 import { installAppBack, installBrowserBack } from "./systemBack";
 
 // No jsdom in this repo: just enough of `document`, KeyboardEvent and a window's history.
@@ -166,5 +166,24 @@ describe("Back in a phone's browser", () => {
     under();
     vi.runAllTimers();
     off();
+  });
+});
+
+describe("a surface that is not modal (a sheet, a menu)", () => {
+  it("closes on Back, newest first, in order with the modals", () => {
+    const closed: string[] = [];
+    const a = registerBackDismiss(() => closed.push("sheet"));
+    const b = modal(target, () => closed.push("modal"));
+    const c = registerBackDismiss(() => closed.push("menu"));
+    expect(openModalCount()).toBe(3);
+    expect(closeTopModal()).toBe(true);
+    c();
+    expect(closeTopModal()).toBe(true);
+    b();
+    expect(closeTopModal()).toBe(true);
+    a();
+    expect(closed).toEqual(["menu", "modal", "sheet"]);
+    expect(openModalCount()).toBe(0);
+    expect(closeTopModal()).toBe(false);
   });
 });

@@ -6,6 +6,7 @@ import { useNotificationsStore } from "../state/notifications";
 import { useTr } from "../state/lang";
 import { useFitOnScreen } from "../components/useFitOnScreen";
 import { NotificationItem, useSeenWhileOpen } from "./notificationList";
+import { useBackDismiss } from "../lib/systemBack";
 
 /**
  * Which Tailwind anchor class the panel gets for a given alignment.
@@ -85,6 +86,7 @@ export default function NotificationInbox({
   // PEEK_COUNT stay unread (and keep the badge) until the Notifications screen
   // shows them.
   const seen = useSeenWhileOpen(open, peekUnreadIds(entries), markRead);
+  useBackDismiss(open, () => setOpen(false));
 
   useEffect(() => {
     if (!open) return;

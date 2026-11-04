@@ -10,6 +10,7 @@ import { ChevronDown, MoreHorizontal } from "lucide-react";
 import { Button, type ButtonVariant } from "./Button";
 import { MenuDropdown } from "./Menu";
 import { fitOnScreen, visibleArea } from "./useFitOnScreen";
+import { useBackDismiss } from "../lib/systemBack";
 
 /**
  * One action inside an OverflowMenu.
@@ -142,6 +143,8 @@ export function OverflowMenu({
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, [open]);
+
+  useBackDismiss(open, () => setOpen(false));
 
   // Close on outside click + Escape. Both wired only when the menu
   // is open so we don't pay the listener cost for every closed menu

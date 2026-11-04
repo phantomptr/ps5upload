@@ -7,7 +7,9 @@
 // event, only history: an extra entry while something is open makes Back land here instead of
 // changing the route.
 
-import { closeTopModal, onModalStackChange, openModalCount } from "./focusTrap";
+import { useEffect, useRef } from "react";
+
+import { closeTopModal, onModalStackChange, openModalCount, registerBackDismiss } from "./focusTrap";
 import { isMobile } from "./platform";
 import { isTauriEnv } from "./tauriEnv";
 
@@ -63,6 +65,19 @@ export function installBrowserBack(w: Window = window): () => void {
     w.removeEventListener("popstate", onPop);
     if (settle !== null) clearTimeout(settle);
   };
+}
+
+/** While `open`, system Back closes this first (a sheet or menu that closes on its own Escape
+ *  handler, not through the modal stack). */
+export function useBackDismiss(open: boolean, close: () => void): void {
+  const latest = useRef(close);
+  useEffect(() => {
+    latest.current = close;
+  });
+  useEffect(() => {
+    if (!open) return;
+    return registerBackDismiss(() => latest.current());
+  }, [open]);
 }
 
 let installed = false;

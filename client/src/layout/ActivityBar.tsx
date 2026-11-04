@@ -15,6 +15,7 @@ import { commandTask, taskCapabilities } from "../state/taskControls";
 import { interruptedAtLoad, useTaskStore, type Task } from "../state/tasks";
 import { useUploadQueueStore } from "../state/uploadQueue";
 import { ActivityPanelView, ActivitySummaryLine, summaryHasNews } from "./ActivitySummary";
+import { useBackDismiss } from "../lib/systemBack";
 
 /**
  * One place for everything that takes time: uploads, installs, conversions, dumps, backups,
@@ -92,6 +93,8 @@ function OpenPanel() {
       }
     }
   };
+
+  useBackDismiss(true, closeToToggle);
 
   return (
     <>
