@@ -2,7 +2,7 @@
 //!
 //! This is the Rust counterpart of the previous `engine-sidecar.js`.
 //! Spawns the engine binary as a child process, waits for the HTTP API
-//! on 127.0.0.1:19113 to answer `/api/jobs`, and tears it down cleanly
+//! on 127.0.0.1:19113 to answer `/api/version`, and tears it down cleanly
 //! when the app exits. The child is launched with the same PS5_ADDR
 //! default the Electron sidecar used — the renderer still passes
 //! `?addr=...` on each call, so this default only matters for the few
@@ -22,7 +22,7 @@ use tokio::time::{sleep, Instant};
 use crate::engine_http::{engine_client_builder, error_chain};
 use crate::DEFAULT_ENGINE_URL;
 
-const READINESS_PROBE: &str = "/api/jobs";
+const READINESS_PROBE: &str = "/api/version";
 const READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 const READINESS_POLL: Duration = Duration::from_millis(200);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -109,16 +109,16 @@ fn extract_unrar_helper(dir: &Path) -> Result<PathBuf> {
 /// extracted binary.
 ///
 /// Why hash-stamp vs the previous full byte compare:
-/// - The previous logic read the entire 14 MiB cached `.exe` from
+/// - The previous logic read the entire cached `.exe` from
 ///   disk on every launch and compared it byte-for-byte to the
 ///   embedded array. On a slow disk that's tens of ms of cold-IO
 ///   per launch; on Windows, reading an `.exe` the OS still has
 ///   open elsewhere can fail with sharing violation and force a
 ///   spurious re-extract that itself fails on the locked file.
 /// - Hash-stamp reads a 64-byte hex string instead, and the
-///   comparison cost is constant regardless of binary size.
-///   BLAKE3 of the embedded bytes runs at GB/s so it stays under
-///   ~10 ms even on the slowest CPU we ship to.
+///   comparison cost is constant regardless of binary size. The
+///   embedded engine's hash (50-57 MB of it) is computed once, by
+///   build.rs, so a start pages none of it in unless it extracts.
 ///
 /// The stamp file IS the source of truth. If it's missing or the
 /// content doesn't hex-match the freshly-computed embedded hash, we
@@ -137,14 +137,12 @@ fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
         .context("resolving app_local_data_dir")?;
     let out_dir = cache_root.join("engine");
     std::fs::create_dir_all(&out_dir).with_context(|| format!("mkdir {}", out_dir.display()))?;
-    // Hash the embedded bytes once. blake3 is fast enough that this
-    // is cheaper than ANY disk IO we'd otherwise do.
-    let embedded_hex = {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(EMBEDDED_ENGINE);
-        hasher.finalize().to_hex().to_string()
-    };
-    extract_engine(&out_dir, bin_name, EMBEDDED_ENGINE, &embedded_hex)
+    extract_engine(
+        &out_dir,
+        bin_name,
+        EMBEDDED_ENGINE,
+        env!("PS5UPLOAD_ENGINE_BLAKE3"),
+    )
 }
 
 /// Writes `bytes` (BLAKE3 `hex`) into `dir` as `bin_name` and returns its path.

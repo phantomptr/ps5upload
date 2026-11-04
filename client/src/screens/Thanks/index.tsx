@@ -3,6 +3,7 @@
 // wallet). The supporters list comes from scripts/supporters.mjs, run on the owner's computer
 // over a Ko-fi export: only the names are kept, most first (no amounts, emails or messages).
 
+import { writeClipboard } from "../../lib/clipboard";
 import { useMemo, useState } from "react";
 import qrcode from "qrcode-generator";
 import { Check, Coffee, Copy, Heart, MessageCircle, ShieldAlert, Sparkles, Wallet } from "lucide-react";
@@ -247,12 +248,10 @@ function Address({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   const groups = value.match(/.{1,4}/g) ?? [value];
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
+    // writeClipboard also works on plain http, where the browser has no navigator.clipboard.
+    if (await writeClipboard(value)) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // No clipboard: the address is on screen to copy by hand.
     }
   };
   return (

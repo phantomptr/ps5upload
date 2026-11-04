@@ -22,7 +22,11 @@ export function bytesMoved(key: string): number | null {
     if (it.status === "running" && hostOf(it.addr) === key) add(it.bytesSent);
   }
   for (const t of useTaskStore.getState().tasks) {
-    if (t.status === "running" && t.progress?.unit === "bytes" && hostOf(t.consoleId) === key) {
+    if (
+      t.status === "running" &&
+      t.progress?.unit === "bytes" &&
+      hostOf(t.consoleId) === key
+    ) {
       add(t.progress.current);
     }
   }

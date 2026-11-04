@@ -138,7 +138,9 @@ export type TaskControlRef =
   // A Convert or .ffpfsc run; Cancel stops its build job.
   | { owner: "fpkg-convert" }
   // A copy from a saved server (NAS) to this computer: Cancel stops the engine's fetch job.
-  | { owner: "remote-fetch"; jobId: string };
+  | { owner: "remote-fetch"; jobId: string }
+  // A file going from this browser to the engine (lib/browserStaging): Cancel stops the upload.
+  | { owner: "browser-staging"; stagingId: string };
 
 /** Per-kind specifics. Kept loose (record of string→unknown) so each
  *  feature can store what it needs without forcing a union. The typed

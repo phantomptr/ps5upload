@@ -16,6 +16,7 @@ export type RefuseWhy =
   | "old_helper"
   | "not_playing"
   | "unreachable"
+  | "address"
   | "slow_down"
   | "refused";
 
@@ -45,7 +46,7 @@ export type ServerMessage =
   | { kind: "bye"; why: ByeWhy }
   | { kind: "pong"; t: number };
 
-const REFUSE: ReadonlySet<string> = new Set(["key", "full", "denied", "closed", "old_helper", "not_playing", "unreachable", "slow_down"]);
+const REFUSE: ReadonlySet<string> = new Set(["key", "full", "denied", "closed", "old_helper", "not_playing", "unreachable", "slow_down", "address"]);
 const GUEST_STATES: ReadonlySet<string> = new Set(["asking", "picking_user", "playing", "reconnecting", "left"]);
 
 const byte = (v: unknown) => Math.max(0, Math.min(255, Math.round(Number(v) || 0)));

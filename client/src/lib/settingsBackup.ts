@@ -26,6 +26,8 @@ const OWN_KEYS = new Set([
   "ps5upload.mesh_prefs.meta.v1",
   "ps5upload.mesh.client",
   "ps5upload.roster.share_unsaved.v1",
+  "ps5upload.browser_staged.v1",
+  "ps5upload.resume_txids.v1",
 ]);
 const ROSTER_KEY = "ps5upload.roster.v1";
 const DAY_MS = 24 * 60 * 60 * 1000;

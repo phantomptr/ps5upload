@@ -14,28 +14,66 @@ async function responseError(response: Response): Promise<string> {
   return body?.error ? String(body.error) : `engine HTTP ${response.status}`;
 }
 
+/** What a caller can do with a staging upload that may take hours. */
+export interface StageOptions {
+  onProgress?: (sent: number, total: number) => void;
+  signal?: AbortSignal;
+}
+
 /**
  * Put a browser-selected package on the engine host. Browsers cannot hand the
  * engine a local filesystem path, while the desktop shell can. The returned
  * path is therefore temporary and must be paired with `deleteBrowserPkgUpload`
  * after both the direct Stream attempt and any staged fallback have finished.
  */
-export async function stageBrowserPkg(file: File): Promise<BrowserPkgUpload> {
-  return stageBrowserFileAt(file, "/api/pkg/upload");
+export async function stageBrowserPkg(file: File, opts?: StageOptions): Promise<BrowserPkgUpload> {
+  return stageBrowserFileAt(file, "/api/pkg/upload", opts);
 }
 
 /** Stage any browser-selected file for the normal Upload review. */
-export async function stageBrowserFile(file: File): Promise<BrowserPkgUpload> {
-  return stageBrowserFileAt(file, "/api/files/upload");
+export async function stageBrowserFile(file: File, opts?: StageOptions): Promise<BrowserPkgUpload> {
+  return stageBrowserFileAt(file, "/api/files/upload", opts);
 }
 
-async function stageBrowserFileAt(file: File, endpoint: string): Promise<BrowserPkgUpload> {
+/** The POST, through `XMLHttpRequest` where there is one: `fetch` has no upload progress, and a
+ *  50 GB file looked as if nothing was happening. */
+function send(url: string, form: FormData, opts?: StageOptions): Promise<Response> {
+  if (typeof XMLHttpRequest === "undefined") {
+    return fetch(url, { method: "POST", body: form, signal: opts?.signal });
+  }
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const onAbort = () => xhr.abort();
+    const done = () => opts?.signal?.removeEventListener("abort", onAbort);
+    xhr.open("POST", url);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) opts?.onProgress?.(e.loaded, e.total);
+    };
+    xhr.onload = () => {
+      done();
+      resolve(new Response(xhr.responseText, { status: xhr.status }));
+    };
+    xhr.onerror = () => {
+      done();
+      reject(new TypeError("the upload to the server failed"));
+    };
+    xhr.onabort = () => {
+      done();
+      reject(new DOMException("the upload was cancelled", "AbortError"));
+    };
+    if (opts?.signal?.aborted) {
+      xhr.onabort(new ProgressEvent("abort"));
+      return;
+    }
+    opts?.signal?.addEventListener("abort", onAbort);
+    xhr.send(form);
+  });
+}
+
+async function stageBrowserFileAt(file: File, endpoint: string, opts?: StageOptions): Promise<BrowserPkgUpload> {
   const form = new FormData();
   form.append(endpoint === "/api/pkg/upload" ? "pkg" : "file", file, file.name);
-  const response = await fetch(`${getEngineUrl()}${endpoint}`, {
-    method: "POST",
-    body: form,
-  });
+  const response = await send(`${getEngineUrl()}${endpoint}`, form, opts);
   if (!response.ok) throw new Error(await responseError(response));
   const body = (await response.json()) as {
     upload_id?: unknown;

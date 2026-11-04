@@ -88,7 +88,6 @@ const NATIVE_ONLY: Record<string, string> = {
   engine_url_set: "native: desktop sidecar URL",
   engine_diagnose: "native: inspects the desktop sidecar process and port",
   engine_restart: "native: restarts the desktop sidecar",
-  toast_push: "native: OS notification",
   keep_awake_set: "native: OS power assertion",
   keep_awake_state: "native: OS power assertion",
   keep_awake_acquire: "native: OS power assertion",
@@ -128,9 +127,6 @@ const NATIVE_ONLY: Record<string, string> = {
   send_payload_history_load: "native: desktop history file",
   send_payload_history_add: "native: desktop history file",
   send_payload_history_clear: "native: desktop history file",
-  resume_txid_lookup: "native: desktop resume-state file",
-  resume_txid_remember: "native: desktop resume-state file",
-  resume_txid_forget: "native: desktop resume-state file",
 
   // Payload catalogue: downloads ELFs to host disk, then sends them over a
   // raw socket. The browser build's Payloads screen has no Catalog or Send tab.

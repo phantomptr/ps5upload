@@ -324,6 +324,9 @@ async function openVideoPip(canvas: HTMLCanvasElement): Promise<boolean> {
   document.body.appendChild(video);
   const cur = { kind: "video" as const, win: null, root: null, video, cleanups: [] as Array<() => void> };
   open = cur;
+  // The video reads the canvas with the page hidden, which is when frames otherwise go undrawn.
+  const letGo = useRemotePlayStore.getState().stream?.holdPicture();
+  if (letGo) cur.cleanups.push(letGo);
   try {
     await video.play();
     await video.requestPictureInPicture();

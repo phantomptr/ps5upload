@@ -12,6 +12,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# The embedded engine's stamp, hashed once at build time (build.rs), not on every launch.
+blake3 = "1"
 
 [dependencies]
 # Same version as engine/Cargo.toml (the third_party/ava1 submodule's tag).

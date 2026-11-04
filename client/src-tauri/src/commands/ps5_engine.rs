@@ -2173,9 +2173,10 @@ pub async fn ps5_game_icon_data(
 /// it with no Origin and no Referer), so the bytes come over the IPC. See
 /// [`engine_icon_data_url`].
 #[tauri::command]
-pub async fn collection_cover_data(game_id: String) -> Result<String, String> {
+pub async fn collection_cover_data(game_id: String, size: Option<u32>) -> Result<String, String> {
+    let query = size.map(|s| format!("?size={s}")).unwrap_or_default();
     engine_icon_data_url(format!(
-        "{}/api/collection/games/{}/cover",
+        "{}/api/collection/games/{}/cover{query}",
         engine::url(),
         urlencoding(&game_id)
     ))

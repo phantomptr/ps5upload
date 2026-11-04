@@ -32,8 +32,16 @@ describe("bytesMoved", () => {
   it("sees a Files upload, and only one that reports bytes", () => {
     useTaskStore.setState({
       tasks: [
-        { status: "running", consoleId: HOST, progress: { unit: "bytes", current: 7, total: 9 } },
-        { status: "running", consoleId: HOST, progress: { unit: "files", current: 3, total: 9 } },
+        {
+          status: "running",
+          consoleId: HOST,
+          progress: { unit: "bytes", current: 7, total: 9 },
+        },
+        {
+          status: "running",
+          consoleId: HOST,
+          progress: { unit: "files", current: 3, total: 9 },
+        },
       ] as never,
     });
     expect(bytesMoved(HOST)).toBe(7);

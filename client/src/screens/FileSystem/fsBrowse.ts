@@ -1,3 +1,5 @@
+import { compareNames } from "../../lib/collate";
+
 // FileZilla-style browsing helpers for the Files screen: column sorting and the keyboard map.
 // Pure, so the screen stays a thin wiring layer and these stay tested.
 
@@ -17,8 +19,7 @@ interface Sortable {
 /** Folders first (as every file manager does), then by the chosen column; ties by name. */
 export function sortEntries<T extends Sortable>(entries: T[], sort: SortState): T[] {
   const dir = sort.desc ? -1 : 1;
-  const byName = (a: T, b: T) =>
-    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+  const byName = (a: T, b: T) => compareNames(a.name, b.name);
   return [...entries].sort((a, b) => {
     const ad = a.kind === "dir" ? 0 : 1;
     const bd = b.kind === "dir" ? 0 : 1;

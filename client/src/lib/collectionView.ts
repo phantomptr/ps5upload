@@ -1,6 +1,7 @@
 // The Collection screen's filtering, searching and sorting: pure, so it is tested without a
 // screen. Filters and sorts are PS Game Library's, plus platform.
 
+import { compareText } from "./collate";
 import type {
   CollectionGame,
   CollectionLocation,
@@ -223,9 +224,7 @@ function compare(
   sort: CollectionSort,
   ctx: CollectionContext,
 ): number {
-  const byTitle = a.title.localeCompare(b.title, undefined, {
-    sensitivity: "base",
-  });
+  const byTitle = compareText(a.title, b.title);
   switch (sort) {
     case "title-asc":
       return byTitle;
