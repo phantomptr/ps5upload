@@ -421,7 +421,7 @@ pub(crate) async fn fpkg_build_handler(
                         total: *total_bytes,
                     });
                     // Nobody listening: nothing to build.
-                    let state = (events_tx.receiver_count() > 0)
+                    let state = crate::event_bus::tick_wanted(&events_tx)
                         .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
                         .flatten();
                     drop(g);
@@ -1053,7 +1053,7 @@ pub(crate) async fn exfat_build_handler(
                     *bytes_sent = tick_bytes.load(Ordering::Relaxed);
                     *stage = tick_stage.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     // Nobody listening: nothing to build.
-                    let state = (events_tx.receiver_count() > 0)
+                    let state = crate::event_bus::tick_wanted(&events_tx)
                         .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
                         .flatten();
                     drop(g);
@@ -1456,7 +1456,7 @@ pub(crate) async fn folder_build_handler(
                 }) => {
                     *bytes_sent = tick_bytes.load(Ordering::Relaxed);
                     *stage = tick_stage.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                    let state = (events_tx.receiver_count() > 0)
+                    let state = crate::event_bus::tick_wanted(&events_tx)
                         .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
                         .flatten();
                     drop(g);
@@ -1936,7 +1936,7 @@ pub(crate) async fn fpkg_extract_handler(
                 Some(JobState::Running { bytes_sent, .. }) => {
                     *bytes_sent = tick_bytes.load(Ordering::Relaxed);
                     // Nobody listening: nothing to build.
-                    let state = (events_tx.receiver_count() > 0)
+                    let state = crate::event_bus::tick_wanted(&events_tx)
                         .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
                         .flatten();
                     drop(g);

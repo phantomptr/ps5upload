@@ -129,6 +129,17 @@ fn fake_api() -> Router {
             }),
         )
         .route(
+            "/api/ps5/power/pair",
+            post(|| async {
+                Json(json!({
+                    "credential": "SECRET-CREDENTIAL",
+                    "regist_key": "SECRET-REGIST",
+                    "rp_key": "SECRET-RP",
+                    "account_id": "42",
+                }))
+            }),
+        )
+        .route(
             "/api/shared/consoles",
             get(|| async {
                 Json(json!({"rev": 1, "value": {"profiles": [{
@@ -1120,6 +1131,23 @@ async fn the_console_keys_stay_out_of_api_request_and_the_catalog() {
     let everything = server.tool("api_catalog", json!({})).await.to_string();
     assert!(!everything.contains("consoles/document"));
     assert!(!everything.contains("settings-backup/get"));
+}
+
+#[tokio::test]
+async fn pairing_works_and_its_keys_stay_out_of_the_result() {
+    let server = server();
+    let result = server
+        .tool(
+            "api_request",
+            json!({"method": "POST", "path": "/api/ps5/power/pair", "body": {"host": "192.0.2.1"}}),
+        )
+        .await;
+    assert_ne!(result["isError"], true, "{result}");
+    let text = result.to_string();
+    assert!(!text.contains("SECRET"), "{text}");
+    let body = &result["structuredContent"]["body"];
+    assert_eq!(body["account_id"], "42");
+    assert!(body["keys"].is_string(), "{body}");
 }
 
 #[tokio::test]

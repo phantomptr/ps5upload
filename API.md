@@ -145,7 +145,7 @@ curl -s http://127.0.0.1:19113/api/jobs/<job_id>
   row has `job_id`, `kind`, `status`, `seq` and `job`.
 - **Following it without missing anything.** `?since_seq=<n>&limit=<m>` gives only what changed
   after `n`, oldest change first. The `x-ps5upload-last-seq` response header is the cursor for your
-  next call, and the same numbers as `/api/events` ids.
+  next call, and the same numbers as `/api/events` ids. While nobody reads `/api/events`, running jobs report no progress ticks, so `since_seq` finds a job when its state changes; read `GET /api/jobs/{id}` for its bytes.
 - **Tasks started on the console.** `GET /api/ps5/console-tasks?addr=` lists what someone started on
   the console page, with its progress, and `POST /api/ps5/console-tasks/cancel {addr, id}` stops one
   whose `cancellable` is true. A helper older than this feature answers `supported: false`.

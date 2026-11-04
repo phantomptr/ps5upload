@@ -36,6 +36,8 @@ pub(crate) struct BusEvent {
     /// The SSE event name. `None` is the default event (job snapshots).
     pub kind: Option<&'static str>,
     pub data: String,
+    /// A job's snapshot: the newer one replaces it in the ring.
+    job: Option<String>,
 }
 
 impl BusEvent {
@@ -50,6 +52,9 @@ impl BusEvent {
 
 struct Ring {
     next_seq: u64,
+    /// The newest number that fell off the end of the ring. A job snapshot replaced by a newer one
+    /// of that job is not a loss: the client gets the newer one.
+    lost_through: u64,
     events: VecDeque<Arc<BusEvent>>,
 }
 
@@ -83,6 +88,7 @@ impl EventBus {
         EventBus {
             ring: Mutex::new(Ring {
                 next_seq: first,
+                lost_through: first.saturating_sub(1),
                 events: VecDeque::with_capacity(cap.min(RING_CAP)),
             }),
             tx,
@@ -98,16 +104,33 @@ impl EventBus {
         kind: Option<&'static str>,
         data: impl FnOnce(u64) -> String,
     ) -> u64 {
+        self.publish_inner(kind, None, data)
+    }
+
+    fn publish_inner(
+        &self,
+        kind: Option<&'static str>,
+        job: Option<String>,
+        data: impl FnOnce(u64) -> String,
+    ) -> u64 {
         let mut ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
         let seq = ring.next_seq;
         ring.next_seq += 1;
+        // A transfer ticks several times a second: one row per job in the ring, or the ticks would
+        // push out the named events a reconnecting client came for.
+        if let Some(id) = &job {
+            ring.events.retain(|e| e.job.as_ref() != Some(id));
+        }
         let ev = Arc::new(BusEvent {
             seq,
             kind,
             data: data(seq),
+            job,
         });
         if ring.events.len() >= self.cap {
-            ring.events.pop_front();
+            if let Some(gone) = ring.events.pop_front() {
+                ring.lost_through = ring.lost_through.max(gone.seq);
+            }
         }
         ring.events.push_back(ev.clone());
         let _ = self.tx.send(ev);
@@ -141,11 +164,10 @@ impl EventBus {
             .filter(|e| e.seq > last)
             .cloned()
             .collect();
-        let oldest = ring.events.front().map_or(ring.next_seq, |e| e.seq);
         let missed = if last >= ring.next_seq {
             Some(0)
-        } else if last + 1 < oldest {
-            Some(oldest - last - 1)
+        } else if last < ring.lost_through {
+            Some(ring.lost_through - last)
         } else {
             None
         };
@@ -196,8 +218,33 @@ pub(crate) fn bus() -> &'static EventBus {
 
 /// Numbers the job snapshots sent on `events_tx` onto the bus until the sender is gone.
 pub(crate) fn forward_jobs(events_tx: &broadcast::Sender<String>) {
+    forwarded()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(events_tx.downgrade());
     let rx = events_tx.subscribe();
     tokio::spawn(forward_loop(rx, bus()));
+}
+
+fn forwarded() -> &'static Mutex<Vec<broadcast::WeakSender<String>>> {
+    static CHANNELS: OnceLock<Mutex<Vec<broadcast::WeakSender<String>>>> = OnceLock::new();
+    CHANNELS.get_or_init(Default::default)
+}
+
+/// Someone would read a progress tick sent on `events_tx`: a client of `GET /api/events`, or a
+/// receiver of the channel other than the forwarder. A tick is built only then. A change of a job's
+/// state is always sent: `/api/jobs?since_seq=` numbers jobs by it.
+pub(crate) fn tick_wanted(events_tx: &broadcast::Sender<String>) -> bool {
+    let forwarders = {
+        let mut channels = forwarded().lock().unwrap_or_else(|e| e.into_inner());
+        channels.retain(|w| w.strong_count() > 0);
+        channels
+            .iter()
+            .filter_map(broadcast::WeakSender::upgrade)
+            .filter(|s| s.same_channel(events_tx))
+            .count()
+    };
+    events_tx.receiver_count() > forwarders || (forwarders > 0 && bus().tx.receiver_count() > 0)
 }
 
 async fn forward_loop(mut rx: broadcast::Receiver<String>, bus: &'static EventBus) {
@@ -216,7 +263,7 @@ fn forward_one(bus: &EventBus, msg: String) {
     let job_id = serde_json::from_str::<serde_json::Value>(&msg)
         .ok()
         .and_then(|v| v.get("job_id").and_then(|j| j.as_str()).map(str::to_string));
-    let seq = bus.publish(None, msg);
+    let seq = bus.publish_inner(None, job_id.clone(), |_| msg);
     if let Some(id) = job_id {
         bus.note_job(&id, seq);
     }
@@ -267,6 +314,35 @@ mod tests {
 
     fn bus_of(cap: usize) -> EventBus {
         EventBus::new(cap, 100)
+    }
+
+    #[test]
+    fn job_ticks_do_not_push_named_events_out_of_the_replay() {
+        let bus = bus_of(4);
+        let first = bus.publish_json("queue", &serde_json::json!({"n": 1}));
+        for tick in 0..50 {
+            forward_one(&bus, format!(r#"{{"job_id":"j","tick":{tick}}}"#));
+        }
+        let sub = bus.subscribe(Some(first - 1));
+        assert_eq!(sub.missed, None, "a replaced tick is not a loss");
+        assert_eq!(sub.backlog.len(), 2);
+        assert_eq!(sub.backlog[0].kind, Some("queue"));
+        assert!(sub.backlog[1].data.contains(r#""tick":49"#));
+    }
+
+    #[tokio::test]
+    async fn the_forwarder_alone_wants_no_ticks() {
+        let (tx, rx) = broadcast::channel::<String>(8);
+        drop(rx);
+        assert!(!tick_wanted(&tx), "nobody at all");
+        let _plain = tx.subscribe();
+        assert!(tick_wanted(&tx), "a receiver and no forwarder");
+        drop(_plain);
+        forward_jobs(&tx);
+        // The feed's own client is another test's business: only this channel's count is asked here.
+        assert_eq!(tx.receiver_count(), 1);
+        let _other = tx.subscribe();
+        assert!(tick_wanted(&tx), "someone besides the forwarder");
     }
 
     #[test]

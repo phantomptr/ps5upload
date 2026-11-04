@@ -257,13 +257,18 @@ fn with_keys(keys: &KeyStore, doc: &mut Doc) {
 /// list changed for anyone reading it). Once per run.
 fn migrate() {
     static DONE: AtomicBool = AtomicBool::new(false);
-    if DONE.swap(true, Ordering::SeqCst) {
+    if DONE.load(Ordering::SeqCst) {
         return;
     }
+    // A second caller waits here for the first, then finds it done. A failure tries again next time.
     let _g = ROSTER.lock().unwrap_or_else(|e| e.into_inner());
+    if DONE.load(Ordering::SeqCst) {
+        return;
+    }
     let doc = shared_state::read(DOC);
     let mut list = profiles_of(doc.value.as_ref());
     if !list.iter().any(has_key_field) {
+        DONE.store(true, Ordering::SeqCst);
         return;
     }
     let mut keys = lock_keys();
@@ -280,6 +285,7 @@ fn migrate() {
     if let Err(e) = shared_state::set_quietly(DOC, value) {
         crate::log_warn!("consoles: could not rewrite the console list: {e}");
     } else {
+        DONE.store(true, Ordering::SeqCst);
         crate::log_info!("consoles: moved the saved Remote Play keys to the encrypted store");
     }
 }
@@ -297,7 +303,24 @@ fn json_error(status: StatusCode, code: &str, msg: impl Into<String>) -> Respons
 /// `/api/shared/consoles` read: no keys.
 pub(crate) fn shared_doc() -> Doc {
     migrate();
-    shared_state::read(DOC)
+    without_key_fields(shared_state::read(DOC))
+}
+
+/// The document with no key in it, whether or not the move to the encrypted store has worked.
+fn without_key_fields(mut doc: Doc) -> Doc {
+    let list = doc
+        .value
+        .as_mut()
+        .and_then(|v| v.get_mut("profiles"))
+        .and_then(Value::as_array_mut);
+    for profile in list.into_iter().flatten() {
+        if let Some(fields) = profile.as_object_mut() {
+            for f in KEY_FIELDS {
+                fields.remove(f);
+            }
+        }
+    }
+    doc
 }
 
 /// `GET /api/consoles/document`: the document with its keys, for the app.
@@ -674,6 +697,24 @@ mod tests {
 
     fn p(id: &str, host: &str) -> Value {
         json!({"id": id, "name": id, "host": host})
+    }
+
+    #[test]
+    fn the_keyless_route_strips_keys_even_when_the_move_failed() {
+        let doc = Doc {
+            rev: 3,
+            value: Some(json!({"profiles": [{
+                "id": "a", "host": "10.0.0.2",
+                "wake_regist_key": R1, "wake_rp_key": K1, "wake_credential": "12345",
+            }]})),
+        };
+        let out = without_key_fields(doc);
+        assert_eq!(out.rev, 3);
+        let text = out.value.unwrap().to_string();
+        assert!(text.contains("10.0.0.2"));
+        for secret in [R1, K1, "12345"] {
+            assert!(!text.contains(secret), "{text}");
+        }
     }
 
     #[test]

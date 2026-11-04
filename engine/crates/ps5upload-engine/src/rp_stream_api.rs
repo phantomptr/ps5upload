@@ -1364,10 +1364,33 @@ pub async fn ws(upgrade: WebSocketUpgrade) -> Response {
         .on_upgrade(session)
 }
 
+#[derive(serde::Deserialize)]
+pub struct CurrentQuery {
+    #[serde(default)]
+    passive: Option<String>,
+}
+
 /// What is streaming now, for a page that wants to show or rejoin it.
-pub async fn current(headers: axum::http::HeaderMap) -> Json<serde_json::Value> {
+///
+/// Asking counts as use for a session started through the API (`keep_alive_s`), unless the asker
+/// says `passive=1`: the app looks every few seconds whatever it is showing, and that must not keep
+/// a script's forgotten session going.
+pub async fn current(
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<CurrentQuery>,
+) -> Json<serde_json::Value> {
     let live = LIVE.lock().ok().and_then(|g| g.clone());
     let local = crate::vinput_api::host_is_local(&headers);
+    if local
+        && !q
+            .passive
+            .as_deref()
+            .is_some_and(|p| p == "1" || p == "true")
+    {
+        if let Some(l) = &live {
+            control::touch(l);
+        }
+    }
     let mut v = current_for(live.as_ref().map(|l| l.snapshot()), local);
     if local {
         control::add_details(&mut v, live.as_deref());

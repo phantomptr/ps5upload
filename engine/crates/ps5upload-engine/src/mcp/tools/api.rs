@@ -269,10 +269,11 @@ async fn request(ctx: ToolCtx, args: Args) -> ToolResult {
     }
     let status = reply.status.as_u16();
     let summary = format!("{label} answered {status}.");
-    if let Some(body) = reply.json() {
+    if let Some(mut body) = reply.json() {
         if body.get("ok").and_then(Value::as_bool) == Some(false) {
             return Err(engine_failure(&label, &reply));
         }
+        catalog_routes::redact_answer(path, &mut body);
         return Ok(ToolOutput::ok(
             summary,
             json!({ "status": status, "body": body }),

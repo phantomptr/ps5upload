@@ -48,6 +48,9 @@ picks another and its log says which. A standalone engine takes the port from
 {"host": "192.168.1.100", "session": 3, "playing": true, "attached": true, "passcode": false}
 ```
 
+Asking here counts as use of a session started through this API, so polling keeps it past
+`keep_alive_s`. Add `?passive=1` to look without that.
+
 `host: null` (and `session: null`) means nothing is streaming; `last_end` then says how the last
 session ended (its `code` can be `busy`, `asleep`, `keys`, `rp_off`, and so on). `attached` is whether
 an app page shows the stream now. `picture` is false while the picture is off on that page (see
@@ -88,7 +91,9 @@ joined rather than started (`"started": false`); a session for another console a
 ### `POST /api/ps5/rp/stop`: end it
 
 `{"host": "192.168.1.100", "session": 4}`. The console holds its Remote Play slot for 12 to 30 s
-after a session ends; a start in that time fails with `last_end.code` `busy` and `retry_s`.
+after a session ends; a start in that time fails with `last_end.code` `busy` and `retry_s`. A start
+right after a stop waits up to 5 s for the old session to go, then starts a new one, or answers
+`409 busy` with `retry_s`. It never joins the session you stopped.
 
 ### `POST /api/ps5/rp/settings`: change it while it runs
 

@@ -14,6 +14,34 @@ use serde_json::{json, Value};
 pub(crate) const HOLD_CONSOLE_KEYS: &[&str] =
     &["/api/consoles/document", "/api/settings-backup/get"];
 
+/// Routes that do their job and also answer with keys: `(path, fields)`. The call goes through, the
+/// engine keeps what it should, and the fields never reach the tool's result.
+const ANSWERS_WITH_KEYS: &[(&str, &[&str])] = &[(
+    "/api/ps5/power/pair",
+    &["credential", "regist_key", "rp_key"],
+)];
+
+/// Takes the keys out of a route's answer. Says so in the answer, so nobody looks for them.
+pub(crate) fn redact_answer(path: &str, body: &mut Value) {
+    let plain = plain_path(path);
+    let Some((_, fields)) = ANSWERS_WITH_KEYS.iter().find(|(p, _)| *p == plain) else {
+        return;
+    };
+    let Some(object) = body.as_object_mut() else {
+        return;
+    };
+    let mut any = false;
+    for field in *fields {
+        any |= object.remove(*field).is_some();
+    }
+    if any {
+        object.insert(
+            "keys".to_string(),
+            json!("kept by the engine; not shown to tools"),
+        );
+    }
+}
+
 /// Percent-escapes undone and letters lowered, `.` and repeated or trailing slashes gone.
 fn plain_path(text: &str) -> String {
     let bytes = text.as_bytes();

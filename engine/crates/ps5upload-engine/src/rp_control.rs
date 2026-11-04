@@ -48,6 +48,12 @@ use serde_json::{json, Value};
 use super::{Live, Secret, StartReq, LAST_SESSION, LIVE, MAX_KEEP_ALIVE, MIC_QUEUE};
 
 /// A session started here waits this long for the next call when nobody watches it.
+/// How long a start waits for a session that was just stopped to go.
+const STOPPING_WAIT: Duration = if cfg!(test) {
+    Duration::from_millis(100)
+} else {
+    Duration::from_secs(5)
+};
 const API_KEEP_ALIVE: Duration = Duration::from_secs(300);
 /// The longest `wait_s`.
 const MAX_WAIT: Duration = Duration::from_secs(60);
@@ -78,6 +84,16 @@ fn gate(peer: &SocketAddr, headers: &HeaderMap) -> Option<Response> {
 }
 
 /// A call to this API, or a reader of the feed: the session started here is in use.
+/// A session a start for `host` can join: that console's, and not stopping.
+fn joinable(live: &Live, host: &str) -> bool {
+    same_console(&live.host, host) && !live.stop.load(Ordering::Relaxed)
+}
+
+/// That console's session is on its way out.
+fn stopping_here(host: &str) -> bool {
+    super::live().is_some_and(|l| same_console(&l.host, host) && l.stop.load(Ordering::Relaxed))
+}
+
 pub(super) fn touch(live: &Live) {
     if API_SESSION.load(Ordering::Relaxed) != live.session {
         return;
@@ -185,7 +201,13 @@ pub async fn start(
         }
     }
     // A session already running is joined: its keys are not needed.
-    let running = super::live().filter(|l| same_console(&l.host, &host));
+    // Unless it is on its way out: joining that would end with it, a moment later. Its console
+    // needs it gone first, so a start right after a stop waits for that, briefly.
+    let until = Instant::now() + STOPPING_WAIT;
+    while stopping_here(&host) && Instant::now() < until {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let running = super::live().filter(|l| joinable(l, &host));
     let creds = if running.is_some() {
         None
     } else {
@@ -234,37 +256,47 @@ pub async fn start(
             )
         }
     };
-    let (live, started) = {
-        let Ok(mut g) = LIVE.lock() else {
-            return fail(StatusCode::INTERNAL_SERVER_ERROR, "internal", "lock");
-        };
-        match g.as_ref() {
-            Some(l) if same_console(&l.host, &host) => (l.clone(), false),
-            Some(l) => {
-                return (
+    let (live, started) =
+        {
+            let Ok(mut g) = LIVE.lock() else {
+                return fail(StatusCode::INTERNAL_SERVER_ERROR, "internal", "lock");
+            };
+            match g.as_ref() {
+                Some(l) if joinable(l, &host) => (l.clone(), false),
+                Some(l) if same_console(&l.host, &host) => return (
                     StatusCode::CONFLICT,
                     Json(json!({
-                        "error": "busy_other",
-                        "host": l.host,
-                        "message": format!("Remote Play is already streaming {}", l.host),
+                        "error": "busy",
+                        "retry_s": super::STOPPING_RETRY_S,
+                        "message": "The last session is still finishing. Try again in a moment.",
                     })),
                 )
-                    .into_response()
-            }
-            None => {
-                let Some(creds) = creds else {
-                    return fail(
+                    .into_response(),
+                Some(l) => {
+                    return (
                         StatusCode::CONFLICT,
-                        "no_session",
-                        "The session ended just now. Try again.",
-                    );
-                };
-                let l = super::begin(&req, creds);
-                *g = Some(l.clone());
-                (l, true)
+                        Json(json!({
+                            "error": "busy_other",
+                            "host": l.host,
+                            "message": format!("Remote Play is already streaming {}", l.host),
+                        })),
+                    )
+                        .into_response()
+                }
+                None => {
+                    let Some(creds) = creds else {
+                        return fail(
+                            StatusCode::CONFLICT,
+                            "no_session",
+                            "The session ended just now. Try again.",
+                        );
+                    };
+                    let l = super::begin(&req, creds);
+                    *g = Some(l.clone());
+                    (l, true)
+                }
             }
-        }
-    };
+        };
     if started {
         adopt(&live);
     } else {
@@ -811,6 +843,37 @@ mod tests {
         mine.attach(vt, ct, false);
         touch(&mine);
         assert!(mine.alone_since.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn asking_for_the_session_counts_as_use_unless_passive() {
+        let _g = super::super::LIVE_TEST_LOCK.lock().await;
+        let live = std::sync::Arc::new(session());
+        *LIVE.lock().unwrap() = Some(live.clone());
+        API_SESSION.store(live.session, Ordering::Relaxed);
+        let mut local = HeaderMap::new();
+        local.insert(axum::http::header::HOST, "127.0.0.1:19113".parse().unwrap());
+        let ask = |passive: Option<&str>| {
+            axum::extract::Query(super::super::CurrentQuery {
+                passive: passive.map(str::to_string),
+            })
+        };
+        let old = Instant::now() - Duration::from_secs(30);
+        *live.alone_since.lock().unwrap() = Some(old);
+        let _ = super::super::current(local.clone(), ask(Some("1"))).await;
+        assert!(live.alone_since.lock().unwrap().unwrap().elapsed() >= Duration::from_secs(30));
+        let _ = super::super::current(local, ask(None)).await;
+        assert!(live.alone_since.lock().unwrap().unwrap().elapsed() < Duration::from_secs(5));
+        *LIVE.lock().unwrap() = None;
+    }
+
+    #[test]
+    fn a_stopping_session_is_not_joined() {
+        let l = Live::new("10.0.0.9".into(), false, Duration::from_secs(60));
+        assert!(joinable(&l, "10.0.0.9"));
+        assert!(!joinable(&l, "10.0.0.8"));
+        l.stop.store(true, Ordering::Relaxed);
+        assert!(!joinable(&l, "10.0.0.9"));
     }
 
     #[test]

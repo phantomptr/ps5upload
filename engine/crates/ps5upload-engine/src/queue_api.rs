@@ -912,7 +912,9 @@ impl QueueState {
             let console = book.items[at].console.clone();
             book.last_ended.insert(console.clone(), Instant::now());
             let stopped = end.status == Status::Cancelled;
-            let removed = stopped && intent == Some(Intent::Remove);
+            // However the run ended: the client was told it is going, and a run that got to its end
+            // before the cancel reached it, or a route that refused, changes nothing about that.
+            let removed = intent == Some(Intent::Remove);
             if removed {
                 let view = book.view(&book.items[at]);
                 book.items.remove(at);
@@ -1191,7 +1193,12 @@ fn install_end(state: &Value) -> Option<End> {
     let field = |name: &str| state.get(name).and_then(Value::as_str);
     let hint = field("hint").map(str::to_string);
     let verdict = field("verdict").map(str::to_string);
-    match field("phase")? {
+    // An update that did not apply ends in phase `done` with verdict `failed`: it failed.
+    let phase = match field("phase")? {
+        "done" if verdict.as_deref() == Some("failed") => "failed",
+        phase => phase,
+    };
+    match phase {
         "done" => Some(End {
             verdict,
             hint,

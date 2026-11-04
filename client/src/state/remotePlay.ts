@@ -559,7 +559,7 @@ export async function fetchRunningSession(): Promise<{
   picture?: boolean;
 }> {
   try {
-    const r = await fetch(`${getEngineUrl()}/api/ps5/rp/session`);
+    const r = await fetch(`${getEngineUrl()}/api/ps5/rp/session?passive=1`);
     return r.ok ? await r.json() : { host: null };
   } catch {
     return { host: null };

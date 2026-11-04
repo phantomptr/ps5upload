@@ -768,6 +768,68 @@ async fn a_lost_job_is_interrupted_and_stop_on_failure_holds_the_rest() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_update_that_did_not_apply_failed_holds_the_rest_and_can_be_retried() {
+    let fake = Fake::default();
+    let engine = engine_on(None, Some(&fake));
+    let console = "127.0.6.3";
+    let (_, first) = engine
+        .post(
+            "/api/queue",
+            json!({
+                "console": console,
+                "kind": "install",
+                "stop_on_failure": true,
+                "request": {"source": {"host_file": "/tmp/update.pkg"}},
+            }),
+        )
+        .await;
+    let first = first["id"].as_str().unwrap().to_string();
+    let second = engine.add_upload(console, "dlc.bin").await;
+    wait_started(&fake, 1).await;
+    // What install/mod.rs ends with for DidNotApply and Regressed.
+    fake.end(
+        "job-0",
+        json!({"phase": "done", "verdict": "failed", "hint": "the update did not apply"}),
+    );
+    let failed = engine.wait_status(&first, "failed").await;
+    assert_eq!(failed["verdict"], "failed");
+    assert_eq!(failed["error"], "the update did not apply");
+    let held = engine.wait_status(&second, "paused").await;
+    assert_eq!(held["code"], "held_after_failure");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(fake.started().len(), 1);
+    let (status, retried) = engine
+        .post(&format!("/api/queue/{first}/resume"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{retried}");
+    wait_started(&fake, 2).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removal_holds_however_the_run_ended() {
+    let fake = Fake::default();
+    let engine = engine_on(None, Some(&fake));
+    let id = engine.add_upload("127.0.6.4", "gone.bin").await;
+    wait_started(&fake, 1).await;
+    let (status, answer) = engine
+        .post(&format!("/api/queue/{id}/remove"), json!({"cancel": true}))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{answer}");
+    // The job got to its end before the cancel reached it.
+    fake.end("job-0", done());
+    for _ in 0..200 {
+        let (_, list) = engine
+            .send(Method::GET, "/api/queue?console=127.0.6.4", None)
+            .await;
+        if !list.to_string().contains(id.as_str()) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the item stayed listed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn queue_events_reach_the_engines_feed() {
     let fake = Fake::default();
     let engine = engine_on(None, Some(&fake));

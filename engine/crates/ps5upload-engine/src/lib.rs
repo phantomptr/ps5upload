@@ -1295,7 +1295,7 @@ fn spawn_progress_ticker(
                         // job); `files` serializes as a count. Sent while
                         // the lock is held, so it can never follow the
                         // terminal event `set_job` sends under the same lock.
-                        if events_tx.receiver_count() > 0 {
+                        if event_bus::tick_wanted(&events_tx) {
                             if let Some(state) = g.get(&job_id).map(|st| serde_json::json!(st)) {
                                 let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, state) });
                                 let _ = events_tx.send(msg.to_string());
@@ -1368,7 +1368,7 @@ fn spawn_verify_stage(
                 }
             };
             let Some(state) = snapshot else { break };
-            if events_tx.receiver_count() > 0 {
+            if event_bus::tick_wanted(&events_tx) {
                 let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, state) });
                 let _ = events_tx.send(msg.to_string());
             }
@@ -1761,8 +1761,9 @@ pub(crate) fn set_job(
         }
         g.insert(job_id, state);
         // Sent under the lock, as the progress ticker does: a ticker's "running" can then
-        // never reach a client after this "done".
-        if events_tx.receiver_count() > 0 {
+        // never reach a client after this "done". Sent whoever listens: `/api/jobs?since_seq=`
+        // numbers a job by its changes.
+        {
             let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, json.clone()) });
             let _ = events_tx.send(msg.to_string());
         }
