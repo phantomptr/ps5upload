@@ -48,6 +48,9 @@ import { useLangStore, useTr } from "../../state/lang";
 import UsbAutoloaderModal from "./UsbAutoloaderModal";
 import { payloadCardLink } from "./payloadTabs";
 
+/** A file name, the same in every language. */
+const CHECKSUM_LIST_EXAMPLE = "SHA256SUMS";
+
 /**
  * Catalog tab of the Payloads screen — curated catalogue of
  * third-party PS5 payloads.
@@ -625,7 +628,7 @@ export default function CatalogPanel() {
                   value={addChecksum}
                   onChange={(e) => setAddChecksum(e.target.value)}
                   spellCheck={false}
-                  placeholder="SHA256SUMS"
+                  placeholder={CHECKSUM_LIST_EXAMPLE}
                   title={tr(
                     "payloads_add_repo_checksum_hint",
                     undefined,
