@@ -17,10 +17,14 @@
  * other browsers' changes are fetched on focus and every minute (applied live for the sidebar, at
  * the next page load for the rest).
  *
- * Desktop and mobile apps keep their settings themselves: their engine is theirs alone.
+ * Desktop and mobile apps keep their settings on the device and mirror the same keys to their own
+ * engine, so `GET|PATCH /api/settings` (engine settings_api.rs) reads and changes what they use.
+ * An app pointed at another computer's engine does not mirror.
  */
+import { getEngineUrl, isLoopbackUrl } from "../state/engine";
 import { onStorageWrite, safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
 import { reloadSettings } from "./liveSettings";
+import { isTauriEnv } from "./tauriEnv";
 
 /** The keys every browser shares. A key not here never leaves this browser. */
 export const SHARED_KEYS: readonly string[] = [
@@ -222,8 +226,14 @@ export interface PrefsApi {
   put(baseRev: number, keys: Entries): Promise<{ rev: number } | { conflict: Doc }>;
 }
 
-/** The engine is the server the page came from (under its base path, behind a proxy). */
+/** The engine is the server the page came from (under its base path, behind a proxy); for an app,
+ *  its own engine on this device. */
 function engineBase(): string {
+  if (isTauriEnv()) {
+    const url = getEngineUrl();
+    if (!isLoopbackUrl(url)) throw new Error("the app is using another computer's engine");
+    return url;
+  }
   return window.location.origin + (import.meta.env.VITE_BASE_URL || "").replace(/\/+$/, "");
 }
 
@@ -327,6 +337,7 @@ export function startSharedPrefs(
   onLive: (keys: string[]) => void,
   api: PrefsApi = enginePrefsApi,
   ch: Channel = ENGINE_CHANNEL,
+  syncNow = false,
 ): () => void {
   let timer: number | undefined;
   let running: Promise<void> = Promise.resolve();
@@ -353,6 +364,8 @@ export function startSharedPrefs(
   const pull = () => {
     if (document.visibilityState === "visible") run();
   };
+  // An app has no preload before it starts (its engine may still be starting): first look now.
+  if (syncNow) run();
   const interval = window.setInterval(pull, PULL_MS);
   window.addEventListener("focus", pull);
   document.addEventListener("visibilitychange", pull);

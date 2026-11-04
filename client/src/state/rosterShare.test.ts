@@ -138,6 +138,32 @@ describe("RosterShare", () => {
   });
 });
 
+describe("an app's list and its engine's", () => {
+  beforeEach(() => {
+    useRosterStore.setState({ profiles: [], active_id: null });
+  });
+
+  it("on first contact keeps both lists, so nothing is dropped", async () => {
+    useRosterStore.setState({ profiles: [p("mine")], active_id: null });
+    const e = fakeEngine([p("theirs")]);
+    await new RosterShare(e.api, useRosterStore, "union").start();
+    expect(ids().sort()).toEqual(["mine", "theirs"]);
+    expect(e.doc.value!.profiles.map((x) => x.id).sort()).toEqual(["mine", "theirs"]);
+  });
+
+  it("the same console in the engine's key order and without its empty keys is no change", async () => {
+    useRosterStore.setState({ profiles: [{ ...p("a"), wake_credential: null }], active_id: null });
+    const { id, name, host } = p("a");
+    // The engine's document: keys in its order, nothing that was cleared.
+    const e = fakeEngine([{ host, id, name }]);
+    const share = new RosterShare(e.api, useRosterStore, "union");
+    await share.start();
+    await share.push();
+    await share.pull();
+    expect(e.doc.rev).toBe(1);
+  });
+});
+
 describe("asDoc", () => {
   it("takes only a well-formed answer, so a stray reply can never erase the list", () => {
     expect(asDoc({ rev: 0, value: null })).toEqual({ rev: 0, value: null });
