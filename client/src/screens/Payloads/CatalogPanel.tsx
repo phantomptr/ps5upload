@@ -42,6 +42,7 @@ import { pmOverview, pmStore } from "../../api/payloadManager";
 import { recordPmStore } from "../../lib/pmUpdates";
 import { hostOf } from "../../lib/addr";
 import { useLangStore, useTr } from "../../state/lang";
+import { catalogText } from "../../lib/payloadCatalogText";
 import UsbAutoloaderModal from "./UsbAutoloaderModal";
 import { payloadCardLink } from "./payloadTabs";
 
@@ -105,7 +106,8 @@ export default function CatalogPanel() {
   const visibleCatalog = (catalog ?? []).filter((p) => {
     const q = query.trim().toLowerCase();
     if (!q) return true;
-    return [p.display_name, p.role, p.description, p.repo_owner, p.repo_name]
+    const text = catalogText(tr, p);
+    return [p.display_name, text.role, text.description, p.role, p.description, p.repo_owner, p.repo_name]
       .join(" ")
       .toLowerCase()
       .includes(q);
@@ -756,10 +758,10 @@ function PayloadCard({
             )}
           </div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-            {info.role}
+            {catalogText(tr, info).role}
           </div>
           <p className="mt-2 text-xs leading-relaxed text-[var(--color-text)]">
-            {info.description}
+            {catalogText(tr, info).description}
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
