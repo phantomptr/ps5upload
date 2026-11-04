@@ -3,7 +3,7 @@
 //! Tauri mobile has no sidecar-binary spawn model (that's desktop-only),
 //! so instead of extracting and exec'ing `ps5upload-engine`, we link the
 //! engine as a library and run its Axum server on a background tokio
-//! task bound to loopback. The renderer keeps calling
+//! task (see `BIND_HOST`). The renderer keeps calling
 //! `http://127.0.0.1:19113` exactly as on desktop — only the server's
 //! host changes from a child process to this in-process task.
 //!

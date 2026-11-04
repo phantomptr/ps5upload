@@ -32,21 +32,39 @@ reports are taken seriously and prioritized.
 
 ## Scope
 
-ps5upload talks to a **jailbroken PS5 over a LAN**. The AVA1 protocol
-(port 9120) uses the Noise XX handshake and encrypts and authenticates
-every byte; the console only accepts devices that were paired by comparing
-a six-digit code, or the engine that launched it. Weaknesses in pairing,
-the handshake, or AVA1's message parsers are squarely in scope. The
-local engine binds every interface (`0.0.0.0:19113`) so the PS5 can fetch
-packages from the `/pkg-host/` route; a guard rejects every other request
-unless it comes from loopback or from an address listed in
-`PS5UPLOAD_ALLOW_IP` (the Android build binds loopback only). A way past
-that guard is in scope. Reports most in scope:
+ps5upload talks to a **jailbroken PS5 over a LAN**, and it trusts that LAN.
 
-- the desktop/Android client and the local engine service,
+**The helper on the PS5.** AVA1 (port 9120) uses the Noise XX handshake and
+encrypts and authenticates every byte. By default it trusts on first connect:
+any device that reaches port 9120 is let in, and the console remembers it. A
+device needs a code shown on the TV only when **Ask before a new device can
+connect** is on, and a blocked device is refused. So by default, anyone on the
+network can read, write and delete on the console through the helper. Weaknesses
+in the handshake, in approval and blocking, or in AVA1's message parsers are in
+scope. The helper also serves PS5Upload Minion on port 9180: to the PS5's own
+browser, and to other devices once **Allow other devices on the network** is on.
+
+**The engine.** The engine listens on every interface (`0.0.0.0:19113`), in the
+desktop app, in Docker and in the Android and iPhone apps, so the PS5 can fetch
+packages from it. A guard answers only loopback callers and addresses listed in
+`PS5UPLOAD_ALLOW_IP`. Four things are open to any peer, and each checks for
+itself:
+
+- `/pkg-host/`: packages for the PS5, each behind its own unguessable address.
+- `/pad` and `/api/pad/ws`: a phone as a controller. The socket checks the QR
+  code's key or waits for the computer to allow it.
+- `/join` and `/api/join/ws`: a friend joining Play Together. The socket checks
+  the invite or the resume token.
+
+A way past that guard or past those checks is in scope. The engine API has no
+sign-in of its own: anyone the guard lets through can use all of it.
+
+Reports most in scope:
+
+- the desktop and phone apps and the local engine service,
 - the PS5 payload's network-facing handlers,
 - the release/build pipeline and bundled dependencies.
 
-Out of scope: attacks that require already-untrusted access to your LAN or
-physical access to an unlocked machine, and the security of the
-third-party jailbreak/loader the payload depends on.
+Out of scope: an attack that only uses what the defaults above already allow to
+anyone on your LAN, physical access to an unlocked machine, and the security of
+the third-party jailbreak/loader the payload depends on.

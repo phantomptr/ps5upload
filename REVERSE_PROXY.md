@@ -1,5 +1,9 @@
 # Reverse proxy for the self-hosted web UI
 
+A proxy with TLS is also how **Play works in a browser on another device**. Browsers only give a
+page the video decoder on `https://` (or on `localhost`), so `http://<nas>:19113` can open the whole
+app except Play. Over plain http, play with the desktop or phone app instead.
+
 For a dedicated DNS name such as `ps5upload.home`, use the published web UI image
 unchanged. `PS5UPLOAD_BASE_URL` is a **URL path prefix**, such as `/ps5/`, not a
 hostname or full URL. Leave it unset for a dedicated hostname. It is baked into
@@ -10,17 +14,27 @@ does not rebuild those assets.
 
 Point your LAN DNS name at the reverse proxy. Start with `engine/compose.yaml`.
 The engine and web UI share port 19113; proxy the whole site, including `/api/`.
-Example nginx server block (replace the hostname and engine address):
+Example nginx configuration (replace the hostname, certificate paths and engine address):
 
 ```nginx
+# In the http block: an Upgrade header if the browser sent one, otherwise a normal request.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ""      "";
+}
+
 server {
-    listen 80;
+    listen 443 ssl;
     server_name ps5upload.home;
+    ssl_certificate     /etc/nginx/certs/ps5upload.home.crt;
+    ssl_certificate_key /etc/nginx/certs/ps5upload.home.key;
 
     location / {
         proxy_pass http://192.168.1.10:19113;
         proxy_http_version 1.1;
         proxy_set_header Host $http_host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_buffering off;
         proxy_request_buffering off;
@@ -30,6 +44,18 @@ server {
     }
 }
 ```
+
+Three of those lines matter more than they look:
+
+- `Upgrade` and `Connection`: Play, the phone controller, watching and Play Together all run on
+  WebSockets, and nginx does not forward those two headers unless told to. Without them the file
+  screens work and all of those fail.
+- `Host $http_host`, not `$host`: `$http_host` keeps the port. The engine compares the browser's
+  `Origin` with `Host` and answers `403` ("cross-site browser requests are not allowed") when they
+  differ, so `$host` breaks on any port other than 443 and 80.
+- Use a certificate the browser trusts: your own CA installed on each device, or a name with a real
+  certificate. One you only clicked past a warning for can still stop the WebSockets (not tested in
+  every browser).
 
 Streaming responses (job events) need buffering off. Browser-selected files can
 be large, so disable nginx's default 1 MiB body limit or choose your own limit.
@@ -85,7 +111,8 @@ the prefix unchanged, with **no trailing slash** on nginx's `proxy_pass` URL:
 location = /ps5 { return 308 /ps5/; }
 location /ps5/ {
     proxy_pass http://192.168.1.10:19113;
-    # Include the same proxy headers, buffering, size and timeout settings above.
+    # Include the same proxy headers (Upgrade and Connection too), buffering, size and timeout
+    # settings as above.
 }
 ```
 
