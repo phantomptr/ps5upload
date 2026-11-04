@@ -213,12 +213,13 @@ mod tests {
         let mut r = Replay::new(60);
         let big = Bytes::from(vec![0u8; MAX_BYTES / 2]);
         r.push(KIND_VIDEO, 0, true, big.clone());
-        r.push(KIND_VIDEO, 1, false, Bytes::from_static(b"d"));
         r.push(KIND_VIDEO, 2, true, big.clone());
-        assert_eq!(r.frames().count(), 3, "right at the cap, nothing goes yet");
-        r.push(KIND_VIDEO, 3, true, big);
+        assert_eq!(r.frames().count(), 2, "right at the cap, nothing goes yet");
+        // One byte over: the first keyframe goes with what depends on it.
+        r.push(KIND_VIDEO, 3, false, Bytes::from_static(b"d"));
         assert_eq!(r.frames().next().map(|f| f.t_us), Some(2));
-        assert_eq!(r.bytes(), MAX_BYTES);
+        assert_eq!(r.frames().count(), 2);
+        assert_eq!(r.bytes(), MAX_BYTES / 2 + 1);
         // A single keyframe over the cap stays: there is nothing to cut back to.
         let mut one = Replay::new(60);
         one.push(KIND_VIDEO, 0, true, Bytes::from(vec![0u8; MAX_BYTES + 1]));

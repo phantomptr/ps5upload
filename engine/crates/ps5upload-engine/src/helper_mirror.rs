@@ -469,10 +469,11 @@ mod tests {
             old: b"=== A\na1\na2\na3\n".to_vec(),
             fail_log: std::cell::Cell::new(true),
         };
+        // The new log happens to be as long as the old offset: the head look is what finds it.
         let mut cur = Cursor {
             offset: 12,
             head: b"=== A\na1\n".to_vec(),
-            quiet: 0,
+            quiet: HEAD_CHECK_EVERY,
         };
         let mut carry = Vec::new();
         let mut got = Vec::new();
@@ -481,6 +482,27 @@ mod tests {
         fake.fail_log.set(false);
         mirror_pass(&fake, "h", &mut cur, &mut carry, &mut |e| got.push(e)).unwrap();
         assert_eq!(texts(&got), vec!["a3", "=== B", "b1", "b2"]);
+    }
+
+    #[test]
+    fn an_unchanged_log_is_only_stat_ed_with_a_look_at_its_head_now_and_then() {
+        // Any read fails here, so a pass that reads shows as an error.
+        let fake = Fake {
+            log: b"=== A\nx1\n".to_vec(),
+            old: vec![],
+            fail_log: std::cell::Cell::new(true),
+        };
+        let mut cur = Cursor {
+            offset: 9,
+            head: b"=== A\nx1\n".to_vec(),
+            quiet: 0,
+        };
+        let (mut carry, mut got) = (Vec::new(), Vec::new());
+        for _ in 1..HEAD_CHECK_EVERY {
+            mirror_pass(&fake, "h", &mut cur, &mut carry, &mut |e| got.push(e)).unwrap();
+        }
+        assert!(mirror_pass(&fake, "h", &mut cur, &mut carry, &mut |e| got.push(e)).is_err());
+        assert!(got.is_empty());
     }
 
     #[test]

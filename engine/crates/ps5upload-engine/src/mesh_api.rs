@@ -740,7 +740,7 @@ mod tests {
             c.clients.insert(
                 "b".into(),
                 (
-                    now - Duration::from_secs(60),
+                    now - CLIENT_GONE - Duration::from_secs(1),
                     vec![json!({"kind":"upload","title":"B"})],
                 ),
             );
@@ -750,6 +750,81 @@ mod tests {
         assert!(s.contains("\"A\"") && !s.contains("\"B\""), "{s}");
         lock_consoles().get_mut(addr).unwrap().pushed = Some(v);
         assert!(presence_due(addr, now).is_none());
+    }
+
+    #[test]
+    fn a_tab_a_browser_has_throttled_to_once_a_minute_is_still_there() {
+        let addr = "test-presence-hidden";
+        let now = Instant::now();
+        lock_consoles()
+            .entry(addr.into())
+            .or_default()
+            .clients
+            .insert(
+                "hidden".into(),
+                (
+                    now - Duration::from_secs(60),
+                    vec![json!({"kind":"upload","title":"H"})],
+                ),
+            );
+        assert!(presence_due(addr, now)
+            .expect("a push")
+            .to_string()
+            .contains("\"H\""));
+    }
+
+    #[test]
+    fn a_noted_transfer_shows_when_no_window_is_left_and_only_then() {
+        let addr = "192.0.2.77";
+        let id = uuid::Uuid::new_v4();
+        note_job(id, addr, "Upload", "/data/homebrew/Game.pkg/");
+        let jobs: JobMap = Default::default();
+        jobs.lock().unwrap().insert(
+            id,
+            crate::JobState::Running {
+                stage: None,
+                started_at_ms: 0,
+                bytes_sent: 55,
+                total_bytes: 100,
+                files: Default::default(),
+                skipped_files: 0,
+                skipped_bytes: 0,
+                files_processing: 0,
+                files_finalized: 0,
+                files_finalizing_total: 0,
+                bytes_finalized: 0,
+            },
+        );
+        let _ = job_map().set(jobs.clone());
+        // Another test may have set the map first: then there is nothing of ours to look at.
+        if !std::sync::Arc::ptr_eq(job_map().get().unwrap(), &jobs) {
+            return;
+        }
+        let now = Instant::now();
+        let shown = presence_due(addr, now).expect("the job is shown");
+        assert_eq!(
+            shown,
+            json!([{"kind": "Upload", "title": "Game.pkg", "pct": 50}])
+        );
+        // A window speaks for itself.
+        lock_consoles()
+            .entry(addr.into())
+            .or_default()
+            .clients
+            .insert(
+                "w".into(),
+                (now, vec![json!({"kind":"Upload","title":"mine"})]),
+            );
+        let with_window = presence_due(addr, now).unwrap().to_string();
+        assert!(!with_window.contains("Game.pkg"), "{with_window}");
+    }
+
+    #[test]
+    fn a_rough_percent_only_moves_in_tens() {
+        assert_eq!(rough_pct(0, 100), Some(0));
+        assert_eq!(rough_pct(19, 100), Some(10));
+        assert_eq!(rough_pct(100, 100), Some(100));
+        assert_eq!(rough_pct(5, 0), None);
     }
 
     #[test]

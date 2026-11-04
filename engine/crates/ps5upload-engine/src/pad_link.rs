@@ -954,7 +954,7 @@ pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
     let prefix = path.strip_suffix(want)?;
     if !prefix.is_empty()
         && crate::host_guard::normalize_base(prefix)
-            .is_none_or(|p| format!("{}/", &p[1..]) != prefix)
+            .is_none_or(|p| p.is_empty() || format!("{}/", &p[1..]) != prefix)
     {
         return None;
     }
@@ -1372,6 +1372,7 @@ mod tests {
             Some("ws://192.168.1.20:19113/ps5/api/pad/ws")
         );
         assert_eq!(relay_target("ws://192.168.1.20/a//api/pad/ws"), None);
+        assert_eq!(relay_target("ws://192.168.1.20//api/pad/ws"), None);
         assert_eq!(relay_target("ws://192.168.1.20/../api/pad/ws"), None);
         assert_eq!(
             lan_ws_target("ws://100.101.2.3:19113/api/join/ws", "api/join/ws").as_deref(),
