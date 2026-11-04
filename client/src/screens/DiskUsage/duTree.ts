@@ -143,10 +143,6 @@ const sleep = (ms: number, signal: AbortSignal) =>
     );
   });
 
-/**
- * Walks `path` on the console at `addr`, reporting each poll to `onProgress`, and resolves
- * with the final status. Aborting `signal` cancels the engine's walk and resolves null.
- */
 /** The engine's refusal while another folder on this console is being walked. */
 export function isWalkBusy(message: string): boolean {
   return message.includes("disk_usage_busy");
@@ -169,14 +165,19 @@ async function startWalk(addr: string, path: string, signal: AbortSignal): Promi
   }
 }
 
+/**
+ * Walks `path` on the console at `addr`, reporting each poll to `onProgress`, and resolves
+ * with the final status. Aborting `signal` cancels the engine's walk and resolves null.
+ */
 export async function runWalk(
   addr: string,
   path: string,
   onProgress: (s: DuStatus) => void,
   signal: AbortSignal,
 ): Promise<DuStatus | null> {
-  let s = await startWalk(addr, path, signal);
-  if (!s) return null;
+  const started = await startWalk(addr, path, signal);
+  if (!started) return null;
+  let s = started;
   const cancel = () => {
     void invoke("ps5_disk_usage_cancel", { id: s.id }).catch(() => {});
   };
