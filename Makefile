@@ -1232,6 +1232,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/cpu_measure_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-cpu-measure-selftest
 	@echo "✓ each core measured once on a worker thread, best run wins, cached for 2 s, off for good when no CPU takes the pin"
+	@echo "Running SIGPIPE guard self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-sigpipe-guard-selftest \
+		$(PAYLOAD_DIR)/tests/sigpipe_guard_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-sigpipe-guard-selftest
+	@echo "✓ with SIGPIPE at its default for one Sony call, a write to a closed peer on any other thread kills nothing"
 	@echo "Running hw-guard fault-recovery self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-hw-guard-selftest \
 		$(PAYLOAD_DIR)/tests/hw_guard_selftest.c

@@ -73,6 +73,7 @@
 #include "index_glob.h"
 #include "mgmt_rpc.h"
 #include "mgmt_fs.h"
+#include "sigpipe_guard.h"
 #include "path_policy.h"
 #include "cross_device.h"
 #include "ava1_stop.h"
@@ -7656,11 +7657,13 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
     sceFsInitMountSaveDataOpt(&mopt);
     mopt.budgetid = "system";
     /* The mount talks to a shell service over a pipe; with SIGPIPE ignored (as our server
-     * runs) the call reports EPIPE instead of completing. */
-    void (*old)(int) = signal(SIGPIPE, SIG_DFL);
+     * runs) the call reports EPIPE instead of completing. The default is the whole process's,
+     * so every other thread keeps the signal blocked (sigpipe_guard.h). g_save_mtx: one at a time. */
+    sigpipe_window_t sp;
+    sigpipe_default_open(&sp);
     int ret = sceFsMountSaveData(&mopt, copy, SAVE_MOUNT_POINT, key);
     int e = errno;
-    signal(SIGPIPE, old);
+    sigpipe_default_close(&sp);
     memset(key, 0, sizeof key);
     if (ret < 0) {
         snprintf(err, err_sz, "save_mount_failed: 0x%x, %s", (unsigned)ret, strerror(e));

@@ -24,6 +24,7 @@
 #include "fs_jobs.h"
 #include "path_policy.h"
 #include "runtime.h"
+#include "sigpipe_guard.h"
 #include "webui_codec.h"
 
 /* The extractor ELF, embedded by payload/Makefile (xxd of payload/extractor/ps5upload-extractor.elf). */
@@ -127,7 +128,7 @@ static int launch_extractor(void) {
             const unsigned char *p = ps5upload_extractor_elf;
             size_t left = ps5upload_extractor_elf_len;
             while (left) {
-                ssize_t w = send(fd, p, left, 0);
+                ssize_t w = send(fd, p, left, MSG_NOSIGNAL);
                 if (w < 0 && errno == EINTR) continue;
                 if (w <= 0) break;
                 p += w;

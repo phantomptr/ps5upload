@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "smbd_json.h"
+#include "sigpipe_guard.h"
 #include "smbd_proto.h"
 
 #define LOADER_PORT 9021
@@ -159,7 +160,7 @@ static int dial(int port, int timeout_ms) {
 
 static int send_all(int fd, const char *b, size_t n) {
     while (n) {
-        ssize_t w = send(fd, b, n, 0);
+        ssize_t w = send(fd, b, n, MSG_NOSIGNAL);
         if (w < 0 && errno == EINTR) continue;
         if (w <= 0) return -1;
         b += w;

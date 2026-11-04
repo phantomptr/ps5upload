@@ -22,6 +22,7 @@
 #include "kernel_rw_lock.h"
 #include "proc_list.h"
 #include "hw_info.h"
+#include "sigpipe_guard.h"
 #include "wake_watchdog.h"
 #include "icon_keeper.h"
 #include "fakelib_overlay.h"
@@ -529,6 +530,9 @@ int main(void) {
      * name against the predecessor's, and ours is read before any worker
      * thread starts while the predecessor's is read after — see #289. */
     proc_name_set_self(PS5UPLOAD2_PROC_NAME);
+
+    /* Before any thread exists, so each one inherits it (sigpipe_guard.h). */
+    sigpipe_block_this_thread();
 
     int rc = 0;
     runtime_state_t state = {0};
