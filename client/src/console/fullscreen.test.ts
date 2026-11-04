@@ -11,6 +11,7 @@ import {
   watchFullscreen,
   type FullscreenDoc,
 } from "./fullscreen";
+import { onOtherDevice } from "./files/transfer";
 
 const PS5_UA =
   "Mozilla/5.0 (PlayStation 5 13.60) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
@@ -132,6 +133,14 @@ describe("full screen", () => {
   it("only the PS5 browser goes full screen by itself", () => {
     expect(isPs5Browser(PS5_UA)).toBe(true);
     expect(isPs5Browser(DESKTOP_UA)).toBe(false);
+  });
+
+  it("any PlayStation user agent is the console, however the rest is spelled (one test for the whole page)", () => {
+    expect(isPs5Browser("Mozilla/5.0 (PlayStation; PlayStation 5/13.60) AppleWebKit/605.1.15 (KHTML, like Gecko)")).toBe(true);
+    expect(isPs5Browser("Mozilla/5.0 (PlayStation 4 11.00) AppleWebKit/601.2 (KHTML, like Gecko)")).toBe(true);
+    // Full screen, Back and Upload read the same export: the three can no longer disagree.
+    expect(onOtherDevice("192.168.1.20", "Mozilla/5.0 (PlayStation 4 11.00) AppleWebKit/601.2")).toBe(false);
+    expect(onOtherDevice("192.168.1.20", DESKTOP_UA)).toBe(true);
   });
 
   it("PS5: enters on the first activation with the prefixed API, only once", async () => {

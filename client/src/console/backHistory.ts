@@ -38,6 +38,7 @@
  * a tour opened at load nor the page itself is closed by it.
  */
 import { useEffect } from "react";
+import { isPs5Browser } from "./fullscreen";
 
 /** A second pop this soon after a back action is the same press reported twice: ignored. */
 export const BACK_ECHO_MS = 150;
@@ -195,11 +196,6 @@ function isGuardState(): boolean {
 
 /** WebKit's load-time popstate is ignored for this long (until a key or click). */
 export const LOAD_GRACE_MS = 1500;
-
-/** The PS5's own browser (its ○ leaves the page; window.close() returns to the home screen). */
-export function isPs5Browser(ua: string = typeof navigator !== "undefined" ? navigator.userAgent : ""): boolean {
-  return /PlayStation/i.test(ua);
-}
 
 /** Fired on window when ○ on the first screen could not leave the page (the browser refused to close it). */
 export const CLOSE_REFUSED_EVENT = "cw-close-refused";

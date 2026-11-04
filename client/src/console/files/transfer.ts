@@ -10,7 +10,7 @@
  * itself there is nothing to pick files from and nowhere to save them.
  */
 import { ApiError, call, callRaw, sendWithProgress } from "../api";
-import { isPs5Browser } from "../backHistory";
+import { isPs5Browser } from "../fullscreen";
 import { onConsoleBrowser } from "../ui/PhoneHandoff";
 import { joinPath } from "./move";
 
