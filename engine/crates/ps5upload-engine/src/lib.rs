@@ -11009,6 +11009,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // Install sessions live in their own state (served by pkg_install::api_router below); the helper
     // log mirror also reads it, to stay off a console while an install runs.
     let pkg_state = std::sync::Arc::new(pkg_install::PkgInstallState::restored());
+    mesh_drive::watch_installs(pkg_state.clone());
     // Copies each connected console's helper log into the event journal.
     {
         let jobs = state.jobs.clone();

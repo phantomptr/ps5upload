@@ -824,39 +824,85 @@ fn confirmed() -> &'static Mutex<std::collections::HashSet<String>> {
 
 // ---- scanning ----
 
-fn walk_local(root: &Path) -> Result<Listing> {
-    let mut out = Listing::new();
+/// A folder as a pass sees it: its files, and the paths it could not look at (a folder that would
+/// not open, an entry that vanished while it was listed). Those are not gone, only unknown, so
+/// nothing at or under them is planned this pass.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Walk {
+    files: Listing,
+    unread: Vec<String>,
+}
+
+/// `path` is `at`, or something inside it.
+fn at_or_under(path: &str, at: &str) -> bool {
+    path == at
+        || path
+            .strip_prefix(at)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn walk_local(root: &Path) -> Result<Walk> {
+    let mut out = Walk::default();
     let mut stack = vec![(root.to_path_buf(), String::new())];
     while let Some((dir, rel)) = stack.pop() {
-        for e in std::fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
-            let e = e?;
+        // Only the folder itself failing fails the pass. Below it, one entry costs only itself.
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if rel.is_empty() => {
+                return Err(e).with_context(|| format!("read {}", dir.display()));
+            }
+            Err(e) => {
+                crate::log_info!("mesh drive: cannot read {}: {e}", dir.display());
+                out.unread.push(rel);
+                continue;
+            }
+        };
+        for e in entries {
+            let e = match e {
+                Ok(e) => e,
+                Err(err) if rel.is_empty() => {
+                    return Err(err).with_context(|| format!("read {}", dir.display()));
+                }
+                // No name to go by: the rest of this folder is unknown.
+                Err(err) => {
+                    crate::log_info!("mesh drive: cannot read {}: {err}", dir.display());
+                    out.unread.push(rel.clone());
+                    break;
+                }
+            };
             let name = e.file_name().to_string_lossy().into_owned();
             if ignored(&name) {
                 continue;
             }
-            let ft = e.file_type()?;
             let child = if rel.is_empty() {
                 name.clone()
             } else {
                 format!("{rel}/{name}")
             };
+            let Ok(ft) = e.file_type() else {
+                out.unread.push(child);
+                continue;
+            };
             if ft.is_dir() {
                 stack.push((e.path(), child));
             } else if ft.is_file() {
-                let md = e.metadata()?;
+                let Ok(md) = e.metadata() else {
+                    out.unread.push(child);
+                    continue;
+                };
                 let mtime = md
                     .modified()
                     .ok()
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map_or(0, |d| d.as_secs() as i64);
-                out.insert(
+                out.files.insert(
                     child,
                     Meta {
                         size: md.len(),
                         mtime,
                     },
                 );
-                if out.len() > MAX_FILES {
+                if out.files.len() > MAX_FILES {
                     return Err(too_many_files());
                 }
             }
@@ -971,6 +1017,8 @@ struct Pass<'a> {
     member_id: String,
     /// This member's copy: a folder on this device, or on a second console.
     side: &'a dyn Side,
+    /// The drive's home folder.
+    hub: &'a dyn Side,
     /// Names this member's conflict copies.
     device_name: String,
     /// The side's own revision when it is another console (its drive's hub_rev): with it and
@@ -1167,7 +1215,7 @@ trait Side {
     /// For messages: the folder, and where it is.
     fn describe(&self) -> String;
     fn has_marker(&self) -> bool;
-    fn walk(&self) -> Result<Listing>;
+    fn walk(&self) -> Result<Walk>;
     fn stat(&self, rel: &str) -> Option<Meta>;
     fn exists(&self, rel: &str) -> bool;
     /// This side's `rel` to the hub's `rel`.
@@ -1197,8 +1245,17 @@ trait Side {
     /// A name this side cannot hold.
     fn unstorable(&self, rel: &str) -> bool;
     fn case_insensitive(&self) -> bool;
-    /// The console this side is on, when it is one (a link's far end).
+    /// The console this side is on, when it is one (a link's far end, or the hub).
     fn console(&self) -> Option<&str> {
+        None
+    }
+    /// An install is running where this side is (installs read the disk hard: syncing waits).
+    fn installing(&self) -> bool {
+        false
+    }
+    /// After a failure: this side's console went away, and why. None: it answers, or it is no
+    /// console, so the failure belongs to the file.
+    fn away(&self, _e: &anyhow::Error) -> Option<(String, AwayWhy)> {
         None
     }
 }
@@ -1232,7 +1289,7 @@ impl Side for LocalSide {
     fn has_marker(&self) -> bool {
         self.root.join(MARKER).is_file()
     }
-    fn walk(&self) -> Result<Listing> {
+    fn walk(&self) -> Result<Walk> {
         walk_local(&self.root)
     }
     fn stat(&self, rel: &str) -> Option<Meta> {
@@ -1501,11 +1558,20 @@ impl Side for ConsoleSide {
     fn console(&self) -> Option<&str> {
         Some(&self.addr)
     }
+    fn installing(&self) -> bool {
+        console_installing(&self.addr)
+    }
+    fn away(&self, e: &anyhow::Error) -> Option<(String, AwayWhy)> {
+        Some((self.addr.clone(), confirm_away(&self.addr, e)?))
+    }
     fn has_marker(&self) -> bool {
         hub_stat(&self.addr, &self.path(MARKER)).is_some()
     }
-    fn walk(&self) -> Result<Listing> {
-        walk_hub(&self.addr, &self.root)
+    fn walk(&self) -> Result<Walk> {
+        Ok(Walk {
+            files: walk_hub(&self.addr, &self.root)?,
+            unread: Vec::new(),
+        })
     }
     fn stat(&self, rel: &str) -> Option<Meta> {
         hub_stat(&self.addr, &self.path(rel))
@@ -1626,6 +1692,27 @@ impl Side for ConsoleSide {
     }
 }
 
+static INSTALLS: OnceLock<crate::pkg_install::PkgInstallStateHandle> = OnceLock::new();
+
+/// Gives the passes this engine's installs to look at (every way one can start ends up there).
+pub fn watch_installs(installs: crate::pkg_install::PkgInstallStateHandle) {
+    let _ = INSTALLS.set(installs);
+}
+
+/// Whether a console install is running: one of this engine's, however it was started, or one
+/// another device's upload queue holds the console's `install` lock for.
+fn console_installing(addr: &str) -> bool {
+    INSTALLS.get().is_some_and(|i| i.jobs.active_for(addr))
+        || crate::mesh_api::call(addr, || mesh::state(addr, 0, 0))
+            .ok()
+            .flatten()
+            .and_then(|v| v.get("locks").and_then(Value::as_array).cloned())
+            .is_some_and(|l| {
+                l.iter()
+                    .any(|x| x.get("name").and_then(Value::as_str) == Some("install"))
+            })
+}
+
 /// A whole small file from a console (chunked reads). Ok(None) only when it is not there (its
 /// folder answers); any other failure is an error.
 fn read_console_file(addr: &str, path: &str) -> Result<Option<Vec<u8>>> {
@@ -1687,44 +1774,13 @@ impl Pass<'_> {
     /// Whether this member's file and the hub's hold the same bytes (BLAKE3 on both sides).
     fn same_bytes(&self, rel: &str) -> Result<bool> {
         let here = self.side.hash(rel)?;
-        let hub = fs_ops::fs_hash(self.addr, &join_hub(&self.drive.hub, rel))?;
-        Ok(hub.hash.eq_ignore_ascii_case(&here))
-    }
-
-    fn trash_hub(&self, rel: &str, today: &str) -> Result<()> {
-        let from = join_hub(&self.drive.hub, rel);
-        let day = join_hub(&join_hub(&self.drive.hub, TRASH), today);
-        let to = join_hub(
-            &day,
-            &free_name(rel, |r| hub_stat(self.addr, &join_hub(&day, r)).is_some()),
-        );
-        if let Some(parent) = to.rsplit_once('/').map(|(d, _)| d) {
-            fs_ops::fs_mkdir(self.addr, parent)?;
-        }
-        fs_ops::fs_move(self.addr, &from, &to)
-    }
-
-    /// Whether a console install is running (installs read the disk hard: syncing waits).
-    fn install_running(&self) -> bool {
-        crate::mesh_api::call(self.addr, || mesh::state(self.addr, 0, 0))
-            .ok()
-            .flatten()
-            .and_then(|v| v.get("locks").and_then(Value::as_array).cloned())
-            .is_some_and(|l| {
-                l.iter()
-                    .any(|x| x.get("name").and_then(Value::as_str) == Some("install"))
-            })
+        Ok(self.hub.hash(rel)?.eq_ignore_ascii_case(&here))
     }
 
     /// After a failure: the console (the hub's, or the far end of a link) that went away, and
     /// why. None: the console answers, so the failure belongs to the file.
     fn gone(&self, e: &anyhow::Error) -> Option<(String, AwayWhy)> {
-        if let Some(w) = confirm_away(self.addr, e) {
-            return Some((self.addr.to_string(), w));
-        }
-        let other = self.side.console()?;
-        let w = confirm_away(other, e)?;
-        Some((other.to_string(), w))
+        self.hub.away(e).or_else(|| self.side.away(e))
     }
 
     /// One pass. Returns whether it changed the hub, and whether it changed this member's side.
@@ -1743,7 +1799,7 @@ impl Pass<'_> {
             });
             return Ok(Changed::default());
         }
-        if hub_stat(self.addr, &join_hub(&self.drive.hub, MARKER)).is_none() {
+        if !self.hub.has_marker() {
             set_status(member_id, |s| {
                 s.state = "offline".into();
                 s.say(Said::coded(
@@ -1757,7 +1813,7 @@ impl Pass<'_> {
             });
             return Ok(Changed::default());
         }
-        if self.install_running() {
+        if self.hub.installing() || self.side.installing() {
             set_status(member_id, |s| {
                 s.state = "waiting".into();
                 s.say(Said::coded(
@@ -1780,7 +1836,10 @@ impl Pass<'_> {
                 return Ok(Changed::default());
             }
         }
-        let mut member = self.side.walk()?;
+        let Walk {
+            files: mut member,
+            mut unread,
+        } = self.side.walk()?;
         // Nothing changed here and nobody changed the console's folder through the drive: skip
         // listing it (the slow half of a pass) until FULL_SCAN says to look anyway.
         let quiet = with_runtime(member_id, |rt| {
@@ -1802,7 +1861,11 @@ impl Pass<'_> {
             s.state = "syncing".into();
             s.say_nothing();
         });
-        let hub = walk_hub(self.addr, &self.drive.hub)?;
+        let hub = {
+            let walked = self.hub.walk()?;
+            unread.extend(walked.unread);
+            walked.files
+        };
         let mut base = self.side.load_base(&self.drive.id, member_id)?;
         let now = now_ms() as i64 / 1000;
         // Still being written: leave it for the next pass (and do not take its absence as a delete).
@@ -1836,12 +1899,14 @@ impl Pass<'_> {
             let fetches = matches!(o, Op::Download(_) | Op::Conflict(_) | Op::Compare(_));
             let keep = !(resting.contains(p)
                 || clash.contains(p)
+                || unread.iter().any(|u| at_or_under(p, u))
                 || (fetches && (self.side.unstorable(p) || twins.contains(p))));
             if !keep {
                 skipped.push(p.to_string());
             }
             keep
         });
+        skipped.extend(unread.iter().cloned());
         let mut held = 0;
         // A confirmation covers the deletes it was given for: used up by this pass either way.
         let was_confirmed = confirmed()
@@ -1938,7 +2003,7 @@ impl Pass<'_> {
                             if before != listed {
                                 edited.insert(rel.clone());
                             }
-                            let h = hub_stat(hub_addr, &join_hub(hub_root, &rel));
+                            let h = self.hub.stat(&rel);
                             if let (Some(m), Some(h)) = (listed, h) {
                                 base.insert(rel.clone(), BaseEntry { m, h });
                             }
@@ -1947,7 +2012,7 @@ impl Pass<'_> {
                         self.side.send(hub_addr, hub_root, &rel)?;
                         up += 1;
                         let after = self.side.stat(&rel);
-                        let h = hub_stat(hub_addr, &join_hub(hub_root, &rel));
+                        let h = self.hub.stat(&rel);
                         // Saved again while it went up: the agreement is on the bytes that went
                         // (the state before), so the next pass sees only this side changed and
                         // sends the new bytes. (Recording nothing made it a change on both sides:
@@ -1985,7 +2050,7 @@ impl Pass<'_> {
                         gone_member.push(rel.clone());
                     }
                     Op::DeleteHub(_) => {
-                        self.trash_hub(&rel, &today)?;
+                        self.hub.trash(&rel, &today)?;
                         del += 1;
                         base.remove(&rel);
                         gone_hub.push(rel.clone());
@@ -2019,13 +2084,7 @@ impl Pass<'_> {
                 && base.contains_key(&rel)
                 && base.get(&rel).copied() != agreed_before
             {
-                touched.insert(
-                    rel.clone(),
-                    (
-                        self.side.stat(&rel),
-                        hub_stat(hub_addr, &join_hub(hub_root, &rel)),
-                    ),
-                );
+                touched.insert(rel.clone(), (self.side.stat(&rel), self.hub.stat(&rel)));
             }
             match r {
                 Ok(()) => with_runtime(member_id, |rt| {
@@ -2074,7 +2133,8 @@ impl Pass<'_> {
         // as listed; anything else (edited meanwhile) is left for the next pass.
         drop(watch);
         if !touched.is_empty() && !self.lost.load(Ordering::SeqCst) && went.is_none() {
-            if let (Ok(side_now), Ok(hub_now)) = (self.side.walk(), walk_hub(hub_addr, hub_root)) {
+            if let (Ok(side_now), Ok(hub_now)) = (self.side.walk(), self.hub.walk()) {
+                let (side_now, hub_now) = (side_now.files, hub_now.files);
                 let close = |a: Option<&Meta>, b: Option<Meta>| match (a, b) {
                     (Some(a), Some(b)) => a.size == b.size && (a.mtime - b.mtime).abs() <= 2,
                     _ => false,
@@ -2094,7 +2154,7 @@ impl Pass<'_> {
                 self.side.prune(&dir, &today);
             }
             for dir in emptied_folders(gone_hub.iter()) {
-                prune_console_dir(hub_addr, hub_root, &dir, &today);
+                self.hub.prune(&dir, &today);
             }
         }
         if let Some(addr) = went {
@@ -2119,12 +2179,16 @@ impl Pass<'_> {
             rt.last_full = Some(std::time::Instant::now());
             rt.hub_rev = self.drive.hub_rev;
             // Only a pass that changed nothing vouches for the other console as it stood.
-            rt.side_rev = self.side_rev.filter(|_| !changed && first_error.is_none());
+            rt.side_rev = self
+                .side_rev
+                .filter(|_| !changed && first_error.is_none() && unread.is_empty());
             // Only a pass that changed nothing vouches for this listing; otherwise list again.
             rt.quiet_local =
-                (!changed && first_error.is_none() && settling.is_empty()).then_some(member);
+                (!changed && first_error.is_none() && settling.is_empty() && unread.is_empty())
+                    .then_some(member);
         });
         skipped.sort();
+        skipped.dedup();
         set_status(member_id, |s| {
             s.files = files;
             s.bytes = bytes;
@@ -2156,7 +2220,7 @@ impl Pass<'_> {
         // Trash folders are named by day; the ones older than TRASH_DAYS go. Best effort.
         let cutoff = date_parts(now - TRASH_DAYS * 86_400).0;
         self.side.empty_trash(&cutoff);
-        empty_console_trash(self.addr, &self.drive.hub, &cutoff);
+        self.hub.empty_trash(&cutoff);
         Ok(Changed {
             hub: hub_changed,
             side: side_changed,
@@ -2230,11 +2294,16 @@ fn pass_on(
         &format!("drive:{}", drive.id),
         &format!("Syncing Mesh Drive {}", drive.name),
     );
+    let hub = ConsoleSide {
+        addr: addr.to_string(),
+        root: drive.hub.clone(),
+    };
     let pass = Pass {
         addr,
         drive,
         member_id: member_id.to_string(),
         side,
+        hub: &hub,
         device_name,
         side_rev: None,
         lost: lease.lost.clone(),
@@ -2608,11 +2677,16 @@ fn run_link(id: &str, lo: &str, hi: &str) -> Result<()> {
     } else {
         to_hi.console_name.clone()
     };
+    let hub = ConsoleSide {
+        addr: lo.to_string(),
+        root: a.hub.clone(),
+    };
     let pass = Pass {
         addr: lo,
         drive: a,
         member_id: member_id.clone(),
         side: &side,
+        hub: &hub,
         device_name: hi_name,
         side_rev: Some(b.hub_rev),
         lost,
@@ -4906,7 +4980,7 @@ mod tests {
         std::fs::write(dir.join("sub").join("b.bin"), b"12").unwrap();
         std::fs::write(dir.join(".DS_Store"), b"x").unwrap();
         std::fs::write(dir.join(TRASH).join("2026-01-01").join("old"), b"x").unwrap();
-        let l = walk_local(&dir).unwrap();
+        let l = walk_local(&dir).unwrap().files;
         assert_eq!(
             l.keys().cloned().collect::<Vec<_>>(),
             vec!["a.txt", "sub/b.bin"]
