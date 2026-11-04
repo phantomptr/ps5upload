@@ -1816,12 +1816,12 @@ mod tests {
         let failed = job_end(&json!({
             "status": "failed",
             "error": "raw",
-            "error_reason": "ava1_refused",
+            "error_reason": "ava1_refused_7",
             "error_detail": "no room",
         }))
         .unwrap();
         assert_eq!(failed.status, Status::Failed);
-        assert_eq!(failed.code.as_deref(), Some("ava1_refused"));
+        assert_eq!(failed.code.as_deref(), Some("ava1_refused_7"));
         assert_eq!(failed.error.as_deref(), Some("no room"));
         assert_eq!(
             job_end(&json!({ "status": "failed", "error": "transfer_cancelled" }))

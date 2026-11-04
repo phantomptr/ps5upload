@@ -398,6 +398,9 @@
   "GET /api/ps5/vinput/caps": {
    "summary": "What virtual keyboard and mouse the helper offers"
   },
+  "GET /api/queue/{id}": {
+   "summary": "One item of the queue"
+  },
   "GET /api/remote/connections": {
    "summary": "Saved network servers"
   },
@@ -819,6 +822,13 @@
   },
   "POST /api/ps5/vinput/report": {
    "summary": "Send raw virtual input reports"
+  },
+  "POST /api/queue": {
+   "x-ps5upload": {
+    "console": {
+     "required": true
+    }
+   }
   },
   "POST /api/rar/inspect": {
    "summary": "Read a RAR archive on this computer"

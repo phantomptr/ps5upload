@@ -68,7 +68,7 @@ claude mcp list
 
 ### Claude Desktop
 
-Use the stdio bridge, not a custom connector. Custom connectors run from Anthropic's cloud, so they
+Not run here (see the table at the end). Use the stdio bridge, not a custom connector. Custom connectors run from Anthropic's cloud, so they
 can't reach `localhost` on your computer.
 
 Edit `claude_desktop_config.json` (**Settings → Developer → Edit Config**) and restart Claude Desktop:
@@ -89,7 +89,7 @@ the backslashes in JSON.
 
 ### Cursor
 
-In `.cursor/mcp.json` (one project) or `~/.cursor/mcp.json` (everywhere):
+Not run here (see the table at the end). In `.cursor/mcp.json` (one project) or `~/.cursor/mcp.json` (everywhere):
 
 ```json
 { "mcpServers": { "ps5upload": { "url": "http://127.0.0.1:19113/mcp" } } }
@@ -225,9 +225,10 @@ Some tools aren't marked destructive but still matter: `install_pkg`, `payloads_
 
 ### What never reaches a model
 
-The keys that sign in to a console's users stay out. `api_request` refuses `/api/consoles/document`,
-`/api/settings-backup/get` and a console's backup slots through `/api/mesh/doc`, and the first two are
-left out of the catalog too. `/api/consoles` says only whether a console has keys. Stream keys for Go live show only their last four characters.
+The keys that sign in to a console's users stay out. `api_request` refuses `/api/consoles/document`
+and `/api/settings-backup/get`, which are left out of the catalog too. No tool reaches a console's
+backup slots, through `/api/mesh/doc` or by the helper's file path; a console's other documents stay
+readable. `/api/consoles` says only whether a console has keys. Stream keys for Go live show only their last four characters.
 
 ## Things that need more than the engine
 
@@ -266,8 +267,8 @@ Run against an engine on a private port, with no console attached, on macOS, 202
 | Claude Code 2.1.318 | `claude mcp add --transport http`, the same with the bridge, `claude mcp list` | Connected both ways |
 | Gemini CLI 0.66.0 | `gemini mcp add --scope user --transport http`, the same with the bridge, `gemini mcp list` | Connected both ways |
 | MCP Inspector CLI | `tools/list`, `tools/call`, `resources/list` over HTTP; `tools/list` over the bridge | All answered |
-| Codex 0.166.0 | `codex mcp add --url`, the same with the bridge, `codex mcp list` | Saved. Codex's list doesn't connect, so no call was made through it |
+| Codex 0.166.0 | `codex mcp add --url`, the same with the bridge, `codex mcp list` | Config saved. Codex's list doesn't connect, so no call went through it |
 | curl and the bare bridge | Both protocol eras, read-only mode, no engine running | As this page says |
-| Claude Desktop, Cursor | Not installed here: their settings above are from their own documentation | **Not run** |
+| Claude Desktop, Cursor | Not installed here. Their setup above is untested | **Not run** |
 
 Tools that need a console were not part of this run.
