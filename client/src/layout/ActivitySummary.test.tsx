@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../state/lang", () => ({
+  useLangStore: { getState: () => ({ lang: "en" }) },
   useTr: () =>
     (key: string, vars?: Record<string, string | number>, fallback?: string) => {
       let s = fallback ?? key;
