@@ -443,6 +443,7 @@ async fn run_copy(run: RunCopy) {
             .chain(sibling_copies.iter().map(|(_, _, l)| l.clone()))
             .collect()
     };
+    let _being_copied = Copying::new(dest_dir.clone());
     let result = copy_all(CopyJob {
         _fs: fs,
         pool: Arc::clone(&r.pool),
@@ -673,6 +674,12 @@ pub(crate) async fn cleanup(dest: &str) -> Response {
     };
     let left = tokio::task::spawn_blocking(move || {
         let failed = remove_copies(&roots);
+        // A build's copy folder goes with its last copy.
+        for parent in roots.iter().filter_map(|r| r.parent()) {
+            if parent.file_name().is_some_and(|n| n == OUTPUT_COPY_DIR) {
+                let _ = std::fs::remove_dir(parent);
+            }
+        }
         // What could not be removed (a file still locked on Windows) stays this copy's, so
         // another cleanup can finish it instead of refusing it as unknown.
         if !failed.is_empty() {
@@ -725,6 +732,79 @@ fn default_copy_root() -> PathBuf {
 /// Where an older version copied to, swept like the rest so nothing stays behind in it.
 fn legacy_copy_root() -> PathBuf {
     std::env::temp_dir().join("ps5upload-remote")
+}
+
+/// The folder in an output folder that server copies for a build go in (the client names it).
+const OUTPUT_COPY_DIR: &str = ".ps5upload-source";
+
+/// Copies being written now (their folders), which no sweep may touch.
+fn copying() -> &'static Mutex<std::collections::HashSet<PathBuf>> {
+    static COPYING: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
+    COPYING.get_or_init(Default::default)
+}
+
+/// Marks a folder as being copied into, for as long as it lives.
+struct Copying(PathBuf);
+
+impl Copying {
+    fn new(dir: PathBuf) -> Self {
+        copying()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(dir.clone());
+        Copying(dir)
+    }
+}
+
+impl Drop for Copying {
+    fn drop(&mut self) {
+        copying()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.0);
+    }
+}
+
+/// What a closed app or crash left in `<out>/.ps5upload-source`: a run's folder no copy of this
+/// engine is using, untouched for a while (another engine may be using a young one). The folder
+/// itself goes once empty, which is also what a finished run leaves.
+pub(crate) fn sweep_copies_in_output(out: &Path) {
+    sweep_copies_older_than(out, STALE_COPY_AGE);
+}
+
+fn sweep_copies_older_than(out: &Path, max_age: std::time::Duration) {
+    let root = out.join(OUTPUT_COPY_DIR);
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return;
+    };
+    let in_use = |dir: &Path| {
+        copying()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(dir)
+            || fetched()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .any(|(dest, roots)| {
+                    dest.starts_with(dir) || roots.iter().any(|r| r.starts_with(dir))
+                })
+    };
+    let now = std::time::SystemTime::now();
+    for e in entries.flatten() {
+        let path = e.path();
+        let stale = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age >= max_age);
+        if stale && e.file_type().is_ok_and(|t| t.is_dir()) && !in_use(&path) {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+    // Only when empty.
+    let _ = std::fs::remove_dir(&root);
 }
 
 /// Copies older than this are left from an earlier run when the engine starts.
@@ -839,6 +919,32 @@ fn total_size(sizes: impl IntoIterator<Item = u64>) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A closed app's copy goes; one being written or held for a build stays, and the folder
+    /// goes once nothing is left in it.
+    #[test]
+    fn the_output_sweep_takes_only_what_no_build_is_using() {
+        let out = std::env::temp_dir().join(format!("ps5upload-source-{}", Uuid::new_v4()));
+        let root = out.join(OUTPUT_COPY_DIR);
+        let (left, writing, held) = (root.join("left"), root.join("writing"), root.join("held"));
+        for d in [&left, &writing, &held] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let copy = held.join("Game.rar");
+        fetched()
+            .lock()
+            .unwrap()
+            .insert(copy.clone(), vec![held.clone()]);
+        let guard = Copying::new(writing.clone());
+        sweep_copies_older_than(&out, std::time::Duration::ZERO);
+        assert!(!left.exists());
+        assert!(writing.exists() && held.exists());
+        drop(guard);
+        fetched().lock().unwrap().remove(&copy);
+        sweep_copies_older_than(&out, std::time::Duration::ZERO);
+        assert!(!root.exists());
+        let _ = std::fs::remove_dir_all(&out);
+    }
     use crate::remote::pool::testing::remote_with;
 
     /// Legal names on a NAS or the PS5, and a device, a stream or another name on Windows.

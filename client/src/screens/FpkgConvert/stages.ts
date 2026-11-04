@@ -48,7 +48,7 @@ function stagesFor(mode: PipelineMode, source: string, packs: boolean): readonly
   const copy: PipelineStage[] = [];
   // A build reads a server folder or image in place; a server archive, or an image being
   // compressed (which reads local disk), is copied first.
-  if (mode !== "install" && isRemotePath(source) && (isArchiveSource(source) || mode === "ffpfsc")) {
+  if (mode !== "install" && isRemotePath(source) && isArchiveSource(source)) {
     copy.push("copy");
   }
   if (mode !== "install" && isArchiveSource(source)) copy.push("extract");

@@ -428,7 +428,7 @@ pub fn run() {
             commands::ps5_elfldr_health,
             commands::ps5_elfldr_ensure,
             commands::ps5_payload_load_console,
-            commands::ffpfsc_compress,
+            commands::workshop_jobs,
             commands::exfat_build,
             commands::folder_build,
             commands::fpkg_extract,
@@ -545,12 +545,10 @@ pub fn run() {
             commands::save_archive_make_temp,
             commands::save_archive_cleanup_temp,
             commands::save_archive_zip,
-            commands::save_archive_unzip,
             // Format-aware backup/restore: strip `sdimg_` prefix from
             // PS4-style images and drop Sony's nested bookkeeping so
             // backups are clean and cross-tool compatible.
             commands::save_archive_backup_finalize,
-            commands::save_archive_restore_prepare,
             // Generic text read/write at a user-picked path — backs the
             // bug-report bundle + settings export/import + search/stats
             // exports, which can't use plugin-fs read/writeTextFile
@@ -662,6 +660,7 @@ pub fn run() {
             // reachability checks and payload delivery.
             commands::port_check,
             commands::payload_send,
+            commands::payload_send_check,
             commands::payload_check,
             commands::payload_probe,
             // ── Self-update ─────────────────────────────────────────

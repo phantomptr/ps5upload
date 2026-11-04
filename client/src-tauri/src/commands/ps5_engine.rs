@@ -1020,10 +1020,18 @@ pub async fn health_junk(addr: Option<String>) -> Result<JsonValue, String> {
 }
 
 #[tauri::command]
-pub async fn health_fix(addr: Option<String>, action: String) -> Result<JsonValue, String> {
+pub async fn health_fix(
+    addr: Option<String>,
+    action: String,
+    paths: Option<Vec<String>>,
+) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/ps5/health/fix");
-    post_json(&url, &serde_json::json!({ "addr": addr, "action": action })).await
+    post_json(
+        &url,
+        &serde_json::json!({ "addr": addr, "action": action, "paths": paths }),
+    )
+    .await
 }
 
 /// Makes the speed test's file on this computer (see the engine's `/api/speed-test/prepare`).
@@ -2557,26 +2565,11 @@ pub async fn fpkg_extract_cleanup(path: String) -> Result<JsonValue, String> {
     post_json(&url, &serde_json::json!({ "path": path })).await
 }
 
-/// Compress a game image into a `.ffpfsc` for ShadowMountPlus; runs as an engine job.
+/// Workshop jobs the engine is running now, whoever started them.
 #[tauri::command]
-pub async fn ffpfsc_compress(
-    source: String,
-    output_dir: Option<String>,
-    level: Option<u32>,
-    full_verify: Option<bool>,
-) -> Result<JsonValue, String> {
+pub async fn workshop_jobs() -> Result<JsonValue, String> {
     let base = engine::url();
-    let url = format!("{base}/api/ffpfsc/compress");
-    post_json(
-        &url,
-        &serde_json::json!({
-            "source": source,
-            "output_dir": output_dir,
-            "level": level,
-            "full_verify": full_verify.unwrap_or(false),
-        }),
-    )
-    .await
+    get_json(&format!("{base}/api/workshop/jobs")).await
 }
 
 /// Write a game folder as one `.exfat` image for ShadowMountPlus; runs as an engine job.

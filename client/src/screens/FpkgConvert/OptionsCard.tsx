@@ -34,6 +34,8 @@ export interface OptionsCardProps {
   locked: boolean;
   /** The package's planned (uncompressed) size, once the game is checked. */
   plannedSize?: number;
+  /** The game's size, when it is being made into a compressed image: the warning for that. */
+  compressedFrom?: number;
   /** Room on the output drive; absent where the platform does not say. */
   outputFree?: number | null;
   /** The one language the package declares to PlayGo; "" keeps every language. */
@@ -109,6 +111,20 @@ export function OptionsCard(props: OptionsCardProps) {
             {tr("fpkg.free", undefined, "Free")}: {prettyBytes(props.outputFree)}
           </div>
         )}
+        {props.outputFree != null &&
+          props.compressedFrom != null &&
+          props.outputFree < props.compressedFrom * 0.4 && (
+            <div className="text-xs text-[var(--color-warn)]" data-testid="low-space-compressed">
+              {tr(
+                "fpkg.lowSpaceCompressed",
+                {
+                  size: prettyBytes(props.compressedFrom),
+                  free: prettyBytes(props.outputFree),
+                },
+                "Low on free space: this game is {size}, a compressed image is usually about half that, and the output drive has {free}. It may not fit.",
+              )}
+            </div>
+          )}
         {props.outputFree != null &&
           props.plannedSize != null &&
           props.outputFree < spaceNeeded(props.plannedSize) && (

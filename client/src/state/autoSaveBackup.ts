@@ -94,6 +94,9 @@ export function startSaveBackupSync(): () => void {
   let stopped = false;
   let retry: ReturnType<typeof setTimeout> | null = null;
   let failures = 0;
+  // What this client has told the engine about: only that can be taken off again. Several clients
+  // can share one engine, and each has its own roster.
+  let told: string[] = [];
   const push = (profiles: readonly { host: string }[]) => {
     const hosts = backupHosts(profiles);
     const key = hosts.join(",");
@@ -101,8 +104,10 @@ export function startSaveBackupSync(): () => void {
     sent = key;
     if (retry) clearTimeout(retry);
     retry = null;
-    void saveBackupApi.set({ hosts }).then(
+    const removed = told.filter((h) => !hosts.includes(h));
+    void saveBackupApi.set({ add_hosts: hosts, remove_hosts: removed }).then(
       () => {
+        told = hosts;
         failures = 0;
       },
       (e) => {

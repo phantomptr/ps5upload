@@ -34,6 +34,8 @@ import { useTr } from "../state/lang";
 export interface ConfirmOptions {
   title: string;
   message?: string;
+  /** A list that goes with the message (the files this acts on), scrolled when long. */
+  details?: string[];
   /** Label of the affirmative button. Defaults to "Confirm". */
   confirmLabel?: string;
   /** Label of the cancel button. Defaults to "Cancel". */
@@ -175,6 +177,18 @@ export function useConfirm(): {
           >
             {pending.message}
           </p>
+        )}
+        {pending.details && pending.details.length > 0 && (
+          <ul
+            className="mb-5 max-h-48 overflow-auto rounded-[var(--radius-field)] border border-[var(--color-border)] px-3 py-2 font-mono text-xs"
+            data-testid="confirm-details"
+          >
+            {pending.details.map((line) => (
+              <li key={line} className="break-all">
+                {line}
+              </li>
+            ))}
+          </ul>
         )}
         <div className="flex items-center justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={() => settle(false)}>

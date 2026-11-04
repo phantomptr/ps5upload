@@ -32,17 +32,33 @@ function currentImageDest(): { volume: string | null; subpath: string } {
   return { volume: u.destinationVolume, subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH };
 }
 
+/** How a pipeline run ended, for the queue. */
+function outcome(installed: boolean) {
+  const p = useFpkgConversion.getState().pipeline;
+  if (p.phase === "done") return { ok: true, packagePath: p.packagePath, installed };
+  if (p.phase === "failed") return { ok: false, message: p.message, cancelled: p.cancelled };
+  return { ok: false, message: "The build did not start." };
+}
+
 async function build(item: ConvertItem) {
   await whenIdle();
   const conv = useFpkgConversion.getState();
+  // A build that kept running after a reload: its result, not a second build of the same game.
+  const left = conv.pipeline;
+  if (left.phase === "done" && left.attached && left.source === item.source) {
+    useFpkgConversion.setState({ pipeline: { ...left, attached: false } });
+    const send = item.build?.kind === "image" && item.then !== "keep" && !!item.host;
+    if (send) {
+      const dest = item.imageDest ?? currentImageDest();
+      conv.uploadImage({ host: item.host!, volume: dest.volume, subpath: dest.subpath, deleteAfter: !!item.deleteAfterInstall });
+    }
+    return { ok: true, packagePath: left.packagePath, installed: !!item.build && item.build.kind !== "pkg" };
+  }
   if (item.build?.kind === "folder") {
     // A plain folder from an image or package: kept here, nothing to hand on.
     await conv.buildFolder(item.source, outputOf(item), item.keepBoth, { fullVerify: item.fullVerify });
     await whenIdle();
-    const p = useFpkgConversion.getState().pipeline;
-    if (p.phase === "done") return { ok: true, packagePath: p.packagePath, installed: true };
-    if (p.phase === "failed") return { ok: false, message: p.message };
-    return { ok: false, message: "The build did not start." };
+    return outcome(true);
   }
   if (item.build?.kind === "image") {
     // A game image, in the format picked; sent on to the Upload queue when asked.
@@ -52,7 +68,7 @@ async function build(item: ConvertItem) {
     await conv.buildImage(
       item.source,
       outputOf(item),
-      item.build.compress,
+      item.build.compress && !item.build.lz4,
       item.build.format,
       dest
         ? {
@@ -63,16 +79,13 @@ async function build(item: ConvertItem) {
           }
         : undefined,
       item.build.lz4,
-      undefined,
+      item.password,
       item.keepBoth,
       { fullVerify: item.fullVerify, imageLevel: item.imageLevel },
     );
     await whenIdle();
-    const p = useFpkgConversion.getState().pipeline;
     // Handed to the Upload queue (or kept): nothing more for this queue to do.
-    if (p.phase === "done") return { ok: true, packagePath: p.packagePath, installed: true };
-    if (p.phase === "failed") return { ok: false, message: p.message };
-    return { ok: false, message: "The build did not start." };
+    return outcome(true);
   }
   // A console dump is swapped for its package inside the build (never installed beside it).
   const swap = item.source.startsWith("ps5://") && item.then !== "keep" && !!item.host;
@@ -89,14 +102,12 @@ async function build(item: ConvertItem) {
       install: swap,
       host: swap ? item.host : null,
       method: item.then === "upload" ? "upload" : "stream",
+      password: item.password,
       fullVerify: item.fullVerify,
     },
   );
   await whenIdle();
-  const p = useFpkgConversion.getState().pipeline;
-  if (p.phase === "done") return { ok: true, packagePath: p.packagePath, installed: swap };
-  if (p.phase === "failed") return { ok: false, message: p.message };
-  return { ok: false, message: "The build did not start." };
+  return outcome(swap);
 }
 
 async function handOff(item: ConvertItem, packagePath: string) {
@@ -115,6 +126,8 @@ export function installConvertRunner() {
   if (installed) return;
   installed = true;
   setConvertRunner({ build, handOff, ready: whenIdle });
+  // A build left running by a reload or another window shows again.
+  void useFpkgConversion.getState().attachRunning();
   // A queue armed during a hand-started build starts once its result is put away (#621).
   useFpkgConversion.subscribe((s, prev) => {
     if (s.pipeline.phase !== prev.pipeline.phase) pipelinePhaseChanged(s.pipeline.phase);

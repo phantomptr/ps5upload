@@ -96,6 +96,17 @@ async function reloadLibrary(): Promise<void> {
   store().set({ library });
 }
 
+/** Picks up a scan the engine ran or is running by itself: the index is read again only when one
+ *  has ended since the last look. */
+export async function followEngineScan(): Promise<void> {
+  const before = store().scan;
+  const st = await collection.scanStatus().catch(() => null);
+  if (!st) return;
+  store().set({ scan: st });
+  if (st.running) pollScan();
+  else if (st.finished_ms !== (before?.finished_ms ?? 0)) await reloadLibrary().catch(() => {});
+}
+
 /** Loads settings, the index and any running scan. */
 export async function loadCollection(): Promise<void> {
   store().set({ loading: true, error: null });

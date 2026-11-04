@@ -10,6 +10,7 @@ import { ArrowDown, ArrowUp, Send, SlidersHorizontal, X } from "lucide-react";
 
 import { Button, Card } from "../../components";
 import { buildExtension, type ConvertItem, type ConvertItemChange } from "../../state/convertQueue";
+import { isArchivePasswordError } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import { QueueItemOptions } from "./QueueItemOptions";
 
@@ -23,6 +24,8 @@ export interface QueueCardProps {
   onStart: () => void;
   onStop: () => void;
   onRemove: (id: string) => void;
+  /** A .rar refused for its password: try it again with this one. */
+  onRetryPassword?: (id: string, password: string) => void;
   /** Change a waiting game's own choices. */
   onUpdate: (id: string, change: ConvertItemChange) => void;
   /** A console answers: installing and uploading can be chosen. */
@@ -47,6 +50,35 @@ export function nameOf(source: string): string {
   }
 }
 
+/** The password box of a queued .rar that was refused for its password. Kept in memory only. */
+function PasswordRow({ onRetry }: { onRetry: (password: string) => void }) {
+  const tr = useTr();
+  const [password, setPassword] = useState("");
+  return (
+    <form
+      className="flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] px-3 py-2"
+      data-testid="cq-password"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (password) onRetry(password);
+      }}
+    >
+      <input
+        type="password"
+        autoComplete="off"
+        className="input min-w-0 flex-1"
+        aria-label={tr("fpkg.archivePassword", undefined, "Archive password")}
+        placeholder={tr("fpkg.archivePassword", undefined, "Archive password")}
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
+      <Button size="sm" type="submit" disabled={!password}>
+        {tr("cq_password_retry", undefined, "Try again")}
+      </Button>
+    </form>
+  );
+}
+
 export function QueueCard(p: QueueCardProps) {
   const tr = useTr();
   // The waiting game whose choices are open.
@@ -58,9 +90,12 @@ export function QueueCard(p: QueueCardProps) {
     handed: tr("cq_handed", undefined, "Sent to the console's queue"),
     done: tr("cq_done", undefined, "Done"),
     failed: tr("cq_failed", undefined, "Failed"),
+    cancelled: tr("cq_cancelled", undefined, "Cancelled"),
   };
   const pending = p.items.filter((i) => i.status === "pending").length;
-  const finished = p.items.some((i) => i.status === "done" || i.status === "failed" || i.status === "handed");
+  const finished = p.items.some(
+    (i) => i.status === "done" || i.status === "failed" || i.status === "handed" || i.status === "cancelled",
+  );
   const sent = p.items.some((i) => i.status === "handed" || i.status === "installing");
   // Nothing queued: no card. ① says how games get here.
   if (p.items.length === 0) return null;
@@ -184,6 +219,9 @@ export function QueueCard(p: QueueCardProps) {
                   </button>
                 )}
               </div>
+              {i.status === "failed" && isArchivePasswordError(i.error) && p.onRetryPassword && (
+                <PasswordRow onRetry={(pw) => p.onRetryPassword?.(i.id, pw)} />
+              )}
               {editing === i.id && i.status === "pending" && (
                 <QueueItemOptions
                   item={i}

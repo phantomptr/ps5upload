@@ -113,6 +113,15 @@ export function CompressionTiles({
           );
         })}
       </div>
+      {value !== "stored" && (
+        <div className="text-xs text-[var(--color-muted)]" data-testid="compression-same-game">
+          {tr(
+            "fpkg.compressionSameGame",
+            undefined,
+            "Same game either way. Fast builds quicker and comes out larger; only Stored skips compression.",
+          )}
+        </div>
+      )}
       {/* The one tile that needs a sentence: said under the row, not in it, so it does not
         make every tile in the row as tall as itself. */}
       {value === "stored" && (

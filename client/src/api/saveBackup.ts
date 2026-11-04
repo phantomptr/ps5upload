@@ -146,13 +146,27 @@ export interface Ps2Save {
 
 export const saveBackupApi = {
   view: () => call<SaveBackupView>(""),
-  set: (patch: Partial<SaveBackupSettings>) =>
+  /** `add_hosts`/`remove_hosts` change the console list by what this client knows of its own
+   *  roster: several clients can share one engine. */
+  set: (patch: Partial<SaveBackupSettings> & { add_hosts?: string[]; remove_hosts?: string[] }) =>
     call<SaveBackupView>("", { method: "PUT", body: JSON.stringify(patch) }),
   runNow: () => call<SaveBackupView>("/run", { ...LONG, method: "POST" }),
   list: async (titleId: string) =>
     (await call<{ backups: SaveBackupFile[] }>(`/list?title_id=${encodeURIComponent(titleId)}`)).backups,
   restore: (req: { addr: string; title_id: string; file: string; save_path: string; user_id: number }) =>
     call<{ ok: boolean }>("/restore", { ...LONG, method: "POST", body: JSON.stringify(req) }),
+  /** Put a backup `.zip` on this computer back, with the same refusals, backup first and putting
+   *  back on failure as `restore`. */
+  restoreFile: (req: { addr: string; title_id: string; zip: string; save_path: string; user_id: number }) =>
+    call<{ ok: boolean }>("/restore-file", { ...LONG, method: "POST", body: JSON.stringify(req) }),
+  /** What to write in a backup zip the app makes itself, so a restore can tell which PS5 and user
+   *  it came from. "" when that can't be said: a backup is never held up for it. */
+  note: async (addr: string, userId: number) =>
+    (
+      await call<{ note: string }>(
+        `/note?addr=${encodeURIComponent(addr)}&user_id=${userId}`,
+      ).catch(() => ({ note: "" }))
+    ).note,
   /** Back up a game's save now, while it may be running: a copy taken only while the save sits
    *  still, kept apart from the automatic backups. */
   snapshot: (req: { addr: string; title_id: string }) =>

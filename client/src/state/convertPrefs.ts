@@ -21,7 +21,7 @@ const KEY_IMAGE_COMPRESS = "ps5upload.convert.image_compress";
 const KEY_IMAGE_LEVEL = "ps5upload.convert.image_level";
 const IMAGE_LEVELS: readonly FfpfscLevel[] = ["fast", "balanced", "smallest"];
 const IMAGE_FORMATS: readonly ImageFormat[] = ["ffpkg", "exfat", "ffpfs"];
-const LEVELS: readonly FpkgCompression[] = ["fast", "balanced", "smallest"];
+const LEVELS: readonly FpkgCompression[] = ["stored", "fast", "balanced", "smallest"];
 /** How much of a file a game image's read-back check reads per call, in KiB. The engine
  *  takes 1024 to 65536; these are the choices offered. */
 export const VERIFY_CHUNK_KIB: readonly number[] = [1024, 4096, 8192, 16384, 32768];
@@ -55,6 +55,8 @@ interface ConvertPrefs {
   /** Shows `m` as what is being made without remembering it: a one-off run (the Workshop's
    *  Convert to folder) or the build that is running, never the user's own choice. */
   showMake: (m: MakeKind) => void;
+  /** Shows this image choice for now without remembering it (one action's preset). */
+  showImageChoice: (format: ImageFormat, compress: boolean) => void;
   setImageLevel: (level: FfpfscLevel) => void;
   setImageChoice: (format: ImageFormat, compress: boolean) => void;
   setOutputDir: (dir: string) => void;
@@ -114,6 +116,7 @@ export const useConvertPrefs = create<ConvertPrefs>((set) => ({
     set({ make: m });
   },
   showMake: (m) => set({ make: m }),
+  showImageChoice: (format, compress) => set({ imageFormat: format, imageCompress: compress }),
   setImageChoice: (format, compress) => {
     safeSetItem(KEY_IMAGE_FORMAT, format);
     safeSetItem(KEY_IMAGE_COMPRESS, compress ? "1" : "0");

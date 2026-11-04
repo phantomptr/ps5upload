@@ -152,6 +152,13 @@ pub fn keep_hosts(s: &mut Snapshots, hosts: &[String]) {
     s.retain(|h, _| keep.contains(h));
 }
 
+/// Forgets the consoles in `hosts`, and only those.
+pub fn forget_hosts(s: &mut Snapshots, hosts: &[String]) {
+    for h in hosts {
+        s.remove(&host_key(h));
+    }
+}
+
 pub fn load_from(path: &Path) -> Snapshots {
     match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {

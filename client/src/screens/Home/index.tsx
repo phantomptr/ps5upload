@@ -24,7 +24,8 @@ import { useConnectionStore } from "../../state/connection";
 import { useActivityHistoryStore } from "../../state/activityHistory";
 import { useNotificationsStore } from "../../state/notifications";
 import { useRunningTitleIds } from "../../state/runningApps";
-import { useSensors } from "../../state/sensors";
+import { useSensors, useTempsView } from "../../state/sensors";
+import { TempsNote } from "../../components/TempsNote";
 import { Badge, Card, ConsoleChip, Sparkline, Spinner } from "../../components";
 import { SendHelperButton } from "../../components/SendHelperButton";
 import { useTr } from "../../state/lang";
@@ -66,7 +67,9 @@ export default function HomeScreen() {
   const ps5Kernel = useConnectionStore((s) => s.ps5Kernel);
   const ucredElevated = useConnectionStore((s) => s.ucredElevated);
   const { sample: sensorSample, history } = useSensors(host);
-  const temps = sensorSample?.temps ?? null;
+  // The last reading that worked, not the last sample: one failed read keeps it on screen.
+  const tempsNow = useTempsView(host);
+  const temps = tempsNow.temps;
   const power = sensorSample?.power ?? null;
   const [recentFilter, setRecentFilter] = useState<RecentFilter>("all");
 
@@ -474,11 +477,11 @@ export default function HomeScreen() {
                   <div className="grid grid-cols-2 gap-2">
                     <SensorMetric
                       label={tr("v5_home_cpu", "CPU")}
-                      value={`${temps.cpu_temp?.toFixed(0) ?? "?"}°C`}
+                      value={temps.cpu_temp > 0 ? `${temps.cpu_temp.toFixed(0)}°C` : "—"}
                     />
                     <SensorMetric
                       label={tr("v5_home_soc", "SoC")}
-                      value={`${temps.soc_temp?.toFixed(0) ?? "?"}°C`}
+                      value={temps.soc_temp > 0 ? `${temps.soc_temp.toFixed(0)}°C` : "—"}
                     />
                     {temps.m2_temp > 0 && (
                       <SensorMetric
@@ -492,12 +495,15 @@ export default function HomeScreen() {
                         value={`${power.operating_time_hours ?? 0}h`}
                       />
                     )}
+                    {tempsNow.note && <TempsNote view={tempsNow} className="col-span-2" />}
                   </div>
-                ) : connected ? (
+                ) : connected && tempsNow.note === "reading" ? (
                   <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
                     <Spinner size={13} />
                     {tr("v5_home_loading_sensors", "Reading sensors…")}
                   </div>
+                ) : connected ? (
+                  <TempsNote view={tempsNow} />
                 ) : (
                   <div className="text-xs text-[var(--color-muted)]">
                     {tr(

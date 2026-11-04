@@ -7441,6 +7441,9 @@ static int g_save_is_ps4 = 0;
  * save was only looked at, and the real image is left as it was. */
 static time_t g_save_copy_mtime;
 static off_t g_save_copy_size;
+/* The real image as it was when the copy was made: only that image may be replaced on close. */
+static time_t g_save_image_mtime;
+static off_t g_save_image_size;
 /* The copy is no longer mounted but its write-back failed: a retry must not ask Sony to unmount
  * again (an unmount of nothing can fail with any errno, which would read as "still in use"). */
 static int g_save_unmounted = 0;
@@ -7527,7 +7530,9 @@ static void save_clear_state(void) {
  * -2 unmounted but the write-back failed: the state and the edited copy are kept so a retry
  * (or the next unmount) writes it back; the real image is untouched.
  * -3 the write-back failed a second time: the save is closed so the person is not stuck, and
- * the edited copy is kept beside the others as `<copy>.unsaved` (its path in `kept`). */
+ * the edited copy is kept beside the others as `<copy>.unsaved` (its path in `kept`).
+ * -4 the real image changed since the open (the game saved, or the save was restored): writing
+ * back would undo that, so it stays, the save is closed and the copy is kept the same way. */
 static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
     *written_back = 0;
     if (kept_sz) kept[0] = 0;
@@ -7551,8 +7556,21 @@ static int save_do_unmount(int *written_back, char *kept, size_t kept_sz) {
         struct stat cst;
         int changed = stat(g_save_copy, &cst) != 0 || cst.st_mtime != g_save_copy_mtime ||
                       cst.st_size != g_save_copy_size;
+        struct stat ist;
+        int image_moved = stat(g_save_image, &ist) != 0 || ist.st_mtime != g_save_image_mtime ||
+                          ist.st_size != g_save_image_size;
         if (!changed) {
             unlink(g_save_copy);
+        } else if (image_moved) {
+            fprintf(stderr, "[payload2] save: %s changed since it was opened; edits not written back\n",
+                    g_save_image);
+            if (kept_sz && snprintf(kept, kept_sz, "%s.unsaved", g_save_copy) < (int)kept_sz &&
+                rename(g_save_copy, kept) != 0)
+                snprintf(kept, kept_sz, "%s", g_save_copy);
+            if (g_save_copy_key[0]) unlink(g_save_copy_key);
+            sync();
+            save_clear_state();
+            return -4;
         } else if (save_write_back(g_save_copy, g_save_image) == 0) {
             *written_back = 1;
             unlink(g_save_copy);
@@ -7659,6 +7677,8 @@ static int save_do_mount(const char *image, char *err, size_t err_sz, int *is_ps
     g_save_unmounted = 0;
     g_save_wb_failures = 0;
     g_save_is_ps4 = is_ps4;
+    g_save_image_mtime = st.st_mtime;
+    g_save_image_size = st.st_size;
     {
         struct stat cst;
         if (stat(copy, &cst) == 0) {
@@ -7705,7 +7725,15 @@ static int handle_save_mount(runtime_state_t *state, const char *body, uint64_t 
         char kept[1100];
         int wb = 0;
         int urc = g_save_mounted ? save_do_unmount(&wb, kept, sizeof kept) : 0;
-        if (urc == -3) {
+        if (urc == -4) {
+            char kesc[1200];
+            json_escape_into(kept, kesc, sizeof kesc);
+            n = snprintf(resp, sizeof resp,
+                         "{\"ok\":false,\"err\":\"save_changed_since_open: the open save changed on the "
+                         "console, so its edits were not written over it; it is closed now and the edits "
+                         "are kept as %s\"}",
+                         kesc);
+        } else if (urc == -3) {
             char kesc[1200];
             json_escape_into(kept, kesc, sizeof kesc);
             n = snprintf(resp, sizeof resp,
@@ -7750,7 +7778,15 @@ static int handle_save_unmount(runtime_state_t *state, const char *body, uint64_
     int was = g_save_mounted;
     char kept[1100];
     int urc = save_do_unmount(&wb, kept, sizeof kept);
-    if (urc == -3) {
+    if (urc == -4) {
+        char kesc[1200];
+        json_escape_into(kept, kesc, sizeof kesc);
+        n = snprintf(resp, sizeof resp,
+                     "{\"ok\":false,\"err\":\"save_changed_since_open: the save changed on the console "
+                     "while it was open, so your edits were not written over it; the save is closed "
+                     "and the edits are kept as %s\"}",
+                     kesc);
+    } else if (urc == -3) {
         char kesc[1200];
         json_escape_into(kept, kesc, sizeof kesc);
         n = snprintf(resp, sizeof resp,

@@ -2,7 +2,8 @@
 //
 // The helper unmounts without force first. The PS5's own services usually keep a USB drive open,
 // so that is refused on every console tried; the user is then asked whether to eject anyway,
-// which flushes the drive first and is safe as long as no game or app is reading from it.
+// which flushes the drive first. The engine refuses while a job of ours runs on that console, and
+// a forced eject while a game runs: those are real uses, which a forced unmount would cut off.
 import { useState, type ReactNode } from "react";
 
 import { usbEject } from "../api/ps5";
@@ -38,6 +39,26 @@ export async function usbEjectFlow(
 ): Promise<UsbEjectOutcome> {
   const failed = (e: unknown): UsbEjectOutcome => {
     const raw = e instanceof Error ? e.message : String(e);
+    if (/usb_eject_refused_jobs/.test(raw)) {
+      return {
+        kind: "failed",
+        message: tr(
+          "volumes_eject_refused_jobs",
+          { path: mountPoint },
+          `Can't eject ${mountPoint} yet: an upload, file operation or install is running on this PS5. Wait for it to finish or stop it.`,
+        ),
+      };
+    }
+    if (/usb_eject_refused_game/.test(raw)) {
+      return {
+        kind: "failed",
+        message: tr(
+          "volumes_eject_refused_game",
+          { path: mountPoint },
+          `Can't eject ${mountPoint} while a game is running: it may be reading from this drive. Close the game, then try again.`,
+        ),
+      };
+    }
     return {
       kind: "failed",
       message: tr("volumes_eject_failed", { path: mountPoint, error: raw }, `Couldn't eject ${mountPoint}: ${raw}`),
@@ -66,9 +87,9 @@ export async function usbEjectFlow(
   const force = await d.confirm({
     title: tr("volumes_eject_force_title", { path: mountPoint }, `${mountPoint} is still in use — eject anyway?`),
     message: tr(
-      "volumes_eject_force_body",
+      "volumes_eject_force_body_v2",
       undefined,
-      "The PS5 holds the drive open; its own services usually do. Ejecting anyway flushes the drive first, so it is safe as long as no game or app is reading from it right now.",
+      "The PS5 holds the drive open; its own services usually do. No game is running and this app is not using it, so ejecting anyway should be safe. The drive is flushed first. An app on the PS5 that is using it would be cut off.",
     ),
     confirmLabel: tr("volumes_eject_force", undefined, "Eject anyway"),
     destructive: true,

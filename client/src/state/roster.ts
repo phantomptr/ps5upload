@@ -713,8 +713,10 @@ function rosterHosts(profiles: PS5Profile[]): string[] {
   return [...new Set(profiles.map((p) => hostOf(p.host)).filter(Boolean))].sort();
 }
 useRosterStore.subscribe((s, prev) => {
-  const now = rosterHosts(s.profiles);
-  // An empty roster is sent too: the last console removed is forgotten as well.
-  if (now.join(",") === rosterHosts(prev.profiles).join(",")) return;
-  void gamesApi.keep(now).catch(() => {});
+  if (s.profiles === prev.profiles) return;
+  // Only what left this roster: several clients can share one engine, and what this one lacks
+  // may be another's console.
+  const now = new Set(rosterHosts(s.profiles));
+  const gone = rosterHosts(prev.profiles).filter((h) => !now.has(h));
+  if (gone.length > 0) void gamesApi.forget(gone).catch(() => {});
 });

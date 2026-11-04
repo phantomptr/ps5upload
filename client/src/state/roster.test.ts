@@ -190,21 +190,22 @@ describe("the engine's saved console state follows the roster", () => {
       calls.length = 0;
       const a = useRosterStore.getState().add({ name: "Pro", host: "192.168.1.10" });
       useRosterStore.getState().add({ name: "Phat", host: "192.168.1.20" });
+      const forgets = () => calls.filter((c) => c.url.endsWith("/api/console-snapshots/forget"));
+      // Adding says nothing: what this roster lacks may be another client's console.
+      expect(forgets()).toHaveLength(0);
       useRosterStore.getState().remove(a);
       await Promise.resolve();
-      const keeps = calls.filter((c) => c.url.endsWith("/api/console-snapshots/keep"));
-      expect(JSON.parse(keeps[keeps.length - 1].body)).toEqual({ hosts: ["192.168.1.20"] });
+      expect(JSON.parse(forgets().pop()!.body)).toEqual({ hosts: ["192.168.1.10"] });
       // A rename changes no host: nothing is sent.
-      const before = keeps.length;
+      const before = forgets().length;
       const id = useRosterStore.getState().profiles[0].id;
       useRosterStore.getState().rename(id, "Old Phat");
       await Promise.resolve();
-      expect(calls.filter((c) => c.url.endsWith("/api/console-snapshots/keep")).length).toBe(before);
+      expect(forgets().length).toBe(before);
       // The last console removed is forgotten too.
       useRosterStore.getState().remove(id);
       await Promise.resolve();
-      const last = calls.filter((c) => c.url.endsWith("/api/console-snapshots/keep")).pop();
-      expect(JSON.parse(last!.body)).toEqual({ hosts: [] });
+      expect(JSON.parse(forgets().pop()!.body)).toEqual({ hosts: ["192.168.1.20"] });
     } finally {
       globalThis.fetch = realFetch;
     }

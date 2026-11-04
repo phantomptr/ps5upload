@@ -552,6 +552,32 @@ export async function sendPayload(
   return { viaPayloadManager: sentViaPayloadManager(resp?.status) };
 }
 
+/** A send the user started that should not go now, by the engine's reason (`pkg_install_busy`,
+ *  `helper_busy`, `loader_busy`): `payloadSendRefusalText` says it. */
+export class PayloadSendRefused extends Error {
+  constructor(readonly code: string) {
+    super(code);
+    this.name = "PayloadSendRefused";
+  }
+}
+
+/** `sendPayload` for a send the user started (Send, a catalogue card, a playlist step): asks the
+ *  engine first, so it does not land in an install or an elfldr swap, or stop the helper under a
+ *  running job. The app's own helper recovery uses `sendPayload` as it is. */
+export async function sendPayloadChecked(
+  ip: string,
+  elfPath: string,
+  port?: number,
+): Promise<{ viaPayloadManager: boolean }> {
+  const check = await invoke<{ ok?: boolean; status?: string }>("payload_send_check", {
+    ip,
+    path: elfPath,
+    port: port ?? null,
+  });
+  if (check?.ok === false) throw new PayloadSendRefused(check.status ?? "loader_busy");
+  return sendPayload(ip, elfPath, port);
+}
+
 /**
  * Send a payload that is already on the console (`path`, a .elf/.bin) to its
  * loader on :9021: the engine reads it back through the helper and sends it
@@ -2801,7 +2827,7 @@ export type ScreenshotPngMode = "sdr" | "hdr" | "hdr_plain";
 /** Create a scratch directory under the OS temp root. The returned
  *  absolute path is what the caller passes as `destDir` to
  *  `startTransferDownload` (for backup) or as `destDir` to
- *  `saveArchiveUnzip` (for restore). Always pair with
+ *  `saveArchiveBackupFinalize` (for a backup). Always pair with
  *  `saveArchiveCleanupTemp` in a `finally` block. */
 export async function saveArchiveMakeTemp(prefix: string): Promise<string> {
   return invoke<string>("save_archive_make_temp", { prefix });
@@ -2826,6 +2852,8 @@ export async function saveArchiveZip(
   // is a content:// URI with no usable name; pass this so the backend keeps
   // distinct backups from colliding on one fixed Downloads filename.
   fileName?: string,
+  // The zip's comment: which PS5 and user the backup came from (`saveBackupApi.note`).
+  note?: string,
 ): Promise<string> {
   // Where the zip landed: `destZip` on desktop, a Downloads file when Android redirected it.
   const written = await invoke<string | null>("save_archive_zip", {
@@ -2834,36 +2862,10 @@ export async function saveArchiveZip(
       inner_root: innerRoot,
       dest_zip: destZip,
       dest_filename: fileName,
+      note,
     },
   });
   return typeof written === "string" && written ? written : destZip;
-}
-
-export interface SaveArchiveUnzipResult {
-  inner_root: string;
-  file_count: number;
-}
-
-/** Strict-validate + extract `zipPath` into `destDir`. The zip must
- *  contain exactly one top-level folder named `expectedInner`; any
- *  other layout (flat files at root, multiple roots, wrong name) is
- *  rejected before any bytes are written.
- *
- *  After success, the extracted save lives at
- *  `<destDir>/<expectedInner>/…` and can be uploaded with
- *  `startTransferDir`. */
-export async function saveArchiveUnzip(
-  zipPath: string,
-  destDir: string,
-  expectedInner: string,
-): Promise<SaveArchiveUnzipResult> {
-  return invoke<SaveArchiveUnzipResult>("save_archive_unzip", {
-    req: {
-      zip_path: zipPath,
-      dest_dir: destDir,
-      expected_inner: expectedInner,
-    },
-  });
 }
 
 export interface SaveArchiveBackupFinalizeResult {
@@ -2885,25 +2887,6 @@ export async function saveArchiveBackupFinalize(
 ): Promise<SaveArchiveBackupFinalizeResult> {
   return invoke<SaveArchiveBackupFinalizeResult>(
     "save_archive_backup_finalize",
-    { req: { src_dir: srcDir, title_id: titleId } },
-  );
-}
-
-export interface SaveArchiveRestorePrepareResult {
-  renamed_count: number;
-}
-
-/** Pre-upload preparation after unzipping. Re-adds `sdimg_` prefix to
- *  bare top-level image files (those whose prefix was stripped during
- *  backup) so the PS5 sees the filename it expects. Files that already
- *  start with `sdimg_`, end in `.bin`, or live under `sce_sys/` pass
- *  through unchanged. */
-export async function saveArchiveRestorePrepare(
-  srcDir: string,
-  titleId: string,
-): Promise<SaveArchiveRestorePrepareResult> {
-  return invoke<SaveArchiveRestorePrepareResult>(
-    "save_archive_restore_prepare",
     { req: { src_dir: srcDir, title_id: titleId } },
   );
 }
@@ -3687,7 +3670,8 @@ export async function scanLibraryChecked(
     if (a.path !== b.path) return a.path.localeCompare(b.path);
     return a.name.localeCompare(b.name);
   });
-  return { entries, incomplete };
+  // No drive listed at all (mid-mount, say) is not a console with nothing on it.
+  return { entries, incomplete: incomplete || volumes.length === 0 };
 }
 
 /** {@link scanLibraryChecked} for a caller that has nowhere to say a scan came back short. */
@@ -5445,6 +5429,12 @@ export interface HealthCheck {
   detail: string;
   remedy: string;
   fix?: HealthFixAction;
+  /** Which sentence `detail` is, with its values: see screens/Health/checkText. Absent from an
+   *  older engine, and from a check that has only its English. */
+  detail_id?: string;
+  values?: Record<string, string>;
+  /** Which sentence `remedy` is. */
+  remedy_id?: string;
 }
 
 export interface HealthReport {
@@ -5487,10 +5477,13 @@ export async function healthJunk(
 export async function healthFix(
   action: HealthFixAction,
   addr?: string,
+  /** For `clean_junk`: the files the user was shown. Nothing else is deleted. */
+  paths?: string[],
 ): Promise<HealthFixOutcome> {
   const resp: HealthFixOutcome = await invoke("health_fix", {
     addr: addr ?? null,
     action,
+    paths: paths ?? null,
   });
   return assertOk(resp, `Repair (${action})`, (r) =>
     r.changed.length ? `Completed first: ${r.changed.join("; ")}` : undefined,

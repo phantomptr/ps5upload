@@ -16,7 +16,9 @@ import {
 import { Button, Spinner, Input } from "../../components";
 
 import { useConnectionStore, PS5_LOADER_PORT } from "../../state/connection";
-import { sendPayload } from "../../api/ps5";
+import { sendPayloadChecked } from "../../api/ps5";
+import { payloadSendRefusalText } from "../../lib/payloadSendRefusal";
+import { useHelperReplaceGuard } from "../Connection/useHelperReplaceGuard";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { BrowseButton } from "../../components/BrowseButton";
@@ -305,8 +307,11 @@ export default function SendPanel() {
    *  second pick. Setting the ref synchronously at probe start fixes
    *  that while preserving the latest-wins drop for rapid re-picks. */
   const latestProbePathRef = useRef<string | null>(null);
+  const pickedIsHelper = useRef(false);
+  const { guard: guardReplace, dialog: replaceDialog } = useHelperReplaceGuard();
   const probeFile = async (path: string) => {
     latestProbePathRef.current = path;
+    pickedIsHelper.current = false;
     if (isRemotePath(path)) {
       // Nothing to read here yet: it is copied from the server when it is sent.
       setStatus({ kind: "idle" });
@@ -319,6 +324,7 @@ export default function SendPanel() {
         { path },
       );
       if (latestProbePathRef.current !== path) return;
+      pickedIsHelper.current = !!r.is_ps5upload;
       const v = probeVerdict(r.code, !!r.is_ps5upload, r.error);
       setStatus({
         kind: "probed",
@@ -348,14 +354,16 @@ export default function SendPanel() {
 
   const send = async () => {
     if (!elfPath || !host?.trim() || parsedPort === null) return;
-    setStatus({ kind: "sending" });
     const startedHost = host.trim();
     const startedPort = parsedPort;
     const startedPath = elfPath;
+    // The file is our own helper: it replaces the one running, so ask as Connection does.
+    if (pickedIsHelper.current && startedPort === 9021 && !(await guardReplace(startedHost))) return;
+    setStatus({ kind: "sending" });
     try {
       // A payload on a saved server is copied here first (the loader sends local bytes), and
       // the copy goes once it is sent.
-      await withLocalCopy(startedPath, (local) => sendPayload(startedHost, local, startedPort));
+      await withLocalCopy(startedPath, (local) => sendPayloadChecked(startedHost, local, startedPort));
       setStatus({ kind: "sent", bytes: 0 });
       void commitToHistory({
         path: startedPath,
@@ -365,7 +373,7 @@ export default function SendPanel() {
         timestamp: Date.now(),
       });
     } catch (e) {
-      const err = e instanceof Error ? e.message : String(e);
+      const err = payloadSendRefusalText(e);
       setStatus({ kind: "failed", error: err });
       void commitToHistory({
         path: startedPath,
@@ -380,6 +388,7 @@ export default function SendPanel() {
 
   return (
     <div>
+      {replaceDialog}
       {/* Form + history. Font-AWARE auto-fit: each column wants at least
           ~24rem and the row holds as many as fit, collapsing to a single
           stacked column the moment two don't. Critically this is driven by

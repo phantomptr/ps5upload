@@ -250,6 +250,22 @@ pub async fn keep(Json(body): Json<KeepBody>) -> Response {
     }
 }
 
+/// `POST /api/console-snapshots/forget` — forgets these consoles (removed from a roster, or at a
+/// new IP). Named one by one: one client's short list says nothing about another's consoles.
+pub async fn forget(Json(body): Json<KeepBody>) -> Response {
+    let kept = tokio::task::spawn_blocking(move || {
+        console_snapshot::with(|s| {
+            console_snapshot::forget_hosts(s, &body.hosts);
+            s.len()
+        })
+    })
+    .await;
+    match kept {
+        Ok(kept) => Json(serde_json::json!({ "kept": kept })).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -103,6 +103,8 @@ export interface RunCardProps {
   canQueue?: boolean;
   onCompress: () => void;
   onCancel: () => void;
+  /** Cancel this game and hold the ones waiting behind it: offered while a queue runs. */
+  onCancelAndStop?: () => void;
   /** Hold the running job where it is (#631); absent where it cannot pause. */
   onPause?: () => void;
   onResume?: () => void;
@@ -407,6 +409,11 @@ export function RunCard(props: RunCardProps) {
                 <Button variant="danger" onClick={props.onCancel}>
                   {tr("fpkg.cancel", undefined, "Cancel")}
                 </Button>
+                {props.onCancelAndStop && (
+                  <Button variant="danger" onClick={props.onCancelAndStop} data-testid="run-cancel-stop">
+                    {tr("fpkg.cancel_stop_queue", undefined, "Cancel and stop the queue")}
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -422,9 +429,15 @@ export function RunCard(props: RunCardProps) {
         <div className="flex flex-col gap-3">
           {title}
           {stageList}
-          <div className="text-sm text-[var(--color-bad)]">
-            {label(p.stage)}: {p.message}
-          </div>
+          {p.cancelled ? (
+            <div className="text-sm text-[var(--color-muted)]" data-testid="run-cancelled">
+              {tr("fpkg.cancelled", undefined, "Cancelled. Nothing was finished.")}
+            </div>
+          ) : (
+            <div className="text-sm text-[var(--color-bad)]">
+              {label(p.stage)}: {p.message}
+            </div>
+          )}
           {p.packagePath && (
             <div className="text-sm text-[var(--color-muted)]">
               {tr("fpkg.kept", { path: p.packagePath }, "The package was built and kept: {path}")}
@@ -452,7 +465,7 @@ export function RunCard(props: RunCardProps) {
             ? props.title
               ? tr("fpkg.installedTitle", { title: props.title }, "Installed on PS5 — {title}")
               : tr("fpkg.installedOn", { host: p.host ?? "" }, "Installed on the PS5 ({host})")
-            : p.mode === "ffpfsc" || (p.mode === "image" && p.packagePath.endsWith(".ffpfsc"))
+            : p.mode === "image" && p.packagePath.endsWith(".ffpfsc")
               ? tr("fpkg.compressed", undefined, "Compressed image written and verified")
               : p.mode === "image"
                 ? tr(

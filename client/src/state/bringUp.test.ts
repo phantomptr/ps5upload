@@ -11,7 +11,13 @@ vi.mock("./helperSendRuntime", () => ({
   sendHelperAndWait: (host: string, tr: unknown) => sendHelperAndWait(host, tr),
 }));
 const { sendPayload } = vi.hoisted(() => ({ sendPayload: vi.fn() }));
-vi.mock("../api/ps5", () => ({ sendPayload, payloadPlaylistsSave: vi.fn(async () => {}) }));
+vi.mock("../api/ps5", () => ({
+  sendPayload,
+  // A playlist step is a send the user set up: it goes through the checked one.
+  sendPayloadChecked: sendPayload,
+  PayloadSendRefused: class extends Error {},
+  payloadPlaylistsSave: vi.fn(async () => {}),
+}));
 // A playlist step on a local path sends that path (no saved-server copy).
 vi.mock("../lib/materialize", () => ({
   withLocalCopy: (path: string, work: (local: string) => Promise<unknown>) => work(path),

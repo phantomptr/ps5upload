@@ -11,7 +11,10 @@ vi.mock("../../state/lang", () => ({
 vi.mock("./ServersCard", () => ({ ServersCard: () => <div data-servers-card /> }));
 vi.mock("./HealthCard", () => ({ HealthCard: () => null }));
 vi.mock("../Connection/PowerControl", () => ({ default: () => null }));
-vi.mock("../../state/sensors", () => ({ useSensors: () => ({ sample: null, history: [] }) }));
+vi.mock("../../state/sensors", () => ({
+  useSensors: () => ({ sample: null, history: [] }),
+  useTempsView: () => ({ temps: null, readAt: null, note: "reading", error: null }),
+}));
 
 import HomeScreen from "./index";
 

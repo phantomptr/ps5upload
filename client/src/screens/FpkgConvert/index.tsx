@@ -29,6 +29,7 @@ import { useWebviewDrop } from "../../lib/useWebviewDrop";
 import { useConnectionStore } from "../../state/connection";
 import { useConvertPrefs } from "../../state/convertPrefs";
 import {
+  imageFormatOf,
   isArchiveSource,
   isFolderableSource,
   makesFolder,
@@ -51,9 +52,11 @@ import { OptionsCard } from "./OptionsCard";
 import { OutputChoice, RunCard, idleRun, lz4Active, type Lz4Choice, type RunCardProps } from "./RunCard";
 import { outputFor } from "../../lib/outputPlace";
 import { SwapJournals } from "./SwapJournals";
-import { QueueCard } from "./QueueCard";
+import { nameOf, QueueCard } from "./QueueCard";
+import { isRarLaterVolume } from "../../lib/rarVolumes";
 import { AmprIndexTool, amprIndexPlan } from "./AmprIndexTool";
 import {
+  imageBuildWith,
   buildExtension,
   startAfterBuild,
   thenFor,
@@ -68,7 +71,7 @@ import { consoleSwapDeps } from "../../lib/dumpSwapConsole";
 import { amprTrace, titleIdOf } from "../../api/amprTrace";
 
 /** Why a source was not queued: the build picked cannot be made from it. */
-type QueueSkip = "not-image" | "not-folder";
+type QueueSkip = "not-image" | "not-folder" | "later-part";
 
 /** How long a first press of Delete package stays armed. */
 const DELETE_ARM_MS = 5000;
@@ -129,7 +132,6 @@ export default function WorkshopScreen() {
   const navigate = useNavigate();
   const pipeline = useFpkgConversion((s) => s.pipeline);
   const start = useFpkgConversion((s) => s.start);
-  const compress = useFpkgConversion((s) => s.compress);
   const buildImage = useFpkgConversion((s) => s.buildImage);
   const buildFolder = useFpkgConversion((s) => s.buildFolder);
   const retryInstall = useFpkgConversion((s) => s.retryInstall);
@@ -181,6 +183,8 @@ export default function WorkshopScreen() {
     isFolder: boolean,
     lz4?: AmprLz4Options,
   ): boolean | QueueSkip => {
+    // A later part of a multi-part archive is read through its first part.
+    if (isRarLaterVolume(src)) return "later-part";
     if (build.kind === "image" && !isFolder && !isFolderableSource(src) && !isArchiveSource(src))
       return "not-image";
     if (build.kind === "folder" && !isFolderableSource(src)) return "not-folder";
@@ -191,10 +195,13 @@ export default function WorkshopScreen() {
     const lang = making ? nextLanguage : language;
     return useConvertQueue.getState().add({
       source: src,
+      isDir: isFolder || undefined,
+      // The password under ① is this game's; it stays in memory only.
+      password: password && src === source.trim() ? password : undefined,
       outputDir: out.outputDir,
       keepBoth: out.keepBoth || undefined,
       compression,
-      build: build.kind === "image" && lz4 ? { ...build, lz4 } : build,
+      build: build.kind === "image" ? imageBuildWith(build, lz4) : build,
       imageDest:
         build.kind === "image"
           ? { volume: u.destinationVolume, subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH }
@@ -204,7 +211,7 @@ export default function WorkshopScreen() {
       host: then !== "keep" ? host : null,
       deleteAfterInstall: then !== "keep" && deleteAfter,
       fullVerify: prefs.fullVerify,
-      imageLevel: build.kind === "image" && build.compress ? prefs.imageLevel : undefined,
+      imageLevel: build.kind === "image" && build.compress && !lz4 ? prefs.imageLevel : undefined,
     });
   };
   /** Queue what was picked or found, then say what was left out. */
@@ -219,7 +226,7 @@ export default function WorkshopScreen() {
       notes.push(
         tr("cq_not_games", { count: notGames }, "{count} folder(s) were not games and were skipped."),
       );
-    for (const why of ["not-image", "not-folder"] as const) {
+    for (const why of ["not-image", "not-folder", "later-part"] as const) {
       const n = results.filter((r) => r === why).length;
       if (n) notes.push(skippedText(why, n));
     }
@@ -233,7 +240,13 @@ export default function WorkshopScreen() {
   };
   /** Why a source was left out of the queue, said for a person. */
   const skippedText = (why: QueueSkip, n: number) =>
-    why === "not-image"
+    why === "later-part"
+      ? tr(
+          "cq_skipped_later_part",
+          { count: n },
+          "Skipped {count}: a later part of a multi-part archive. Add its first part (.part1.rar) instead.",
+        )
+      : why === "not-image"
       ? tr(
           "cq_skipped_not_image",
           { count: n },
@@ -252,6 +265,10 @@ export default function WorkshopScreen() {
   );
 
   const locked = pipeline.phase === "running";
+  // A Workshop job left running by a reload, or started in another window, shows here again.
+  useEffect(() => {
+    void useFpkgConversion.getState().attachRunning();
+  }, []);
   const [source, setSource] = useState(pipeline.phase === "idle" ? "" : pipeline.source);
   const [inspection, setInspection] = useState<FpkgInspection | null>(null);
   // "pending" while the sample runs; null when it failed or there is no game.
@@ -551,6 +568,9 @@ export default function WorkshopScreen() {
   // on this computer, on a saved server, or on the console (read through the helper, as a
   // package build reads it). An archive cannot from here: unpack it first.
   const src = source.trim();
+  // Whether the run shown under ④ is the game under ① (a queue run is another game).
+  const runIsShown = pipeline.phase === "idle" || pipeline.source.trim() === src;
+  const pipelineName = pipeline.phase === "idle" ? null : nameOf(pipeline.source);
   const isLocalFolder = inspection !== null && !noFiles && !isArchiveSource(src);
   // An archive is not looked inside until the run unpacks it; an image run unpacks it first,
   // as a package run does.
@@ -837,6 +857,7 @@ export default function WorkshopScreen() {
             kernel={locked ? null : kernel}
             contentId={locked ? null : inspection?.content_id}
             checked={!locked && inspection !== null}
+            archive={!locked && isArchiveSource(src)}
             forNext={locked}
           />
 
@@ -865,6 +886,11 @@ export default function WorkshopScreen() {
             forNext={locked}
             plannedSize={locked ? undefined : inspection?.planned_size}
             outputFree={locked ? undefined : inspection?.output_free}
+            compressedFrom={
+              !locked && build.kind === "image" && build.compress && !lz4Active(build.format, lz4Choice)
+                ? inspection?.bytes
+                : undefined
+            }
           >
             {locked && <OutputChoice {...runChoice} />}
           </OptionsCard>
@@ -890,8 +916,9 @@ export default function WorkshopScreen() {
             canConvert={!noFiles && !checking && source.trim() !== ""}
             isImage={isImage}
             deleteArmed={deleteArmed}
-            title={inspection?.title ?? null}
-            sourceBytes={inspection?.bytes ?? 0}
+            // ①'s game is not the one a queue run is making: its name and size say nothing of it.
+            title={runIsShown ? (inspection?.title ?? null) : pipelineName}
+            sourceBytes={runIsShown ? (inspection?.bytes ?? 0) : 0}
             choice={runChoice}
             onRun={run}
             canImage={canImage}
@@ -924,11 +951,23 @@ export default function WorkshopScreen() {
                   ? { profileToml: lz4Profile?.text, installRuntime: lz4InstallRuntime }
                   : undefined,
               );
-              if (r === "not-image" || r === "not-folder") setError(skippedText(r, 1));
+              if (r === "not-image" || r === "not-folder" || r === "later-part") setError(skippedText(r, 1));
               else if (!r) setError(tr("cq_already", undefined, "This game is already in the queue."));
             }}
-            onCompress={() => void compress(source.trim(), outFor(src).outputDir)}
+            onCompress={() => {
+              const out = outFor(src);
+              // One way to make a .ffpfsc: the level chosen, numbered when the name is taken.
+              void buildImage(src, out.outputDir, true, imageFormatOf(src), undefined, undefined, undefined, out.keepBoth);
+            }}
             onCancel={() => void cancel()}
+            onCancelAndStop={
+              queueRunning && queueItems.some((i) => i.status === "pending")
+                ? () => {
+                    useConvertQueue.getState().holdNext();
+                    void cancel();
+                  }
+                : undefined
+            }
             onPause={() =>
               void pauseRun().catch((e: unknown) =>
                 setError(tr("fpkg.pause_failed", { error: e instanceof Error ? e.message : String(e) }, "Pause or resume did not work: {error}")),
@@ -995,7 +1034,7 @@ export default function WorkshopScreen() {
         >
           <span className="min-w-0 flex-1 truncate text-[var(--color-muted)]">
             {locked
-              ? tr("workshop_bar_running", { title: inspection?.title || src }, "Working on {title}…")
+              ? tr("workshop_bar_running", { title: runIsShown ? inspection?.title || src : (pipelineName ?? src) }, "Working on {title}…")
               : inspection?.title || src}
           </span>
           {locked ? (
@@ -1024,6 +1063,7 @@ export default function WorkshopScreen() {
         onStart={() => void useConvertQueue.getState().start()}
         onStop={() => useConvertQueue.getState().stop()}
         onRemove={(id) => useConvertQueue.getState().remove(id)}
+        onRetryPassword={(id, pw) => useConvertQueue.getState().retryWithPassword(id, pw)}
         onUpdate={(id, change) => void useConvertQueue.getState().update(id, change)}
         canInstall={canInstall}
         host={host}

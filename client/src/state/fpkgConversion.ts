@@ -5,12 +5,15 @@
 import { installErrorLink } from "../lib/installErrorDoc";
 import { create } from "zustand";
 
+import { t as translate } from "../i18n";
+import { ps5FakeGameUnplayableFirmware } from "../lib/ps5Firmware";
+import { useLangStore } from "./lang";
 import { useConvertPrefs } from "./convertPrefs";
 
 import { imageUploadItem, type ImageUploadPlan } from "../lib/imageUpload";
 import { useUploadQueueStore } from "./uploadQueue";
 
-import { fpkg, type AmprLz4Options, type FfpfscLevel, type FpkgBuildRequest, type ImageFormat } from "../api/fpkg";
+import { fpkg, type AmprLz4Options, type FfpfscLevel, type FpkgBuildRequest, type ImageFormat, type WorkshopRun } from "../api/fpkg";
 import { jobCancel, jobPause, jobResume, jobStatus } from "../api/ps5";
 import { useConnectionStore } from "./connection";
 import { useRosterStore } from "./roster";
@@ -40,12 +43,12 @@ export type PipelineStage =
   | "install";
 
 /** What a run does: a package, a package then its install, an install of a kept package, a
- *  compressed .ffpfsc image from an image, a game image (.exfat) from a folder, or a plain
+ *  game image (compressed into a .ffpfsc or not) from a folder or another image, or a plain
  *  folder from an image or a debug-key package. */
-export type PipelineMode = "convert" | "convert-install" | "install" | "ffpfsc" | "image" | "folder";
+export type PipelineMode = "convert" | "convert-install" | "install" | "image" | "folder";
 
 /** A run whose result is a game image to mount, not a package to install. */
-export const makesImage = (mode: PipelineMode) => mode === "ffpfsc" || mode === "image";
+export const makesImage = (mode: PipelineMode) => mode === "image";
 
 /** A run whose result is a plain game folder on this computer. */
 export const makesFolder = (mode: PipelineMode) => mode === "folder";
@@ -83,6 +86,8 @@ export type Pipeline =
       /** The game unpacked from an archive (inside an engine unpack folder); removed with it
        *  once the run is over. */
       extractedSource: string | null;
+      /** Found running, not started by this window (see `attachRunning`). */
+      attached?: boolean;
       /** The engine job is paused (#631): it waits, and so does the queue behind it. */
       paused?: boolean;
       /** When the current pause began; null or absent while not paused. */
@@ -109,6 +114,9 @@ export type Pipeline =
       swap?: SwapJournal | null;
       /** An image put in the Upload queue (by the run's own plan, or Upload to PS5). */
       uploadQueued?: boolean;
+      /** A build found running after a reload, not started by this window: the queue takes its
+       *  result rather than building the game again. */
+      attached?: boolean;
     }
   | {
       phase: "failed";
@@ -120,6 +128,8 @@ export type Pipeline =
       packagePath: string | null;
       stageMs: StageMs;
       titleId: string | null;
+      /** Stopped by the user: not a fault. */
+      cancelled?: boolean;
     };
 
 export interface ConversionState {
@@ -138,9 +148,7 @@ export interface ConversionState {
       fullVerify?: boolean;
     },
   ) => Promise<void>;
-  /** Compress an .exfat / .ffpkg image into a .ffpfsc. */
-  compress: (source: string, outputDir?: string) => Promise<void>;
-  /** Write a game folder as one game image (`format`, .exfat by default); with
+  /** Write a game folder or image as one game image (`format`, .exfat by default); with
    *  `thenCompress`, straight into a .ffpfsc (no uncompressed copy is written). */
   buildImage: (
     source: string,
@@ -178,6 +186,9 @@ export interface ConversionState {
   resume: () => Promise<void>;
   /** A new source: clears a finished result; ignored while running. */
   reset: () => void;
+  /** Follow a Workshop job the engine is still running (after a reload, or from another window),
+   *  when this window is idle. */
+  attachRunning: () => Promise<void>;
   deletePackage: () => Promise<void>;
   /** After a swap: delete the parked dump, or keep it parked outside the scan roots. */
   finishReplace: (choice: "delete" | "keep") => Promise<void>;
@@ -291,17 +302,16 @@ function fail(stage: PipelineStage, message: string, packagePath: string | null)
   const p = running();
   if (!p) return;
   dropCopy(p);
+  const cancelled = isCancelMessage(message);
   if (p.taskId) {
-    if (isCancelMessage(message)) useTaskStore.getState().finishTask(p.taskId, "cancelled");
+    if (cancelled) useTaskStore.getState().finishTask(p.taskId, "cancelled");
     else
       useTaskStore.getState().finishTask(p.taskId, "failed", {
         lastError: { code: "FPKG_FAILED", message, recoverable: false },
       });
   }
   const failedTitle =
-    p.mode === "ffpfsc"
-      ? trStatic("fpkg_failed_compress", "Compression failed")
-      : p.mode === "image"
+    p.mode === "image"
         ? trStatic("fpkg_failed_image", "Making the game image failed")
         : p.mode === "folder"
           ? trStatic("fpkg_failed_folder", "Making the game folder failed")
@@ -319,8 +329,11 @@ function fail(stage: PipelineStage, message: string, packagePath: string | null)
       packagePath,
       stageMs: { ...p.stageMs, [p.stage]: Date.now() - p.stageStartedMs },
       titleId: p.titleId,
+      cancelled,
     },
   });
+  // The user asked for this: the card says so, and it is not an error to report.
+  if (cancelled) return;
   // An install-stage failure links to the install-route matrix entry for its
   // error; a build failure has no such page, so it goes back to Convert.
   pushNotification("error", failedTitle, {
@@ -368,6 +381,7 @@ function finish(packagePath: string, packageBytes: number, convertMs: number) {
       deleted: false,
       titleId: p.titleId,
       uploadQueued: !!plan,
+      attached: p.attached,
     },
   });
 }
@@ -541,9 +555,6 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
       const s = snapshot.stage;
       if (s && BUILD_STAGES.includes(s.id as PipelineStage)) {
         enterStage(s.id as PipelineStage, s.done, s.total);
-      } else if (!s && p.mode === "ffpfsc") {
-        // A compression job reports no stages, only its overall bytes.
-        enterStage("compress", snapshot.bytes_sent ?? 0, snapshot.total_bytes ?? 0);
       }
       poll(jobId, install);
       return;
@@ -574,13 +585,11 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
         finish(path, bytes, Date.now() - cur.startedMs - pausedSoFar(cur, Date.now()));
         pushNotification(
           "success",
-          cur.mode === "ffpfsc"
-            ? trStatic("fpkg_done_compress", "Compression complete")
-            : cur.mode === "image"
-              ? trStatic("fpkg_done_image", "Game image ready")
-              : cur.mode === "folder"
-                ? trStatic("fpkg_done_folder", "Game folder ready")
-                : trStatic("fpkg_done_fpkg", "FPKG conversion complete"),
+          cur.mode === "image"
+            ? trStatic("fpkg_done_image", "Game image ready")
+            : cur.mode === "folder"
+              ? trStatic("fpkg_done_folder", "Game folder ready")
+              : trStatic("fpkg_done_fpkg", "FPKG conversion complete"),
           { body: path, link: "/workshop" },
         );
       }
@@ -597,9 +606,9 @@ function beginRun(mode: PipelineMode, source: string, host: string | null, stage
     mode === "install"
       ? null
       : useTaskStore.getState().registerTask({
-          kind: mode === "ffpfsc" ? "ffpfsc-compress" : "fpkg-convert",
+          kind: "fpkg-convert",
           origin: "convert",
-          label: `${mode === "ffpfsc" ? "Compress" : mode === "image" ? "Make image of" : mode === "folder" ? "Make folder of" : "Convert"} ${baseName(source)}`,
+          label: `${mode === "image" ? "Make image of" : mode === "folder" ? "Make folder of" : "Convert"} ${baseName(source)}`,
           detail: source,
           consoleId: host ?? "",
           control: { owner: "fpkg-convert" },
@@ -649,12 +658,15 @@ export function isFolderableSource(path: string): boolean {
   return /\.(exfat|ffpkg|ufs2|ffpfs|ffpfsc|pkg)$/i.test(path.trim());
 }
 
+const ARCHIVE_PASSWORD_NEEDED = "This archive is password-protected. Enter its password and start again.";
+const ARCHIVE_PASSWORD_WRONG = "The archive's password is wrong. Check it and start again.";
+
 /** The engine's archive errors, said for a person. */
 export function archiveErrorText(message: string): string {
   if (/rar_password_required/.test(message))
-    return "This archive is password-protected. Enter its password and start again.";
+    return ARCHIVE_PASSWORD_NEEDED;
   if (/rar_password_wrong/.test(message))
-    return "The archive's password is wrong. Check it and start again.";
+    return ARCHIVE_PASSWORD_WRONG;
   const missing = /rar_missing_volume:\s*(.+)/.exec(message);
   if (missing)
     return `A part of this archive is missing: ${missing[1].trim()}. Keep every part in the same folder.`;
@@ -710,6 +722,7 @@ async function prepareThenStart(
       return;
     }
     update({ extractedSource: local, jobId: null });
+    void warnIfUnplayable(local, outputDir);
   }
   enterStage("check");
   try {
@@ -718,6 +731,22 @@ async function prepareThenStart(
     poll(job_id, install);
   } catch (error) {
     fail("check", error instanceof Error ? error.message : String(error), null);
+  }
+}
+
+/** An archive can't be looked inside before it is unpacked, so the firmware note a checked game
+ *  gets under ② comes now: a PS5 game that would install as a package but not play here. */
+async function warnIfUnplayable(local: string, outputDir: string | undefined) {
+  const p = running();
+  if (!p || (p.mode !== "convert" && p.mode !== "convert-install")) return;
+  const seen = await fpkg.inspect(local, outputDir).catch(() => null);
+  const fw = seen && ps5FakeGameUnplayableFirmware(useConnectionStore.getState().ps5Kernel, seen.content_id);
+  if (fw) {
+    const lang = useLangStore.getState().lang;
+    pushNotification("warning", translate(lang, "fpkg.unpacked_unplayable_title", undefined), {
+      body: translate(lang, "fpkg.unpacked_unplayable", { fw }),
+      link: "/workshop",
+    });
   }
 }
 
@@ -775,6 +804,47 @@ function currentHost(): string | null {
   return c.payloadStatus === "up" && c.host?.trim() ? c.host : null;
 }
 
+/** An image's format kept when it is compressed into a `.ffpfsc`. */
+export function imageFormatOf(path: string): ImageFormat {
+  return /\.ffpkg$/i.test(path.trim()) ? "ffpkg" : "exfat";
+}
+
+/** Whether an archive's error is about its password (the queue row asks for one). */
+export function isArchivePasswordError(message: string | undefined): boolean {
+  return message === ARCHIVE_PASSWORD_NEEDED || message === ARCHIVE_PASSWORD_WRONG;
+}
+
+/** Run mode for a job kind the engine reports. */
+function modeOfKind(kind: WorkshopRun["kind"]): PipelineMode {
+  return kind === "image" ? "image" : kind === "folder" ? "folder" : "convert";
+}
+
+/** Follow an unpack whose page was closed: the build that was to follow it died with the page, so
+ *  its folder is dropped and the user is told to start again. */
+async function followLostUnpack(jobId: string) {
+  try {
+    for (;;) {
+      if (running()?.jobId !== jobId) return;
+      const s = await jobStatus(jobId);
+      if (running()?.jobId !== jobId) return;
+      if (s.status === "done") {
+        if (s.dest) void fpkg.cleanupExtract(s.dest).catch(() => {});
+        fail("extract", translate(useLangStore.getState().lang, "fpkg.unpack_lost", undefined), null);
+        return;
+      }
+      if (s.status === "failed") {
+        fail("extract", archiveErrorText(s.error ?? "The archive did not unpack."), null);
+        return;
+      }
+      markPaused(s.paused === true);
+      enterStage("extract", s.bytes_sent ?? 0, s.total_bytes ?? 0);
+      await new Promise((r) => setTimeout(r, POLL_MS));
+    }
+  } catch (error) {
+    fail("extract", error instanceof Error ? error.message : String(error), null);
+  }
+}
+
 export const useFpkgConversion = create<ConversionState>((set, get) => ({
   pipeline: { phase: "idle" },
 
@@ -806,26 +876,6 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
       poll(job_id, then);
     } catch (error) {
       fail("check", error instanceof Error ? error.message : String(error), null);
-    }
-  },
-
-  compress: async (source, outputDir) => {
-    if (get().pipeline.phase === "running") return;
-    const fullVerify = useConvertPrefs.getState().fullVerify;
-    // Compressing reads the image from this machine's disk, so a server image is copied
-    // first (unlike a build, which reads it in place).
-    if (isRemotePath(source) || isArchiveSource(source)) {
-      beginRun("ffpfsc", source, null, isRemotePath(source) ? "copy" : "extract");
-      void prepareThenStart(source, outputDir, (local) => fpkg.compress(local, outputDir, fullVerify), null);
-      return;
-    }
-    beginRun("ffpfsc", source, null, "compress");
-    try {
-      const { job_id } = await fpkg.compress(source, outputDir, fullVerify);
-      update({ jobId: job_id });
-      poll(job_id, null);
-    } catch (error) {
-      fail("compress", error instanceof Error ? error.message : String(error), null);
     }
   },
 
@@ -944,6 +994,19 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
   reset: () => {
     const phase = get().pipeline.phase;
     if (phase === "done" || phase === "failed") set({ pipeline: { phase: "idle" } });
+  },
+
+  attachRunning: async () => {
+    if (get().pipeline.phase !== "idle") return;
+    const runs = await fpkg.runningJobs().catch(() => [] as WorkshopRun[]);
+    const run = runs[0];
+    // Started by hand meanwhile, or nothing to follow.
+    if (!run || get().pipeline.phase !== "idle") return;
+    const stage: PipelineStage = run.kind === "extract" ? "extract" : "check";
+    beginRun(modeOfKind(run.kind), run.source, null, stage);
+    update({ jobId: run.job_id, attached: true, startedMs: run.started_at_ms || Date.now() });
+    if (run.kind === "extract") void followLostUnpack(run.job_id);
+    else poll(run.job_id, null);
   },
 
   finishReplace: async (choice) => {

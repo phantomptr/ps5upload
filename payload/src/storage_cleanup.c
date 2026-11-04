@@ -1211,6 +1211,8 @@ int sc_apply_status(const char *body, size_t n, char *out, size_t cap) {
     uint32_t id = num_field(body, n, "apply_id");
     jb_t j = { out, cap, 0, 0 };
     pthread_mutex_lock(&g_mu);
+    /* No id: the latest one, so a screen that was not watching can find a running apply. */
+    if (!id) id = G.apply_id;
     if (!id || id != G.apply_id || G.apply_state == 0) {
         pthread_mutex_unlock(&g_mu);
         return reply_err(out, cap, "unknown_apply");

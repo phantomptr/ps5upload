@@ -58,7 +58,7 @@ describe("giving the engine the console list", () => {
     expect(set).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(set).toHaveBeenCalledTimes(3);
-    expect(set).toHaveBeenLastCalledWith({ hosts: ["10.0.0.2"] });
+    expect(set).toHaveBeenLastCalledWith({ add_hosts: ["10.0.0.2"], remove_hosts: [] });
     await vi.advanceTimersByTimeAsync(600_000);
     expect(set).toHaveBeenCalledTimes(3);
     stop();
