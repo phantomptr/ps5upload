@@ -87,7 +87,7 @@ export async function inspectSource(
       throw new Error(
         trStatic(
           "upload_split_pkg_unsupported",
-          "Split .pkg sets aren't supported. Pick the single lead .pkg.",
+          "This is one part of a split package, and split packages can't be installed. Join the parts into one .pkg first.",
         ),
       );
     }

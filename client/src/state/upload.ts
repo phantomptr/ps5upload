@@ -60,6 +60,8 @@ export interface PkgSourceInfo {
 export interface PickedSource {
   kind: SourceKind;
   path: string;
+  /** A local copy of a file on a saved server: the server's path, which the queue keeps. */
+  remoteOrigin?: string;
   /** Populated for `folder` and `game-folder`. Null otherwise. */
   meta: FolderInspectResult | null;
   /** Present when the root isn't a game but a single child subdir is. */
@@ -278,7 +280,12 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       try {
         const local = await materializeRemote(path);
         if (get().source?.path !== path) return;
-        return get().pickFile(local);
+        await get().pickFile(local);
+        // The queue keeps the server's path, not this copy's: the engine sweeps its copies at
+        // start, so a queued item would fail after an app restart. It makes a new copy then.
+        const picked = get().source;
+        if (picked?.path === local) set({ source: { ...picked, remoteOrigin: path } });
+        return;
       } catch (e) {
         if (get().source?.path !== path) return;
         set({ detecting: false, detectError: e instanceof Error ? e.message : String(e) });
@@ -325,7 +332,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
             detecting: false,
             detectError: trStatic(
               "upload_split_pkg_unsupported",
-              "Split .pkg sets aren't supported. Pick the single lead .pkg.",
+              "This is one part of a split package, and split packages can't be installed. Join the parts into one .pkg first.",
             ),
           });
           return;

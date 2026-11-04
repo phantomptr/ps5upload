@@ -137,6 +137,10 @@ pub struct InstallStatus {
     /// re-applying can undo).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaces: Option<String>,
+    /// The package's type as the engine came to know it (`PS4DP`, `PS5GD`…), for a check the
+    /// client goes on making after the job has ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_type: Option<String>,
     /// Windows only: which local adapter faces the console, what network category Windows gave it
     /// and whether the firewall lets this engine in on it. Set when the console could not reach
     /// this computer; the UI offers the fixes it implies. Never set off Windows.
@@ -171,6 +175,7 @@ impl InstallStatus {
             shortened: false,
             retry_with_stream: false,
             replaces: None,
+            package_type: None,
             net_diag: None,
             started_at: now,
             updated_at: now,
@@ -218,6 +223,7 @@ mod tests {
             shortened: false,
             retry_with_stream: false,
             replaces: None,
+            package_type: None,
             net_diag: None,
             started_at: 1_790_000_000,
             updated_at: 1_790_000_001,

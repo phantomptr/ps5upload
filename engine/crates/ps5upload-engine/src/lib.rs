@@ -6713,10 +6713,13 @@ async fn transfer_dir_handler(
                 job_failed_from_err(
                     started_at_ms,
                     completed_at_ms,
-                    &anyhow::anyhow!(
-                        "source directory not found or not a directory: {}",
-                        req.src_dir
-                    ),
+                    &anyhow::Error::from(ps5upload_ava1::upload::UploadFailure {
+                        reason: "source_missing".into(),
+                        detail: format!(
+                            "source directory not found or not a directory: {}",
+                            req.src_dir
+                        ),
+                    }),
                 ),
             );
             fail_guard.mark_succeeded();
@@ -6756,7 +6759,14 @@ async fn transfer_dir_handler(
                     &jobs,
                     &events_tx,
                     job_id,
-                    job_failed_from_err(started_at_ms, completed_at_ms, &anyhow::anyhow!(msg)),
+                    job_failed_from_err(
+                        started_at_ms,
+                        completed_at_ms,
+                        &anyhow::Error::from(ps5upload_ava1::upload::UploadFailure {
+                            reason: "source_names_made_up".into(),
+                            detail: msg,
+                        }),
+                    ),
                 );
                 fail_guard.mark_succeeded();
                 return;
@@ -9219,6 +9229,8 @@ async fn rar_packages_handler(Json(req): Json<RarPackagesReq>) -> impl IntoRespo
 
 /// The exclude entry that keeps only packages (see `ps5upload_core::excludes`).
 const RAR_PKG_ALLOW: &str = "!*.pkg";
+/// The same for a package named `.fpkg` (the name a converted package can carry).
+const RAR_FPKG_ALLOW: &str = "!*.fpkg";
 
 /// Which archive reader a path's name asks for. A split RAR is recognised by any of its
 /// parts' names; a `.7z.001` style split 7z is not supported and is not claimed here.
@@ -9249,7 +9261,7 @@ fn archive_package_entries(
     path: &str,
     password: Option<&str>,
 ) -> anyhow::Result<Vec<(String, u64)>> {
-    let allow = [RAR_PKG_ALLOW.to_string()];
+    let allow = [RAR_PKG_ALLOW.to_string(), RAR_FPKG_ALLOW.to_string()];
     let p = std::path::Path::new(path);
     match archive_kind_of(path) {
         Some(ArchiveKind::Zip) => Ok(ps5upload_core::transfer::zip_plan_preview(p, &allow)?.1),

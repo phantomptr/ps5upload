@@ -156,6 +156,8 @@ export interface PkgQueueApi {
   watch: (id: string, cb: (p: QueueItemProgress | null) => void) => () => void;
   /** Drop item `id` (a no-op once it is gone). */
   remove: (id: string) => void;
+  /** Console files that waiting or running installs on `host` read. */
+  queuedInstallPaths: (host: string) => string[];
 }
 
 let pkgQueueApi: PkgQueueApi | null = null;

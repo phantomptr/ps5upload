@@ -89,7 +89,7 @@ export function buildUploadQueueItem(
   );
   return {
     sourceKind: source.kind,
-    sourcePath: source.path,
+    sourcePath: source.remoteOrigin ?? source.path,
     displayName: baseName(source.path),
     resolvedDest: dest,
     addr: o.addr,

@@ -78,8 +78,10 @@ import {
   useUploadQueueStore,
   type QueueItem,
   type QueueItemStatus,
+  HANDED_TO_SMP,
 } from "../../state/uploadQueue";
 import { isRemotePath } from "../../lib/remotePath";
+import { recoveryResendsHelper } from "../../lib/uploadRecovery";
 import { useTransferStore } from "../../state/transfer";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
 import {
@@ -1194,11 +1196,13 @@ export function QueueRow({
             {item.mountedAt && (
               <span className="font-mono text-[var(--color-accent)]">
                 ·{" "}
-                {tr(
-                  "queue_mounted_at",
-                  { mount: item.mountedAt },
-                  "mounted at {mount}",
-                )}
+                {item.mountedAt === HANDED_TO_SMP
+                  ? tr("queue_handed_to_smp", undefined, "handed to ShadowMount+")
+                  : tr(
+                      "queue_mounted_at",
+                      { mount: item.mountedAt },
+                      "mounted at {mount}",
+                    )}
               </span>
             )}
             {item.sourceKind === "pkg" &&
@@ -1373,7 +1377,8 @@ export function QueueRow({
         <div className="mt-2 flex items-center gap-2 rounded-[var(--radius-field)] bg-[var(--color-warn)]/10 px-2 py-1.5 text-xs text-[var(--color-warn)]">
           <Spinner size={12} className="shrink-0" />
           <span>
-            {tr(
+            {recoveryResendsHelper(item.errorReason)
+              ? tr(
               "queue_recovering",
               {
                 attempt: item.recoverAttempt ?? 1,
@@ -1382,7 +1387,15 @@ export function QueueRow({
               `Connection lost — re-deploying payload & resuming (${
                 item.recoverAttempt ?? 1
               }/${MAX_AUTO_RECOVER_ATTEMPTS})…`,
-            )}
+            )
+              : tr(
+                  "queue_recovering_retry",
+                  {
+                    attempt: item.recoverAttempt ?? 1,
+                    max: MAX_AUTO_RECOVER_ATTEMPTS,
+                  },
+                  "Trying again ({attempt}/{max})…",
+                )}
           </span>
         </div>
       )}

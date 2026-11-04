@@ -7,6 +7,7 @@ import { pkgMkdirChain } from "../lib/pkgStorage";
 import {
   fsMount,
   fsDelete,
+  fsListDir,
   fsMkdir,
   appRegister,
   generateTxIdHex,
@@ -72,8 +73,10 @@ import { hostOf, mgmtAddr } from "../lib/addr";
 import { log } from "./logs";
 import { isRemotePath } from "../lib/remotePath";
 import { partialUploadPath } from "../lib/partialUpload";
+import { resumableTxId } from "../lib/resumeGuard";
 import { discardUploadLeftovers } from "../lib/uploadLeftovers";
-import { materializeRemote, releaseCopy } from "../lib/materialize";
+import { existingCopyOf, materializeRemote, releaseCopy } from "../lib/materialize";
+import { staticTranslator as tx } from "../lib/trStatic";
 
 /** Failed status reads in a row (2 s apart) before a found install counts as lost. */
 const FIND_JOB_MAX_UNANSWERED = 150;
@@ -87,7 +90,7 @@ async function archiveSourceFor(item: { id: string; sourcePath: string }): Promi
   if (!isRemotePath(item.sourcePath)) return item.sourcePath;
   const have = archiveCopies.get(item.id);
   if (have) return have;
-  const local = await materializeRemote(item.sourcePath);
+  const local = existingCopyOf(item.sourcePath) ?? (await materializeRemote(item.sourcePath));
   archiveCopies.set(item.id, local);
   return local;
 }
@@ -118,6 +121,7 @@ import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import {
   autoRecoverBackoffMs,
   isAutoRecoverable,
+  recoveryResendsHelper,
   MAX_AUTO_RECOVER_ATTEMPTS,
   PostUploadStepError,
   shouldAutoRecover,
@@ -876,6 +880,17 @@ export function clearNotice(
   return null;
 }
 
+/** `mountedAt` of an image ShadowMount+ will mount by itself: it has no mount point yet. */
+export const HANDED_TO_SMP = "handed to ShadowMount+";
+
+function installDetailsLostText(): string {
+  return trStatic("queue_install_details_lost", "This install can't run: its details were not kept.");
+}
+
+function removedFromQueueText(): string {
+  return trStatic("pkg.removed_from_queue", "Removed from the queue.");
+}
+
 export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
   // A render loop elsewhere in the UI must not fail a transfer (lib/renderLoopGuard). The stack
   // is logged once per run of loops, which is what a bug report needs to find the component.
@@ -1056,7 +1071,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       await sleep(CANCEL_SETTLE_MS);
       if (!isLive()) throw new Error("queue stopped");
     }
-    throw new Error("The previous transfer of this item is still stopping. Try again in a moment.");
+    throw new Error(trStatic("queue_prev_stopping", "The previous transfer of this item is still stopping. Try again in a moment."));
   };
 
   /** Schedule a debounced whole-document save. Idempotent — multiple
@@ -1093,7 +1108,11 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           const message = e instanceof Error ? e.message : String(e);
           console.error("[upload-queue] save failed:", e);
           set({
-            persistenceError: `Queue changes could not be saved: ${message}. Keep the app open and free disk space or fix permissions before retrying.`,
+            persistenceError: tx(
+              "queue_save_failed",
+              { error: message },
+              "Queue changes could not be saved: {error}. Keep the app open and free disk space or fix permissions before retrying.",
+            ),
           });
         });
     }, SAVE_DEBOUNCE_MS);
@@ -1219,7 +1238,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
   const runInstallItem = async (item: QueueItem, isLive: () => boolean) => {
     const exec = getInstallExecutor();
     if (!exec || !item.install) {
-      throw new Error("This install can't run: its details were not kept.");
+      throw new Error(installDetailsLostText());
     }
     // A PS5 installs one package at a time, whichever device asks (8.0.0): wait while another
     // device's install holds the console. An older helper has no locks and this goes straight on.
@@ -1236,7 +1255,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
     item: QueueItem,
     isLive: () => boolean,
   ): Promise<() => Promise<void>> => {
-    const label = `Installing ${item.displayName}`.slice(0, 110);
+    const label = tx("pkg.task_installing", { name: item.displayName }, "Installing {name}").slice(0, 110);
     for (;;) {
       const turn = await takeMeshLock(h, "install", label);
       if (turn.ok) {
@@ -1246,16 +1265,34 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       set((s) => ({
         items: patchItem(s.items, item.id, {
           installPhase: "installing",
-          installNote: `Waiting for ${turn.byName}: ${turn.label || "installing"} on this console`,
+          installNote: turn.label
+            ? tx("queue_waiting_for_device_doing", { who: turn.byName, what: turn.label }, "Waiting for {who}: {what} on this console")
+            : tx("queue_waiting_for_device", { who: turn.byName }, "Waiting for {who} to finish installing on this console"),
         }),
       }));
       await new Promise((r) => setTimeout(r, 5_000));
-      if (!isLive()) throw new Error(`Stopped while waiting for ${turn.byName} to finish installing`);
+      if (!isLive()) throw new Error(tx("queue_stopped_waiting", { who: turn.byName }, "Stopped while waiting for {who} to finish installing"));
     }
   };
 
+  /** A folder job goes on under its id, and the console's journal then skips what it wrote: not
+   *  when that has been deleted since ("free up space, then Retry"), or it would land with those
+   *  files missing. */
+  const startOverIfTreeGone = async (item: QueueItem) => {
+    const txIdHex = await resumableTxId(
+      item.addr,
+      item.resolvedDest,
+      item.txIdHex,
+      generateTxIdHex,
+      (addr, path) => fsListDir(addr, path),
+    );
+    if (txIdHex === item.txIdHex) return;
+    item.txIdHex = txIdHex;
+    set((s) => ({ items: patchItem(s.items, item.id, { txIdHex }) }));
+  };
+
   const runInstallItemHeld = async (item: QueueItem, exec: NonNullable<ReturnType<typeof getInstallExecutor>>) => {
-    if (!item.install) throw new Error("This install can't run: its details were not kept.");
+    if (!item.install) throw new Error(installDetailsLostText());
     set((s) => ({
       items: patchItem(s.items, item.id, {
         installPhase: "installing",
@@ -1303,7 +1340,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       bytesPerSec: 0,
       mountedAt: null,
       mountWarnings: r.mayNotLaunch
-        ? ["Installed, but it may not launch on this firmware."]
+        ? [trStatic("queue_may_not_launch", "Installed, but it may not launch on this firmware.")]
         : [],
       registeredAs: null,
       installPhase: (r.mayNotLaunch ? "warn" : "done") as QueueItem["installPhase"],
@@ -1324,11 +1361,19 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
     // Writing into a folder another device writes into too (8.0.0): say so, and go on: two
     // uploads into one folder are allowed, only the user knows whether they collide.
     const h = hostOf(item.addr);
-    const write = await takeMeshLock(h, `write:${item.resolvedDest}`, `Uploading ${item.displayName}`.slice(0, 110));
+    const write = await takeMeshLock(
+      h,
+      `write:${item.resolvedDest}`,
+      tx("queue_task_uploading", { name: item.displayName }, "Uploading {name}").slice(0, 110),
+    );
     if (!write.ok) {
       useToastStore.getState().push({
         tone: "warn",
-        message: `${write.byName} is also writing here (${write.label || item.resolvedDest}).`,
+        message: tx(
+          "queue_also_writing",
+          { who: write.byName, what: write.label || item.resolvedDest },
+          "{who} is also writing here ({what}).",
+        ),
       });
     }
     try {
@@ -1437,9 +1482,9 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           bandwidthCap,
         );
       }
-    } else if (isFolder && item.strategy === "resume" && !isRemotePath(item.sourcePath)) {
-      // (A folder on a saved server always takes the plain folder upload below: the resume
-      // walk compares against local disk. The transfer itself still resumes by tx id.)
+    } else if (isFolder && item.strategy === "resume") {
+      await startOverIfTreeGone(item);
+      // (A folder on a saved server too: the engine walks it through its own connection.)
       // Pass the persisted tx_id so a Resume after app restart
       // picks up the payload's existing journal entry instead of
       // minting a fresh tx and re-sending everything.
@@ -1523,6 +1568,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
     // When bytes last moved, for the "nothing is moving" note on the row.
     let lastBytes = -1;
     let lastMoveAt = startedAtMs;
+    let lastMoved = "";
 
     // Consecutive status reads that failed. One failed read (engine busy, the
     // 60 s fetch timeout, a proxy blip) says nothing about the transfer, which
@@ -1633,16 +1679,17 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
               const r = await smpManualInstall(mgmt, finalDest);
               handedToSmp = true;
               mountedAt = r.added
-                ? "handed to ShadowMount+"
+                ? HANDED_TO_SMP
                 : "already in ShadowMount+ list";
             } catch (e) {
               // Still fall back — an unmounted image helps nobody — but say
               // so, because this mount may later fight ShadowMount+.
               mountWarnings.push(
-                `ShadowMount+ is running but the hand-off failed (${
-                  e instanceof Error ? e.message : String(e)
-                }). Mounted it directly instead — if ShadowMount+ also picks ` +
-                  `it up you may see a duplicate or a blocked title.`,
+                tx(
+                  "queue_smp_handoff_failed",
+                  { error: e instanceof Error ? e.message : String(e) },
+                  "ShadowMount+ is running but the hand-off failed ({error}). It was mounted directly instead. If ShadowMount+ also picks it up, you may see a duplicate or a blocked title.",
+                ),
               );
             }
           }
@@ -1661,21 +1708,29 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
               // Library row's Mount button shows.
               if (mounted.layout_valid === false) {
                 mountWarnings.push(
-                  "Image is missing sce_sys/param.json at root — Register/Launch will fail. Re-build the image with files at root (no extra folder).",
+                  trStatic(
+                    "queue_image_no_param",
+                    "The image has no sce_sys/param.json at its root, so adding it to the home screen and starting it will fail. Build the image again with the files at its root (no extra folder).",
+                  ),
                 );
               }
               if (mounted.kernel_ro && !item.mountReadOnly) {
                 mountWarnings.push(
-                  "Kernel mounted this read-only despite the RW pick — common for UFS .ffpkg images on some firmwares. Reads work; writes through the mount will fail.",
+                  trStatic(
+                    "queue_mounted_read_only",
+                    "The PS5 mounted this read-only, although read-write was picked. This is common for UFS .ffpkg images on some firmwares. Reads work; writes through the mount will fail.",
+                  ),
                 );
               }
             } catch (e) {
               // Post-upload step: the transfer already committed, so this is
               // not something re-sending the bytes can fix.
               const wrapped = new PostUploadStepError(
-                `upload completed, but mount failed: ${
-                  e instanceof Error ? e.message : String(e)
-                }`,
+                tx(
+                  "queue_mount_failed",
+                  { error: e instanceof Error ? e.message : String(e) },
+                  "The upload finished, but the mount failed: {error}",
+                ),
               );
               // Preserve the original error so downstream consumers can
               // inspect the underlying mount failure (eslint's
@@ -1712,9 +1767,11 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
               : res.title_id;
           } catch (e) {
             mountWarnings.push(
-              `Couldn't add it to the home screen automatically: ${
-                e instanceof Error ? e.message : String(e)
-              }. You can still do it from the Library.`,
+              tx(
+                "queue_register_failed",
+                { error: e instanceof Error ? e.message : String(e) },
+                "Couldn't add it to the home screen automatically: {error}. You can still do it from the Library.",
+              ),
             );
           }
         }
@@ -1809,7 +1866,11 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
                     Math.floor((installedBytes / total) * 100),
                   );
                   pkgStore.setState({
-                    busyNotice: `Installing "${item.displayName}" on the PS5… ${pct}%`,
+                    busyNotice: tx(
+                      "queue_installing_notice",
+                      { name: item.displayName, pct },
+                      "Installing \"{name}\" on the PS5… {pct}%",
+                    ),
                   });
                 }
                 feedRow(sample);
@@ -1845,7 +1906,10 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
               recordPkgInstalled(hostOf(item.addr), finalDest);
               if (r.mayNotLaunch) {
                 mountWarnings.push(
-                  "Installed, but it may not launch on this firmware — re-install it from Upload & Install if it won't start.",
+                  trStatic(
+                    "queue_may_not_launch_reinstall",
+                    "Installed, but it may not launch on this firmware. If it won't start, install it again from Upload & Install.",
+                  ),
                 );
               }
               // Free the staging copy on success (default on). Best-effort —
@@ -1898,7 +1962,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
               // re-upload the whole package (a user watched a 5.93 GiB update
               // restart itself six seconds after an install error, unasked).
               throw new PostUploadStepError(
-                r.errMessage || "Install was rejected.",
+                r.errMessage || trStatic("pkg.rejected", "The install was rejected."),
               );
             }
           } catch (e) {
@@ -1995,13 +2059,16 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       // Speed is this run's: the resumed part was already there and arrives in one jump.
       pushRateSample(samples, now, runBytes(bytesSent, resumedBytes));
       const bytesPerSec = computeRate(samples, now);
-      if (bytesSent !== lastBytes) {
-        lastBytes = bytesSent;
+      // Hashing before the send and the skip phase of a resumed archive are work too.
+      const moved = `${bytesSent}/${snap.skip_done_bytes ?? 0}/${snap.stage?.id ?? ""}/${snap.stage?.done ?? 0}`;
+      if (moved !== lastMoved) {
+        lastMoved = moved;
         lastMoveAt = now;
       }
       const totalNow = snap.total_bytes ?? 0;
       // Everything sent and the console making it durable is not a stall.
-      const sending = !(totalNow > 0 && bytesSent >= totalNow);
+      // Nor is a walk that has no total yet: restarting it only starts it over.
+      const sending = totalNow > 0 && bytesSent < totalNow;
       const stalledForMs = sending && now - lastMoveAt >= STALL_AFTER_MS ? now - lastMoveAt : null;
       set((s) => ({
         items: patchItem(s.items, item.id, {
@@ -2357,7 +2424,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           // promptly instead of leaving a ghost push running.
           // Not when only the status reads failed: the transfer may still be running on the
           // helper, so re-send it only if it no longer answers (the retry then adopts the job).
-          const forceRedeploy = !(e instanceof Error && lostContactErrors.has(e));
+          const forceRedeploy =
+            !(e instanceof Error && lostContactErrors.has(e)) && recoveryResendsHelper(reason);
           try {
             // Unattended: a console whose helper the user stopped is left alone (#471).
             await ensurePayloadCurrent(
@@ -2615,8 +2683,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
             trStatic("queue_links_cleared_title", "Queued links were cleared"),
             {
               body: trStatic(
-                "queue_links_cleared_body_v2",
-                "{n} install link(s) weren't kept after restart — links are never saved to disk. Add them again from Upload & Install.",
+                "queue_links_cleared_body_v3",
+                "{n} install link(s) weren't kept after the restart. Add them again from Upload & Install.",
               ).replace("{n}", String(dropped)),
             },
           );
@@ -2644,7 +2712,11 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
         const message = e instanceof Error ? e.message : String(e);
         set({
           loaded: true,
-          persistenceError: `The saved upload queue could not be loaded: ${message}. The original queue file was left untouched.`,
+          persistenceError: tx(
+            "queue_load_failed",
+            { error: message },
+            "The saved upload queue could not be loaded: {error}. The original queue file was left untouched.",
+          ),
         });
       }
     },
@@ -2713,7 +2785,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       ) {
         return {
           ok: false,
-          message: "Retry via upload works only for a file on this computer.",
+          message: trStatic("queue_retry_upload_local_only", "Retry via upload works only for a file on this computer."),
         };
       }
       const source = it.install.source;
@@ -2782,7 +2854,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
     },
 
     remove(id) {
-      settle(id, { ok: false, message: "Removed from the queue." });
+      settle(id, { ok: false, message: removedFromQueueText() });
       // A failed item keeps its server copy for a retry; removing it is the last use. That
       // covers a copy made at pick time (Upload screen) too, which the item names directly.
       const removed = get().items.find((it) => it.id === id);
@@ -2830,7 +2902,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
         })();
         return;
       }
-      settle(id, { ok: false, message: "Removed from the queue." });
+      settle(id, { ok: false, message: removedFromQueueText() });
       const h = hostOf(item.addr);
       // A pending / done / failed item isn't touching the wire — just drop it.
       // (Pending removal also keeps the drain loop from ever claiming it.)
@@ -2949,7 +3021,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       const keptOfMine = cleared.filter((it) => isInstallWork(it) && it.status === "running");
       const keep = get().items.filter((it) => !mine(it) || keptOfMine.includes(it));
       for (const it of cleared) {
-        if (!keep.includes(it)) settle(it.id, { ok: false, message: "Removed from the queue." });
+        if (!keep.includes(it)) settle(it.id, { ok: false, message: removedFromQueueText() });
       }
       const notice = clearNotice(cleared, keptOfMine);
       if (notice) {
@@ -3198,8 +3270,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
                     withConsolePrefix(
                       h,
                       ack.ok
-                        ? "Uploads done — entering rest mode"
-                        : "Uploads done — couldn't enter rest mode",
+                        ? trStatic("queue_rest_entering", "Uploads done. Entering rest mode.")
+                        : trStatic("queue_rest_failed", "Uploads done, but the PS5 did not enter rest mode."),
                     ),
                     ack.ok
                       ? undefined
@@ -3297,7 +3369,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
   // A tab that is not the runner shows the queue and changes nothing: every action is a no-op
   // with the neutral answer its caller expects (see lib/queueLeader).
   const readOnlyMessage =
-    "The queue is running in another tab of this browser. Use that tab to change it.";
+    trStatic("queue_other_tab", "The queue is running in another tab of this browser. Use that tab to change it.");
   const refusals: Partial<Record<keyof QueueState, () => unknown>> = {
     add: () => undefined,
     enqueueInstall: () => ({
@@ -3340,6 +3412,19 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
 // pkgLibrary queues installs through the bridge (it can't import this module).
 registerInstallEnqueuer((input) => useUploadQueueStore.getState().enqueueInstall(input));
 registerPkgQueueApi({
+  queuedInstallPaths(host) {
+    const h = hostOf(host);
+    return useUploadQueueStore
+      .getState()
+      .items.flatMap((it) =>
+        (it.status === "pending" || it.status === "running") &&
+        hostOf(it.addr) === h &&
+        it.install &&
+        (it.install.via === "library" || it.install.via === "console-path")
+          ? [it.install.path]
+          : [],
+      );
+  },
   add(item) {
     // A tab that is not the queue's runner adds nothing (its add returns no id).
     const id = useUploadQueueStore.getState().add(item);

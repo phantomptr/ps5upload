@@ -9,7 +9,7 @@
 // Parts of a folder merged into an existing one (`<dest>/<file>.ava-part`) are named only by the
 // console's job journal, so the helper's job sweep removes those.
 
-import { fsDelete, fsListDir, jobStatus, resumeTxidForget } from "../api/ps5";
+import { fsDelete, fsListDir, jobCancel, jobStatus, resumeTxidForget } from "../api/ps5";
 import type { QueueItem } from "../state/uploadQueue";
 import { hostOf } from "./addr";
 import { removeUploadPart, type UploadPartDeps } from "./uploadPart";
@@ -24,6 +24,7 @@ const LATE_SWEEP_MS = 15_000;
 
 export interface LeftoverDeps extends UploadPartDeps {
   jobRunning: (jobId: string) => Promise<boolean>;
+  cancelJob?: (jobId: string) => Promise<void>;
   forgetResumeId: (host: string, src: string, dest: string) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
 }
@@ -38,6 +39,7 @@ const realDeps: LeftoverDeps = {
       return false; // the engine no longer knows it
     }
   },
+  cancelJob: (jobId) => jobCancel(jobId),
   forgetResumeId: (host, src, dest) => resumeTxidForget(host, src, dest),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 };
@@ -102,10 +104,15 @@ export async function discardUploadLeftovers(
     if (it.sourceKind !== "folder" && it.sourceKind !== "game-folder" && it.sourceKind !== "archive") {
       await deps.forgetResumeId(hostOf(it.addr), it.sourcePath, dest).catch(() => undefined);
     }
-    if (it.status !== "running") {
+    // A row left over from before a window reload can have a job still sending: removing the row
+    // is the person's way of stopping it, and nothing else would.
+    const orphanJob =
+      it.status !== "running" && it.interrupted && it.jobId && (await deps.jobRunning(it.jobId));
+    if (it.status !== "running" && !orphanJob) {
       await sweep();
       return;
     }
+    if (orphanJob && it.jobId) await deps.cancelJob?.(it.jobId).catch(() => undefined);
     if (it.jobId) {
       let running = true;
       for (let i = 0; running && i < JOB_END_TRIES; i++) {

@@ -130,9 +130,9 @@ export function LinkInstallCard({
       </header>
       <p className="mb-3 text-xs text-[var(--color-muted)]">
         {tr(
-          "linkcard.help",
+          "linkcard.help2",
           undefined,
-          "Paste a direct download link to a .pkg. Nothing is copied to the PS5 first, so a 100 GB game needs no spare space there.",
+          "Paste a direct download link to a .pkg. Nothing is copied to the PS5 first, so it needs room only for the installed game, not for a copy as well.",
         )}
       </p>
 

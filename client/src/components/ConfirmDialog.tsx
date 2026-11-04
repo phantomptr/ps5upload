@@ -41,6 +41,9 @@ export interface ConfirmOptions {
   /** When true, the confirm button uses the destructive (red)
    *  variant — appropriate for delete/unmount/discard actions. */
   destructive?: boolean;
+  /** Close as a Cancel after this long: a question nobody is there to answer must not hold up
+   *  work behind it. */
+  cancelAfterMs?: number;
 }
 
 interface PendingState extends ConfirmOptions {
@@ -118,6 +121,9 @@ export function useConfirm(): {
       }
     };
     window.addEventListener("keydown", handler);
+    const expiry = pending.cancelAfterMs
+      ? setTimeout(() => settle(false), pending.cancelAfterMs)
+      : undefined;
     // Escape goes through the shared modal stack so it closes only this
     // dialog, not a Modal it was opened from.
     const releaseTrap = activateFocusTrap(() => panelRef.current, window, {
@@ -128,6 +134,7 @@ export function useConfirm(): {
     });
     return () => {
       window.removeEventListener("keydown", handler);
+      if (expiry) clearTimeout(expiry);
       releaseTrap();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

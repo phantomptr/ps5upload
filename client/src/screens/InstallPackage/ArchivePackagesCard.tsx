@@ -22,6 +22,7 @@ import {
   downloadArchiveParts,
   parseArchiveLinks,
   stopArchiveDownload,
+  stopArchiveUnpack,
   type ArchiveLinkDeps,
   runArchiveInstall,
   submitArchivePassword,
@@ -388,6 +389,18 @@ export function ArchivePackagesCard({ host }: { host: string }) {
             phase.count > 0 && (
               <ProgressBar value={(phase.index - 1) / phase.count} size="sm" />
             )}
+          {st?.unpackJob && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-2"
+              disabled={st.stopRequested}
+              onClick={() => void stopArchiveUnpack(host)}
+              data-testid="archive-packages-stop"
+            >
+              {tr("stop", undefined, "Stop")}
+            </Button>
+          )}
           <p className="mt-1 text-[11px] text-[var(--color-muted)]">
             {tr(
               "arcpkg.keepsRunning",

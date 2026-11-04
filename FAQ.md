@@ -1943,7 +1943,7 @@ often keeps the ordinary `.pkg` extension) in the same drop zone as everything e
 offers the two ways a package can reach the PS5:
 
 - **Stream & install** (recommended): the PS5 installs straight from this computer. No copy is
-  put on the PS5 first, so it needs no spare space there. This is the most reliable way.
+  put on the PS5 first, so it needs room only for the installed game. This is the most reliable way.
 - **Upload & install**: the package is copied to the PS5 first
   (`/user/data/ps5upload/pkg_library/`), then installed from that copy. The copies stay listed
   under **Already on the PS5**, each with **Install**, **Reinstall** and **Delete**.
@@ -2291,7 +2291,8 @@ Open your phone's Files app → Downloads and look for the title ID/game name.
 **Save to USB** is a separate action using the configured PS5 USB backup path.
 
 **Q: Can I install a split package (`*.0`, `*.1`, …)?**
-Not through Upload & Install: it installs a single package file. Pick the single lead `.pkg`.
+No. An install takes one package file, and the parts of a split package are not one on their own.
+Join the parts into one `.pkg` first.
 
 **Q: Where do uploaded packages live, and are they cleaned up?**
 At `/user/data/ps5upload/pkg_library/<ContentID>.pkg`, and they stay so you can reinstall. Remove

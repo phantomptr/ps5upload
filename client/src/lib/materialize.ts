@@ -11,10 +11,19 @@ import { trStatic } from "./trStatic";
 
 /** Local copies this app made of server files, so only those are ever cleaned up. */
 const copies = new Set<string>();
+/** The local copy of a server file, while it is still ours (a later upload of it reuses it). */
+const copyOfRemote = new Map<string, string>();
+
+/** A copy already made of this server file, or null. */
+export function existingCopyOf(remotePath: string): string | null {
+  const local = copyOfRemote.get(remotePath);
+  return local && copies.has(local) ? local : null;
+}
 
 /** Remove a copy made by `materializeRemote` once nothing needs it. Anything else is left alone. */
 export async function releaseCopy(path: string): Promise<void> {
   if (!copies.delete(path)) return;
+  for (const [remote, local] of copyOfRemote) if (local === path) copyOfRemote.delete(remote);
   await remoteApi.cleanupFetched(path).catch(() => {});
 }
 

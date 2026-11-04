@@ -2225,8 +2225,8 @@ function ExistingDestinationDialog({
             >
               {hasExisting
                 ? tr(
-                    "upload_override_desc",
-                    "Replace everything — re-send the entire source.",
+                    "upload_override_desc2",
+                    "Sends everything again. Files with the same name are replaced. Other files already there stay.",
                   )
                 : tr("upload_start_desc", "Send all files to the PS5.")}
             </span>

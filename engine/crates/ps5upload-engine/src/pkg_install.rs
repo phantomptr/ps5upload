@@ -1599,13 +1599,6 @@ async fn parse_remote_handler(remote_path: &str) -> Response<Body> {
 pub struct InstallStartRequest {
     /// PS5 address, e.g. "192.168.1.42" (a `:port` suffix is dropped).
     pub ps5_addr: String,
-    /// Proceed with a staged re-install of an already-installed full game.
-    ///
-    /// Off by default because that path is destructive on failure (see the
-    /// guard in `install_start_handler`). A caller that has explicitly warned
-    /// the user may set it.
-    #[serde(default)]
-    pub allow_destructive_reinstall: bool,
     /// Skip TLS certificate verification when THIS COMPUTER downloads the
     /// package from `remote_url`. Per install, never global, default off.
     ///
@@ -3225,7 +3218,7 @@ mod remote_type_tests {
 }
 
 /// Open a package on a saved server and read its header through ranges.
-async fn open_remote_package(
+pub(crate) async fn open_remote_package(
     remote_path: &str,
 ) -> Result<
     (
@@ -3379,7 +3372,6 @@ async fn remote_probe_handler(Json(req): Json<RemoteProbeRequest>) -> Response<B
     }
     let probe_req = InstallStartRequest {
         ps5_addr: String::new(),
-        allow_destructive_reinstall: false,
         // The same certificate choice as the install this read is for.
         insecure_tls: req.insecure_tls,
         path: None,
@@ -3451,7 +3443,6 @@ async fn console_probe_handler(Json(req): Json<ConsoleProbeRequest>) -> Response
     let url = format!("ps5://{host}{path}");
     let probe_req = InstallStartRequest {
         ps5_addr: String::new(),
-        allow_destructive_reinstall: false,
         insecure_tls: false,
         path: None,
         split_root: None,
@@ -3960,7 +3951,12 @@ pub(crate) fn engine_origin_for_ps5(ps5_addr: &str) -> std::io::Result<String> {
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(19113),
     };
-    Ok(format!("http://{local_ip}:{host_port}"))
+    // An IPv6 address needs its brackets, or the port reads as part of it.
+    Ok(if local_ip.is_ipv6() {
+        format!("http://[{local_ip}]:{host_port}")
+    } else {
+        format!("http://{local_ip}:{host_port}")
+    })
 }
 
 // ─── Short aliases for over-long install links ───────────────────────
@@ -4308,9 +4304,16 @@ mod persist_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let pkg = dir.join("game.pkg");
         std::fs::write(&pkg, vec![7u8; 64]).unwrap();
-        let first = session("rival-a", pkg.clone(), 64);
+        let mut first = session("rival-a", pkg.clone(), 64);
         let mut again = session("rival-b", pkg.clone(), 64);
+        // No console has asked it for anything: a session kept after a lost reply lets a retry on.
+        assert!(!is_rival(&first, &again, now_unix()));
+        first.requests_served = 1;
         assert!(is_rival(&first, &again, now_unix()));
+        // All of it delivered: nothing left to pull while it waits to be released.
+        first.transfer.mark(0, 63);
+        assert!(!is_rival(&first, &again, now_unix()));
+        first.transfer = TransferCoverage::new(64);
         again.ps5_mgmt_addr = "1.2.3.5:9120".into();
         assert!(!is_rival(&first, &again, now_unix()));
         let _ = std::fs::remove_dir_all(&dir);

@@ -1,7 +1,8 @@
 import { installPathFallbackOptions } from "./installPathFallback";
 import { displayPath, isRemotePath } from "../lib/remotePath";
 import { useConnectionsStore } from "./connections";
-import { trStatic } from "../lib/trStatic";
+import { staticTranslator as tx, trStatic } from "../lib/trStatic";
+import { askInstall } from "./installAsk";
 import { declineDetails } from "../lib/installDecline";
 import { isInstallPackagePath } from "../lib/pkgDropDedupe";
 import { useStore } from "zustand";
@@ -180,7 +181,7 @@ export function installedLastResult(mayNotLaunch: boolean): {
 } {
   return mayNotLaunch
     ? { ok: true, warn: true, message: PKG_MAY_NOT_LAUNCH_MESSAGE }
-    : { ok: true, message: "Installed package verified on the console." };
+    : { ok: true, message: trStatic("pkg.verified_on_console", "Installed package verified on the console.") };
 }
 
 /** Human guidance for a unified-status `reason` (the machine-readable failure
@@ -192,9 +193,9 @@ export function installedLastResult(mayNotLaunch: boolean): {
  *  fill in when the engine gave no detail. */
 const REASON_GUIDANCE: Record<string, [string, string, boolean]> = {
   loader_unreachable: [
-    "pkg.reason.loader_unreachable",
-    "The PS5's payload loader wasn't reachable — reload it and retry.",
-    false,
+    "pkg.reason.loader_down",
+    "The PS5's payload loader did not answer. If the PS5 is off or in rest mode, wake it. Otherwise load elfldr on it, then try again.",
+    true,
   ],
   no_bringup: [
     "pkg.reason.no_bringup",
@@ -212,8 +213,28 @@ const REASON_GUIDANCE: Record<string, [string, string, boolean]> = {
     false,
   ],
   destructive_guard: [
-    "pkg.reason.destructive_guard",
-    "This would erase the installed game first; re-run allowing a destructive re-install.",
+    "pkg.reason.replaces_game",
+    "This game is installed already. Reinstalling removes the installed copy first, and if the install fails, no copy is left. Nothing was changed.",
+    true,
+  ],
+  busy: [
+    "pkg.reason.busy",
+    "Another install is running on this PS5. Wait for it to finish, then try again.",
+    true,
+  ],
+  base_missing: [
+    "pkg.reason.base_missing",
+    "This update or add-on needs its base game, and the base game is not on this PS5. Install the base game first.",
+    true,
+  ],
+  image_mounted: [
+    "pkg.reason.image_mounted",
+    "This game is on the PS5 as a game image or folder. Move that out of the scan folder first, then install.",
+    true,
+  ],
+  reply_lost: [
+    "pkg.reason.reply_lost",
+    "The install was sent, but the PS5's answer never came back. It may be installing, so check Downloads on the PS5 before you try again. The package was kept.",
     true,
   ],
   bad_request: [
@@ -227,8 +248,8 @@ const REASON_GUIDANCE: Record<string, [string, string, boolean]> = {
     false,
   ],
   stalled: [
-    "pkg.reason.stalled",
-    "The PS5 stopped fetching the package before it finished. The package was kept — try again.",
+    "pkg.reason.stalled_kept",
+    "The PS5 has not asked for the package for 5 minutes. If its download is paused, it can still resume. Otherwise try again. The package was kept.",
     true,
   ],
   stream_unreachable: [
@@ -248,14 +269,25 @@ const REASON_GUIDANCE: Record<string, [string, string, boolean]> = {
   ],
 };
 
-function reasonGuidance(reason: string | null): string {
+function reasonGuidance(reason: string | null, replaces?: string | null): string {
+  if (reason === "destructive_guard" && replaces === "update") return reapplyUpdateText();
   const g = reason ? REASON_GUIDANCE[reason] : undefined;
   return g ? trStatic(g[0], g[1]) : "";
+}
+
+function reapplyUpdateText(): string {
+  return trStatic(
+    "pkg.reason.replaces_update",
+    "The game already has this update or a newer one. Applying it again can undo it. Nothing was changed.",
+  );
 }
 
 function hexCode(code: number): string {
   return `0x${(code >>> 0).toString(16).padStart(8, "0")}`;
 }
+
+/** Not the engine's: what the client calls an install whose job the engine no longer knows. */
+const JOB_LOST = "job_lost";
 
 /** Map the engine's unified terminal `InstallStatus` onto the outcome the UI
  *  already renders. The engine now owns guard/deliver/DPI/restore/verify, so
@@ -270,14 +302,40 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
   const installed = st.verdict === "installed" || st.verdict === "may_not_launch";
   const mayNotLaunch = st.verdict === "may_not_launch";
   let errMessage = "";
+  // The person's own Stop: said plainly, and not as a failure.
+  if (st.reason === "cancelled") {
+    return {
+      installed: false,
+      stopped: true,
+      mayNotLaunch: false,
+      errMessage: trStatic("pkg.stopped", "The install was stopped."),
+    };
+  }
+  if (st.reason === JOB_LOST) {
+    return {
+      installed: false,
+      unverified: true,
+      mayNotLaunch: false,
+      errMessage: trStatic(
+        "pkg.engine_lost_job",
+        "This app's engine restarted during the install and can no longer follow it. The PS5 may still be installing, so check Downloads there. The package was kept.",
+      ),
+    };
+  }
   if (st.verdict === "unverified") {
     const minutes = Math.max(1, Math.round((st.metrics.phase_ms?.verify ?? 0) / 60_000));
     errMessage =
       st.patch_verdict === null
-        ? trStatic(
-            "pkg.link_unverified",
-            "The PS5 took the link and downloads it by itself. Check Downloads on the PS5 to see how it went.",
-          )
+        ? st.metrics.served_bytes > 0
+          ? tx(
+              "pkg.base_unverified",
+              { minutes },
+              "The PS5 has the whole package, but it had not shown up as installed after {minutes} min. It may still be installing, so check Downloads on the PS5. The package was kept.",
+            )
+          : trStatic(
+              "pkg.link_unverified",
+              "The PS5 took the link and downloads it by itself. Check Downloads on the PS5 to see how it went.",
+            )
         : trStatic(
             "pkg.patch_unverified",
             "The PS5 accepted this update, but the game's version had not changed after {minutes} min. It may still be installing, so check Downloads on the PS5. The package was kept. If the version never changes, the update does not match the installed base game: re-install the base game from its own package, then apply the update again.",
@@ -313,7 +371,7 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
         !engineHostIpHint &&
         !engineNetDiag &&
         (st.reason ? REASON_GUIDANCE[st.reason]?.[2] : false);
-      const guidance = reasonGuidance(st.reason);
+      const guidance = reasonGuidance(st.reason, st.replaces);
       // 0x80B21104: Sony would not accept this particular package (other packages install on
       // the same console). Not the package's required-firmware field: a package demanding FW
       // 14.00 installed on a 13.60 console in testing. Seen with new PS5 games on FW 9.60.
@@ -352,12 +410,18 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
  *  do not split transfer bytes from install bytes, so both progress fields read
  *  the same served/total counters (the max of them never runs backwards). */
 export function sampleFromStatus(st: InstallStatus): InstallSample {
+  // Resolve is this engine checking things: nothing is moving. A console reading its own copy
+  // is not a stream to it.
   const phase =
-    st.phase === "resolve" || st.phase === "deliver"
-      ? "download"
-      : st.phase === "install" || st.phase === "verify"
-        ? "install"
-        : st.phase; // done | failed
+    st.phase === "resolve"
+      ? "queued"
+      : st.phase === "deliver"
+        ? st.route === "loopback"
+          ? "install"
+          : "download"
+        : st.phase === "install" || st.phase === "verify"
+          ? "install"
+          : st.phase; // done | failed
   const served = st.metrics.served_bytes;
   const past = st.phase === "install" || st.phase === "verify" || st.phase === "done";
   return {
@@ -385,11 +449,28 @@ export function installSpaceWarning(
 ): string | null {
   if (freeBytes == null || neededBytes <= 0) return null;
   if (neededBytes <= freeBytes) return null;
-  return `Not enough free space to install ${label}: it needs about ${formatBytes(
-    neededBytes,
-  )}, but only ${formatBytes(
-    freeBytes,
-  )} is free on the PS5. Free up space (uninstall a game, or clear staged packages) and try again. Note: this is an estimate — the installed size can be a bit larger.`;
+  return tx(
+    "pkg.space_warning",
+    { label, need: formatBytes(neededBytes), free: formatBytes(freeBytes) },
+    "{label} needs about {need} to install, but the roomiest drive on the PS5 has {free} free. This is an estimate, so it may still fit. If not, free up space (uninstall a game, or clear staged packages) and try again.",
+  );
+}
+
+/** Whether to go on with an install that looks too big: the person decides, since the size is an
+ *  estimate. Returns the warning when the answer is no (or nobody answered), else null. */
+async function declinedForSpace(
+  host: string,
+  label: string,
+  neededBytes: number,
+): Promise<string | null> {
+  const warning = installSpaceWarning(label, neededBytes, await installFreeBytes(transferAddr(host)));
+  if (!warning) return null;
+  const go = await askInstall({
+    title: tx("pkg.space_ask_title", { label }, "Not enough space for {label}?"),
+    message: warning,
+    confirmLabel: trStatic("pkglib.baseMissing.installAnyway", "Install anyway"),
+  });
+  return go ? null : warning;
 }
 
 export type PkgStatus = "idle" | "queued" | "uploading" | "installing";
@@ -689,6 +770,22 @@ export function pkgRowInstalled(
         : "base";
   if (artifacts) {
     const candidates = artifacts.filter((a) => a.kind === kind);
+    const wanted = (entry.fingerprint ?? "").toLowerCase();
+    // These exact bytes anywhere for the title are this package, whatever its category says: a PS5
+    // update that carries the whole app lands as the app (the engine's `exact_bytes_installed`).
+    if (/^[a-f0-9]{33,}$/.test(wanted) && artifacts.some((a) => a.fingerprint.toLowerCase() === wanted)) {
+      return true;
+    }
+    // A PS5 debug package lands as its inner image, with another size and fingerprint: its
+    // content id on the same kind of file is the proof (the engine's `artifact_identity_matches`).
+    const ps5 = platformFromTitleId(entry.titleId) === "ps5";
+    if (
+      ps5 &&
+      entry.contentId &&
+      candidates.some((a) => a.contentId === entry.contentId && a.size > 0)
+    ) {
+      return true;
+    }
     const exact = candidates.some((a) => {
       if (entry.fingerprint) {
         const expected = entry.fingerprint.toLowerCase();
@@ -711,7 +808,17 @@ export function pkgRowInstalled(
     if (exact) return true;
     // A successful live inventory is authoritative. In particular, a base
     // title plus a different patch variant must not be labelled Reinstall.
-    if (isAddonCategory(entry.category)) return false;
+    // The exception is what it cannot see: a PS5 update this app installed can land inside the
+    // app itself, with no file of its own to find.
+    if (isAddonCategory(entry.category)) {
+      return (
+        ps5 &&
+        !!entry.installedHere &&
+        candidates.length === 0 &&
+        !!entry.titleId &&
+        installedTitleIds.has(entry.titleId)
+      );
+    }
   } else if (entry.installedHere) {
     // Transitional/legacy hint only while the live inventory is still loading.
     return true;
@@ -1283,6 +1390,10 @@ export interface PkgInstallOutcome {
   /** Windows: the adapter facing the console and its network category, when the console could
    *  not reach this computer. The row offers the fixes it implies. */
   netDiag?: NetDiag;
+  /** It never started: it looked too big and nobody said to go on. */
+  noSpace?: boolean;
+  /** The person stopped it. Not a failure to report. */
+  stopped?: boolean;
 }
 
 /**
@@ -1306,8 +1417,8 @@ const PKG_VERIFY_POLL_MS = 2_500;
 const READY_POLL_MS = 1_500;
 /** Cap on each readiness wait. We never hard-block forever — if the probe can't
  *  clear (e.g. an older payload that can't report registered apps), attempting
- *  the install is better than refusing to try, and the DPI transient-retry is
- *  the real safety net for a genuinely-busy console. Kept modest (30s) so a
+ *  the install is better than refusing to try, and `driveUnifiedInstall`'s retry of
+ *  the transient refusal is the safety net for a genuinely-busy console. Kept modest (30s) so a
  *  console whose probe never clears adds a bounded delay, not a 90s stall; the
  *  real post-install blip settles well within this. */
 const READY_WAIT_TIMEOUT_MS = 30_000;
@@ -1325,15 +1436,25 @@ export async function waitForConsoleReady(
   opts: { timeoutMs?: number; onWait?: (elapsedMs: number) => void } = {},
 ): Promise<boolean> {
   const timeoutMs = opts.timeoutMs ?? READY_WAIT_TIMEOUT_MS;
-  const maxAttempts = Math.max(1, Math.ceil(timeoutMs / READY_POLL_MS));
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (await consoleReadiness(host)) return true;
-    if (attempt < maxAttempts - 1) {
-      opts.onWait?.(attempt * READY_POLL_MS);
-      await sleep(READY_POLL_MS);
-    }
+  const started = Date.now();
+  // The deadline is wall clock: one probe can sit for 30 s on a helper that accepts and stays
+  // silent, which is the very state this waits out.
+  for (;;) {
+    const left = timeoutMs - (Date.now() - started);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ready = await Promise.race([
+      consoleReadiness(host),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), Math.max(left, READY_POLL_MS));
+      }),
+    ]);
+    clearTimeout(timer);
+    if (ready) return true;
+    const elapsed = Date.now() - started;
+    if (elapsed + READY_POLL_MS >= timeoutMs) return false;
+    opts.onWait?.(elapsed);
+    await sleep(READY_POLL_MS);
   }
-  return false;
 }
 /** DPI's synchronous rc=0 is only acceptance. Once the main payload is
  * restored, allow enough time for its live installed-artifact inventory to
@@ -1408,11 +1529,13 @@ export function fmtEta(remainingBytes: number, bytesPerSec: number): string {
   if (!(bytesPerSec > 0) || !(remainingBytes > 0)) return "";
   const secs = remainingBytes / bytesPerSec;
   if (!Number.isFinite(secs)) return "";
-  if (secs < 90) return `${Math.max(1, Math.round(secs))}s left`;
-  if (secs < 5400) return `${Math.round(secs / 60)}m left`;
+  if (secs < 90) return tx("pkg.eta_s", { n: Math.max(1, Math.round(secs)) }, "{n}s left");
+  if (secs < 5400) return tx("pkg.eta_m", { n: Math.round(secs / 60) }, "{n}m left");
   const h = Math.floor(secs / 3600);
   const m = Math.round((secs % 3600) / 60);
-  return m > 0 ? `${h}h ${m}m left` : `${h}h left`;
+  return m > 0
+    ? tx("pkg.eta_hm", { h, m }, "{h}h {m}m left")
+    : tx("pkg.eta_h", { h }, "{h}h left");
 }
 
 /** Bytes as a short human string, in the app's one (IEC) unit system. */
@@ -1430,23 +1553,39 @@ const fmtBytes = formatBytes;
  * both are lower bounds on the same package measured against the same total, so
  * the max never runs backwards across the download→install handover.
  */
+/** " at 12 MiB/s", or nothing. */
+function speedText(bytesPerSec: number): string {
+  return bytesPerSec > 0 ? ` ${tx("pkg.speed_at", { rate: fmtBytes(bytesPerSec) }, "at {rate}/s")}` : "";
+}
+
 /** The download leg of "Download through this computer": how far, how fast, how long. */
 export function describeLinkDownload(
   written: number,
   total: number,
   bytesPerSec: number,
 ): string {
-  const speed = bytesPerSec > 0 ? ` at ${fmtBytes(bytesPerSec)}/s` : "";
+  const speed = speedText(bytesPerSec);
   if (total <= 0) {
-    return `Downloading to this computer — ${fmtBytes(written)}${speed}`;
+    return (
+      tx("pkg.link_download_unknown", { done: fmtBytes(written) }, "Downloading to this computer — {done}") +
+      speed
+    );
   }
   const pct = Math.min(100, Math.floor((100 * written) / total));
   const etaText = fmtEta(Math.max(0, total - written), bytesPerSec);
   return (
-    `Downloading to this computer — ${pct}% (${fmtBytes(written)} of ${fmtBytes(total)})` +
+    tx(
+      "pkg.link_download_progress",
+      { pct, done: fmtBytes(written), total: fmtBytes(total) },
+      "Downloading to this computer — {pct}% ({done} of {total})",
+    ) +
     speed +
     (etaText ? ` · ${etaText}` : "")
   );
+}
+
+function installingPct(pct: number): string {
+  return tx("pkg.installing_short", { pct }, "Installing on the PS5… {pct}%");
 }
 
 export function describeInstallSample(
@@ -1456,7 +1595,7 @@ export function describeInstallSample(
   const current = Math.max(s.transferBytes, s.installedBytes);
   const pct =
     s.total > 0 ? Math.min(100, Math.floor((100 * current) / s.total)) : 0;
-  const speed = bytesPerSec > 0 ? ` at ${fmtBytes(bytesPerSec)}/s` : "";
+  const speed = speedText(bytesPerSec);
   const etaText = fmtEta(Math.max(0, s.total - current), bytesPerSec);
   const eta = etaText ? ` · ${etaText}` : "";
   let detail: string;
@@ -1467,7 +1606,7 @@ export function describeInstallSample(
   }
   switch (s.phase) {
     case "queued":
-      detail = "Waiting for the PS5 to start…";
+      detail = trStatic("pkg.waiting_start", "Waiting for the PS5 to start…");
       break;
     case "download": {
       // For a link install, name both legs. The console leg alone cannot
@@ -1475,11 +1614,18 @@ export function describeInstallSample(
       // when that is the constraint the PS5 figure just mirrors it.
       const legs =
         s.originRateBps && s.originRateBps > 0
-          ? ` · downloading ${fmtBytes(s.originRateBps)}/s` +
-            (bytesPerSec > 0 ? `, sending ${fmtBytes(bytesPerSec)}/s` : "")
+          ? ` · ${tx("pkg.leg_download", { rate: fmtBytes(s.originRateBps) }, "downloading {rate}/s")}` +
+            (bytesPerSec > 0
+              ? `, ${tx("pkg.leg_send", { rate: fmtBytes(bytesPerSec) }, "sending {rate}/s")}`
+              : "")
           : speed;
       detail =
-        `Streaming to the PS5 — ${pct}% (${fmtBytes(current)} of ${fmtBytes(s.total)})${legs}` +
+        tx(
+          "pkg.streaming_progress",
+          { pct, done: fmtBytes(current), total: fmtBytes(s.total) },
+          "Streaming to the PS5 — {pct}% ({done} of {total})",
+        ) +
+        legs +
         eta;
       break;
     }
@@ -1487,13 +1633,15 @@ export function describeInstallSample(
       // Show the same bytes/rate/ETA the transfer phase does. This phase is
       // the longest part of a big install and used to be a bare percentage.
       detail =
-        `The PS5 is installing the package — ${pct}%` +
-        (s.total > 0 ? ` (${fmtBytes(current)} of ${fmtBytes(s.total)})` : "") +
+        tx("pkg.installing_pct", { pct }, "The PS5 is installing the package — {pct}%") +
+        (s.total > 0
+          ? ` (${tx("pkg.done_of_total", { done: fmtBytes(current), total: fmtBytes(s.total) }, "{done} of {total}")})`
+          : "") +
         speed +
         eta;
       break;
     default:
-      detail = `Installing on the PS5… ${pct}%`;
+      detail = installingPct(pct);
       break;
   }
   return { detail, current, pct };
@@ -1518,7 +1666,7 @@ export function installSampleFeed(
       return;
     }
     if (s.phase === "queued" && current === 0) {
-      hooks.onStatus("Waiting for the PS5 to start…");
+      hooks.onStatus(trStatic("pkg.waiting_start", "Waiting for the PS5 to start…"));
       return;
     }
     if (!(s.total > 0)) return;
@@ -1579,7 +1727,7 @@ export async function verifyDpiInstalledArtifact(
   let idleDeadline = startedAt + idleMs;
   let bestSeenBytes = 0;
   let announcedProgress = false;
-  onStatus?.("Verifying the exact installed package on the PS5…");
+  onStatus?.(trStatic("pkg.verifying", "Verifying the exact installed package on the PS5…"));
   while (Date.now() < idleDeadline && Date.now() < hardDeadline) {
     try {
       const artifacts = await pkgInstalledInventory(
@@ -1614,10 +1762,14 @@ export async function verifyDpiInstalledArtifact(
             Math.floor((seenBytes / expected.size) * 100),
           );
           onStatus?.(
-            `The PS5 is still writing ${titleId} (${pct}%) — waiting for it to finish…`,
+            tx(
+              "pkg.still_writing_pct",
+              { id: titleId, pct },
+              "The PS5 is still writing {id} ({pct}%) — waiting for it to finish…",
+            ),
           );
         } else {
-          onStatus?.(`The PS5 is still writing ${titleId} — waiting…`);
+          onStatus?.(tx("pkg.still_writing", { id: titleId }, "The PS5 is still writing {id} — waiting…"));
         }
         announcedProgress = true;
       }
@@ -1707,13 +1859,13 @@ export async function finalizePkgInstallSuccess(args: {
   // play). Surfaces in the bell even if the user navigated away while a
   // large title finished, which is exactly when a heads-up is wanted.
   const installedId = titleIdFromContentId(entry?.contentId ?? "");
-  pushNotification(mayNotLaunch ? "warning" : "success", `${label} installed`, {
+  pushNotification(mayNotLaunch ? "warning" : "success", tx("pkg.notify_installed", { label }, "{label} installed"), {
     jobOutcome: true,
     // Opens the game's page (play, saves, cheats) from the bell.
     ...(installedId ? { link: gamePath(installedId) } : {}),
     body: mayNotLaunch
       ? PKG_MAY_NOT_LAUNCH_MESSAGE
-      : "Installed on the PS5 and ready to play.",
+      : trStatic("pkg.notify_ready", "Installed on the PS5 and ready to play."),
   });
   // Flash a toast on the PS5 itself (sceNotificationSend) so the
   // confirmation shows on the console screen too — handy when the desktop
@@ -1998,6 +2150,116 @@ async function driveUnifiedInstall(
   onSample?: (s: InstallSample) => void,
   onStatus?: (msg: string) => void,
 ): Promise<InstallStatus> {
+  let options = { ...meta.options };
+  for (let retries = 0; ; ) {
+    // Not into the SceShellUI recovery after the last install (the source of transient
+    // rejections), on every route. Best-effort: on timeout it goes ahead, and the retry below is
+    // what catches a console still busy.
+    await waitForConsoleReady(host, {
+      onWait: () => onStatus?.(trStatic("pkg.waiting_ready", "Waiting for the PS5 to be ready…")),
+    });
+    const st = await runUnifiedInstallOnce(host, source, meta, options, onSample, onStatus);
+    if (st.reason === "destructive_guard" && !options.allow_destructive_reinstall) {
+      if (await askReinstall(meta.label || meta.titleId || "", st.replaces)) {
+        options = { ...options, allow_destructive_reinstall: true };
+        continue;
+      }
+      return st;
+    }
+    if (isTransientRefusal(st) && retries < TRANSIENT_REFUSAL_RETRIES) {
+      retries += 1;
+      log.info("install", `transient refusal ${hexCode(st.code)}: trying again (${retries})`);
+      await sleep(TRANSIENT_REFUSAL_WAIT_MS);
+      continue;
+    }
+    return st;
+  }
+}
+
+function jobLostStatus(
+  job: string,
+  host: string,
+  meta: { contentId?: string | null; titleId?: string | null },
+  last: InstallStatus | null,
+): InstallStatus {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    job,
+    ps5_addr: mgmtAddr(host),
+    content_id: meta.contentId ?? "",
+    title_id: meta.titleId ?? null,
+    route: null,
+    code: 0,
+    hint: null,
+    metrics: { total_bytes: 0, served_bytes: 0, throughput_mbps: 0, phase_ms: {}, retries: 0, sony_rc: 0 },
+    app_ver_before: null,
+    app_ver_after: null,
+    patch_verdict: null,
+    shortened: false,
+    started_at: now,
+    ...last,
+    phase: "done",
+    verdict: "unverified",
+    reason: JOB_LOST,
+    updated_at: now,
+  };
+}
+
+/** Sony's "busy" (seen in the recovery after an install). Only before anything was fetched, so a
+ *  retry can touch nothing. */
+const TRANSIENT_REFUSAL = 0x80020002;
+const TRANSIENT_REFUSAL_RETRIES = 3;
+const TRANSIENT_REFUSAL_WAIT_MS = 5_000;
+
+export function isTransientRefusal(st: Pick<InstallStatus, "code" | "phase" | "metrics">): boolean {
+  return (
+    st.phase === "failed" &&
+    st.code >>> 0 === TRANSIENT_REFUSAL &&
+    (st.metrics?.served_bytes ?? 0) === 0
+  );
+}
+
+/** Asks before an install that replaces what is on the console. */
+function askReinstall(label: string, replaces: string | null | undefined): Promise<boolean> {
+  return askInstall(
+    replaces === "update"
+      ? {
+          title: tx("pkg.reapply_title", { label }, "Apply {label} again?"),
+          message: reapplyUpdateAskText(),
+          confirmLabel: trStatic("pkg.reapply_confirm", "Apply anyway"),
+          destructive: true,
+        }
+      : {
+          title: tx("pkg.reinstall_title", { label }, "Reinstall {label}?"),
+          message: reinstallAskText(),
+          confirmLabel: trStatic("pkg.reinstall_confirm", "Reinstall"),
+          destructive: true,
+        },
+  );
+}
+
+function reinstallAskText(): string {
+  return trStatic(
+    "pkg.reinstall_body",
+    "This game is installed already. Reinstalling removes the installed copy first, and if the install fails, no copy is left.",
+  );
+}
+
+function reapplyUpdateAskText(): string {
+  return trStatic(
+    "pkg.reapply_body",
+    "The game already has this update or a newer one. Applying it again can undo it, and the game can end up back on its base version.",
+  );
+}
+
+async function runUnifiedInstallOnce(
+  host: string,
+  source: InstallSource,
+  meta: { label?: string; contentId?: string | null; titleId?: string | null; packageAppVer?: string | null; category?: string | null },
+  options: Record<string, unknown>,
+  onSample?: (s: InstallSample) => void,
+  onStatus?: (msg: string) => void,
+): Promise<InstallStatus> {
   const start = await pkgInstall({
     ps5_addr: mgmtAddr(host),
     source,
@@ -2007,13 +2269,13 @@ async function driveUnifiedInstall(
     category: meta.category ?? null,
     // The trial switch (Settings > Beta) only lets the engine consider its last resort;
     // the engine's own guards decide whether it runs.
-    options: { ...meta.options, ...installPathFallbackOptions() },
+    options: { ...options, ...installPathFallbackOptions() },
   });
   if (!start.ok || !start.job) {
     throw new Error(
       start.error === "busy"
-        ? "Another install is already running on this PS5."
-        : start.error || "The engine wouldn't start the install.",
+        ? trStatic("pkg.reason.busy", "Another install is running on this PS5. Wait for it to finish, then try again.")
+        : start.error || trStatic("pkg.engine_refused_start", "The engine wouldn't start the install."),
     );
   }
   const job = start.job;
@@ -2025,14 +2287,21 @@ async function driveUnifiedInstall(
   // that deleted a 25 GB install mid-write is gone). A short error budget rides
   // out a transient engine blip instead of failing a live install.
   let errBudget = 8;
+  let last: InstallStatus | null = null;
   for (;;) {
     let st: InstallStatus;
     try {
       st = await pkgInstallStatus(job);
       errBudget = 8;
+      last = st;
     } catch (e) {
+      // The engine restarted: its jobs are in memory, and the console's install goes on without
+      // it. Neither a failure nor an error: nobody can say how it ends from here.
+      if (/no such job/i.test(e instanceof Error ? e.message : String(e))) {
+        return jobLostStatus(job, host, meta, last);
+      }
       if (--errBudget <= 0) throw e;
-      onStatus?.("Waiting for the engine…");
+      onStatus?.(trStatic("pkg.waiting_engine", "Waiting for the engine…"));
       await sleep(PKG_VERIFY_POLL_MS);
       continue;
     }
@@ -2101,13 +2370,15 @@ export async function runPkgInstall(
   packageAppVer?: string,
   /** Skip the console-local attempt and send the package through Stream. */
   forceStream?: boolean,
+  /** The caller has already asked about free space. */
+  spaceChecked?: boolean,
 ): Promise<PkgInstallOutcome> {
   const name = basenameOf(localPs5Path) || contentId || "package";
   const tasks = useTaskStore.getState();
   const taskId = tasks.registerTask({
     kind: "pkg-install",
     origin: "pkg.install",
-    label: `Installing ${name}`,
+    label: tx("pkg.task_installing", { name }, "Installing {name}"),
     detail: localPs5Path,
     consoleId: host,
     payload: { localPs5Path, contentId, packageType, deleteStaging, expected },
@@ -2116,18 +2387,13 @@ export async function runPkgInstall(
   let latestProgress:
     { current: number; total: number; unit: "bytes" } | undefined;
   try {
-    // Pre-install readiness gate: don't fire an install into the post-install
-    // SceShellUI recovery window (the source of transient rejections). Wait for
-    // the console to answer the readiness probe first. Best-effort — on timeout
-    // we proceed anyway (the engine's own bring-up still rescues a busy console).
-    await waitForConsoleReady(host, {
-      onWait: () => {
-        useTaskStore
-          .getState()
-          .updateTask(taskId, { detail: "Waiting for the PS5 to be ready…" });
-        onStatus?.("Waiting for the PS5 to be ready…");
-      },
-    });
+    if (!spaceChecked && expected?.size) {
+      const warning = await declinedForSpace(host, name, expected.size);
+      if (warning) {
+        useTaskStore.getState().finishTask(taskId, "cancelled", { detail: warning });
+        return { installed: false, mayNotLaunch: false, errMessage: warning, noSpace: true };
+      }
+    }
 
     // Informational: say what the console already has, using the engine's own
     // verdict, before the install runs. A re-install is a legitimate repair.
@@ -2138,11 +2404,9 @@ export async function runPkgInstall(
         fingerprint: expected?.fingerprint,
       });
       if (pre?.state === "installed") {
-        onStatus?.(
-          `${name} is already installed on the PS5${pre.installedVersion ? ` (version ${pre.installedVersion})` : ""} — reinstalling over it…`,
-        );
+        onStatus?.(alreadyInstalledLine(name, pre.installedVersion));
       } else if (pre?.state === "different_version_installed") {
-        onStatus?.(`${name}: ${pre.detail} — installing this build over it…`);
+        onStatus?.(tx("pkg.other_build_line", { name }, "{name}: another build is installed. Installing this one over it…"));
       }
     }
 
@@ -2158,12 +2422,9 @@ export async function runPkgInstall(
         // gd/gp/ac just like a PARAM.SFO category, which is all the engine's
         // destructive-reinstall guard inspects.
         category: packageType ?? null,
-        // The user explicitly chose to (re)install this package and the
-        // preflight above already surfaced any "already installed" state, so
-        // let the engine's guard proceed — matching the prior behaviour, where
-        // a re-install was warned about, never blocked.
+        // The engine's guard stops what would replace an installed game or update, and
+        // driveUnifiedInstall asks before going on.
         options: {
-          allow_destructive_reinstall: true,
           ...(forceStream ? { force_stream: true } : {}),
         },
       },
@@ -2199,8 +2460,41 @@ export async function runPkgInstall(
         await fsDelete(mgmtAddr(host), localPs5Path).catch(() => {});
       }
     } else if (result.unverified) {
-      // Not a failure, not confirmed either: the task ends and says so, the staged copy stays.
-      useTaskStore.getState().finishTask(taskId, "done", {
+      // Not a failure, not confirmed either: the staged copy stays. When there is something to
+      // check against, keep looking in the background: a large update can outlive the engine's
+      // wait, and a late success runs the same finishing work a normal one does.
+      const packageTypeSeen = terminal.package_type ?? packageType ?? "";
+      if (terminal.metrics.served_bytes > 0 && installReverifyProbeViable(contentId, expected)) {
+        useTaskStore.getState().updateTask(taskId, {
+          status: "awaiting",
+          detail: result.errMessage,
+          payload: {
+            localPs5Path,
+            contentId,
+            packageType,
+            deleteStaging,
+            expected,
+            resolvedPackageType: packageTypeSeen,
+          },
+        });
+        scheduleInstallReverify({
+          taskId,
+          host,
+          name,
+          contentId,
+          packageType: packageTypeSeen,
+          expected,
+          path: localPs5Path,
+          autoRemove: deleteStaging,
+        });
+      } else {
+        useTaskStore.getState().finishTask(taskId, "done", {
+          progress: latestProgress,
+          detail: result.errMessage,
+        });
+      }
+    } else if (result.stopped) {
+      useTaskStore.getState().finishTask(taskId, "cancelled", {
         progress: latestProgress,
         detail: result.errMessage,
       });
@@ -2210,13 +2504,13 @@ export async function runPkgInstall(
         detail: localPs5Path,
         lastError: {
           code: "INSTALL_FAILED",
-          message: result.errMessage || "Install was not confirmed.",
+          message: result.errMessage || installNotConfirmedText(),
           recoverable: true,
         },
       });
       showInstallFailureToast(
         name,
-        result.errMessage || "Install was not confirmed.",
+        result.errMessage || installNotConfirmedText(),
       );
     }
     return result;
@@ -2236,6 +2530,25 @@ export async function runPkgInstall(
   }
 }
 
+function installRejectedText(): string {
+  return trStatic("pkg.rejected", "The install was rejected.");
+}
+
+function noHostResult(): { ok: false; message: string } {
+  return { ok: false, message: trStatic("pkg.no_host", "No PS5 is selected.") };
+}
+
+function installNotConfirmedText(): string {
+  return trStatic("pkg.not_confirmed", "The install was not confirmed.");
+}
+
+/** "… is already installed — reinstalling over it", with its version when known. */
+function alreadyInstalledLine(name: string, version?: string | null): string {
+  return version
+    ? tx("pkg.reinstalling_version", { name, version }, "{name} is already installed (version {version}). Reinstalling over it…")
+    : tx("pkg.reinstalling", { name }, "{name} is already installed. Reinstalling over it…");
+}
+
 /** Install failures must remain visible when the user has navigated away from
  * the originating screen. The task contains full diagnostics; this sticky
  * alert provides the missing foreground signal and a direct recovery path. */
@@ -2243,9 +2556,9 @@ function showInstallFailureToast(name: string, detail: string): void {
   const compact = detail.length > 260 ? `${detail.slice(0, 257)}…` : detail;
   useToastStore.getState().push({
     tone: "critical",
-    message: `${name} was not verified as installed. ${compact}`,
+    message: tx("pkg.toast_not_verified", { name, detail: compact }, "{name} was not verified as installed. {detail}"),
     action: {
-      label: "Open Tasks",
+      label: trStatic("pkg.open_tasks", "Open Tasks"),
       onClick: () => {
         window.history.pushState({}, "", "/tasks");
         window.dispatchEvent(new PopStateEvent("popstate"));
@@ -2422,7 +2735,7 @@ const makePkgLibraryStore = () =>
         // An install swaps the main payload out (DPI), which kills the transfer
         // port — never start an upload while one is running.
         if (get().installing) {
-          set({ error: "Can't upload while an install is in progress." });
+          set({ error: trStatic("pkg.no_upload_during_install", "Can't upload while an install is in progress.") });
           return;
         }
         set({ error: null });
@@ -2434,7 +2747,7 @@ const makePkgLibraryStore = () =>
             path: localPath,
           })) as SplitParseResponse;
         } catch (e) {
-          set({ error: `Couldn't read .pkg header: ${pkgError(e)}` });
+          set({ error: tx("upload_pkg_header_unreadable", { error: pkgError(e) }, "Couldn't read the .pkg header: {error}") });
           return;
         }
         if ((meta.parts?.length ?? 1) > 1) {
@@ -2605,7 +2918,7 @@ const makePkgLibraryStore = () =>
               };
               // Mirror the queue item onto this row while it waits and uploads.
               unsub = pkgQueue().watch(id, (q) => {
-                if (!q) return finish({ ok: false, message: "Removed from the queue." });
+                if (!q) return finish({ ok: false, message: trStatic("pkg.removed_from_queue", "Removed from the queue.") });
                 if (q.status === "pending") patch({ status: "queued" });
                 else if (q.status === "running")
                   patch({
@@ -2662,12 +2975,17 @@ const makePkgLibraryStore = () =>
                   lastResult: {
                     ok: false,
                     warn: true,
-                    message:
+                    message: trStatic(
+                      "pkg.variant_staged",
                       "Staged as an alternative variant. Choose which same-version patch/DLC matches this firmware; it was not auto-installed.",
+                    ),
                   },
                 });
-                pushNotification("info", "Package variant kept staged", {
-                  body: "Another same-version patch or DLC variant is already in the library. Install the intended one from its row; ps5upload will not silently make the last upload win.",
+                pushNotification("info", trStatic("pkg.variant_notify", "Package variant kept staged"), {
+                  body: trStatic(
+                    "pkg.variant_notify_body",
+                    "Another same-version patch or DLC variant is already in the library. Install the intended one from its row; ps5upload will not silently make the last upload win.",
+                  ),
                 });
               } else {
                 if (uploaded && options?.selectVariant) {
@@ -2688,7 +3006,7 @@ const makePkgLibraryStore = () =>
           // Drop the optimistic row and surface the error.
           set({
             entries: get().entries.filter((e2) => e2.path !== destPath),
-            error: `Upload failed: ${pkgError(e)}`,
+            error: tx("pkg.upload_failed", { error: pkgError(e) }, "Upload failed: {error}"),
           });
         }
       } finally {
@@ -2733,6 +3051,7 @@ const makePkgLibraryStore = () =>
       // Runs from the console queue, one install at a time per console.
       set({ installing: true, busyNotice: null });
       let outcome: InstallResult;
+      let actId: ReturnType<ReturnType<typeof useActivityHistoryStore.getState>["start"]> | null = null;
       const patch = (p: Partial<PkgEntry>) =>
         set({
           entries: get().entries.map((e) =>
@@ -2773,34 +3092,6 @@ const makePkgLibraryStore = () =>
         const entry = get().entries.find((e) => e.path === path);
         const label = entry?.title || entry?.contentId || basenameOf(path);
 
-        // Pre-flight free-space check (#115): if the pkg clearly won't fit, warn
-        // NOW instead of letting the user wait through a doomed install that ends
-        // in a late out-of-space error. Best-effort — if free space can't be read
-        // it returns null and we never block.
-        const spaceWarn = installSpaceWarning(
-          label,
-          entry?.size ?? 0,
-          await installFreeBytes(transferAddr(host)),
-        );
-        if (spaceWarn) {
-          patch({
-            status: "idle",
-            lastResult: { ok: false, message: spaceWarn },
-          });
-          pushNotification("warning", `Not enough space for ${label}`, {
-            body: spaceWarn,
-            // Clean up's planner, with the size filled in: it proposes what to clear, move or
-            // uninstall, and offers to install this package again once it has run.
-            link: spacePlanLink({
-              neededBytes: entry?.size ?? 0,
-              drive: "internal",
-              retry: { kind: "pkg", path, label },
-            }),
-          });
-          outcome = { ok: false, message: spaceWarn };
-          return outcome;
-        }
-
         // delete_staging = the user's Auto Delete preference: the engine keeps
         // the uploaded pkg when this is off (the separate client-side remove()
         // below is also gated on the same setting, so OFF means truly kept).
@@ -2810,9 +3101,9 @@ const makePkgLibraryStore = () =>
         // (with a live %), so it stays visible while the user browses other
         // screens — same treatment uploads/downloads already get.
         const feed = installSampleFeed(hooks);
-        const actId = useActivityHistoryStore
+        actId = useActivityHistoryStore
           .getState()
-          .start("library-install", `Installing ${label}`, {
+          .start("library-install", tx("pkg.task_installing", { name: label }, "Installing {name}"), {
             addr: mgmtAddr(host),
           });
         const {
@@ -2823,6 +3114,8 @@ const makePkgLibraryStore = () =>
           retryWithStream,
           stagedRefused,
           netDiag,
+          noSpace,
+          stopped,
         } = await runPkgInstall(
           host,
           path,
@@ -2842,7 +3135,7 @@ const makePkgLibraryStore = () =>
                 99,
                 Math.floor((installedBytes / total) * 100),
               );
-              set({ busyNotice: `Installing on the PS5… ${pct}%` });
+              set({ busyNotice: installingPct(pct) });
             }
             feed(sample);
           },
@@ -2860,6 +3153,32 @@ const makePkgLibraryStore = () =>
         useActivityHistoryStore
           .getState()
           .finish(actId, installed || unverified ? "done" : "failed");
+
+        if (stopped) {
+          patch({ status: "idle", lastResult: undefined });
+          outcome = { ok: false, message: mainErr };
+          return outcome;
+        }
+
+        if (noSpace) {
+          // Pre-flight free-space check (#115): the person was asked and did not go on.
+          patch({
+            status: "idle",
+            lastResult: { ok: false, message: mainErr },
+          });
+          pushNotification("warning", tx("pkg.notify_no_space", { label }, "Not enough space for {label}"), {
+            body: mainErr,
+            // Clean up's planner, with the size filled in: it proposes what to clear, move or
+            // uninstall, and offers to install this package again once it has run.
+            link: spacePlanLink({
+              neededBytes: entry?.size ?? 0,
+              drive: "internal",
+              retry: { kind: "pkg", path, label },
+            }),
+          });
+          outcome = { ok: false, message: mainErr };
+          return outcome;
+        }
 
         if (installed) {
           await finalizePkgInstallSuccess({
@@ -2883,7 +3202,7 @@ const makePkgLibraryStore = () =>
           );
           outcome = { ok: true, message: mainErr };
         } else {
-          outcome = { ok: false, message: mainErr || "Install was rejected." };
+          outcome = { ok: false, message: mainErr || installRejectedText() };
           // Failed verdict → the pkg was KEPT on the PS5 (never deleted on a
           // non-confirmed install), so re-running the install is the natural
           // next step. The engine resolves the install synchronously, so there
@@ -2893,7 +3212,7 @@ const makePkgLibraryStore = () =>
             status: "idle",
             lastResult: {
               ok: false,
-              message: mainErr || "Install was rejected.",
+              message: mainErr || installRejectedText(),
               ...(retryWithStream ? { retryWithStream: true } : {}),
               ...(stagedRefused ? { stagedRefused: true } : {}),
               ...(netDiag ? { netDiag } : {}),
@@ -2902,14 +3221,16 @@ const makePkgLibraryStore = () =>
           // Surface failures in the bell too (success already notifies above).
           // Without this a failed item — an update or DLC especially — was silent
           // if the user navigated away from the Library tab mid-install.
-          pushNotification("error", `${label} install failed`, {
+          pushNotification("error", tx("pkg.notify_failed", { label }, "{label} install failed"), {
             jobOutcome: true,
-            body: mainErr || "The PS5 didn’t confirm the install. Try again.",
+            body: mainErr || trStatic("pkg.notify_failed_body", "The PS5 didn’t confirm the install. Try again."),
             link: installErrorLink(mainErr),
           });
         }
       } catch (e) {
         const message = pkgError(e);
+        // A throw must not leave a running ghost in Activity.
+        if (actId) useActivityHistoryStore.getState().finish(actId, "failed");
         patch({
           status: "idle",
           lastResult: { ok: false, message },
@@ -2918,7 +3239,7 @@ const makePkgLibraryStore = () =>
           (candidate) => candidate.path === path,
         );
         const label = entry?.title || entry?.contentId || basenameOf(path);
-        pushNotification("error", `${label} install failed`, {
+        pushNotification("error", tx("pkg.notify_failed", { label }, "{label} install failed"), {
           body: message,
           link: installErrorLink(message),
         });
@@ -2930,7 +3251,7 @@ const makePkgLibraryStore = () =>
     },
 
     async install(path, host) {
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return noHostResult();
       const entry = get().entries.find((e) => e.path === path);
       return enqueueInstall({
         host,
@@ -2943,12 +3264,12 @@ const makePkgLibraryStore = () =>
     },
 
     async retryWithStream(path, host) {
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return noHostResult();
       const entry = get().entries.find((e) => e.path === path);
       // Never start a second install of a package that is already waiting or running: the row
       // hides the button then, and this guards a double click that beats the re-render.
       if (entry && entry.status !== "idle") {
-        return { ok: false, message: "This package already has an install in progress." };
+        return { ok: false, message: trStatic("pkg.already_in_progress", "This package already has an install in progress.") };
       }
       set({
         entries: get().entries.map((e) =>
@@ -2991,11 +3312,16 @@ const makePkgLibraryStore = () =>
       if (targets.length === 0) {
         pushNotification(
           "info",
-          conflicts.length ? "Choose an update variant" : "Nothing to install",
+          conflicts.length
+            ? trStatic("pkg.all_choose_variant", "Choose an update variant")
+            : trStatic("pkg.all_nothing", "Nothing to install"),
           {
             body: conflicts.length
-              ? "Conflicting same-version patch/DLC variants were kept staged. Install the one intended for this firmware from its row."
-              : "Every staged package is already installed on this console.",
+              ? trStatic(
+                  "pkg.all_choose_variant_body",
+                  "Conflicting same-version patch/DLC variants were kept staged. Install the one intended for this firmware from its row.",
+                )
+              : trStatic("pkg.all_nothing_body", "Every staged package is already installed on this console."),
           },
         );
         return;
@@ -3009,7 +3335,7 @@ const makePkgLibraryStore = () =>
       const batchTaskId = useTaskStore.getState().registerTask({
         kind: "install-batch",
         origin: "pkg.install-all",
-        label: `Install all (${n})`,
+        label: tx("pkg.all_task", { n }, "Install all ({n})"),
         consoleId: host,
       });
       try {
@@ -3030,7 +3356,7 @@ const makePkgLibraryStore = () =>
               else failed++;
               finished++;
               useTaskStore.getState().updateTask(batchTaskId, {
-                stage: `Installed ${finished} of ${n}`,
+                stage: tx("pkg.all_stage", { done: finished, n }, "Installed {done} of {n}"),
                 progress: { current: finished, total: n, unit: "items" },
               });
             }),
@@ -3046,7 +3372,7 @@ const makePkgLibraryStore = () =>
           useTaskStore.getState().finishTask(batchTaskId, "failed", {
             lastError: {
               code: "INSTALL_BATCH_FAILED",
-              message: `${failed} of ${ok + failed} failed`,
+              message: tx("pkg.all_failed_count", { failed, total: ok + failed }, "{failed} of {total} failed"),
               recoverable: false,
             },
           });
@@ -3057,17 +3383,20 @@ const makePkgLibraryStore = () =>
       pushNotification(
         failed === 0 && conflicts.length === 0 ? "success" : "warning",
         failed === 0 && conflicts.length === 0
-          ? `Installed ${ok} package${ok === 1 ? "" : "s"}`
+          ? tx("pkg.all_done", { n: ok }, "Installed: {n}")
           : conflicts.length > 0 && failed === 0
-            ? `Installed ${ok}; skipped ${conflicts.length} conflicting variant${conflicts.length === 1 ? "" : "s"}`
-            : `Installed ${ok} of ${ok + failed}; ${failed} failed`,
+            ? tx("pkg.all_done_conflicts", { n: ok, skipped: conflicts.length }, "Installed: {n}. Conflicting variants skipped: {skipped}")
+            : tx("pkg.all_done_failed", { n: ok, total: ok + failed, failed }, "Installed {n} of {total}. Failed: {failed}"),
         {
           body:
             failed === 0 && conflicts.length === 0
-              ? "All staged packages installed."
+              ? trStatic("pkg.all_done_body", "All staged packages installed.")
               : conflicts.length > 0 && failed === 0
-                ? "Choose the patch or DLC variant intended for this firmware and install it from its row."
-                : "Some packages didn't install — check the rows marked failed and retry them.",
+                ? trStatic(
+                    "pkg.all_conflicts_body",
+                    "Choose the patch or DLC variant intended for this firmware and install it from its row.",
+                  )
+                : trStatic("pkg.all_failed_body", "Some packages didn't install. Check the rows marked failed and retry them."),
         },
       );
     },
@@ -3092,8 +3421,8 @@ const makePkgLibraryStore = () =>
       const taskId = tasks.registerTask({
         kind: "download",
         origin: "pkg.url-download",
-        label: `Downloading ${name} to this computer`,
-        detail: "Connecting to the link…",
+        label: tx("pkg.task_link_download", { name }, "Downloading {name} to this computer"),
+        detail: trStatic("pkg.link_connecting", "Connecting to the link…"),
         consoleId: host,
         // Never record the URL: an install link can carry a signed token.
         payload: { remote: true },
@@ -3122,7 +3451,7 @@ const makePkgLibraryStore = () =>
         // Not a failure of the link: the user decides what happens to the file in the way.
         set({ downloadNotice: null });
         useTaskStore.getState().finishTask(taskId, "cancelled", {
-          detail: "A different file already has this name.",
+          detail: trStatic("pkg.link_name_taken", "A different file already has this name."),
         });
         return {
           ok: false,
@@ -3173,11 +3502,11 @@ const makePkgLibraryStore = () =>
           return fail(pkgError(e));
         }
         if (st.error) {
-          return fail(`The download failed: ${st.error}`);
+          return fail(tx("pkg.link_download_failed", { error: st.error }, "The download failed: {error}"));
         }
         if (!path && st.path) path = st.path;
         if (st.cancelled) {
-          return fail("The download was cancelled.", true);
+          return fail(trStatic("pkg.link_download_cancelled", "The download was cancelled."), true);
         }
         const written = st.written ?? 0;
         const size = st.total && st.total > 0 ? st.total : total;
@@ -3203,7 +3532,7 @@ const makePkgLibraryStore = () =>
 
       set({ downloadNotice: null });
       useTaskStore.getState().finishTask(taskId, "done", {
-        detail: "Downloaded. Installing on the PS5 from this computer…",
+        detail: trStatic("pkg.link_downloaded", "Downloaded. Installing on the PS5 from this computer…"),
       });
       log.info("install", "download finished; installing from the local file");
       // From here it is a local file, so the link can expire freely.
@@ -3286,7 +3615,7 @@ const makePkgLibraryStore = () =>
         const directTask = useTaskStore.getState().registerTask({
           kind: "pkg-dpi-install",
           origin: "pkg.url-direct",
-          label: `PS5 downloading ${name}`,
+          label: tx("pkg.task_direct", { name }, "PS5 downloading {name}"),
           consoleId: host,
           payload: { remote: true, direct: true },
           status: "running",
@@ -3347,7 +3676,7 @@ const makePkgLibraryStore = () =>
     },
     async _execStream(source, host, opts, hooks) {
       if (!host?.trim()) {
-        return { ok: false, message: "No PS5 host selected." };
+        return noHostResult();
       }
       // A link and a local file differ only in where the bytes come from and
       // what we call them; the install itself is one path.
@@ -3363,8 +3692,8 @@ const makePkgLibraryStore = () =>
       const taskId = tasks.registerTask({
         kind: "pkg-dpi-install",
         origin: remoteUrl ? "pkg.url-install" : "pkg.stream-install",
-        label: `Stream-installing ${sourceName}`,
-        detail: "Waiting to prepare the package…",
+        label: tx("pkg.task_stream", { name: sourceName }, "Stream-installing {name}"),
+        detail: trStatic("pkg.stream_waiting", "Waiting to prepare the package…"),
         consoleId: host,
         // Never record the URL: an install link can carry a signed token and
         // task payloads reach the diagnostic bundle.
@@ -3388,14 +3717,14 @@ const makePkgLibraryStore = () =>
         if (result.ok) {
           const progress = useTaskStore.getState().getTask(taskId)?.progress;
           useTaskStore.getState().finishTask(taskId, "done", {
-            detail: "Installed and verified on the PS5.",
+            detail: trStatic("pkg.stream_verified", "Installed and verified on the PS5."),
             progress: progress
               ? { ...progress, current: progress.total }
               : undefined,
           });
         } else if (cancelled) {
           useTaskStore.getState().finishTask(taskId, "cancelled", {
-            detail: result.message || "Cancelled.",
+            detail: result.message || trStatic("pkg.cancelled", "Cancelled."),
           });
         } else {
           const message = result.message || "The install didn't complete.";
@@ -3416,7 +3745,7 @@ const makePkgLibraryStore = () =>
       try {
         useTaskStore.getState().updateTask(taskId, {
           status: "running",
-          detail: "Reading package metadata…",
+          detail: trStatic("pkg.reading_meta", "Reading package metadata…"),
         });
 
         // 1. Parse the PC-side pkg header for content_id + category. The
@@ -3433,6 +3762,7 @@ const makePkgLibraryStore = () =>
           platform?: string;
           package_type?: string;
           fingerprint?: string;
+          app_ver?: string;
         };
         let totalBytes: number;
         if (serverPath) {
@@ -3454,13 +3784,14 @@ const makePkgLibraryStore = () =>
               platform?: string;
               package_type?: string;
               fingerprint?: string;
+              app_ver?: string;
             };
             head = probe;
             totalBytes = probe.total_size ?? 0;
           } catch (e) {
             return finishStreamTask({
               ok: false,
-              message: `Couldn't read a package from that link: ${pkgError(e)}`,
+              message: tx("pkg.link_unreadable", { error: pkgError(e) }, "Couldn't read a package from that link: {error}"),
             });
           }
         } else {
@@ -3472,14 +3803,13 @@ const makePkgLibraryStore = () =>
           } catch (e) {
             return finishStreamTask({
               ok: false,
-              message: `Couldn't read .pkg header: ${pkgError(e)}`,
+              message: tx("upload_pkg_header_unreadable", { error: pkgError(e) }, "Couldn't read the .pkg header: {error}"),
             });
           }
           if ((meta.parts?.length ?? 1) > 1) {
             return finishStreamTask({
               ok: false,
-              message:
-                "Split .pkg sets aren't supported by the streaming installer — pick the single lead .pkg.",
+              message: trStatic("upload_split_pkg_unsupported", "This is one part of a split package, and split packages can't be installed. Join the parts into one .pkg first."),
             });
           }
           head = meta.head ?? {};
@@ -3490,8 +3820,8 @@ const makePkgLibraryStore = () =>
         const resolvedPackageType =
           head.package_type || pkgTypeForCategory(head.category, head.platform);
         useTaskStore.getState().updateTask(taskId, {
-          label: `Stream-installing ${label}`,
-          detail: "Preparing the PS5 installer…",
+          label: tx("pkg.task_stream", { name: label }, "Stream-installing {name}"),
+          detail: trStatic("pkg.preparing_installer", "Getting the PS5 installer ready…"),
           progress:
             totalBytes > 0
               ? { current: 0, total: totalBytes, unit: "bytes" }
@@ -3500,14 +3830,14 @@ const makePkgLibraryStore = () =>
 
         set({
           busyNotice: remoteUrl
-            ? `Installing ${label} from the link — this computer downloads it over several connections at once and feeds the PS5, nothing is staged…`
-            : `Stream-installing ${label} — the PS5 pulls the pkg directly over HTTP, no staging upload…`,
+            ? tx("pkg.notice_link", { label }, "Installing {label} from the link. This computer downloads it and feeds the PS5; nothing is copied to the PS5 first…")
+            : tx("pkg.notice_stream", { label }, "Stream-installing {label}. The PS5 fetches it from this computer; nothing is copied to the PS5 first…"),
         });
 
         hooks?.onStatus(
           remoteUrl
-            ? "Reading the package from the link…"
-            : "Getting the PS5 installer ready…",
+            ? trStatic("pkg.reading_link", "Reading the package from the link…")
+            : trStatic("pkg.preparing_installer", "Getting the PS5 installer ready…"),
         );
 
         const onStatus = (msg: string) => {
@@ -3527,12 +3857,14 @@ const makePkgLibraryStore = () =>
             })
           : null;
         if (pre?.state === "installed") {
-          onStatus(
-            `${label} is already installed on the PS5${pre.installedVersion ? ` (version ${pre.installedVersion})` : ""} — reinstalling over it…`,
-          );
+          onStatus(alreadyInstalledLine(label, pre.installedVersion));
         } else if (pre?.state === "different_version_installed") {
-          onStatus(`${label}: ${pre.detail} — installing this build over it…`);
+          onStatus(tx("pkg.other_build_line", { name: label }, "{name}: another build is installed. Installing this one over it…"));
         }
+
+        // Too big for any drive? The size is an estimate, so the person decides.
+        const spaceWarning = await declinedForSpace(host, label, totalBytes);
+        if (spaceWarning) return finishStreamTask({ ok: false, message: spaceWarning });
 
         // 2. One call to the unified install endpoint. The engine creates the
         //    pkg-host serving session, hands the URL to the daemon, and verifies
@@ -3566,14 +3898,14 @@ const makePkgLibraryStore = () =>
               label,
               contentId: contentId || "",
               titleId: titleIdFromContentId(contentId ?? "") ?? null,
+              // What lets the engine see whether an update really applied: Sony says 0 either way.
+              packageAppVer: head.app_ver || null,
               // The probe's package_type/category; ends in gd/gp/ac like a
               // PARAM.SFO category, which is all the engine's guard inspects.
               category: resolvedPackageType ?? null,
-              // The user explicitly chose this install and the preflight above
-              // already surfaced any "already installed" state, so let the
-              // engine's guard proceed (a re-install was never blocked before).
+              // The engine's guard stops what would replace an installed game or update, and
+              // driveUnifiedInstall asks before going on.
               options: {
-                allow_destructive_reinstall: true,
                 // A link in this mode is streamed THROUGH this computer: the engine fetches
                 // it and serves it. Without the flag the engine handed the PS5 the link
                 // first, so one only this computer can reach just failed.
@@ -3606,7 +3938,7 @@ const makePkgLibraryStore = () =>
               if (sample.note) {
                 hooks?.onStatus(sample.note);
               } else if (sample.phase === "queued" && current === 0) {
-                hooks?.onStatus("Waiting for the PS5 to start…");
+                hooks?.onStatus(trStatic("pkg.waiting_start", "Waiting for the PS5 to start…"));
               } else if (sample.total > 0) {
                 hooks?.onProgress(
                   Math.min(99, Math.floor((current / sample.total) * 100)),
@@ -3647,12 +3979,12 @@ const makePkgLibraryStore = () =>
         const outcome = statusToOutcome(terminal);
         if (outcome.installed) {
           const installedId = titleIdFromContentId(contentId);
-          pushNotification("success", `Installed ${label}`, {
+          pushNotification("success", tx("pkg.notify_installed", { label }, "{label} installed"), {
             jobOutcome: true,
             ...(installedId ? { link: gamePath(installedId) } : {}),
             body: remoteUrl
-              ? "Link install complete. The package was downloaded from the link and fed straight to the console — nothing was staged."
-              : "Stream-install complete. The pkg was fetched over HTTP — nothing was staged on the PS5.",
+              ? trStatic("pkg.notify_link_body", "Link install complete. Nothing was copied to the PS5 first.")
+              : trStatic("pkg.notify_stream_body", "Stream install complete. Nothing was copied to the PS5 first."),
           });
           return finishStreamTask({
             ok: true,
@@ -3662,10 +3994,13 @@ const makePkgLibraryStore = () =>
         if (outcome.unverified) {
           return finishStreamTask({ ok: true, message: outcome.errMessage });
         }
+        if (outcome.stopped) {
+          return finishStreamTask({ ok: false, message: outcome.errMessage }, true);
+        }
         return finishStreamTask({
           ok: false,
           stagedFallbackRecommended: true,
-          message: outcome.errMessage || "The install didn't complete.",
+          message: outcome.errMessage || trStatic("pkg.not_complete", "The install didn't complete."),
         });
       } catch (e) {
         return finishStreamTask({ ok: false, message: pkgError(e) });
@@ -3673,7 +4008,7 @@ const makePkgLibraryStore = () =>
         if (!taskFinished) {
           finishStreamTask({
             ok: false,
-            message: "The stream install ended without a result.",
+            message: trStatic("pkg.stream_no_result", "The stream install ended without a result."),
           });
         }
         clearBusy();
@@ -3681,7 +4016,7 @@ const makePkgLibraryStore = () =>
     },
 
     async installStream(source, host, opts) {
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return noHostResult();
       let name = "package";
       try {
         name =
@@ -3698,7 +4033,7 @@ const makePkgLibraryStore = () =>
           : { via: "stream", source };
       // Convert follows the install's task: hand it the id once the queue runs it.
       // A duplicate request joins the queued one and keeps its callback.
-      const key = installRequestKey(request);
+      const key = `${hostOf(host)}|${installRequestKey(request)}`;
       const onTask = opts?.onTask;
       const owns = !!onTask && !streamTaskCallbacks.has(key);
       if (owns) streamTaskCallbacks.set(key, onTask);
@@ -3718,7 +4053,7 @@ const makePkgLibraryStore = () =>
     },
 
     async installExternal(pkg, host) {
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return noHostResult();
       return enqueueInstall({
         host,
         request: { via: "external", pkg },
@@ -3729,7 +4064,7 @@ const makePkgLibraryStore = () =>
     },
 
     async _execExternal(pkg, host, hooks) {
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return noHostResult();
       // Runs from the console queue, one install at a time per console.
       set({ installing: true, busyNotice: null });
       // The fast external scan often returns an EMPTY content id — it derives the
@@ -3766,11 +4101,14 @@ const makePkgLibraryStore = () =>
             99,
             Math.floor((sample.installedBytes / sample.total) * 100),
           );
-          set({ busyNotice: `Installing ${label} from ${pkg.drive}… ${pct}%` });
+          set({ busyNotice: tx("pkg.usb_installing", { label, drive: pkg.drive, pct }, "Installing {label} from {drive}… {pct}%") });
         }
         feed(sample);
       };
       try {
+        // The copy and the install both land here, so twice the package has to fit.
+        const spaceWarning = await declinedForSpace(host, label, (pkg.size ?? 0) * 2);
+        if (spaceWarning) return { ok: false, message: spaceWarning };
         // Copy USB → internal, then install from there. We do NOT install
         // directly from the USB path: handing Sony's installer a `/mnt/usb…`
         // package registers it as a BGFT *download task* that streams the pkg off
@@ -3783,7 +4121,7 @@ const makePkgLibraryStore = () =>
           `install-from-usb: copy→internal then install for ${pkg.path}`,
         );
         set({
-          busyNotice: `Staging ${label} from ${pkg.drive} to internal storage — removed automatically after install…`,
+          busyNotice: tx("pkg.usb_staging", { label, drive: pkg.drive }, "Copying {label} from {drive} to internal storage. The copy is removed after the install…"),
         });
         await fsMkdir(transferAddr(host), PKG_TEMP_DIR).catch(() => {});
         // Trackable op_id → the (drop-tolerant) copy drives a live % bar, and a
@@ -3792,7 +4130,7 @@ const makePkgLibraryStore = () =>
         let copying = true;
         const copyRate: RateSample[] = [{ ts: Date.now(), bytes: 0 }];
         hooks?.onStatus(
-          `Copying from ${pkg.drive} to internal storage first — the copy is removed after the install.`,
+          tx("pkg.usb_copying", { drive: pkg.drive }, "Copying from {drive} to internal storage first. The copy is removed after the install."),
         );
         const pollCopy = (async () => {
           while (copying) {
@@ -3805,7 +4143,7 @@ const makePkgLibraryStore = () =>
                   Math.floor((s.bytes_copied / s.total_bytes) * 100),
                 );
                 set({
-                  busyNotice: `Staging ${label} from ${pkg.drive} to internal storage… ${pct}% (removed after install)`,
+                  busyNotice: tx("pkg.usb_staging_pct", { label, drive: pkg.drive, pct }, "Copying {label} from {drive} to internal storage… {pct}%. The copy is removed after the install."),
                 });
                 const now = Date.now();
                 pushRateSample(copyRate, now, s.bytes_copied);
@@ -3860,6 +4198,10 @@ const makePkgLibraryStore = () =>
           // re-verify has nothing to match an installed artifact against and
           // could never confirm this install.
           pkg.size > 0 ? { size: pkg.size } : undefined,
+          undefined,
+          undefined,
+          // Asked before the copy, which counted the install as well.
+          true,
         );
         // Only a CONFIRMED completion authorizes deletion. A request that Sony
         // merely accepted can still be installing (or can fail asynchronously),
@@ -3876,8 +4218,8 @@ const makePkgLibraryStore = () =>
           : {
               ok: false,
               message:
-                (viaCopy.errMessage || "Install was rejected.") +
-                ` Internal staging was kept at ${internalPath}.`,
+                (viaCopy.errMessage || installRejectedText()) +
+                " " + tx("pkg.staging_kept", { path: internalPath }, "The copy on internal storage was kept at {path}."),
             };
       } catch (e) {
         // A partial copy is disposable, but once an install call has begun its
@@ -3891,7 +4233,7 @@ const makePkgLibraryStore = () =>
           message:
             pkgError(e) +
             (installAttempted
-              ? ` Internal staging was kept at ${internalPath}.`
+              ? " " + tx("pkg.staging_kept", { path: internalPath }, "The copy on internal storage was kept at {path}.")
               : ""),
         };
       } finally {
@@ -3900,7 +4242,7 @@ const makePkgLibraryStore = () =>
     },
 
     async installFromConsolePath(path, host, opts) {
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return noHostResult();
       return enqueueInstall({
         host,
         request: { via: "console-path", path },
@@ -3932,10 +4274,10 @@ const makePkgLibraryStore = () =>
       }
       // Already on internal storage (/data, /user, …): Sony can read it in
       // place, so install directly with no wasteful copy.
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return noHostResult();
       set({ installing: true, busyNotice: null });
       try {
-        set({ busyNotice: `Installing ${name}…` });
+        set({ busyNotice: tx("pkg.installing_name", { name }, "Installing {name}…") });
         // In-place install of a pkg the user pointed at on the console's disk
         // (e.g. from the File System browser). It's THEIR file at THEIR path, not
         // a staging copy we made — never delete it. deleteStaging: false.
@@ -3956,7 +4298,7 @@ const makePkgLibraryStore = () =>
           ? { ok: true, mayNotLaunch }
           : {
               ok: false,
-              message: errMessage || "Install was rejected.",
+              message: errMessage || installRejectedText(),
             };
       } catch (e) {
         return { ok: false, message: pkgError(e) };
@@ -3973,7 +4315,7 @@ const makePkgLibraryStore = () =>
       try {
         await fsDeleteWithRetry(mgmtAddr(host), path);
       } catch (e) {
-        set({ entries: prev, error: `Delete failed: ${pkgError(e)}` });
+        set({ entries: prev, error: tx("pkg.delete_failed", { error: pkgError(e) }, "Delete failed: {error}") });
       }
     },
 
@@ -3984,7 +4326,10 @@ const makePkgLibraryStore = () =>
     async clearAll(host) {
       // Only idle rows — never yank a file out from under an in-flight
       // upload/install (status uploading/installing/queued).
-      await bulkDelete(get, set, host, (e) => e.status === "idle");
+      // Nor from under an install still waiting its turn in the console queue: its row reads
+      // idle until the install starts.
+      const queued = new Set(pkgQueue().queuedInstallPaths(host));
+      await bulkDelete(get, set, host, (e) => e.status === "idle" && !queued.has(e.path));
     },
   };
   });
@@ -4138,7 +4483,7 @@ async function bulkDelete(
         ...s.entries.filter((e) => !failedPaths.has(e.path)),
         ...failed,
       ],
-      error: `Failed to delete ${failed.length} file(s).`,
+      error: tx("pkg.delete_failed_count", { n: failed.length }, "Files that could not be deleted: {n}"),
     }));
   }
 }
@@ -4192,14 +4537,14 @@ registerInstallExecutor(async (req, host, hooks) => {
     case "external":
       return store._execExternal(req.pkg, host, hooks);
     case "stream": {
-      const key = installRequestKey(req);
+      const key = `${hostOf(host)}|${installRequestKey(req)}`;
       const onTask = streamTaskCallbacks.get(key);
       streamTaskCallbacks.delete(key);
       return store._execStream(req.source, host, onTask ? { onTask } : undefined, hooks);
     }
     case "link": {
       if (req.mode === "stream") {
-        const key = installRequestKey(req);
+        const key = `${hostOf(host)}|${installRequestKey(req)}`;
         const onTask = streamTaskCallbacks.get(key);
         streamTaskCallbacks.delete(key);
         return store._execStream({ remoteUrl: req.url }, host, onTask ? { onTask } : undefined, hooks);

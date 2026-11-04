@@ -8,6 +8,7 @@ import SessionBanner from "./SessionBanner";
 import RemotePlayBanner from "./RemotePlayBanner";
 import EngineDownBanner from "./EngineDownBanner";
 import MovedConsoleBanner, { useMovedConsoleWatch } from "./MovedConsoleBanner";
+import { InstallAskHost } from "../components/InstallAskHost";
 import { PairingDialog } from "../screens/Connection/PairingDialog";
 import { useHelperReplaceGuard } from "../screens/Connection/useHelperReplaceGuard";
 import { helperSendFor, useHelperSendStore } from "../state/helperSend";
@@ -201,6 +202,9 @@ async function consoleBootAndProcesses(
  *  exited by then, so only the ones that stay are remembered. */
 const AUTO_LOADER_SETTLE_MS = 20_000;
 
+/** Consoles whose auto-loader playlist is sending right now. */
+const autoLoadersRunning = new Set<string>();
+
 /** Run the auto-loader's playlist on a console that just came up, unless this boot already
  *  ran it and what it loaded is still running (lib/autoLoaderGuard). */
 async function runAutoLoaderOnce(
@@ -218,7 +222,12 @@ async function runAutoLoaderOnce(
     return;
   }
   log.info("connection", `auto-loader: running "${playlistName}" on ${host}`);
-  await usePayloadPlaylistsStore.getState().run(playlistId, host, PS5_LOADER_PORT);
+  autoLoadersRunning.add(key);
+  try {
+    await usePayloadPlaylistsStore.getState().run(playlistId, host, PS5_LOADER_PORT);
+  } finally {
+    autoLoadersRunning.delete(key);
+  }
   await new Promise((r) => setTimeout(r, AUTO_LOADER_SETTLE_MS));
   const after = await consoleBootAndProcesses(host);
   if (after.boot !== null && after.names !== null) {
@@ -538,12 +547,18 @@ function useStatusPolling() {
         // a transfer runs; guardElfldr itself asks at most every 10 minutes per console.
         if (newStatus === "up" && prev.payloadStatus !== "up") {
           const guardHost = probedHost;
-          window.setTimeout(() => {
+          const whenSettled = () => {
             const now = useConnectionStore.getState().runtimeByHost[key];
             if (now?.payloadStatus !== "up") return;
             if (transferScreenBusy(guardHost)) return;
+            // Swapping elfldr closes the loader for a moment: not under a playlist still sending.
+            if (autoLoadersRunning.has(key)) {
+              window.setTimeout(whenSettled, BLACK_BOX_SETTLE_MS);
+              return;
+            }
             void guardElfldr(hostOf(guardHost) || guardHost, false);
-          }, BLACK_BOX_SETTLE_MS);
+          };
+          window.setTimeout(whenSettled, BLACK_BOX_SETTLE_MS);
         }
         // Log only on an up<->down TRANSITION (not every poll).
         if (
@@ -1758,6 +1773,7 @@ export default function AppShell() {
       <SignInNeededHost />
       <WakePasscodeHost />
       <PairingDialog />
+      <InstallAskHost />
     </div>
   );
 }

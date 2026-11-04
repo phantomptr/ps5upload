@@ -1106,6 +1106,23 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             }
         }
     }
+    // And for a package on a saved server: the client does not read it, the serve session would.
+    if let Source::Remote { connection, path } = &req.source {
+        let remote = format!("remote://{connection}/{path}");
+        let head = unless_stopped(&state, &job, async move {
+            crate::pkg_install::open_remote_package(&remote).await
+        })
+        .await;
+        if let Some(Ok((_, _, h, _, _))) = head {
+            fill_from_header(
+                &mut req,
+                &h.content_id,
+                &h.title_id,
+                &h.category,
+                &h.app_ver,
+            );
+        }
+    }
     crate::log_info!(
         "{tag}: install start ps5={ip} source={} content_id={} category={} app_ver={}",
         req.source.kind(),
@@ -1133,6 +1150,10 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         s.title_id = title_id.clone();
         s.route = Some(route);
         s.phase = Phase::Resolve;
+        s.package_type = title_id
+            .as_deref()
+            .filter(|_| !category.trim().is_empty())
+            .map(|t| package_type_for_verify(&category, t));
     });
 
     // resolve: what the console has. Could-not-read stays apart from not-installed: it never

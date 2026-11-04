@@ -11,7 +11,7 @@ export function offerLabel(game: Pick<CollectionGame, "title">, o: CollectionOff
 }
 
 /** Queues packages from the collection on `host`, streamed from this computer. The queue
- *  orders them base → update → DLC, keeps the computer and the console awake, and refuses an
+ *  orders them base → update → DLC, keeps the computer and the console awake, and asks before an
  *  install that would erase an installed game. The console's state is read again once they
  *  have all finished. Returns how many were queued. */
 export function installOffers(
