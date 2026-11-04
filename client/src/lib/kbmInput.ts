@@ -433,7 +433,9 @@ export class KbmSender {
       this.wheel -= w;
       this.hwheel -= hw;
       this.d.send(encodeReport(held, dx, dy, w, hw));
-    } while (this.dx || this.dy || this.wheel || this.hwheel);
+      // Whole units go; a fraction (touchpad speed 1.5, a scaled display's movementX) stays for the
+      // next batch. Waiting for it to reach zero here would never end: it truncates to no movement.
+    } while (Math.abs(this.dx) >= 1 || Math.abs(this.dy) >= 1 || this.wheel || this.hwheel);
   }
 
   /** Lets go of every key and button of this page (motion not yet sent is dropped). What a phone

@@ -192,6 +192,21 @@ describe("KbmSender", () => {
     expect(f.sent).toEqual([rep(0, 0, 32767, 0), rep(0, 0, 7233, 0)]);
   });
 
+  // The touchpad's speed is 1.5 and a scaled display's movementX a fraction: this used to loop for
+  // ever on the page's main thread, sending a report each time round.
+  it("sends whole units and keeps a fraction for the next batch", () => {
+    const f = fakeSender();
+    f.s.move(1.5, -0.5);
+    f.s.flush();
+    expect(f.sent).toEqual([rep(0, 0, 1, 0)]);
+    f.s.move(0.5, -0.5);
+    f.s.flush();
+    expect(f.sent.slice(1)).toEqual([rep(0, 0, 1, -1)]);
+    f.s.move(0.25, 0.25);
+    f.s.flush();
+    expect(f.sent.length).toBe(3);
+  });
+
   it("lets go of everything once, and only when something is held", () => {
     const f = fakeSender();
     f.s.releaseAll();

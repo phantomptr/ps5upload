@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { avcCodecFromHeader, isHevcHeader, parseReplay } from "./rpReplay";
+import { avcCodecFromHeader, isHevcHeader, orderAudio, parseReplay } from "./rpReplay";
 
 /** A snapshot in the engine's wire form (rp_replay.rs `encode`). */
 function snapshot(recs: Array<{ kind: number; t: number; data: number[]; key?: boolean }>): ArrayBuffer {
@@ -26,7 +26,7 @@ describe("instant replay snapshot", () => {
         { kind: 0, t: 0, data: SPS },
         { kind: 3, t: 0, data: [2, 0, 0, 0, 0xbb, 0x80, 0, 0, 1, 0xe0] },
         { kind: 1, t: 5_000_000_000, data: [1, 2, 3], key: true },
-        { kind: 4, t: 5_000_000_010, data: [9] },
+        { kind: 4, t: 5_000_000_010, data: [0x12, 0x34, 9] },
       ]),
     );
     expect(r.hevc).toBe(false);
@@ -35,6 +35,24 @@ describe("instant replay snapshot", () => {
       [1, 5_000_000_000, true],
       [4, 5_000_000_010, false],
     ]);
+    // The packet alone: the decoder must not get the index in front of it.
+    expect([...r.frames[1].data]).toEqual([9]);
+  });
+
+  it("puts sound back in the console's order, across the index's wrap", () => {
+    const f = (t: number, i: number, b: number) => ({ tUs: t, data: new Uint8Array([i >> 8, i & 255, b]) });
+    const got = orderAudio([
+      f(100, 65534, 1),
+      f(200, 0, 3),
+      // Recovered late, with a later time.
+      f(300, 65535, 2),
+      f(400, 1, 4),
+      // A copy of one already here.
+      f(500, 1, 4),
+    ]);
+    expect(got.map((g) => g.data[0])).toEqual([1, 2, 3, 4]);
+    // Rising times, as a decoder wants.
+    expect(got.map((g) => g.tUs)).toEqual([100, 200, 300, 400]);
   });
 
   it("refuses what is not a snapshot or is cut short", () => {

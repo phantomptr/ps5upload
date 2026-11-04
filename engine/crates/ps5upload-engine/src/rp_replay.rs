@@ -7,7 +7,8 @@
 //!
 //! The snapshot's wire form (`GET /api/ps5/rp/replay`), all integers big-endian:
 //! `"PSRP1"`, then records `[kind u8][t_us u64][len u32][bytes]`: kind 0 = video codec header,
-//! 3 = audio header (both at t 0, first), 1 = video access unit, 4 = Opus frame; then for kind 1
+//! 3 = audio header (both at t 0, first), 1 = video access unit, 4 = audio frame as the session
+//! carries it (`[u16 BE index][Opus packet]`; a recovered copy can arrive late); then for kind 1
 //! one more byte before the bytes: 1 for a keyframe, 0 otherwise.
 
 use std::collections::VecDeque;
