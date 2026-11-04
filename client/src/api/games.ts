@@ -78,7 +78,8 @@ export const gamesApi = {
     return r.body;
   },
   /** Forgets saved state of every console not in `hosts`. */
-  keep: async (hosts: string[]): Promise<void> => {
-    await call(`/console-snapshots/keep`, { method: "POST", body: JSON.stringify({ hosts }) });
+  /** Forget these consoles (removed here, or at a new IP); other clients' consoles stay. */
+  forget: async (hosts: string[]): Promise<void> => {
+    await call(`/console-snapshots/forget`, { method: "POST", body: JSON.stringify({ hosts }) });
   },
 };

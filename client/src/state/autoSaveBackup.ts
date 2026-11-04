@@ -87,15 +87,24 @@ export const useAutoSaveBackupStore = create<AutoSaveBackupState>((set) => ({
  */
 export function startSaveBackupSync(): () => void {
   let sent = "";
+  // What this client has told the engine about: only that can be taken off again. Several clients
+  // can share one engine, and each has its own roster.
+  let told: string[] = [];
   const push = (profiles: readonly { host: string }[]) => {
     const hosts = backupHosts(profiles);
     const key = hosts.join(",");
     if (key === sent) return;
     sent = key;
-    void saveBackupApi.set({ hosts }).catch((e) => {
-      sent = "";
-      log.warn("saves", "could not give the engine the console list for save backups", e);
-    });
+    const removed = told.filter((h) => !hosts.includes(h));
+    void saveBackupApi.set({ add_hosts: hosts, remove_hosts: removed }).then(
+      () => {
+        told = hosts;
+      },
+      (e) => {
+        sent = "";
+        log.warn("saves", "could not give the engine the console list for save backups", e);
+      },
+    );
   };
   void (async () => {
     try {
