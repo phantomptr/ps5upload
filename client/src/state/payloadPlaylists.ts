@@ -9,8 +9,9 @@ import {
   payloadsDownload,
   payloadsLocalInventory,
   payloadsRelease,
-  sendPayload,
+  sendPayloadChecked,
 } from "../api/ps5";
+import { payloadSendRefusalText } from "../lib/payloadSendRefusal";
 import { log } from "./logs";
 import { importedPlaylists, type PlaylistExport } from "../lib/playlistShare";
 import {
@@ -375,10 +376,10 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
           if (!isLive()) return;
           // A step on a saved server is copied here first (the loader sends local bytes), and
           // the copy goes once it is sent.
-          await withLocalCopy(sendPath, (local) => sendPayload(stepHost, local, stepPort));
+          await withLocalCopy(sendPath, (local) => sendPayloadChecked(stepHost, local, stepPort));
           successCount++;
         } catch (e) {
-          const errMsg = e instanceof Error ? e.message : String(e);
+          const errMsg = payloadSendRefusalText(e);
           failureCount++;
           failures.push({ stepIndex: i, error: errMsg });
           // Log every step failure: the run-status banner is transient (gone by

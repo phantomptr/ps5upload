@@ -26,11 +26,12 @@ import {
   payloadsDownload,
   payloadsAddCustomRepo,
   payloadsRemoveCustomRepo,
-  sendPayload,
+  sendPayloadChecked,
   type PayloadInfo,
   type PayloadReleaseInfo,
   type PayloadLocalEntry,
 } from "../../api/ps5";
+import { payloadSendRefusalText } from "../../lib/payloadSendRefusal";
 import {
   defaultRelease,
   downloadableReleases,
@@ -377,7 +378,7 @@ export default function CatalogPanel() {
     }
     setBusy(id, true);
     try {
-      const { viaPayloadManager } = await sendPayload(host.trim(), local.path);
+      const { viaPayloadManager } = await sendPayloadChecked(host.trim(), local.path);
       const version = local.version || "?";
       pushNotification(
         "success",
@@ -402,9 +403,10 @@ export default function CatalogPanel() {
         },
       );
     } catch (e) {
-      setErrors((prev) => ({ ...prev, [id]: String(e) }));
+      const why = payloadSendRefusalText(e);
+      setErrors((prev) => ({ ...prev, [id]: why }));
       pushNotification("error", withConsolePrefix(host, tr("payloads_send_failed", { id }, `Send failed: ${id}`)), {
-        body: String(e),
+        body: why,
         link: "/payloads",
       });
     } finally {

@@ -22,11 +22,12 @@ import {
   payloadsRelease,
   processKill,
   processList,
-  sendPayload,
+  sendPayloadChecked,
   type PayloadInfo,
   type ProcessInfo,
 } from "../../../api/ps5";
 import { mgmtAddr, withPort } from "../../../lib/addr";
+import { payloadSendRefusalText } from "../../../lib/payloadSendRefusal";
 import { openExternalUrl } from "../../../lib/openExternalUrl";
 import { compareVersions } from "../../../lib/semver";
 import { isTauriEnv } from "../../../lib/tauriEnv";
@@ -358,7 +359,7 @@ function OnPs5Body() {
       const inv = await payloadsLocalInventory();
       let local = inv.find((e) => e.payload_id === card.id && e.version === rel.tag);
       if (!local) local = await payloadsDownload(card.id, rel.picked_asset_url, rel.tag);
-      await sendPayload(host.trim(), local.path);
+      await sendPayloadChecked(host.trim(), local.path);
       pushNotification(
         "success",
         withConsolePrefix(host, tr("hub_updated", { name: card.name, version: rel.tag }, `Sent ${card.name} ${rel.tag}`)),
@@ -370,7 +371,7 @@ function OnPs5Body() {
       pushNotification(
         "error",
         withConsolePrefix(host, tr("hub_update_failed", { name: card.name }, `Couldn't update ${card.name}`)),
-        { body: String(e) },
+        { body: payloadSendRefusalText(e) },
       );
     } finally {
       setBusy(null);

@@ -448,6 +448,60 @@ pub async fn payload_send(ip: String, path: String, port: Option<u16>) -> serde_
     }
 }
 
+/// Whether a send the user started may go now, asked of the engine: the loader serves one
+/// connection at a time and the engine is the one using it (an elfldr swap, an install's daemon
+/// send), and a helper image stops the helper a running job needs. This socket is the app's own,
+/// so it can't take the engine's lock; the check waits for it to be free instead. The app's own
+/// sends of the helper (the recovery a queue runs) do not come here.
+///
+/// `{ok: true}` to go ahead, also when the engine can't be asked: the send itself says what is
+/// wrong then. `{ok: false, status}` with the engine's reason otherwise.
+#[tauri::command]
+pub async fn payload_send_check(
+    ip: String,
+    path: String,
+    port: Option<u16>,
+) -> serde_json::Value {
+    if port.unwrap_or(PS5_LOADER_PORT) != PS5_LOADER_PORT {
+        return serde_json::json!({ "ok": true });
+    }
+    let helper = file_is_helper(&path).await;
+    let url = format!("{}/api/payload/send-check", crate::engine::url());
+    let Ok(client) = crate::engine_http::engine_client_builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+    else {
+        return serde_json::json!({ "ok": true });
+    };
+    let body = serde_json::json!({ "host": ip, "helper": helper });
+    let Ok(resp) = client.post(url).json(&body).send().await else {
+        return serde_json::json!({ "ok": true });
+    };
+    if resp.status() != reqwest::StatusCode::CONFLICT {
+        return serde_json::json!({ "ok": true });
+    }
+    let reason = resp
+        .json::<serde_json::Value>()
+        .await
+        .ok()
+        .and_then(|v| v.get("error")?.as_str().map(str::to_string))
+        .unwrap_or_else(|| "loader_busy".to_string());
+    serde_json::json!({ "ok": false, "status": reason })
+}
+
+/// Whether the file at `path` is a ps5upload helper, from the same window `payload_send` reads.
+async fn file_is_helper(path: &str) -> bool {
+    const PROBE_WINDOW: u64 = 512 * 1024;
+    let Ok(file) = tokio::fs::File::open(path).await else {
+        return false;
+    };
+    let mut window = Vec::new();
+    if file.take(PROBE_WINDOW).read_to_end(&mut window).await.is_err() {
+        return false;
+    }
+    is_ps5upload_payload(path, &window)
+}
+
 /// This engine's AVA1 public key and the launch token that goes with it (SPEC.md §5.2),
 /// or `None` if the engine is unreachable or silent.
 async fn fetch_ava1_identity(url: &str) -> Option<([u8; 32], Option<[u8; 16]>)> {

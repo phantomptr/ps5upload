@@ -8,10 +8,11 @@ import {
   profileNpBackup,
   profileNpRestore,
   profileNpState,
-  sendPayload,
+  sendPayloadChecked,
   type NpState,
   type ProfileInfo,
 } from "../../api/ps5";
+import { payloadSendRefusalText } from "../../lib/payloadSendRefusal";
 import { Button, Card, ErrorCard, SuccessCard } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { hostOf } from "../../lib/addr";
@@ -160,7 +161,7 @@ export function NpSignInSection({
         rel.tag,
       );
       setBusy(tr("profile.np.sending", undefined, "Sending it to the PS5…"));
-      await sendPayload(hostOf(addr), local.path);
+      await sendPayloadChecked(hostOf(addr), local.path);
       setDone(
         tr(
           "profile.np.sent",
@@ -170,7 +171,7 @@ export function NpSignInSection({
       );
       await refreshNpState();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(payloadSendRefusalText(e));
     } finally {
       setBusy(null);
     }
