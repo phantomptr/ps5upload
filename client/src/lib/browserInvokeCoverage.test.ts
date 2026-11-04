@@ -73,8 +73,6 @@ const NATIVE_ONLY: Record<string, string> = {
   screenshot_convert: "native: host image transcode into a temp dir",
   usb_list_removable: "native: enumerates host block devices",
   usb_autoloader_install: "native: writes to a host USB volume",
-  fs_blake3_hash: "native: hashes a host file",
-  crc32_file_get: "native: hashes a host file",
 
   // Desktop app data / lifecycle
   user_config_load: "native: desktop config file mirror (localStorage in browser)",
@@ -131,27 +129,11 @@ const NATIVE_ONLY: Record<string, string> = {
   send_payload_history_add: "native: desktop history file",
   send_payload_history_clear: "native: desktop history file",
 
-  // Payload catalogue: downloads ELFs to host disk, then sends them over a
-  // raw socket. The browser build's Payloads screen has no Catalog or Send tab.
-  payloads_catalog: "native: caches the catalogue on host disk",
-  payloads_releases: "native: talks to the GitHub API from the client",
-  payloads_release: "native: talks to the GitHub API from the client",
-  payloads_download: "native: downloads an ELF to host disk",
-  payloads_local_inventory: "native: reads the host payload dir",
-  payloads_local_path: "native: host path",
-  payloads_add_custom_repo: "native: desktop repo-config file",
-  payloads_remove_custom_repo: "native: desktop repo-config file",
   payload_bundled_path: "native: path of an ELF bundled in the desktop app",
 
   // Direct TCP to the console — need an engine route before they can work
   payload_probe: "direct-socket: probes the console's mgmt port",
-  payload_send: "direct-socket: writes an ELF to the console's loader port",
   payload_send_check: "direct-socket: asks before payload_send (the browser's own send is checked by the engine)",
-  companion_probe: "direct-socket: raw TCP connect probe",
-  discover_ps5: "direct-socket: mDNS multicast",
-  shell_run_cmd: "direct-socket: console mgmt port",
-  appdb_query_get: "direct-socket: console mgmt port",
-  heal_appmeta: "direct-socket: console mgmt port",
   title_meta_fetch: "native: fetches artwork over https from the client",
 };
 

@@ -1,6 +1,6 @@
 //! Real implementations of the connectivity + payload-send primitives.
 //! These stay small and dependency-free: a TCP connect for port_check, a
-//! `stream the file + half-close` for payload_send, and a thin wrapper
+//! thin caller of `payload_lifecycle` for payload_send, and a thin wrapper
 //! around the engine's FS_LIST_DIR for manage_list.
 
 use std::net::SocketAddr;
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
@@ -25,11 +25,6 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// really a slow lookup. Resolving separately also lets the error say which
 /// of the two actually failed.
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
-const SEND_TIMEOUT: Duration = Duration::from_secs(60);
-/// How long a refused :9021 is tried again before it counts as closed (see `connect_then`).
-const LOADER_REFUSED_RETRY: Duration = Duration::from_secs(8);
-const LOADER_REFUSED_POLL: Duration = Duration::from_millis(500);
-const PAYLOAD_SEND_MAX_BYTES: u64 = 128 * 1024 * 1024;
 const EMBEDDED_PAYLOAD_MAX_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Generic TCP reachability probe. Mirrors the Electron `port_check` shape:
@@ -240,263 +235,31 @@ mod status_failure_tests {
     }
 }
 
-/// Stream a file to a PS5 loader port. Extracted from the
-/// `#[tauri::command]` wrapper so the core flow (open → optional ELF
-/// magic check → connect → stream → half-close) is reachable from
-/// `#[tokio::test]` without standing up a Tauri runtime.
+/// Send an ELF (or other payload) to the PS5 payload loader, the way
+/// `payload_lifecycle::send_payload_file` does it for every front end: TCP connect to ip:port,
+/// stream the file, half-close the write side (the loader uses EOF as the "go execute" signal),
+/// and through Payload Manager when :9021 did not answer at all.
 ///
-/// When `target_port == PS5_LOADER_PORT` (9021 — the canonical ELF
-/// loader convention) we peek the first 4 bytes and reject non-ELF
-/// before opening the TCP socket. Without this, picking the wrong
-/// file silently streamed garbage to the loader, which then either
-/// hung or no-oped — surfacing to the user as "send succeeded but
-/// the payload didn't come up." Other ports (custom-build loaders,
-/// .bin/.js/.lua/.jar scene flows surfaced by `payload_probe`) skip
-/// the check; those formats don't begin with the ELF magic. JARs in
-/// particular start with `PK\x03\x04` (ZIP) — sending them to :9021
-/// would be a no-op; users targeting BD-JB-style loaders are expected
-/// to set a non-9021 port in the Send Payload screen.
-async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, String> {
-    let mut file = tokio::fs::File::open(path)
-        .await
-        .map_err(|e| format!("open {path}: {e}"))?;
-    let size = file
-        .metadata()
-        .await
-        .map_err(|e| format!("stat {path}: {e}"))?
-        .len();
-    if size > PAYLOAD_SEND_MAX_BYTES {
-        return Err(format!(
-            "payload is too large ({size} bytes > {PAYLOAD_SEND_MAX_BYTES} cap)"
-        ));
-    }
-    // Does the ELF we're about to load identify as a ps5upload payload?
-    // Only ps5upload payloads bind :9120, so only they contend with a
-    // running ps5upload — and only they warrant evicting it (below). Other
-    // ELFs (the DPI install daemon on :9115, scene tools) bind different
-    // ports and can load ALONGSIDE ps5upload, so they must NOT knock it
-    // offline. Determined here while the file is already open.
-    let mut sending_ps5upload = false;
-    if target_port == PS5_LOADER_PORT {
-        if size < 4 {
-            return Err(format!("not an ELF file: {path} (only {size} bytes)"));
-        }
-        // Read a window big enough to verify the ELF magic AND spot the
-        // "ps5upload" ASCII signature in the section headers (mirrors
-        // payload_probe's 512 KiB window). Capped so we stay off disk for
-        // large ELFs.
-        const PROBE_WINDOW: usize = 512 * 1024;
-        let want = PROBE_WINDOW.min(size as usize);
-        let mut window = vec![0u8; want];
-        file.read_exact(&mut window)
-            .await
-            .map_err(|e| format!("read {path}: {e}"))?;
-        if &window[..4] != b"\x7FELF" {
-            return Err(format!(
-                "not an ELF file: {path} (first 4 bytes {:02x?})",
-                &window[..4]
-            ));
-        }
-        sending_ps5upload = is_ps5upload_payload(path, &window);
-        // Rewind so the magic bytes ship as part of the file body.
-        file.seek(std::io::SeekFrom::Start(0))
-            .await
-            .map_err(|e| format!("seek {path}: {e}"))?;
-    }
-    // A ps5upload helper is sent from memory so its AVA1 trust slot can be stamped. Done before
-    // connecting: a connection the loader has taken must not wait on the engine.
-    let evict_helper = target_port == PS5_LOADER_PORT && sending_ps5upload;
-    let helper_bytes = if evict_helper {
-        let mut v = Vec::with_capacity(size as usize);
-        file.read_to_end(&mut v)
-            .await
-            .map_err(|e| format!("read {path}: {e}"))?;
-        stamp_ava1_trust(&mut v).await;
-        Some(v)
-    } else {
-        None
-    };
-
-    // When the user resends payload bytes to :9021, the PS5 ELF loader spawns a fresh process,
-    // but the OLD ps5upload payload is unaware and keeps running. The two contend for :9120.
-    // Symptom users see: "I sent the payload but nothing changed." So the running helper is asked
-    // to exit (best effort, no-op when nothing is listening).
-    //
-    // Only once the loader has taken the connection (see `connect_then`): a closed loader leaves
-    // the running helper alone.
-    //
-    // GATED on `evict_helper`: we ONLY evict when the incoming ELF is itself a ps5upload payload
-    // (the only thing that contends for :9120). Loading a different-port daemon, e.g. the DPI
-    // installer (:9115), leaves ps5upload running, so an install no longer drops the transfer
-    // connection. (On a single-payload loader the loader itself may still clobber ps5upload;
-    // that's outside our control, and the post-install payload restore, which IS a ps5upload
-    // send, cleans up the ports.)
-    let retry_refused = if target_port == PS5_LOADER_PORT {
-        LOADER_REFUSED_RETRY
-    } else {
-        Duration::ZERO
-    };
-    let mut stream = connect_then(ip, target_port, retry_refused, async {
-        if evict_helper {
-            evict_running_helper(ip).await;
-        }
-    })
-    .await?;
-    let sent = timeout(SEND_TIMEOUT, async {
-        let mut buf = [0u8; 64 * 1024];
-        let mut total = 0u64;
-        if let Some(v) = &helper_bytes {
-            stream
-                .write_all(v)
-                .await
-                .map_err(|e| format!("write: {e}"))?;
-            total = v.len() as u64;
-        } else {
-            loop {
-                let n = file
-                    .read(&mut buf)
-                    .await
-                    .map_err(|e| format!("read {path}: {e}"))?;
-                if n == 0 {
-                    break;
-                }
-                total = total.saturating_add(n as u64);
-                if total > PAYLOAD_SEND_MAX_BYTES {
-                    return Err(format!(
-                        "payload exceeded {PAYLOAD_SEND_MAX_BYTES} bytes while streaming"
-                    ));
-                }
-                stream
-                    .write_all(&buf[..n])
-                    .await
-                    .map_err(|e| format!("write: {e}"))?;
-            }
-        }
-        // Bound the half-close FIN: if the PS5 loader's TCP stack
-        // doesn't promptly ACK our FIN (e.g. its keepalive interval
-        // hasn't fired yet), an unbounded shutdown() can block until
-        // the OS keepalive default fires (Linux: 2 hours). 5 s is
-        // generous for a healthy LAN and keeps the worst case bounded.
-        match tokio::time::timeout(std::time::Duration::from_secs(5), stream.shutdown()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(format!("shutdown: {e}")),
-            Err(_) => {
-                // Treat shutdown timeout as success — the bytes are
-                // already in the kernel's send buffer and the loader
-                // typically reads + processes the ELF before ACKing
-                // our half-close anyway.
-            }
-        }
-        Ok::<u64, String>(total)
-    })
-    .await
-    .map_err(|_| "send timed out".to_string())??;
-    Ok(sent)
-}
-
-/// Connect to `ip:port`, retrying a refused connect for up to `retry_refused`, then run `before`
-/// and return the connection.
-///
-/// Why connect first: stopping the running helper and only then finding the loader closed left
-/// the console with neither, and the app with no way to bring either back. The caller writes the
-/// ELF on this same connection, so no bare connection is ever opened: a loader handed a
-/// connection and no bytes must not be left waiting on it. `before` is bounded (see
-/// `evict_running_helper`), well inside the patched elfldr's 15 s read deadline.
-///
-/// Why retry: elfldr leaves :9021 closed for about a second whenever it is replaced, and for 3 s
-/// after a failed accept. The engine's own loader sends wait on a lock for its swap; this socket
-/// is the desktop's own and cannot, so a send landing in that gap would fail (the auto-loader,
-/// or a playlist step). Only a refusal is retried: a timeout already took its full budget.
-async fn connect_then(
-    ip: &str,
-    port: u16,
-    retry_refused: Duration,
-    before: impl std::future::Future<Output = ()>,
-) -> Result<TcpStream, String> {
-    // Resolve first, on the lookup budget, so a slow DNS answer for a host
-    // name does not eat the connect timeout (#272); then each address gets
-    // the full connect timeout, as `connect_probe` does.
-    let addr = format!("{ip}:{port}");
-    let targets = resolve_targets(ip, port).await?;
-    let deadline = tokio::time::Instant::now() + retry_refused;
-    loop {
-        let mut last = format!("connect {addr}: no addresses to try");
-        let mut refused = false;
-        for sa in &targets {
-            match timeout(CONNECT_TIMEOUT, TcpStream::connect(sa)).await {
-                Ok(Ok(s)) => {
-                    before.await;
-                    return Ok(s);
-                }
-                Ok(Err(e)) => {
-                    refused = e.kind() == std::io::ErrorKind::ConnectionRefused;
-                    last = format!("connect {addr}: {e}");
-                }
-                Err(_) => {
-                    refused = false;
-                    last = format!("connect {addr}: timeout");
-                }
-            }
-        }
-        if !refused || tokio::time::Instant::now() >= deadline {
-            return Err(last);
-        }
-        tokio::time::sleep(LOADER_REFUSED_POLL).await;
-    }
-}
-
-/// Ask the running helper to exit, and give the port a moment to free. Bounded: the connection to
-/// the loader is waiting. An answer that comes later changes nothing, because a new helper that
-/// finds an old one alive takes over by itself.
-async fn evict_running_helper(ip: &str) {
-    use ps5upload_core::payload_lifecycle::{shutdown_running_payload, EVICT_BUDGET, EVICT_GRACE};
-    let host = ip.to_string();
-    // Off the async runtime: the management call is blocking I/O.
-    let _ = timeout(
-        EVICT_BUDGET,
-        tokio::task::spawn_blocking(move || shutdown_running_payload(&host)),
-    )
-    .await;
-    tokio::time::sleep(EVICT_GRACE).await;
-}
-
-/// Send an ELF (or other payload) to the PS5 payload loader. Matches
-/// the `make send-payload` behaviour: TCP connect to ip:port, stream
-/// the file, half-close the write side (the loader uses EOF as the
-/// "go execute" signal).
-///
-/// `port` is optional — defaults to `PS5_LOADER_PORT` (9021). Pass an
-/// override for scene payloads that bind a different loader port (some
-/// custom builds do). The Connection screen's fast-path send always
-/// uses the default; the Send-payload screen exposes a port field.
+/// `port` is optional and defaults to 9021. Pass an override for scene payloads that bind a
+/// different loader port. The Connection screen's fast-path send always uses the default; the
+/// Send-payload screen exposes a port field.
 #[tauri::command]
 pub async fn payload_send(ip: String, path: String, port: Option<u16>) -> serde_json::Value {
     let target_port = port.unwrap_or(PS5_LOADER_PORT);
-    match do_payload_send(&ip, &path, target_port).await {
-        Ok(n) => serde_json::json!({
-            "ok": true,
-            "status": format!("sent {n} bytes to {ip}:{target_port}"),
-            "bytes": n
-        }),
-        // Nothing answered on the loader at all (not a send that broke
-        // mid-way, which may already be running): launch it through the
-        // console's Payload Manager instead. A wedged elfldr leaves :9021 dead
-        // while Payload Manager stays up, and the helper could not be put back
-        // until the user reloaded elfldr by hand (#344).
-        Err(e) if target_port == PS5_LOADER_PORT && e.starts_with("connect ") => {
-            match payload_send_via_payload_manager(&ip, &path).await {
-                Ok(n) => serde_json::json!({
-                    "ok": true,
-                    "status": format!("{e}; launched {n} bytes through Payload Manager on {ip}:8084 instead"),
-                    "bytes": n
-                }),
-                Err(pm) => serde_json::json!({
-                    "ok": false,
-                    "status": format!("{e} (and no fallback: {pm})")
-                }),
-            }
-        }
-        Err(e) => serde_json::json!({ "ok": false, "status": e }),
+    let handle = tokio::runtime::Handle::current();
+    let sent = tokio::task::spawn_blocking(move || {
+        ps5upload_core::payload_lifecycle::send_payload_file(
+            &ip,
+            &path,
+            target_port,
+            &mut |bytes| handle.block_on(stamp_ava1_trust(bytes)),
+        )
+    })
+    .await;
+    match sent {
+        Ok(Ok(s)) => serde_json::json!({ "ok": true, "status": s.status, "bytes": s.bytes }),
+        Ok(Err(e)) => serde_json::json!({ "ok": false, "status": e }),
+        Err(e) => serde_json::json!({ "ok": false, "status": format!("send task: {e}") }),
     }
 }
 
@@ -592,22 +355,6 @@ async fn stamp_ava1_trust(bytes: &mut [u8]) {
     if let Err(why) = ava1::trust::stamp_program(bytes, key, || token) {
         eprintln!("[payload_send] {why}");
     }
-}
-
-/// Launch the ELF at `path` through Payload Manager (:8084). The stored copy
-/// is removed once it has been launched; the payload keeps running.
-async fn payload_send_via_payload_manager(ip: &str, path: &str) -> Result<u64, String> {
-    let mut bytes = tokio::fs::read(path)
-        .await
-        .map_err(|e| format!("read {path}: {e}"))?;
-    stamp_ava1_trust(&mut bytes).await;
-    let (host, n) = (ip.to_string(), bytes.len() as u64);
-    tokio::task::spawn_blocking(move || {
-        ps5upload_core::payload_manager::launch_helper(&host, &bytes)
-    })
-    .await
-    .map_err(|e| format!("launch task failed: {e}"))??;
-    Ok(n)
 }
 
 /// PS5 payload embedded at compile time via `include_bytes!`. The
@@ -903,26 +650,6 @@ fn memmem_ascii(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-/// True when the file we're about to send is a ps5upload payload — by
-/// filename (`ps5upload.elf`) or by the ASCII signature embedded in its
-/// section headers. This is the only kind of ELF that binds :9120
-/// and thus contends with a running ps5upload, so it's the only kind that
-/// should trigger eviction of the current payload. `head` is the leading
-/// chunk of the file (payload_probe / do_payload_send both pass 512 KiB).
-fn is_ps5upload_payload(path: &str, head: &[u8]) -> bool {
-    // Our installer daemon is a companion that runs alongside the helper, but
-    // it shares the name and carries "ps5upload" in its strings: rule it out
-    // first, by its file name or its own log marker.
-    let name = path.to_ascii_lowercase();
-    let base = name.rsplit(['/', '\\']).next().unwrap_or(&name);
-    if base.contains("installer") || memmem_ascii(head, b"PS5Upload installer") {
-        return false;
-    }
-    base.contains("ps5upload")
-        || memmem_ascii(head, b"ps5upload")
-        || memmem_ascii(head, b"PS5UPLOAD")
-}
-
 #[cfg(test)]
 mod ava1_fetch_tests {
     #[tokio::test]
@@ -943,15 +670,10 @@ mod ava1_fetch_tests {
 
 #[cfg(test)]
 mod payload_send_tests {
-    //! Pin the `do_payload_send` flow: ELF magic check fires only
-    //! on the canonical loader port, file bytes reach the listener,
-    //! and the half-close signals EOF. Pre-2.2.61 there was a
-    //! parallel implementation in `ps5upload-core::payload_loader`
-    //! that had the magic check but no production callers — we
-    //! deleted it and ported the check here.
+    //! The send itself is tested in `ps5upload_core::payload_lifecycle`. These two need what is
+    //! embedded in this app.
     use super::*;
-    use std::path::{Path, PathBuf};
-    use tokio::net::TcpListener;
+    use ps5upload_core::payload_lifecycle::is_ps5upload_payload;
 
     /// The embedded PS5 payload must decompress to a real ELF — this is
     /// exactly what "Send payload / helper" streams to the console. This
@@ -986,196 +708,6 @@ mod payload_send_tests {
         );
     }
 
-    fn tempdir() -> PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "ps5upload_probes_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&p).unwrap();
-        p
-    }
-
-    fn write_fixture(dir: &Path, name: &str, content: &[u8]) -> PathBuf {
-        let p = dir.join(name);
-        std::fs::write(&p, content).unwrap();
-        p
-    }
-
-    #[tokio::test]
-    async fn rejects_non_elf_on_default_loader_port() {
-        let tmp = tempdir();
-        let p = write_fixture(
-            &tmp,
-            "fake.elf",
-            b"NOT AN ELF, ENOUGH BYTES TO PASS THE SIZE CHECK",
-        );
-
-        // Port 0 would also fail to connect, but the magic check fires
-        // first because we open and peek before connecting.
-        let err = do_payload_send("127.0.0.1", p.to_str().unwrap(), PS5_LOADER_PORT)
-            .await
-            .unwrap_err();
-        assert!(
-            err.contains("not an ELF"),
-            "expected ELF-magic rejection, got: {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn rejects_too_small_file_on_default_loader_port() {
-        let tmp = tempdir();
-        let p = write_fixture(&tmp, "tiny.elf", b"AB");
-
-        let err = do_payload_send("127.0.0.1", p.to_str().unwrap(), PS5_LOADER_PORT)
-            .await
-            .unwrap_err();
-        assert!(
-            err.contains("not an ELF"),
-            "expected size-based rejection, got: {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn skips_magic_check_on_non_default_port() {
-        // .bin / .js / .lua scene flows use custom loader ports and
-        // don't begin with the ELF magic. The check must NOT fire
-        // there. We verify by sending a non-ELF to a real listener
-        // on a non-default port and asserting success + bytes match.
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        assert_ne!(port, PS5_LOADER_PORT, "ephemeral port must not be 9021");
-
-        let received = tokio::spawn(async move {
-            let (mut s, _) = listener.accept().await.unwrap();
-            let mut buf = Vec::new();
-            s.read_to_end(&mut buf).await.unwrap();
-            buf
-        });
-
-        let tmp = tempdir();
-        let payload = b"#!/usr/bin/env lua\nprint('hi')\n";
-        let p = write_fixture(&tmp, "exploit.lua", payload);
-
-        let n = do_payload_send("127.0.0.1", p.to_str().unwrap(), port)
-            .await
-            .unwrap();
-        assert_eq!(n, payload.len() as u64);
-
-        let got = received.await.unwrap();
-        assert_eq!(got, payload);
-    }
-
-    #[tokio::test]
-    async fn sends_elf_bytes_to_loopback_listener() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        let received = tokio::spawn(async move {
-            let (mut s, _) = listener.accept().await.unwrap();
-            let mut buf = Vec::new();
-            s.read_to_end(&mut buf).await.unwrap();
-            buf
-        });
-
-        let tmp = tempdir();
-        let mut elf = b"\x7FELF".to_vec();
-        elf.extend(vec![0xabu8; 1024]);
-        let p = write_fixture(&tmp, "ok.elf", &elf);
-
-        // Use the random listener's port — that path skips the
-        // magic check, but we want to also exercise the magic path,
-        // so we run a *second* send against the default loader port
-        // wrapper-style: the listener test above proved the bytes
-        // path works; here we just confirm a valid ELF makes it
-        // through the magic gate without rewriting the buffer.
-        let n = do_payload_send("127.0.0.1", p.to_str().unwrap(), port)
-            .await
-            .unwrap();
-        assert_eq!(n, elf.len() as u64);
-
-        let got = received.await.unwrap();
-        assert_eq!(got, elf);
-    }
-
-    /// A closed loader must cost the console nothing: `before` (stopping the running helper)
-    /// runs only once the loader has taken the connection.
-    #[tokio::test]
-    async fn a_closed_loader_never_runs_the_eviction() {
-        let port = TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let ran = std::sync::atomic::AtomicBool::new(false);
-        let err = connect_then("127.0.0.1", port, Duration::ZERO, async {
-            ran.store(true, std::sync::atomic::Ordering::SeqCst);
-        })
-        .await
-        .unwrap_err();
-        assert!(err.starts_with("connect "), "{err}");
-        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
-    }
-
-    /// The eviction runs with the connection already taken, and that connection carries the bytes.
-    #[tokio::test]
-    async fn evicts_with_the_connection_already_open() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let mut accepted = None;
-        let mut stream = connect_then("127.0.0.1", port, Duration::ZERO, async {
-            accepted = Some(listener.accept().await.unwrap().0);
-        })
-        .await
-        .unwrap();
-        stream.write_all(b"\x7FELF").await.unwrap();
-        stream.shutdown().await.unwrap();
-        let mut got = Vec::new();
-        accepted.unwrap().read_to_end(&mut got).await.unwrap();
-        assert_eq!(got, b"\x7FELF");
-    }
-
-    /// An elfldr swap closes :9021 for about a second: a send landing in that gap waits it out.
-    #[tokio::test]
-    async fn a_refused_connect_is_tried_again_within_the_window() {
-        let port = TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let opens = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            let l = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
-            l.accept().await.unwrap();
-        });
-        connect_then("127.0.0.1", port, Duration::from_secs(5), async {})
-            .await
-            .expect("connects once the port opens");
-        opens.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn enforces_size_cap() {
-        let tmp = tempdir();
-        let p = tmp.join("huge.elf");
-        // Use set_len to make a sparse file at the size cap + 1 — no
-        // need to actually allocate 128 MiB on disk for this test.
-        let f = std::fs::File::create(&p).unwrap();
-        f.set_len(PAYLOAD_SEND_MAX_BYTES + 1).unwrap();
-        drop(f);
-
-        let err = do_payload_send("127.0.0.1", p.to_str().unwrap(), PS5_LOADER_PORT)
-            .await
-            .unwrap_err();
-        assert!(err.contains("too large"), "expected size cap, got: {err}");
-    }
-
     #[test]
     fn the_real_installer_daemon_never_evicts_the_helper() {
         // The shipped daemon carries "ps5upload" in its debug paths, so the
@@ -1186,28 +718,5 @@ mod payload_send_tests {
         let head = &elf[..elf.len().min(512 * 1024)];
         assert!(!is_ps5upload_payload("/x/ps5upload-installer.elf", head));
         assert!(!is_ps5upload_payload("/x/daemon.elf", head));
-    }
-
-    #[test]
-    fn ps5upload_detection_gates_eviction() {
-        // ps5upload payload — by filename...
-        assert!(is_ps5upload_payload(
-            "/x/ps5upload.elf",
-            b"\x7FELF\x00garbage"
-        ));
-        // ...or by embedded signature (case-insensitive) even with a
-        // neutral filename (e.g. a user-renamed copy).
-        assert!(is_ps5upload_payload(
-            "/x/helper.elf",
-            b"\x7FELF .... ps5upload v2 ...."
-        ));
-        assert!(is_ps5upload_payload("/x/HELPER.ELF", b"\x7FELF PS5UPLOAD"));
-        // The DPI daemon and other scene ELFs must NOT match — loading
-        // them leaves a running ps5upload untouched.
-        assert!(!is_ps5upload_payload(
-            "/x/ps5upload-installer.elf",
-            b"\x7FELF some other daemon"
-        ));
-        assert!(!is_ps5upload_payload("/x/exploit.elf", b"\x7FELF\x00\x00"));
     }
 }

@@ -918,6 +918,12 @@ pub async fn start(app: &AppHandle) -> Result<String> {
         cmd.env("PS5UPLOAD_UNRAR_BIN", p);
     }
 
+    // The Payload Library's folder: the engine's /api/payloads and this app's Payloads screen
+    // share one cache and one repo list.
+    if let Ok(dir) = crate::commands::payloads::library_dir(app) {
+        cmd.env(ps5upload_core::payload_library::PAYLOADS_DIR_ENV, dir);
+    }
+
     // Windows: belt-and-braces with the engine's own
     // `windows_subsystem = "windows"` — also pass CREATE_NO_WINDOW so
     // the spawn API never allocates a console for the child. With only

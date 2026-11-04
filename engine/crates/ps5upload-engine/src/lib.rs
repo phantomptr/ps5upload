@@ -34,6 +34,7 @@ mod console_payload;
 mod console_read;
 mod console_shares_api;
 mod console_snapshot;
+mod console_tools_api;
 mod convert_source;
 mod diag_api;
 mod disk_usage;
@@ -77,6 +78,7 @@ mod net_doctor;
 mod net_health;
 mod ops;
 mod pad_link;
+mod payloads_api;
 mod pkg_install;
 mod pkg_sidecar;
 mod pldmgr_api;
@@ -12115,6 +12117,8 @@ fn build_app(
             post(remote::api::test_saved_handler),
         )
         .merge(browser_payload::router(browser_payload_installs))
+        .merge(payloads_api::router())
+        .merge(console_tools_api::router())
         .route("/api/remote/test", post(remote::api::test_form_handler))
         .route("/api/remote/list", post(remote::api::list_dir_handler))
         .route(

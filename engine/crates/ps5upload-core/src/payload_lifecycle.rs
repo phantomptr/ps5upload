@@ -50,8 +50,8 @@ pub const DPI_REASON_NO_BRINGUP: &str = "no_bringup";
 
 /// Classify a loader-send failure.
 ///
-/// Both senders (`send_elf_to_loader` here, and the desktop's
-/// `do_payload_send`) report a failure to reach the loader as
+/// Both senders (`send_elf_to_loader` and `send_payload_image`) report a
+/// failure to reach the loader as
 /// `connect <addr>: <cause>`; every other failure they can return happens
 /// after the socket is up. Keying off that prefix keeps the distinction the
 /// user needs — "your loader isn't listening" vs "the send broke" — without a
@@ -175,9 +175,9 @@ pub enum LoaderImage {
 }
 
 /// Stream raw ELF bytes to the PS5's loader and half-close so it executes
-/// them. This is the engine-side twin of the desktop client's
-/// `do_payload_send`: same ELF-magic gate, same old-payload eviction, same
-/// bounded half-close.
+/// them: the ELF-magic gate, old-payload eviction and half-close of
+/// `send_payload_image`, without its stamping or Payload Manager fallback,
+/// for the images the install cascade loads itself.
 ///
 /// It exists because the install cascade's DPI fallback — the only path
 /// that lands a game *patch* — needs to load a daemon onto the console,
@@ -300,9 +300,292 @@ fn evict_running_helper(host: String) {
     std::thread::sleep(EVICT_GRACE);
 }
 
+/// A send that reached the console.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentPayload {
+    pub bytes: u64,
+    /// :9021 did not answer, so the file was launched through Payload Manager on :8084.
+    pub via_payload_manager: bool,
+    /// One line for the user or a log, the same wording on every front end.
+    pub status: String,
+}
+
+/// The most a payload file may be. The loader has no length prefix and runs whatever it reads at
+/// EOF, so a wrong file picked up by mistake should stop here.
+const PAYLOAD_FILE_MAX_BYTES: u64 = 128 * 1024 * 1024;
+const PAYLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+/// A host name gets its own budget, separate from the connect one: a slow first lookup could
+/// spend all of it, and the send then said "port not open" for a name that was only slow (#272).
+const PAYLOAD_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
+const PAYLOAD_SEND_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a refused :9021 is tried again before it counts as closed: elfldr leaves it closed for
+/// about a second whenever it is replaced, and for 3 s after a failed accept. A desktop send has no
+/// lock to wait on for that gap (the auto-loader, a playlist step).
+const LOADER_REFUSED_RETRY: Duration = Duration::from_secs(8);
+const LOADER_REFUSED_POLL: Duration = Duration::from_millis(500);
+/// How much of a file to read for the signature: `is_ps5upload_payload` sees this window.
+const PAYLOAD_PROBE_WINDOW: usize = 512 * 1024;
+
+fn memmem_ascii(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack.len() >= needle.len()
+        && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// True when the file about to be sent is a ps5upload helper, by file name or by the ASCII
+/// signature in its section headers. Only those bind :9120, so only those contend with a running
+/// helper and warrant evicting it. `head` is the leading part of the file.
+pub fn is_ps5upload_payload(path: &str, head: &[u8]) -> bool {
+    // Our installer daemon is a companion that runs alongside the helper, but it shares the name
+    // and carries "ps5upload" in its strings: rule it out first, by its name or its log marker.
+    let name = path.to_ascii_lowercase();
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(&name);
+    if base.contains("installer") || memmem_ascii(head, b"PS5Upload installer") {
+        return false;
+    }
+    base.contains("ps5upload")
+        || memmem_ascii(head, b"ps5upload")
+        || memmem_ascii(head, b"PS5UPLOAD")
+}
+
+/// Resolve on its own budget, so no lookup can hold a send for longer than that.
+fn resolve_within(host: &str, addr: &str) -> Result<Vec<std::net::SocketAddr>, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let name = addr.to_string();
+    std::thread::Builder::new()
+        .name("payload-resolve".into())
+        .spawn(move || {
+            let _ = tx.send(resolve_connect_targets(&name));
+        })
+        .map_err(|e| format!("cannot resolve \"{host}\": {e}"))?;
+    match rx.recv_timeout(PAYLOAD_RESOLVE_TIMEOUT) {
+        Ok(Ok(t)) => Ok(t),
+        Ok(Err(e)) => Err(format!("cannot resolve \"{host}\": {e}")),
+        Err(_) => Err(format!(
+            "cannot resolve \"{host}\": name lookup timed out after {}s",
+            PAYLOAD_RESOLVE_TIMEOUT.as_secs()
+        )),
+    }
+}
+
+/// Connect, run `before`, stream `image`, half-close. A failure to reach the loader starts with
+/// `connect `, and then `before` has not run: stopping the running helper and only then finding the
+/// loader closed left the console with neither. A refused connect is tried again for
+/// `retry_refused`; a timeout already took its full budget.
+fn stream_to_port(
+    host: &str,
+    port: u16,
+    image: &[u8],
+    retry_refused: Duration,
+    before: impl FnOnce(),
+) -> Result<u64, String> {
+    let addr = join_host_port(host, port);
+    let targets = resolve_within(host, &addr)?;
+    let give_up = std::time::Instant::now() + retry_refused;
+    let mut stream = None;
+    while stream.is_none() {
+        let mut last = format!("connect {addr}: no addresses to try");
+        let mut was_refused = false;
+        for sa in &targets {
+            match TcpStream::connect_timeout(sa, PAYLOAD_CONNECT_TIMEOUT) {
+                Ok(s) => {
+                    stream = Some(s);
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    was_refused = false;
+                    last = format!("connect {addr}: timeout");
+                }
+                Err(e) => {
+                    was_refused = e.kind() == std::io::ErrorKind::ConnectionRefused;
+                    last = format!("connect {addr}: {e}");
+                }
+            }
+        }
+        if stream.is_none() {
+            if !was_refused || std::time::Instant::now() >= give_up {
+                return Err(last);
+            }
+            std::thread::sleep(LOADER_REFUSED_POLL);
+        }
+    }
+    let mut stream = stream.ok_or_else(|| format!("connect {addr}: no connection"))?;
+    before();
+    let deadline = std::time::Instant::now() + PAYLOAD_SEND_TIMEOUT;
+    for chunk in image.chunks(64 * 1024) {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err("send timed out".to_string());
+        }
+        stream
+            .set_write_timeout(Some(left))
+            .map_err(|e| format!("set write timeout: {e}"))?;
+        stream.write_all(chunk).map_err(|e| match e.kind() {
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
+                "send timed out".to_string()
+            }
+            _ => format!("write: {e}"),
+        })?;
+    }
+    // The loader takes EOF as "go execute". The bytes are already in the kernel's buffer, so this
+    // only fails on a socket that is really gone.
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .map_err(|e| format!("shutdown: {e}"))?;
+    Ok(image.len() as u64)
+}
+
+/// Launch an image through Payload Manager (:8084). The stored copy is removed once it has been
+/// launched; the payload keeps running. Our own name, never the file's: Payload Manager files
+/// uploads under a folder derived from the name and its cleanup clears that folder, so a user's
+/// own "ps5upload" entry must not be the one we land in.
+fn launch_through_payload_manager(host: &str, image: &[u8]) -> Result<u64, String> {
+    let name = "ps5upload-helper.elf";
+    crate::payload_manager::launch_elf(host, name, image)?;
+    // Give it a moment to start before the stored copy goes.
+    std::thread::sleep(Duration::from_secs(2));
+    crate::payload_manager::forget(host, name);
+    Ok(image.len() as u64)
+}
+
+/// Send an image to the console's loader, the one way every front end does it: refuse a non-ELF
+/// on :9021, stamp a helper for this engine's trust, connect, shut down a running helper when this
+/// is one, stream and half-close. When nothing answered on :9021 at all (not a send that broke mid-way,
+/// which may already be running), launch it through Payload Manager instead: a wedged elfldr
+/// leaves :9021 dead while Payload Manager stays up, and the helper could not be put back until
+/// the user reloaded elfldr by hand (#344).
+///
+/// `label` is a file name or path, for the signature check and for messages. `stamp` writes this
+/// engine's AVA1 trust into a helper image; a build without a slot comes back unchanged.
+pub fn send_payload_image(
+    host: &str,
+    port: u16,
+    label: &str,
+    image: &[u8],
+    stamp: &mut dyn FnMut(&mut Vec<u8>),
+) -> Result<SentPayload, String> {
+    let size = image.len() as u64;
+    if size > PAYLOAD_FILE_MAX_BYTES {
+        return Err(format!(
+            "payload is too large ({size} bytes > {PAYLOAD_FILE_MAX_BYTES} cap)"
+        ));
+    }
+    let mut is_helper = false;
+    // Other ports serve .bin/.js/.lua/.jar flows, which don't begin with the ELF magic.
+    if port == PS5_LOADER_PORT {
+        if size < 4 {
+            return Err(format!("not an ELF file: {label} (only {size} bytes)"));
+        }
+        if &image[..4] != b"\x7FELF" {
+            return Err(format!(
+                "not an ELF file: {label} (first 4 bytes {:02x?})",
+                &image[..4]
+            ));
+        }
+        is_helper = is_ps5upload_payload(label, &image[..image.len().min(PAYLOAD_PROBE_WINDOW)]);
+    }
+    let image_kind = if is_helper {
+        LoaderImage::Ps5Upload
+    } else {
+        LoaderImage::Companion
+    };
+    let stamped;
+    let to_send: &[u8] = if is_helper {
+        let mut v = image.to_vec();
+        stamp(&mut v);
+        stamped = v;
+        &stamped
+    } else {
+        image
+    };
+    let retry_refused = if port == PS5_LOADER_PORT {
+        LOADER_REFUSED_RETRY
+    } else {
+        Duration::ZERO
+    };
+    let evict = should_evict_running_payload(port, image_kind);
+    let sent = stream_to_port(host, port, to_send, retry_refused, || {
+        if evict {
+            evict_running_helper(host.to_string());
+        }
+    });
+    match sent {
+        Ok(n) => Ok(SentPayload {
+            bytes: n,
+            via_payload_manager: false,
+            status: format!("sent {n} bytes to {host}:{port}"),
+        }),
+        Err(e) if port == PS5_LOADER_PORT && e.starts_with("connect ") => {
+            let mut v = image.to_vec();
+            stamp(&mut v);
+            match launch_through_payload_manager(host, &v) {
+                Ok(n) => Ok(SentPayload {
+                    bytes: n,
+                    via_payload_manager: true,
+                    status: format!(
+                        "{e}; launched {n} bytes through Payload Manager on {host}:8084 instead"
+                    ),
+                }),
+                Err(pm) => Err(format!("{e} (and no fallback: {pm})")),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// [`send_payload_image`] for a file on this machine.
+pub fn send_payload_file(
+    host: &str,
+    path: &str,
+    port: u16,
+    stamp: &mut dyn FnMut(&mut Vec<u8>),
+) -> Result<SentPayload, String> {
+    let size = std::fs::metadata(path)
+        .map_err(|e| format!("open {path}: {e}"))?
+        .len();
+    if size > PAYLOAD_FILE_MAX_BYTES {
+        return Err(format!(
+            "payload is too large ({size} bytes > {PAYLOAD_FILE_MAX_BYTES} cap)"
+        ));
+    }
+    let image = std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
+    send_payload_image(host, port, path, &image, stamp)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_closed_port_runs_nothing_and_a_refused_one_is_tried_again() {
+        use std::io::Read;
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let mut ran = false;
+        let e = stream_to_port("127.0.0.1", port, b"x", Duration::ZERO, || ran = true).unwrap_err();
+        assert!(e.starts_with("connect "), "{e}");
+        assert!(
+            !ran,
+            "the helper must not be stopped for a loader that is closed"
+        );
+
+        let opens = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(700));
+            let l = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+            let (mut s, _) = l.accept().unwrap();
+            let mut got = Vec::new();
+            s.read_to_end(&mut got).unwrap();
+            got
+        });
+        let mut ran = false;
+        let sent = stream_to_port("127.0.0.1", port, b"abc", Duration::from_secs(5), || {
+            ran = true
+        });
+        assert_eq!(sent, Ok(3));
+        assert!(ran);
+        assert_eq!(opens.join().unwrap(), b"abc");
+    }
 
     /// The interesting failure mode for callers is "nothing listening on
     /// that addr" — assert that surfaces as Ok(false), not Err. The
@@ -550,5 +833,172 @@ mod tests {
             unreachable.starts_with("connect "),
             "want a connect error, got: {unreachable}"
         );
+    }
+
+    fn no_stamp() -> impl FnMut(&mut Vec<u8>) {
+        |_: &mut Vec<u8>| {}
+    }
+
+    fn temp_file(name: &str, content: &[u8]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ps5upload-send-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, content).unwrap();
+        p
+    }
+
+    fn listen_once() -> (u16, std::thread::JoinHandle<Vec<u8>>) {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let h = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut got = Vec::new();
+            sock.read_to_end(&mut got).unwrap();
+            got
+        });
+        (port, h)
+    }
+
+    #[test]
+    fn a_file_that_is_not_an_elf_stops_before_the_loader_port() {
+        let p = temp_file(
+            "fake.elf",
+            b"NOT AN ELF, ENOUGH BYTES TO PASS THE SIZE CHECK",
+        );
+        let e = send_payload_file(
+            "127.0.0.1",
+            p.to_str().unwrap(),
+            PS5_LOADER_PORT,
+            &mut no_stamp(),
+        )
+        .unwrap_err();
+        assert!(e.contains("not an ELF"), "{e}");
+        let p = temp_file("tiny.elf", b"AB");
+        let e = send_payload_file(
+            "127.0.0.1",
+            p.to_str().unwrap(),
+            PS5_LOADER_PORT,
+            &mut no_stamp(),
+        )
+        .unwrap_err();
+        assert!(e.contains("not an ELF"), "{e}");
+    }
+
+    #[test]
+    fn other_ports_take_other_file_types() {
+        let (port, h) = listen_once();
+        let body = b"#!/usr/bin/env lua\nprint('hi')\n";
+        let p = temp_file("exploit.lua", body);
+        let sent =
+            send_payload_file("127.0.0.1", p.to_str().unwrap(), port, &mut no_stamp()).unwrap();
+        assert_eq!(sent.bytes, body.len() as u64);
+        assert!(!sent.via_payload_manager);
+        assert_eq!(h.join().unwrap(), body);
+    }
+
+    #[test]
+    fn a_companion_elf_is_sent_as_is_and_not_stamped() {
+        let (port, h) = listen_once();
+        let mut elf = b"\x7FELF".to_vec();
+        elf.extend(vec![0xabu8; 200 * 1024]);
+        let p = temp_file("ok.elf", &elf);
+        let mut stamped = false;
+        let sent = send_payload_file("127.0.0.1", p.to_str().unwrap(), port, &mut |_| {
+            stamped = true;
+        })
+        .unwrap();
+        assert_eq!(sent.bytes, elf.len() as u64);
+        assert_eq!(
+            sent.status,
+            format!("sent {} bytes to 127.0.0.1:{port}", elf.len())
+        );
+        assert_eq!(h.join().unwrap(), elf);
+        assert!(!stamped);
+    }
+
+    #[test]
+    fn the_size_cap_applies_before_anything_is_read() {
+        let p = temp_file("huge.elf", b"");
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_len(PAYLOAD_FILE_MAX_BYTES + 1)
+            .unwrap();
+        let e = send_payload_file(
+            "127.0.0.1",
+            p.to_str().unwrap(),
+            PS5_LOADER_PORT,
+            &mut no_stamp(),
+        )
+        .unwrap_err();
+        assert!(e.contains("too large"), "{e}");
+    }
+
+    #[test]
+    fn a_missing_file_is_named() {
+        let e =
+            send_payload_file("127.0.0.1", "/no/such/file.elf", 1, &mut no_stamp()).unwrap_err();
+        assert!(e.contains("/no/such/file.elf"), "{e}");
+    }
+
+    #[test]
+    fn a_dead_port_that_is_not_the_loader_gets_no_fallback() {
+        let closed = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let e = send_payload_image("127.0.0.1", closed, "x.elf", b"\x7FELFabc", &mut no_stamp())
+            .unwrap_err();
+        assert!(e.starts_with("connect "), "{e}");
+        assert!(
+            !e.contains("Payload Manager") && !e.contains("fallback"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_name_that_never_resolves_says_so() {
+        let e = send_payload_image(
+            "no-such-host.invalid",
+            9020,
+            "x.elf",
+            b"\x7FELFabc",
+            &mut no_stamp(),
+        )
+        .unwrap_err();
+        assert!(e.starts_with("cannot resolve"), "{e}");
+    }
+
+    #[test]
+    fn ps5upload_detection_gates_eviction() {
+        assert!(is_ps5upload_payload(
+            "/x/ps5upload.elf",
+            b"\x7FELF\x00garbage"
+        ));
+        // A user-renamed copy is told by its signature, in either case.
+        assert!(is_ps5upload_payload(
+            "/x/helper.elf",
+            b"\x7FELF .... ps5upload v2 ...."
+        ));
+        assert!(is_ps5upload_payload("/x/HELPER.ELF", b"\x7FELF PS5UPLOAD"));
+        // The installer daemon and other scene ELFs leave a running helper alone.
+        assert!(!is_ps5upload_payload(
+            "/x/ps5upload-installer.elf",
+            b"\x7FELF some other daemon"
+        ));
+        assert!(!is_ps5upload_payload(
+            "/x/daemon.elf",
+            b"\x7FELF ps5upload path, PS5Upload installer log marker"
+        ));
+        assert!(!is_ps5upload_payload("/x/exploit.elf", b"\x7FELF\x00\x00"));
     }
 }

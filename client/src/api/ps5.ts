@@ -563,7 +563,7 @@ export async function loadConsolePayload(host: string, path: string): Promise<{ 
 }
 
 /** Whether payload_send's status says the loader port was dead and the file
- *  was launched through Payload Manager instead (client/src-tauri probes.rs). */
+ *  was launched through Payload Manager instead (core payload_lifecycle.rs). */
 export function sentViaPayloadManager(status: string | undefined): boolean {
   return /through Payload Manager/i.test(status ?? "");
 }
@@ -1962,7 +1962,7 @@ export interface DiscoveredHost {
   loader_port_open: boolean;
   /** The helper's AVA1 port (9120) is reachable — our own payload is already running here. */
   payload_port_open: boolean;
-  /** 0-100 score; see commands/discover.rs::confidence for weights. */
+  /** 0-100 score; see core discover.rs::confidence for weights. */
   confidence: number;
   /** Pre-computed `confidence >= 50` so the renderer doesn't repeat
    *  the threshold value. UI shows a green badge when true. */
@@ -1990,7 +1990,7 @@ export async function discoverPs5(
 }
 
 // ─── Payload Library (curated catalogue + GitHub fetch) ───────────────
-// Backed by `commands/payloads.rs`. Three primitives:
+// Backed by `ps5upload-core`'s payload_library. Three primitives:
 //   - catalogue: static list of supported payloads
 //   - release: fetch latest GitHub release (cached on disk)
 //   - inventory + download: manage the on-disk cache the Send and
@@ -2035,7 +2035,7 @@ export interface PayloadReleaseInfo {
    *  the data is potentially stale and what went wrong, instead of
    *  silently presenting "old data as if fresh". Omitted (undefined)
    *  when the fetch succeeded. Mirrors sonicloader's `refreshError`
-   *  field — see backend `payloads.rs::ReleaseInfo`. */
+   *  field — see core `payload_library::ReleaseInfo`. */
   refresh_error?: string;
 }
 
@@ -2090,6 +2090,8 @@ export async function payloadsAddCustomRepo(args: {
   name: string;
   displayName?: string;
   assetHint?: string;
+  /** A `sha256sum`-style list the repo's releases publish. A download that doesn't match is refused. */
+  checksumFile?: string;
 }): Promise<PayloadInfo> {
   return invoke<PayloadInfo>("payloads_add_custom_repo", {
     host: args.host,
@@ -2097,6 +2099,7 @@ export async function payloadsAddCustomRepo(args: {
     name: args.name,
     displayName: args.displayName ?? null,
     assetHint: args.assetHint ?? null,
+    checksumFile: args.checksumFile ?? null,
   });
 }
 
@@ -2120,6 +2123,12 @@ export async function payloadsDownload(
     assetUrl,
     version,
   });
+}
+
+/** Stop a running download of this payload. Its `payloadsDownload` then rejects with
+ *  `download_cancelled` (`isDownloadCancelled`). False when none was running. */
+export async function payloadsDownloadCancel(id: string): Promise<boolean> {
+  return invoke<boolean>("payloads_download_cancel", { id });
 }
 
 // ─── ShadowMount+ awareness (read-only) ───────────────────────────────

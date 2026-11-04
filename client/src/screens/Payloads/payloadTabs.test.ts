@@ -7,7 +7,7 @@ import {
   defaultPayloadTab,
   legacyPayloadsTarget,
   payloadCardLink,
-  payloadTabsFor,
+  payloadTabs,
 } from "./payloadTabs";
 
 const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url), "utf8");
@@ -15,18 +15,16 @@ const app = read("../../App.tsx");
 const shim = read("../../lib/browserInvoke.ts");
 
 describe("Payloads in the browser build", () => {
-  it("keeps every tab on the desktop", () => {
-    expect(payloadTabsFor(true)).toEqual(["catalog", "send", "ps5", "running"]);
-  });
-
-  it("offers browser payload sending alongside On your PS5 and Running", () => {
-    expect(payloadTabsFor(false)).toEqual(["send", "ps5", "running"]);
+  it("has every tab in every build: the catalogue runs on the engine", () => {
+    expect(payloadTabs()).toEqual(["catalog", "send", "ps5", "running"]);
+    for (const cmd of ["payloads_catalog", "payloads_releases", "payloads_download", "payload_send"]) {
+      expect(shim).toContain(`case "${cmd}":`);
+    }
   });
 
   it("opens on On your PS5 once a console is connected", () => {
-    expect(defaultPayloadTab(true, true)).toBe("ps5");
-    expect(defaultPayloadTab(true, false)).toBe("catalog");
-    expect(defaultPayloadTab(false, false)).toBe("ps5");
+    expect(defaultPayloadTab(true)).toBe("ps5");
+    expect(defaultPayloadTab(false)).toBe("catalog");
   });
 
   it("is reachable: in the nav and not behind NativeOnlyRoute", () => {
