@@ -217,6 +217,21 @@ opt-level = "s"
 # packages via [profile.release.package.X] with `strip = true`.
 panic = "abort"
 
+# The phone apps link the engine into this binary, so a size-first profile would run Remote Play's
+# per-packet crypto at its slowest level on the weakest CPUs. Measured with these crates on Apple
+# Silicon (2026-11-04): AES-GCM 893 MB/s at "s", 3,831 MB/s at 3 (AES blocks and HMAC-SHA256 differ
+# by under 6 %). GCM is generic, so the crate that instantiates it counts too. Only these.
+[profile.release.package.ps5upload-core]
+opt-level = 3
+[profile.release.package.aes-gcm]
+opt-level = 3
+[profile.release.package.ghash]
+opt-level = 3
+[profile.release.package.polyval]
+opt-level = 3
+[profile.release.package.ctr]
+opt-level = 3
+
 # No `unrar` here: UnRAR runs as the separate `ps5upload-unrar` program (built in
 # the engine workspace, embedded next to the engine by build.rs/engine.rs), never
 # linked into this app or the engine. See LICENSES/UnRAR-exception.md.
