@@ -554,7 +554,8 @@ async fn the_route_receives_the_injected_op_id() {
     )
     .await;
     let v = wait_done(&app, &id).await;
-    let sent: Value = serde_json::from_str(v["body"].as_str().unwrap()).unwrap();
+    // The route echoes what it received; a JSON answer is kept as JSON.
+    let sent = &v["body"];
     assert_eq!(sent["op_id"], v["fs_op_id"]);
     assert_eq!(sent["from"], "/a");
 }
