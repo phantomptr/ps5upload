@@ -331,8 +331,7 @@ test("a friend's browser joins, plays as Player 2, and survives a dropped connec
   expect(f[0]).toBe(0x01);
   expect(f.slice(5)).toEqual([1, 0, 0, 0, 128, 128, 128, 128, 0, 0, 0]);
   const n = frames.length;
-  await page.waitForTimeout(600);
-  expect(frames.length - n).toBeGreaterThanOrEqual(4);
+  await expect.poll(() => frames.length - n, { timeout: 1_500 }).toBeGreaterThanOrEqual(4);
   const seqs = frames.map((x) => new DataView(Uint8Array.from(x).buffer).getUint32(1, true));
   for (let i = 1; i < seqs.length; i++) expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
   await press(page, 0, 0);

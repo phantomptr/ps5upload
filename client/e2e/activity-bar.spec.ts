@@ -75,7 +75,6 @@ test("desktop: the strip names the job and opens the activity panel", async ({ p
   await expect(sheet).toContainText("Dump Bloodborne");
   await expect(sheet).toContainText("Just finished");
   await expect(sheet).toContainText("USB gone");
-  await page.waitForTimeout(400);
   // The badge clears once the panel has shown the failure.
   await expect(toggle).not.toContainText("failed");
   const box = await sheet.boundingBox();
@@ -115,12 +114,13 @@ test("phone: a pill above the tab bar opens a bottom sheet inside the viewport",
   const sheet = page.getByTestId("activity-sheet");
   await expect(sheet).toBeVisible();
   await expect(sheet).toContainText("Dump Bloodborne");
-  // Let the sheet's slide-in finish before measuring it.
-  await page.waitForTimeout(400);
-  const sb = (await sheet.boundingBox())!;
-  expect(sb.x).toBeGreaterThanOrEqual(0);
-  expect(sb.x + sb.width).toBeLessThanOrEqual(375);
-  expect(sb.y + sb.height).toBeLessThanOrEqual(720 + 1);
+  // Measured once the slide-in has brought it fully on screen.
+  await expect
+    .poll(async () => {
+      const sb = (await sheet.boundingBox())!;
+      return sb.x >= 0 && sb.x + sb.width <= 375 && sb.y + sb.height <= 720 + 1;
+    })
+    .toBe(true);
   await noSideScroll(page);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/activity-phone-sheet.png` });
 

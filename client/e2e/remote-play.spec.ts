@@ -704,7 +704,7 @@ test("Remote Play saves a screenshot and a clip, shows its latency and asks for 
   await page.getByTestId("rp-record").click();
   await expect(page.getByTestId("rp-recording")).toContainText(/Recording 0:0\d/);
   await expect(page.getByTestId("rp-record")).toHaveAttribute("aria-pressed", "true");
-  await page.waitForTimeout(1500);
+  await expect(page.getByTestId("rp-recording")).toContainText(/Recording 0:0[1-9]/);
   const clipDl = page.waitForEvent("download");
   await toolbar.hover();
   await page.getByTestId("rp-record").click();

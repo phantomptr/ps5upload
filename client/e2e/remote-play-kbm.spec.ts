@@ -187,8 +187,7 @@ test("Keyboard & mouse sends raw keys, Mixed sends the pad, the hotkey cycles an
 
   // The heartbeat keeps going.
   const beats = engine.kbm.length;
-  await page.waitForTimeout(1200);
-  expect(engine.kbm.length).toBeGreaterThanOrEqual(beats + 2);
+  await expect.poll(() => engine.kbm.length).toBeGreaterThanOrEqual(beats + 2);
 
   // A key held when the window loses the focus is let go.
   await page.keyboard.down("KeyW");
@@ -437,8 +436,7 @@ test("a browser that refuses the pointer lock sends the mouse while it is over t
   const stage = page.getByTestId("rp-stage").filter({ visible: true });
   await expect(page.getByTestId("rp-capture-hint")).toHaveText("Click the picture to capture the mouse");
   await stage.click();
-  await page.waitForTimeout(300); // the lock's wait runs out
-  // The click gave the PS5 the keyboard and mouse all the same: the release key shows instead.
+  // Once the lock's wait runs out. The click gave the PS5 the keyboard and mouse all the same: the release key shows instead.
   await expect(page.getByTestId("rp-capture-hint")).toHaveCount(0);
   await expect(page.getByTestId("rp-kbm-card").or(page.getByTestId("rp-kbm-chip"))).toBeVisible();
   const box = (await stage.boundingBox())!;

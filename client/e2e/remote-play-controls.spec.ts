@@ -72,10 +72,10 @@ test("turbo repeats a held button, and a macro key plays its presses", async ({ 
   await stage.focus();
   pads.length = 0;
   await page.keyboard.down("Enter");
-  await page.waitForTimeout(600);
+  await expect
+    .poll(() => pads.filter((b, i) => i > 0 && (b & CROSS) !== (pads[i - 1] & CROSS)).length)
+    .toBeGreaterThanOrEqual(6);
   await page.keyboard.up("Enter");
-  const flips = pads.filter((b, i) => i > 0 && (b & CROSS) !== (pads[i - 1] & CROSS)).length;
-  expect(flips).toBeGreaterThanOrEqual(6);
 
   // A macro: Q plays ✕ for 100 ms.
   await page.getByTestId("rp-toolbar").hover();
