@@ -302,7 +302,7 @@ describe("a rename whose answer never came", () => {
     const { fs, log } = fakeConsole(WORLD);
     const real = mockCall.getMockImplementation()!;
     mockCall.mockImplementation(async (route: string, body?: unknown) => {
-      const r = await real(route, body);
+      const r = await real(route, body as object);
       if (route === "/api/fs/rename" && which(body as Record<string, string>)) throw new ApiError(0, "timeout");
       return r as never;
     });

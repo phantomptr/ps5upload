@@ -1,8 +1,16 @@
 // @vitest-environment node
+// @ts-expect-error -- the app tsconfig has no node types; Vitest runs this under Node.
+import { execFileSync } from "node:child_process";
+// @ts-expect-error -- as above.
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+// @ts-expect-error -- as above.
+import { tmpdir } from "node:os";
+// @ts-expect-error -- as above.
+import { join } from "node:path";
+// @ts-expect-error -- as above.
+import { fileURLToPath } from "node:url";
 import { transform } from "lightningcss";
 import postcss from "postcss";
-import { fileURLToPath } from "node:url";
-import { build } from "vite";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error plain .mjs build helper, no type declarations
 import { splitLangLists } from "../../postcss/langLists.mjs";
@@ -13,7 +21,23 @@ import { splitLangLists } from "../../postcss/langLists.mjs";
  * with a translate, one stretched to both sides) says so in a comment right after it.
  */
 
-const SHEETS = import.meta.glob("./**/*.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+declare const process: { execPath: string; env: Record<string, string | undefined> };
+
+const HERE: string = fileURLToPath(new URL(".", import.meta.url));
+const CLIENT: string = fileURLToPath(new URL("../../", import.meta.url));
+
+/** From disk: Vitest turns a CSS import, even `?raw`, into an empty string. */
+function readSheets(dir = "."): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const e of readdirSync(join(HERE, dir), { withFileTypes: true }) as { name: string; isDirectory(): boolean }[]) {
+    const rel = `${dir}/${e.name}`;
+    if (e.isDirectory()) Object.assign(out, readSheets(rel));
+    else if (e.name.endsWith(".css")) out[rel] = readFileSync(join(HERE, rel), "utf8");
+  }
+  return out;
+}
+
+const SHEETS = readSheets();
 /** `.cw-x margin-left: 1rem` for each declaration in `css` that is physical without saying why. */
 function physicalDeclarations(css: string): string[] {
   const out: string[] = [];
@@ -102,15 +126,23 @@ describe("the console page's stylesheets", () => {
     expect(built()).not.toMatch(/:lang\([a-z-]+,/);
   });
 
-  it("the page as really built has no language list either, and has the left/right pairs", async () => {
-    const out = (await build({
-      configFile: fileURLToPath(new URL("../../vite.console.config.ts", import.meta.url)),
-      logLevel: "silent",
-      build: { write: false },
-    })) as { output: { fileName: string; source?: string | Uint8Array }[] };
-    const page = out.output.find((f) => f.fileName === "index.html");
-    const css = (/<style>([\s\S]*)<\/style>/.exec(String(page?.source)) ?? [])[1] ?? "";
-    expect(css).toMatch(/:lang\(ar\)[^{]*\{(left|right):/);
-    expect(css).not.toMatch(/:lang\([a-z-]+,/);
+  it("the page as really built has no language list either, and has the left/right pairs", () => {
+    // In a process of its own: under Vitest NODE_ENV is "test", React comes out in its dev build and
+    // the page is over its budget.
+    const outDir: string = mkdtempSync(join(tmpdir(), "ps5upload-console-page-"));
+    try {
+      execFileSync(
+        process.execPath,
+        [join(CLIENT, "node_modules/vite/bin/vite.js"), "build", "-c", "vite.console.config.ts", "--outDir", outDir, "--emptyOutDir", "--logLevel", "error"],
+        { cwd: CLIENT, env: { ...process.env, NODE_ENV: "production" }, stdio: "pipe" },
+      );
+      const page: string = readFileSync(join(outDir, "index.html"), "utf8");
+      const css = (/<style>([\s\S]*)<\/style>/.exec(page) ?? [])[1] ?? "";
+      expect(css).toMatch(/:lang\(ar\)[^{]*\{(left|right):/);
+      expect(css).toMatch(/:not\(:lang\(ar\)\):not\(:lang\(fa\)\)[^{]*\{(left|right):/);
+      expect(css).not.toMatch(/:lang\([a-z-]+,/);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
   }, 120_000);
 });
