@@ -10,8 +10,10 @@ pub async fn discover_ps5(timeout_secs: Option<u64>) -> Result<DiscoverResult, S
     // Android filters multicast frames (224.0.0.251:5353) unless a MulticastLock is held, and
     // discovery then finds nothing by mDNS. Best effort: the LAN sweep still works without it.
     #[cfg(target_os = "android")]
-    if let Err(e) = crate::commands::acquire_multicast_lock().await {
-        eprintln!("[discover] multicast lock acquire failed: {e}");
+    {
+        if let Err(e) = crate::commands::acquire_multicast_lock().await {
+            eprintln!("[discover] multicast lock acquire failed: {e}");
+        }
     }
 
     let opts = DiscoverOptions {
@@ -23,8 +25,10 @@ pub async fn discover_ps5(timeout_secs: Option<u64>) -> Result<DiscoverResult, S
         .map_err(|e| format!("discover task: {e}"));
 
     #[cfg(target_os = "android")]
-    if let Err(e) = crate::commands::release_multicast_lock().await {
-        eprintln!("[discover] multicast lock release failed: {e}");
+    {
+        if let Err(e) = crate::commands::release_multicast_lock().await {
+            eprintln!("[discover] multicast lock release failed: {e}");
+        }
     }
 
     result

@@ -207,6 +207,11 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
+    fn read_body(r: &mut ureq::http::Response<ureq::Body>) -> Value {
+        let text = r.body_mut().read_to_string().unwrap_or_default();
+        serde_json::from_str(&text).unwrap_or(Value::Null)
+    }
+
     struct Harness {
         base: String,
         dir: std::path::PathBuf,
@@ -247,10 +252,7 @@ mod tests {
             let (agent, url) = (self.agent.clone(), format!("{}{path}", self.base));
             tokio::task::spawn_blocking(move || {
                 let mut r = agent.get(&url).call().unwrap();
-                (
-                    r.status().as_u16(),
-                    r.body_mut().read_json().unwrap_or(Value::Null),
-                )
+                (r.status().as_u16(), read_body(&mut r))
             })
             .await
             .unwrap()
@@ -258,11 +260,12 @@ mod tests {
         async fn post(&self, path: &str, body: Value) -> (u16, Value) {
             let (agent, url) = (self.agent.clone(), format!("{}{path}", self.base));
             tokio::task::spawn_blocking(move || {
-                let mut r = agent.post(&url).send_json(&body).unwrap();
-                (
-                    r.status().as_u16(),
-                    r.body_mut().read_json().unwrap_or(Value::Null),
-                )
+                let mut r = agent
+                    .post(&url)
+                    .header("content-type", "application/json")
+                    .send(body.to_string())
+                    .unwrap();
+                (r.status().as_u16(), read_body(&mut r))
             })
             .await
             .unwrap()
@@ -271,10 +274,7 @@ mod tests {
             let (agent, url) = (self.agent.clone(), format!("{}{path}", self.base));
             tokio::task::spawn_blocking(move || {
                 let mut r = agent.delete(&url).call().unwrap();
-                (
-                    r.status().as_u16(),
-                    r.body_mut().read_json().unwrap_or(Value::Null),
-                )
+                (r.status().as_u16(), read_body(&mut r))
             })
             .await
             .unwrap()
@@ -390,10 +390,7 @@ mod tests {
                 .proxy(None)
                 .build();
             let mut r = ureq::Agent::new_with_config(cfg).get(&url).call().unwrap();
-            (
-                r.status().as_u16(),
-                r.body_mut().read_json::<Value>().unwrap(),
-            )
+            (r.status().as_u16(), read_body(&mut r))
         })
         .await
         .unwrap();

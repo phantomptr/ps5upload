@@ -43,13 +43,14 @@ fn bad_request(message: impl Into<String>) -> Response {
         .into_response()
 }
 
-/// The console a request names, without a port, or the 400 for naming none.
-fn required_addr(addr: &str) -> Result<String, Response> {
+/// The console a request names, without a port. `None` is answered with [`no_addr`].
+fn required_addr(addr: &str) -> Option<String> {
     let a = crate::console_addr(addr);
-    if a.is_empty() {
-        return Err(bad_request("addr is required"));
-    }
-    Ok(a)
+    (!a.is_empty()).then_some(a)
+}
+
+fn no_addr() -> Response {
+    bad_request("addr is required")
 }
 
 /// Run a blocking console call and answer with its JSON, or 502 with the reason.
@@ -100,9 +101,8 @@ struct ShellRunRequest {
 
 /// POST /api/ps5/shell/run {addr, cmd, cwd?, session_id?, timeout_s?}
 async fn shell_run(Json(req): Json<ShellRunRequest>) -> Response {
-    let addr = match required_addr(&req.addr) {
-        Ok(a) => a,
-        Err(r) => return r,
+    let Some(addr) = required_addr(&req.addr) else {
+        return no_addr();
     };
     if req.cmd.trim().is_empty() {
         return bad_request("cmd is required");
@@ -122,18 +122,16 @@ async fn shell_run(Json(req): Json<ShellRunRequest>) -> Response {
 
 /// GET /api/ps5/appdb?addr=
 async fn appdb(Query(q): Query<AddrOnly>) -> Response {
-    let addr = match required_addr(&q.addr) {
-        Ok(a) => a,
-        Err(r) => return r,
+    let Some(addr) = required_addr(&q.addr) else {
+        return no_addr();
     };
     console_call(move || ps5upload_core::diagnostics::appdb_query(&addr)).await
 }
 
 /// GET /api/ps5/process/{pid}/modules?addr=
 async fn process_modules(Path(pid): Path<i32>, Query(q): Query<AddrOnly>) -> Response {
-    let addr = match required_addr(&q.addr) {
-        Ok(a) => a,
-        Err(r) => return r,
+    let Some(addr) = required_addr(&q.addr) else {
+        return no_addr();
     };
     console_call(move || ps5upload_core::diagnostics::proc_modules(&addr, pid)).await
 }
@@ -152,9 +150,8 @@ struct FsHashRequest {
 /// Same reply as the app's commands: `{path, size, hash}` for BLAKE3, `{crc32, size, err}` for
 /// CRC32. A big file takes as long as it takes.
 async fn fs_hash(Json(req): Json<FsHashRequest>) -> Response {
-    let addr = match required_addr(&req.addr) {
-        Ok(a) => a,
-        Err(r) => return r,
+    let Some(addr) = required_addr(&req.addr) else {
+        return no_addr();
     };
     if !req.path.starts_with('/') {
         return bad_request("path must be absolute");
@@ -186,9 +183,8 @@ struct HealRequest {
 /// POST /api/ps5/appmeta/heal {addr, title_id, source_path}: copy a title's missing
 /// `/user/appmeta/<id>/` files from its game folder. What is already there is left alone.
 async fn appmeta_heal(Json(req): Json<HealRequest>) -> Response {
-    let addr = match required_addr(&req.addr) {
-        Ok(a) => a,
-        Err(r) => return r,
+    let Some(addr) = required_addr(&req.addr) else {
+        return no_addr();
     };
     if !ps5upload_core::appmeta_heal::is_valid_title_id(&req.title_id) {
         return bad_request("title_id must be 4-16 chars of [A-Z0-9_] (e.g. CUSA00001)");
@@ -203,9 +199,8 @@ async fn appmeta_heal(Json(req): Json<HealRequest>) -> Response {
 /// GET /api/ps5/companions?addr=: which third-party tools answer on their usual ports. A TCP
 /// connect per port, so it needs no helper on the console.
 async fn companions(Query(q): Query<AddrOnly>) -> Response {
-    let addr = match required_addr(&q.addr) {
-        Ok(a) => a,
-        Err(r) => return r,
+    let Some(addr) = required_addr(&q.addr) else {
+        return no_addr();
     };
     console_call(move || Ok::<_, String>(ps5upload_core::companions::probe_companions(&addr))).await
 }

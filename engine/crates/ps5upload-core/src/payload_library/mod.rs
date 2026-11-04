@@ -417,10 +417,12 @@ pub(crate) mod test_support {
     use std::io::Cursor;
     use std::sync::Mutex;
 
+    type Route = (u16, Option<String>, Vec<u8>);
+
     /// A scripted server: url → (status, location, body). Unknown urls answer 404.
     #[derive(Default)]
     pub struct Scripted {
-        pub routes: Mutex<HashMap<String, (u16, Option<String>, Vec<u8>)>>,
+        pub routes: Mutex<HashMap<String, Route>>,
         pub asked: Mutex<Vec<String>>,
     }
 
@@ -624,7 +626,7 @@ mod live {
         let bytes = std::fs::read(&local.path).unwrap();
         assert_eq!(&bytes[..4], b"\x7FELF");
         assert_eq!(bytes.len() as u64, local.size);
-        // One file and its VERSION: no temporary left behind.
+        // The file, VERSION and the release list: no temporary left behind.
         assert_eq!(
             std::fs::read_dir(d.0.join("payloads").join(id))
                 .unwrap()
