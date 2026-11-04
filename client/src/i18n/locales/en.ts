@@ -2580,6 +2580,7 @@ screenshots_bulk_partial:
 upload_done_registered: 'On your PS5 home screen as "{name}" — ready to launch.',
 fs_rename_target_exists:
   'An item named "{name}" already exists here — rename would overwrite it. Pick another name or delete it first.',
+fs_move_exists: '"{name}" is already there, so nothing was replaced. Pick another name or delete it first.',
 fs_op_on_other_console:
   "A file operation is running on {name} — switch to that console's tab to see its progress.",
 

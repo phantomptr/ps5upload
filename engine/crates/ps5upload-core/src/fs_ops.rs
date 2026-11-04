@@ -689,14 +689,17 @@ pub fn usb_eject(addr: &str, mount_point: &str, force: bool) -> Result<()> {
     anyhow::bail!("{err}")
 }
 
-/// Rename/move a file or directory intra-volume. Cross-volume moves
-/// surface as `fs_move_cross_mount` error — payload uses `rename(2)` which
-/// returns EXDEV across mount points.
+/// Rename/move a file or directory intra-volume. An existing destination is refused
+/// (`fs_move_exists`), never replaced. Cross-volume moves surface as `fs_move_cross_mount`
+/// error — payload uses `rename(2)` which returns EXDEV across mount points.
 pub fn fs_move(addr: &str, from: &str, to: &str) -> Result<()> {
-    fs_move_with_timeout(addr, from, to, None)
+    fs_move_with_timeout(addr, from, to, false, None)
 }
 
-/// Like [`fs_move`] but with a caller-supplied per-socket I/O timeout.
+/// Like [`fs_move`] with the caller's choice about an existing destination and its own
+/// per-socket I/O timeout. `replace` false: the console refuses with `fs_move_exists`. True:
+/// `rename(2)` replaces a file, or an empty folder, that is there. Only a caller that was told
+/// to replace passes true: this is how a same-drive move used to destroy files.
 /// Most fs_move calls return in milliseconds (rename(2) is a metadata
 /// op), but cross-volume moves where the engine retries via
 /// copy-then-delete inherit the same long-deadline need as fs_copy.
@@ -704,10 +707,12 @@ pub fn fs_move_with_timeout(
     addr: &str,
     from: &str,
     to: &str,
+    replace: bool,
     io_timeout: Option<std::time::Duration>,
 ) -> Result<()> {
-    let body = serde_json::to_vec(&serde_json::json!({ "from": from, "to": to }))
-        .context("serialize fs_move")?;
+    let body =
+        serde_json::to_vec(&serde_json::json!({ "from": from, "to": to, "overwrite": replace }))
+            .context("serialize fs_move")?;
     mgmt::call_with(addr, m::FS_RENAME, "FS_MOVE", &body, io_timeout)?;
     Ok(())
 }

@@ -1807,6 +1807,7 @@ pub async fn ps5_fs_move(req: FsMoveReq) -> Result<JsonValue, String> {
             "from": req.from,
             "to": req.to,
             "op_id": req.op_id.unwrap_or(0),
+            "overwrite": req.overwrite.unwrap_or(false),
         }),
     )
     .await

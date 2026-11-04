@@ -49,6 +49,7 @@ mod collection_check_api;
 mod collection_tidy_api;
 mod console_cleanup_api;
 mod console_files_api;
+mod console_move;
 mod console_payload;
 mod console_read;
 mod console_shares_api;
@@ -146,9 +147,9 @@ use ps5upload_core::{
     focus::{focus_probe, FocusProbe},
     fs_ops::{
         app_launch, app_list_registered, app_register, app_unregister, fs_delete_with_op_id,
-        fs_mkdir, fs_mount, fs_move_with_timeout, fs_op_cancel, fs_op_status, fs_read,
-        fs_read_with_timeout, fs_unmount, list_dir, reconcile, DirListing, ListDirOptions,
-        MountResult, ReconcileMode, RegisterResult,
+        fs_mkdir, fs_mount, fs_op_cancel, fs_op_status, fs_read, fs_read_with_timeout, fs_unmount,
+        list_dir, reconcile, DirListing, ListDirOptions, MountResult, ReconcileMode,
+        RegisterResult,
     },
     game_meta::{parse_param_json_bytes, parse_param_sfo_bytes},
     hw::{
@@ -2431,9 +2432,9 @@ struct FsMoveReq {
     to: String,
     /// Merge into an existing destination instead of refusing it. Files that
     /// collide are replaced; anything already in the destination that the
-    /// source doesn't mention is left alone. Absent = the historical
-    /// refuse-to-clobber behaviour, so only a caller that has actually asked
-    /// the user gets the destructive path.
+    /// source doesn't mention is left alone. Absent = an existing destination
+    /// is refused (`fs_move_exists` / `fs_copy_dest_exists`, 409 on a move), so
+    /// only a caller that has actually asked the user gets the destructive path.
     #[serde(default)]
     overwrite: bool,
     /// Optional unique 64-bit identifier the client generates so it
@@ -2681,25 +2682,18 @@ async fn ps5_fs_move(
     } else {
         next_fs_op_id()
     };
-    // One blocking closure for the whole decision: the rename is still tried first (a
-    // same-drive move is metadata-only) and only a cross-mount refusal becomes a console-side
-    // move (copy, then delete the source after a verified finish). `overwrite` travels with
-    // it, so a move that was not allowed to clobber still refuses.
+    // One blocking closure for the whole decision (`console_move::run`): the rename is still
+    // tried first (a same-drive move is metadata-only). `overwrite` travels with it, so a move
+    // that was not allowed to clobber refuses on one drive and across drives alike.
     match tokio::task::spawn_blocking(move || {
         // Marks the console busy for the job: a helper stop is refused meanwhile.
         let _busy = helper_stop::enter(&addr);
-        match fs_move_with_timeout(&addr, &from, &to, Some(io_timeout)) {
-            Err(e)
-                if {
-                    let msg = format!("{e:#}");
-                    msg.contains("cross_mount") || msg.contains("EXDEV")
-                } =>
-            {
-                require_console_ready(&addr)?;
-                ps5upload_ava1::copy::console_copy(&addr, &from, &to, op_id, true, overwrite)
-            }
-            other => other,
-        }
+        let console = console_move::Console {
+            addr: &addr,
+            op_id,
+            rename_timeout: io_timeout,
+        };
+        console_move::run(&console, &from, &to, overwrite)
     })
     .await
     .map_err(anyhow::Error::from)
@@ -2724,7 +2718,13 @@ async fn ps5_fs_move(
                 "fs_move failed: {from_for_log} -> {to_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
-            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
+            let msg = format!("{e:#}");
+            let status = if console_move::is_exists_refusal(&msg) {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_GATEWAY
+            };
+            json_err(status, msg).into_response()
         }
     }
 }

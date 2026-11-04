@@ -1363,15 +1363,19 @@ export async function fsListDir(
   return out;
 }
 
+/** Move on the console. An existing destination is refused (`fs_move_exists`) unless
+ *  `overwrite` is set, which only a caller that has asked the user may do: colliding files
+ *  are replaced, and folders are merged. */
 export async function fsMove(
   transferAddr: string,
   from: string,
   to: string,
   opId?: number,
+  overwrite?: boolean,
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
   await invoke("ps5_fs_move", {
-    req: { addr, from, to, op_id: opId ?? 0 },
+    req: { addr, from, to, op_id: opId ?? 0, overwrite: overwrite ?? false },
   });
 }
 

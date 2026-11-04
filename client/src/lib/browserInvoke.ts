@@ -348,15 +348,16 @@ export async function browserInvoke<T>(
     }
 
     case "ps5_fs_move": {
-      const { addr, from, to, op_id } = args["req"] as {
+      const { addr, from, to, op_id, overwrite } = args["req"] as {
         addr?: string | null;
         from: string;
         to: string;
         op_id?: number;
+        overwrite?: boolean;
       };
       return postJson<T>(
         "/api/ps5/fs/move",
-        { addr, from, to, op_id: op_id ?? 0 },
+        { addr, from, to, op_id: op_id ?? 0, overwrite: overwrite ?? false },
         /*long=*/ true,
       );
     }
