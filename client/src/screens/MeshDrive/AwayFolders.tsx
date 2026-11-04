@@ -15,6 +15,7 @@ import { useTr, type Translator } from "../../state/lang";
 import { useRosterStore } from "../../state/roster";
 import { sendHelperTo } from "../../state/helperSendRuntime";
 import { agoText } from "../Devices";
+import { driveDetailText } from "./driveDetail";
 
 export type AwayWhy = "rest" | "unreachable" | "helper";
 
@@ -120,6 +121,7 @@ function FolderRow({ f, now }: { f: LocalFolder; now: number }) {
         ? tr("drive_badge_error", undefined, "Problem")
         : tr("drive_starting", undefined, "Starting…"));
   const tone = away ? "warn" : f.status.state === "idle" ? "good" : f.status.state === "error" ? "bad" : "neutral";
+  const line = away?.long || driveDetailText(tr, f.status.detail_code, f.status.detail_args, f.status.detail);
   return (
     <li className="flex min-w-0 flex-col gap-2 py-3 sm:flex-row sm:items-start">
       <div className="flex min-w-0 flex-1 items-start gap-3">
@@ -134,9 +136,7 @@ function FolderRow({ f, now }: { f: LocalFolder; now: number }) {
           <p className="truncate text-xs text-[var(--color-muted)]" title={f.path}>
             {tr("drive_folder_on", { path: f.path, name }, `${f.path} · home on ${name}`)}
           </p>
-          {(away?.long || f.status.detail) && (
-            <p className="mt-1 text-xs text-[var(--color-warn)]">{away?.long || f.status.detail}</p>
-          )}
+          {line && <p className="mt-1 text-xs text-[var(--color-warn)]">{line}</p>}
         </div>
       </div>
       {why && <AwayActions console={f.console} why={why} />}

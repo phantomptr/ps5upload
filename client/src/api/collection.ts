@@ -90,6 +90,9 @@ export interface CollectionLocation {
   date_source?: string;
   added_ts: number;
   pkg?: CollectionPkg;
+  /** The copy's other files (a split package's later parts, a `.rar` set's later volumes). They
+   *  count in `size_bytes` and go wherever it goes. */
+  parts?: string[];
 }
 
 export interface CollectionGame {
@@ -123,6 +126,8 @@ export interface CollectionLibrary {
   roots?: string[];
   /** Roots the last scan could not open (deleted, unplugged, server down); skipped. */
   missing_roots?: string[];
+  /** Folders the last scan could not read: what it found there before is kept. */
+  unreadable?: string[];
   generated_at?: string;
   summary: CollectionSummary;
   games: Record<string, CollectionGame>;
@@ -158,6 +163,8 @@ export interface CollectionScanStatus {
   roots_done?: number;
   games_total?: number;
   games_done?: number;
+  /** Folders the last scan could not read. */
+  unreadable?: string[];
 }
 
 /** A package in the collection a console could take. */
@@ -191,6 +198,8 @@ export interface TrashItem {
   game_id: string;
   title: string;
   size_bytes: number;
+  /** Its other files: they go with it. */
+  parts?: string[];
 }
 
 export interface TrashPreview {
@@ -219,6 +228,8 @@ export interface OrganizeMove {
   size: number;
   content_id: string;
   part?: string;
+  /** A part of a split package: its set. A set moves as one, all of it or none of it. */
+  set?: string;
   duplicate?: boolean;
   duplicate_of?: string;
 }
@@ -241,6 +252,21 @@ export interface OrganizePlan {
   total_bytes: number;
 }
 
+/** The preview being made in the background, or the last one. */
+export interface OrganizePlanStatus {
+  running: boolean;
+  /** While running: walking the folders, or reading the packages the index does not know. */
+  phase: "finding" | "reading" | "";
+  done: number;
+  total: number;
+  current: string;
+  cancelled: boolean;
+  error: string | null;
+  plan: OrganizePlan | null;
+  started_ms: number;
+  finished_ms: number;
+}
+
 export interface OrganizeResult {
   moved: OrganizeMove[];
   failed: (OrganizeMove & { error: string })[];
@@ -258,6 +284,8 @@ export interface OrganizeRun {
   moved: number;
   failed: number;
   reverted_at: string | null;
+  /** Its undo log could not be read: a run happened, and it cannot be undone from here. */
+  unreadable?: boolean;
 }
 
 export interface JunkFile {
@@ -286,6 +314,16 @@ export interface MacSettings {
   volumes: { volume: string; indexing: string; has_index: boolean }[];
 }
 
+/** A refusal from the engine: `code` says which, for the words in the user's language. */
+export class CollectionApiError extends Error {
+  code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "CollectionApiError";
+    this.code = code;
+  }
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${getEngineUrl()}/api/collection${path}`, {
     ...init,
@@ -299,9 +337,8 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     body = null;
   }
   if (!res.ok) {
-    const msg =
-      (body as { error?: string } | null)?.error ?? `HTTP ${res.status}`;
-    throw new Error(msg);
+    const b = body as { error?: string; code?: string } | null;
+    throw new CollectionApiError(b?.error ?? `HTTP ${res.status}`, b?.code);
   }
   return body as T;
 }
@@ -352,6 +389,17 @@ export const collection = {
     }),
   organizePlan: () =>
     call<OrganizePlan>("/organize/plan", { method: "POST", body: "{}" }),
+  organizePlanStart: () =>
+    call<OrganizePlanStatus>("/organize/plan/start", {
+      method: "POST",
+      body: "{}",
+    }),
+  organizePlanStatus: () => call<OrganizePlanStatus>("/organize/plan/status"),
+  organizePlanCancel: () =>
+    call<OrganizePlanStatus>("/organize/plan/cancel", {
+      method: "POST",
+      body: "{}",
+    }),
   organizeApply: (
     token: string,
     moves: { container: string; from: string; to: string }[],

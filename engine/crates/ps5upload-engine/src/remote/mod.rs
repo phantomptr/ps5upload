@@ -262,6 +262,7 @@ pub(crate) struct MemFs {
     mtimes: Arc<Mutex<BTreeMap<String, i64>>>,
     fail_reads: Arc<AtomicUsize>,
     fail_lists: AtomicUsize,
+    lists: AtomicUsize,
     /// Folders made explicitly (an empty one has no file to imply it).
     dirs: Arc<Mutex<BTreeSet<String>>>,
     /// The next writes happen but their reply is lost: the caller sees a dropped connection.
@@ -290,6 +291,7 @@ impl MemFs {
             mtimes: Arc::default(),
             fail_reads: Arc::new(AtomicUsize::new(0)),
             fail_lists: AtomicUsize::new(0),
+            lists: AtomicUsize::new(0),
             dirs: Arc::default(),
             lose_replies: Arc::default(),
             down_after: Arc::default(),
@@ -325,12 +327,22 @@ impl MemFs {
             mtimes: Arc::clone(&self.mtimes),
             fail_reads: Arc::new(AtomicUsize::new(0)),
             fail_lists: AtomicUsize::new(0),
+            lists: AtomicUsize::new(0),
             dirs: Arc::clone(&self.dirs),
             lose_replies: Arc::clone(&self.lose_replies),
             down_after: Arc::clone(&self.down_after),
             down: Arc::clone(&self.down),
             keep_dirs: Arc::clone(&self.keep_dirs),
         }
+    }
+
+    /// Folder listings asked for since the last reset.
+    pub fn list_count(&self) -> usize {
+        self.lists.load(Ordering::SeqCst)
+    }
+
+    pub fn reset_list_count(&self) {
+        self.lists.store(0, Ordering::SeqCst);
     }
 
     /// From now on folders are never removed (`remove_dir` is unsupported), as on WebDAV.
@@ -515,6 +527,7 @@ impl RemoteFs for MemFs {
 
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError> {
         self.check_up()?;
+        self.lists.fetch_add(1, Ordering::SeqCst);
         if self.list_fails() {
             return Err(RemoteError::Io("connection reset".into()));
         }

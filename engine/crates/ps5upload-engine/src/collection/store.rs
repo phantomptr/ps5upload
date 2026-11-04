@@ -123,10 +123,10 @@ pub fn format_bytes(n: u64) -> String {
 
 /// `Sep 22, 2026`, or `Unknown`.
 pub fn format_date(iso: Option<&str>) -> String {
-    let Some(s) = iso.filter(|s| s.len() >= 10) else {
+    // `get`: an index can come from another tool, and a date from it may not be ASCII.
+    let Some((y, m, d)) = iso.and_then(|s| Some((s.get(..4)?, s.get(5..7)?, s.get(8..10)?))) else {
         return "Unknown".into();
     };
-    let (y, m, d) = (&s[..4], &s[5..7], &s[8..10]);
     let months = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
@@ -270,6 +270,87 @@ mod tests {
         assert_eq!(format_bytes(2 << 30), "2.0 GiB");
         assert_eq!(format_date(Some("2026-09-22T10:00:00Z")), "Sep 22, 2026");
         assert_eq!(format_date(None), "Unknown");
+    }
+
+    #[test]
+    fn a_date_from_another_tool_never_panics() {
+        for odd in [
+            "",
+            "2026",
+            "2026-09-2",
+            "二〇二六年九月二十二日",
+            "2026-é9-22",
+            "20é6-09-22xx",
+        ] {
+            assert_eq!(format_date(Some(odd)), "Unknown", "{odd}");
+        }
+    }
+
+    /// An index written before split sets, unreadable folders and the lookups' memory. Each of
+    /// those fields is new since: it must read as empty, and a save must not grow it for nothing.
+    #[test]
+    fn an_older_index_still_loads() {
+        let dir = std::env::temp_dir().join(format!("ps5u-old-index-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("index.json"),
+            br#"{"version":1,"roots":["/g"],"library_root":"/g","generated_at":"2026-10-01T00:00:00Z",
+              "summary":{"total_games":1,"total_locations":1,"total_size_bytes":26,"duplicates_count":0,"reclaimable_bytes":0},
+              "games":{"CUSA00900":{"game_id":"CUSA00900","title":"Bloodborne","platform":"PS4","locations":[
+                {"root":"/g","container":"fpkg","name":"b.pkg","type":"pkg","path":"fpkg/b.pkg","absolute_path":"/g/fpkg/b.pkg",
+                 "size_bytes":26,"pkg":{"kind":"base","title":"Bloodborne","complete":true}}],"total_size_bytes":26}},
+              "missing_roots":["/gone"],
+              "_folder_cache":{"/g|x":{"sig":"s","size":1}},
+              "_pkg_cache":{"/g|fpkg/b.pkg":{"size":26,"mtime":5,"pkg":{"kind":"base"},"v":6}}}"#,
+        )
+        .unwrap();
+        let lib = load_index_at(&dir).expect("an older index loads");
+        assert_eq!(
+            lib.games["CUSA00900"].locations[0].parts,
+            Vec::<String>::new()
+        );
+        assert!(lib.unreadable.is_empty());
+        assert!(lib.online.is_empty());
+        assert_eq!(lib.missing_roots, vec!["/gone".to_string()]);
+        assert_eq!(lib.pkg_cache["/g|fpkg/b.pkg"].v, 6);
+        // Written back, it holds nothing it did not need and reads the same again.
+        save_index_at(&dir, &lib).unwrap();
+        let bytes = std::fs::read(dir.join("index.json")).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            !text.contains("\"parts\"")
+                && !text.contains("\"unreadable\"")
+                && !text.contains("_online")
+        );
+        assert_eq!(load_index_at(&dir).unwrap(), lib);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_a_new_date_is_no_change_worth_saving() {
+        let mut a = Library {
+            version: 1,
+            generated_at: "t1".into(),
+            ..Library::default()
+        };
+        let mut b = a.clone();
+        b.generated_at = "t2".into();
+        assert!(a.same_index(&b));
+        b.unreadable.push("/x".into());
+        assert!(!a.same_index(&b));
+        b.unreadable.clear();
+        a.online.misses.insert("PPSA00001".into(), 5);
+        assert!(!a.same_index(&b));
+    }
+
+    /// The memory of the title sites is the scanner's, not something consumers read.
+    #[test]
+    fn the_public_index_leaves_the_scanners_memory_out() {
+        let mut lib = Library::default();
+        lib.online.misses.insert("PPSA00001".into(), 5);
+        let v = public_json(&lib);
+        assert!(v.get("_online").is_none());
+        assert!(serde_json::to_value(&lib).unwrap().get("_online").is_some());
     }
 
     #[test]

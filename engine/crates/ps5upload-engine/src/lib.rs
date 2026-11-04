@@ -11060,6 +11060,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     let pkg_state = std::sync::Arc::new(pkg_install::PkgInstallState::restored());
     // Automatic save backups wait for an install too.
     save_backup::watch_installs(pkg_state.clone());
+    mesh_drive::watch_installs(pkg_state.clone());
     // Copies each connected console's helper log into the event journal.
     {
         let jobs = state.jobs.clone();
@@ -11291,6 +11292,18 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route(
             "/api/collection/organize/plan",
             post(collection_tidy_api::post_organize_plan),
+        )
+        .route(
+            "/api/collection/organize/plan/start",
+            post(collection_tidy_api::post_organize_plan_start),
+        )
+        .route(
+            "/api/collection/organize/plan/status",
+            get(collection_tidy_api::get_organize_plan_status),
+        )
+        .route(
+            "/api/collection/organize/plan/cancel",
+            post(collection_tidy_api::post_organize_plan_cancel),
         )
         .route(
             "/api/collection/organize/apply",
