@@ -12,6 +12,9 @@ import { isTauriEnv } from "../lib/tauriEnv";
 import { appLinkRoute } from "../lib/appLinks";
 import { noteAppLinks } from "../lib/appLinkDiag";
 
+/** When the page asks the shell again for links while the app starts (ms after it loads). */
+export const RETAKE_MS = [500, 1500, 3000, 6000];
+
 /** Where an opened link leads in the app, or null for one it doesn't know (lib/appLinks). */
 export const openLinkRoute = appLinkRoute;
 
@@ -36,8 +39,21 @@ export function OpenLinks(): null {
     const unlisten = listen("ps5upload-open-link", drain)
       .catch(() => null)
       .finally(drain);
+    // A link that opened the app from closed can reach the shell after the page's first take
+    // (on Android the launch intent arrives late, and its event before anyone listens): it then
+    // sat there until the next link came. Ask again while the app starts, and whenever it comes
+    // back to the front.
+    const retries = RETAKE_MS.map((ms) => window.setTimeout(drain, ms));
+    const onShow = () => {
+      if (document.visibilityState === "visible") drain();
+    };
+    document.addEventListener("visibilitychange", onShow);
+    window.addEventListener("focus", drain);
     return () => {
       alive = false;
+      retries.forEach((t) => window.clearTimeout(t));
+      document.removeEventListener("visibilitychange", onShow);
+      window.removeEventListener("focus", drain);
       void unlisten.then((off) => off?.());
     };
   }, [navigate]);

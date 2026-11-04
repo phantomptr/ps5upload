@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Expand, Gamepad2, LogOut, Minimize, RotateCw, Users, Volume2, VolumeX } from "lucide-react";
+import { Expand, Gamepad2, LogOut, Minimize, MoreHorizontal, RotateCw, Users, Volume2, VolumeX } from "lucide-react";
 
 import type { JoinStage } from "../lib/joinClient";
 import { delayTone, playerColor } from "../lib/joinProtocol";
@@ -8,6 +8,7 @@ import { gamepadsOf } from "../lib/nativePad";
 import { TouchControls } from "../screens/Play/TouchControls";
 import { useTr } from "../state/lang";
 import { devicePad, useJoinSession, type JoinSession } from "./session";
+import { useAutoHide } from "./autoHide";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -98,6 +99,11 @@ function usePadReady(): { ready: boolean; pressed: boolean } {
   return state;
 }
 
+/** A press on the on-screen controller (its buttons, sticks, touchpad, menu), not the picture. */
+function onController(t: EventTarget | null): boolean {
+  return !!(t as Element | null)?.closest?.('[data-testid="rp-touch"]');
+}
+
 const coarsePointer = () => typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
 
 const TONE_COLOR = {
@@ -168,6 +174,16 @@ export function JoinView({
   const reconnecting = stage.kind === "reconnecting";
   const now = useNow(reconnecting);
   const live = stage.kind === "joined" || reconnecting;
+  const picking = status?.state === "picking_user";
+  // The buttons over the picture hide after a quiet moment where the picture is the screen
+  // (full screen; the /join page always), like a streaming app's. A touch on the picture, a
+  // mouse move, Esc or the handle brings them back. Never while the guest must see them
+  // (reconnecting, picking a user on the TV) or a mouse or keyboard is on them.
+  const [barHover, setBarHover] = useState(false);
+  const [barFocus, setBarFocus] = useState(false);
+  const autoHide = live && (full || !inApp);
+  const chrome = useAutoHide(autoHide, reconnecting || picking || barHover || barFocus);
+  const { poke } = chrome;
 
   useEffect(() => {
     if (!live) return;
@@ -200,6 +216,31 @@ export function JoinView({
     if (!full) return;
     return () => void onFullscreen?.(false);
   }, [full, onFullscreen]);
+
+  // Esc shows the buttons and leaves full screen (the desktop app's window has no Esc of its
+  // own; a browser that kept Esc for the page gets it here). A guest's Esc is never the pad's.
+  useEffect(() => {
+    if (!live) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      poke();
+      if (full) setFull(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [live, full, poke]);
+
+  // The browser left full screen itself (Esc): back to the picture's place. Not on a touch
+  // screen, where Android drops it on a system gesture mid-game and the picture keeps filling.
+  useEffect(() => {
+    if (!full || typeof document === "undefined") return;
+    const onChange = () => {
+      if (document.fullscreenElement || coarsePointer()) return;
+      setFull(false);
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, [full]);
 
   const leave = () => {
     session.leave();
@@ -263,7 +304,6 @@ export function JoinView({
   const light = snap.light ?? playerColor(player);
   const delay = snap.rttMs ?? status?.rttMs ?? null;
   const tone = delayTone(delay);
-  const picking = status?.state === "picking_user";
   const coarse = coarsePointer();
   const showTouch = live && !reconnecting && !pad.ready && coarse && (!inApp || full);
   const showGuide = !guided && !reconnecting;
@@ -274,6 +314,96 @@ export function JoinView({
     await onFullscreen?.(next);
   };
 
+  const info = (
+    <>
+      <span
+        className="flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 font-medium"
+        data-testid="join-player"
+      >
+        <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: `rgb(${light[0]},${light[1]},${light[2]})` }} />
+        {inApp && (
+          <span className="text-white/80">
+            {tr("join_playing_at", { host }, `Playing at ${host}'s`)}
+            {" · "}
+          </span>
+        )}
+        {tr("join_you_are", { n: player }, `You are Player ${player}`)}
+      </span>
+      {delay != null && (
+        <span
+          className="rounded-full bg-black/60 px-2 py-1 tabular-nums"
+          style={{ color: TONE_COLOR[tone] }}
+          data-testid="join-delay"
+          data-tone={tone}
+        >
+          {Math.round(delay)} ms
+        </span>
+      )}
+      {picking && (
+        <span className="rounded-full bg-white/90 px-2.5 py-1 font-medium text-black" data-testid="join-picking">
+          {tr("join_picking", undefined, "On the TV: pick Quick Play")}
+        </span>
+      )}
+    </>
+  );
+  const actions = (
+    <>
+      {!snap.sound && (
+        <button
+          type="button"
+          onClick={() => session.startSound()}
+          className="flex items-center gap-1 rounded-full bg-white/90 px-2.5 py-1 font-medium text-black"
+          data-testid="join-sound"
+        >
+          <Volume2 size={13} />
+          {tr("join_sound", undefined, "Tap for sound")}
+        </button>
+      )}
+      {snap.noSound && (
+        <span className="flex items-center gap-1 rounded-full bg-black/60 px-2.5 py-1 text-white/80" data-testid="join-no-sound">
+          <VolumeX size={13} />
+          {tr("join_no_sound", undefined, "No sound in this browser")}
+        </span>
+      )}
+      {(inApp || (typeof document !== "undefined" && !!document.documentElement.requestFullscreen)) && (
+        <button
+          type="button"
+          onClick={() => void toggleFull()}
+          aria-label={full ? tr("join_exit_fullscreen", undefined, "Leave full screen") : tr("pad_fill", undefined, "Full screen")}
+          className="flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 hover:bg-white/25"
+          data-testid="join-full"
+        >
+          {full ? <Minimize size={13} /> : <Expand size={13} />}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={leave}
+        className="flex items-center gap-1 rounded-full bg-[var(--color-danger,#dc2626)] px-3 py-1 font-medium"
+        data-testid="join-leave"
+      >
+        <LogOut size={13} />
+        {tr("join_leave", undefined, "Leave")}
+      </button>
+    </>
+  );
+  // Hidden buttons stay in the page and focusable: a keyboard reaching one shows them all.
+  const fade = chrome.shown ? "opacity-100" : "pointer-events-none opacity-0";
+  const barProps = {
+    "data-testid": "join-bar",
+    "data-shown": chrome.shown ? "1" : "0",
+    onFocus: (e: React.FocusEvent<HTMLDivElement>) => {
+      if ((e.target as Element).matches?.(":focus-visible")) setBarFocus(true);
+    },
+    onBlur: (e: React.FocusEvent<HTMLDivElement>) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setBarFocus(false);
+    },
+    onPointerEnter: (e: React.PointerEvent) => {
+      if (e.pointerType === "mouse") setBarHover(true);
+    },
+    onPointerLeave: () => setBarHover(false),
+  };
+
   const box = full || !inApp ? "fixed inset-0 z-[200] bg-black" : "relative aspect-video w-full overflow-hidden rounded-[var(--radius-card)] bg-black shadow-[var(--shadow-2)]";
 
   return (
@@ -281,78 +411,53 @@ export function JoinView({
       <div
         className={`${box} select-none text-white [-webkit-touch-callout:none]`}
         style={{ touchAction: "none" }}
+        onPointerMove={(e) => {
+          if (e.pointerType === "mouse") poke();
+        }}
+        onPointerDown={(e) => {
+          if (!onController(e.target)) poke();
+        }}
         data-testid="join-stage-view"
       >
         <div ref={screen} className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center" aria-hidden />
 
-        <div className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-2 bg-gradient-to-b from-black/70 to-transparent px-3 pb-5 pt-[max(8px,env(safe-area-inset-top))] text-xs">
-          <span
-            className="flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 font-medium"
-            data-testid="join-player"
+        {showTouch ? (
+          // Over the on-screen controller: a card in the middle of the picture, which the
+          // controller keeps clear (its top row is the shoulders and the touchpad).
+          <div
+            className={`absolute left-1/2 top-1/2 z-20 flex w-max max-w-[min(24rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-2 rounded-2xl bg-black/70 p-3 text-xs backdrop-blur-sm transition-opacity duration-300 ${fade}`}
+            {...barProps}
           >
-            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: `rgb(${light[0]},${light[1]},${light[2]})` }} />
-            {inApp && (
-              <span className="text-white/80">
-                {tr("join_playing_at", { host }, `Playing at ${host}'s`)}
-                {" · "}
-              </span>
-            )}
-            {tr("join_you_are", { n: player }, `You are Player ${player}`)}
-          </span>
-          {delay != null && (
-            <span
-              className="rounded-full bg-black/60 px-2 py-1 tabular-nums"
-              style={{ color: TONE_COLOR[tone] }}
-              data-testid="join-delay"
-              data-tone={tone}
-            >
-              {Math.round(delay)} ms
-            </span>
-          )}
-          {picking && (
-            <span className="rounded-full bg-white/90 px-2.5 py-1 font-medium text-black" data-testid="join-picking">
-              {tr("join_picking", undefined, "On the TV: pick Quick Play")}
-            </span>
-          )}
-          <span className="flex-1" />
-          {!snap.sound && (
-            <button
-              type="button"
-              onClick={() => session.startSound()}
-              className="flex items-center gap-1 rounded-full bg-white/90 px-2.5 py-1 font-medium text-black"
-              data-testid="join-sound"
-            >
-              <Volume2 size={13} />
-              {tr("join_sound", undefined, "Tap for sound")}
-            </button>
-          )}
-          {snap.noSound && (
-            <span className="flex items-center gap-1 rounded-full bg-black/60 px-2.5 py-1 text-white/80" data-testid="join-no-sound">
-              <VolumeX size={13} />
-              {tr("join_no_sound", undefined, "No sound in this browser")}
-            </span>
-          )}
-          {(inApp || (typeof document !== "undefined" && !!document.documentElement.requestFullscreen)) && (
-            <button
-              type="button"
-              onClick={() => void toggleFull()}
-              aria-label={full ? tr("join_exit_fullscreen", undefined, "Leave full screen") : tr("pad_fill", undefined, "Full screen")}
-              className="flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 hover:bg-white/25"
-              data-testid="join-full"
-            >
-              {full ? <Minimize size={13} /> : <Expand size={13} />}
-            </button>
-          )}
+            <div className="flex flex-wrap items-center justify-center gap-2">{info}</div>
+            <div className="flex flex-wrap items-center justify-center gap-2">{actions}</div>
+          </div>
+        ) : (
+          <div
+            className={`absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-2 bg-gradient-to-b from-black/70 to-transparent px-3 pb-5 pt-[max(8px,env(safe-area-inset-top))] text-xs transition-opacity duration-300 ${fade}`}
+            {...barProps}
+          >
+            {info}
+            <span className="flex-1" />
+            {actions}
+          </div>
+        )}
+
+        {/* The buttons hidden: a faint handle, top middle, brings them back (the controller has
+            its own, bottom middle). */}
+        {!chrome.shown && !showTouch && (
           <button
             type="button"
-            onClick={leave}
-            className="flex items-center gap-1 rounded-full bg-[var(--color-danger,#dc2626)] px-3 py-1 font-medium"
-            data-testid="join-leave"
+            onClick={(e) => {
+              e.stopPropagation();
+              poke();
+            }}
+            aria-label={tr("join_show_controls", undefined, "Show controls")}
+            className="absolute left-1/2 top-[max(6px,env(safe-area-inset-top))] z-20 flex h-7 w-11 -translate-x-1/2 items-center justify-center rounded-full bg-black/40 text-white/70 opacity-60 hover:opacity-100 focus-visible:opacity-100"
+            data-testid="join-show-controls"
           >
-            <LogOut size={13} />
-            {tr("join_leave", undefined, "Leave")}
+            <MoreHorizontal size={16} aria-hidden />
           </button>
-        </div>
+        )}
 
         {snap.problem && (
           <p className="absolute inset-x-4 top-1/2 z-10 -translate-y-1/2 text-center text-sm text-white/85" data-testid="join-problem">
@@ -362,10 +467,13 @@ export function JoinView({
           </p>
         )}
 
-        {showTouch && <TouchControls stream={session} layout="overlay" />}
+        {showTouch && <TouchControls stream={session} layout="overlay" onMenu={() => (chrome.shown ? chrome.hide() : poke())} />}
 
         {!showTouch && !reconnecting && (
-          <div className="absolute bottom-3 left-3 z-20 flex items-center gap-2 rounded-2xl bg-black/70 px-3 py-1.5 text-xs" data-testid="join-pad">
+          <div
+            className={`absolute bottom-3 left-3 z-20 flex items-center gap-2 rounded-2xl bg-black/70 px-3 py-1.5 text-xs transition-opacity duration-300 ${fade}`}
+            data-testid="join-pad"
+          >
             <Gamepad2 size={14} style={{ color: pad.pressed ? `rgb(${light[0]},${light[1]},${light[2]})` : undefined }} />
             {pad.ready
               ? tr("join_pad_ready", undefined, "Your controller is ready")
@@ -383,7 +491,10 @@ export function JoinView({
         )}
 
         {status?.blockSystem && status.state === "playing" && !showTouch && (
-          <p className="absolute bottom-3 right-3 z-20 rounded-full bg-black/60 px-3 py-1 text-[11px] text-white/70" data-testid="join-blocked">
+          <p
+            className={`absolute bottom-3 right-3 z-20 rounded-full bg-black/60 px-3 py-1 text-[11px] text-white/70 transition-opacity duration-300 ${fade}`}
+            data-testid="join-blocked"
+          >
             {tr("join_block_note", { host }, `${host} turned off PS and Create for friends.`)}
           </p>
         )}

@@ -7046,6 +7046,8 @@ helper_mismatch_boot_copy: "PS5, açılış için sakladığı eski bir yardımc
 "join_code_label": "Ya da kısa kod",
 "join_code_unknown": "Yakında bu kodla oyun açan kimse yok. Kodu kontrol et ya da bağlantıyı yapıştır.",
 "join_scan": "QR tara",
+"join_invite_title": "{host} adlı kişinin oyununa katıl",
+"join_show_controls": "Kontrolleri göster",
 "join_scan_hint": "Kamerayı arkadaşının ekranındaki QR koduna tut.",
 "join_scan_failed": "Kamera açılmadı. Bunun yerine bağlantıyı yapıştır.",
 "join_scan_denied": "PS5Upload'ın kodu taraması için kamera gerekiyor. Tekrar dene'ye basıp izin ver veya kamerayı ayarlardan aç.",

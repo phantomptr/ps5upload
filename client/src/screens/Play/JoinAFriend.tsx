@@ -4,9 +4,8 @@ import { Link2, Radar, ScanLine, Users } from "lucide-react";
 import { Button, Input } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { linkFromSocket, normalizeCode, parseJoinLink, type JoinLink } from "../../lib/joinProtocol";
-import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { JoinView } from "../../join/JoinView";
-import { NAME_KEY } from "../../join/JoinFlow";
+import { lastName, rememberName } from "../../join/guestName";
 import { useTr } from "../../state/lang";
 import { activeJoin, useJoinStore } from "../../state/joinSession";
 import { useRemotePlayStore } from "../../state/remotePlay";
@@ -100,7 +99,11 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
   const { confirm, dialog } = useConfirm();
   const [text, setText] = useState(pending ?? "");
   const [codeText, setCodeText] = useState("");
-  const [name, setName] = useState(() => safeGetItem(NAME_KEY) ?? "");
+  // The last name used to join, wherever it was typed.
+  const [name, setName] = useState(() => lastName());
+  // An invite opened in the app (a tapped link): just the name and Join, not the whole form.
+  const [invite, setInvite] = useState<JoinLink | null>(() => (pending ? parseJoinLink(pending) : null));
+  const inviteForm = useRef<HTMLFormElement>(null);
   const [bad, setBad] = useState<"link" | "code" | null>(null);
   const [scanning, setScanning] = useState(false);
   const busy = useRef(false);
@@ -111,12 +114,14 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
 
   const go = useCallback(
     async (link: JoinLink, who: string) => {
-      const clean = who.trim().slice(0, 32);
-      if (!clean || busy.current) return;
+      if (busy.current) return;
+      // Remembered whichever way the guest joins: the next invite has it filled in.
+      const clean = rememberName(who);
+      if (!clean) return;
       busy.current = true;
       try {
         if (!(await okToJoin(tr, confirm, link))) return;
-        safeSetItem(NAME_KEY, clean);
+        setInvite(null);
         useJoinStore.getState().join(link, clean);
       } finally {
         busy.current = false;
@@ -142,16 +147,78 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
     [go, nearby],
   );
 
-  // A link opened in the app: join it at once when the name is known (asking first if
-  // something else is playing).
+  // A link opened in the app: the invite step (the name, filled in when one was used before,
+  // and Join). One tap joins; a bad link lands in the form with its error.
   useEffect(() => {
     if (!pending) return;
     setText(pending);
     onPendingDone?.();
-    if (name.trim()) void join(pending, "", name);
+    const link = parseJoinLink(pending);
+    setInvite(link);
+    setBad(link ? null : "link");
     // Once per link.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending]);
+
+  // The invite step starts on its name field when it is empty, else on Join.
+  const inviteShown = !!invite;
+  useEffect(() => {
+    if (!inviteShown) return;
+    const id = name.trim() ? "join-invite-go" : "join-invite-name";
+    inviteForm.current?.querySelector<HTMLElement>(`[data-testid="${id}"]`)?.focus();
+    // Only when the step opens, not as the name is typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inviteShown]);
+
+  // An invite opened while in a game shows too: Join asks to leave that game first (okToJoin).
+  if (invite) {
+    const who = linkHost(invite);
+    return (
+      <div className="space-y-4" data-testid="join-invite">
+        <form
+          ref={inviteForm}
+          className="space-y-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void go(invite, name);
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <Users size={16} />
+            <h3 className="text-sm font-semibold" data-testid="join-invite-title">
+              {tr("join_invite_title", { host: who }, `Join ${who}'s game`)}
+            </h3>
+          </div>
+          <p className="text-sm text-[var(--color-muted)]">
+            {tr("join_title_body", { host: who }, `Play on ${who}'s PS5 as Player 2, 3 or 4.`)}
+          </p>
+          <Input
+            label={tr("join_name_label", undefined, "Your name")}
+            hint={tr("join_name_hint", undefined, "Your friend sees this when you ask to join.")}
+            value={name}
+            maxLength={32}
+            autoComplete="nickname"
+            onChange={(e) => setName(e.target.value)}
+            data-testid="join-invite-name"
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!name.trim()}
+              data-testid="join-invite-go"
+            >
+              {tr("join_button", undefined, "Join")}
+            </Button>
+            <Button type="button" variant="secondary" onClick={() => setInvite(null)} data-testid="join-invite-cancel">
+              {tr("join_cancel", undefined, "Cancel")}
+            </Button>
+          </div>
+        </form>
+        {dialog}
+      </div>
+    );
+  }
 
   if (session) {
     return (
@@ -201,31 +268,34 @@ export function JoinAFriend({ pending, onPendingDone }: { pending?: string | nul
           onChange={(e) => setName(e.target.value)}
           data-testid="join-app-name"
         />
-        <Input
-          label={tr("join_link_label", undefined, "Your friend's link")}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            setBad(null);
-          }}
-          placeholder={EXAMPLE_LINK}
-          leftIcon={<Link2 size={14} />}
-          rightSlot={
-            canScan ? (
-              <button
-                type="button"
-                onClick={() => setScanning(true)}
-                className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-[var(--color-surface-3)]"
-                data-testid="join-scan"
-              >
-                <ScanLine size={14} />
-                {tr("join_scan", undefined, "Scan QR")}
-              </button>
-            ) : undefined
-          }
-          error={bad === "link" ? tr("join_bad_link", undefined, "That isn't a Play Together link. It ends in /join#i=…") : undefined}
-          data-testid="join-link"
-        />
+        {/* Scan QR sits beside the field, not inside it: a long link never runs under it. */}
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <Input
+              label={tr("join_link_label", undefined, "Your friend's link")}
+              value={text}
+              onChange={(e) => {
+                setText(e.target.value);
+                setBad(null);
+              }}
+              placeholder={EXAMPLE_LINK}
+              leftIcon={<Link2 size={14} />}
+              error={bad === "link" ? tr("join_bad_link", undefined, "That isn't a Play Together link. It ends in /join#i=…") : undefined}
+              data-testid="join-link"
+            />
+          </div>
+          {canScan && (
+            <Button
+              type="button"
+              className="mt-5"
+              leftIcon={<ScanLine size={14} />}
+              onClick={() => setScanning(true)}
+              data-testid="join-scan"
+            >
+              {tr("join_scan", undefined, "Scan QR")}
+            </Button>
+          )}
+        </div>
         <Input
           label={tr("join_code_label", undefined, "Or the short code")}
           value={codeText}

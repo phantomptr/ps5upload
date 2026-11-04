@@ -88,12 +88,23 @@ function loadAutoInstall(): boolean {
 
 /** Nothing would be cut short by a restart: no queue running and no one-off transfer. Read
  *  lazily so this store does not pull the transfer stores in at start. */
+/** Quick lookups that never hold the update back. */
+const LIGHT_TASKS = new Set(["icon-fetch", "cheat-download"]);
+
+/** Whether a task in the Activity list is moving data (an upload, copy, install, backup…):
+ *  started from any screen, not only the upload queue (#660). */
+export function busyTasks(tasks: ReadonlyArray<{ kind: string; status: string }>): boolean {
+  return tasks.some((t) => (t.status === "running" || t.status === "queued") && !LIGHT_TASKS.has(t.kind));
+}
+
 async function appIdle(): Promise<boolean> {
-  const [{ useUploadQueueStore }, { useTransferStore }] = await Promise.all([
+  const [{ useUploadQueueStore }, { useTransferStore }, { useTaskStore }] = await Promise.all([
     import("./uploadQueue"),
     import("./transfer"),
+    import("./tasks"),
   ]);
   if (useUploadQueueStore.getState().running) return false;
+  if (busyTasks(useTaskStore.getState().tasks)) return false;
   return !Object.values(useTransferStore.getState().phasesByHost).some(
     (p) => p.kind === "starting" || p.kind === "running",
   );

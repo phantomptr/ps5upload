@@ -1,21 +1,15 @@
 import { useEffect, useState } from "react";
 import { Users } from "lucide-react";
 
-import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useTr } from "../state/lang";
 import { tokenKey } from "../lib/joinClient";
 import { joinAppLink } from "../lib/joinProtocol";
 import { OpenInAppGate } from "../components/OpenInAppGate";
 import { JoinView } from "./JoinView";
 import { JoinSession } from "./session";
+import { defaultName, lastName, rememberName } from "./guestName";
 
-/** The name a guest goes by, remembered on this device. */
-export const NAME_KEY = "ps5upload.join.name";
-
-/** A device's default name, before the friend types one. */
-export function defaultName(ua: string): string {
-  return /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : "";
-}
+export { NAME_KEY, defaultName } from "./guestName";
 
 /** A saved place for this invite (a reload while joined): go straight back in. */
 function hasPlace(invite: string | null): boolean {
@@ -46,14 +40,14 @@ async function pageFullscreen(on: boolean): Promise<void> {
  */
 export function JoinFlow({ url, invite, host }: { url: string; invite: string | null; host: string | null }) {
   const tr = useTr();
-  const [name, setName] = useState(() => safeGetItem(NAME_KEY) ?? defaultName(typeof navigator === "undefined" ? "" : navigator.userAgent));
+  const [name, setName] = useState(() => lastName(defaultName(typeof navigator === "undefined" ? "" : navigator.userAgent)));
   const [session, setSession] = useState<JoinSession | null>(null);
   const [round, setRound] = useState(0);
 
   const go = (n: string) => {
-    const clean = n.trim().slice(0, 32);
+    // Remembered on this device: the next invite has it filled in.
+    const clean = rememberName(n);
     if (!clean) return;
-    safeSetItem(NAME_KEY, clean);
     const s = new JoinSession({ url, invite, name: clean, host });
     setSession(s);
     setRound((r) => r + 1);
