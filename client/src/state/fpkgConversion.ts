@@ -10,7 +10,7 @@ import { ps5FakeGameUnplayableFirmware } from "../lib/ps5Firmware";
 import { useLangStore } from "./lang";
 import { useConvertPrefs } from "./convertPrefs";
 
-import { imageUploadItem, type ImageUploadPlan } from "../lib/imageUpload";
+import { imageUploadItem, resolveImagePlan, type ImageUploadPlan } from "../lib/imageUpload";
 import { useUploadQueueStore } from "./uploadQueue";
 
 import { fpkg, type AmprLz4Options, type FfpfscLevel, type FpkgBuildRequest, type ImageFormat, type WorkshopRun } from "../api/fpkg";
@@ -351,10 +351,13 @@ let deleteAfterInstall = false;
 
 /** Puts a finished image in the Upload queue and starts that console's queue. */
 function queueImage(imagePath: string, bytes: number, plan: ImageUploadPlan) {
-  const q = useUploadQueueStore.getState();
-  const id = q.add(imageUploadItem(imagePath, plan, bytes));
-  // Like every add (#536): the console's queue runs in order, or waits for Start.
-  q.startAdded(plan.host, [id]);
+  // Its drive is decided now, with that console's drives as they are (#673).
+  void resolveImagePlan(plan).then((resolved) => {
+    const q = useUploadQueueStore.getState();
+    const id = q.add(imageUploadItem(imagePath, resolved, bytes));
+    // Like every add (#536): the console's queue runs in order, or waits for Start.
+    q.startAdded(plan.host, [id]);
+  });
 }
 
 /** A build that ends the run (Convert only, or a .ffpfsc image). */

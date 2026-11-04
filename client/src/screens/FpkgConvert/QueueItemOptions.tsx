@@ -12,6 +12,8 @@ import { thenFor, type ConvertBuild, type ConvertItem, type ConvertItemChange, t
 import { isArchiveSource, isFolderableSource } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
+import { DEFAULT_IMAGE_SUBPATH } from "../../lib/imageUpload";
+import { ImageDestination } from "./ImageDestination";
 import { FullVerifyOption, ImageChoice } from "./ImageOptions";
 
 type Kind = ConvertBuild["kind"];
@@ -207,6 +209,14 @@ export function QueueItemOptions({
           }}
         />
       </div>
+      {kind === "image" && item.then !== "keep" && (item.host ?? host) && (
+        <ImageDestination
+          host={(item.host ?? host)!}
+          volume={item.imageDest?.volume ?? null}
+          subpath={item.imageDest?.subpath ?? DEFAULT_IMAGE_SUBPATH}
+          onChange={(volume, subpath) => onChange({ imageDest: { volume, subpath } })}
+        />
+      )}
       {kind !== "folder" && item.then !== "keep" && (
         <Toggle
           checked={!!item.deleteAfterInstall}
