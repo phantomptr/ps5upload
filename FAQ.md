@@ -3127,8 +3127,9 @@ so on) are in `protocol/ps5upload-ava1/` in this repository. You must pair with 
 shows a six-digit code your client must display too.
 
 **Q: How do I contribute a translation?**
-Edit `client/src/i18n/locales/` (English, `en.ts`, is the source of truth) or use
-`scripts/translate-i18n.py`. PRs welcome.
+Edit the file for your language in `client/src/i18n/locales/` (English, `en.ts`, is the source of
+truth), change only the lines you translate, then run `npm run i18n:hashes` and `npm run i18n:check`.
+PRs welcome.
 
 **Q: Why is my anti-virus flagging the app?**
 Tauri apps often trigger false positives because they bundle a

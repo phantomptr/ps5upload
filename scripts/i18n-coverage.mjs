@@ -2,8 +2,8 @@
 /*
  * i18n coverage gate.
  *
- * Loads `client/src/i18n.ts` and compares every non-English language's
- * key set against English. For each non-en language:
+ * Loads `client/src/i18n/locales/*.ts` and compares every non-English
+ * language's key set against English. For each non-en language:
  *
  *   missing = (en_keys − lang_keys) − allowlist[lang]
  *
@@ -14,9 +14,15 @@
  * surface as build failures and force either a translation or an
  * explicit allowlist entry.
  *
+ * It also fails on source drift: English rewritten while a translation
+ * stayed as it was (see scripts/i18n-source-hashes.mjs).
+ *
  * Modes
  *   default          Check; non-zero if any non-allowlisted miss.
  *   --report         Print per-language miss counts even when passing.
+ *   --strict         Also fail on allowlist entries that are no longer
+ *                    needed (validate-repo.mjs runs this). Without it they
+ *                    are only printed.
  *   --update-allowlist
  *                    Rewrite allowlist with whatever is currently
  *                    missing. Use sparingly — the whole point of the
@@ -31,8 +37,10 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import { duplicateKeys, scanLocale } from "./i18n-locale-file.mjs";
+import { checkSourceHashes, describeProblems } from "./i18n-source-hashes.mjs";
+import { usedKeysIn } from "./i18n-usage.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LOCALES_DIR = path.join(repoRoot, "client/src/i18n/locales");
@@ -41,35 +49,21 @@ const ALLOWLIST_PATH = path.join(repoRoot, "scripts/i18n-known-missing.json");
 const args = process.argv.slice(2);
 const updateAllowlist = args.includes("--update-allowlist");
 const report = args.includes("--report");
+const strict = args.includes("--strict");
 
 /**
  * Load translations from the per-locale split layout under
  * `client/src/i18n/locales/<code>.ts`.
  *
  * Each locale file is plain TS with one runtime surface: a top-level
- * `const <safeId>: Translations = { ... }` object literal followed by
- * `export default <safeId>;`. We extract that literal as a string and
- * evaluate it in an isolated V8 context (`vm.runInNewContext`) so the
- * `import type` line + `export default` don't trip up the parser.
+ * `const <safeId>: Translations = { ... }` object literal. The filename
+ * keeps the canonical hyphenated code (`zh-CN.ts`); the identifier inside
+ * (`zh_CN`) is internal. scripts/i18n-locale-file.mjs tokenizes the literal,
+ * so Node needs no TS loader and text inside a value can never look like a
+ * key.
  *
- * The locale ID inside the file uses underscores (e.g. `zh_CN`) to
- * stay a valid JS identifier; the filename keeps the canonical
- * hyphenated form (`zh-CN.ts`). Both this script and the runtime
- * code rely on the filename — the in-file identifier is internal.
- *
- * Why vm.runInNewContext: runs in a fresh global with no access to
- * require/process/fs/etc — the strongest sandbox Node ships without
- * spawning a subprocess.
- *
- * Why not `import(...)` directly: Node can't load .ts files without
- * a TS loader (tsx, ts-node) which we'd need to install as a script-
- * only dep. Extracting the literal inline keeps the dep graph
- * minimal.
- *
- * Replaces the older monolithic `client/src/i18n.ts` scanner
- * (extracted a single `const translations = { ... }` block). The
- * locale-split refactor moved each locale to its own file so Vite
- * could chunk-split the i18n bundle by ~50 KB lazy-load groups.
+ * Duplicate-key guard: a repeated key in a locale literal is valid JS (the
+ * later one silently wins), so it would quietly override a translation.
  */
 function loadTranslations() {
   if (!fs.existsSync(LOCALES_DIR)) {
@@ -85,53 +79,21 @@ function loadTranslations() {
   for (const f of files) {
     const code = f.replace(/\.ts$/, "");
     const fp = path.join(LOCALES_DIR, f);
-    const src = fs.readFileSync(fp, "utf8");
-    // Find the object literal: `const <id>: Translations = { ... };`
-    // The id might contain underscores for hyphenated locales
-    // (zh-CN → zh_CN inside the file). Match on any identifier.
-    const startMatch = src.match(
-      /^const\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*Translations\s*=\s*/m,
-    );
-    if (!startMatch) {
+    let entries;
+    try {
+      ({ entries } = scanLocale(fs.readFileSync(fp, "utf8")));
+    } catch (e) {
+      throw new Error(`${fp}: ${e.message}`);
+    }
+    const dups = duplicateKeys(entries);
+    if (dups.length > 0) {
       throw new Error(
-        `${fp}: could not find 'const <name>: Translations = ' declaration`,
+        `${fp}: duplicate locale key(s) — a dup silently overrides a ` +
+          `translation: ${dups.join(", ")}`,
       );
     }
-    const startIdx = startMatch.index + startMatch[0].length;
-    // The literal ends at `};` followed by the export default line.
-    // Look for `};\n\nexport default` (matches our generator's output).
-    const endMatch = src.slice(startIdx).match(/\n};\s*\n\s*export default/);
-    if (!endMatch) {
-      throw new Error(`${fp}: could not find end of literal (};\\nexport default)`);
-    }
-    const literalSrc = src.slice(
-      startIdx,
-      startIdx + endMatch.index + "\n}".length,
-    );
-    // Duplicate-key guard. A repeated key in a locale literal is valid JS
-    // (the later one silently wins), so the vm eval below — and the coverage
-    // diff that follows — can't see it: it just quietly overrides a
-    // translation. Scan the raw literal source (one key per line in the
-    // generated files) for repeats before evaluating.
-    {
-      const keyRe = /^\s*"?([A-Za-z][A-Za-z0-9_.-]*)"?\s*:/gm;
-      const seen = new Set();
-      const dups = new Set();
-      let km;
-      while ((km = keyRe.exec(literalSrc))) {
-        if (seen.has(km[1])) dups.add(km[1]);
-        seen.add(km[1]);
-      }
-      if (dups.size > 0) {
-        throw new Error(
-          `${fp}: duplicate locale key(s) — a dup silently overrides a ` +
-            `translation: ${[...dups].sort().join(", ")}`,
-        );
-      }
-    }
-    const dict = vm.runInNewContext(`(${literalSrc})`, Object.create(null), {
-      timeout: 1000,
-    });
+    const dict = {};
+    for (const e of entries) dict[e.key] = e.value;
     translations[code] = dict;
   }
   if (!translations.en) {
@@ -241,8 +203,10 @@ function computeAllForLang(translations) {
 }
 
 /**
- * Scan `client/src` for i18n keys referenced via `tr("literal", …)` (and
- * `t(lang, "literal", …)`) and return the set of those NOT present in en.ts.
+ * Scan `client/src` for i18n keys referenced via `tr("literal", …)`,
+ * `trStatic("literal", …)`, the console page's `t("literal", …)` and
+ * `t(lang, "literal", …)`, and return the set of those NOT present in en.ts
+ * (the console page's strings are generated from en.ts's `cw_*` keys).
  *
  * Why this matters: the per-language coverage check above only validates
  * translations OF en.ts keys. A key used at a call site with an inline
@@ -252,27 +216,23 @@ function computeAllForLang(translations) {
  * catches that class (fixed a batch of 70 such keys in the PR that added
  * this guard). Multi-line `tr(\n  "key"…)` calls are matched too.
  *
- * Only LITERAL first-arg keys are checked; dynamically-built keys
- * (`tr(\`x.${k}\`)`) can't be statically resolved and are skipped — same
- * limitation find-orphan-i18n.mjs documents. `foo`/`x` are the doc-comment
- * example keys in i18n.ts / lang.ts and are ignored.
+ * Only LITERAL keys are checked; dynamically-built keys
+ * (`tr(\`x.${k}\`)`) can't be statically resolved and are skipped.
+ * `foo`/`x` are the doc-comment example keys in i18n.ts / lang.ts and are
+ * ignored. Tests are skipped: they call `t("ja", …)` with a language first.
  */
 function findUsedButMissing(enKeys) {
   const SRC_DIR = path.join(repoRoot, "client/src");
   const IGNORE = new Set(["foo", "x"]);
   const used = new Set();
-  // tr( <ws/nl> "key"   — and   t( <ws> ident/"lang", <ws/nl> "key"
-  const trPat = /\btr\(\s*"([a-zA-Z0-9_.]+)"/g;
   const walk = (dir) => {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
       const fp = path.join(dir, ent.name);
       if (ent.isDirectory()) {
         if (ent.name === "i18n" && dir.endsWith("/src")) continue; // skip locale defs
         walk(fp);
-      } else if (/\.tsx?$/.test(ent.name)) {
-        const txt = fs.readFileSync(fp, "utf8");
-        let m;
-        while ((m = trPat.exec(txt)) !== null) used.add(m[1]);
+      } else if (/\.tsx?$/.test(ent.name) && !/\.test\./.test(ent.name)) {
+        for (const k of usedKeysIn(fs.readFileSync(fp, "utf8"))) used.add(k);
       }
     }
   };
@@ -280,6 +240,27 @@ function findUsedButMissing(enKeys) {
   return [...used]
     .filter((k) => !IGNORE.has(k) && !enKeys.has(k))
     .sort();
+}
+
+/**
+ * Allowlist entries that no longer describe anything: an "untranslated" key
+ * that now has a translation, a "missing" key that is now there, a "stale"
+ * key that is gone. Nothing else ever removes them, so without this the
+ * register only grows and stops being the tight list it is meant to be.
+ */
+function findNeedlessAllowlist(translations, allowlist) {
+  const en = translations.en;
+  const out = [];
+  for (const [lang, raw] of Object.entries(allowlist)) {
+    const dict = translations[lang] ?? {};
+    const entry = readEntry(raw);
+    for (const k of entry.untranslated) {
+      if (dict[k] !== en[k] || en[k] === undefined) out.push(`${lang}: untranslated ${k}`);
+    }
+    for (const k of entry.missing) if (k in dict || !(k in en)) out.push(`${lang}: missing ${k}`);
+    for (const k of entry.stale) if (!(k in dict) || k in en) out.push(`${lang}: stale ${k}`);
+  }
+  return out.sort();
 }
 
 const translations = loadTranslations();
@@ -322,7 +303,7 @@ if (updateAllowlist) {
 const allowlist = loadAllowlist();
 const perLang = computeMissingPerLang(translations, allowlist);
 
-let failed = false;
+let coverageFailed = false;
 const lines = [];
 for (const [lang, info] of Object.entries(perLang)) {
   const missCount = info.missing.length;
@@ -339,7 +320,7 @@ for (const [lang, info] of Object.entries(perLang)) {
     }
     continue;
   }
-  failed = true;
+  coverageFailed = true;
   lines.push(
     `  ${lang.padEnd(8)} missing=${missCount} stale=${staleCount} ` +
       `untranslated=${untransCount} allowlisted=${allowCount}`,
@@ -364,7 +345,7 @@ for (const [lang, info] of Object.entries(perLang)) {
   }
 }
 
-if (failed) {
+if (coverageFailed) {
   process.stderr.write("[i18n-coverage] failed:\n");
   process.stderr.write(`${lines.join("\n")}\n`);
   process.stderr.write(
@@ -373,8 +354,20 @@ if (failed) {
   process.stderr.write(
     "  bootstrap (caution): node scripts/i18n-coverage.mjs --update-allowlist\n",
   );
-  process.exit(1);
 }
+
+const needless = findNeedlessAllowlist(translations, allowlist);
+if (needless.length > 0) {
+  process.stderr.write(
+    `[i18n-coverage] ${needless.length} entries in scripts/i18n-known-missing.json are no longer needed; remove them:\n`,
+  );
+  for (const n of needless) process.stderr.write(`      ${n}\n`);
+}
+
+const drift = describeProblems(checkSourceHashes(repoRoot));
+if (drift) process.stderr.write(`[i18n-coverage] source drift:\n${drift}\n`);
+
+if (coverageFailed || drift || (strict && needless.length > 0)) process.exit(1);
 
 if (report) {
   process.stdout.write("[i18n-coverage] all languages within allowlist budget\n");

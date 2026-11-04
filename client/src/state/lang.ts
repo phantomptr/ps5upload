@@ -12,9 +12,9 @@ import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 const STORAGE_KEY = "ps5upload.lang";
 
 /**
- * The 20 languages we ship with. Mirrors `translations` in `src/i18n.ts`
- * and the label table from v1.5.4's `App.tsx`. RTL detection is handled
- * in `applyLang()` below; only Arabic triggers it today.
+ * The 21 languages we ship with, one per file in `src/i18n/locales/`.
+ * RTL detection is handled in `applyLang()` below; Arabic and Persian
+ * trigger it (`RTL_LANGS`).
  */
 export const LANGUAGES: { code: LanguageCode; label: string }[] = [
   { code: "en", label: "English" },

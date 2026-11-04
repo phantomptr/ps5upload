@@ -1,7 +1,7 @@
 // i18n translations for PS5 Upload webapp
 //
-// The 20 locale dictionaries each live in `src/i18n/locales/<code>.ts`
-// and are imported here via per-locale dynamic `import()` so Vite ships
+// The 21 locale dictionaries each live in `src/i18n/locales/<code>.ts`;
+// the 20 besides English are imported here via per-locale dynamic `import()` so Vite ships
 // each as its own chunk. English is loaded eagerly because it's the
 // universal fallback and every screen's inline `tr(key, "English…")`
 // default needs it ready on first paint.
