@@ -21,6 +21,7 @@ const LOADER_WAIT: Duration = Duration::from_secs(15);
 
 #[derive(Deserialize)]
 struct Target {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     port: u16,
 }

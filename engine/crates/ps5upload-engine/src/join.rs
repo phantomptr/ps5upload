@@ -1938,6 +1938,7 @@ fn state_json(console: &str) -> serde_json::Value {
 
 #[derive(serde::Deserialize)]
 pub struct AddrQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
 }
 
@@ -1956,6 +1957,7 @@ pub async fn get_state(
 
 #[derive(serde::Deserialize)]
 pub struct AddrBody {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
 }
 
@@ -2034,6 +2036,7 @@ pub async fn close(
 
 #[derive(serde::Deserialize)]
 pub struct InviteBody {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
     /// A new key (the old link stops working).
     #[serde(default)]
@@ -2095,6 +2098,7 @@ pub async fn decide(
 
 #[derive(serde::Deserialize)]
 pub struct PlayerBody {
+    #[serde(alias = "console", alias = "host")]
     addr: String,
     player: u8,
 }

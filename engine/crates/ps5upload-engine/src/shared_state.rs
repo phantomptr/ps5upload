@@ -47,15 +47,50 @@ pub fn put(docs: &mut Docs, name: &str, base_rev: u64, value: Value) -> Result<u
     Ok(doc.rev)
 }
 
+/// Where the documents are kept.
+#[derive(Debug, PartialEq, Eq)]
+enum Place {
+    /// `<dir>/web-shared.json`
+    File(PathBuf),
+    /// Only in tests with no explicit directory.
+    Memory,
+    /// Nowhere that lasts, and why.
+    Nowhere(String),
+}
+
 /// `PS5UPLOAD_STATE_DIR`, else `<data dir>/state`. Tests persist only with an explicit directory.
-fn path() -> Option<PathBuf> {
-    let dir = match std::env::var("PS5UPLOAD_STATE_DIR") {
-        Ok(v) if !v.trim().is_empty() => PathBuf::from(v),
-        _ if cfg!(test) => return None,
-        _ => crate::remote::store::data_dir()?.join("state"),
+fn place_from(explicit: Option<String>, data_dir: Option<PathBuf>, testing: bool) -> Place {
+    let dir = match explicit {
+        Some(v) if !v.trim().is_empty() => PathBuf::from(v),
+        _ if testing => return Place::Memory,
+        _ => match data_dir {
+            Some(d) => d.join("state"),
+            None => {
+                return Place::Nowhere(
+                    "no data directory to save in: set PS5UPLOAD_DATA_DIR on the engine".into(),
+                )
+            }
+        },
     };
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir.join("web-shared.json"))
+    match std::fs::create_dir_all(&dir) {
+        Ok(()) => Place::File(dir.join("web-shared.json")),
+        Err(e) => Place::Nowhere(format!("cannot save in {}: {e}", dir.display())),
+    }
+}
+
+fn place() -> Place {
+    place_from(
+        std::env::var("PS5UPLOAD_STATE_DIR").ok(),
+        crate::remote::store::data_dir(),
+        cfg!(test),
+    )
+}
+
+fn path() -> Option<PathBuf> {
+    match place() {
+        Place::File(p) => Some(p),
+        Place::Memory | Place::Nowhere(_) => None,
+    }
 }
 
 /// The store, or an empty one when there is no file yet. A file that cannot be read or parsed is
@@ -185,14 +220,65 @@ pub async fn put_doc(UrlPath(name): UrlPath<String>, Json(body): Json<PutBody>) 
         );
     }
     let done = tokio::task::spawn_blocking(move || {
-        with(|docs| put(docs, &name, body.base_rev, body.value))
+        // Refused rather than held in memory: a "saved" that a restart would lose is a lie.
+        if let Place::Nowhere(why) = place() {
+            return Err(why);
+        }
+        Ok(with(|docs| put(docs, &name, body.base_rev, body.value)))
     })
     .await;
+    let done = match done {
+        Ok(Ok(saved)) => Ok(saved),
+        Ok(Err(why)) => {
+            crate::log_warn!("shared settings not saved: {why}");
+            return json_error(StatusCode::SERVICE_UNAVAILABLE, why);
+        }
+        Err(e) => Err(e),
+    };
     match done {
         Ok((Ok(rev), Ok(()))) => Json(serde_json::json!({ "rev": rev })).into_response(),
         Ok((Ok(_), Err(e))) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         Ok((Err(current), _)) => (StatusCode::CONFLICT, Json(*current)).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod place_tests {
+    use super::*;
+
+    #[test]
+    fn no_data_directory_is_nowhere_and_says_so() {
+        match place_from(None, None, false) {
+            Place::Nowhere(why) => assert!(why.contains("PS5UPLOAD_DATA_DIR"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_directory_that_cannot_be_made_is_nowhere_too() {
+        let file = std::env::temp_dir().join(format!("shared-state-{}", std::process::id()));
+        std::fs::write(&file, b"x").unwrap();
+        let got = place_from(Some(file.join("sub").display().to_string()), None, false);
+        let _ = std::fs::remove_file(&file);
+        assert!(matches!(got, Place::Nowhere(_)), "{got:?}");
+    }
+
+    #[test]
+    fn tests_stay_in_memory_unless_given_a_directory() {
+        assert_eq!(place_from(None, None, true), Place::Memory);
+        let dir = std::env::temp_dir().join(format!("shared-state-dir-{}", std::process::id()));
+        let got = place_from(Some(dir.display().to_string()), None, true);
+        assert_eq!(got, Place::File(dir.join("web-shared.json")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_data_directory_is_used_when_nothing_is_set() {
+        let dir = std::env::temp_dir().join(format!("shared-state-data-{}", std::process::id()));
+        let got = place_from(None, Some(dir.clone()), false);
+        assert_eq!(got, Place::File(dir.join("state").join("web-shared.json")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

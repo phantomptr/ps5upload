@@ -5,6 +5,7 @@ import {
   BrowserUnsupportedError,
   parseSseBlock,
   statusFailureFields,
+  statusFailureText,
   timeSyncBody,
 } from "./browserInvoke";
 
@@ -523,5 +524,37 @@ describe("remote conversion preflight", () => {
     expect(deadline).toHaveBeenCalledWith(3_600_000);
     const call = vi.mocked(fetch).mock.calls[0];
     expect(JSON.parse(call[1]?.body as string).source).toBe("ps5://console/data/game.exfat");
+  });
+});
+
+describe("engine errors", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it("status failures read a normalized refusal as its text and keep other bodies raw", () => {
+    expect(statusFailureText('{"error":"loopback only","code":"forbidden"}')).toBe("loopback only");
+    expect(statusFailureText("  plain text ")).toBe("plain text");
+    const withReason = '{"error":"x","reason":"console_rest_mode"}';
+    expect(statusFailureText(withReason)).toBe(withReason);
+    expect(statusFailureText("")).toBe("");
+  });
+
+  it("a failed call throws the engine's text, from JSON or from a plain body", async () => {
+    const answer = (body: string, status: number) => {
+      globalThis.fetch = vi.fn(async () => new Response(body, { status })) as typeof fetch;
+    };
+    answer('{"error":"Missing field `path`","code":"unprocessable_entity"}', 422);
+    await expect(browserInvoke("inspect_folder", { path: "/x" })).rejects.toThrow("Missing field `path`");
+    // The console refused a drive action: a 502 now, read like any other failure.
+    answer('{"error":"PERIPHERAL_CONTROL failed: code 3","reason":"helper_refused"}', 502);
+    await expect(browserInvoke("peripheral_eject", { addr: "10.0.0.2" })).rejects.toThrow(
+      "PERIPHERAL_CONTROL failed",
+    );
+    answer("a proxy said no", 502);
+    await expect(browserInvoke("inspect_folder", { path: "/x" })).rejects.toThrow("a proxy said no");
+    answer("", 500);
+    await expect(browserInvoke("inspect_folder", { path: "/x" })).rejects.toThrow("engine HTTP 500");
   });
 });

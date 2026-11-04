@@ -121,6 +121,7 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, serde::Deserialize)]
 struct StartReq {
+    #[serde(alias = "console", alias = "addr")]
     host: String,
     regist_key: String,
     rp_key: String,

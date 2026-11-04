@@ -647,13 +647,7 @@ pub struct BenchArgs {
     pub warmup: bool,
 }
 
-fn host_of(console: &str) -> String {
-    console
-        .rsplit_once(':')
-        .map(|(h, _)| h)
-        .unwrap_or(console)
-        .to_string()
-}
+use ps5upload_core::events::console_addr as host_of;
 
 impl BenchArgs {
     pub fn parse<S: AsRef<str>>(args: &[S]) -> anyhow::Result<BenchArgs> {

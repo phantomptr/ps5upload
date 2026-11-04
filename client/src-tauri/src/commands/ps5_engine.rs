@@ -90,19 +90,23 @@ async fn send(request: reqwest::RequestBuilder) -> Result<(reqwest::StatusCode, 
     Ok((status, body))
 }
 
-/// The error for a non-success answer, the same for every verb: the engine's `{"error":"…"}`
-/// message when it sent one, else the body as it came.
+/// The error for a non-success answer, the same for every verb: the engine's message when that is
+/// all the body says (`{"error":"…"}`, with or without the API's `code`), else the body as it came,
+/// which keeps any other field (`reason`, say) for the renderer.
 fn engine_error(status: reqwest::StatusCode, body: &str) -> String {
-    let detail = serde_json::from_str::<JsonValue>(body)
-        .ok()
-        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
-        .unwrap_or_else(|| {
-            if body.is_empty() {
-                "(empty body)".to_string()
-            } else {
-                body.to_string()
-            }
-        });
+    let message = match serde_json::from_str::<JsonValue>(body) {
+        Ok(JsonValue::Object(o)) if o.keys().all(|k| k == "error" || k == "code") => {
+            o.get("error").and_then(|e| e.as_str()).map(String::from)
+        }
+        _ => None,
+    };
+    let detail = message.unwrap_or_else(|| {
+        if body.is_empty() {
+            "(empty body)".to_string()
+        } else {
+            body.to_string()
+        }
+    });
     format!("engine HTTP {status}: {detail}")
 }
 

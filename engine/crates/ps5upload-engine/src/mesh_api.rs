@@ -532,6 +532,7 @@ fn answer_result(r: anyhow::Result<Value>) -> Response {
 
 #[derive(Deserialize)]
 pub struct StateQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     since: Option<u64>,
     ev: Option<u64>,
@@ -556,6 +557,7 @@ pub async fn state(Query(q): Query<StateQuery>) -> Response {
 
 #[derive(Deserialize)]
 pub struct ActivityReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     client: String,
     #[serde(default)]
@@ -586,6 +588,7 @@ pub async fn activity(Json(req): Json<ActivityReq>) -> Response {
 
 #[derive(Deserialize)]
 pub struct LockReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     op: String,
     name: String,
@@ -622,6 +625,7 @@ pub async fn lock(Json(req): Json<LockReq>) -> Response {
 
 #[derive(Deserialize)]
 pub struct DeviceReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     op: String,
     id: String,
@@ -643,6 +647,7 @@ pub async fn device(Json(req): Json<DeviceReq>) -> Response {
 
 #[derive(Deserialize)]
 pub struct SettingsReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     require_approval: Option<bool>,
     prune_days: Option<u64>,
@@ -663,6 +668,7 @@ pub async fn settings(Json(req): Json<SettingsReq>) -> Response {
 
 #[derive(Deserialize)]
 pub struct DocQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     name: String,
 }
@@ -681,6 +687,7 @@ pub async fn doc_get(Query(q): Query<DocQuery>) -> Response {
 
 #[derive(Deserialize)]
 pub struct DocPut {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     name: String,
     base: u64,
@@ -705,6 +712,7 @@ pub async fn doc_put(Json(req): Json<DocPut>) -> Response {
 
 #[derive(Deserialize)]
 pub struct AnnounceReq {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     kind: String,
     #[serde(default)]

@@ -28,22 +28,26 @@ use crate::{console_addr_or_default, required_console_addr, AppState};
 
 #[derive(Deserialize)]
 pub(crate) struct AddrBody {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct AddrQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct ApplyBody {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     item_ids: Vec<u32>,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct CancelBody {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     id: u32,
 }

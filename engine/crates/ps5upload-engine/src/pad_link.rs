@@ -501,6 +501,7 @@ fn diag_of(l: &Link, tailscale: bool) -> serde_json::Value {
 #[derive(serde::Deserialize, Default)]
 pub struct StatusQuery {
     #[serde(default)]
+    #[serde(alias = "addr", alias = "host")]
     console: Option<String>,
 }
 
@@ -516,6 +517,7 @@ pub async fn get_status(
 pub struct OpenReq {
     open: bool,
     #[serde(default)]
+    #[serde(alias = "addr", alias = "host")]
     console: Option<String>,
 }
 
@@ -1524,6 +1526,15 @@ mod tests {
         assert_eq!(relay_target("ws://192.168.1.20/a//api/pad/ws"), None);
         assert_eq!(relay_target("ws://192.168.1.20//api/pad/ws"), None);
         assert_eq!(relay_target("ws://192.168.1.20/../api/pad/ws"), None);
+        for bad in [
+            "ws://192.168.1.20:19113/../api/pad/ws",
+            "ws://192.168.1.20:19113/a/../api/pad/ws",
+            "ws://192.168.1.20:19113/xapi/pad/ws",
+            "ws://192.168.1.20:19113/api/pad/ws/x",
+            "ws://192.168.1.20:19113/api/other",
+        ] {
+            assert_eq!(relay_target(bad), None, "{bad}");
+        }
         assert_eq!(
             lan_ws_target("ws://100.101.2.3:19113/api/join/ws", "api/join/ws").as_deref(),
             Some("ws://100.101.2.3:19113/api/join/ws")

@@ -809,6 +809,7 @@ pub fn back_up_now(host: &str, title_id: &str, user_id: u32) -> Result<PathBuf, 
 
 #[derive(Deserialize)]
 pub struct BackUpNowBody {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub title_id: String,
     pub user_id: u32,
@@ -878,6 +879,7 @@ pub async fn get_latest() -> Response {
 
 #[derive(Deserialize)]
 pub struct SnapshotBody {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub title_id: String,
 }
@@ -1431,6 +1433,7 @@ fn import_ps4(
 
 #[derive(Deserialize)]
 pub struct ImportPs4Body {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub title_id: String,
     /// The PS4 save folder of the game on the PS5 (from the saves list, kind "ps4").
@@ -1709,6 +1712,7 @@ pub async fn get_list(Query(q): Query<ListQuery>) -> Response {
 #[derive(Deserialize)]
 pub struct RestoreBody {
     /// The console (bare IP).
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub title_id: String,
     pub file: String,

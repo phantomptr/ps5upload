@@ -195,7 +195,7 @@ fn status_failure(code: u16, body: &str) -> serde_json::Value {
         "error": if body.is_empty() {
             format!("engine returned HTTP {code}")
         } else {
-            body.to_string()
+            crate::engine_http::plain_error_text(body)
         },
     });
     if let Ok(serde_json::Value::Object(parsed)) = serde_json::from_str(body) {

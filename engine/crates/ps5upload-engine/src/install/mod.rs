@@ -76,7 +76,9 @@ impl JobStore {
         }
         let job = self.new_job_id();
         active.insert(cid, job.clone());
-        lock(&self.jobs).insert(job.clone(), InstallStatus::new(&job, ps5_addr, ""));
+        let st = InstallStatus::new(&job, ps5_addr, "");
+        publish_status(&st);
+        lock(&self.jobs).insert(job.clone(), st);
         Ok(job)
     }
 
@@ -183,8 +185,13 @@ impl JobStore {
     pub fn update(&self, job: &str, f: impl FnOnce(&mut InstallStatus)) {
         let mut jobs = lock(&self.jobs);
         if let Some(st) = jobs.get_mut(job) {
+            let (phase, verdict, stamp) = (st.phase, st.verdict, st.updated_at);
             f(st);
             st.updated_at = status::now_unix();
+            // On a change of phase or result, and at most once a second for progress.
+            if st.phase != phase || st.verdict != verdict || st.updated_at != stamp {
+                publish_status(st);
+            }
         }
     }
 }
@@ -212,6 +219,15 @@ pub fn job_list_entry(st: &InstallStatus) -> serde_json::Value {
         },
         "job": st,
     })
+}
+
+/// The install's status as an `install` event on `/api/events`, and its place for `/api/jobs`.
+fn publish_status(st: &InstallStatus) {
+    if let Ok(v) = serde_json::to_value(st) {
+        let bus = crate::event_bus::bus();
+        let seq = bus.publish_json("install", &v);
+        bus.note_job(&st.job, seq);
+    }
 }
 
 /// Drops the oldest finished statuses until at most `keep` remain. Running ones (those holding
@@ -870,6 +886,7 @@ pub struct InstallOptions {
 
 #[derive(Debug, Deserialize)]
 pub struct InstallRequest {
+    #[serde(alias = "console", alias = "addr", alias = "host")]
     pub ps5_addr: String,
     pub source: Source,
     #[serde(default)]
@@ -1016,6 +1033,7 @@ pub async fn install_status_handler(
 
 #[derive(Debug, Deserialize)]
 pub struct AddrQuery {
+    #[serde(alias = "console", alias = "addr", alias = "host")]
     pub ps5_addr: String,
 }
 

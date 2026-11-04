@@ -5,6 +5,8 @@
 export interface PadLink {
   /** `<host>:<port>` as written (an IPv6 host in brackets). */
   authority: string;
+  /** The path the engine is served under (`/ps5`, its PS5UPLOAD_BASE_URL). Absent at the root. */
+  prefix?: string;
   /** The host alone, to name the computer. */
   host: string;
   key: string;
@@ -20,11 +22,18 @@ export function parsePadLink(text: string): PadLink | null {
     return null;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-  if (!/^\/pad\/?$/.test(u.pathname) || u.username || u.password) return null;
+  const path = /^(.*)\/pad\/?$/.exec(u.pathname);
+  if (!path || u.username || u.password) return null;
   const hash = new URLSearchParams(u.hash.replace(/^#/, ""));
   const key = hash.get("t") ?? "";
   if (!/^[0-9a-fA-F]{8,128}$/.test(key)) return null;
-  return { authority: u.host, host: u.hostname.replace(/^\[|\]$/g, ""), key, watch: hash.get("w") === "1" };
+  return {
+    authority: u.host,
+    ...(path[1] ? { prefix: path[1] } : {}),
+    host: u.hostname.replace(/^\[|\]$/g, ""),
+    key,
+    watch: hash.get("w") === "1",
+  };
 }
 
 /** "Open in the PS5Upload app" for a controller (or watch) link. */

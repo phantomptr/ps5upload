@@ -127,6 +127,8 @@ impl Journal {
             let p = &mut self.pending[i];
             p.count = Some(p.count.unwrap_or(1) + 1);
             p.last_ts = Some(e.ts);
+            // The line changed: a poller on `since_seq` sees it again, with the new count.
+            p.seq = e.seq.or(p.seq);
             return;
         }
         // An entry whose repeats have stopped (a gap over a minute) is done.
@@ -334,7 +336,13 @@ pub fn journal_dir() -> PathBuf {
 pub fn install() {
     let j = JOURNAL.get_or_init(|| Mutex::new(Journal::open(journal_dir(), MAX_TOTAL, MAX_AGE_MS)));
     let (tx, rx) = std::sync::mpsc::sync_channel::<Event>(4096);
-    set_sink(move |e| {
+    set_sink(move |mut e| {
+        // The same number on the live feed (`journal` events) and in the journal, so
+        // `?since_seq=` and `Last-Event-ID` are one cursor.
+        crate::event_bus::bus().publish_with(Some("journal"), |seq| {
+            e.seq = Some(seq);
+            serde_json::to_string(&e).unwrap_or_default()
+        });
         let _ = tx.try_send(e);
     });
     let _ = std::thread::Builder::new()
@@ -395,9 +403,34 @@ pub fn flush_now() {
 
 #[derive(Deserialize)]
 pub struct EventsQuery {
+    /// From this time (ms). Without it, from the start of what is kept.
+    #[serde(default)]
     pub since: u64,
     pub until: Option<u64>,
     pub cat: Option<String>,
+    /// Only events numbered after this: the `last_seq` of an earlier answer, or an `id:` from
+    /// `/api/events`.
+    pub since_seq: Option<u64>,
+    /// At most this many events: the next ones after `since_seq`, else the newest.
+    pub limit: Option<usize>,
+}
+
+/// Applies `since_seq` and `limit` to events oldest first. With `since_seq` the order is the
+/// events' numbers and `limit` keeps the first ones, so a poller's cursor never skips any.
+fn select(mut events: Vec<Event>, since_seq: Option<u64>, limit: Option<usize>) -> Vec<Event> {
+    match since_seq {
+        Some(after) => {
+            events.retain(|e| e.seq.is_some_and(|s| s > after));
+            events.sort_by_key(|e| e.seq);
+            events.truncate(limit.unwrap_or(usize::MAX));
+        }
+        None => {
+            if let Some(limit) = limit {
+                events.drain(..events.len().saturating_sub(limit));
+            }
+        }
+    }
+    events
 }
 
 pub(crate) fn parse_cats(s: &str) -> Vec<Cat> {
@@ -408,24 +441,39 @@ pub(crate) fn parse_cats(s: &str) -> Vec<Cat> {
         .collect()
 }
 
-/// `GET /api/event-journal?since=<ms>&until=<ms>&cat=a,b` -> `{"events":[...],"dropped":N}`, oldest first.
+/// `GET /api/event-journal?since=<ms>&until=<ms>&cat=a,b&since_seq=<n>&limit=<n>` ->
+/// `{"events":[...],"dropped":N,"last_seq":N}`, oldest first. `last_seq` is the cursor for the next
+/// `since_seq`.
 pub async fn events_handler(Query(q): Query<EventsQuery>) -> Response {
+    let since_seq = q.since_seq;
     let Some(j) = JOURNAL.get() else {
-        return Json(serde_json::json!({ "events": [], "dropped": 0 })).into_response();
+        return Json(serde_json::json!({
+            "events": [],
+            "dropped": 0,
+            "last_seq": since_seq.unwrap_or(0),
+        }))
+        .into_response();
     };
     let cats = q.cat.as_deref().map(parse_cats);
     let until = q.until.unwrap_or(u64::MAX);
-    let since = q.since;
+    let (since, limit) = (q.since, q.limit);
     let (events, dropped) = tokio::task::spawn_blocking(move || {
         let (plan, dropped) = {
             let g = j.lock().unwrap_or_else(|e| e.into_inner());
             (g.read_plan(since, until, cats.as_deref()), g.dropped())
         };
-        (plan.read(), dropped)
+        (select(plan.read(), since_seq, limit), dropped)
     })
     .await
     .unwrap_or_default();
-    Json(serde_json::json!({ "events": events, "dropped": dropped })).into_response()
+    let last_seq = events
+        .iter()
+        .filter_map(|e| e.seq)
+        .max()
+        .max(since_seq)
+        .unwrap_or(0);
+    Json(serde_json::json!({ "events": events, "dropped": dropped, "last_seq": last_seq }))
+        .into_response()
 }
 
 #[cfg(test)]
@@ -459,6 +507,63 @@ mod tests {
         );
         e.ts = ts;
         e
+    }
+
+    fn seq_ev(ts: u64, seq: Option<u64>) -> Event {
+        let mut e = ev(ts, "x");
+        e.seq = seq;
+        e
+    }
+
+    #[test]
+    fn since_seq_is_a_cursor_that_never_skips() {
+        let all = || {
+            vec![
+                seq_ev(1, None),
+                seq_ev(2, Some(12)),
+                seq_ev(3, Some(11)),
+                seq_ev(4, Some(13)),
+            ]
+        };
+        let seqs = |v: Vec<Event>| v.iter().map(|e| e.seq).collect::<Vec<_>>();
+        assert_eq!(
+            seqs(select(all(), Some(11), None)),
+            vec![Some(12), Some(13)],
+            "newer numbers only; lines without a number are from before"
+        );
+        assert_eq!(
+            seqs(select(all(), Some(0), Some(2))),
+            vec![Some(11), Some(12)],
+            "the limit keeps the next ones, not the newest"
+        );
+    }
+
+    #[test]
+    fn a_plain_limit_keeps_the_newest_in_time_order() {
+        let got = select(
+            vec![seq_ev(1, None), seq_ev(2, None), seq_ev(3, None)],
+            None,
+            Some(2),
+        );
+        assert_eq!(got.iter().map(|e| e.ts).collect::<Vec<_>>(), vec![2, 3]);
+        assert_eq!(select(vec![seq_ev(1, None)], None, Some(9)).len(), 1);
+    }
+
+    #[test]
+    fn a_folded_repeat_takes_the_newest_number() {
+        let t = TmpDir::new("foldseq");
+        let mut j = Journal::open(t.0.clone(), 32 << 20, 7 * 86_400_000);
+        let base = now_ms() - 3_600_000;
+        let mut a = ev(base, "reconnect");
+        a.seq = Some(5);
+        let mut b = ev(base + 1_000, "reconnect");
+        b.seq = Some(9);
+        j.push(a);
+        j.push(b);
+        let got = j.read_range(0, u64::MAX, None);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].count, Some(2));
+        assert_eq!(got[0].seq, Some(9));
     }
 
     #[test]

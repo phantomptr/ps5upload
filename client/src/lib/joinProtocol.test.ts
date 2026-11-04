@@ -137,6 +137,12 @@ describe("links and timing", () => {
     expect(parseJoinLink("http://192.168.1.9:19113/join")).toBeNull();
     expect(parseJoinLink("ftp://x/join#i=abcdefgh12")).toBeNull();
     expect(joinSocketUrl({ origin: "http://10.0.0.2:19113" })).toBe("ws://10.0.0.2:19113/api/join/ws");
+    // An engine served under a path (PS5UPLOAD_BASE_URL) keeps it.
+    const prefixed = parseJoinLink("http://10.0.0.2:19113/ps5/join#i=abcdefgh12")!;
+    expect(joinSocketUrl(prefixed)).toBe("ws://10.0.0.2:19113/ps5/api/join/ws");
+    expect(joinSocketUrl(linkFromSocket("ws://10.0.0.2:19113/ps5/api/join/ws", "Ann")!)).toBe(
+      "ws://10.0.0.2:19113/ps5/api/join/ws",
+    );
   });
 
   it("colours a delay", () => {

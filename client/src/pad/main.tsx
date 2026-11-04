@@ -16,7 +16,9 @@ const key = hash.get("t") ?? "";
 const watch = hash.get("w") === "1";
 const name = deviceWord(navigator.userAgent, navigator.maxTouchPoints);
 const device = padDeviceId({ get: safeGetItem, set: safeSetItem });
-const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/pad/ws?t=${encodeURIComponent(key)}&name=${name}&d=${device}${watch ? "&w=1" : ""}`;
+// The engine may be served under a path (PS5UPLOAD_BASE_URL): the socket is beside this page.
+const prefix = location.pathname.replace(/\/pad\/?$/, "");
+const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${prefix}/api/pad/ws?t=${encodeURIComponent(key)}&name=${name}&d=${device}${watch ? "&w=1" : ""}`;
 
 // A link opened in a browser: offer the PS5Upload app first (Slack-style).
 createRoot(document.getElementById("root")!).render(

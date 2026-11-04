@@ -179,6 +179,7 @@ pub async fn get_game(Path(id): Path<String>) -> Response {
 
 #[derive(Deserialize)]
 pub struct RefreshQuery {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
 }
 

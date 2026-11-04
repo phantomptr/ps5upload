@@ -100,6 +100,28 @@ export function statusFailureFields(body: string): {
   return out;
 }
 
+/**
+ * The text of a status failure. The engine sends what used to be a plain-text refusal as
+ * `{ error, code }`; that reads as its text, as before. Any other body stays raw: the callers
+ * match tokens in it.
+ */
+export function statusFailureText(body: string): string {
+  try {
+    const o = JSON.parse(body) as Record<string, unknown>;
+    if (
+      o &&
+      typeof o["error"] === "string" &&
+      typeof o["code"] === "string" &&
+      Object.keys(o).length === 2
+    ) {
+      return o["error"];
+    }
+  } catch {
+    /* not JSON: the text itself */
+  }
+  return body.trim();
+}
+
 /** Build a path + optional `?addr=` query, matching the Rust `addr_url()`. */
 function addrUrl(path: string, addr?: string | null): string {
   return addr && addr.length > 0 ? `${path}?addr=${uenc(addr)}` : path;
@@ -1073,7 +1095,7 @@ export async function browserInvoke<T>(
           ok: false,
           reachable: false,
           engine: true,
-          error: body.trim() || `engine HTTP ${r.status}`,
+          error: statusFailureText(body) || `engine HTTP ${r.status}`,
           // The engine's `{ error, reason, power }`: passed through like probes.rs does.
           ...statusFailureFields(body),
         } as unknown as T;

@@ -520,6 +520,7 @@ impl Drop for Leave {
 pub struct LiveQuery {
     /// The console whose session to read (when given, it must be the one running).
     #[serde(default)]
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
 }
 

@@ -33,11 +33,11 @@ async fn handle(req: ProxyRequest, transport: Option<Arc<dyn MgmtTransport>>) ->
     .await;
     match res {
         Ok(r) => Json(r).into_response(),
-        Err(e) => (
+        Err(e) => crate::json_err(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("management call task failed: {e}"),
         )
-            .into_response(),
+        .into_response(),
     }
 }
 

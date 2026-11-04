@@ -11,8 +11,6 @@
 //! and the reason, and the client says so instead of a verdict. Reading the facts runs a
 //! command or two per platform; everything that interprets their output is a plain function
 //! tested on every platform.
-// Each platform's reader uses only its own parsers; all of them are tested everywhere.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
@@ -303,6 +301,7 @@ fn run(prog: &str, args: &[&str]) -> Option<String> {
 }
 
 /// Names that are tunnels whatever the system: VPN clients, WireGuard, PPP.
+#[cfg_attr(not(test), allow(dead_code))] // this platform's reader may not use it; tested everywhere
 fn is_tunnel_name(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     [
@@ -322,6 +321,7 @@ fn is_tunnel_name(name: &str) -> bool {
 /// The interface Linux routes `ip` through: the longest matching prefix in /proc/net/route
 /// (lowest metric on a tie). The table's addresses are the kernel's in-memory words printed
 /// in hex.
+#[cfg_attr(not(test), allow(dead_code))] // this platform's reader may not use it; tested everywhere
 pub(crate) fn linux_route_iface(table: &str, ip: Ipv4Addr) -> Option<String> {
     let target = u32::from_ne_bytes(ip.octets());
     let mut best: Option<(u32, u32, String)> = None; // (prefix length, metric, iface)
@@ -356,6 +356,7 @@ pub(crate) fn linux_route_iface(table: &str, ip: Ipv4Addr) -> Option<String> {
 
 /// What /sys/class/net says about one interface.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(not(test), allow(dead_code))] // this platform's reader may not use it; tested everywhere
 pub(crate) struct LinuxIf {
     pub name: String,
     pub wireless: bool,
@@ -366,6 +367,7 @@ pub(crate) struct LinuxIf {
     pub mtu: Option<String>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // this platform's reader may not use it; tested everywhere
 pub(crate) fn linux_classify(f: &LinuxIf) -> Link {
     let kind = if f.wireless {
         LinkKind::Wifi
@@ -394,6 +396,7 @@ pub(crate) fn linux_classify(f: &LinuxIf) -> Link {
 }
 
 /// `route -n get` on macOS: the `interface:` line.
+#[cfg_attr(not(test), allow(dead_code))] // this platform's reader may not use it; tested everywhere
 pub(crate) fn mac_route_iface(text: &str) -> Option<String> {
     text.lines().find_map(|l| {
         l.trim()
@@ -405,6 +408,7 @@ pub(crate) fn mac_route_iface(text: &str) -> Option<String> {
 
 /// The hardware port `networksetup -listallhardwareports` names for `device` ("Wi-Fi",
 /// "Ethernet", "USB 10/100/1000 LAN").
+#[cfg_attr(not(test), allow(dead_code))] // this platform's reader may not use it; tested everywhere
 pub(crate) fn mac_hardware_port(text: &str, device: &str) -> Option<String> {
     let mut port: Option<String> = None;
     for l in text.lines() {
@@ -422,6 +426,7 @@ pub(crate) fn mac_hardware_port(text: &str, device: &str) -> Option<String> {
 
 /// From `ifconfig <iface>` on macOS: the MTU, and the negotiated speed from the media line
 /// ("media: autoselect (1000baseT <full-duplex>)"; "(100baseTX ...)"; "(10Gbase-T ...)").
+#[cfg_attr(not(test), allow(dead_code))] // this platform's reader may not use it; tested everywhere
 pub(crate) fn mac_ifconfig(text: &str) -> (Option<u32>, Option<u64>) {
     let mtu = text
         .split_whitespace()
@@ -438,6 +443,7 @@ pub(crate) fn mac_ifconfig(text: &str) -> (Option<u32>, Option<u64>) {
 }
 
 /// "1000baseT" -> 1000, "10Gbase-T" -> 10000, "2500Base-T" -> 2500; anything else is none.
+#[cfg_attr(not(test), allow(dead_code))] // this platform's reader may not use it; tested everywhere
 fn media_mbps(word: &str) -> Option<u64> {
     let w = word.trim_start_matches('(').to_ascii_lowercase();
     let digits: String = w.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -452,6 +458,7 @@ fn media_mbps(word: &str) -> Option<u64> {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // this platform's reader may not use it; tested everywhere
 pub(crate) fn mac_classify(iface: &str, ports: &str, ifconfig: &str) -> Link {
     let (mtu, mbps) = mac_ifconfig(ifconfig);
     let port = mac_hardware_port(ports, iface);
@@ -477,6 +484,7 @@ pub(crate) fn mac_classify(iface: &str, ports: &str, ifconfig: &str) -> Link {
 }
 
 /// The PowerShell that finds the adapter Windows routes `ip` through and reads it.
+#[cfg_attr(not(test), allow(dead_code))] // this platform's reader may not use it; tested everywhere
 pub(crate) fn windows_script(ip: Ipv4Addr) -> String {
     format!(
         "$ErrorActionPreference='Stop'\n\
@@ -491,6 +499,7 @@ pub(crate) fn windows_script(ip: Ipv4Addr) -> String {
 
 /// Reads the script's JSON. `speed` is in bits per second; `media` is the adapter's physical
 /// medium ("802.3", "Native 802.11").
+#[cfg_attr(not(test), allow(dead_code))] // this platform's reader may not use it; tested everywhere
 pub(crate) fn windows_classify(json: &str) -> Link {
     let v: serde_json::Value =
         match serde_json::from_str(json.trim_start_matches('\u{feff}').trim()) {

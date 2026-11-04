@@ -9,6 +9,8 @@ import { JoinFlow } from "./JoinFlow";
 const hash = new URLSearchParams(location.hash.slice(1));
 const invite = hash.get("i") || null;
 const host = hash.get("n")?.trim() || null;
-const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/join/ws`;
+// The engine may be served under a path (PS5UPLOAD_BASE_URL): the socket is beside this page.
+const prefix = location.pathname.replace(/\/join\/?$/, "");
+const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${prefix}/api/join/ws`;
 
 createRoot(document.getElementById("root")!).render(<JoinFlow url={url} invite={invite} host={host} />);
