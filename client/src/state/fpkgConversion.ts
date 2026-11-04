@@ -10,7 +10,7 @@ import { useConvertPrefs } from "./convertPrefs";
 import { imageUploadItem, type ImageUploadPlan } from "../lib/imageUpload";
 import { useUploadQueueStore } from "./uploadQueue";
 
-import { fpkg, type AmprLz4Options, type FpkgBuildRequest, type ImageFormat } from "../api/fpkg";
+import { fpkg, type AmprLz4Options, type FfpfscLevel, type FpkgBuildRequest, type ImageFormat } from "../api/fpkg";
 import { jobCancel, jobPause, jobResume, jobStatus } from "../api/ps5";
 import { useConnectionStore } from "./connection";
 import { useRosterStore } from "./roster";
@@ -132,6 +132,8 @@ export interface ConversionState {
       password?: string;
       /** Delete the package once its install is verified (Convert's "delete after"). */
       deleteAfter?: boolean;
+      /** This game's own choice (a queued game keeps what it was added with); else the setting. */
+      fullVerify?: boolean;
     },
   ) => Promise<void>;
   /** Compress an .exfat / .ffpkg image into a .ffpfsc. */
@@ -151,10 +153,18 @@ export interface ConversionState {
     password?: string,
     /** Number the image's name when it is taken in `outputDir`, instead of refusing. */
     keepBoth?: boolean,
+    /** This game's own choices (a queued game keeps what it was added with); else the settings. */
+    own?: { fullVerify?: boolean; imageLevel?: FfpfscLevel },
   ) => Promise<void>;
   /** Unpack a game image or a debug-key package into a plain folder in `outputDir`; with
    *  `keepBoth`, a name already taken there is numbered instead of refused. */
-  buildFolder: (source: string, outputDir: string | undefined, keepBoth?: boolean) => Promise<void>;
+  buildFolder: (
+    source: string,
+    outputDir: string | undefined,
+    keepBoth?: boolean,
+    /** This game's own choice (a queued game keeps what it was added with); else the setting. */
+    own?: { fullVerify?: boolean },
+  ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
   uploadImage: (plan: ImageUploadPlan) => void;
   /** Install the kept package again: after a failed install, or Install again on a result. */
@@ -762,10 +772,10 @@ function currentHost(): string | null {
 export const useFpkgConversion = create<ConversionState>((set, get) => ({
   pipeline: { phase: "idle" },
 
-  start: async (req, { install, host, method = "stream", password, deleteAfter }) => {
+  start: async (req, { install, host, method = "stream", password, deleteAfter, fullVerify: ownVerify }) => {
     const then = install ? method : null;
     if (get().pipeline.phase === "running") return;
-    const fullVerify = useConvertPrefs.getState().fullVerify;
+    const fullVerify = ownVerify ?? useConvertPrefs.getState().fullVerify;
     deleteAfterInstall = install && !!deleteAfter;
     if (needsPrep(req.source)) {
       beginRun(
@@ -813,10 +823,13 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     }
   },
 
-  buildImage: async (source, outputDir, thenCompress, format = "exfat", thenUpload, lz4, password, keepBoth) => {
+  buildImage: async (source, outputDir, thenCompress, format = "exfat", thenUpload, lz4, password, keepBoth, own) => {
     if (get().pipeline.phase === "running") return;
     pendingImageUpload = thenUpload ?? null;
-    const { verifyChunkKib, fullVerify, imageLevel } = useConvertPrefs.getState();
+    const prefs = useConvertPrefs.getState();
+    const verifyChunkKib = prefs.verifyChunkKib;
+    const fullVerify = own?.fullVerify ?? prefs.fullVerify;
+    const imageLevel = own?.imageLevel ?? prefs.imageLevel;
     // One engine job: compressing happens as the image is written, so no uncompressed copy
     // is ever on disk.
     // The console it goes to, when it is sent once built: another console's view of this
@@ -868,7 +881,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     }
   },
 
-  buildFolder: async (source, outputDir, keepBoth) => {
+  buildFolder: async (source, outputDir, keepBoth, own) => {
     if (get().pipeline.phase === "running") return;
     pendingImageUpload = null;
     beginRun("folder", source, null, "write");
@@ -877,7 +890,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
         source,
         outputDir,
         undefined,
-        useConvertPrefs.getState().fullVerify,
+        own?.fullVerify ?? useConvertPrefs.getState().fullVerify,
         undefined,
         keepBoth,
       );

@@ -638,7 +638,7 @@ export interface OutputChoiceProps {
   lz4?: Lz4Choice;
 }
 
-function OutputChoice(c: OutputChoiceProps) {
+export function OutputChoice(c: OutputChoiceProps) {
   const tr = useTr();
   const image = c.make === "image";
   return (

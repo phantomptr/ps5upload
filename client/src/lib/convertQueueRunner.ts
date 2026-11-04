@@ -5,6 +5,8 @@ import { fpkg } from "../api/fpkg";
 import { pipelinePhaseChanged, setConvertRunner, type ConvertItem } from "../state/convertQueue";
 import { useFpkgConversion } from "../state/fpkgConversion";
 import { pkgLibraryStore } from "../state/pkgLibrary";
+import { useUploadStore } from "../state/upload";
+import { DEFAULT_IMAGE_SUBPATH } from "./imageUpload";
 
 /** Resolves once the pipeline is not running (a manual run started first finishes first). */
 function whenIdle(): Promise<void> {
@@ -19,12 +21,23 @@ function whenIdle(): Promise<void> {
   });
 }
 
+/** The output folder as the waiting game's options have it (typed there, so maybe with spaces
+ *  at the ends); none means the engine's default. */
+function outputOf(item: ConvertItem): string | undefined {
+  return item.outputDir?.trim() || undefined;
+}
+
+function currentImageDest(): { volume: string | null; subpath: string } {
+  const u = useUploadStore.getState();
+  return { volume: u.destinationVolume, subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH };
+}
+
 async function build(item: ConvertItem) {
   await whenIdle();
   const conv = useFpkgConversion.getState();
   if (item.build?.kind === "folder") {
     // A plain folder from an image or package: kept here, nothing to hand on.
-    await conv.buildFolder(item.source, item.outputDir, item.keepBoth);
+    await conv.buildFolder(item.source, outputOf(item), item.keepBoth, { fullVerify: item.fullVerify });
     await whenIdle();
     const p = useFpkgConversion.getState().pipeline;
     if (p.phase === "done") return { ok: true, packagePath: p.packagePath, installed: true };
@@ -33,23 +46,26 @@ async function build(item: ConvertItem) {
   }
   if (item.build?.kind === "image") {
     // A game image, in the format picked; sent on to the Upload queue when asked.
-    const send = item.then !== "keep" && !!item.host && !!item.imageDest;
+    const send = item.then !== "keep" && !!item.host;
+    // A game changed to an image while it waited was added with no destination: the one set now.
+    const dest = send ? (item.imageDest ?? currentImageDest()) : null;
     await conv.buildImage(
       item.source,
-      item.outputDir,
+      outputOf(item),
       item.build.compress,
       item.build.format,
-      send
+      dest
         ? {
             host: item.host!,
-            volume: item.imageDest!.volume,
-            subpath: item.imageDest!.subpath,
+            volume: dest.volume,
+            subpath: dest.subpath,
             deleteAfter: !!item.deleteAfterInstall,
           }
         : undefined,
       item.build.lz4,
       undefined,
       item.keepBoth,
+      { fullVerify: item.fullVerify, imageLevel: item.imageLevel },
     );
     await whenIdle();
     const p = useFpkgConversion.getState().pipeline;
@@ -63,13 +79,18 @@ async function build(item: ConvertItem) {
   await conv.start(
     {
       source: item.source,
-      outputDir: item.outputDir,
+      outputDir: outputOf(item),
       compression: item.compression,
       firmware: item.firmware,
       language: item.language,
       keepBoth: item.keepBoth,
     },
-    { install: swap, host: swap ? item.host : null, method: item.then === "upload" ? "upload" : "stream" },
+    {
+      install: swap,
+      host: swap ? item.host : null,
+      method: item.then === "upload" ? "upload" : "stream",
+      fullVerify: item.fullVerify,
+    },
   );
   await whenIdle();
   const p = useFpkgConversion.getState().pipeline;

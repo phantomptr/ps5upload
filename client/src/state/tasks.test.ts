@@ -305,6 +305,25 @@ describe("deriveRate", () => {
     expect(deriveRate(samples, "c", p(11 * 2 ** 30), 3000 * 1000)?.rate.bytesPerSec).toBeGreaterThan(1);
   });
 
+  it("#669: a speed fades out once the bytes stop, and never shows a few bytes a second", async () => {
+    const { deriveRate } = await import("./tasks");
+    const samples = new Map();
+    const p = (current: number) => ({ current, total: 100 * 2 ** 30, unit: "bytes" as const });
+    deriveRate(samples, "f", p(0), 0);
+    deriveRate(samples, "f", p(2 ** 30), 1000);
+    const shown: number[] = [];
+    for (let i = 2; i < 100; i++) {
+      const r = deriveRate(samples, "f", p(2 ** 30), i * 1000);
+      if (r) shown.push(r.rate.bytesPerSec);
+    }
+    expect(shown.length).toBeGreaterThan(0);
+    expect(Math.min(...shown)).toBeGreaterThanOrEqual(1024);
+    // A real slow transfer, where bytes do move, still shows its speed.
+    const slow = new Map();
+    deriveRate(slow, "s", p(0), 0);
+    expect(deriveRate(slow, "s", p(500), 1000)?.rate.bytesPerSec).toBe(500);
+  });
+
   it("fills in speed for an update that reports only bytes, and never overrides one that has a speed", async () => {
     vi.useFakeTimers();
     try {

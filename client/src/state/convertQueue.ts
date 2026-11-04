@@ -6,7 +6,7 @@
 import { hostOf } from "../lib/addr";
 import { create } from "zustand";
 
-import type { AmprLz4Options, FpkgCompression, ImageFormat } from "../api/fpkg";
+import type { AmprLz4Options, FfpfscLevel, FpkgCompression, ImageFormat } from "../api/fpkg";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useUploadSettingsStore } from "./uploadSettings";
 
@@ -60,6 +60,11 @@ export interface ConvertItem {
   host: string | null;
   /** Delete the package once its install is verified (only ever a package Convert built). */
   deleteAfterInstall?: boolean;
+  /** Re-read every byte of the output to check it, as it was set when the game was added
+   *  (absent on items queued before this was per game: the current setting). */
+  fullVerify?: boolean;
+  /** How hard a .ffpfsc is compressed, likewise. */
+  imageLevel?: FfpfscLevel;
   status: ConvertStatus;
   packagePath?: string;
   error?: string;
@@ -67,8 +72,23 @@ export interface ConvertItem {
 
 export type NewConvertItem = Omit<ConvertItem, "id" | "status" | "packagePath" | "error">;
 
-/** What can change on a game still waiting in the queue. */
-export type ConvertItemChange = Partial<Pick<ConvertItem, "build" | "then" | "host" | "deleteAfterInstall">>;
+/** What can change on a game still waiting in the queue: every choice it was added with (#669),
+ *  not only what it becomes. */
+export type ConvertItemChange = Partial<
+  Pick<
+    ConvertItem,
+    | "build"
+    | "then"
+    | "host"
+    | "deleteAfterInstall"
+    | "outputDir"
+    | "keepBoth"
+    | "compression"
+    | "language"
+    | "fullVerify"
+    | "imageLevel"
+  >
+>;
 
 /** How the queue builds and installs; the app wires the real ones (see convertQueueRunner). */
 export interface ConvertRunner {

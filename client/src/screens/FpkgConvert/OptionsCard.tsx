@@ -1,6 +1,8 @@
 // Card ② Options: where the package goes (remembered), how hard to compress it, and the one
 // language it declares when a game needs telling.
 
+import type { ReactNode } from "react";
+
 import type { FpkgCompression, FpkgEstimate, ImageFormat } from "../../api/fpkg";
 import { Button, Card } from "../../components";
 import { PLAYGO_LANGUAGES } from "../../lib/playgoLanguages";
@@ -9,6 +11,7 @@ import type { OutputPlace } from "../../lib/outputPlace";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
 import { FullVerifyOption, ImageChoice, type Lz4Choice } from "./ImageOptions";
+import { NextGameNote } from "./MakeCard";
 import { prettyBytes } from "./RunCard";
 
 /** The most room a conversion needs on the output drive: the package, which the compressed
@@ -46,6 +49,10 @@ export interface OptionsCardProps {
     lz4?: Lz4Choice;
   };
   onLanguage?: (code: string) => void;
+  /** A game is being made: this card sets what the next game added uses (#669). */
+  forNext?: boolean;
+  /** More choices, after the rest. */
+  children?: ReactNode;
 }
 
 export function OptionsCard(props: OptionsCardProps) {
@@ -55,6 +62,7 @@ export function OptionsCard(props: OptionsCardProps) {
     <Card padded={false} className="p-3.5 sm:p-4">
       <div className="flex flex-col gap-2.5 text-sm">
         <div className="font-medium">{tr("fpkg.card.options_v2", undefined, "③ Options")}</div>
+        {props.forNext && <NextGameNote />}
         <div className="flex flex-col gap-1">
           <label htmlFor="fpkg-output" className="text-[var(--color-muted)]">
             {tr("fpkg.output", undefined, "Output folder")}
@@ -186,6 +194,7 @@ export function OptionsCard(props: OptionsCardProps) {
           </div>
         )}
         <FullVerifyOption disabled={props.locked} />
+        {props.children}
       </div>
     </Card>
   );
