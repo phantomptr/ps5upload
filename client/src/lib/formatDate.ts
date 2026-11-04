@@ -1,4 +1,5 @@
 import { useLangStore } from "../state/lang";
+import { formatDuration as formatDurationIn } from "./format";
 
 /**
  * Dates and times in the app's language, not the operating system's.
@@ -52,4 +53,82 @@ export function formatDate(
 export function useFormatDate(): (value: Date | number, format?: DateFormat) => string {
   const lang = useLangStore((s) => s.lang);
   return (value, format = "datetime") => formatDate(value, format, lang);
+}
+
+const numberFormats = new Map<string, Intl.NumberFormat>();
+
+/** A count in the app's language ("1.234" in German), not the operating system's. */
+export function formatNumber(
+  n: number,
+  lang: string = useLangStore.getState().lang,
+): string {
+  let f = numberFormats.get(lang);
+  if (!f) {
+    try {
+      f = new Intl.NumberFormat(lang);
+    } catch {
+      f = new Intl.NumberFormat();
+    }
+    numberFormats.set(lang, f);
+  }
+  return f.format(n);
+}
+
+/** A length of time in the app's language: "1h 5m" in English, "1 ч 5 м" in Russian. */
+export function formatDuration(
+  sec: number,
+  lang: string = useLangStore.getState().lang,
+): string {
+  return formatDurationIn(sec, lang);
+}
+
+function relativeFormat(lang: string): Intl.RelativeTimeFormat | null {
+  try {
+    return new Intl.RelativeTimeFormat(lang, { numeric: "auto" });
+  } catch {
+    try {
+      return new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+    } catch {
+      return null; // A WebView older than RelativeTimeFormat.
+    }
+  }
+}
+
+/** "57 days ago", "3 hours ago", … for an age in seconds, in the app's language. */
+export function relativeAge(
+  secs: number,
+  lang: string = useLangStore.getState().lang,
+): string {
+  const rtf = relativeFormat(lang);
+  const steps: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+    ["day", 86400],
+    ["hour", 3600],
+    ["minute", 60],
+  ];
+  for (const [unit, size] of steps) {
+    if (secs >= size) {
+      const n = Math.floor(secs / size);
+      return rtf ? rtf.format(-n, unit) : `-${n} ${unit}`;
+    }
+  }
+  const n = Math.max(1, Math.floor(secs));
+  return rtf ? rtf.format(-n, "second") : `-${n} s`;
+}
+
+/**
+ * How long ago `ms` was, for a recent-activity line: "now", "5 minutes ago", "yesterday", and the
+ * date once it is over a week old (nobody wants to work out "240 hours ago"). Empty for 0.
+ */
+export function formatAgo(
+  ms: number,
+  lang: string = useLangStore.getState().lang,
+): string {
+  if (ms <= 0) return "";
+  const diff = Date.now() - ms;
+  if (diff >= 7 * 86_400_000) return formatDate(ms, "date", lang);
+  if (diff < 60_000) {
+    const rtf = relativeFormat(lang);
+    return rtf ? rtf.format(0, "second") : formatDate(ms, "time-short", lang);
+  }
+  return relativeAge(Math.floor(diff / 1000), lang);
 }

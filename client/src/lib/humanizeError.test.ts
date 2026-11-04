@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { humanizePs5Error } from "./humanizeError";
+import { caughtText, humanizeCaught, humanizePs5Error } from "./humanizeError";
 import en from "../i18n/locales/en";
 
 describe("humanizePs5Error", () => {
@@ -426,5 +426,29 @@ describe("a React render loop in the queue", () => {
     );
     expect(out).toContain("may have finished");
     expect(out).not.toContain("react.dev");
+  });
+});
+
+describe("caughtText", () => {
+  it("reads every shape a catch can receive", () => {
+    expect(caughtText(new Error("boom"))).toBe("boom");
+    expect(caughtText("plain")).toBe("plain");
+    expect(caughtText({ message: "from a message" })).toBe("from a message");
+    expect(caughtText({ error: "from an error" })).toBe("from an error");
+    expect(caughtText({ code: 5 })).toBe('{"code":5}');
+    expect(caughtText(undefined)).toBe("undefined");
+  });
+  it("never prints [object Object]", () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    expect(caughtText({ code: 1 })).not.toContain("[object");
+    expect(typeof caughtText(cycle)).toBe("string");
+  });
+});
+
+describe("humanizeCaught", () => {
+  it("gives the sentence for a known code and the text for an unknown one", () => {
+    expect(humanizeCaught(new Error("fs_unmount_busy"))).not.toContain("fs_unmount_busy");
+    expect(humanizeCaught(new Error("something else"))).toBe("something else");
   });
 });

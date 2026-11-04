@@ -1,4 +1,4 @@
-import { t } from "../i18n";
+import { interpolate, t } from "../i18n";
 import { useLangStore } from "../state/lang";
 
 /**
@@ -16,12 +16,17 @@ import { useLangStore } from "../state/lang";
  * key. Never throws: a translation lookup must not turn an error message into
  * an exception.
  */
-export function trStatic(key: string, fallback: string): string {
+export function trStatic(
+  key: string,
+  fallback: string,
+  vars?: Record<string, string | number>,
+): string {
+  const filled = () => (vars ? interpolate(fallback, vars) : fallback);
   try {
     const lang = useLangStore.getState().lang;
-    const out = t(lang, key);
-    return out === key ? fallback : out;
+    const out = t(lang, key, vars);
+    return out === key ? filled() : out;
   } catch {
-    return fallback;
+    return filled();
   }
 }
