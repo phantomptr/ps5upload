@@ -765,6 +765,46 @@ test("Remote Play restarts a decoder that stopped giving pictures, then gives up
   await expect(stages).toContainText("decoder restarts 3");
 });
 
+test("Start right after a stop waits for the PS5 with a countdown, not an error", async ({ page }) => {
+  await rpPage(page);
+  const engine = await rpEngine(page, (ws, n) => {
+    if (n === 0) {
+      ws.send(JSON.stringify({ stage: "error", code: "busy", retry_s: 1, error: "busy" }));
+      void ws.close({ code: 1000, reason: "busy" });
+      return true;
+    }
+  });
+  await page.goto("/play", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("rp-start").click();
+  await expect(page.getByTestId("rp-quality-switching")).toContainText("as soon as the PS5 is free");
+  await expect.poll(() => engine.starts.length, { timeout: 20_000 }).toBe(2);
+  await expect(page.getByTestId("rp-quality-switching")).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByTestId("rp-toolbar")).toContainText("Living room");
+  await expect(page.locator("[role=alert]").filter({ hasText: /still finishing/ })).toHaveCount(0);
+});
+
+test("a stream the console ended says why, and the Start button is back", async ({ page }) => {
+  await rpPage(page);
+  await rpEngine(page, (ws, n, repeat) => {
+    if (n === 0) {
+      // A moment in, the console hangs up with its reason.
+      let sent = false;
+      repeat(() => {
+        if (sent) return;
+        sent = true;
+        ws.send(JSON.stringify({ stage: "ended", reason: "Server shutting down" }));
+        void ws.close({ code: 1000, reason: "ended" });
+      }, 500);
+    }
+  });
+  await page.goto("/play", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Play", exact: true })).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("rp-start").click();
+  await expect(page.getByText("The PS5 ended the stream: Server shutting down")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("rp-start")).toBeVisible();
+});
+
 test("Remote Play offers 720p when a 1080p stream keeps losing frames, and switches on a tap", async ({ page }) => {
   test.setTimeout(120_000);
   await rpPage(page, { res: "1920x1080" });

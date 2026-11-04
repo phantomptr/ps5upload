@@ -390,7 +390,9 @@ export function StreamPanel() {
   const phase = useRemotePlayStore((s) => s.phase);
   const error = useRemotePlayStore((s) => s.error);
   // A start is under way before it has a stream: looking for blockers, waiting for the PS5's slot.
-  const startHeld = useRpBlockers((s) => !!s.checking) || useRpQualityStore((s) => !!s.switching);
+  const blockersChecking = useRpBlockers((s) => !!s.checking);
+  const slotWait = useRpQualityStore((s) => !!s.switching);
+  const startHeld = blockersChecking || slotWait;
   const stats = useRemotePlayStore((s) => s.stats);
   const light = useRemotePlayStore((s) => s.light);
   const prefs = useRemotePlayStore((s) => s.prefs);

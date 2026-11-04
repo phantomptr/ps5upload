@@ -9,13 +9,13 @@ import {
 } from "lucide-react";
 import { Button } from "../../components";
 import { useTr } from "../../state/lang";
+import { humanizePs5Error } from "../../lib/humanizeError";
 import { pairConsole } from "../../lib/pairConsole";
 import { PinPairForm } from "../Play/setup/PinPairForm";
 import { useRosterStore, withConsolePrefix } from "../../state/roster";
 import { pushNotification } from "../../state/notifications";
 import { audit } from "../../state/auditLog";
 import {
-import { humanizePs5Error } from "../../lib/humanizeError";
   WAKE_REQUIREMENTS,
   isValidWakeCredential,
   isValidSessionKey,
