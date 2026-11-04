@@ -226,12 +226,17 @@ Some tools aren't marked destructive but still matter: `install_pkg`, `games_lau
 
 ### What never reaches a model
 
-The keys that sign in to a console's users stay out. `api_request` refuses `/api/consoles/document`
-and `/api/settings-backup/get`, which are left out of the catalog too. No tool reaches a console's
-backup slots, through `/api/mesh/doc` or by the helper's file path; a console's other documents stay
-readable. `/api/consoles` says only whether a console has keys. Stream keys for Go live show only their last four characters.
+The keys that sign in to a console's users stay out. `api_request` refuses `/api/consoles/document`,
+`/api/settings-backup/get`, `/api/mgmt/call` and `/api/ava1/identity`, and they are left out of the
+catalog too. No tool reaches the console documents that hold keys (`state`, `consoles`, `drives` and the
+backup slots), through `/api/mesh/doc` or by the helper's file path; the other documents stay readable.
+Keys are taken out of every answer a tool gets: `POST /api/ps5/power/pair` still pairs and stores them,
+and a Mesh Drive's password hash reads as `has_password`. `/api/consoles` says only whether a console has
+keys. Stream keys for Go live show only their last four characters. Play Together invites and phone
+controller links do reach a tool, because handing them out is what those calls are for, and the
+host still approves who joins.
 
-**A shell on the console has everything.** `shell_run`, and `api_request` calling `/api/ps5/shell/run`, can read any file on the console, including the backup slot files the rules above keep other tools from. Nothing filters what a command reads, and no filter could. `payloads_send` runs a program there, which can do the same. So these tools are marked destructive, and read-only mode refuses them. Keep them on "ask" and read each command before you allow it, or turn them off in your client.
+**A shell on the console has everything.** `shell_run`, and `api_request` calling `/api/ps5/shell/run`, can read any file on the console, including the files the rules above keep other tools from. Nothing filters what a command reads, and no filter could. `payloads_send` runs a program there, which can do the same. So these tools are marked destructive, and read-only mode refuses them. Keep them on "ask" and read each command before you allow it, or turn them off in your client.
 
 ## Things that need more than the engine
 

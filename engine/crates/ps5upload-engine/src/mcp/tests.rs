@@ -1147,7 +1147,6 @@ async fn pairing_works_and_its_keys_stay_out_of_the_result() {
     assert!(!text.contains("SECRET"), "{text}");
     let body = &result["structuredContent"]["body"];
     assert_eq!(body["account_id"], "42");
-    assert!(body["keys"].is_string(), "{body}");
 }
 
 #[tokio::test]
@@ -1177,6 +1176,24 @@ async fn a_console_backup_slot_stays_out_of_every_tool() {
         )
         .await;
     assert!(read.to_string().contains("is refused"), "{read}");
+    for name in ["state", "consoles", "drives"] {
+        let keys = server
+            .tool(
+                "api_request",
+                json!({"path": "/api/mesh/doc", "query": {"addr": "192.0.2.1", "name": name}}),
+            )
+            .await;
+        assert!(keys.to_string().contains("is refused"), "{keys}");
+    }
+    for path in ["/api/mgmt/call", "/api/ava1/identity"] {
+        let refused = server
+            .tool(
+                "api_request",
+                json!({"path": path, "method": "POST", "body": {}}),
+            )
+            .await;
+        assert!(refused.to_string().contains("is refused"), "{refused}");
+    }
     // The index and the other documents are not refused (this test's router has no such route).
     for name in ["backups", "prefs"] {
         let other = server

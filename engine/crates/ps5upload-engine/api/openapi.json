@@ -6167,46 +6167,6 @@
         ],
         "type": "object"
       },
-      "JobProgress": {
-        "description": "A running operation's progress, from the console.",
-        "properties": {
-          "bytes_done": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "bytes_total": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "cancel_requested": {
-            "type": "boolean"
-          },
-          "files_done": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "files_total": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "subject": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "subject",
-          "files_done",
-          "files_total",
-          "bytes_done",
-          "bytes_total",
-          "cancel_requested"
-        ],
-        "type": "object"
-      },
       "JobQuery": {
         "properties": {
           "job": {
@@ -9568,359 +9528,6 @@
           "webdavs"
         ],
         "type": "string"
-      },
-      "ProxyError": {
-        "description": "A failure, typed so the caller can rebuild the original error.",
-        "oneOf": [
-          {
-            "allOf": [
-              {
-                "properties": {
-                  "kind": {
-                    "const": "mgmt"
-                  }
-                },
-                "required": [
-                  "kind"
-                ],
-                "type": "object"
-              },
-              {
-                "properties": {
-                  "cause": {
-                    "type": "string"
-                  },
-                  "label": {
-                    "type": "string"
-                  },
-                  "status": {
-                    "minimum": 0,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "label",
-                  "status",
-                  "cause"
-                ],
-                "type": "object"
-              }
-            ],
-            "description": "The payload (or the transport) refused: `payload rejected <label>: <cause>`."
-          },
-          {
-            "allOf": [
-              {
-                "properties": {
-                  "kind": {
-                    "const": "other"
-                  }
-                },
-                "required": [
-                  "kind"
-                ],
-                "type": "object"
-              },
-              {
-                "properties": {
-                  "message": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "message"
-                ],
-                "type": "object"
-              }
-            ],
-            "description": "Anything else, as the engine's error chain text."
-          }
-        ]
-      },
-      "ProxyRequest": {
-        "description": "What the caller asks the engine to run.",
-        "oneOf": [
-          {
-            "allOf": [
-              {
-                "properties": {
-                  "op": {
-                    "const": "call"
-                  }
-                },
-                "required": [
-                  "op"
-                ],
-                "type": "object"
-              },
-              {
-                "properties": {
-                  "addr": {
-                    "type": "string"
-                  },
-                  "body_b64": {
-                    "type": "string"
-                  },
-                  "label": {
-                    "type": "string"
-                  },
-                  "method": {
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "timeout_ms": {
-                    "minimum": 0,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "addr",
-                  "method",
-                  "label",
-                  "body_b64",
-                  "timeout_ms"
-                ],
-                "type": "object"
-              }
-            ]
-          },
-          {
-            "allOf": [
-              {
-                "properties": {
-                  "op": {
-                    "const": "run_job"
-                  }
-                },
-                "required": [
-                  "op"
-                ],
-                "type": "object"
-              },
-              {
-                "properties": {
-                  "addr": {
-                    "type": "string"
-                  },
-                  "body_b64": {
-                    "type": "string"
-                  },
-                  "deadline_ms": {
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "job_op": {
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "label": {
-                    "type": "string"
-                  },
-                  "op_id": {
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "subject": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "addr",
-                  "job_op",
-                  "label",
-                  "body_b64",
-                  "op_id",
-                  "subject",
-                  "deadline_ms"
-                ],
-                "type": "object"
-              }
-            ]
-          },
-          {
-            "allOf": [
-              {
-                "properties": {
-                  "op": {
-                    "const": "job_progress"
-                  }
-                },
-                "required": [
-                  "op"
-                ],
-                "type": "object"
-              },
-              {
-                "properties": {
-                  "addr": {
-                    "type": "string"
-                  },
-                  "op_id": {
-                    "minimum": 0,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "addr",
-                  "op_id"
-                ],
-                "type": "object"
-              }
-            ]
-          },
-          {
-            "allOf": [
-              {
-                "properties": {
-                  "op": {
-                    "const": "job_cancel"
-                  }
-                },
-                "required": [
-                  "op"
-                ],
-                "type": "object"
-              },
-              {
-                "properties": {
-                  "addr": {
-                    "type": "string"
-                  },
-                  "op_id": {
-                    "minimum": 0,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "addr",
-                  "op_id"
-                ],
-                "type": "object"
-              }
-            ]
-          }
-        ]
-      },
-      "ProxyResponse": {
-        "properties": {
-          "error": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ProxyError"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "ok": {
-            "type": "boolean"
-          },
-          "result": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ProxyResult"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "ok"
-        ],
-        "type": "object"
-      },
-      "ProxyResult": {
-        "description": "A successful answer.",
-        "oneOf": [
-          {
-            "allOf": [
-              {
-                "properties": {
-                  "kind": {
-                    "const": "bytes"
-                  }
-                },
-                "required": [
-                  "kind"
-                ],
-                "type": "object"
-              },
-              {
-                "properties": {
-                  "body_b64": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "body_b64"
-                ],
-                "type": "object"
-              }
-            ]
-          },
-          {
-            "allOf": [
-              {
-                "properties": {
-                  "kind": {
-                    "const": "progress"
-                  }
-                },
-                "required": [
-                  "kind"
-                ],
-                "type": "object"
-              },
-              {
-                "properties": {
-                  "progress": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/components/schemas/JobProgress"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "progress"
-                ],
-                "type": "object"
-              }
-            ]
-          },
-          {
-            "allOf": [
-              {
-                "properties": {
-                  "kind": {
-                    "const": "cancel"
-                  }
-                },
-                "required": [
-                  "kind"
-                ],
-                "type": "object"
-              },
-              {
-                "properties": {
-                  "found": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "found"
-                ],
-                "type": "object"
-              }
-            ]
-          }
-        ]
       },
       "Ps5ToPs5Req": {
         "properties": {
@@ -14737,59 +14344,6 @@
             "name": "addr",
             "required": false
           },
-          "response_schema": "json-unknown"
-        }
-      }
-    },
-    "/api/ava1/identity": {
-      "get": {
-        "description": "`GET /api/ava1/identity` — the public key an app stamps into the helper ELF, and a\nfresh launch token to go with it (SPEC.md §5.2).",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
-          },
-          "403": {
-            "$ref": "#/components/responses/Error",
-            "description": "Refused by the engine's address, Origin or Host guards."
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/Error"
-                    },
-                    {
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "type": "object"
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "Unavailable"
-          },
-          "default": {
-            "$ref": "#/components/responses/Error",
-            "description": "Any other failure, in the same shape."
-          }
-        },
-        "summary": "The public key an app stamps into the helper ELF, and a fresh launch token to go with it (SPEC.md §5.2)",
-        "tags": [
-          "pairing"
-        ],
-        "x-ps5upload": {
-          "access": "loopback",
           "response_schema": "json-unknown"
         }
       }
@@ -22377,52 +21931,6 @@
         "x-ps5upload": {
           "access": "loopback",
           "response_schema": "binary"
-        }
-      }
-    },
-    "/api/mgmt/call": {
-      "post": {
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProxyRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProxyResponse"
-                }
-              }
-            },
-            "description": "Success."
-          },
-          "403": {
-            "$ref": "#/components/responses/Error",
-            "description": "Refused by the engine's address, Origin or Host guards."
-          },
-          "500": {
-            "$ref": "#/components/responses/Error",
-            "description": "Engine error"
-          },
-          "default": {
-            "$ref": "#/components/responses/Error",
-            "description": "Any other failure, in the same shape."
-          }
-        },
-        "summary": "Call a helper management method directly (the generic escape hatch)",
-        "tags": [
-          "engine"
-        ],
-        "x-ps5upload": {
-          "access": "loopback",
-          "response_schema": "struct"
         }
       }
     },
@@ -35273,6 +34781,19 @@
     "/api/ps5/rp/session": {
       "get": {
         "description": "What is streaming now. The session id and details appear only when the request addresses this computer as localhost; PS5UPLOAD_ALLOW_IP machines get the rest.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "passive",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -35496,6 +35017,18 @@
                   "anyOf": [
                     {
                       "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retry_s": {}
+                      },
+                      "type": "object"
                     },
                     {
                       "properties": {

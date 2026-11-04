@@ -11,35 +11,54 @@ use serde_json::{json, Value};
 /// own. They are not in [`ROUTES`], and `api_request` refuses them: a model's context, its logs and
 /// whoever reads them are no place for those keys. The curated tools use `/api/consoles`, which says
 /// only whether a console has keys.
-pub(crate) const HOLD_CONSOLE_KEYS: &[&str] =
-    &["/api/consoles/document", "/api/settings-backup/get"];
+pub(crate) const HOLD_CONSOLE_KEYS: &[&str] = &[
+    "/api/consoles/document",
+    "/api/settings-backup/get",
+    // Any helper call, by number and with a base64 body: every document, PSN sign-in files.
+    "/api/mgmt/call",
+    // Mints a launch token each time it is asked. No tool has a use for one.
+    "/api/ava1/identity",
+];
 
-/// Routes that do their job and also answer with keys: `(path, fields)`. The call goes through, the
-/// engine keeps what it should, and the fields never reach the tool's result.
-const ANSWERS_WITH_KEYS: &[(&str, &[&str])] = &[(
-    "/api/ps5/power/pair",
-    &["credential", "regist_key", "rp_key"],
-)];
+/// Fields that are a key wherever they appear in an answer.
+const KEY_FIELDS: &[&str] = &[
+    "credential",
+    "regist_key",
+    "rp_key",
+    "wake_credential",
+    "wake_regist_key",
+    "wake_rp_key",
+    "launch_token",
+];
 
-/// Takes the keys out of a route's answer. Says so in the answer, so nobody looks for them.
-pub(crate) fn redact_answer(path: &str, body: &mut Value) {
-    let plain = plain_path(path);
-    let Some((_, fields)) = ANSWERS_WITH_KEYS.iter().find(|(p, _)| *p == plain) else {
-        return;
-    };
-    let Some(object) = body.as_object_mut() else {
-        return;
-    };
+/// Takes every key out of an answer. Pairing still works and stores them: the route has done its
+/// job by now, this is only what a tool gets to see. A drive's password hash (`lock`) goes too,
+/// since it can be cracked offline, leaving that it has one. A key in a route's own words, such as
+/// a finished `/api/ops` body, goes the same way. Returns whether anything went.
+pub(crate) fn redact_keys(value: &mut Value) -> bool {
     let mut any = false;
-    for field in *fields {
-        any |= object.remove(*field).is_some();
+    match value {
+        Value::Object(map) => {
+            for field in KEY_FIELDS {
+                any |= map.remove(*field).is_some();
+            }
+            if map.get("lock").is_some_and(|l| l.get("hash").is_some()) {
+                map.remove("lock");
+                map.insert("has_password".to_string(), json!(true));
+                any = true;
+            }
+            for v in map.values_mut() {
+                any |= redact_keys(v);
+            }
+        }
+        Value::Array(items) => {
+            for v in items {
+                any |= redact_keys(v);
+            }
+        }
+        _ => {}
     }
-    if any {
-        object.insert(
-            "keys".to_string(),
-            json!("kept by the engine; not shown to tools"),
-        );
-    }
+    any
 }
 
 /// Percent-escapes undone and letters lowered, `.` and repeated or trailing slashes gone.
@@ -88,29 +107,44 @@ fn any_text(value: &Value, found: &dyn Fn(&str) -> bool) -> bool {
     }
 }
 
-/// This call reaches a console's backup slot. Each slot holds that console's wake and Remote Play
-/// keys (`forConsole` in the client's settingsBackup.ts), so it stays out of a tool's reach like
-/// [`HOLD_CONSOLE_KEYS`]. The other documents, and the `backups` index, stay readable: through
-/// `/api/mesh/doc` only the name counts, elsewhere only the helper's file path.
-pub(crate) fn reaches_a_backup_slot(
+/// Where the helper keeps a copy of each user's PSN sign-in files (payload/include/profile.h).
+const NP_BACKUP_ROOT: &str = "/data/ps5upload/np-backup/";
+
+/// A console document that holds keys: its backup slots (that console's), `state` and `consoles`
+/// (every console on the roster), `drives` (Mesh Drive password hashes).
+fn is_key_document(plain_name: &str) -> bool {
+    let name = plain_name.trim_start_matches('/');
+    name.starts_with("backup-") || matches!(name, "state" | "consoles" | "drives")
+}
+
+/// This call reaches a console document that holds keys, by its name or by the helper's file for
+/// it. The `backups` index and the other documents stay readable: through `/api/mesh/doc` only the
+/// name counts, elsewhere only the file path.
+pub(crate) fn reaches_a_key_document(
     path: &str,
     query: &[(&str, String)],
     body: Option<&Value>,
 ) -> bool {
     if plain_path(path) == "/api/mesh/doc" {
-        let slot = |name: &str| plain_path(name).starts_with("/backup-");
-        return query.iter().any(|(k, v)| *k == "name" && slot(v))
+        let doc = |name: &str| is_key_document(&plain_path(name));
+        return query.iter().any(|(k, v)| *k == "name" && doc(v))
             || body
                 .and_then(|b| b.get("name"))
                 .and_then(Value::as_str)
-                .is_some_and(slot);
+                .is_some_and(doc);
     }
     // A shell reads anything on the console, whatever its command says: MCP.md says so, and the
     // tool asks for the user's confirmation. Refusing one spelling would only look like a guard.
     if plain_path(path) == "/api/ps5/shell/run" {
         return false;
     }
-    let file = |text: &str| plain_path(text).contains("/mesh/v1/doc-backup-");
+    let file = |text: &str| {
+        let plain = plain_path(text);
+        plain
+            .rsplit_once("/mesh/v1/doc-")
+            .is_some_and(|(_, name)| is_key_document(name))
+            || plain.starts_with(NP_BACKUP_ROOT)
+    };
     query.iter().any(|(_, v)| file(v)) || body.is_some_and(|b| any_text(b, &file))
 }
 
@@ -134,7 +168,6 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/ampr/trace/generate"),
     ("POST", "/api/ampr/trace/start"),
     ("POST", "/api/ampr/trace/stop"),
-    ("GET", "/api/ava1/identity"),
     ("GET", "/api/ava1/pairing"),
     ("POST", "/api/ava1/pairing/allow"),
     ("POST", "/api/ava1/pairing/cancel"),
@@ -271,7 +304,6 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/mesh/settings"),
     ("GET", "/api/mesh/state"),
     ("GET", "/api/metrics"),
-    ("POST", "/api/mgmt/call"),
     ("GET", "/api/net/doctor"),
     ("GET", "/api/net/doctor/reply"),
     ("GET", "/api/openapi.json"),
@@ -833,9 +865,34 @@ mod tests {
     }
 
     #[test]
-    fn a_backup_slot_is_refused_however_it_is_written_and_only_a_slot() {
+    fn the_helper_route_is_named_as_core_names_it() {
+        assert!(HOLD_CONSOLE_KEYS.contains(&ps5upload_core::mgmt_proxy::ROUTE));
+    }
+
+    #[test]
+    fn keys_leave_an_answer_wherever_they_are() {
+        let mut answer = json!({
+            "credential": "c", "regist_key": "r", "rp_key": "k", "account_id": "42",
+            "body": {"wake_rp_key": "k", "name": "ok"},
+            "drives": [{"name": "d", "lock": {"alg": "argon2id", "hash": "h", "salt": "s"}}],
+        });
+        assert!(redact_keys(&mut answer));
+        let text = answer.to_string();
+        for gone in ["\"c\"", "\"r\"", "\"k\"", "argon2id"] {
+            assert!(!text.contains(gone), "{text}");
+        }
+        assert_eq!(answer["account_id"], "42");
+        assert_eq!(answer["body"]["name"], "ok");
+        assert_eq!(answer["drives"][0]["has_password"], true);
+        let mut plain = json!({"name": "x", "lock": {"holder": "a"}});
+        assert!(!redact_keys(&mut plain));
+        assert_eq!(plain["lock"]["holder"], "a");
+    }
+
+    #[test]
+    fn a_document_with_keys_is_refused_however_it_is_written_and_only_those() {
         let doc = |path: &str, name: &str| {
-            reaches_a_backup_slot(path, &[("name", name.to_string())], None)
+            reaches_a_key_document(path, &[("name", name.to_string())], None)
         };
         for (path, name) in [
             ("/api/mesh/doc", "backup-01"),
@@ -843,6 +900,9 @@ mod tests {
             ("/api//mesh/doc/", "backup-01"),
             ("/api/mesh/%64oc", "%62ackup-01"),
             ("/api/mesh/doc", " backup-16 "),
+            ("/api/mesh/doc", "state"),
+            ("/api/mesh/doc", "Consoles"),
+            ("/api/mesh/doc", "drives"),
         ] {
             assert!(doc(path, name), "{path} {name}");
         }
@@ -851,27 +911,34 @@ mod tests {
         }
         assert!(!doc("/api/ps5/status", "backup-01"));
         let put = json!({"addr": "a", "name": "backup-02", "base": 1, "doc": {}});
-        assert!(reaches_a_backup_slot("/api/mesh/doc", &[], Some(&put)));
+        assert!(reaches_a_key_document("/api/mesh/doc", &[], Some(&put)));
         for file in [
             "/data/ps5upload/mesh/v1/doc-backup-01",
             "/data//ps5upload/MESH/./v1/doc-backup-01",
             "/data/ps5upload/mesh/v1/doc-%62ackup-01",
             "/data/ps5upload/mesh/x/../v1/doc-backup-01",
+            "/data/ps5upload/mesh/v1/doc-state",
         ] {
             let body = json!({"addr": "a", "req": {"path": file}});
             assert!(
-                reaches_a_backup_slot("/api/ps5/fs/read-preview", &[], Some(&body)),
+                reaches_a_key_document("/api/ps5/fs/read-preview", &[], Some(&body)),
                 "{file}"
             );
         }
         let shell = json!({"cmd": "cat /data/ps5upload/mesh/v1/doc-backup-01"});
-        assert!(!reaches_a_backup_slot(
+        assert!(!reaches_a_key_document(
             "/api/ps5/shell/run",
             &[],
             Some(&shell)
         ));
+        let np = json!({"path": "/data/ps5upload/np-backup/0x00000001.txt"});
+        assert!(reaches_a_key_document(
+            "/api/ps5/fs/read-preview",
+            &[],
+            Some(&np)
+        ));
         let other = json!({"path": "/data/ps5upload/mesh/v1/doc-prefs"});
-        assert!(!reaches_a_backup_slot(
+        assert!(!reaches_a_key_document(
             "/api/ps5/fs/read-preview",
             &[],
             Some(&other)
@@ -889,7 +956,7 @@ mod tests {
             .route("/three", axum::routing::put(d).delete(e))
             .route("/four", post(move |x: State<S>| { map.get(x).post(y) }).layer(z(1)))
             .route(
-                ps5upload_core::mgmt_proxy::ROUTE,
+                "/api/mgmt/call",
                 post(handler),
             )
             .route(&format!("{}/", base), get(ui_handler))

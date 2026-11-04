@@ -153,7 +153,10 @@ pub(crate) async fn call(
     if let Err(problem) = check_arguments(&tool.schema, &arguments) {
         return ToolOutput::error(problem);
     }
-    (tool.run)(ctx, Args(arguments)).await.unwrap_or_else(|e| e)
+    (tool.run)(ctx, Args(arguments))
+        .await
+        .unwrap_or_else(|e| e)
+        .without_keys()
 }
 
 /// Checks arguments against a tool's schema, the small part of JSON Schema the tools use. The same
@@ -373,6 +376,28 @@ pub(crate) struct ToolOutput {
 }
 
 impl ToolOutput {
+    /// What leaves the server: every key out, whatever route it came from. Tools read keys inside
+    /// (a wake needs its credential); only their results are held to this.
+    fn without_keys(mut self) -> Self {
+        let mut changed = false;
+        if let Some(structured) = self.structured.as_mut() {
+            changed = crate::mcp::catalog_routes::redact_keys(structured);
+        }
+        if changed {
+            let plain = self.structured.as_ref().map(Value::to_string);
+            for block in &mut self.content {
+                if let (Some(text), Some(plain)) =
+                    (block.get("text").and_then(Value::as_str), &plain)
+                {
+                    if serde_json::from_str::<Value>(text).is_ok_and(|v| v.is_object()) {
+                        block["text"] = json!(plain);
+                    }
+                }
+            }
+        }
+        self
+    }
+
     /// A success: `summary` for a person, `structured` for a program, and the same JSON again as
     /// text for clients that read only text.
     pub(super) fn ok(summary: impl Into<String>, structured: Value) -> Self {

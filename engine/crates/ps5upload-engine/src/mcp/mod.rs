@@ -156,10 +156,10 @@ impl McpState {
         body: Option<&Value>,
     ) -> Result<ApiReply, String> {
         let label = format!("{method} {path}");
-        if catalog_routes::reaches_a_backup_slot(path, query, body) {
+        if catalog_routes::reaches_a_key_document(path, query, body) {
             return Err(format!(
-                "{label} is refused: a console's backup slots hold the keys that sign in to it, \
-                 which stay with the app."
+                "{label} is refused: that console document holds the keys that sign in to \
+                 consoles, which stay with the app."
             ));
         }
         let mut builder = Request::builder()

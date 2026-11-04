@@ -592,9 +592,6 @@
   "POST /api/mesh/settings": {
    "summary": "Change a console's mesh settings"
   },
-  "POST /api/mgmt/call": {
-   "summary": "Call a helper management method directly (the generic escape hatch)"
-  },
   "POST /api/ops/{id}/cancel": {
    "summary": "Cancel an operation, job or install, where the route can"
   },
