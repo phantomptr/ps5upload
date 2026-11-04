@@ -220,7 +220,7 @@ else
   # the template and is patched again.
   python3 - "$mainactivity" <<'PY'
 import sys
-REV = "// ps5upload-patch-rev: 2\n"
+REV = "// ps5upload-patch-rev: 3\n"
 TEMPLATE = """package com.phantomptr.ps5upload
 
 import android.os.Bundle
@@ -293,7 +293,7 @@ anchor = "    super.onWebViewCreate(webView)\n"
 if anchor not in src:
     sys.exit("::error::onWebViewCreate not found in MainActivity.kt (step 3 must run first)")
 hook = anchor + '''    // WebView reports only part of the safe area (measured: top 49px, bottom
-    // 0px), so give the page the real values: "top,right,bottom,left".
+    // 0px), so give the page the real values: "top,right,bottom,left,keyboard".
     webView.addJavascriptInterface(object {
       @android.webkit.JavascriptInterface
       fun systemInsetsPx(): String = systemInsetsPx
@@ -311,7 +311,16 @@ hook = anchor + '''    // WebView reports only part of the safe area (measured: 
       val type = androidx.core.view.WindowInsetsCompat.Type.systemBars() or
         androidx.core.view.WindowInsetsCompat.Type.displayCutout()
       val i = insets.getInsets(type)
-      val now = "${i.top},${i.right},${i.bottom},${i.left}"
+      // Edge-to-edge, Android does not resize anything for the keyboard (measured on Android 16,
+      // WebView 134: the page stayed 997 px tall with a 336 px keyboard over a field low on
+      // Settings). Shrink the WebView's parent: the page gets a real resize, which is what the
+      // viewport meta (interactive-widget=resizes-content) and appMain's scroll-into-view expect.
+      val ime = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
+      val content = findViewById<android.view.View>(android.R.id.content)
+      if (content.paddingBottom != ime) content.setPadding(0, 0, 0, ime)
+      // The keyboard covers the navigation bar.
+      val bottom = if (ime > 0) 0 else i.bottom
+      val now = "${i.top},${i.right},$bottom,${i.left},$ime"
       if (now != systemInsetsPx) {
         systemInsetsPx = now
         webView.evaluateJavascript(
@@ -321,9 +330,9 @@ hook = anchor + '''    // WebView reports only part of the safe area (measured: 
 '''
 src = src.replace(anchor, hook, 1)
 field = '''
-  // System bars and cutout in physical pixels, "top,right,bottom,left", read by the page through
-  // PS5UploadInsets. Written on the UI thread, read on WebView's binder thread.
-  @Volatile private var systemInsetsPx: String = "0,0,0,0"
+  // System bars and cutout in physical pixels, "top,right,bottom,left,keyboard", read by the page
+  // through PS5UploadInsets. Written on the UI thread, read on WebView's binder thread.
+  @Volatile private var systemInsetsPx: String = "0,0,0,0,0"
 '''
 brace = src.index("{", src.index("class MainActivity"))
 src = src[:brace + 1] + field + src[brace + 1:]
@@ -1526,7 +1535,8 @@ if not m:
     sys.exit("::error::MainActivity <activity> not found in AndroidManifest.xml")
 tag = m.group(0)
 new = tag
-for attr in ('android:supportsPictureInPicture="true"', 'android:resizeableActivity="true"'):
+# adjustResize: with it the system reports the keyboard's inset on every Android version (step 4).
+for attr in ('android:supportsPictureInPicture="true"', 'android:resizeableActivity="true"', 'android:windowSoftInputMode="adjustResize"'):
     if attr.split("=")[0] + "=" not in new:
         new = new.replace("<activity", "<activity\n            " + attr, 1)
 # Going in and out of picture in picture resizes the window: the activity must not be

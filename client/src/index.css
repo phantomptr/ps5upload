@@ -1103,6 +1103,10 @@ body {
   --safe-right: max(env(safe-area-inset-right), var(--sys-inset-right, 0px));
 }
 .safe-bottom { padding-bottom: var(--safe-bottom); }
+/* Keyboard up in the Android app (lib/androidInsets.ts): the page has been resized to what is left
+   of the screen, and these fixed bars would take up a good part of it. */
+html[data-keyboard] [data-bottom-nav],
+html[data-keyboard] [data-testid="activity-pill"] { display: none !important; }
 .safe-left { padding-left: var(--safe-left); }
 .safe-right { padding-right: var(--safe-right); }
 .safe-pad {

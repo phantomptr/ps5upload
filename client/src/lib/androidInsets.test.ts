@@ -3,16 +3,21 @@ import { applyNavInset, navInsetCssPx } from "./androidInsets";
 
 function fakeWindow(bridge?: { systemInsetsPx(): string }, dpr = 2.625) {
   const props = new Map<string, string>();
+  const attrs = new Set<string>();
   const w = {
     devicePixelRatio: dpr,
     PS5UploadInsets: bridge,
     document: {
       documentElement: {
         style: { setProperty: (k: string, v: string) => void props.set(k, v) },
+        toggleAttribute: (name: string, on: boolean) => {
+          if (on) attrs.add(name);
+          else attrs.delete(name);
+        },
       },
     },
   } as unknown as Window;
-  return { w, props };
+  return { w, props, attrs };
 }
 
 describe("android navigation-bar inset", () => {
@@ -40,6 +45,17 @@ describe("android navigation-bar inset", () => {
     expect(props.get("--sys-inset-right")).toBe("48px");
     expect(props.get("--nav-inset-bottom")).toBe("0px");
     expect(props.get("--sys-inset-left")).toBe("16px");
+  });
+
+  /* The tab bar and activity pill go while the keyboard is up (index.css). */
+  it("marks the page while the keyboard is up", () => {
+    let insets = "63,0,0,0,1008";
+    const { w, attrs } = fakeWindow({ systemInsetsPx: () => insets });
+    applyNavInset(w);
+    expect(attrs.has("data-keyboard")).toBe(true);
+    insets = "63,0,126,0,0";
+    applyNavInset(w);
+    expect(attrs.has("data-keyboard")).toBe(false);
   });
 
   /* Desktop, the browser build and iOS have no bridge: leave env() alone. */

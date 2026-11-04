@@ -58,6 +58,8 @@ def problems(tree: str) -> list[str]:
         out.append("no networkSecurityConfig: a release build could not reach its own engine")
     if "android:supportsPictureInPicture(" not in tree:
         out.append("no supportsPictureInPicture: Remote Play could not float")
+    if "android:windowSoftInputMode(" not in tree:
+        out.append("no windowSoftInputMode: older Androids would not report the keyboard's inset")
     return out
 
 
@@ -90,6 +92,7 @@ def self_test() -> None:
         f'{a}scheme(0x01010027)="ps5upload" (Raw: "ps5upload")',
         f"{a}networkSecurityConfig(0x01010527)=@0x7f120008",
         f"{a}supportsPictureInPicture(0x010104f7)=true",
+        f"{a}windowSoftInputMode(0x0101022b)=0x10",
     ]
     good = "\n".join(lines)
     assert problems(good) == [], problems(good)

@@ -8,7 +8,7 @@
  * labels covered, and a 3-button nav bar on the side of a phone held sideways is not reported at
  * all. The Android shell (MainActivity, patched by
  * scripts/release/android-postinit-patch.sh) exposes the real values as
- * `window.PS5UploadInsets.systemInsetsPx()`, "top,right,bottom,left" in physical pixels, and fires
+ * `window.PS5UploadInsets.systemInsetsPx()`, "top,right,bottom,left,keyboard" in physical pixels, and fires
  * `ps5upload-insets` whenever they change (rotation, gesture ↔ 3-button navigation). `--safe-*`
  * in index.css takes the larger of the two on each side, so iOS and desktop browsers, where env()
  * is right, are unaffected.
@@ -41,7 +41,11 @@ export function applyNavInset(w: Window = window): void {
     return;
   }
   const [top, right, bottom, left] = sides.map((px) => navInsetCssPx(px, w.devicePixelRatio));
-  const style = w.document.documentElement.style;
+  const root = w.document.documentElement;
+  // The shell resizes the page for the keyboard; the bottom tab bar and activity pill would sit
+  // on top of what is left of the screen (index.css hides them).
+  root.toggleAttribute("data-keyboard", (sides[4] ?? 0) > 0);
+  const style = root.style;
   style.setProperty("--sys-inset-top", `${top ?? 0}px`);
   style.setProperty("--sys-inset-right", `${right ?? 0}px`);
   style.setProperty("--nav-inset-bottom", `${bottom ?? 0}px`);
