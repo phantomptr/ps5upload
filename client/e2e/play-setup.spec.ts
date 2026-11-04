@@ -86,6 +86,19 @@ async function consoleHalfSetUp(page: Page, opts: { paired?: boolean } = {}): Pr
                 : [],
         };
       }
+      if (path === "/api/ps5/fs/stat") {
+        const asked = (route.request().postDataJSON() as { path: string }).path;
+        const there = c.hush && (asked === "/data/hush" || (c.hush.enabled && asked === "/data/hush/state.txt"));
+        if (!there) {
+          await route.fulfill({
+            status: 502,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "payload rejected FS_STAT: fs_stat_failed_errno_2" }),
+          });
+          return;
+        }
+        body = { kind: "file", size: 1, mtime: 1, mode: 420, dev: 1 };
+      }
       if (path === "/api/ps5/fs/read-preview") {
         const file = (req.postDataJSON() as { path: string }).path;
         const text =

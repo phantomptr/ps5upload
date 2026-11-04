@@ -4108,7 +4108,7 @@ mod tests {
 
     // ── short aliases for over-long install links ──
 
-    const LONG: &str = "http://192.0.2.199:20080/3A5CA02AFD084A3B8445AC51D3EAE212/\
+    const LONG: &str = "http://198.51.100.199:20080/3A5CA02AFD084A3B8445AC51D3EAE212/\
 Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
 
     /// The link from the field that "let the PS5 download it" could not take.

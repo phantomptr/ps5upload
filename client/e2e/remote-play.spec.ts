@@ -768,9 +768,10 @@ test("Remote Play offers 720p when a 1080p stream keeps losing frames, and switc
   await expect(page.getByTestId("rp-quality-switching")).toHaveCount(0, { timeout: 15_000 });
   await expect(page.getByTestId("rp-toolbar")).toContainText("Living room");
   await expect(page.locator("[role=alert]").filter({ hasText: /still finishing/ })).toHaveCount(0);
-  await expect
-    .poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("ps5upload.rp_prefs.v1") ?? "{}").res))
-    .toBe("1280x720");
+  // For this session only: Settings keep what the user chose.
+  expect(
+    await page.evaluate(() => JSON.parse(localStorage.getItem("ps5upload.rp_prefs.v1") ?? "{}").res),
+  ).not.toBe("1280x720");
   // 720p is never offered lower, and nothing steps it back up.
   await page.waitForTimeout(2000);
   await expect(page.getByTestId("rp-quality-offer")).toHaveCount(0);
