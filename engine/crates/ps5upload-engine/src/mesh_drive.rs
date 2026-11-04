@@ -19,7 +19,8 @@
 //! * `GET  /api/drive?addr=`                                   -> drives, this device's folders
 //! * `POST /api/drive/create`  `{addr,name,hub,hub_name?,path,password?}`
 //! * `POST /api/drive/join`    `{addr,drive,path,password?}`  (no approval step: the password, if set)
-//! * `POST /api/drive/password` `{addr,drive,password?,current?}`
+//! * `POST /api/drive/password` `{addr,drive,password?,current?}` -> `pending`: linked consoles that
+//!   did not answer (each takes it from the next link pass)
 //! * `POST /api/drive/approve` `{addr,drive,member,approve}`  (kept for 8.0.0 apps)
 //! * `POST /api/drive/leave`   `{addr,drive,member}`          (any member, e.g. a device long gone)
 //! * `POST /api/drive/delete`  `{addr,drive}`                   (the drive goes; files stay)
@@ -1038,11 +1039,12 @@ impl Drop for DriveClaim {
 /// None while another job of this engine has this drive on this console.
 fn claim_drive(addr: &str, drive: &str) -> Option<DriveClaim> {
     let key = claim_key(addr, drive);
-    claims()
+    let free = claims()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(key.clone())
-        .then_some(DriveClaim(key))
+        .insert(key.clone());
+    // Only when free: a DriveClaim made and dropped would let go of the other job's hold.
+    free.then(|| DriveClaim(key))
 }
 
 /// Gives another job of this engine a moment to finish (a quiet pass is over in seconds; without
@@ -5816,9 +5818,10 @@ mod tests {
         assert_eq!(from.lock, lock("new"));
         assert_eq!(to.lock, lock("old"));
         assert_eq!(addr, "a");
+        // The same two the other way round: the older one is still the one at "a".
         let (from, _, addr) = newer_password(&b, &a, "a", "b").unwrap();
         assert_eq!(from.lock, lock("new"));
-        assert_eq!(addr, "b");
+        assert_eq!(addr, "a");
         // Removing the password is a change too.
         b.lock = None;
         assert!(newer_password(&a, &b, "b", "a").unwrap().0.lock.is_none());
