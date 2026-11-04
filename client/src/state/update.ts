@@ -3,8 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 
 import { openExternalUrl } from "../lib/openExternalUrl";
 import {
+  UPDATE_DOWNLOAD_PROGRESS_EVENT,
   updateCheck,
   updateDownload,
+  updateDownloadCancel,
   updateInstall,
   updateInstallOnQuit,
   updateLastInstall,
@@ -15,8 +17,10 @@ import {
   type LastInstall,
   type UpdateCheck,
   type UpdateDownload,
+  type UpdateDownloadProgress,
 } from "../api/ps5";
 import { isMobile } from "../lib/platform";
+import { shellErrorCode, shellErrorText } from "../lib/shellError";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { apkUpdaterAvailable, downloadAndInstallApk } from "./apkUpdate";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "../lib/safeStorage";
@@ -311,6 +315,10 @@ interface UpdateStore {
    *  Mobile: opens the APK download URL (or the GitHub release page)
    *  in the system browser instead — no in-app download. */
   download: () => Promise<void>;
+  /** How far the download in progress is (desktop), once it has started. */
+  downloadProgress: UpdateDownloadProgress | null;
+  /** Stop the download in progress and delete what it saved: back to `available`. */
+  cancelDownload: () => Promise<void>;
   /** Reset to the cached `available` state so the Download button is
    *  clickable again after a failure or after the user dismissed the
    *  "downloaded" panel. */
@@ -424,7 +432,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
       set({
         phase: {
           kind: "error",
-          message: e instanceof Error ? e.message : String(e),
+          message: shellErrorText(e instanceof Error ? e.message : String(e), trFb),
         },
         lastCheckedMs: Date.now(),
       });
@@ -530,6 +538,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
   return {
     phase: initialPhase,
     lastCheckedMs: initialLastChecked,
+    downloadProgress: null,
     installing: false,
     autoInstallEnabled: loadAutoInstall(),
     installOnQuitEnabled: loadInstallOnQuit(),
@@ -633,7 +642,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         await updateInstall(phase.download.path, phase.result.latest_version);
         // The app quits from here; nothing else to do.
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
+        const message = shellErrorText(e instanceof Error ? e.message : String(e), trFb);
         // A .deb / .rpm through pkexec: the prompt was closed, could not be shown, or the
         // package manager failed. Nothing changed; show the command to run instead.
         if (phase.download.needs_password) {
@@ -744,8 +753,11 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
                 result,
                 // openExternalUrl already logged the underlying error; give the
                 // user an actionable message + the in-panel browser button.
-                message:
+                message: trFb(
+                  "update_open_link_failed",
+                  undefined,
                   "Couldn't open the download link. Tap “Get APK in browser”, or grab it from the GitHub releases page.",
+                ),
               },
         });
         return;
@@ -755,12 +767,24 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
           phase: {
             kind: "download-failed",
             result,
-            message: "No download bundle for your platform in this release.",
+            message: trFb(
+              "update_no_platform_bundle",
+              undefined,
+              "No download for your platform in this release.",
+            ),
           },
         });
         return;
       }
-      set({ phase: { kind: "downloading", result } });
+      set({ phase: { kind: "downloading", result }, downloadProgress: null });
+      let unlisten: (() => void) | undefined;
+      try {
+        unlisten = await listen<UpdateDownloadProgress>(UPDATE_DOWNLOAD_PROGRESS_EVENT, (e) => {
+          set({ downloadProgress: e.payload });
+        });
+      } catch {
+        // No progress events: the download still runs, the bar just stays empty.
+      }
       try {
         const download = await updateDownload(
           result.download_url,
@@ -769,13 +793,25 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         );
         set({ phase: { kind: "downloaded", result, download } });
       } catch (e) {
+        const raw = e instanceof Error ? e.message : String(e);
         set({
-          phase: {
-            kind: "download-failed",
-            result,
-            message: e instanceof Error ? e.message : String(e),
-          },
+          // Cancelled by the person: nothing failed, the update is on offer as before.
+          phase:
+            shellErrorCode(raw) === "update_cancelled"
+              ? { kind: "available", result }
+              : { kind: "download-failed", result, message: shellErrorText(raw, trFb) },
         });
+      } finally {
+        unlisten?.();
+        set({ downloadProgress: null });
+      }
+    },
+
+    async cancelDownload() {
+      try {
+        await updateDownloadCancel();
+      } catch {
+        // Nothing running, or a shell without the command: the download ends by itself.
       }
     },
 

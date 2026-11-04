@@ -52,15 +52,23 @@ pub mod save_text_file;
 pub mod saves_screenshots;
 pub mod screenshot_convert;
 pub mod self_install;
+pub(crate) mod shell_error;
 pub mod smp;
 pub mod system_bars;
 pub mod system_power;
 pub mod title_meta;
 pub mod update_android;
+pub mod update_fetch;
 pub mod update_files;
 pub mod updates;
 pub mod usb_autoloader;
 pub mod user_config;
+
+/// A console's reply as the JSON the renderer reads. One that cannot be serialised is an error,
+/// never an empty success (`{}` read as "the console said nothing").
+pub(crate) fn reply_json<T: serde::Serialize>(reply: T) -> Result<serde_json::Value, String> {
+    serde_json::to_value(reply).map_err(|e| format!("serialize: {e}"))
+}
 
 pub(crate) fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     #[cfg(windows)]
@@ -121,6 +129,7 @@ pub use system_bars::*;
 pub use system_power::*;
 pub use title_meta::*;
 pub use update_android::*;
+pub use update_fetch::*;
 pub use update_files::*;
 pub use updates::*;
 pub use usb_autoloader::*;

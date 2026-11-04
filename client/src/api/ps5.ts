@@ -105,13 +105,6 @@ export interface ZipInspect {
   entry_names_complete?: boolean;
 }
 
-/** Inspect a `.zip` without extracting it. Reads only the central directory
- *  (plus, at most, one small embedded param.json), so it's fast even for a
- *  100 GB archive. Throws if the file isn't a readable zip. */
-export async function zipInspect(zipPath: string): Promise<ZipInspect> {
-  return invoke<ZipInspect>("zip_inspect", { req: { zip_path: zipPath } });
-}
-
 /** A single progress tick from `zipInspectStream`. `entriesSeen` is the
  *  running CDFH-record count while the central directory is parsed —
  *  not the final `file_count` (which excludes directories and sanitized
@@ -120,12 +113,15 @@ export interface ZipInspectProgress {
   entries_seen: number;
 }
 
-/** Streaming variant of `zipInspect`. The engine returns SSE — we forward
+/** Inspect a `.zip` without extracting it. Reads only the central directory
+ *  (plus, at most, one small embedded param.json), so it's fast even for a
+ *  100 GB archive. Throws if the file isn't a readable zip. The engine
+ *  returns SSE — we forward
  *  every `progress` event through `onProgress` so the UI can show a live
  *  entry-count while the central directory is walked, then resolve to the
  *  final `ZipInspect` once the engine emits `event: done`.
  *
- *  Unlike `zipInspect`, this call has no fixed deadline: the Tauri client
+ *  This call has no short deadline: the Tauri client
  *  uses a **dead-man-switch watchdog** (no SSE chunk for 30 s → fail). On
  *  a healthy engine the keep-alive sends `: heartbeat` every 1 s, so the
  *  watchdog only fires for a genuinely wedged sidecar. This is what lets
@@ -158,15 +154,8 @@ export async function zipInspectStream(
 // host-visible param.json, so `title` etc. stay null.
 
 /** Inspect a `.7z` without extracting it (file count + sizes). Fast even for a
- *  124 GB archive — only the small header is read. Throws if unreadable. */
-export async function sevenzInspect(archivePath: string): Promise<ZipInspect> {
-  return invoke<ZipInspect>("sevenz_inspect", {
-    req: { archive_path: archivePath },
-  });
-}
-
-/** Streaming variant of `sevenzInspect` — same dead-man-switch watchdog +
- *  progress channel as `zipInspectStream`. */
+ *  124 GB archive — only the small header is read. Throws if unreadable. Same
+ *  dead-man-switch watchdog + progress channel as `zipInspectStream`. */
 export async function sevenzInspectStream(
   archivePath: string,
   onProgress: (p: ZipInspectProgress) => void,
@@ -315,18 +304,6 @@ export async function profileNpRestore(
     { req: { addr, slot: 0, uid } },
   );
   return assertOk(resp, "Undo the sign-in");
-}
-
-/** Create a new local user account. Returns the new user's uid. */
-export async function userCreate(
-  name: string,
-  addr?: string,
-): Promise<{ ok: boolean; uid: number; name: string }> {
-  const resp = await invoke<{ ok: boolean; uid: number; name: string }>(
-    "user_create",
-    { req: { addr: addr ?? null, name } },
-  );
-  return assertOk(resp, "Create user");
 }
 
 /** Delete a local user account. */
@@ -523,10 +500,6 @@ function assertOk<T extends { ok?: boolean; error?: string | null }>(
  * screen. As of 2026-08, seventeen are UI-unreferenced, and most back a
  * live engine route with browserInvoke plumbing behind them
  * (profile/activate, users/list, volumes, zip/inspect, …).
- *
- * Others are superseded rather than unused: zipInspect and sevenzInspect
- * predate their *Stream variants and are kept for callers that do not
- * want to plumb a Channel through.
  *
  * Before deleting one, check for an engine route and a browserInvoke
  * case. If both exist, it is API surface, not debris.
@@ -5019,10 +4992,11 @@ export async function updateCheck(
 
 /** Stream the update archive into the app's updates folder (a download
  *  installed by hand: the Downloads folder, revealed in the file manager). Re-running with the same URL
- *  is idempotent: if the file is already on disk with the expected
- *  size, we skip the download and just re-open the folder. With a
+ *  is idempotent: if the file is already on disk and matches, we skip the
+ *  download and just re-open the folder, and a download that was cut off
+ *  carries on where it stopped. With a
  *  `sha256`, the file must match it or the call rejects (and the file
- *  is deleted). */
+ *  is deleted). Progress arrives on `UPDATE_DOWNLOAD_PROGRESS_EVENT`. */
 export async function updateDownload(
   url: string,
   filename: string,
@@ -5033,6 +5007,20 @@ export async function updateDownload(
     filename,
     sha256: sha256 || null,
   });
+}
+
+/** The event `updateDownload` reports on while it runs. */
+export const UPDATE_DOWNLOAD_PROGRESS_EVENT = "update-download-progress";
+
+/** How far an update download is, in bytes (`total` 0 until the server says). */
+export interface UpdateDownloadProgress {
+  received: number;
+  total: number;
+}
+
+/** Stop the running `updateDownload`, which then rejects with `update_cancelled` (lib/shellError). */
+export async function updateDownloadCancel(): Promise<boolean> {
+  return invoke<boolean>("update_download_cancel");
 }
 
 /** Android: the update APK downloaded into the app's cache, checked. */
