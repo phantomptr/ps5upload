@@ -120,6 +120,7 @@ static void *late_sweep_main(void *arg) {
     if (g_state && *(volatile int *)&g_state->shutdown_requested) return NULL;
     int n = runtime_sweep_our_instances();
     if (n > 0) fprintf(stderr, "[payload2] late sweep: ended %d stray instance(s) of ours\n", n);
+    archive_extract_sweep_request(); /* one that was too young to judge at the start */
     return NULL;
 }
 
