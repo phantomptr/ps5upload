@@ -197,6 +197,7 @@ pub fn is_junk_entry(name: &str) -> bool {
         || n.ends_with(".partial")
         || n.ends_with(".staging")
         || n.ends_with(".download")
+        || n.ends_with(".ava-part")
 }
 
 /// Folders whose whole contents are throwaway once they have sat for a while, with how long
@@ -815,6 +816,7 @@ mod tests {
         assert!(is_junk_entry("upload.TMP"));
         assert!(is_junk_entry("x.partial"));
         assert!(is_junk_entry("y.staging"));
+        assert!(is_junk_entry("Game.pkg.ava-part"));
     }
 
     #[test]
@@ -829,6 +831,7 @@ mod tests {
             "partition", // starts with "part" but is not a suffix
             "tmpfile",   // contains "tmp" but is not a suffix
             "notes.partly",
+            "ava-part", // the suffix alone is a name someone chose
         ] {
             assert!(!is_junk_entry(name), "{name} must not be treated as junk");
         }

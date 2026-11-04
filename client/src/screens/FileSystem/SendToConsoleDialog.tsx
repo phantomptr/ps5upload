@@ -344,7 +344,10 @@ export function SendToConsoleDialog({
                 </span>
                 <input
                   type="text"
-                  inputMode="decimal"
+                  inputMode="url"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
                   value={route.directAddr}
                   placeholder={`${target}:9120`}
                   onChange={(e) => setRoute(hostOf(fromHost), target, { ...route, directAddr: e.target.value })}

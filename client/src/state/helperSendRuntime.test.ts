@@ -11,6 +11,9 @@ const { updateHelperCopiesAfterSend } = vi.hoisted(() => ({
 }));
 vi.mock("./helperStoredCopiesRuntime", () => ({ updateHelperCopiesAfterSend }));
 
+vi.mock("../lib/appVersion", () => ({ getAppVersion: async () => "5.37.1" }));
+
+import { useConnectionStore } from "./connection";
 import { useHelperSendStore } from "./helperSend";
 import { loaderHint, sendHelperAndWait, sendHelperTo } from "./helperSendRuntime";
 import type { Translator } from "./lang";
@@ -24,6 +27,10 @@ describe("loaderHint", () => {
     const msg = loaderHint(raw);
     expect(msg).toContain("loader (port 9021) isn't running");
     expect(msg).toContain(raw);
+  });
+
+  it("reads the desktop send's own timeout wording too", () => {
+    expect(loaderHint("connect 1.2.3.4:9021: timeout")).toContain("isn't running");
   });
 
   it("leaves any other error as it is", () => {
@@ -75,6 +82,58 @@ describe("sendHelperAndWait", () => {
   beforeEach(() => {
     runHelperSend.mockReset();
     useHelperSendStore.setState({ byHost: {} });
+  });
+
+  // "Run again" and "Send only ps5upload" restarted a current helper and stopped uploads.
+  it("leaves a helper of this app's version running, and says it is up", async () => {
+    const out = await sendHelperAndWait(H, tr, undefined, async () => ({
+      reachable: true,
+      payloadVersion: "5.37.1",
+    }));
+    expect(out).toBeNull();
+    expect(runHelperSend).not.toHaveBeenCalled();
+    expect(useConnectionStore.getState().runtimeByHost[H]?.payloadStatus).toBe("up");
+  });
+
+  it("does not put this app's helper over a newer one", async () => {
+    const guard = vi.fn(async () => true);
+    const out = await sendHelperAndWait(
+      H,
+      tr,
+      undefined,
+      async () => ({ reachable: true, payloadVersion: "99.0.0" }),
+      guard,
+    );
+    expect(out).toBeNull();
+    expect(guard).not.toHaveBeenCalled();
+    expect(runHelperSend).not.toHaveBeenCalled();
+  });
+
+  it("asks before replacing an older helper, and stops if told no", async () => {
+    const out = await sendHelperAndWait(
+      H,
+      tr,
+      undefined,
+      async () => ({ reachable: true, payloadVersion: "1.0.0" }),
+      async () => false,
+    );
+    expect(out).toContain("left as it is");
+    expect(runHelperSend).not.toHaveBeenCalled();
+  });
+
+  it("replaces an older helper once allowed", async () => {
+    runHelperSend.mockResolvedValue("ok");
+    const guard = vi.fn(async () => true);
+    const out = await sendHelperAndWait(
+      H,
+      tr,
+      undefined,
+      async () => ({ reachable: true, payloadVersion: "1.0.0" }),
+      guard,
+    );
+    expect(out).toBeNull();
+    expect(guard).toHaveBeenCalledWith(H);
+    expect(runHelperSend).toHaveBeenCalledTimes(1);
   });
 
   it("goes through the shared send and resolves null when the helper answered", async () => {

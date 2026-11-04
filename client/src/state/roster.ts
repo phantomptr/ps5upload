@@ -4,7 +4,7 @@ import { useRunningAppsStore } from "./runningApps";
 import { useFsClipboardStore, evictFsClipboard } from "./fsClipboard";
 import { useUploadStore, evictUploadDraft } from "./upload";
 import { evictPkgLibraryStore } from "./pkgLibrary";
-import { hostOf } from "../lib/addr";
+import { cleanConsoleAddress, hostOf } from "../lib/addr";
 import { gamesApi } from "../api/games";
 import { setConsoleKeyResolver } from "./tasks";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
@@ -675,7 +675,7 @@ setConsoleKeyResolver((host) => profileIdForHost(host, useRosterStore.getState()
  * callers do this on commit (blur, Enter, Check), never per keystroke.
  */
 export function selectConsoleByAddress(address: string): void {
-  const value = address.trim();
+  const value = cleanConsoleAddress(address);
   if (!value) return;
   const roster = useRosterStore.getState();
   const existing = roster.profiles.find((p) => hostOf(p.host) === hostOf(value));
@@ -686,6 +686,25 @@ export function selectConsoleByAddress(address: string): void {
   } else {
     roster.setActive(roster.add({ name: `PS5 (${value})`, host: value }));
   }
+}
+
+/** Whether this address could be another console rather than the active one at a new address, so
+ *  the person has to say which: it is not in the roster, and the active profile has been seen
+ *  answering. A profile that never answered has no keys to lose, so a typo is simply corrected. */
+export function addressChoiceNeeded(address: string): boolean {
+  const value = cleanConsoleAddress(address);
+  if (!value) return false;
+  const roster = useRosterStore.getState();
+  if (roster.profiles.some((p) => hostOf(p.host) === value)) return false;
+  return !!roster.profiles.find((p) => p.id === roster.active_id)?.last_seen_at;
+}
+
+/** Adds the console at `address` to the roster and selects it; the active one stays as it is. */
+export function addConsoleByAddress(address: string): void {
+  const value = cleanConsoleAddress(address);
+  if (!value) return;
+  const roster = useRosterStore.getState();
+  roster.setActive(roster.add({ name: `PS5 (${value})`, host: value }));
 }
 
 /** The engine keeps what it last read from each console for the game page: a console removed

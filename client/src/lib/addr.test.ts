@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  cleanConsoleAddress,
   hostOf,
   mgmtAddr,
   PS5_LOADER_PORT,
@@ -113,5 +114,23 @@ describe("IPv6 addressing", () => {
   });
   it("leaves IPv4 unbracketed and portless", () => {
     expect(mgmtAddr("192.168.1.50")).toBe("192.168.1.50");
+  });
+});
+
+describe("cleanConsoleAddress", () => {
+  it.each([
+    ["192.168.1.5", "192.168.1.5"],
+    ["  192.168.1.5  ", "192.168.1.5"],
+    ["192.168.1.5:9021", "192.168.1.5"],
+    ["http://192.168.1.5", "192.168.1.5"],
+    ["https://192.168.1.5:9021/", "192.168.1.5"],
+    ["http://ps5.local/index.html?x=1", "ps5.local"],
+    ["ps5.local:9021", "ps5.local"],
+    ["fe80::1", "fe80::1"],
+    ["[fe80::1]:9021", "fe80::1"],
+    ["http://[fe80::1]:9021/", "fe80::1"],
+    ["", ""],
+  ])("%s -> %s", (raw, want) => {
+    expect(cleanConsoleAddress(raw)).toBe(want);
   });
 });

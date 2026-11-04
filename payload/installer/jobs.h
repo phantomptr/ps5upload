@@ -30,6 +30,11 @@ int inst_admit_install(inst_job_phase_t active_phase, int active_complete);
 int inst_stop_allowed(int install_in_flight, inst_job_phase_t active_phase,
                       int active_complete);
 
+/* The same for `{"op":"stop","force":true}`: the engine's own recovery, after the user stopped a
+ * job or a failure that poisons Sony's library. Only a call in flight refuses it, since the
+ * process cannot end cleanly under one. */
+int inst_stop_forced_allowed(int install_in_flight);
+
 #define INST_COVERAGE_MAX 256
 
 typedef struct { uint64_t start; uint64_t end; } inst_interval_t; /* inclusive */
@@ -51,6 +56,17 @@ int inst_coverage_complete(const inst_coverage_t *c, uint64_t total);
 
 /* serving -> done when coverage is complete AND idle >= 600s. */
 int inst_job_should_finish(int covered_complete, double idle_seconds);
+
+/* How long a loopback job may go without Sony asking for a byte before it stops holding the
+ * daemon. Matches the engine's stall window (DELIVERY_STALL_MS). The job goes on serving for as
+ * long as nothing else wants the daemon, so a paused download can still resume. */
+#define INST_JOB_STALLED_S 300.0
+
+/* Whether a serving job with `bytes_served` of `total` still needs protecting from a new install
+ * or a plain `stop`: 1 when Sony has read it all, or has asked for nothing for
+ * INST_JOB_STALLED_S. Only a job that never completes hits the second case: nothing else retires
+ * one, and every later install was refused as busy until a reboot. */
+int inst_job_released(uint64_t bytes_served, uint64_t total, double idle_seconds);
 
 #define INST_JOB_RING 16
 

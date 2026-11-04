@@ -97,6 +97,19 @@ pub fn launch_elf(ip: &str, filename: &str, bytes: &[u8]) -> Result<(), String> 
     Ok(())
 }
 
+/// Launch the helper through Payload Manager when the loader did not answer. Under our own name,
+/// never the file's: Payload Manager files an upload under a folder derived from the name and its
+/// cleanup clears that folder, so a user's own "ps5upload" entry must not be the one we land in.
+/// A helper that is still running is left to the new one's takeover.
+pub fn launch_helper(ip: &str, bytes: &[u8]) -> Result<(), String> {
+    const NAME: &str = "ps5upload-helper.elf";
+    launch_elf(ip, NAME, bytes)?;
+    // Give it a moment to start before the stored copy goes.
+    std::thread::sleep(Duration::from_secs(2));
+    forget(ip, NAME);
+    Ok(())
+}
+
 /// Remove the copy [`launch_elf`] stored. Best effort: a leftover entry is
 /// only clutter in the user's list, and the launched ELF keeps running.
 pub fn forget(ip: &str, filename: &str) {

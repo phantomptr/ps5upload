@@ -11,6 +11,7 @@ import { helperSendFor, useHelperSendStore } from "../../state/helperSend";
 import { usePayloadPlaylistsStore } from "../../state/payloadPlaylists";
 import { useTr } from "../../state/lang";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
+import { useHelperReplaceGuard } from "./useHelperReplaceGuard";
 
 /**
  * Quick bring-up panel for the Connection screen. One tap runs the configured
@@ -24,6 +25,7 @@ export function BringUpPanel() {
   // This console's status only: another console's bring-up neither shows here nor blocks Run.
   const status = useBringUpStore((s) => bringUpStatusFor(s, host));
   const run = useBringUpStore((s) => s.run);
+  const { guard, dialog: replaceDialog } = useHelperReplaceGuard();
   const bringUpId = usePayloadPlaylistsStore(
     (s) => s.autoLoader.bringUpPlaylistId,
   );
@@ -41,6 +43,7 @@ export function BringUpPanel() {
 
   return (
     <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mt-6 p-5">
+      {replaceDialog}
       <header className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
           <Zap size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
@@ -76,7 +79,7 @@ export function BringUpPanel() {
           leftIcon={
             running ? <Spinner size={12} tone="inherit" /> : <Zap size={12} />
           }
-          onClick={() => void run(host, tr)}
+          onClick={() => void run(host, tr, { guard })}
           disabled={!canRun}
           title={
             !host.trim()

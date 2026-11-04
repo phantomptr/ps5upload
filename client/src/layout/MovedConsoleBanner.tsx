@@ -103,12 +103,13 @@ export function useMovedConsoleWatch() {
   const status = useConnectionStore(
     (s) => s.runtimeByHost[hostOf(s.host) || "_"]?.payloadStatus ?? "unknown",
   );
+  const power = useConnectionStore((s) => s.runtimeByHost[hostOf(s.host) || "_"]?.power);
   useEffect(() => {
-    if (!isTauriEnv() || !host.trim() || status !== "down") return;
+    if (!isTauriEnv() || !host.trim() || status !== "down" || power === "rest") return;
     const look = async () => {
       const st = useMovedConsoleStore.getState();
       const from = hostOf(host);
-      if (st.looking || !shouldLook(status, st.lastLookAt[from], Date.now())) return;
+      if (st.looking || !shouldLook(status, st.lastLookAt[from], Date.now(), power)) return;
       useMovedConsoleStore.setState({
         looking: true,
         lastLookAt: { ...st.lastLookAt, [from]: Date.now() },
@@ -132,5 +133,5 @@ export function useMovedConsoleWatch() {
     void look();
     const id = window.setInterval(() => void look(), TICK_MS);
     return () => window.clearInterval(id);
-  }, [host, status]);
+  }, [host, status, power]);
 }

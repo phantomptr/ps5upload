@@ -64,6 +64,9 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
         return Ok(url());
     }
     let port = pick_port();
+    // The stream-install URL the console fetches names this port, not the default.
+    // Before the engine task starts, as for `PS5UPLOAD_DATA_DIR` below.
+    std::env::set_var("PS5UPLOAD_ENGINE_PORT", port.to_string());
     let _ = URL.set(format!("http://127.0.0.1:{port}"));
     let bind = format!("{BIND_HOST}:{port}");
     point_engine_at_app_data(app);

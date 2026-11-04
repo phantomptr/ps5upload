@@ -32,6 +32,13 @@ use crate::net::resolve_connect_targets;
 /// as a fresh process once the sender half-closes the socket.
 pub const PS5_LOADER_PORT: u16 = 9021;
 
+/// The longest the running helper is given to answer `node.shutdown` while a connection to the
+/// loader waits. The call itself is bounded at 2 s once a session exists; finding out there is
+/// no session can take a few seconds more.
+pub const EVICT_BUDGET: Duration = Duration::from_secs(5);
+/// Grace period for FreeBSD to recycle :9120 after the old helper exits.
+pub const EVICT_GRACE: Duration = Duration::from_millis(600);
+
 /// Why a `dpi-ensure` failed, in a form a UI can branch on. Prose is a bad
 /// contract: 5.17.6 collapsed three unrelated causes into one message that
 /// told a user to rebuild their engine when the real problem was that their
@@ -208,13 +215,48 @@ pub fn send_elf_to_loader(
             &bytes[..bytes.len().min(4)]
         ));
     }
-    if should_evict_running_payload(port, image) {
-        let _ = shutdown_running_payload(ip);
-        // Grace period for FreeBSD to recycle the port after the old process
-        // exits — the same 600 ms the desktop send waits.
-        std::thread::sleep(Duration::from_millis(600));
+    let evict_host = should_evict_running_payload(port, image).then(|| ip.to_string());
+    let sent = connect_evict_stream(ip, port, bytes, move || {
+        if let Some(host) = evict_host {
+            evict_running_helper(host);
+        }
+    });
+    match sent {
+        // Nothing answered on the loader, and no helper was stopped for it: launch through
+        // the console's Payload Manager instead. A wedged elfldr leaves :9021 dead while
+        // Payload Manager stays up (#344).
+        Err(e) if falls_back_to_payload_manager(port, image, &e) => {
+            match crate::payload_manager::launch_helper(ip, bytes) {
+                Ok(()) => Ok(size),
+                Err(pm) => Err(format!("{e} (and no fallback: {pm})")),
+            }
+        }
+        r => r,
     }
+}
 
+/// Only the helper, only on the loader port, and only when nothing took the connection: a send
+/// that broke after connecting may already be running on the console.
+fn falls_back_to_payload_manager(port: u16, image: LoaderImage, err: &str) -> bool {
+    port == PS5_LOADER_PORT && image == LoaderImage::Ps5Upload && err.starts_with("connect ")
+}
+
+/// Connect to the loader, run `evict`, then write the image on that same connection.
+///
+/// The order is the point. Stopping the running helper first and only then finding the loader
+/// closed left a console with no helper and no way to send one. Connecting first means a closed
+/// loader costs nothing, and holding the connection means no second, bare one is opened: a
+/// loader handed a connection and no bytes must not be left waiting on it. elfldr serves one
+/// connection at a time and waits for the first bytes, so a silent connection only blocks it
+/// for as long as `evict` runs: [`EVICT_BUDGET`] plus [`EVICT_GRACE`], well under the 15 s read
+/// deadline of our patched elfldr (the stock one has no deadline, and gets the bytes all the
+/// same).
+fn connect_evict_stream(
+    ip: &str,
+    port: u16,
+    bytes: &[u8],
+    evict: impl FnOnce(),
+) -> Result<u64, String> {
     let addr = join_host_port(ip, port);
     let targets = resolve_connect_targets(&addr).map_err(|e| format!("resolve {addr}: {e}"))?;
     let mut last_err = String::new();
@@ -229,6 +271,7 @@ pub fn send_elf_to_loader(
         }
     }
     let mut stream = stream.ok_or(last_err)?;
+    evict();
     stream
         .set_write_timeout(Some(ELF_SEND_TIMEOUT))
         .map_err(|e| format!("set write timeout: {e}"))?;
@@ -242,7 +285,19 @@ pub fn send_elf_to_loader(
     stream
         .shutdown(std::net::Shutdown::Write)
         .map_err(|e| format!("half-close {addr}: {e}"))?;
-    Ok(size)
+    Ok(bytes.len() as u64)
+}
+
+/// [`shutdown_running_payload`], given at most [`EVICT_BUDGET`] (the connection to the loader is
+/// waiting), then [`EVICT_GRACE`] for the port to free. An answer that comes later changes
+/// nothing: a new helper that finds an old one alive takes over by itself.
+fn evict_running_helper(host: String) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(shutdown_running_payload(&host));
+    });
+    let _ = rx.recv_timeout(EVICT_BUDGET);
+    std::thread::sleep(EVICT_GRACE);
 }
 
 #[cfg(test)]
@@ -352,6 +407,87 @@ mod tests {
 
         assert_eq!(sent, image.len() as u64);
         assert_eq!(handle.join().expect("joined"), image);
+    }
+
+    /// A closed loader must cost the console nothing: the running helper is stopped only once
+    /// the loader has taken the connection.
+    #[test]
+    fn a_closed_loader_never_stops_the_helper() {
+        use std::net::TcpListener;
+        // Bind and drop: the port is free and refuses.
+        let port = TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .expect("free port")
+            .port();
+        let mut evicted = false;
+        let err = connect_evict_stream("127.0.0.1", port, b"\x7FELF", || evicted = true)
+            .expect_err("nothing listens");
+        assert!(err.starts_with("connect "), "{err}");
+        assert!(
+            !evicted,
+            "the helper was stopped for a loader that is not there"
+        );
+    }
+
+    /// One connection, opened before the eviction, carries the whole image. A second connection
+    /// or a write before the eviction would fail this.
+    #[test]
+    fn evicts_after_connecting_and_streams_on_the_same_connection() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let image = b"\x7FELF-the-new-helper".to_vec();
+        let mut seen_at_eviction = None;
+        let sent = connect_evict_stream("127.0.0.1", port, &image, || {
+            // The loader has the connection and no bytes yet.
+            let (mut sock, _) = listener.accept().expect("connected before the eviction");
+            sock.set_nonblocking(true).expect("nonblocking");
+            let mut b = [0u8; 1];
+            assert!(sock.read(&mut b).is_err(), "bytes came before the eviction");
+            sock.set_nonblocking(false).expect("blocking");
+            seen_at_eviction = Some(sock);
+        })
+        .expect("send");
+        assert_eq!(sent, image.len() as u64);
+        let mut got = Vec::new();
+        seen_at_eviction
+            .expect("eviction ran")
+            .read_to_end(&mut got)
+            .expect("read to EOF");
+        assert_eq!(got, image);
+    }
+
+    /// The silent connection has to end well inside the patched elfldr's 15 s read deadline.
+    #[test]
+    fn the_silent_gap_stays_inside_the_loaders_deadline() {
+        assert!(EVICT_BUDGET + EVICT_GRACE < Duration::from_secs(15));
+    }
+
+    #[test]
+    fn only_a_refused_helper_send_goes_to_payload_manager() {
+        let refused = "connect 1.2.3.4:9021: refused";
+        assert!(falls_back_to_payload_manager(
+            PS5_LOADER_PORT,
+            LoaderImage::Ps5Upload,
+            refused
+        ));
+        assert!(!falls_back_to_payload_manager(
+            PS5_LOADER_PORT,
+            LoaderImage::Companion,
+            refused
+        ));
+        assert!(!falls_back_to_payload_manager(
+            9020,
+            LoaderImage::Ps5Upload,
+            refused
+        ));
+        // Past the connect: it may already be running.
+        assert!(!falls_back_to_payload_manager(
+            PS5_LOADER_PORT,
+            LoaderImage::Ps5Upload,
+            "write 1.2.3.4:9021: broken pipe"
+        ));
     }
 
     /// The DPI daemon binds :9040 and must load ALONGSIDE a running

@@ -29,7 +29,7 @@ use axum::{
 use ps5upload_core::pkg_install::PkgInstallStatus;
 use ps5upload_pkg::{
     extract_from_ffpkg, inspect_ffpkg, metadata_from_reader, package_fingerprint_from_reader,
-    parse_pkg, parse_split_pkg, PkgKind, PkgMetadata, SplitPkgMetadata,
+    parse_pkg, parse_split_pkg, PkgMetadata, SplitPkgMetadata,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -157,7 +157,7 @@ pub struct InstallSession {
     pub cancelled: bool,
     pub created_at_unix: u64,
     /// PS5-side absolute path of the Tier-1 staging file. Set on
-    /// install_start when `local_ps5_path` was provided; the
+    /// install_start by clients older than serve-only sessions; the
     /// status handler best-effort fs_delete's it when the install
     /// terminates (phase = Done | Error). Then `take()`'s the field
     /// to None to prevent double-delete on subsequent polls.
@@ -246,6 +246,8 @@ pub struct PkgInstallState {
     /// partially-mutated session row is no worse than a stale row,
     /// and the next status poll / GC pass cleans it up.
     pub sessions: Mutex<HashMap<String, InstallSession>>,
+    /// When the sessions were last saved because bytes went out (see `note_bytes_sent`).
+    pub sessions_saved_unix: std::sync::atomic::AtomicU64,
     /// Unified-install (spec 2) job store: one install per console, statuses
     /// polled via `/api/pkg/install/status`.
     pub jobs: crate::install::JobStore,
@@ -266,6 +268,7 @@ impl PkgInstallState {
         }
         Self {
             sessions: Mutex::new(sessions),
+            sessions_saved_unix: std::sync::atomic::AtomicU64::new(0),
             jobs: crate::install::JobStore::new(),
         }
     }
@@ -400,7 +403,9 @@ mod persist {
                     detail: String::new(),
                     cancelled: false,
                     created_at_unix: s.created_at_unix,
-                    last_activity_unix: now,
+                    // As saved: a restored session is not a console pulling it right now, so it
+                    // must not hold a retry back as a rival.
+                    last_activity_unix: s.last_activity_unix,
                     staging_path: s.staging_path,
                     terminal_status: None,
                     launchable: None,
@@ -1353,22 +1358,14 @@ fn verify_installed_artifact(
 }
 
 fn remote_pkg_size(addr: &str, path: &str) -> Option<u64> {
-    let (parent, name) = path.rsplit_once('/')?;
-    let parent = if parent.is_empty() { "/" } else { parent };
-    let listing = ps5upload_core::fs_ops::list_dir(
-        addr,
-        parent,
-        ps5upload_core::fs_ops::ListDirOptions::default(),
-    )
-    .ok()?;
-    listing
-        .entries
-        .into_iter()
-        .find(|e| e.kind == "file" && e.name == name)
-        .map(|e| e.size)
+    // Stat, not a listing: a listing holds the first 256 entries of the folder.
+    ps5upload_core::fs_ops::fs_stat(addr, path)
+        .ok()
+        .filter(|s| s.kind == "file")
+        .map(|s| s.size)
 }
 
-fn remote_pkg_identity(addr: &str, path: &str) -> (u64, String) {
+pub(crate) fn remote_pkg_identity(addr: &str, path: &str) -> (u64, String) {
     let size = remote_pkg_size(addr, path).unwrap_or(0);
     let fingerprint = package_fingerprint_from_reader(size, |off, len| {
         ps5upload_core::fs_ops::fs_read(addr, path, off, len).ok()
@@ -1649,13 +1646,6 @@ async fn parse_remote_handler(remote_path: &str) -> Response<Body> {
 pub struct InstallStartRequest {
     /// PS5 address, e.g. "192.168.1.42" (a `:port` suffix is dropped).
     pub ps5_addr: String,
-    /// Proceed with a staged re-install of an already-installed full game.
-    ///
-    /// Off by default because that path is destructive on failure (see the
-    /// guard in `install_start_handler`). A caller that has explicitly warned
-    /// the user may set it.
-    #[serde(default)]
-    pub allow_destructive_reinstall: bool,
     /// Skip TLS certificate verification when THIS COMPUTER downloads the
     /// package from `remote_url`. Per install, never global, default off.
     ///
@@ -1681,25 +1671,6 @@ pub struct InstallStartRequest {
     /// or fall back to "PS4GD". Useful for unknown-magic PKGs where
     /// the user picks the type manually in the UI.
     pub package_type_override: Option<String>,
-    /// PS5-side absolute path to a pkg already on the console's disk.
-    /// When `Some`, the install URL is built as `file://{local_ps5_path}`
-    /// and the HTTP-host serve_handler is not used. This is the
-    /// "Tier-1" path: bytes already on PS5-local storage + ShellUI-RPC
-    /// install + file:// URL = exactly what Settings → Debug Settings
-    /// → Game → Package Installer does internally. Bypasses both the
-    /// PlayGo HTTP-fetch authid reject (0x80B22404) and the
-    /// engine-side network plumbing entirely.
-    ///
-    /// When `None`, falls back to the http://{lan-ip}:{port} flow —
-    /// the engine hosts bytes for Sony's BGFT downloader.
-    pub local_ps5_path: Option<String>,
-    /// Caller-supplied content id for the staged-pkg case. When the pkg
-    /// is already on the PS5 (`local_ps5_path` set) there's no PC-side
-    /// file to parse, so the client passes the content id it parsed at
-    /// upload time. Optional — the payload re-parses it from the staged
-    /// pkg itself, so an empty value still installs.
-    #[serde(default)]
-    pub content_id: Option<String>,
     /// Expected exact source size and sampled identity. Current clients pass
     /// these from the local parser; older clients may omit them, in which case
     /// a staged PS5 path is sampled here before installation.
@@ -1707,15 +1678,6 @@ pub struct InstallStartRequest {
     pub expected_size: Option<u64>,
     #[serde(default)]
     pub package_fingerprint: Option<String>,
-    /// Whether to DELETE the staged `local_ps5_path` pkg after the install
-    /// reaches a terminal phase (the "Tier-1 staging cleanup"). This is the
-    /// user's "Auto Delete after installation" preference. Defaults TRUE for
-    /// backward-compatibility (older clients that don't send it keep the old
-    /// always-clean behaviour), but the current client always sends the real
-    /// setting — so "Auto Delete off" now actually KEEPS the uploaded pkg
-    /// instead of the engine silently deleting it regardless.
-    #[serde(default = "default_true")]
-    pub delete_staging: bool,
     /// Serve-only mode for the streaming-install (Stream beta) path.
     ///
     /// When true, create + register the /pkg-host/ serving session and
@@ -1736,24 +1698,6 @@ pub struct InstallStartRequest {
     /// Set by `link_create_handler`, never by a request body.
     #[serde(skip)]
     pub link_only: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-/// Decide the session's `staging_path` — the file the terminal-phase handler
-/// deletes after install. Returns `Some(path)` ONLY when the caller asked us to
-/// clean up (`delete_staging`) AND a non-empty local path was supplied; `None`
-/// otherwise, which KEEPS the uploaded pkg. Pulled out as a pure fn so the
-/// "Auto Delete off ⇒ pkg kept" guarantee is unit-tested rather than buried in
-/// the install_start flow (it was the root of a reported data-loss bug).
-fn staging_path_for(local_ps5_path: &Option<String>, delete_staging: bool) -> Option<String> {
-    if delete_staging {
-        local_ps5_path.clone().filter(|s| !s.is_empty())
-    } else {
-        None
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1812,276 +1756,31 @@ pub(crate) async fn install_start_handler(
             Err(e) => return json_err(StatusCode::BAD_REQUEST, &e),
         };
 
-    let mut package_type = req
+    let package_type = req
         .package_type_override
         .clone()
         .or_else(|| head_meta.package_type.clone())
         .unwrap_or_else(|| "PS4GD".to_string());
 
-    // ── Data-loss guard (engine layer) ──────────────────────────────────
-    // The payload refuses to fall back to a DESTRUCTIVE install tier
-    // (shellui-rpc / BGFT) for a patch — but it only recognises a patch by
-    // package_type ending in "DP". The Library path carries the type the
-    // client parsed at upload, but the USB-scan / File-System / upload-queue
-    // paths have NO PARAM.SFO category, so they default to "PS4GD": a PS4
-    // patch (which shares its base game's content_id) then looked like a full
-    // game and slipped past the guard, re-registering the shared content_id
-    // and WIPING the installed base (hardware-confirmed: a Jak X patch deleted
-    // its 3.8 GB base). Fix: when the caller didn't declare a type, read the
-    // category straight from the STAGED package's CNT metadata (a bounded set
-    // of small ranged reads) and derive the platform-specific type. This arms
-    // the guard for an ACTUAL patch (`gp` → PS4DP/PS5DP) while leaving a
-    // full-game re-install (`gd` → PS4GD/PS5GD)
-    // alone — an earlier "is it already installed?" heuristic wrongly blocked
-    // legitimate base re-installs, which this avoids. Bounded + fail-soft: a
-    // slow/unreadable pkg just leaves the default type, never hangs the start.
-    let is_local = req
-        .local_ps5_path
-        .as_deref()
-        .map(|p| !p.is_empty())
-        .unwrap_or(false);
-    let type_declared = req.package_type_override.is_some() || head_meta.package_type.is_some();
-    // Read the staged package's own metadata once. This used to run only when
-    // the caller declared no package_type, and to keep nothing but the
-    // category — so a staged install had an EMPTY content_id and a total of 0.
-    // That is not cosmetic: `title_id_from_content_id("")` is empty, so
-    // `title_dir_size` measured nothing, the free-space baseline is captured
-    // after Sony pre-allocates, and `total` is the percentage's denominator.
-    // A staged install therefore reported "0 bytes, 0%" for its entire run
-    // with no ETA — measured on FW 5.10 installing a 101 GB PS5 title that
-    // was in fact installing perfectly (PlayGo chunks advancing the whole
-    // time). That display is almost certainly why staged installs are
-    // believed not to work at all.
-    let mut staged_meta: Option<ps5upload_pkg::ReaderMetadata> = None;
-    if is_local {
-        if let Some(local_path) = req.local_ps5_path.clone() {
-            let addr = req.ps5_addr.clone();
-            let parsed = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                tokio::task::spawn_blocking(move || {
-                    ps5upload_pkg::metadata_from_reader(|off, len| {
-                        ps5upload_core::fs_ops::fs_read(&addr, &local_path, off, len).ok()
-                    })
-                }),
-            )
-            .await;
-            if let Ok(Ok(Some(meta))) = parsed {
-                staged_meta = Some(meta);
-            }
-        }
-    }
-    if is_local && !type_declared {
-        {
-            let parsed = staged_meta.as_ref().and_then(|meta| {
-                ps5upload_pkg::package_type_for_category_and_platform(
-                    &meta.category,
-                    &meta.platform,
-                )
-                .map(|pt| (meta.category.clone(), pt))
-            });
-            if let Some((cat, pt)) = parsed {
-                if pt != package_type {
-                    crate::log_info!(
-                        "install guard: staged pkg category '{}' → package_type {} \
-                         (was {}); {}",
-                        cat,
-                        pt,
-                        package_type,
-                        if pt.ends_with("DP") {
-                            "arms the patch guard so a fallback tier can't wipe the base"
-                        } else {
-                            "full game — normal install cascade"
-                        }
-                    );
-                    package_type = pt;
-                }
-            }
-        }
-    }
-
-    // Fill the identity and size a staged install otherwise has no source
-    // for. `head_meta` is populated from the PC-side file or the HTTP HEAD;
-    // neither exists when the package is already sitting on the console, so
-    // without this the progress tracker has no title to measure and no total
-    // to divide by. Never overrides a value the caller already supplied.
-    let mut head_meta = head_meta;
-    let mut total_size = total_size;
-    if let Some(meta) = staged_meta.as_ref() {
-        if head_meta.content_id.is_empty() && !meta.content_id.is_empty() {
-            crate::log_info!(
-                "staged install: resolved content_id {} from the package on the console                  (progress tracking needs it)",
-                meta.content_id
-            );
-            head_meta.content_id = meta.content_id.clone();
-        }
-        if head_meta.title.is_empty() && !meta.title.is_empty() {
-            head_meta.title = meta.title.clone();
-        }
-    }
-    if total_size == 0 && is_local {
-        if let Some(local_path) = req.local_ps5_path.clone() {
-            let addr = req.ps5_addr.clone();
-            if let Ok(Ok(sz)) = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                tokio::task::spawn_blocking(move || staged_file_size(&addr, &local_path)),
-            )
-            .await
-            {
-                if sz > 0 {
-                    total_size = sz;
-                }
-            }
-        }
-    }
-
-    // ── Destructive-staged-reinstall guard ──────────────────────────────
-    // A STAGED (PS5-local) install of a full game whose title is ALREADY
-    // installed is destructive on failure: Sony's installer clears the old
-    // title before writing the new one, so if the write then fails the user
-    // is left with neither. Hardware-observed on FW 5.10 — a working
-    // CUSA03474 was removed by a staged reinstall that failed with
-    // 0x80B2150F, while `install/start` had returned 0 (start only registers;
-    // the failure is asynchronous, so nothing upstream can react in time).
-    //
-    // Staged is also simply the worse path: measured 0/3 successful staged
-    // installs across two consoles vs 9/9 for stream, same packages.
-    //
-    // So refuse this specific combination by default and point at Stream.
-    // `allow_destructive_reinstall` lets a caller that has warned the user
-    // proceed anyway. Stream (serve_only) is never blocked — it does not
-    // take this destructive route.
-    if !req.serve_only && is_local && package_type.ends_with("GD") {
-        if let Some(title_id) =
-            ps5upload_core::pkg_install::title_id_from_content_id(&head_meta.content_id)
-        {
-            if !req.allow_destructive_reinstall {
-                let addr = req.ps5_addr.clone();
-                let tid = title_id.clone();
-                let check = tokio::task::spawn_blocking(move || {
-                    ps5upload_core::pkg_install::verify_title_registered(&addr, &tid)
-                })
-                .await
-                .unwrap_or(ps5upload_core::pkg_install::LaunchCheck::Unsupported);
-                if matches!(check, ps5upload_core::pkg_install::LaunchCheck::Registered) {
-                    crate::log_warn!(
-                        "staged reinstall refused: {} already installed on {} (destructive on failure)",
-                        title_id,
-                        req.ps5_addr
-                    );
-                    return json_err(
-                        StatusCode::CONFLICT,
-                        &format!(
-                            "{title_id} is already installed. Re-installing it from PS5 storage wipes the current copy before writing the new one, so a failure would leave the game gone. Use Stream install instead, or uninstall {title_id} first."
-                        ),
-                    );
-                }
-            }
-        }
-    }
-
-    // ── Patch/add-on-without-base pre-flight ────────────────────────────
-    // A patch or add-on whose base game isn't installed cannot install:
-    // Sony's installer accepts the request, writes nothing, and the progress
-    // tracker eventually calls it a stall — after ~10 MINUTES of a spinner.
-    // Measured: a Toy Story 2 backport (category `gp`) aimed at a console
-    // without CUSA33334 sat for 604s before reporting "0 of 15335424 bytes
-    // written". An add-on (`ac`) against a missing base fails the same way.
-    //
-    // The answer is knowable instantly, so check it instantly. Only a
-    // DEFINITE absence fails: an enumeration that errors leaves the install
-    // to proceed exactly as before, because a check we cannot perform must
-    // never block a legitimate install. The category-gating and the "never
-    // block on uncertainty" rule live in core::preflight_patch_install.
-    let category = if package_type.ends_with("DP") {
-        "gp"
-    } else if package_type.ends_with("AC") {
-        "ac"
-    } else {
-        "gd"
-    };
-    // PS4 only. A PS5 update can carry the whole app: a YouTube update package (PS5DP, 101 MB)
-    // installed on a 13.60 console without YouTube through the debug settings' Package
-    // Installer, while this check refused it. The PS5 is left to decide, and its own refusal
-    // (0x80A30004, "the base game is not installed") still reaches the person. Letting it try
-    // is safe: with no base installed there is nothing for an install to replace.
-    if !req.link_only && !package_type.starts_with("PS5") {
-        let addr = req.ps5_addr.clone();
-        let content_id = head_meta.content_id.clone();
-        let cat = category;
-        let preflight = tokio::task::spawn_blocking(move || {
-            ps5upload_core::pkg_install::preflight_patch_install(&addr, &content_id, cat)
-        })
-        .await
-        .unwrap_or(None);
-        if let Some(message) = preflight {
-            crate::log_warn!(
-                "install rejected: {} {} has no installed base on {}",
-                category,
-                head_meta.content_id,
-                req.ps5_addr
-            );
-            return json_err(StatusCode::BAD_REQUEST, &message);
-        }
-    }
-
-    // Exact source identity used by category-aware completion verification.
-    // PC/stream installs already have it from the local parser. Staged installs
-    // have no host-side file, so sample the PS5 copy once (two 64 KiB reads)
-    // before Sony begins consuming it. Caller-provided values win.
-    let mut expected_size = req.expected_size.unwrap_or(total_size);
-    let mut package_fingerprint = req
+    // The source's identity, for the installer's cross-check and the coverage total. Caller-provided
+    // values win.
+    let expected_size = req.expected_size.unwrap_or(total_size);
+    let package_fingerprint = req
         .package_fingerprint
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| head_meta.fingerprint.clone());
-    if is_local && (expected_size == 0 || package_fingerprint.is_empty()) {
-        if let Some(local_path) = req.local_ps5_path.as_deref() {
-            let addr = req.ps5_addr.clone();
-            let path = local_path.to_string();
-            if let Ok((remote_size, remote_fingerprint)) =
-                tokio::task::spawn_blocking(move || remote_pkg_identity(&addr, &path)).await
-            {
-                if expected_size == 0 {
-                    expected_size = remote_size;
-                }
-                if package_fingerprint.is_empty() {
-                    package_fingerprint = remote_fingerprint;
-                }
-            }
-        }
-    }
-
-    // URL strategy: raw path when caller staged the pkg on PS5 disk
-    // (Tier 1). On FW 9.60+ Sony's installer accepts a bare absolute
-    // path WITHOUT the `file://` prefix; with the prefix it returns
-    // 0x80B21106 (rejected) even on a freshly-rebooted PS5. The 6.xx
-    // branch uses an HTTP loopback proxy; non-6.xx (incl. 9.60) uses
-    // the bare path. Switched from `file://{path}` to raw `{path}` in
-    // 2.2.54-fix-round-14 after direct hardware verification.
+    // The installer cross-checks the URL's file name against the package header, so
+    // `pkg_host_url_for` builds it the same way for every route.
     let session_id = Uuid::new_v4().to_string();
-    let url = match req.local_ps5_path.as_deref() {
-        Some(p) if !p.is_empty() => {
-            // Raw path. Sony's installer reads bytes off PS5
-            // local disk; no engine-side HTTP listener needed.
-            p.to_string()
-        }
-        _ => {
-            // Pick the LAN IP this host presents to the PS5 and build the
-            // /pkg-host/ URL Sony's installer will fetch. Centralised in
-            // pkg_host_url_for so the direct-install (DPI) path constructs
-            // an identical URL — a divergence would silently break the
-            // installer's header cross-check (0x80B21106).
-            let url = match pkg_host_url_for(&req.ps5_addr, &session_id, &head_meta.content_id) {
-                Ok(u) => u,
-                Err(e) => {
-                    let ps5_host_only = strip_host_port(&req.ps5_addr);
-                    return json_err(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        &format!("could not determine local LAN IP for PS5 {ps5_host_only}: {e}"),
-                    );
-                }
-            };
-            url
+    let url = match pkg_host_url_for(&req.ps5_addr, &session_id, &head_meta.content_id) {
+        Ok(u) => u,
+        Err(e) => {
+            let ps5_host_only = strip_host_port(&req.ps5_addr);
+            return json_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("could not determine local LAN IP for PS5 {ps5_host_only}: {e}"),
+            );
         }
     };
 
@@ -2121,9 +1820,8 @@ pub(crate) async fn install_start_handler(
         cancelled: false,
         created_at_unix: now_unix(),
         last_activity_unix: now_unix(),
-        // staging_path drives the terminal-phase cleanup. None ⇒ pkg KEPT,
-        // honouring "Auto Delete after installation" = off. See staging_path_for.
-        staging_path: staging_path_for(&req.local_ps5_path, req.delete_staging),
+        // Only a session from before serve-only sessions had one; nothing sets it now.
+        staging_path: None,
         terminal_status: None,
         launchable: None,
         serve_only: req.serve_only,
@@ -2308,6 +2006,8 @@ pub(crate) async fn install_start_handler(
 /// session GC age, so a genuinely active transfer is always protected while a
 /// finished-but-unpolled one never blocks its own retry.
 const RIVAL_ACTIVE_WINDOW_SEC: u64 = 90;
+/// How often a session's last activity is written out while it serves.
+const SESSION_SAVE_EVERY_SECS: u64 = 60;
 
 /// Default maximum age (seconds) of an install session before the
 /// engine GCs it. 2 hours covers the practical worst case: a large
@@ -2427,25 +2127,6 @@ impl TransferCoverage {
 /// volume since the baseline) and (sum of the title dir's file sizes). Both
 /// are best-effort: an unreadable signal contributes 0, not an error — the
 /// tracker degrades to whichever signal is available.
-/// Size of one staged package already on the console, by listing its parent
-/// directory. A staged install has no PC-side file to stat and no HTTP HEAD to
-/// read a Content-Length from, so without this its `total` stays 0 and the
-/// client can render neither a percentage nor an estimate. 0 if unreadable.
-fn staged_file_size(addr: &str, path: &str) -> u64 {
-    let (dir, name) = match path.rsplit_once('/') {
-        Some((d, n)) if !n.is_empty() => (if d.is_empty() { "/" } else { d }, n),
-        _ => return 0,
-    };
-    ps5upload_core::fs_ops::list_dir(addr, dir, ps5upload_core::fs_ops::ListDirOptions::default())
-        .ok()
-        .and_then(|l| {
-            l.entries
-                .into_iter()
-                .find(|e| e.kind == "file" && e.name == name)
-                .map(|e| e.size)
-        })
-        .unwrap_or(0)
-}
 
 // ─── /api/host-net/* (Windows network fixes) ─────────────────────────
 
@@ -2567,6 +2248,89 @@ pub(crate) fn normalize_mgmt_addr(addr: &str) -> String {
     } else {
         host
     })
+}
+
+/// What a console says about a title. `Unknown` is an unanswered question (console busy, payload
+/// too old): never read as "not installed", which is what lets the last resort run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InstalledState {
+    Installed(String),
+    Absent,
+    Unknown,
+}
+
+pub(crate) fn read_installed_state(mgmt_addr: &str, title_id: &str) -> InstalledState {
+    match ps5upload_core::diagnostics::appinfo_query(mgmt_addr, title_id, Some("APP_VER")) {
+        Err(_) => InstalledState::Unknown,
+        Ok(rows) => rows
+            .rows
+            .into_iter()
+            .find(|r| r.key == "APP_VER")
+            .map(|r| r.val)
+            .filter(|v| !v.trim().is_empty())
+            .map_or(InstalledState::Absent, InstalledState::Installed),
+    }
+}
+
+/// What the wait for an installed base game or add-on found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArtifactWait {
+    /// This package's file is on a drive.
+    Landed,
+    /// The wait ran out with no sign of it.
+    NotSeen,
+    /// Nothing to check it against (no title id in the content id).
+    CannotTell,
+}
+
+/// Wait for a base game's or add-on's package file to appear after the console has all of it.
+/// `idle` restarts whenever the title's files grow, or while the console does not answer: both say
+/// nothing against the install. Sony preallocates a large file, so this usually ends at once. A
+/// ceiling keeps a console that never answers from holding the job for good.
+pub(crate) fn wait_for_installed_artifact(
+    addr: &str,
+    content_id: &str,
+    package_type: &str,
+    expected_size: u64,
+    expected_fingerprint: &str,
+    idle: std::time::Duration,
+    stop: &dyn Fn() -> bool,
+) -> ArtifactWait {
+    const CEILING: std::time::Duration = std::time::Duration::from_secs(4 * 60 * 60);
+    const POLL: std::time::Duration = std::time::Duration::from_secs(5);
+    let started = std::time::Instant::now();
+    let mut idle_from = started;
+    let mut most_seen = 0u64;
+    let title = ps5upload_core::pkg_install::title_id_from_content_id(content_id);
+    loop {
+        match verify_installed_artifact(
+            addr,
+            content_id,
+            package_type,
+            expected_size,
+            expected_fingerprint,
+        ) {
+            InstalledArtifactCheck::Match => return ArtifactWait::Landed,
+            InstalledArtifactCheck::Unsupported => return ArtifactWait::CannotTell,
+            InstalledArtifactCheck::Absent | InstalledArtifactCheck::Different => {}
+        }
+        let answered = ps5upload_core::volumes::list_volumes(addr).is_ok();
+        let seen = title.as_deref().map_or(0, |t| {
+            installed_pkg_inventory(addr, t)
+                .artifacts
+                .iter()
+                .map(|a| a.size)
+                .sum()
+        });
+        if !answered || seen > most_seen {
+            most_seen = most_seen.max(seen);
+            idle_from = std::time::Instant::now();
+        }
+        if stop() || idle_from.elapsed() >= idle || started.elapsed() >= CEILING {
+            return ArtifactWait::NotSeen;
+        }
+        std::thread::sleep(POLL);
+    }
 }
 
 /// Read a title's installed `APP_VER`, or `None` when it cannot be read (title
@@ -2930,11 +2694,6 @@ async fn serve_handler(
             // would age out from under a long transfer.
             active.last_activity_unix = now_unix();
             active.requests_served = active.requests_served.saturating_add(1);
-            active.bytes_served = active.bytes_served.saturating_add(len);
-            if counts_as_progress {
-                active.transfer.mark(start, end);
-                active.transfer_bytes = active.transfer.bytes();
-            }
             // Periodic serve-rate line, so the CONSOLE leg is measurable the
             // same way the origin leg is. A "my install is slow" report needs
             // both numbers: a slow origin and a slow console link look
@@ -2994,7 +2753,12 @@ async fn serve_handler(
     let body = if is_head {
         Body::empty()
     } else {
-        range_body(session, source, start, end)
+        let sent = counts_as_progress;
+        range_body(session, source, start, end, {
+            let state = state.clone();
+            let sid = served_session_id.clone();
+            move |from, to| note_bytes_sent(&state, &sid, from, to, sent)
+        })
     };
     builder.body(body).unwrap_or_else(builder_failed_response)
 }
@@ -3012,7 +2776,42 @@ const PKG_HOST_STREAM_CHUNK: u64 = 1024 * 1024;
 /// early: the headers are already sent by then, so the client sees a truncated
 /// response and retries, which is the only signalling HTTP allows at that
 /// point.
-fn range_body(session: InstallSession, source: ServeSource, start: u64, end: u64) -> Body {
+/// A chunk of a response went out: the only moment it counts. Marking a range when it was asked
+/// for called a package complete under a body still in flight, and a 250 MiB footer range on a
+/// slow link looked idle for minutes. A long install's session is also saved from here, or its
+/// saved last activity stays at its creation and a restart past the idle window drops it.
+fn note_bytes_sent(
+    state: &PkgInstallStateHandle,
+    sid: &str,
+    from: u64,
+    to: u64,
+    counts_as_progress: bool,
+) {
+    let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    let now = now_unix();
+    if let Some(active) = sessions.get_mut(sid) {
+        active.last_activity_unix = now;
+        active.bytes_served = active.bytes_served.saturating_add(to - from + 1);
+        if counts_as_progress {
+            active.transfer.mark(from, to);
+            active.transfer_bytes = active.transfer.bytes();
+        }
+    }
+    use std::sync::atomic::Ordering;
+    let last = state.sessions_saved_unix.load(Ordering::Relaxed);
+    if now.saturating_sub(last) >= SESSION_SAVE_EVERY_SECS {
+        state.sessions_saved_unix.store(now, Ordering::Relaxed);
+        persist::save(&sessions);
+    }
+}
+
+fn range_body(
+    session: InstallSession,
+    source: ServeSource,
+    start: u64,
+    end: u64,
+    on_sent: impl Fn(u64, u64) + Send + 'static,
+) -> Body {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
     tokio::task::spawn_blocking(move || {
         let mut cursor = start;
@@ -3033,6 +2832,7 @@ fn range_body(session: InstallSession, source: ServeSource, start: u64, end: u64
                     if tx.blocking_send(Ok(axum::body::Bytes::from(b))).is_err() {
                         return;
                     }
+                    on_sent(cursor, stop);
                 }
                 Err(e) => {
                     let _ = tx.blocking_send(Err(e));
@@ -3059,9 +2859,6 @@ async fn resolve_remote_source(
 ) -> Result<ResolvedSource, String> {
     if req.path.is_some() || req.split_root.is_some() {
         return Err("remote_url cannot be combined with path or split_root".into());
-    }
-    if req.local_ps5_path.as_deref().is_some_and(|p| !p.is_empty()) {
-        return Err("remote_url cannot be combined with local_ps5_path".into());
     }
     let owned = url.to_string();
     let insecure_tls = req.insecure_tls;
@@ -3202,7 +2999,7 @@ mod remote_type_tests {
 }
 
 /// Open a package on a saved server and read its header through ranges.
-async fn open_remote_package(
+pub(crate) async fn open_remote_package(
     remote_path: &str,
 ) -> Result<
     (
@@ -3263,9 +3060,6 @@ async fn resolve_remote_fs_source(
 ) -> Result<ResolvedSource, String> {
     if req.split_root.is_some() || req.remote_url.is_some() {
         return Err("a server path cannot be combined with split_root or remote_url".into());
-    }
-    if req.local_ps5_path.as_deref().is_some_and(|p| !p.is_empty()) {
-        return Err("a server path cannot be combined with local_ps5_path".into());
     }
     let (remote, total_size, head, fingerprint, name) = open_remote_package(remote_path).await?;
     let metadata = streamed_metadata(req, head, fingerprint, total_size, &name);
@@ -3356,18 +3150,14 @@ async fn remote_probe_handler(Json(req): Json<RemoteProbeRequest>) -> Response<B
     }
     let probe_req = InstallStartRequest {
         ps5_addr: String::new(),
-        allow_destructive_reinstall: false,
         // The same certificate choice as the install this read is for.
         insecure_tls: req.insecure_tls,
         path: None,
         split_root: None,
         remote_url: Some(url.clone()),
         package_type_override: None,
-        local_ps5_path: None,
-        content_id: None,
         expected_size: None,
         package_fingerprint: None,
-        delete_staging: false,
         serve_only: true,
         link_only: false,
     };
@@ -3428,17 +3218,13 @@ async fn console_probe_handler(Json(req): Json<ConsoleProbeRequest>) -> Response
     let url = format!("ps5://{host}{path}");
     let probe_req = InstallStartRequest {
         ps5_addr: String::new(),
-        allow_destructive_reinstall: false,
         insecure_tls: false,
         path: None,
         split_root: None,
         remote_url: None,
         package_type_override: None,
-        local_ps5_path: None,
-        content_id: None,
         expected_size: None,
         package_fingerprint: None,
-        delete_staging: false,
         serve_only: true,
         link_only: false,
     };
@@ -3513,48 +3299,8 @@ async fn resolve_parts_and_meta(req: &InstallStartRequest) -> Result<ResolvedSou
             .map_err(|e| format!("{e}"))?;
         let size = meta.size;
         Ok((vec![meta.path.clone()], vec![size], size, meta, None))
-    } else if req
-        .local_ps5_path
-        .as_deref()
-        .map(|p| !p.is_empty())
-        .unwrap_or(false)
-    {
-        // Staged-pkg install: the .pkg is already on the PS5's disk and
-        // there's no PC-side file to parse. Build minimal metadata from the
-        // caller-provided fields (the client parsed the header at upload
-        // time). The install URL is just the raw PS5 path and the payload
-        // re-parses the content id from the staged pkg itself, so empty
-        // values here are fine. parts/size are unused for a local install
-        // (nothing is HTTP-served). This is what lets the Install Package
-        // page route a staged pkg through the main payload's
-        // InstallByPackage (which installs launchable content) instead of
-        // the metadata-only DPI daemon.
-        let lp = req.local_ps5_path.clone().unwrap_or_default();
-        let meta = PkgMetadata {
-            path: PathBuf::from(&lp),
-            size: 0,
-            kind: PkgKind::CntContainer,
-            authenticity: ps5upload_pkg::PkgAuthenticity::Unknown,
-            content_id: req.content_id.clone().unwrap_or_default(),
-            title: String::new(),
-            title_id: String::new(),
-            category: String::new(),
-            app_ver: String::new(),
-            fingerprint: String::new(),
-            package_type: req.package_type_override.clone(),
-            platform: ps5upload_pkg::derive_platform(
-                ps5upload_pkg::PKG_MAGIC,
-                req.content_id.as_deref().unwrap_or(""),
-                "",
-            ),
-            content_type: 0,
-            content_flags: 0,
-            icon_png_base64: None,
-            warnings: vec![],
-        };
-        Ok((vec![PathBuf::from(lp)], vec![0], 0, meta, None))
     } else {
-        Err("either `path`, `split_root`, or `local_ps5_path` is required".into())
+        Err("either `path` or `split_root` is required".into())
     }
 }
 
@@ -3937,7 +3683,12 @@ pub(crate) fn engine_origin_for_ps5(ps5_addr: &str) -> std::io::Result<String> {
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(19113),
     };
-    Ok(format!("http://{local_ip}:{host_port}"))
+    // An IPv6 address needs its brackets, or the port reads as part of it.
+    Ok(if local_ip.is_ipv6() {
+        format!("http://[{local_ip}]:{host_port}")
+    } else {
+        format!("http://{local_ip}:{host_port}")
+    })
 }
 
 // ─── Short aliases for over-long install links ───────────────────────
@@ -4235,6 +3986,10 @@ mod loader_route_tests {
 fn is_rival(other: &InstallSession, new: &InstallSession, now: u64) -> bool {
     !other.cancelled
         && other.terminal_status.is_none()
+        // Kept after its job ended (a lost reply, a stall): one no console ever asked anything of
+        // is not being pulled, and one it has all of has nothing left to pull.
+        && other.requests_served > 0
+        && (other.total_size == 0 || other.transfer.bytes() < other.total_size)
         && !other.package_fingerprint.is_empty()
         && other.package_fingerprint == new.package_fingerprint
         // Another console installing the same package is not a rival: each pulls its own
@@ -4281,9 +4036,16 @@ mod persist_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let pkg = dir.join("game.pkg");
         std::fs::write(&pkg, vec![7u8; 64]).unwrap();
-        let first = session("rival-a", pkg.clone(), 64);
+        let mut first = session("rival-a", pkg.clone(), 64);
         let mut again = session("rival-b", pkg.clone(), 64);
+        // No console has asked it for anything: a session kept after a lost reply lets a retry on.
+        assert!(!is_rival(&first, &again, now_unix()));
+        first.requests_served = 1;
         assert!(is_rival(&first, &again, now_unix()));
+        // All of it delivered: nothing left to pull while it waits to be released.
+        first.transfer.mark(0, 63);
+        assert!(!is_rival(&first, &again, now_unix()));
+        first.transfer = TransferCoverage::new(64);
         again.ps5_mgmt_addr = "1.2.3.5:9120".into();
         assert!(!is_rival(&first, &again, now_unix()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -4671,60 +4433,6 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         assert_eq!(c.verdict, PatchVerdict::Inconclusive);
         assert!(!c.timed_out);
         assert!(started.elapsed() < std::time::Duration::from_secs(30));
-    }
-
-    // ── delete_staging / staging cleanup (the Auto-Delete data-loss fix) ──
-
-    #[test]
-    fn staging_path_kept_when_delete_disabled() {
-        // Auto Delete OFF → no staging_path → the uploaded pkg is KEPT, even
-        // though a real local path was supplied. This is the core guarantee.
-        let path = Some("/user/data/ps5upload/pkg_library/game.pkg".to_string());
-        assert_eq!(staging_path_for(&path, false), None);
-    }
-
-    #[test]
-    fn staging_path_cleaned_when_delete_enabled() {
-        let path = Some("/user/data/ps5upload/pkg_library/game.pkg".to_string());
-        assert_eq!(
-            staging_path_for(&path, true),
-            Some("/user/data/ps5upload/pkg_library/game.pkg".to_string())
-        );
-    }
-
-    #[test]
-    fn staging_path_none_for_empty_or_missing_path() {
-        // Empty string and None both yield None regardless of the flag (there's
-        // nothing to clean — e.g. the http-host flow with no local pkg).
-        assert_eq!(staging_path_for(&Some(String::new()), true), None);
-        assert_eq!(staging_path_for(&None, true), None);
-        assert_eq!(staging_path_for(&None, false), None);
-    }
-
-    #[test]
-    fn install_start_request_delete_staging_defaults_true() {
-        // Back-compat: an older client that omits delete_staging must keep the
-        // historical always-clean behaviour (true), not silently flip to keep.
-        let json = r#"{"ps5_addr":"1.2.3.4:9120","local_ps5_path":"/x.pkg"}"#;
-        let req: InstallStartRequest = serde_json::from_str(json).unwrap();
-        assert!(
-            req.delete_staging,
-            "omitted delete_staging must default true"
-        );
-    }
-
-    #[test]
-    fn install_start_request_delete_staging_false_round_trips() {
-        // The current client sends the real preference; false must be honoured.
-        let json =
-            r#"{"ps5_addr":"1.2.3.4:9120","local_ps5_path":"/x.pkg","delete_staging":false}"#;
-        let req: InstallStartRequest = serde_json::from_str(json).unwrap();
-        assert!(!req.delete_staging);
-        // And it must flow through to a kept pkg.
-        assert_eq!(
-            staging_path_for(&req.local_ps5_path, req.delete_staging),
-            None
-        );
     }
 
     #[test]
@@ -5316,12 +5024,9 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         // real install — serve_only=false — so the staged/normal path is
         // untouched. This is the safety default: any caller that forgets the
         // field gets the install, not a silent no-op.
-        let req: InstallStartRequest = serde_json::from_str(
-            r#"{"ps5_addr":"1.2.3.4:9120","path":"/x.pkg","delete_staging":true}"#,
-        )
-        .expect("parse");
+        let req: InstallStartRequest =
+            serde_json::from_str(r#"{"ps5_addr":"1.2.3.4:9120","path":"/x.pkg"}"#).expect("parse");
         assert!(!req.serve_only);
-        assert!(req.delete_staging);
     }
 
     #[test]
@@ -5335,8 +5040,6 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         )
         .expect("parse");
         assert!(req.serve_only);
-        // delete_staging still defaults true even when omitted here.
-        assert!(req.delete_staging);
     }
 
     // ── parse_range_header ─────────────────────────────────────────────

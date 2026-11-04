@@ -464,8 +464,15 @@ impl SessionGate {
 }
 
 pub(crate) fn refusal(status: u16, message: String) -> UploadFailure {
+    // The protocol has one code for any write failure; EFBIG (a file past FAT32's 4 GiB) cannot
+    // be fixed by trying again, so it is told apart by the console's words.
+    let reason = if status == gen::ERR_IO && message.contains("File too large") {
+        "ava1_file_too_large".into()
+    } else {
+        refusal_reason(status)
+    };
     UploadFailure {
-        reason: refusal_reason(status),
+        reason,
         detail: format!("console refused the transfer ({status}): {message}"),
     }
 }
@@ -887,6 +894,15 @@ pub fn upload_with_seq_in(
                 // numbers. The console keeps what it has, so freeing room and retrying resumes.
                 Err(SendError::NoRoom(detail)) => {
                     return Err(no_room_failure(detail, crate::space::take_refusal(&job_id)));
+                }
+                // The source, not the connection: no helper re-send helps. A damaged archive
+                // keeps its own wording (InvalidData), see `seq.rs`.
+                Err(SendError::Source(e)) if e.kind() != std::io::ErrorKind::InvalidData => {
+                    return Err(UploadFailure {
+                        reason: "source_read_failed".into(),
+                        detail: format!("reading the source: {e}"),
+                    }
+                    .into());
                 }
                 Err(e) => return Err(anyhow!(e)),
             }
@@ -1640,6 +1656,11 @@ mod failure_reason_tests {
         // Every typed refusal (upload, download, relay, copy) goes through `refusal`.
         let f = refusal(gen::ERR_STALLED, "no data".into());
         assert_eq!(f.reason, "ava1_stalled");
+        // One code for every write failure; a file too big for the drive is not retried.
+        let f = refusal(gen::ERR_IO, "write failed: File too large (a.bin)".into());
+        assert_eq!(f.reason, "ava1_file_too_large");
+        let f = refusal(gen::ERR_IO, "write failed: Input/output error".into());
+        assert_eq!(f.reason, format!("ava1_refused_{}", gen::ERR_IO));
     }
 }
 

@@ -3,6 +3,7 @@
 // again within a round of the console answering. "Your folders" is read from the engine alone, so
 // it shows while the console cannot be reached at all.
 
+import { useHelperReplaceGuard } from "../Connection/useHelperReplaceGuard";
 import { useEffect, useState } from "react";
 import { FolderSync, Power, Send } from "lucide-react";
 
@@ -73,20 +74,26 @@ export function AwayActions({ console, why }: { console: string; why: AwayWhy })
   const host = hostOf(console) || console;
   const wake = useConsoleWake(host);
   const [sending, setSending] = useState(false);
+  const { guard, dialog } = useHelperReplaceGuard();
   if (why === "helper") {
     return (
-      <Button
-        size="sm"
-        variant="secondary"
-        leftIcon={<Send size={14} />}
-        loading={sending}
-        onClick={() => {
-          setSending(true);
-          void sendHelperTo(host, tr).finally(() => setSending(false));
-        }}
-      >
-        {tr("drive_send_helper", undefined, "Send helper")}
-      </Button>
+      <>
+        {dialog}
+        <Button
+          size="sm"
+          variant="secondary"
+          leftIcon={<Send size={14} />}
+          loading={sending}
+          onClick={() => {
+            setSending(true);
+            void guard(host)
+              .then((ok) => (ok ? sendHelperTo(host, tr) : undefined))
+              .finally(() => setSending(false));
+          }}
+        >
+          {tr("drive_send_helper", undefined, "Send helper")}
+        </Button>
+      </>
     );
   }
   if (!wake.canWake) return null;

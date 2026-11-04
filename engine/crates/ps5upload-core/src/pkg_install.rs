@@ -404,7 +404,10 @@ pub fn verify_title_registered(addr: &str, title_id: &str) -> LaunchCheck {
     // SUPPLEMENT 2: app.db, where sqlite is readable (newer firmwares).
     match appdb_has_title(addr, title_id) {
         Some(true) => LaunchCheck::Registered,
-        _ => LaunchCheck::Absent,
+        Some(false) => LaunchCheck::Absent,
+        // app.db could not be read: that says nothing about the game, and an update must not be
+        // blocked as "base missing" for it.
+        None => LaunchCheck::Unsupported,
     }
 }
 

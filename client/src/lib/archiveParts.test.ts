@@ -7,6 +7,8 @@ import {
   diagnoseArchiveSet,
   parseSplitVolume,
   isSpannedZip,
+  isManualPartSet,
+  collapseRarVolumes,
 } from "./archiveParts";
 
 const SET = [
@@ -334,5 +336,40 @@ describe("numeric suffixes that are not split archives", () => {
     expect(diagnoseArchiveSet("save.001", ["save.001", "save.002"])).toMatchObject(
       { kind: "split-unsupported", volumeCount: 2 },
     );
+  });
+});
+
+describe("isManualPartSet", () => {
+  it("is true for the parts of one zip or 7z set", () => {
+    expect(isManualPartSet(["G.part1.zip", "G.part2.zip"])).toBe(true);
+    expect(isManualPartSet(["g.PART01.7z", "G.part02.7z"])).toBe(true);
+  });
+  it("is false for a RAR set, another stem, another format or the same part twice", () => {
+    expect(isManualPartSet(["G.part1.rar", "G.part2.rar"])).toBe(false);
+    expect(isManualPartSet(["G.part1.zip", "H.part2.zip"])).toBe(false);
+    expect(isManualPartSet(["G.part1.zip", "G.part2.7z"])).toBe(false);
+    expect(isManualPartSet(["G.part1.zip", "G.part01.zip"])).toBe(false);
+    expect(isManualPartSet(["G.zip", "G.part2.zip"])).toBe(false);
+  });
+});
+
+describe("collapseRarVolumes", () => {
+  const paths = (...p: string[]) => p.map((path) => ({ path }));
+  const kept = (e: { path: string }[]) => collapseRarVolumes(e).map((x) => x.path);
+  it("keeps only the first volume of a .partN.rar set", () => {
+    expect(kept(paths("/d/G.part1.rar", "/d/G.part2.rar", "/d/G.part03.rar"))).toEqual(["/d/G.part1.rar"]);
+    expect(kept(paths("C:\\d\\G.part01.rar", "C:\\d\\G.part02.rar"))).toEqual(["C:\\d\\G.part01.rar"]);
+  });
+  it("drops .rNN volumes when their .rar is listed", () => {
+    expect(kept(paths("/d/G.rar", "/d/G.r00", "/d/G.r01"))).toEqual(["/d/G.rar"]);
+  });
+  it("keeps a volume whose opening file is not listed, and another folder's set", () => {
+    expect(kept(paths("/d/G.part2.rar"))).toEqual(["/d/G.part2.rar"]);
+    expect(kept(paths("/d/G.r00"))).toEqual(["/d/G.r00"]);
+    expect(kept(paths("/a/G.part1.rar", "/b/G.part2.rar"))).toEqual(["/a/G.part1.rar", "/b/G.part2.rar"]);
+  });
+  it("leaves zip parts and everything else alone", () => {
+    const all = ["/d/G.part1.zip", "/d/G.part2.zip", "/d/a.pkg", "/d/Folder"];
+    expect(kept(paths(...all))).toEqual(all);
   });
 });

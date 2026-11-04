@@ -31,7 +31,7 @@
 #include "authid.h"          /* ps5_detect_firmware_major */
 
 #define INST_PORT     9115
-#define INST_VERSION  "1.5.0"
+#define INST_VERSION  "1.6.0"
 #define BOOT_STEP_MS  500
 #define BOOT_STEPS    50     /* 50 * 500ms = 25s */
 /* A replaced daemon releases :9115 within a poll slice of its `stop`; the new
@@ -158,21 +158,30 @@ static int do_install(const inst_request_t *req, char *out, size_t cap) {
     char busy_id[INST_JOBID_MAX];
     snprintf(busy_id, sizeof(busy_id), "%s", g_d.active_id);
     int active_complete = 0;
+    uint64_t active_served = 0, active_total = 0;
     if (g_d.active_lb && active == INST_JOB_SERVING) {
-        uint64_t tot = inst_loopback_total(g_d.active_lb);
-        active_complete = (tot == 0) || (inst_loopback_bytes_served(g_d.active_lb) >= tot);
+        active_total = inst_loopback_total(g_d.active_lb);
+        active_served = inst_loopback_bytes_served(g_d.active_lb);
+        active_complete = inst_job_released(active_served, active_total,
+                                            inst_loopback_idle_seconds(g_d.active_lb));
     }
     if (!inst_admit_install(active, active_complete)) {
         pthread_mutex_unlock(&g_d.state_lock);
         pthread_mutex_unlock(&g_d.sony_lock);
         return inst_reply_err_busy(out, cap, busy_id);
     }
-    /* Sony has read every byte of the previous loopback job: retire it now
-     * (instead of after its idle window) so this install can start its own. */
+    /* Sony has read every byte of the previous loopback job, or stopped asking for any: retire
+     * it now so this install can start its own. A job that stalled ends "failed", never "done":
+     * "done" tells the engine the whole package was read. */
     inst_loopback_t *retire = NULL;
     if (active == INST_JOB_SERVING && active_complete) {
-        uint64_t tot = inst_loopback_total(g_d.active_lb);
-        inst_ring_put(&g_d.ring, g_d.active_id, INST_JOB_DONE, 0, tot, tot);
+        if (active_total == 0 || active_served >= active_total) {
+            inst_ring_put(&g_d.ring, g_d.active_id, INST_JOB_DONE, 0, active_total, active_total);
+        } else {
+            fprintf(stderr, "[installer] job %s stalled at %llu of %llu bytes; retiring it for a new install\n",
+                    g_d.active_id, (unsigned long long)active_served, (unsigned long long)active_total);
+            inst_ring_put(&g_d.ring, g_d.active_id, INST_JOB_FAILED, 0, active_served, active_total);
+        }
         retire = g_d.active_lb;
         g_d.active_lb = NULL;
         g_d.active_phase = INST_JOB_DONE;
@@ -204,23 +213,28 @@ static int do_install(const inst_request_t *req, char *out, size_t cap) {
 
     if (res.accepted)
         return inst_reply_install_ok(out, cap, job_id, res.via);
+    if (res.error)
+        return inst_reply_err_str(out, cap, res.error);
     return inst_reply_err_sony(out, cap, res.code, res.hint);
 }
 
 /* `stop`: refused as busy while an install call is in flight (the Sony lock
  * is held) or a loopback job is still being read; exiting then would fail
  * that install. The engine keeps the running daemon and upgrades later.
+ * `force` (the engine recovering after a stop or a failure): only a call in flight refuses it.
  * Returns the reply length; *accepted is set when the daemon will exit. */
-static int do_stop(char *out, size_t cap, int *accepted) {
+static int do_stop(char *out, size_t cap, int force, int *accepted) {
     *accepted = 0;
     int in_flight = (pthread_mutex_trylock(&g_d.sony_lock) != 0);
     pthread_mutex_lock(&g_d.state_lock);
     int complete = 1;
     if (g_d.active_lb && g_d.active_phase == INST_JOB_SERVING) {
-        uint64_t tot = inst_loopback_total(g_d.active_lb);
-        complete = (tot == 0) || (inst_loopback_bytes_served(g_d.active_lb) >= tot);
+        complete = inst_job_released(inst_loopback_bytes_served(g_d.active_lb),
+                                     inst_loopback_total(g_d.active_lb),
+                                     inst_loopback_idle_seconds(g_d.active_lb));
     }
-    int allowed = inst_stop_allowed(in_flight, g_d.active_phase, complete);
+    int allowed = force ? inst_stop_forced_allowed(in_flight)
+                        : inst_stop_allowed(in_flight, g_d.active_phase, complete);
     char busy_id[INST_JOBID_MAX];
     snprintf(busy_id, sizeof(busy_id), "%s", g_d.active_id);
     pthread_mutex_unlock(&g_d.state_lock);
@@ -229,7 +243,8 @@ static int do_stop(char *out, size_t cap, int *accepted) {
         pthread_mutex_unlock(&g_d.sony_lock);
     }
     if (!allowed) {
-        fprintf(stderr, "[installer] stop refused: install in flight (job %s)\n",
+        fprintf(stderr, "[installer] stop refused: %s (job %s)\n",
+                in_flight ? "install call in flight" : "package still being read",
                 busy_id[0] ? busy_id : "-");
         return inst_reply_err_busy(out, cap, busy_id);
     }
@@ -273,7 +288,7 @@ static void *conn_worker(void *arg) {
         case INST_OP_HELLO:   olen = do_hello(out, sizeof(out)); break;
         case INST_OP_INSTALL: olen = do_install(&req, out, sizeof(out)); break;
         case INST_OP_JOB:     olen = do_job(&req, out, sizeof(out)); break;
-        case INST_OP_STOP:    olen = do_stop(out, sizeof(out), &is_stop); break;
+        case INST_OP_STOP:    olen = do_stop(out, sizeof(out), req.force, &is_stop); break;
         default:              olen = inst_reply_err_str(out, sizeof(out), "bad_request"); break;
     }
     if (olen > 0) {
@@ -291,7 +306,9 @@ static void *conn_worker(void *arg) {
     return NULL;
 }
 
-/* ── monitor: retire a serving loopback job once fully covered + idle ──── */
+/* ── monitor: retire a serving loopback job once fully covered + idle ────
+ * A job Sony stopped reading is left serving, so a paused download can still resume: the next
+ * install or stop retires it (inst_job_released). */
 
 static void *monitor(void *arg) {
     inst_thread_name(INST_THREAD_MONITOR);

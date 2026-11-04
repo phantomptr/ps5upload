@@ -1,5 +1,12 @@
 import { useUploadQueueStore } from "../state/uploadQueue";
 import { useTransferStore } from "../state/transfer";
+import { fsUploadForHost, useFsUploadStore } from "../state/fsUpload";
+import {
+  bulkOpForHost,
+  downloadForHost,
+  useFsBulkOpStore,
+  useFsDownloadOpStore,
+} from "../state/fsBulkOp";
 import { hostOf } from "./addr";
 
 /**
@@ -46,5 +53,41 @@ export function transferScreenBusy(host?: string): boolean {
   const oneShotBusy = wantKey
     ? active(ts.phasesByHost[wantKey])
     : Object.values(ts.phasesByHost).some(active);
-  return queueBusy || oneShotBusy;
+  return queueBusy || oneShotBusy || filesTransferBusy(host);
+}
+
+/**
+ * True while the Files screen is moving data on `host` (any console when omitted): an upload, a
+ * download, or a copy, move or delete. These run in their own stores, so a large drag into Files
+ * used to read as an idle console: a helper could be sent over it, and the pollers kept going.
+ */
+export function filesTransferBusy(host?: string): boolean {
+  const uploads = useFsUploadStore.getState();
+  const downloads = useFsDownloadOpStore.getState();
+  const bulk = useFsBulkOpStore.getState();
+  const busy = (h: string) =>
+    !!fsUploadForHost(uploads, h).active ||
+    downloadForHost(downloads, h).active ||
+    !!bulkOpForHost(bulk, h).op;
+  if (host) return busy(host);
+  return [uploads.byHost, downloads.byHost, bulk.byHost].some((m) => Object.keys(m).some(busy));
+}
+
+/**
+ * Bytes moved so far on `host`'s running transfers, or null when none reports any. A change here
+ * is proof the helper is alive. Queue rows and Files runs are where this lives now: the one-shot
+ * upload's phase has had no caller but its retry since uploads moved to the queue.
+ */
+export function transferBytesMoved(host: string): number | null {
+  const key = hostOf(host);
+  let total = 0;
+  for (const it of useUploadQueueStore.getState().items) {
+    if (it.status === "running" && hostOf(it.addr) === key) total += it.bytesSent ?? 0;
+  }
+  total += fsUploadForHost(useFsUploadStore.getState(), host).active?.sent ?? 0;
+  const download = downloadForHost(useFsDownloadOpStore.getState(), host);
+  if (download.active) total += download.bytesReceived;
+  const phase = useTransferStore.getState().phasesByHost[key];
+  if (phase?.kind === "running") total += phase.bytesSent;
+  return total > 0 ? total : null;
 }

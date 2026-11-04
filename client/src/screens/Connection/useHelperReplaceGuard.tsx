@@ -2,8 +2,10 @@ import { useCallback } from "react";
 
 import { useConfirm } from "../../components/ConfirmDialog";
 import { meshAnnounce } from "../../api/mesh";
+import { hostOf } from "../../lib/addr";
 import { getAppVersion } from "../../lib/appVersion";
 import { busyText, replaceCheck } from "../../lib/helperGuard";
+import { transferScreenBusy } from "../../lib/ps5Transfers";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 import { meshFor, useMeshStore } from "../../state/mesh";
@@ -19,12 +21,13 @@ export function useHelperReplaceGuard(): { guard: (host: string) => Promise<bool
   const { confirm, dialog } = useConfirm();
   const guard = useCallback(
     async (host: string) => {
-      const conn = useConnectionStore.getState();
+      // That console's own state: Mesh Drive sends to one that is not the selected one.
+      const rt = useConnectionStore.getState().runtimeByHost[hostOf(host) || "_"];
       // Nothing is running there: nobody to warn.
-      if (conn.payloadStatus !== "up") return true;
+      if (rt?.payloadStatus !== "up") return true;
       const state = meshFor(useMeshStore.getState(), host).state;
       const app = await getAppVersion().catch(() => null);
-      const check = replaceCheck(state, conn.payloadVersion, app);
+      const check = replaceCheck(state, rt.payloadVersion, app);
       if (check.downgrade) {
         const { running, ours } = check.downgrade;
         const ok = await confirm({
@@ -50,6 +53,20 @@ export function useHelperReplaceGuard(): { guard: (host: string) => Promise<bool
             "mesh_busy_body",
             { work: busyText(check.busy) },
             `${busyText(check.busy)}. Sending the helper restarts it: their work stops, and uploads pick up where they left off once it is back.`,
+          ),
+          confirmLabel: tr("mesh_busy_confirm", undefined, "Send anyway"),
+          destructive: true,
+        });
+        if (!ok) return false;
+      }
+      // This app's own uploads and copies stop with the helper too.
+      if (transferScreenBusy(host)) {
+        const ok = await confirm({
+          title: tr("helper_replace_own_busy_title", undefined, "A transfer is running on this console"),
+          message: tr(
+            "helper_replace_own_busy_body",
+            undefined,
+            "Sending the helper restarts it, and this transfer stops. Send it when the transfer has finished, or send it now and start the transfer again.",
           ),
           confirmLabel: tr("mesh_busy_confirm", undefined, "Send anyway"),
           destructive: true,

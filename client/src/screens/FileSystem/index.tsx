@@ -130,7 +130,7 @@ import {
   type SearchHit,
   type Volume,
 } from "../../api/ps5";
-import { kindsOf, namesPreview, planFsUpload } from "../../state/fsUploadPlan";
+import { baseNameOf, kindsOf, namesPreview, planFsUpload } from "../../state/fsUploadPlan";
 import { useConflictAsk } from "./ConflictAsk";
 import {
   loadFsLastPath,
@@ -171,7 +171,8 @@ import {
   cancelFsUpload,
   fsUploadForHost,
   runFsUpload,
-  dismissFsUploadStopped,
+  clearFsUploadUnreadable,
+  giveUpFsUploadStopped,
   resumeFsUpload,
   useFsUploadStore,
   type FsUploadActive,
@@ -484,6 +485,9 @@ export default function FileSystemScreen() {
   );
   const uploadRuns = useFsUploadStore(
     (s) => fsUploadForHost(s, host).finishedRuns,
+  );
+  const uploadUnreadable = useFsUploadStore(
+    (s) => fsUploadForHost(s, host).unreadable,
   );
   const stoppedAt = {
     name: uploadStopped?.name ?? "",
@@ -3839,7 +3843,7 @@ export default function FileSystemScreen() {
                       {tr("queue_send_now", undefined, "Send now")}
                     </Button>
                   )}
-                  <Button size="sm" variant="ghost" disabled={uploadQueue.running && uploadQueue.currentId === item.id} onClick={() => removeFsUploadQueued(host, item.id)}>
+                  <Button size="sm" variant="ghost" disabled={uploadQueue.running && uploadQueue.currentId === item.id} onClick={() => removeFsUploadQueued(host, item.id, fsUploadDeps)}>
                     {tr("queue_remove", undefined, "Remove from queue")}
                   </Button>
                 </div>
@@ -3974,6 +3978,11 @@ export default function FileSystemScreen() {
                   "fs_upload_stopped_hint",
                   undefined,
                   "What already reached the PS5 is kept. Resume sends only the rest.",
+                )}{" "}
+                {tr(
+                  "fs_upload_dismiss_hint",
+                  undefined,
+                  "Dismiss gives up the rest and deletes the unfinished item from the PS5.",
                 )}
               </div>
               <div className="mt-2 flex gap-2">
@@ -3988,7 +3997,31 @@ export default function FileSystemScreen() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => dismissFsUploadStopped(host)}
+                  onClick={() => giveUpFsUploadStopped(host, fsUploadDeps)}
+                >
+                  {tr("dismiss", undefined, "Dismiss")}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {uploadUnreadable && uploadUnreadable.length > 0 && (
+            <div
+              className="mb-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-surface-raised)] px-4 py-3.5 text-sm shadow-[var(--edge-highlight),var(--shadow-1)]"
+              data-testid="fs-upload-unreadable"
+            >
+              <div className="break-words">
+                {tr(
+                  "fs_upload_unreadable",
+                  { names: namesPreview(uploadUnreadable.map(baseNameOf)) },
+                  `These files could not be read on this computer, so they were not copied: ${namesPreview(uploadUnreadable.map(baseNameOf))}`,
+                )}
+              </div>
+              <div className="mt-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => clearFsUploadUnreadable(host)}
                 >
                   {tr("dismiss", undefined, "Dismiss")}
                 </Button>

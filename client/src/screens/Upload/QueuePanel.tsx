@@ -22,6 +22,7 @@ import {
   HardDrive,
   Pause,
   Send,
+  AlertTriangle,
 } from "lucide-react";
 
 import {
@@ -73,11 +74,14 @@ import {
   installOrderPriority,
   moveGroupOf,
   canPauseItem,
+  isInstallWork,
   useUploadQueueStore,
   type QueueItem,
   type QueueItemStatus,
+  HANDED_TO_SMP,
 } from "../../state/uploadQueue";
 import { isRemotePath } from "../../lib/remotePath";
+import { recoveryResendsHelper } from "../../lib/uploadRecovery";
 import { useTransferStore } from "../../state/transfer";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
 import {
@@ -856,6 +860,55 @@ function ConsoleGroup({
   );
 }
 
+/** What a finished upload left to say: warnings from its mount, register or install, and where
+ *  a game stands: on the home screen, or what to do next. Exported for tests. */
+export function FinishedRowNotes({
+  item,
+}: {
+  item: Pick<QueueItem, "sourceKind" | "registeredAs" | "mountWarnings" | "mountedAt">;
+}) {
+  const tr = useTr();
+  const warnings = item.mountWarnings ?? [];
+  const isGame = item.sourceKind === "folder" || item.sourceKind === "image";
+  return (
+    <>
+      {warnings.length > 0 && (
+        <ul
+          data-testid="queue-row-warnings"
+          className="mt-2 space-y-1 text-xs text-[var(--color-warn)]"
+        >
+          {warnings.map((w) => (
+            <li key={w} className="flex items-start gap-1.5">
+              <AlertTriangle size={12} aria-hidden className="mt-px shrink-0" />
+              <span className="min-w-0 break-words">{w}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {item.registeredAs ? (
+        <div className="mt-1 text-xs text-[var(--color-muted)]">
+          {tr(
+            "upload_done_registered",
+            { name: item.registeredAs },
+            `On your PS5 home screen as "${item.registeredAs}" — ready to launch.`,
+          )}
+        </div>
+      ) : (
+        isGame &&
+        !item.mountedAt && (
+          <div className="mt-1 text-xs text-[var(--color-muted)]">
+            {tr(
+              "upload_done_next_hint2",
+              undefined,
+              "Next: open the game in Games and, under On the PS5's drives, add it to the home screen or mount it.",
+            )}
+          </div>
+        )
+      )}
+    </>
+  );
+}
+
 export function QueueRow({
   item,
   position,
@@ -1143,11 +1196,13 @@ export function QueueRow({
             {item.mountedAt && (
               <span className="font-mono text-[var(--color-accent)]">
                 ·{" "}
-                {tr(
-                  "queue_mounted_at",
-                  { mount: item.mountedAt },
-                  "mounted at {mount}",
-                )}
+                {item.mountedAt === HANDED_TO_SMP
+                  ? tr("queue_handed_to_smp", undefined, "handed to ShadowMount+")
+                  : tr(
+                      "queue_mounted_at",
+                      { mount: item.mountedAt },
+                      "mounted at {mount}",
+                    )}
               </span>
             )}
             {item.sourceKind === "pkg" &&
@@ -1251,7 +1306,7 @@ export function QueueRow({
               <ScanSearch size={14} />
             </button>
           )}
-          {isActive && isInstall ? (
+          {isActive && isInstallWork(item) ? (
             item.stopping ? (
               <span className="px-1 text-xs text-[var(--color-muted)]">
                 {tr("queue_stopping", undefined, "Stopping…")}
@@ -1322,7 +1377,8 @@ export function QueueRow({
         <div className="mt-2 flex items-center gap-2 rounded-[var(--radius-field)] bg-[var(--color-warn)]/10 px-2 py-1.5 text-xs text-[var(--color-warn)]">
           <Spinner size={12} className="shrink-0" />
           <span>
-            {tr(
+            {recoveryResendsHelper(item.errorReason)
+              ? tr(
               "queue_recovering",
               {
                 attempt: item.recoverAttempt ?? 1,
@@ -1331,8 +1387,26 @@ export function QueueRow({
               `Connection lost — re-deploying payload & resuming (${
                 item.recoverAttempt ?? 1
               }/${MAX_AUTO_RECOVER_ATTEMPTS})…`,
-            )}
+            )
+              : tr(
+                  "queue_recovering_retry",
+                  {
+                    attempt: item.recoverAttempt ?? 1,
+                    max: MAX_AUTO_RECOVER_ATTEMPTS,
+                  },
+                  "Trying again ({attempt}/{max})…",
+                )}
           </span>
+        </div>
+      )}
+
+      {isActive && !isRecovering && !isInstall && item.verifying && (
+        <div className="mt-2 text-xs text-[var(--color-muted)]" data-testid="queue-verifying">
+          {tr(
+            "queue_verifying_pct",
+            { pct: Math.floor((100 * item.verifying.done) / item.verifying.total) },
+            "Comparing with what is on the PS5: {pct}%",
+          )}
         </div>
       )}
 
@@ -1551,6 +1625,7 @@ export function QueueRow({
           {item.installNote}
         </div>
       )}
+      {item.status === "done" && !isInstall && <FinishedRowNotes item={item} />}
 
       {item.status === "failed" && item.error && (
         <FailedRowErrorCard

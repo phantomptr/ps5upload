@@ -59,7 +59,7 @@ describe("planFsUpload", () => {
 
   it("a single file keeps the single-file job", async () => {
     const plan = await planFsUpload([file("C:\\pc\\a.bin")], [], answers().decide, tx);
-    expect(plan?.steps).toEqual([{ kind: "one", src: "C:\\pc\\a.bin", name: "a.bin" }]);
+    expect(plan?.steps).toEqual([{ kind: "one", src: "C:\\pc\\a.bin", name: "a.bin", txId: tx() }]);
   });
 
   it("folders stay their own job, in pick order around the list", async () => {
@@ -154,7 +154,7 @@ describe("planFsUpload", () => {
       answers({ choice: "replace", all: false }).decide,
       tx,
     );
-    expect(plan?.steps).toEqual([{ kind: "one", src: "/pc/Game", name: "Game" }]);
+    expect(plan?.steps).toEqual([{ kind: "one", src: "/pc/Game", name: "Game", txId: tx() }]);
   });
 
   it("Keep both keeps a folder's dots", async () => {
@@ -164,7 +164,7 @@ describe("planFsUpload", () => {
       answers({ choice: "keep", all: false }).decide,
       tx,
     );
-    expect(plan?.steps).toEqual([{ kind: "one", src: "/pc/v1.2", name: "v1.2 (2)" }]);
+    expect(plan?.steps).toEqual([{ kind: "one", src: "/pc/v1.2", name: "v1.2 (2)", txId: tx() }]);
   });
 
   it("two picked files with one name conflict with each other; Replace keeps the later one", async () => {
@@ -219,7 +219,7 @@ describe("planFsUpload", () => {
       answers({ choice: "replace", all: false }).decide,
       tx,
     );
-    expect(plan?.steps).toEqual([{ kind: "one", src: "/pc/EBOOT.BIN", name: "eboot.bin" }]);
+    expect(plan?.steps).toEqual([{ kind: "one", src: "/pc/EBOOT.BIN", name: "eboot.bin", txId: tx() }]);
   });
 
   it("two picks differing only in case clash with each other", async () => {

@@ -2297,6 +2297,7 @@ function ExternalPackages({ host }: { host: string }) {
   const setAutoScan = useInstallSettingsStore((s) => s.setAutoScanExternal);
   const [pkgs, setPkgs] = useState<ExternalPkg[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [scanned, setScanned] = useState(false);
   const [installingPath, setInstallingPath] = useState<string | null>(null);
   const [results, setResults] = useState<
@@ -2320,10 +2321,12 @@ function ExternalPackages({ host }: { host: string }) {
     setScanning(true);
     try {
       setPkgs(await pkgScanExternal(transferAddr(host)));
+      setScanError(null);
       setScanned(true);
-    } catch {
-      // Best-effort: no drives / scan failure just shows an empty section.
+    } catch (e) {
+      // The empty section's "No packages found" would be untrue: nobody looked.
       setPkgs([]);
+      setScanError(e instanceof Error ? e.message : String(e));
       setScanned(true);
     } finally {
       setScanning(false);
@@ -2452,10 +2455,16 @@ function ExternalPackages({ host }: { host: string }) {
       ) : pkgs.length === 0 ? (
         // Empty state — informative, and the Scan button above stays put.
         <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--glass-edge)] px-3 py-4 text-xs text-[var(--color-muted)]">
-          {tr(
-            "pkglib.external.empty",
-            "No .pkg or .fpkg install packages found on connected USB or external drives. Connect a drive that has packages on it, then click Scan.",
-          )}
+          {scanError
+            ? tr(
+                "pkglib.external.scanFailed",
+                { error: scanError },
+                "The drives could not be scanned: {error}",
+              )
+            : tr(
+                "pkglib.external.empty",
+                "No .pkg or .fpkg install packages found on connected USB or external drives. Connect a drive that has packages on it, then click Scan.",
+              )}
         </div>
       ) : (
         <ul className="grid gap-2">

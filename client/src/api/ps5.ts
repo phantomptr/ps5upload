@@ -631,8 +631,11 @@ export async function startTransferFileList(
   addr: string,
   txId?: string | null,
   bandwidthCapMbps?: number,
-): Promise<string> {
-  const res = await invoke<{ job_id: string }>("transfer_file_list", {
+): Promise<{ jobId: string; unreadable: string[] }> {
+  const res = await invoke<{
+    job_id: string;
+    skipped_unreadable?: { path: string; error: string }[];
+  }>("transfer_file_list", {
     req: {
       dest_root: destRoot,
       files,
@@ -642,7 +645,10 @@ export async function startTransferFileList(
         bandwidthCapMbps && bandwidthCapMbps > 0 ? bandwidthCapMbps : null,
     },
   });
-  return res.job_id;
+  return {
+    jobId: res.job_id,
+    unreadable: (res.skipped_unreadable ?? []).map((s) => s.path),
+  };
 }
 
 /** Start a zip-archive upload. The engine decompresses on the host so files
@@ -1029,14 +1035,14 @@ export async function listVolumes(transferAddr: string): Promise<Volume[]> {
   return res?.volumes ?? [];
 }
 
-/** Bytes free across the volumes a game install can land on — the internal
- *  storage plus every extended-storage `/mnt/ext*` mount. Best-effort: returns
- *  null if volumes can't be read (so a check that can't run never blocks the
- *  install).
+/** Bytes free on the roomiest drive a game install can land on: the internal storage or an
+ *  extended-storage `/mnt/ext*` mount. A package lands on one drive, so the sum across drives
+ *  would over-promise. Best-effort: returns null if volumes can't be read (so a check that can't
+ *  run never blocks the install).
  *
  *  Internal is reported as `/user` on some consoles and `/data` on others (both
  *  are the one main data partition where `/user/app` lives) — we pick ONE of
- *  them (prefer `/user`) so overlapping mounts aren't double-counted. */
+ *  them (prefer `/user`). */
 export async function installFreeBytes(
   transferAddr: string,
 ): Promise<number | null> {
@@ -1044,22 +1050,14 @@ export async function installFreeBytes(
     const vols = await listVolumes(transferAddr);
     if (vols.length === 0) return null;
     const real = vols.filter((v) => !v.is_placeholder);
-    let free = 0;
-    let counted = false;
     const internal =
       real.find((v) => v.path === "/user") ??
       real.find((v) => v.path === "/data");
-    if (internal) {
-      free += volumeAllocatableBytes(internal);
-      counted = true;
-    }
-    for (const v of real) {
-      if (v.path.startsWith("/mnt/ext")) {
-        free += volumeAllocatableBytes(v);
-        counted = true;
-      }
-    }
-    return counted ? free : null;
+    const drives = [
+      ...(internal ? [internal] : []),
+      ...real.filter((v) => v.path.startsWith("/mnt/ext")),
+    ];
+    return drives.length > 0 ? Math.max(...drives.map(volumeAllocatableBytes)) : null;
   } catch {
     return null;
   }
@@ -4315,32 +4313,36 @@ export async function probeDestination(
   isFolder: boolean,
 ): Promise<DestinationProbe> {
   const addr = toMgmtAddr(transferAddr);
-  const listPath = isFolder ? path : parentDir(path);
-  const targetName = isFolder ? null : basenameUnix(path);
   try {
+    if (!isFolder) {
+      // Every page of the folder: one page holds only its first 256 entries.
+      const name = basenameUnix(path);
+      const match = (await fsListDir(transferAddr, parentDir(path))).find((e) => e.name === name);
+      return match
+        ? { exists: true, entryCount: 1, totalBytes: typeof match.size === "number" ? match.size : 0 }
+        : { exists: false, entryCount: 0, totalBytes: 0 };
+    }
     const res = await invoke<{
       entries?: Array<{ name?: string; size?: number; kind?: string }>;
       truncated?: boolean;
-    }>("ps5_list_dir", { addr, path: listPath, offset: 0, limit: 256 });
+    }>("ps5_list_dir", { addr, path, offset: 0, limit: 256 });
     const entries = res.entries ?? [];
-    if (isFolder) {
-      const totalBytes = entries.reduce(
-        (acc, e) => acc + (typeof e.size === "number" ? e.size : 0),
-        0,
-      );
-      return { exists: true, entryCount: entries.length, totalBytes };
-    }
-    // File mode: look for our filename in the parent listing.
-    const match = entries.find((e) => e.name === targetName);
-    if (!match) return { exists: false, entryCount: 0, totalBytes: 0 };
     return {
       exists: true,
-      entryCount: 1,
-      totalBytes: typeof match.size === "number" ? match.size : 0,
+      entryCount: entries.length,
+      totalBytes: entries.reduce((acc, e) => acc + (typeof e.size === "number" ? e.size : 0), 0),
     };
-  } catch {
-    return { exists: false, entryCount: 0, totalBytes: 0 };
+  } catch (e) {
+    // Only "not there" says it is clear. A console that did not answer says nothing, and
+    // reading that as clear overwrites an existing file unasked.
+    if (isNotFoundError(e)) return { exists: false, entryCount: 0, totalBytes: 0 };
+    throw e;
   }
+}
+
+function isNotFoundError(e: unknown): boolean {
+  const m = (e instanceof Error ? e.message : String(e)).toLowerCase();
+  return /no such file|not found|enoent|errno[ =:]*2\b|os error 2\b/.test(m);
 }
 
 function parentDir(absPath: string): string {
@@ -4603,6 +4605,21 @@ export function humanizeJobErrorReason(
     ).replace("{code}", refused[1]);
   }
   switch (reason) {
+    case "ava1_file_too_large":
+      return trStatic(
+        "joberr.file_too_large",
+        "This file is too big for the destination drive's format: FAT32 holds at most 4 GiB per file. Use a drive formatted as exFAT, or the PS5's internal storage.",
+      );
+    case "source_missing":
+      return trStatic(
+        "joberr.source_missing",
+        "The folder to send is not there any more. If it is on an external drive or a share, connect it again, then retry.",
+      );
+    case "source_read_failed":
+      return trStatic(
+        "joberr.source_read_failed",
+        "A file could not be read on this computer. If it is on an external drive or a share, check that it is still connected, then retry. What already reached the PS5 is kept.",
+      );
     case "preflight_insufficient_space":
       return trStatic(
         "joberr.preflight_insufficient_space",
@@ -4816,15 +4833,10 @@ export function humanizeJobErrorReason(
         "The PS5 sent a file list this app could not understand. Update the helper and this app to the same version, then retry.",
       );
     case "helper_not_ava1":
-      return isTauriEnv()
-        ? trStatic(
-            "joberr.helper_not_ava1",
-            "The PS5 helper is not running. Send it from the Connection screen, then retry.",
-          )
-        : trStatic(
-            "joberr.helper_not_ava1_web",
-            "The PS5 helper is not running. This web UI cannot send it: start the ps5upload payload on the console with your usual payload loader, then retry.",
-          );
+      return trStatic(
+        "joberr.helper_not_ava1",
+        "The PS5 helper is not running. Send it from the Connection screen, then retry.",
+      );
     case "ava1_not_paired":
     case "not_paired":
       return trStatic(
@@ -4844,7 +4856,7 @@ export function humanizeJobErrorReason(
     case "helper_not_running":
       return trStatic(
         "joberr.helper_not_running",
-        "No helper is running on the PS5. Send the helper first (Connection screen on the desktop app, or your payload loader), then retry.",
+        "No helper is running on the PS5. Send it from the Connection screen, then retry.",
       );
     case "tx_table_full":
       return trStatic(
@@ -6058,6 +6070,10 @@ export interface InstallStatus {
   /** The PS5 refused a package from its own storage and the engine can safely send it through
    *  Stream: offer "Retry with Stream". Absent from an older engine. */
   retry_with_stream?: boolean;
+  /** With `reason: "destructive_guard"`: what the install would replace, "game" or "update". */
+  replaces?: string | null;
+  /** What the engine took the package to be (`PS4DP`, `PS5GD`…). */
+  package_type?: string | null;
   /** Windows only: the local adapter facing the console and what Windows says about it, set
    *  when the console could not reach this computer. Absent elsewhere and from an older engine. */
   net_diag?: NetDiag | null;

@@ -8,6 +8,7 @@ import SessionBanner from "./SessionBanner";
 import RemotePlayBanner from "./RemotePlayBanner";
 import EngineDownBanner from "./EngineDownBanner";
 import MovedConsoleBanner, { useMovedConsoleWatch } from "./MovedConsoleBanner";
+import { InstallAskHost } from "../components/InstallAskHost";
 import { PairingDialog } from "../screens/Connection/PairingDialog";
 import { useHelperReplaceGuard } from "../screens/Connection/useHelperReplaceGuard";
 import { helperSendFor, useHelperSendStore } from "../state/helperSend";
@@ -71,7 +72,7 @@ import { ensureOsNotificationPermission } from "../lib/osNotify";
 import { powerTick } from "../api/ps5";
 import { anyAwakeWork, awakeConsoles } from "../lib/awakeWork";
 import { useTaskStore } from "../state/tasks";
-import { transferScreenBusy } from "../lib/ps5Transfers";
+import { transferBytesMoved, transferScreenBusy } from "../lib/ps5Transfers";
 import {
   autoRedeployDecision,
   liveHelperDecision,
@@ -103,6 +104,7 @@ import {
   mgmtAddr,
   hostOf,
   PS5_AVA1_PORT,
+  PAYLOAD_MANAGER_PORT,
 } from "../lib/addr";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useUploadQueueStore } from "../state/uploadQueue";
@@ -200,6 +202,9 @@ async function consoleBootAndProcesses(
  *  exited by then, so only the ones that stay are remembered. */
 const AUTO_LOADER_SETTLE_MS = 20_000;
 
+/** Consoles whose auto-loader playlist is sending right now. */
+const autoLoadersRunning = new Set<string>();
+
 /** Run the auto-loader's playlist on a console that just came up, unless this boot already
  *  ran it and what it loaded is still running (lib/autoLoaderGuard). */
 async function runAutoLoaderOnce(
@@ -217,7 +222,12 @@ async function runAutoLoaderOnce(
     return;
   }
   log.info("connection", `auto-loader: running "${playlistName}" on ${host}`);
-  await usePayloadPlaylistsStore.getState().run(playlistId, host, PS5_LOADER_PORT);
+  autoLoadersRunning.add(key);
+  try {
+    await usePayloadPlaylistsStore.getState().run(playlistId, host, PS5_LOADER_PORT);
+  } finally {
+    autoLoadersRunning.delete(key);
+  }
   await new Promise((r) => setTimeout(r, AUTO_LOADER_SETTLE_MS));
   const after = await consoleBootAndProcesses(host);
   if (after.boot !== null && after.names !== null) {
@@ -410,8 +420,7 @@ function useStatusPolling() {
       // afford it. If the count has NOT advanced, the transfer may
       // genuinely be stuck, and we fall through to a real probe.
       if (transferScreenBusy(probedHost)) {
-        const phase = useTransferStore.getState().phasesByHost[key];
-        const sent = phase && phase.kind === "running" ? phase.bytesSent : null;
+        const sent = transferBytesMoved(probedHost);
         const prevSent = transferProgressRef.current[key];
         // Any CHANGE counts as proof of life, not just an increase: a
         // resumed attempt restarts the byte count lower, and that still
@@ -538,12 +547,18 @@ function useStatusPolling() {
         // a transfer runs; guardElfldr itself asks at most every 10 minutes per console.
         if (newStatus === "up" && prev.payloadStatus !== "up") {
           const guardHost = probedHost;
-          window.setTimeout(() => {
+          const whenSettled = () => {
             const now = useConnectionStore.getState().runtimeByHost[key];
             if (now?.payloadStatus !== "up") return;
             if (transferScreenBusy(guardHost)) return;
+            // Swapping elfldr closes the loader for a moment: not under a playlist still sending.
+            if (autoLoadersRunning.has(key)) {
+              window.setTimeout(whenSettled, BLACK_BOX_SETTLE_MS);
+              return;
+            }
             void guardElfldr(hostOf(guardHost) || guardHost, false);
-          }, BLACK_BOX_SETTLE_MS);
+          };
+          window.setTimeout(whenSettled, BLACK_BOX_SETTLE_MS);
         }
         // Log only on an up<->down TRANSITION (not every poll).
         if (
@@ -869,9 +884,10 @@ function useAutoRedeployDownHelpers() {
         // of its chain; a helper pushed into that window lands before the
         // kernel patches it relies on and crashed an FW 11.40 console three
         // times out of three. Wait until :9021 has been open a while.
-        const loaderOpen = await portCheck(hostOf(host) || host, PS5_LOADER_PORT).catch(
-          () => false,
-        );
+        // Payload Manager counts: a send goes through it when :9021 is closed (#344).
+        const loaderOpen =
+          (await portCheck(hostOf(host) || host, PS5_LOADER_PORT).catch(() => false)) ||
+          (await portCheck(hostOf(host) || host, PAYLOAD_MANAGER_PORT).catch(() => false));
         if (cancelled) return;
         const settle = loaderSettled({
           loaderOpen,
@@ -880,7 +896,7 @@ function useAutoRedeployDownHelpers() {
         });
         if (settle === "closed") {
           delete loaderFirstOpenRef.current[key];
-          return; // nothing listens on :9021; a send could only fail
+          return; // nothing can take the helper; a send could only fail
         }
         if (settle === "settle") {
           if (loaderFirstOpenRef.current[key] === undefined) {
@@ -1757,6 +1773,7 @@ export default function AppShell() {
       <SignInNeededHost />
       <WakePasscodeHost />
       <PairingDialog />
+      <InstallAskHost />
     </div>
   );
 }

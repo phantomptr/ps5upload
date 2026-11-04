@@ -78,8 +78,10 @@ export interface FsListFile {
 
 export type FsUploadStep =
   /** One file or folder, as its own job (a folder is told apart by `pathKind` at run time;
-   *  `asFile`: never a folder, the row action "Replace" with a picked file). */
-  | { kind: "one"; src: string; name: string; asFile?: boolean }
+   *  `asFile`: never a folder, the row action "Replace" with a picked file). `txId` is the job's
+   *  id, as for a list: a retry or a resume under the same id continues the console's partial.
+   *  Absent on what an older version saved; the run mints it. */
+  | { kind: "one"; src: string; name: string; asFile?: boolean; txId?: string }
   /** Files sent together as ONE file-list job. `txId` is the job's id: a resume sends the same
    *  list under the same id and the console's journal skips what it already has. */
   | { kind: "list"; txId: string; files: FsListFile[] };
@@ -141,7 +143,7 @@ interface Planned {
 
 /**
  * Settles conflicts and groups the pick into steps. Returns null when the user cancelled at a
- * conflict (nothing is sent). `newTxId` mints the id of the list job.
+ * conflict (nothing is sent). `newTxId` mints the id of each job.
  */
 export async function planFsUpload(
   picked: FsPickedItem[],
@@ -257,7 +259,7 @@ export async function planFsUpload(
       }
       continue;
     }
-    steps.push({ kind: "one", src: i.src, name: i.name });
+    steps.push({ kind: "one", src: i.src, name: i.name, txId: newTxId() });
   }
   return { steps, skipped };
 }

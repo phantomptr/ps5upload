@@ -7,6 +7,11 @@ import { resetHelperSendGate, sendHelperOnce, sentAgoMs } from "./helperSendGate
 import { compareVersions } from "./semver";
 import { log } from "../state/logs";
 import { clearHelperStopped, isHelperStopped } from "../state/helperStopped";
+import { updateHelperCopiesAfterSend } from "../state/helperStoredCopiesRuntime";
+import { meshAnnounce } from "../api/mesh";
+import { meshFor, othersBusy, useMeshStore } from "../state/mesh";
+import { filesTransferBusy } from "./ps5Transfers";
+import { staticTranslator } from "./trStatic";
 
 export type EnsurePayloadResult =
   | "current"
@@ -99,6 +104,18 @@ export function resetEnsurePayloadState(): void {
   resetHelperSendGate();
 }
 
+/** Why a helper that answers must not be replaced unasked, or null when nothing stands in the way. */
+function replaceHold(host: string, running: string | null, appVersion: string): string | null {
+  if (running && compareVersions(running, appVersion) === 1) {
+    return `it runs v${running}, newer than this app's v${appVersion}`;
+  }
+  const busy = othersBusy(meshFor(useMeshStore.getState(), host).state);
+  if (busy.length > 0) return "other devices are using this console";
+  // Not this app's queue: its rows are the reason this runs, and a recovery runs under them.
+  if (filesTransferBusy(host)) return "the Files screen is moving data on this console";
+  return null;
+}
+
 async function ensurePayloadCurrentOnce(
   host: string,
   shouldCancel: (() => boolean) | undefined,
@@ -121,10 +138,17 @@ async function ensurePayloadCurrentOnce(
   }
   // Probe what's running.
   let running: string | null = null;
+  let helperAnswers = false;
   try {
     const probe = await payloadCheck(host);
     if (probe.reachable) {
+      helperAnswers = true;
       running = probe.payloadVersion;
+    } else if (probe.session === "needs_pairing") {
+      // A helper IS running and only wants pairing, which the pairing banner asks for. Replacing
+      // it would stop it for every device that uses it, unasked.
+      log.info("payload", `not sending the helper to ${host}: one is running there, waiting to be paired`);
+      return "no-push";
     }
   } catch {
     // payloadCheck threw — fall through to push attempt.
@@ -136,6 +160,17 @@ async function ensurePayloadCurrentOnce(
     // background (see lib/elfldrGuard.ts).
     void guardElfldr(host, false);
     return "current";
+  }
+  // Replacing a helper that answers restarts it for every device on the console, and nobody
+  // here asked: only the Send helper buttons ask (useHelperReplaceGuard). So a running helper is
+  // left alone when this would take something away from someone. `force` does not change that:
+  // a recovery must not put an older helper over a newer one, or stop another device's work.
+  if (helperAnswers) {
+    const hold = replaceHold(host, running, appVersion);
+    if (hold) {
+      log.info("payload", `not replacing the helper on ${host}: ${hold}`);
+      return "no-push";
+    }
   }
   // Need to push — unless we already did, moments ago, and that helper is
   // still starting.
@@ -159,6 +194,10 @@ async function ensurePayloadCurrentOnce(
     "payload",
     `(re)deploying helper to ${host} (running=${running ?? "none"}, want=${appVersion})`,
   );
+  // Best effort: the other devices hear it on their next poll, before the helper goes.
+  if (helperAnswers && meshFor(useMeshStore.getState(), host).state) {
+    await meshAnnounce(host, "restart", `sending helper v${appVersion}`).catch(() => false);
+  }
   if (!isTauriEnv()) {
     // A browser has neither the ELF bytes nor a socket to the loader, so the
     // engine does the send. `bundledPayloadPath`/`sendPayload` are
@@ -204,6 +243,9 @@ async function ensurePayloadCurrentOnce(
       ) {
         // A fresh helper usually means a reboot or a wake, which brings the stock elfldr back.
         void guardElfldr(host, true);
+        // The send replaced the helper in memory only. Without this, an autoloader's old copy
+        // comes back at every boot and the reconnect loop or the next queue sends again.
+        void updateHelperCopiesAfterSend(host, staticTranslator).catch(() => {});
         return "pushed";
       }
     } catch {

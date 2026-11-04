@@ -95,11 +95,13 @@ export function reportInstallJob(host: string, job: string): void {
 }
 
 /** What an engine install job is doing now: still installing, finished, or gone (the engine
- *  restarted and forgot it, so whether the console finished is unknown). */
+ *  restarted and forgot it, so whether the console finished is unknown), or not known yet. */
 export type InstallJobState =
   | { state: "running"; pct: number }
   | { state: "finished"; result: InstallResult }
-  | { state: "gone" };
+  | { state: "gone" }
+  /** The status read failed: the engine may be fine and just out of reach for now. */
+  | { state: "unanswered" };
 
 let jobResolver: ((job: string) => Promise<InstallJobState>) | null = null;
 
@@ -154,6 +156,8 @@ export interface PkgQueueApi {
   watch: (id: string, cb: (p: QueueItemProgress | null) => void) => () => void;
   /** Drop item `id` (a no-op once it is gone). */
   remove: (id: string) => void;
+  /** Console files that waiting or running installs on `host` read. */
+  queuedInstallPaths: (host: string) => string[];
 }
 
 let pkgQueueApi: PkgQueueApi | null = null;

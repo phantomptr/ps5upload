@@ -19,7 +19,7 @@ use crate::payload_lifecycle::{
 const INSTALLER_ELF_NAME: &str = "ps5upload-installer.elf";
 
 /// Must match the daemon's INST_VERSION in payload/installer/main.c.
-pub const INSTALLER_VERSION: &str = "1.5.0";
+pub const INSTALLER_VERSION: &str = "1.6.0";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const SHORT_TIMEOUT: Duration = Duration::from_secs(5); // hello / job / stop
@@ -50,13 +50,28 @@ pub struct Hello {
 
 #[derive(Debug)]
 pub enum InstallReply {
-    Accepted { job: String, via: String },
-    Busy { job: String },
-    NotReady { init_rc: u32 },
+    Accepted {
+        job: String,
+        via: String,
+    },
+    Busy {
+        job: String,
+    },
+    NotReady {
+        init_rc: u32,
+    },
     BadRequest,
     BadPath,
     UnknownJob,
-    Sony { code: u32, hint: Option<String> },
+    /// The console's copy could not be opened (1.6.0+): gone, or not a readable file. Sony was
+    /// never called.
+    SourceUnreadable,
+    /// The daemon could not start its local server for the file (1.6.0+). Sony was never called.
+    LoopbackFailed,
+    Sony {
+        code: u32,
+        hint: Option<String>,
+    },
     Unknown(String),
 }
 
@@ -147,6 +162,8 @@ fn parse_install_reply(line: &str) -> InstallReply {
             "bad_path" => InstallReply::BadPath,
             "unknown_job" => InstallReply::UnknownJob,
             "bad_request" => InstallReply::BadRequest,
+            "source_unreadable" => InstallReply::SourceUnreadable,
+            "loopback_failed" => InstallReply::LoopbackFailed,
             other => InstallReply::Unknown(other.to_string()),
         };
     }
@@ -196,7 +213,11 @@ fn job_at(addr: &str, id: &str) -> Result<Job, String> {
 }
 
 fn stop_at(addr: &str) -> Result<(), String> {
-    let line = talk(addr, SHORT_TIMEOUT, "{\"op\":\"stop\"}")?;
+    stop_with(addr, "{\"op\":\"stop\"}")
+}
+
+fn stop_with(addr: &str, request: &str) -> Result<(), String> {
+    let line = talk(addr, SHORT_TIMEOUT, request)?;
     let v: serde_json::Value =
         serde_json::from_str(line.trim()).map_err(|e| format!("stop reply: {e}"))?;
     if v.get("ok").and_then(|b| b.as_bool()) == Some(true) {
@@ -536,6 +557,17 @@ pub fn stop(ip: &str) -> Result<(), String> {
     stop_at(&join_host_port(ip, INSTALLER_PORT))
 }
 
+/// `stop`, also ending a job Sony is still being served; only an install call in flight refuses
+/// it (1.6.0+). For the engine's own recovery, once it has given up on that job: a plain stop is
+/// refused for exactly the job it is trying to clear. A daemon older than 1.6.0 ignores the flag
+/// and answers as for a plain stop.
+pub fn stop_forced(ip: &str) -> Result<(), String> {
+    stop_with(
+        &join_host_port(ip, INSTALLER_PORT),
+        "{\"op\":\"stop\",\"force\":true}",
+    )
+}
+
 pub fn job(ip: &str, id: &str) -> Result<Job, String> {
     job_at(&join_host_port(ip, INSTALLER_PORT), id)
 }
@@ -769,6 +801,28 @@ mod tests {
             .unwrap()
             .iter()
             .any(|q| q == "{\"op\":\"stop\"}"));
+    }
+
+    #[test]
+    fn a_forced_stop_says_so_and_a_refusal_is_returned() {
+        let (addr, h) = fake_once("{\"ok\":false,\"error\":\"busy\",\"job\":\"j1\"}");
+        let (ip, port) = addr.rsplit_once(':').unwrap();
+        let r = stop_with(&format!("{ip}:{port}"), "{\"op\":\"stop\",\"force\":true}");
+        let e = r.unwrap_err();
+        assert!(stop_refused_busy(&e), "{e}");
+        assert!(h.join().unwrap().contains("\"force\":true"));
+    }
+
+    #[test]
+    fn parses_the_two_errors_where_sony_was_never_called() {
+        assert!(matches!(
+            parse_install_reply("{\"ok\":false,\"error\":\"source_unreadable\"}"),
+            InstallReply::SourceUnreadable
+        ));
+        assert!(matches!(
+            parse_install_reply("{\"ok\":false,\"error\":\"loopback_failed\"}"),
+            InstallReply::LoopbackFailed
+        ));
     }
 
     #[test]

@@ -36,6 +36,8 @@ typedef struct {
      * asks for it (a base game that is not installed, on a console that
      * refused its own loopback copy and cannot reach the engine). */
     int        bare_path;
+    /* A stop with `"force":true`: also ends a job Sony is still being served. */
+    int        force;
     /* NULL on success; otherwise our string error code ("bad_request"). */
     const char *error;
 } inst_request_t;
