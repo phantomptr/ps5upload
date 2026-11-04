@@ -260,13 +260,17 @@ pub fn fatal(stage: Stage, error: &str) -> ! {
 
 /// What the person reads. Plain words: no language is loaded yet at this point.
 fn fatal_message(stage: Stage, error: &str, saved: Option<&Path>) -> String {
-    fatal_message_for(
-        stage,
-        error,
-        saved,
-        cfg!(windows),
-        webview_version().as_deref(),
-    )
+    // Only asked when it is to be shown: this may be running in the panic hook.
+    let webview = if webview_failed(stage, error) {
+        webview_version()
+    } else {
+        None
+    };
+    fatal_message_for(stage, error, saved, cfg!(windows), webview.as_deref())
+}
+
+fn webview_failed(stage: Stage, error: &str) -> bool {
+    stage == Stage::Window || error.to_lowercase().contains("webview")
 }
 
 fn fatal_message_for(
@@ -276,9 +280,8 @@ fn fatal_message_for(
     windows: bool,
     webview: Option<&str>,
 ) -> String {
-    let webview_failed = stage == Stage::Window || error.to_lowercase().contains("webview");
     let mut out = String::new();
-    if windows && webview_failed {
+    if windows && webview_failed(stage, error) {
         out.push_str(
             "PS5Upload could not open its window, because the Microsoft Edge WebView2 Runtime \
              failed to start.\n\n\
@@ -310,9 +313,7 @@ fn fatal_message_for(
     out
 }
 
-/// On a main thread panic this runs from the hook, where anything that could panic again ends
-/// the process at once. `tauri::webview_version` only asks the WebView2 loader and returns an
-/// error where there is none.
+/// Asks the WebView2 loader; an error where there is none.
 fn webview_version() -> Option<String> {
     #[cfg(windows)]
     {
