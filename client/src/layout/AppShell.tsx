@@ -128,7 +128,7 @@ import { installPlayTimeAccumulator } from "../state/playTime";
 import { installRunningWatch } from "../state/runningWatch";
 import { useTr } from "../state/lang";
 import { isAndroid, isMobile } from "../lib/platform";
-import { localFs } from "../api/localFs";
+import { localFs, storageAccessUsesPrompt } from "../api/localFs";
 import { getAppVersion } from "../lib/appVersion";
 import { GlobalPackageViewer } from "../components/GlobalPackageViewer";
 import { IncomingShareSheet } from "../components/IncomingShareSheet";
@@ -1475,7 +1475,9 @@ function AndroidStorageAccessBanner() {
                 })
             }
           >
-            {tr("picker_open_settings", undefined, "Open settings")}
+            {storageAccessUsesPrompt()
+              ? tr("picker_allow", undefined, "Allow")
+              : tr("picker_open_settings", undefined, "Open settings")}
           </Button>
           <Button
             variant="ghost"
@@ -1511,14 +1513,18 @@ function AndroidLocalNetworkBanner() {
     recheck();
     window.addEventListener("focus", recheck);
     document.addEventListener("visibilitychange", recheck);
-    // Android's prompt returns no event to the page; poll while it is open.
-    const t = window.setInterval(recheck, 2000);
     return () => {
       window.removeEventListener("focus", recheck);
       document.removeEventListener("visibilitychange", recheck);
-      window.clearInterval(t);
     };
   }, []);
+
+  // Android's prompt returns no event to the page; poll only while the banner is up.
+  useEffect(() => {
+    if (!blocked) return;
+    const t = window.setInterval(() => setBlocked(localNetworkBlocked()), 2000);
+    return () => window.clearInterval(t);
+  }, [blocked]);
 
   if (!blocked) return null;
 
@@ -1681,7 +1687,7 @@ export default function AppShell() {
       {isTauriEnv() && <CaptureViewer />}
       {/* v5 mobile top bar — kept slim; primary nav is the bottom
           tab bar. Only renders below md. */}
-      <div className="h-top-bar flex items-center gap-2.5 px-4 pb-2 pt-[calc(env(safe-area-inset-top)_+_0.5rem)] md:hidden">
+      <div className="h-top-bar flex items-center gap-2.5 px-4 pb-2 pt-[calc(var(--safe-top)_+_0.5rem)] md:hidden">
         <NavigationControls />
         <AppLogo size={28} />
         <span className="text-base font-semibold tracking-[-0.02em]">PS5Upload</span>
@@ -1699,7 +1705,7 @@ export default function AppShell() {
       <AndroidStorageAccessBanner />
 
       {/* Desktop: the sidebar runs to the window edge, the content beside it. */}
-      <div className="flex min-h-0 flex-1">
+      <div className="shell-safe-x flex min-h-0 flex-1">
         <div className="flex min-h-0 min-w-0 flex-1">
           {/* Desktop defaults to labeled navigation again. Users who prefer the
               compact v5 rail can collapse it explicitly; that choice persists. */}
@@ -1710,7 +1716,7 @@ export default function AppShell() {
             tabIndex={-1}
             className="flex min-w-0 flex-1 flex-col overflow-hidden outline-none"
           >
-            <div className="flex min-w-0 items-center gap-3 px-3 md:px-6 md:pt-4">
+            <div className="flex min-w-0 items-center gap-3 px-3 md:px-6 md:pt-[calc(var(--safe-top)_+_1rem)]">
               {/* Browser-style history for a desktop app: route and workspace-tab
                   changes are first-class views, so users can retrace a workflow
                   without reopening More or rebuilding a search. */}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyNavInset, navInsetCssPx } from "./androidInsets";
 
-function fakeWindow(bridge?: { navBottomPx(): number }, dpr = 2.625) {
+function fakeWindow(bridge?: { systemInsetsPx(): string }, dpr = 2.625) {
   const props = new Map<string, string>();
   const w = {
     devicePixelRatio: dpr,
@@ -26,9 +26,20 @@ describe("android navigation-bar inset", () => {
 
   /* This is what lifts the tab bar clear of the gesture bar. */
   it("sets --nav-inset-bottom from the shell", () => {
-    const { w, props } = fakeWindow({ navBottomPx: () => 126 });
+    const { w, props } = fakeWindow({ systemInsetsPx: () => "0,0,126,0" });
     applyNavInset(w);
     expect(props.get("--nav-inset-bottom")).toBe("48px");
+  });
+
+  /* A device with no cutout, and a 3-button nav bar on the side of a phone held sideways:
+     neither reaches env() on a cutout-only WebView. */
+  it("sets the other sides from the shell too", () => {
+    const { w, props } = fakeWindow({ systemInsetsPx: () => "63,126,0,42" });
+    applyNavInset(w);
+    expect(props.get("--sys-inset-top")).toBe("24px");
+    expect(props.get("--sys-inset-right")).toBe("48px");
+    expect(props.get("--nav-inset-bottom")).toBe("0px");
+    expect(props.get("--sys-inset-left")).toBe("16px");
   });
 
   /* Desktop, the browser build and iOS have no bridge: leave env() alone. */
@@ -41,7 +52,7 @@ describe("android navigation-bar inset", () => {
   /* A throwing bridge must not break the page. */
   it("falls back quietly if the bridge throws", () => {
     const { w, props } = fakeWindow({
-      navBottomPx: () => {
+      systemInsetsPx: () => {
         throw new Error("gone");
       },
     });

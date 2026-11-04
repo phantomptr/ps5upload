@@ -8,7 +8,7 @@
 import { create } from "zustand";
 
 import { joinSocketUrl, type JoinLink } from "../lib/joinProtocol";
-import { JoinSession } from "../join/session";
+import { holdWhileJoined, JoinSession } from "../join/session";
 import { getEngineUrl } from "./engine";
 
 /** The app reaches the friend's engine through its own (an app page may not open a plain ws://
@@ -64,3 +64,11 @@ export function activeJoin(): { session: JoinSession; host: string } | null {
   if (k === "refused" || k === "ended") return null;
   return { session, host: session.snapshot.host ?? session.opts.host ?? "" };
 }
+
+// From the store, not a screen: leaving Play keeps playing.
+let joinHold: { session: JoinSession; undo: () => void } | null = null;
+useJoinStore.subscribe(({ session }) => {
+  if (joinHold?.session === session) return;
+  joinHold?.undo();
+  joinHold = session ? { session, undo: holdWhileJoined(session) } : null;
+});

@@ -85,9 +85,10 @@ export function BackportPackCard({
   const browse = useCallback(async () => {
     // Tauri-only: a browser file picker cannot hand back a real filesystem
     // path, and the engine needs one. The web build types it instead.
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const picked = await open({ directory: true, multiple: false });
-    if (typeof picked === "string") setPath(picked);
+    // pickPath, not the system dialog: a phone has no folder dialog at all.
+    const { pickPath } = await import("../../lib/pickPath");
+    const picked = await pickPath({ mode: "folder" });
+    if (picked) setPath(picked);
   }, []);
 
   const inspect = useCallback(async () => {

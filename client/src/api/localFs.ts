@@ -22,8 +22,38 @@ export const localFs = {
   listDir: (path: string) => invoke<LocalEntry[]>("local_list_dir", { path }),
   /** Seed roots for the browser (Android: shared storage + removable). */
   storageRoots: () => invoke<string[]>("local_storage_roots"),
-  /** Whether all-files access is granted (always true off Android). */
+  /** Whether the app may read shared storage (always true off Android). */
   accessGranted: () => invoke<boolean>("storage_access_granted"),
-  /** Open the system All-files-access settings page (no-op off Android). */
-  requestAccess: () => invoke<void>("request_storage_access"),
+  /** Ask for it: Android's prompt on Android 7 to 10, the All-files-access settings page on 11+
+   *  (no-op off Android). */
+  requestAccess: async (): Promise<void> => {
+    const storage = storageBridge();
+    if (storage?.usesPrompt()) {
+      storage.request();
+      return;
+    }
+    return invoke<void>("request_storage_access");
+  },
+  /** Android's public Downloads folder for this user. */
+  downloadsDir: () => invoke<string>("local_downloads_dir"),
 };
+
+interface StorageBridge {
+  usesPrompt(): boolean;
+  request(): void;
+}
+
+/** MainActivity's (step 15 of android-postinit-patch.sh). */
+function storageBridge(): StorageBridge | undefined {
+  if (typeof window === "undefined") return undefined;
+  return (window as unknown as { PS5UploadStorage?: StorageBridge }).PS5UploadStorage;
+}
+
+/** Android 7 to 10: the storage permission is a prompt in the app, not a page in Settings. */
+export function storageAccessUsesPrompt(): boolean {
+  try {
+    return !!storageBridge()?.usesPrompt();
+  } catch {
+    return false;
+  }
+}

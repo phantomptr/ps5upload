@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { isMobile } from "../lib/platform";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
@@ -28,7 +29,15 @@ function loadEngineUrl(): string {
   // window.location.origin rather than a persisted 127.0.0.1 address.
   if (!isTauriEnv()) return window.location.origin + (import.meta.env.VITE_BASE_URL || "").replace(/\/+$/, "");
   const v = safeGetItem(KEY_ENGINE_URL);
-  return v ? normalizeEngineUrl(v) : DEFAULT_ENGINE_URL;
+  return v ? usableEngineUrl(normalizeEngineUrl(v)) : DEFAULT_ENGINE_URL;
+}
+
+/** The phone apps have no Engine URL setting: their native commands always reach the engine
+ *  inside the app, and Android allows plain http to loopback only. A remote URL saved before the
+ *  setting was hidden (or restored from a backup) would point the page's direct fetches at
+ *  another machine while the native calls stay here, with no field left to clear it. */
+function usableEngineUrl(url: string): string {
+  return isTauriEnv() && isMobile() && !isLoopbackUrl(url) ? DEFAULT_ENGINE_URL : url;
 }
 
 interface EngineState {
@@ -39,7 +48,7 @@ interface EngineState {
 export const useEngineStore = create<EngineState>((set) => ({
   engineUrl: loadEngineUrl(),
   setEngineUrl: (url) => {
-    const engineUrl = normalizeEngineUrl(url);
+    const engineUrl = usableEngineUrl(normalizeEngineUrl(url));
     safeSetItem(KEY_ENGINE_URL, engineUrl);
     set({ engineUrl });
     // A deliberate user/settings change of the engine URL supersedes any

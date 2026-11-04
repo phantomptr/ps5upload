@@ -6,7 +6,7 @@ import { tokenKey } from "../lib/joinClient";
 import { joinAppLink } from "../lib/joinProtocol";
 import { OpenInAppGate } from "../components/OpenInAppGate";
 import { JoinView } from "./JoinView";
-import { JoinSession } from "./session";
+import { holdWhileJoined, JoinSession } from "./session";
 import { defaultName, lastName, rememberName } from "./guestName";
 
 export { NAME_KEY, defaultName } from "./guestName";
@@ -60,6 +60,9 @@ export function JoinFlow({ url, invite, host }: { url: string; invite: string | 
     // Once, on load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // This page has no store: the session is its own.
+  useEffect(() => (session ? holdWhileJoined(session) : undefined), [session]);
 
   useEffect(() => {
     if (!session) return;

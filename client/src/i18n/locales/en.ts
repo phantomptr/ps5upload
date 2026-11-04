@@ -2312,7 +2312,7 @@ err_rar_password_required:
 err_rar_password_wrong:
   "Wrong password for this RAR archive. Check it and try again.",
 err_rar_unsupported:
-  "RAR archives aren't supported on this build (Android uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.",
+  "RAR archives aren't supported on phones (the app uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.",
 err_rar_unsafe_entry:
   "This RAR contains a file path that points outside the destination folder, so it was refused for safety. The archive may be malformed.",
 err_rar_missing_volume:
@@ -3791,6 +3791,7 @@ fs_upload_already_running: "A copy to this PS5 is already running. Wait for it t
 fs_upload_interrupted_notice: "A copy to the PS5 was interrupted. Open Files to resume it.",
 installed_launch_smp_refused: "The PS5 refused to start this game (0x80940033) although kstuff is running. ShadowMount+ mounts a game when it starts, and that did not happen. Close any game that is running, send ShadowMount+ again from Payloads, then press Play.",
 connection_mac_local_network_hint: "macOS may be blocking this app from your local network. Open System Settings → Privacy & Security → Local Network, allow PS5Upload, then check again.",
+connection_ios_local_network_hint: "iOS may be blocking this app from your local network. Open Settings → PS5Upload, turn on Local Network, then check again.",
 batch_space_tight: "{drive}: {size} may not fit. The PS5 holds back about a fifth more as it writes, so about {fits} is likely to fit. You can still try.",
 installed_swap_confirm_title: "Close {other} first?",
 installed_swap_confirm_body: "{other} is running, and the PS5 runs one game at a time. Close it and start {name}? Any unsaved progress in {other} will be lost.",
@@ -6298,6 +6299,7 @@ library_compressed_hint: "Compressed images need ShadowMount+ to play. To edit, 
 "rp_pad_extra_press": "Press the extra button (a back button or paddle)",
 "rp_pad_extra_as": "It presses",
 "rp_pad_extra_save": "Save",
+"pad_back_again": "Press Back again to leave.",
 "pad_connecting": "Connecting…",
 "pad_asking": "Waiting for {name} to allow this phone…",
 "pad_no_session": "Connected. Waiting for Play to start on the computer.",
@@ -6539,6 +6541,7 @@ library_compressed_hint: "Compressed images need ShadowMount+ to play. To edit, 
 "rp_pip_bring_back": "Bring it back here",
 "rp_pip_back": "Back to the app",
 "rp_pip_title": "{name} · Play",
+"rp_android_pip_ended": "Stream ended",
 "rp_pip_hint_any": "A controller keeps playing it while you use other apps. Click the small window to play with the keyboard.",
 "rp_pip_hint_front": "The keyboard and controller play it while the small window is the active one: click it. On macOS and Linux a controller only reaches the window in front.",
 "rp_pip_hint_video": "This browser's picture in picture shows the picture only: the keyboard and controller play it while this window is in front.",

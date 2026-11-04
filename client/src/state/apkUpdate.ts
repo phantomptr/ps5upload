@@ -118,7 +118,27 @@ export function installRefusalMessage(code: string): string {
       "Install unknown apps is still off for PS5Upload. Turn it on, then try again.",
     );
   }
+  if (code === "not-an-app") {
+    return trFb("update_apk_not_an_app", "The download is not an Android app. Try again, or use the download page.");
+  }
+  if (code === "different-app") {
+    return trFb("update_apk_different_app", "The download is a different app. Use the download page.");
+  }
+  if (code === "not-downloaded") {
+    return trFb("update_apk_not_downloaded", "The update file is missing. Try again.");
+  }
+  if (code === "no-dialog") {
+    return trFb("update_apk_no_dialog", "Android did not show the install dialog. Try again, or use the download page.");
+  }
   return code;
+}
+
+/** What the person reads for an install that failed after Android took it: Android's own words
+ *  when it gave any (they are in the phone's language), else ours. */
+function failedMessage(message: string): string {
+  return message
+    ? installRefusalMessage(message)
+    : trFb("update_apk_install_failed", "The update did not install. Try again, or use the download page.");
 }
 
 interface ApkUpdateStore {
@@ -165,7 +185,7 @@ async function startInstall(bridge: UpdaterBridge, path: string): Promise<string
   for (;;) {
     const s = parseInstallStatus(bridge.status());
     if (s.state === "failed") {
-      const message = s.message || "install failed";
+      const message = failedMessage(s.message);
       setStep({ kind: "failed", message });
       return message;
     }
@@ -184,7 +204,7 @@ async function startInstall(bridge: UpdaterBridge, path: string): Promise<string
       if (s.state === "confirm" || s.state === "writing") continue;
       setStep(
         s.state === "failed"
-          ? { kind: "failed", message: s.message || "install failed" }
+          ? { kind: "failed", message: failedMessage(s.message) }
           : { kind: "idle" },
       );
       return;
@@ -233,9 +253,9 @@ export function openInstallSettings(): void {
  */
 export async function downloadAndInstallApk(result: UpdateCheck): Promise<string | null> {
   const bridge = updaterBridge();
-  if (!bridge) return "this copy cannot install updates itself";
+  if (!bridge) return trFb("update_apk_no_installer", "This copy cannot install updates itself. Use the download page.");
   if (!result.download_url || !result.download_filename) {
-    return "no APK for this device in this release";
+    return trFb("update_apk_none_for_device", "This release has no APK for this device. Use the download page.");
   }
   pendingPath = null;
   setStep({ kind: "downloading", received: 0, total: 0 });

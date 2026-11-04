@@ -16,7 +16,7 @@ import {
   type UpdateCheck,
   type UpdateDownload,
 } from "../api/ps5";
-import { isMobile } from "../lib/platform";
+import { isIOS, isMobile } from "../lib/platform";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { apkUpdaterAvailable, downloadAndInstallApk } from "./apkUpdate";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "../lib/safeStorage";
@@ -40,6 +40,24 @@ import { log } from "./logs";
 // than the TTL. No localStorage — users installing a fresh version
 // should never see a stale "update available" hint from a previous
 // install.
+
+/** A phone could not open the download link. */
+function mobileLinkFailedMessage(): string {
+  const lang = useLangStore.getState().lang;
+  const say = (key: string, fallback: string) => {
+    const out = translate(lang, key, undefined);
+    return out === key ? fallback : out;
+  };
+  return isIOS()
+    ? say(
+        "update_ios_link_failed",
+        "Couldn't open the download link. Get the new .ipa from the GitHub releases page and install it with your sideloading app.",
+      )
+    : say(
+        "update_apk_link_failed",
+        "Couldn't open the download link. Tap “Get APK in browser”, or grab it from the GitHub releases page.",
+      );
+}
 
 const CHECK_TTL_MS = 24 * 60 * 60 * 1000; // 1 day
 const CACHE_KEY = "ps5upload.update-check-v2";
@@ -744,8 +762,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
                 result,
                 // openExternalUrl already logged the underlying error; give the
                 // user an actionable message + the in-panel browser button.
-                message:
-                  "Couldn't open the download link. Tap “Get APK in browser”, or grab it from the GitHub releases page.",
+                message: mobileLinkFailedMessage(),
               },
         });
         return;

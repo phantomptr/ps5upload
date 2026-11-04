@@ -9,6 +9,7 @@ import {
   type EngineDiagnosis,
   type EngineProblemKind,
 } from "../lib/engineDiagnosis";
+import { isMobile } from "../lib/platform";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { useConnectionStore } from "../state/connection";
 import { setLiveEngineUrl } from "../state/engine";
@@ -165,7 +166,16 @@ export function EngineProblem({ compact = false }: { compact?: boolean }) {
           "Check that the server (Docker container) is running, then reload this page.",
         ),
       };
-  const canRestart = desktop && (diag?.local ?? true);
+  // On a phone the engine runs inside the app: Restart can only fail, and the computer advice
+  // does not apply.
+  const phone = desktop && isMobile();
+  const shown = phone
+    ? {
+        why: tr("engine_problem.phone.why", undefined, "The engine runs inside this app, and it stopped answering."),
+        fix: tr("engine_problem.phone.fix", undefined, "Close the app fully and open it again."),
+      }
+    : text;
+  const canRestart = desktop && !phone && (diag?.local ?? true);
   const stopReason = engineError && engineError !== diag?.probe_error ? engineError : null;
 
   return (
@@ -180,14 +190,16 @@ export function EngineProblem({ compact = false }: { compact?: boolean }) {
         />
       )}
       <p className="text-sm font-semibold">
-        {tr(
-          "engine_problem.title",
-          undefined,
-          "The app cannot reach its engine on this computer",
-        )}
+        {phone
+          ? tr("engine_problem.phone.title", undefined, "The app cannot reach its engine")
+          : tr(
+              "engine_problem.title",
+              undefined,
+              "The app cannot reach its engine on this computer",
+            )}
       </p>
-      <p className="mt-1 text-xs text-[var(--color-muted)]">{text.why}</p>
-      <p className="mt-1 text-xs text-[var(--color-text)]">{text.fix}</p>
+      <p className="mt-1 text-xs text-[var(--color-muted)]">{shown.why}</p>
+      <p className="mt-1 text-xs text-[var(--color-text)]">{shown.fix}</p>
       {/* Why it stopped, when the app saw it go ("engine exited (code …)"): the probe alone
           only says nothing answers. */}
       {stopReason && (

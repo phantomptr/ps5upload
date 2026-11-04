@@ -41,13 +41,18 @@ const ALLOWED = new Set(["../lib/pickPath.ts"]);
  * everyone keeping to it.
  */
 export function callsReadDialog(text: string): boolean {
-  const imp =
-    /import\s*\{([^}]*)\}\s*from\s*["']@tauri-apps\/plugin-dialog["']/.exec(text);
-  if (!imp) return false;
-  const alias = /(^|,)\s*open\s*(?:as\s+(\w+))?\s*(?=,|$)/.exec(imp[1]);
-  if (!alias) return false;
-  const name = alias[2] ?? "open";
-  return new RegExp(`\\b${name}\\s*\\(`).test(text);
+  // `import { open } from "..."` and `const { open } = await import("...")` alike: the dynamic
+  // form slipped past this guard and left Android's settings restore always failing.
+  const bindings = [
+    ...text.matchAll(/import\s*\{([^}]*)\}\s*from\s*["']@tauri-apps\/plugin-dialog["']/g),
+    ...text.matchAll(/\{([^}]*)\}\s*=\s*await\s+import\(\s*["']@tauri-apps\/plugin-dialog["']\s*\)/g),
+  ];
+  return bindings.some((imp) => {
+    const alias = /(^|,)\s*open\s*(?:(?:as|:)\s*(\w+))?\s*(?=,|$)/.exec(imp[1].trim());
+    if (!alias) return false;
+    const name = alias[2] ?? "open";
+    return new RegExp(`\\b${name}\\s*\\(`).test(text);
+  });
 }
 
 describe("Android read-path pickers (issue #278)", () => {
@@ -89,5 +94,17 @@ describe("Android read-path pickers (issue #278)", () => {
     const importedNotCalled = `import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
       await confirm("sure?");`;
     expect(callsReadDialog(importedNotCalled)).toBe(false);
+
+    const dynamic = `const { open } = await import("@tauri-apps/plugin-dialog");
+      const sel = await open({ multiple: false });`;
+    expect(callsReadDialog(dynamic)).toBe(true);
+
+    const dynamicAlias = `const { open: pick } = await import("@tauri-apps/plugin-dialog");
+      const sel = await pick({ multiple: false });`;
+    expect(callsReadDialog(dynamicAlias)).toBe(true);
+
+    const dynamicSave = `const { save } = await import("@tauri-apps/plugin-dialog");
+      const dest = await save({});`;
+    expect(callsReadDialog(dynamicSave)).toBe(false);
   });
 });

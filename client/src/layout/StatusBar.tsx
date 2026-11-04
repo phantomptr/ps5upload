@@ -110,7 +110,7 @@ export default function StatusBar() {
   return (
     // A quiet line on the atmosphere under the shell's canvas, lined up with
     // the canvas's inner edge.
-    <div className="hidden min-h-9 flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap px-4 pb-[calc(var(--safe-bottom)_+_0.35rem)] pt-1.5 pl-[calc(env(safe-area-inset-left)_+_2rem)] pr-[calc(env(safe-area-inset-right)_+_2rem)] text-[0.6875rem] text-[var(--color-muted)] md:flex">
+    <div className="shell-statusbar hidden min-h-9 flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap px-4 pb-[calc(var(--safe-bottom)_+_0.35rem)] pt-1.5 pl-[calc(var(--safe-left)_+_2rem)] pr-[calc(var(--safe-right)_+_2rem)] text-[0.6875rem] text-[var(--color-muted)] md:flex">
       {/* Group 1 — the Engine (our local backend). */}
       <div
         className="flex items-center gap-2"

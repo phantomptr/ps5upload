@@ -7,6 +7,8 @@ import { TouchControls } from "../screens/Play/TouchControls";
 import { PhoneKeyboardButton, TouchModeToggle, TouchpadSurface } from "../screens/Play/TouchpadOverlay";
 import { KbmSender } from "../lib/kbmInput";
 import { useTr } from "../state/lang";
+import { setScreenWakeReason } from "../lib/androidScreenWake";
+import { setPadForwardReason } from "../lib/androidPadBridge";
 import { rpInput } from "../state/remotePlay";
 import { makeWatchPlayer, type MsePlayer, type WatchPlayer, type WatchProblem } from "./watchPlayer";
 
@@ -125,6 +127,17 @@ export function PadApp({
   // Touchpad & keyboard: offered when the console has a native mouse (the engine says).
   const [kbmCaps, setKbmCaps] = useState<KbmCapsMsg | null>(null);
   const [tab, setTab] = useState<"controller" | "touchpad">("controller");
+
+  // A phone being a controller (or a screen being watched) has nobody touching it: keep it on,
+  // and controllers plugged into it are this page's.
+  useEffect(() => {
+    setScreenWakeReason("pad-remote", true);
+    setPadForwardReason("pad-remote", true);
+    return () => {
+      setScreenWakeReason("pad-remote", false);
+      setPadForwardReason("pad-remote", false);
+    };
+  }, []);
 
   useEffect(() => {
     if (!motionOn) return;

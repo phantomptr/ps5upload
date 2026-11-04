@@ -27,7 +27,8 @@ import {
 import { sendHelperTo } from "../../state/helperSendRuntime";
 import { clearHelperStopped, useHelperStopped } from "../../state/helperStopped";
 import { StopHelperButton } from "./StopHelper";
-import { looksLikeMacLocalNetworkBlock } from "../../lib/localNetworkHint";
+import { localNetworkHintFor } from "../../lib/localNetworkHint";
+import { isIOS } from "../../lib/platform";
 import { localNetworkBlocked } from "../../lib/androidLocalNetwork";
 import { pairingAllow } from "../../api/ava1";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
@@ -570,6 +571,7 @@ export default function ConnectionScreen() {
       // "No route to host" at once, on a Mac, with the console known to be up from another
       // computer, is what a denied Local Network permission looks like: say where it is.
       const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+      const networkHint = localNetworkHintFor(probe.error, ua, isIOS());
       settleStep1(
         "fail",
         localNetworkBlocked()
@@ -578,7 +580,9 @@ export default function ConnectionScreen() {
               undefined,
               "Android is blocking PS5Upload from your local network. Tap Allow at the top, then check again.",
             )
-          : looksLikeMacLocalNetworkBlock(probe.error, ua)
+          : networkHint === "ios"
+          ? `${detail}. ${tr("connection_ios_local_network_hint", undefined, "iOS may be blocking this app from your local network. Open Settings → PS5Upload, turn on Local Network, then check again.")}`
+          : networkHint === "mac"
           ? `${detail}. ${tr("connection_mac_local_network_hint", undefined, "macOS may be blocking this app from your local network. Open System Settings → Privacy & Security → Local Network, allow PS5Upload, then check again.")}`
           : // A VPN on this computer sends the console's address out through the tunnel: the
             // likeliest cause when everything else is right (reported twice on Discord).

@@ -55,7 +55,7 @@ function MobilePill() {
   return (
     <div
       data-testid="activity-pill"
-      className="glass-float elev-2 fixed inset-x-3 bottom-[calc(var(--safe-bottom)_+_5.1rem)] z-30 rounded-full ps-[env(safe-area-inset-left)] pe-[env(safe-area-inset-right)] md:hidden"
+      className="glass-float elev-2 fixed inset-x-3 bottom-[calc(var(--safe-bottom)_+_5.1rem)] z-30 rounded-full ps-[var(--safe-left)] pe-[var(--safe-right)] md:hidden"
     >
       <ActivitySummaryLine summary={summary} open={false} onToggle={toggle} variant="pill" />
     </div>
@@ -116,9 +116,9 @@ function OpenPanel() {
           "glass-float elev-2 anim-sheet fixed z-50 overflow-y-auto overscroll-contain outline-none",
           // Phone: a bottom sheet inside the safe area.
           "inset-x-0 bottom-0 max-h-[80dvh] rounded-t-[var(--radius-card)] pt-4",
-          "pb-[calc(var(--safe-bottom)_+_1rem)] ps-[calc(env(safe-area-inset-left)_+_1rem)] pe-[calc(env(safe-area-inset-right)_+_1rem)]",
+          "pb-[calc(var(--safe-bottom)_+_1rem)] ps-[calc(var(--safe-left)_+_1rem)] pe-[calc(var(--safe-right)_+_1rem)]",
           // Desktop: a popover over the status strip's right end.
-          "md:inset-x-auto md:bottom-[calc(var(--safe-bottom)_+_2.75rem)] md:end-[calc(env(safe-area-inset-right)_+_1.5rem)] md:max-h-[min(36rem,70vh)] md:w-[min(34rem,calc(100vw-3rem))] md:rounded-[var(--radius-card)] md:px-5 md:py-4",
+          "md:inset-x-auto md:bottom-[calc(var(--safe-bottom)_+_2.75rem)] md:end-[calc(var(--safe-right)_+_1.5rem)] md:max-h-[min(36rem,70vh)] md:w-[min(34rem,calc(100vw-3rem))] md:rounded-[var(--radius-card)] md:px-5 md:py-4",
         ].join(" ")}
       >
         <ActivityPanelView

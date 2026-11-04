@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { isAndroid, isMobile } from "../../lib/platform";
+import { isMobile } from "../../lib/platform";
 import { pkgKindLabel } from "./pkgKind";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
 import { engineIsOnThisDevice } from "../../state/engine";
@@ -3217,7 +3217,7 @@ function RarSourceCard() {
   // user picked a middle part). The generic open-failure copy explains it.
   const otherErr = !!error && !needsPw && !wrongPw;
 
-  if (isAndroid()) {
+  if (isMobile()) {
     return (
       <div className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] p-4">
         <p className="mb-1 text-sm font-medium">
@@ -3226,7 +3226,7 @@ function RarSourceCard() {
         <p className="text-xs text-[var(--color-warn)]">
           {tr(
             "err_rar_unsupported",
-            "RAR archives aren't supported on this build (Android uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.",
+            "RAR archives aren't supported on phones (the app uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.",
           )}
         </p>
       </div>

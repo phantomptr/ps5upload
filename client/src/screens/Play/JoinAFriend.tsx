@@ -1,3 +1,4 @@
+import { isIOS } from "../../lib/platform";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link2, Radar, ScanLine, Users } from "lucide-react";
 
@@ -404,9 +405,12 @@ async function appFullscreen(on: boolean): Promise<void> {
 type Detector = { detect: (src: CanvasImageSource) => Promise<Array<{ rawValue: string }>> };
 type DetectorCtor = new (o: { formats: string[] }) => Detector;
 
-/** A camera QR scanner exists here (BarcodeDetector: Chrome on Android, some desktops). */
+/** A camera QR scanner exists here (BarcodeDetector: Chrome on Android, some desktops). Never the
+ *  iPhone app: WebKit has no such API by default, and the app no longer asks for the camera, so
+ *  it could not use one (the iPhone's own Camera app scans the code and opens the invite). */
 export function scanAvailable(): boolean {
   return (
+    !isIOS() &&
     typeof window !== "undefined" &&
     "BarcodeDetector" in window &&
     typeof navigator !== "undefined" &&

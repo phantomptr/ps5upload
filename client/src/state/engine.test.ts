@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 const { mockIsTauri } = vi.hoisted(() => ({ mockIsTauri: vi.fn(() => true) }));
 vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => mockIsTauri() }));
+const { mockIsMobile } = vi.hoisted(() => ({ mockIsMobile: vi.fn(() => false) }));
+vi.mock("../lib/platform", () => ({ isMobile: () => mockIsMobile() }));
 
 import { engineIsOnThisDevice, getEngineUrl, isLoopbackUrl, setLiveEngineUrl, useEngineStore } from "./engine";
 
@@ -51,6 +53,30 @@ describe("getEngineUrl", () => {
     useEngineStore.getState().setEngineUrl("http://192.168.1.20:19113");
     setLiveEngineUrl("http://127.0.0.1:19113");
     expect(getEngineUrl()).toBe("http://192.168.1.20:19113");
+    useEngineStore.getState().setEngineUrl("http://127.0.0.1:19113");
+  });
+});
+
+describe("a stored remote engine on a phone", () => {
+  it("is not applied: the phone app uses the engine inside it", () => {
+    mockIsTauri.mockReturnValue(true);
+    mockIsMobile.mockReturnValue(true);
+    try {
+      useEngineStore.getState().setEngineUrl("http://192.168.1.50:19113");
+      expect(useEngineStore.getState().engineUrl).toBe("http://127.0.0.1:19113");
+      // The app's own engine on a fallback port is still fine.
+      useEngineStore.getState().setEngineUrl("http://127.0.0.1:19123");
+      expect(useEngineStore.getState().engineUrl).toBe("http://127.0.0.1:19123");
+    } finally {
+      mockIsMobile.mockReturnValue(false);
+      useEngineStore.getState().setEngineUrl("http://127.0.0.1:19113");
+    }
+  });
+
+  it("stays the desktop's choice to make", () => {
+    mockIsTauri.mockReturnValue(true);
+    useEngineStore.getState().setEngineUrl("http://192.168.1.50:19113");
+    expect(useEngineStore.getState().engineUrl).toBe("http://192.168.1.50:19113");
     useEngineStore.getState().setEngineUrl("http://127.0.0.1:19113");
   });
 });

@@ -1,6 +1,6 @@
 // The renderer's half of background work (#457).
 //
-// The desktop / Android host watches the engine from Rust (src-tauri/src/bg_activity.rs):
+// The desktop, Android and iPhone hosts watch the engine from Rust (src-tauri/src/bg_activity.rs):
 // it keeps the app running while jobs run, shows their progress (Android) and posts
 // complete / failed notifications. This module gives it what only the page knows:
 //
