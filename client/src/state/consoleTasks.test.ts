@@ -183,8 +183,8 @@ describe("cancel", () => {
     expect(rows()[0].status).toBe("cancelled");
   });
 
-  it("treats a task that is already over as no failure", async () => {
-    vi.spyOn(api, "cancelConsoleTask").mockRejectedValue(new ConsoleTaskError("gone", "unknown_job"));
+  it.each(["unknown_job", "ended"])("treats a task that is already over (%s) as no failure", async (reason) => {
+    vi.spyOn(api, "cancelConsoleTask").mockRejectedValue(new ConsoleTaskError("gone", reason));
     vi.spyOn(api, "fetchConsoleTasks").mockResolvedValue({ supported: true, tasks: [] });
     await expect(cancelConsoleTaskRow(HOST, "aa")).resolves.toBeUndefined();
   });

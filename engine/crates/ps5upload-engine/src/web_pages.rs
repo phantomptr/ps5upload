@@ -230,6 +230,26 @@ fn harden(headers: &mut HeaderMap, content_type: &str) {
     }
 }
 
+/// An API answer can hold a key (the console list, a settings backup), and a browser's disk cache
+/// keeps what it is not told otherwise: words go uncached unless their route says differently.
+/// Pictures and files are left alone, as they have their own rules.
+pub(crate) async fn api_no_store(req: Request, next: Next) -> Response {
+    let api = req.uri().path().starts_with("/api/");
+    let mut res = next.run(req).await;
+    if api && !res.headers().contains_key(header::CACHE_CONTROL) {
+        let words = res
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|t| t.to_str().ok())
+            .is_none_or(|t| t.starts_with("text/") || t.contains("json"));
+        if words {
+            res.headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        }
+    }
+    res
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

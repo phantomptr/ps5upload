@@ -201,6 +201,18 @@ fn session() -> TestSession {
     )
 }
 
+#[test]
+#[ignore = "sets the global session"]
+fn a_test_that_panics_leaves_no_session_behind() {
+    let panicked = std::panic::catch_unwind(|| {
+        let _s = session();
+        assert!(crate::rp_stream_api::live_feed::session_running());
+        panic!("a test failing part way");
+    });
+    assert!(panicked.is_err());
+    assert!(!crate::rp_stream_api::live_feed::session_running());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs ffmpeg/ffprobe with libx264 and libopus; local RTMP on 19350"]
 async fn goes_live_to_a_local_rtmp_server_and_reconnects() {
@@ -262,8 +274,9 @@ async fn goes_live_to_a_local_rtmp_server_and_reconnects() {
         assert_eq!(ac, "aac");
         assert!(dur > 4.0, "{dur}");
         assert!(gaps.iter().all(|&g| g <= 2.1), "{gaps:?}");
-        // The killed server's file may end in a cut-off frame; nothing else may be broken.
-        assert!(errs <= if killed { 4 } else { 0 }, "{errs} decode errors");
+        // A server killed mid-stream cuts off what it was writing: a few frames at the end, more
+        // on a slow machine (6 seen on arm64 in Docker). The other file may have none.
+        assert!(errs <= if killed { 16 } else { 0 }, "{errs} decode errors");
     }
 }
 

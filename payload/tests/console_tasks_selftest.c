@@ -117,6 +117,77 @@ static void test_how_it_ended_is_kept(void) {
     CHECK(json[0] == '\0');
 }
 
+/* Asked to stop, the stop failed, and it fails by itself later: not "cancelled". An ended one says so. */
+static void test_a_stop_that_did_not_go_through(void) {
+    uint8_t a[16], b[16];
+    ava1_job_entry_t e[2];
+    size_t n;
+    ctasks_reset();
+    id_of(1, a);
+    id_of(2, b);
+    ctasks_started(a, "copy", "/data/a", 0);
+    ctasks_started(b, "copy", "/data/b", 0);
+    CHECK(ctasks_cancel_requested(a) == 1);
+    ctasks_cancel_failed(a);
+    e[0] = job(1, 2, 1, 10);
+    e[1] = job(2, 1, 10, 10);
+    n = list_of(e, 2);
+    CHECK(ctasks_observe(res, n, 1000) == 0);
+    read_json(1000);
+    CHECK(strstr(json, "\"state\":\"failed\"") != NULL);
+    CHECK(strstr(json, "\"state\":\"cancelled\"") == NULL);
+    CHECK(ctasks_cancel_requested(a) == 0);
+    CHECK(ctasks_cancel_requested(b) == 0);
+}
+
+/* A stopped copy's leftovers come up twice and only for a new dest of a job that was stopped. */
+static void test_leftovers_of_a_stopped_copy(void) {
+    uint8_t a[16], b[16], c[16], d[16];
+    ava1_job_entry_t e[3];
+    char dest[64];
+    size_t n;
+    ctasks_reset();
+    id_of(1, a);
+    id_of(2, b);
+    id_of(3, c);
+    id_of(4, d);
+    ctasks_started(a, "copy", "/data/a", 0);
+    ctasks_started(b, "copy", "/data/b", 0);
+    ctasks_started(c, "copy", "/data/c", 0);
+    ctasks_started(d, "copy", "/data/d", 0);
+    ctasks_note_new_dest(a, "/data/stopped");
+    ctasks_note_new_dest(b, "/data/failed");
+    ctasks_note_new_dest(c, "/data/done");
+    /* d went into a folder that was there: never noted, so never cleared */
+    CHECK(ctasks_take_leftover(1000, dest, sizeof dest) == 0);
+    CHECK(ctasks_cancel_requested(a) == 1);
+    CHECK(ctasks_cancel_requested(d) == 1);
+    e[0] = job(1, 2, 1, 10);
+    e[1] = job(2, 2, 1, 10);
+    e[2] = job(3, 1, 10, 10);
+    n = list_of(e, 3);
+    CHECK(ctasks_observe(res, n, 1000) == 0);
+    CHECK(ctasks_take_leftover(1000, dest, sizeof dest) == 1);
+    CHECK(strcmp(dest, "/data/stopped") == 0);
+    CHECK(ctasks_take_leftover(1001, dest, sizeof dest) == 0);
+    CHECK(ctasks_take_leftover(1000 + CTASKS_CLEAR_AGAIN_MS, dest, sizeof dest) == 1);
+    CHECK(strcmp(dest, "/data/stopped") == 0);
+    CHECK(ctasks_take_leftover(1000 + 3 * CTASKS_CLEAR_AGAIN_MS, dest, sizeof dest) == 0);
+    /* a dest too long for the slot is simply not noted */
+    {
+        char longer[CTASKS_SLOTS * 64];
+        memset(longer, 'x', sizeof longer - 1);
+        longer[sizeof longer - 1] = 0;
+        ctasks_reset();
+        ctasks_started(a, "copy", "/data/a", 0);
+        ctasks_note_new_dest(a, longer);
+        CHECK(ctasks_cancel_requested(a) == 1);
+        n = list_of(e, 0);
+        CHECK(ctasks_observe(res, n, 2000) == 0);
+        CHECK(ctasks_take_leftover(2000, dest, sizeof dest) == 0);
+    }
+}
+
 static void test_vanished_and_too_new(void) {
     uint8_t a[16];
     size_t n;
@@ -188,6 +259,8 @@ static void test_slots_and_long_names(void) {
 int main(void) {
     test_only_noted_jobs_and_keys();
     test_how_it_ended_is_kept();
+    test_a_stop_that_did_not_go_through();
+    test_leftovers_of_a_stopped_copy();
     test_vanished_and_too_new();
     test_slots_and_long_names();
     if (failures) {

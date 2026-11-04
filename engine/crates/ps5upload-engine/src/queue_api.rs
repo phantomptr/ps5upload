@@ -343,10 +343,34 @@ enum WaitingFor {
     Hold,
     /// A job, install or console operation this engine did not start from the queue.
     OtherWork,
+    /// A task running on the console itself (Minion's copies, a PC's on a share).
+    ConsoleTask,
     /// The console's helper does not answer.
     Console,
     /// A short pause between items.
     Settle,
+}
+
+/// Where a stopped upload's unfinished copy sits: `<dest>.ava-part`, a file or a staged folder.
+fn part_left_by(item: &Item) -> Option<String> {
+    let uploads = matches!(
+        item.kind,
+        ItemKind::UploadFile
+            | ItemKind::UploadDir
+            | ItemKind::UploadZip
+            | ItemKind::Upload7z
+            | ItemKind::UploadRar
+    );
+    let dest = item.request.get("dest")?.as_str()?.trim_end_matches('/');
+    (uploads && !dest.is_empty()).then(|| format!("{dest}.ava-part"))
+}
+
+/// What `GET /api/ps5/console-tasks` answers holds a task still running.
+fn tasks_say_running(answer: &Value) -> bool {
+    answer
+        .get("tasks")
+        .and_then(Value::as_array)
+        .is_some_and(|tasks| tasks.iter().any(|t| t["state"] == "running"))
 }
 
 #[derive(Default)]
@@ -801,6 +825,17 @@ impl QueueState {
         }
     }
 
+    /// Asked only as an item is about to start, and while one waits. A helper too old to say, or
+    /// that doesn't answer this, stops nothing: the probe above is what says it is there.
+    async fn a_task_runs_on(&self, console: &str) -> bool {
+        let path = format!(
+            "/api/ps5/console-tasks?addr={}",
+            crate::mcp::encode_component(console)
+        );
+        let (status, answer) = self.call(Method::GET, &path, None).await;
+        status.is_success() && tasks_say_running(&answer)
+    }
+
     fn console_is_in_use(&self, console: &str) -> bool {
         crate::helper_stop::is_busy(console)
             || self
@@ -836,6 +871,9 @@ impl QueueState {
         }
         if !(self.0.probe)(console.to_string()).await {
             return Step::Wait(Some(WaitingFor::Console));
+        }
+        if self.a_task_runs_on(console).await {
+            return Step::Wait(Some(WaitingFor::ConsoleTask));
         }
         let mut book = self.book();
         // The probe took a moment: the line or the holds may have changed.
@@ -905,6 +943,7 @@ impl QueueState {
 
     /// Ends an item and says so. An item someone asked to remove goes away instead.
     async fn finish(&self, id: &str, end: End) {
+        let mut part = None;
         let (removed, console) = {
             let mut book = self.book();
             let Some(at) = book.find(id) else { return };
@@ -917,6 +956,9 @@ impl QueueState {
             let removed = intent == Some(Intent::Remove);
             if removed {
                 let view = book.view(&book.items[at]);
+                if stopped {
+                    part = part_left_by(&book.items[at]);
+                }
                 book.items.remove(at);
                 bus().publish_json("queue", &json!({ "action": "removed", "item": view }));
             } else {
@@ -942,6 +984,9 @@ impl QueueState {
         };
         if !removed {
             self.announce("ended", id);
+        }
+        if let Some(part) = part {
+            self.clear_part(&console, &part).await;
         }
         crate::log_info!("queue: {console} item {id} ended (removed: {removed})");
         self.save().await;
@@ -1009,6 +1054,23 @@ impl QueueState {
         self.finish(id, end).await;
     }
 
+    /// A removed upload can't resume: its id went with the item, so its part is only taking room.
+    /// Twice, the driver waiting: a stopped job's last writes can land just after it ended.
+    async fn clear_part(&self, console: &str, part: &str) {
+        let body = json!({ "addr": console, "path": part });
+        for again in [false, true] {
+            if again {
+                tokio::time::sleep(self.0.timing.settle).await;
+            }
+            let (status, answer) = self
+                .call(Method::POST, "/api/ps5/fs/delete", Some(&body))
+                .await;
+            if !status.is_success() && !again {
+                crate::log_info!("queue: {part} stays for now: {answer}");
+            }
+        }
+    }
+
     /// Follows the job to its end.
     async fn follow(&self, id: &str, kind: ItemKind, job: &str) -> End {
         let path = format!("/api/jobs/{job}");
@@ -1039,10 +1101,11 @@ impl QueueState {
             } else {
                 job_end(&state)
             };
+            // The last figures too: a job can end between two looks.
+            self.note_progress(id, kind, &state);
             if let Some(end) = end {
                 return end;
             }
-            self.note_progress(id, kind, &state);
             tokio::time::sleep(self.0.timing.tick).await;
         }
     }

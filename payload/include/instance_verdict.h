@@ -131,6 +131,13 @@ static inline int instance_sweep_is_older(uint64_t their_start, int their_pid, u
     return their_pid < my_pid;
 }
 
+/* For the log, before the prior instance was asked to hand over. A helper that is running looks
+ * "wedged" until then (instance_verdict_after_takeover), and on a normal swap it is not. */
+static inline const char *
+instance_verdict_first_look(ps5upload2_prior_verdict_t v, const char *name) {
+    return v == PS5UPLOAD2_PRIOR_WEDGED ? "still running, asking it to hand over" : name;
+}
+
 /* Wire name. snake_case: this value crosses the STATUS_ACK JSON boundary
  * into serde on the engine side. */
 static inline const char *

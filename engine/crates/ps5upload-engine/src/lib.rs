@@ -12512,6 +12512,7 @@ fn build_app_and_mcp(
         // below. The guard sits outside this layer, so foreign origins are
         // rejected before CORS can answer either a simple request or preflight.
         .layer(cors)
+        .layer(middleware::from_fn(web_pages::api_no_store))
         .layer(middleware::from_fn(web_pages::finish_pages))
         .layer(middleware::from_fn(browser_origin_guard))
         // Loopback-guard middleware MUST be applied last so it ends

@@ -48,8 +48,8 @@ docker run --rm --entrypoint /ps5upload-unrar "$image" --version | grep -q '^ps5
 echo "ok: the RAR helper is next to the engine"
 
 # Reaching it by a LAN name works; a public name needs PS5UPLOAD_ALLOW_HOST, which the refusal names.
-for name in nas nas.local ps5upload.home 192.168.1.10; do
-  curl -fsS -m 5 -H "Host: $name" "$base/api/jobs" >/dev/null || fail "the Host $name was refused"
+for host in nas nas.local ps5upload.home 192.168.1.10; do
+  curl -fsS -m 5 -H "Host: $host" "$base/api/jobs" >/dev/null || fail "the Host $host was refused"
 done
 echo "ok: the engine answers when reached by a LAN name"
 refused="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' -H 'Host: rebound.example' "$base/api/jobs")"

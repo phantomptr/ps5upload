@@ -123,12 +123,24 @@ pub(crate) struct Progress {
     pub fps: f64,
     /// ffmpeg's output bitrate (absent for tee), kbit/s.
     pub bitrate_kbps: Option<f64>,
+    /// Bytes ffmpeg has written out (absent for tee).
+    pub total_size: u64,
     pub out_time_s: f64,
     pub drop_frames: u64,
     pub dup_frames: u64,
     pub speed: Option<f64>,
     /// "continue" or "end".
     pub ended: bool,
+}
+
+impl Progress {
+    /// The stream is going out. Frames say so on the build we ship, but ffmpeg 6.1 reports `frame=0`
+    /// for `-c copy` while it sends, and `PS5UPLOAD_FFMPEG` can name any ffmpeg: bytes and bitrate
+    /// count too. Tee reports neither, and frames there.
+    pub(crate) fn flowing(&self) -> bool {
+        self.out_time_s > 0.0
+            && (self.frame > 0 || self.total_size > 0 || self.bitrate_kbps.is_some_and(|k| k > 0.0))
+    }
 }
 
 /// Collects `key=value` lines into reports: `push` gives one at each `progress=` line.
@@ -147,6 +159,7 @@ impl ProgressParser {
             "bitrate" => {
                 self.cur.bitrate_kbps = v.trim_end_matches("kbits/s").trim().parse().ok();
             }
+            "total_size" => self.cur.total_size = v.parse().unwrap_or(0),
             "out_time_us" | "out_time_ms" => {
                 // Both are µs (out_time_ms is misnamed in ffmpeg).
                 if let Ok(us) = v.parse::<i64>() {

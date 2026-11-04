@@ -1756,11 +1756,15 @@ pub struct RestoreFileBody {
 /// `POST /api/save-backup/restore-file` — puts a backup `.zip` from this computer back, with the
 /// refusals, the backup first and the putting back on failure of `restore`.
 pub async fn post_restore_file(Json(b): Json<RestoreFileBody>) -> Response {
+    let zip = PathBuf::from(b.zip.trim());
+    // A wrong path in the request, not a console that failed.
+    if !tokio::fs::metadata(&zip).await.is_ok_and(|m| m.is_file()) {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("no backup {}", zip.display()),
+        );
+    }
     let r = tokio::task::spawn_blocking(move || {
-        let zip = PathBuf::from(b.zip.trim());
-        if !zip.is_file() {
-            return Err(format!("no backup {}", zip.display()));
-        }
         restore_zip(
             b.addr.trim(),
             &b.title_id.trim().to_ascii_uppercase(),
@@ -1812,6 +1816,22 @@ mod tests {
     }
 
     use super::*;
+
+    #[tokio::test]
+    async fn a_missing_local_zip_is_the_requests_fault() {
+        let body: RestoreFileBody = serde_json::from_value(json!({
+            "addr": "192.0.2.1",
+            "title_id": "PPSA00000",
+            "zip": "/no/such/backup.zip",
+            "save_path": "/user/home/1/savedata_prospero/PPSA00000/x",
+            "user_id": 1,
+        }))
+        .unwrap();
+        assert_eq!(
+            post_restore_file(Json(body)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+    }
 
     /// A backup says whose save it is; one of another user's is refused, unknown never.
     #[test]

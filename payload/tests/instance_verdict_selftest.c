@@ -20,6 +20,9 @@ int main(void) {
 
     /* No record: the previous instance unlinked it on a graceful exit, or
      * this is the first run ever. */
+    /* The log before a swap: a running helper isn't called wedged. */
+    check(strstr(instance_verdict_first_look(PS5UPLOAD2_PRIOR_WEDGED, "wedged"), "wedged") == NULL, "a running helper is not called wedged");
+    check(strcmp(instance_verdict_first_look(PS5UPLOAD2_PRIOR_CLEAN, "clean"), "clean") == 0, "other verdicts keep their name");
     check(instance_verdict_classify(0, 0, BOOT, 0) == PS5UPLOAD2_PRIOR_CLEAN,
           "no record means clean exit");
     check(instance_verdict_classify(0, AFTER_BOOT, BOOT, 1) == PS5UPLOAD2_PRIOR_CLEAN,

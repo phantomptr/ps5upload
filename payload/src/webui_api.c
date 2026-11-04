@@ -617,13 +617,21 @@ static void send_job(int fd, const uint8_t id[16]) {
     send_json(fd, 200, json, (size_t)k);
 }
 
+/* Neither `dest` nor its part folder is there: whatever appears under those names is the copy's. */
+static int dest_is_fresh(const char *dest) {
+    char part[API_PATH + 16];
+    struct stat st;
+    if ((size_t)snprintf(part, sizeof part, "%s.ava-part", dest) >= sizeof part) return 0;
+    return lstat(dest, &st) != 0 && errno == ENOENT && lstat(part, &st) != 0 && errno == ENOENT;
+}
+
 static void r_fs_copy(const char *b, size_t n, uint8_t *out, int fd) {
     char src[API_PATH], dest[API_PATH];
     uint8_t req[2 * API_PATH + 64];
     ava1_job_copy_t q;
     ava1_w_t w;
     size_t ol;
-    int move = 0, overwrite = 0, st, rc;
+    int move = 0, overwrite = 0, st, rc, fresh;
     if (need_path(fd, b, n, "src", src, sizeof src) != 0) return;
     if (need_path(fd, b, n, "dest", dest, sizeof dest) != 0) return;
     rc = webui_json_bool(b, n, "move", &move);
@@ -639,6 +647,7 @@ static void r_fs_copy(const char *b, size_t n, uint8_t *out, int fd) {
         send_bad(fd, "bad_overwrite");
         return;
     }
+    fresh = dest_is_fresh(dest);
     memset(&q, 0, sizeof q);
     arc4random_buf(q.job_id, sizeof q.job_id); /* a fresh job: a known id would resume that job instead */
     q.src = (const uint8_t *)src;
@@ -656,6 +665,7 @@ static void r_fs_copy(const char *b, size_t n, uint8_t *out, int fd) {
         send_status_error(fd, st, out, ol);
     } else {
         ctasks_started(q.job_id, move ? "move" : "copy", src, (uint64_t)mono_ms());
+        if (fresh) ctasks_note_new_dest(q.job_id, dest);
         send_job(fd, q.job_id);
     }
 }
@@ -713,6 +723,38 @@ static void start_path_job(int fd, uint8_t *out, int op, const char *path, const
     } else {
         ctasks_started(q.job_id, op_task_kind(op), path, (uint64_t)mono_ms());
         send_job(fd, q.job_id);
+    }
+}
+
+/* What stopped copies left (ctasks_note_new_dest), for every client: runs where any of them reads the
+ * list, which they all do after a stop. The empty <dest> goes with rmdir, which refuses a folder
+ * with anything in it; the part folder as a job of its own, so nobody waits for a large tree. */
+static void clear_stopped_copies(void) {
+    char dest[API_PATH], part[API_PATH + 16], args[2 * API_PATH];
+    uint8_t *req, *res;
+    struct stat st;
+    while (ctasks_take_leftover((uint64_t)mono_ms(), dest, sizeof dest)) {
+        ava1_job_run_t q;
+        ava1_w_t w;
+        size_t ol;
+        int len;
+        (void)rmdir(dest);
+        if ((size_t)snprintf(part, sizeof part, "%s.ava-part", dest) >= sizeof part) continue;
+        if (lstat(part, &st) != 0) continue;
+        len = webui_path_job_args(args, sizeof args, part, NULL, NULL);
+        req = malloc(sizeof args + 64);
+        res = malloc(API_OUT_MAX);
+        if (len > 0 && req && res) {
+            memset(&q, 0, sizeof q);
+            arc4random_buf(q.job_id, sizeof q.job_id);
+            q.op = (uint8_t)AVA1_JOB_OP_DELETE;
+            q.args = (const uint8_t *)args;
+            q.args_len = (uint32_t)len;
+            ava1_w_init(&w, req, sizeof args + 64);
+            if (ava1_job_run_encode(&q, &w) == 0) (void)call(AVA1_METHOD_JOB_RUN, req, w.len, res, &ol);
+        }
+        free(req);
+        free(res);
     }
 }
 
@@ -944,6 +986,7 @@ static void r_jobs(const char *b, size_t n, uint8_t *out, int fd) {
     }
     /* before the release below: how a job ended is kept for the apps (console_tasks.h) */
     (void)ctasks_observe(out, ol, (uint64_t)mono_ms());
+    clear_stopped_copies();
     json = malloc(API_JOBS_JSON + API_UPLOADS_JSON);
     if (!json) {
         send_error(fd, 500, "out_of_memory", 13);
@@ -973,10 +1016,14 @@ static void r_jobs_cancel(const char *b, size_t n, uint8_t *out, int fd) {
         send_bad(fd, "bad_job");
         return;
     }
-    ctasks_cancel_requested(id);
+    (void)ctasks_cancel_requested(id);
     st = ava1_job_cancel_any(id);
-    if (st != AVA1_STATUS_OK) send_status_error(fd, st, NULL, 0);
-    else send_json(fd, 200, "{}", 2);
+    if (st != AVA1_STATUS_OK) {
+        ctasks_cancel_failed(id);
+        send_status_error(fd, st, NULL, 0);
+    } else {
+        send_json(fd, 200, "{}", 2);
+    }
 }
 
 /* console.tasks (webui_api.h): the same job list /api/jobs reads, narrowed to what the page started.
@@ -991,6 +1038,7 @@ int webui_console_tasks(char *out, size_t cap) {
     if (ava1_jobs_list_all(k_console_id, res, API_OUT_MAX, &ol) == AVA1_STATUS_OK)
         (void)ctasks_observe(res, ol, (uint64_t)mono_ms());
     free(res);
+    clear_stopped_copies();
     pos = (size_t)snprintf(out, cap, "{\"ok\":true,\"now\":%lld,\"tasks\":[", (long long)time(NULL));
     if (pos >= cap) return snprintf(out, cap, "{\"ok\":false,\"err\":\"too_long\"}");
     k = ctasks_json(out + pos, cap - pos, (uint64_t)mono_ms());
@@ -1025,10 +1073,12 @@ int webui_console_task_cancel(const char *b, size_t n, char *out, size_t cap) {
     }
     if (webui_parse_hex16(id, job) != 0) return snprintf(out, cap, "{\"ok\":false,\"err\":\"bad_job\"}");
     if (!ctasks_known(job)) return snprintf(out, cap, "{\"ok\":false,\"err\":\"unknown_job\"}");
-    ctasks_cancel_requested(job);
+    /* Over already: say so, the next listing says how. */
+    if (!ctasks_cancel_requested(job)) return snprintf(out, cap, "{\"ok\":false,\"err\":\"ended\"}");
     st = ava1_job_cancel_any(job);
-    /* gone already: it ended on its own, and the next listing says how */
-    if (st != AVA1_STATUS_OK && st != AVA1_ERR_UNKNOWN_JOB) return snprintf(out, cap, "{\"ok\":false,\"err\":\"failed\"}");
+    if (st != AVA1_STATUS_OK) ctasks_cancel_failed(job);
+    if (st == AVA1_ERR_UNKNOWN_JOB) return snprintf(out, cap, "{\"ok\":false,\"err\":\"ended\"}");
+    if (st != AVA1_STATUS_OK) return snprintf(out, cap, "{\"ok\":false,\"err\":\"failed\"}");
     return snprintf(out, cap, "{\"ok\":true}");
 }
 

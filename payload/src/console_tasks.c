@@ -10,6 +10,7 @@
 
 #define CTASK_KIND_MAX 16u
 #define CTASK_NAME_MAX 128u
+#define CTASK_DEST_MAX 1024u
 
 enum { CT_FREE = 0, CT_RUNNING, CT_DONE, CT_FAILED, CT_CANCELLED, CT_GONE };
 
@@ -22,6 +23,10 @@ typedef struct {
     uint32_t files_done, files_total;
     uint64_t bytes_done, bytes_total;
     uint64_t started_ms, ended_ms;
+    /* What ctasks_note_new_dest was told; clear_left: times still to come up after a stop. */
+    char new_dest[CTASK_DEST_MAX];
+    uint8_t clear_left;
+    uint64_t clear_at_ms;
 } ctask_t;
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -89,12 +94,50 @@ int ctasks_known(const uint8_t id[16]) {
     return known;
 }
 
-void ctasks_cancel_requested(const uint8_t id[16]) {
+int ctasks_cancel_requested(const uint8_t id[16]) {
+    ctask_t *t;
+    int running;
+    pthread_mutex_lock(&g_mu);
+    t = find_locked(id);
+    running = t && t->state == CT_RUNNING;
+    if (running) t->cancel_asked = 1;
+    pthread_mutex_unlock(&g_mu);
+    return running;
+}
+
+void ctasks_cancel_failed(const uint8_t id[16]) {
     ctask_t *t;
     pthread_mutex_lock(&g_mu);
     t = find_locked(id);
-    if (t && t->state == CT_RUNNING) t->cancel_asked = 1;
+    if (t) t->cancel_asked = 0;
     pthread_mutex_unlock(&g_mu);
+}
+
+void ctasks_note_new_dest(const uint8_t id[16], const char *dest) {
+    ctask_t *t;
+    pthread_mutex_lock(&g_mu);
+    t = find_locked(id);
+    if (t && strlen(dest) < sizeof t->new_dest) {
+        snprintf(t->new_dest, sizeof t->new_dest, "%s", dest);
+        t->clear_left = 2;
+    }
+    pthread_mutex_unlock(&g_mu);
+}
+
+int ctasks_take_leftover(uint64_t now_ms, char *out, size_t cap) {
+    unsigned i;
+    int found = 0;
+    pthread_mutex_lock(&g_mu);
+    for (i = 0; i < CTASKS_SLOTS && !found; i++) {
+        ctask_t *t = &g_tasks[i];
+        if (t->state != CT_CANCELLED || !t->clear_left || !t->new_dest[0] || now_ms < t->clear_at_ms) continue;
+        if ((size_t)snprintf(out, cap, "%s", t->new_dest) >= cap) continue;
+        t->clear_left--;
+        t->clear_at_ms = now_ms + CTASKS_CLEAR_AGAIN_MS;
+        found = 1;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return found;
 }
 
 int ctasks_observe(const uint8_t *res, size_t n, uint64_t now_ms) {

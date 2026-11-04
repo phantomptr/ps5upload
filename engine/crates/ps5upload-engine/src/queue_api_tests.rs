@@ -38,6 +38,10 @@ struct FakeJobs {
     cancelled: Vec<String>,
     /// The next install is refused as busy.
     install_busy: bool,
+    /// What `/api/ps5/console-tasks` answers; without one it is a helper too old to have it.
+    console_tasks: Option<Value>,
+    /// Paths `/api/ps5/fs/delete` was asked for.
+    deleted: Vec<String>,
 }
 
 impl Fake {
@@ -94,7 +98,35 @@ impl Fake {
                 Json(json!({"cancelled": true}))
             }
         });
+        let tasks = {
+            let fake = self.clone();
+            get(move || {
+                let fake = fake.clone();
+                async move {
+                    match fake.lock().console_tasks.clone() {
+                        Some(answer) => (StatusCode::OK, Json(answer)),
+                        None => (
+                            StatusCode::NOT_IMPLEMENTED,
+                            Json(json!({"reason": "unsupported"})),
+                        ),
+                    }
+                }
+            })
+        };
+        let delete = {
+            let fake = self.clone();
+            post(move |Json(body): Json<Value>| {
+                let fake = fake.clone();
+                async move {
+                    let path = body["path"].as_str().unwrap_or_default().to_string();
+                    fake.lock().deleted.push(path);
+                    Json(json!({"ok": true}))
+                }
+            })
+        };
         Router::new()
+            .route("/api/ps5/console-tasks", tasks)
+            .route("/api/ps5/fs/delete", delete)
             .route("/api/transfer/file", start("/api/transfer/file", "job_id"))
             .route("/api/transfer/rar", start("/api/transfer/rar", "job_id"))
             .route("/api/link/download", start("/api/link/download", "job_id"))
@@ -1099,4 +1131,156 @@ async fn the_mcp_tools_drive_the_same_queue() {
         .unwrap()
         .iter()
         .all(|item| item["id"] != second.as_str()));
+}
+
+#[tokio::test]
+async fn an_item_waits_for_a_task_running_on_the_console() {
+    let fake = Fake::default();
+    fake.lock().console_tasks = Some(json!({
+        "ok": true, "supported": true,
+        "tasks": [{"id": "a", "state": "done"}, {"id": "b", "state": "running"}],
+    }));
+    let engine = engine_on(None, Some(&fake));
+    let console = "127.0.5.40";
+    let id = engine.add_upload(console, "t.bin").await;
+    engine.wait_waiting_for(console, "console_task").await;
+    assert!(fake.started().is_empty());
+    fake.lock().console_tasks = Some(json!({
+        "ok": true, "supported": true, "tasks": [{"id": "b", "state": "cancelled"}],
+    }));
+    wait_started(&fake, 1).await;
+    engine.wait_status(&id, "running").await;
+    fake.end("job-0", done());
+    engine.wait_status(&id, "done").await;
+}
+
+#[tokio::test]
+async fn removing_a_running_upload_clears_its_part() {
+    let fake = Fake::default();
+    let engine = engine_on(None, Some(&fake));
+    let console = "127.0.5.41";
+    let id = engine.add_upload(console, "r.bin").await;
+    wait_started(&fake, 1).await;
+    engine.wait_status(&id, "running").await;
+    let (status, answer) = engine
+        .post(&format!("/api/queue/{id}/remove"), json!({"cancel": true}))
+        .await;
+    assert!(status.is_success(), "{answer}");
+    for _ in 0..300 {
+        if fake.lock().deleted.len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let deleted = fake.lock().deleted.clone();
+    assert!(!deleted.is_empty(), "nothing was cleared");
+    assert!(
+        deleted.iter().all(|p| p == "/data/r.bin.ava-part"),
+        "{deleted:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_paused_or_finished_upload_keeps_its_part() {
+    let fake = Fake::default();
+    let engine = engine_on(None, Some(&fake));
+    let console = "127.0.5.42";
+    let id = engine.add_upload(console, "p.bin").await;
+    wait_started(&fake, 1).await;
+    fake.end("job-0", done());
+    engine.wait_status(&id, "done").await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert!(fake.lock().deleted.is_empty());
+}
+
+#[tokio::test]
+async fn a_done_item_shows_where_its_job_ended() {
+    let fake = Fake::default();
+    let engine = engine_on(None, Some(&fake));
+    let console = "127.0.5.43";
+    let id = engine.add_upload(console, "e.bin").await;
+    wait_started(&fake, 1).await;
+    let mut end = done();
+    end["bytes_sent"] = json!(8_388_608_u64);
+    end["total_bytes"] = json!(8_388_608_u64);
+    fake.end("job-0", end);
+    let item = engine.wait_status(&id, "done").await;
+    assert_eq!(item["progress"]["bytes_sent"], 8_388_608_u64, "{item}");
+}
+
+/// Through the real router: `wake_rp_key` was found in a browser's disk cache.
+#[tokio::test]
+async fn api_answers_are_not_cached() {
+    let engine = engine_on(None, None);
+    for path in [
+        "/api/consoles/document",
+        "/api/consoles",
+        "/api/settings-backup",
+        "/api/settings-backup/get?id=nothing",
+        "/api/mesh/me",
+        "/api/queue",
+        "/api/version",
+        "/api/engine-logs",
+        "/api/no/such/route",
+    ] {
+        let res = engine
+            .app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(path)
+                    .header(header::HOST, "127.0.0.1")
+                    .extension(axum::extract::ConnectInfo(SocketAddr::from((
+                        [127, 0, 0, 1],
+                        50_000,
+                    ))))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res.headers()
+                .get(header::CACHE_CONTROL)
+                .map(|v| v.to_str().unwrap()),
+            Some("no-store"),
+            "{path}: {}",
+            res.status()
+        );
+    }
+}
+
+/// A route that wants caching keeps it, and a picture is not told anything new.
+#[tokio::test]
+async fn a_route_with_its_own_cache_rule_keeps_it() {
+    let app = Router::new()
+        .route(
+            "/api/cover",
+            get(|| async { ([(header::CACHE_CONTROL, "private, max-age=300")], "{}") }),
+        )
+        .route(
+            "/api/picture",
+            get(|| async { ([(header::CONTENT_TYPE, "image/png")], vec![1_u8]) }),
+        )
+        .route("/page", get(|| async { "words" }))
+        .layer(middleware::from_fn(web_pages::api_no_store));
+    let cache_of = |path: &'static str| {
+        let app = app.clone();
+        async move {
+            let req = HttpRequest::builder()
+                .uri(path)
+                .body(Body::empty())
+                .unwrap();
+            let res = app.oneshot(req).await.unwrap();
+            res.headers()
+                .get(header::CACHE_CONTROL)
+                .map(|v| v.to_str().unwrap().to_string())
+        }
+    };
+    assert_eq!(
+        cache_of("/api/cover").await.as_deref(),
+        Some("private, max-age=300")
+    );
+    assert_eq!(cache_of("/api/picture").await, None);
+    assert_eq!(cache_of("/page").await, None);
 }

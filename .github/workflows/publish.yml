@@ -803,7 +803,13 @@ jobs:
         run: bash scripts/release/android-sign.sh
 
       - name: Check the APKs
-        run: python3 scripts/release/verify-android-apk.py PS5Upload-android.apk PS5Upload-android-armv7.apk
+        # armv7 is optional (android-sign.sh): only what was signed.
+        run: |
+          apks=()
+          for apk in PS5Upload-android.apk PS5Upload-android-armv7.apk; do
+            if [ -f "$apk" ]; then apks+=("$apk"); fi
+          done
+          python3 scripts/release/verify-android-apk.py "${apks[@]}"
 
       - name: Upload signed APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

@@ -34,6 +34,7 @@ pub(crate) struct CancelBody {
 
 fn status_for(reason: &str) -> StatusCode {
     match reason {
+        "ended" => StatusCode::CONFLICT,
         "unknown_job" => StatusCode::NOT_FOUND,
         "unsupported" => StatusCode::NOT_IMPLEMENTED,
         "bad_job" => StatusCode::BAD_REQUEST,
@@ -91,6 +92,7 @@ mod tests {
         assert_eq!(status_for("unknown_job"), StatusCode::NOT_FOUND);
         assert_eq!(status_for("unsupported"), StatusCode::NOT_IMPLEMENTED);
         assert_eq!(status_for("bad_job"), StatusCode::BAD_REQUEST);
+        assert_eq!(status_for("ended"), StatusCode::CONFLICT);
         assert_eq!(status_for("anything_else"), StatusCode::BAD_GATEWAY);
     }
 

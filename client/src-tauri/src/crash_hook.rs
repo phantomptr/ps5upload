@@ -374,8 +374,41 @@ fn show_dialog(message: &str) {
             }
         });
     if let Ok(thread) = shown {
-        let _ = thread.join();
+        wait_for_thread(thread, DIALOG_LIMIT);
     }
+}
+
+/// No one may be there to dismiss a dialog (a scheduled task, a service session): a process that has
+/// failed must not stay alive for it. The report is written by now.
+#[cfg(not(target_os = "macos"))]
+const DIALOG_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Until the thread ends, or `limit`.
+#[cfg(any(test, windows))]
+fn wait_for_thread(thread: std::thread::JoinHandle<()>, limit: std::time::Duration) {
+    let end = std::time::Instant::now() + limit;
+    while !thread.is_finished() && std::time::Instant::now() < end {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Until the program ends, or `limit`, and then it is closed. Whether it could start at all.
+#[cfg(any(test, not(any(windows, target_os = "macos"))))]
+fn wait_for_program(
+    command: &mut std::process::Command,
+    limit: std::time::Duration,
+) -> std::io::Result<()> {
+    let mut child = command.spawn()?;
+    let end = std::time::Instant::now() + limit;
+    while std::time::Instant::now() < end {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(())
 }
 
 /// An alert from outside the process: AppKit may be what failed, and may not be usable here.
@@ -392,20 +425,45 @@ fn show_dialog(message: &str) {
 /// Whichever of the desktops' dialog tools is there; without one, stderr and the file remain.
 #[cfg(not(any(windows, target_os = "macos")))]
 fn show_dialog(message: &str) {
-    let zenity = std::process::Command::new("zenity")
-        .args(["--error", "--no-markup", "--title=PS5Upload", "--text"])
-        .arg(message)
-        .status();
+    let zenity = wait_for_program(
+        std::process::Command::new("zenity")
+            .args(["--error", "--no-markup", "--title=PS5Upload", "--text"])
+            .arg(message),
+        DIALOG_LIMIT,
+    );
     if zenity.is_err() {
-        let _ = std::process::Command::new("kdialog")
-            .args(["--title", "PS5Upload", "--error", message])
-            .status();
+        let _ = wait_for_program(
+            std::process::Command::new("kdialog").args(["--title", "PS5Upload", "--error", message]),
+            DIALOG_LIMIT,
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dialog_nobody_answers_is_not_waited_for_forever() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        #[cfg(unix)]
+        {
+            let mut sleep = std::process::Command::new("sleep");
+            sleep.arg("30");
+            wait_for_program(&mut sleep, Duration::from_millis(200)).unwrap();
+            assert!(t0.elapsed() < Duration::from_secs(10));
+            assert!(wait_for_program(
+                &mut std::process::Command::new("/no/such/dialog/tool"),
+                Duration::from_secs(1)
+            )
+            .is_err());
+        }
+        let t1 = Instant::now();
+        let stuck = std::thread::spawn(|| std::thread::sleep(Duration::from_secs(5)));
+        wait_for_thread(stuck, Duration::from_millis(100));
+        assert!(t1.elapsed() < Duration::from_secs(3));
+    }
 
     fn saved() -> PathBuf {
         PathBuf::from(r"C:\Users\a\.ps5upload\crash-reports\r.txt")

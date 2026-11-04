@@ -1137,7 +1137,7 @@ void runtime_classify_prior_instance(runtime_state_t *state) {
                                   runtime_system_boottime_unix(), prior_alive);
     state->prior_verdict = (int)v;
 
-    fprintf(stderr, "[payload2] prior instance: %s\n", instance_verdict_name(v));
+    fprintf(stderr, "[payload2] prior instance: %s\n", instance_verdict_first_look(v, instance_verdict_name(v)));
     if (v == PS5UPLOAD2_PRIOR_KILLED_EXTERNALLY) {
         fprintf(stderr,
                 "[payload2] the previous instance was killed by something else on this "

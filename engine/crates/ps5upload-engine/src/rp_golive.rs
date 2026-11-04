@@ -635,7 +635,7 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
                 if let Ok(mut t) = out_time.lock() {
                     *t = p.out_time_s;
                 }
-                let flowing = p.frame > 0 && p.out_time_s > 0.0;
+                let flowing = p.flowing();
                 r.set(|s| {
                     if flowing {
                         if s.phase != "live" {

@@ -341,28 +341,22 @@ jobs:
             ${{ runner.os }}-engine-test-engine-${{ hashFiles('engine/Cargo.lock') }}-
             ${{ runner.os }}-engine-test-engine-
 
-      - name: Install ffmpeg
+      # The build the app itself downloads (ffmpeg_tool.rs PINS, linux x86_64): apt's 6.1.1 reports
+      # differently, and what ships is what must pass.
+      - name: Install the pinned ffmpeg
         timeout-minutes: 12
         run: |
           set -euo pipefail
-          # apt has no default network timeout (see "Install Tauri Linux deps").
-          apt_retry() {
-            for attempt in 1 2 3; do
-              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
-                   -o Acquire::Retries=3 \
-                   -o Acquire::http::Timeout=20 \
-                   -o Acquire::https::Timeout=20 \
-                   "$@"; then
-                return 0
-              fi
-              echo "apt attempt $attempt failed; retrying in 15s" >&2
-              sleep 15
-            done
-            echo "apt failed after 3 attempts: apt-get $*" >&2
-            return 1
-          }
-          apt_retry update -qq
-          apt_retry install -y --no-install-recommends ffmpeg
+          url="$(grep -A3 'os: "linux"' engine/crates/ps5upload-engine/src/ffmpeg_tool.rs | grep -A2 'arch: "x86_64"' | sed -n 's/.*url: "\(.*\)",/\1/p')"
+          sum="$(grep -A4 'os: "linux"' engine/crates/ps5upload-engine/src/ffmpeg_tool.rs | grep -A3 'arch: "x86_64"' | sed -n 's/.*sha256: "\(.*\)",/\1/p')"
+          test -n "$url" && test -n "$sum"
+          curl -fsSL --retry 3 --retry-delay 15 --connect-timeout 20 -o "$RUNNER_TEMP/ffmpeg.tar.xz" "$url"
+          echo "$sum  $RUNNER_TEMP/ffmpeg.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/ffmpeg"
+          tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP/ffmpeg" --strip-components=1
+          echo "$RUNNER_TEMP/ffmpeg/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/ffmpeg/lib" >> "$GITHUB_ENV"
+          LD_LIBRARY_PATH="$RUNNER_TEMP/ffmpeg/lib" "$RUNNER_TEMP/ffmpeg/bin/ffmpeg" -hide_banner -version | head -1
 
       - name: cargo test (ignored, ffmpeg)
         working-directory: engine
@@ -1333,6 +1327,14 @@ jobs:
           path: client/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
           retention-days: 7
+
+      # What publish.yml checks on the signed APK, here too: a missing manifest line or renderer
+      # handler is a PR failure rather than a release that silently ships without Android.
+      - name: Check the debug APKs
+        run: |
+          mapfile -t apks < <(find client/src-tauri/gen/android/app/build/outputs/apk -name '*.apk')
+          test "${#apks[@]}" -gt 0
+          python3 scripts/release/verify-android-apk.py "${apks[@]}"
 
       - name: Save cargo cache
         if: github.ref == 'refs/heads/main'

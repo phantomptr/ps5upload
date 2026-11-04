@@ -153,7 +153,7 @@ export async function cancelConsoleTaskRow(host: string, taskId: string): Promis
   try {
     await cancelConsoleTask(host, taskId);
   } catch (e) {
-    if (!(e instanceof ConsoleTaskError && e.reason === "unknown_job")) throw e;
+    if (!(e instanceof ConsoleTaskError && (e.reason === "unknown_job" || e.reason === "ended"))) throw e;
   } finally {
     await readConsoleTasks(host);
   }
