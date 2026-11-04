@@ -7,6 +7,8 @@ import { remoteApi } from "../api/remote";
 import { useConnectionsStore } from "../state/connections";
 import { useTaskStore } from "../state/tasks";
 import { isRemotePath, parseRemotePath } from "./remotePath";
+import { readWithRetries } from "./pollRead";
+import { trStatic } from "./trStatic";
 
 /** Local copies this app made of server files, so only those are ever cleaned up. */
 const copies = new Set<string>();
@@ -45,7 +47,7 @@ export async function fetchRemote(
   const { job_id } = await remoteApi.fetch(path, opts.destDir);
   opts.onJob?.(job_id);
   for (;;) {
-    const s = (await jobStatus(job_id)) as {
+    const s = (await readWithRetries(() => jobStatus(job_id))) as {
       status: string;
       dest?: string;
       error?: string;
@@ -67,13 +69,14 @@ export async function materializeRemote(
   const parsed = parseRemotePath(path);
   const name = parsed?.path.split("/").filter(Boolean).pop() ?? "file";
   const server =
-    (parsed && useConnectionsStore.getState().nameOf(parsed.connectionId)) ?? "the server";
+    (parsed && useConnectionsStore.getState().nameOf(parsed.connectionId)) ??
+    trStatic("task_the_server", "the server");
   const pollMs = opts.pollMs ?? 500;
   const tasks = useTaskStore.getState();
   const id = tasks.registerTask({
     kind: "download",
     origin: "remote.fetch",
-    label: `Copy ${name} from ${server}`,
+    label: trStatic("task_copy_from_server", "Copy {name} from {server}", { name, server }),
     consoleId: "",
   });
   let local: string;

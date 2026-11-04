@@ -10,6 +10,7 @@ import { useActivityHistoryStore } from "./activityHistory";
 import { audit } from "./auditLog";
 import { libraryMove, libraryMoveKey, runLibraryMove, stopLibraryMove, useLibraryMoveStore } from "./libraryMove";
 import { withConsolePrefix } from "./roster";
+import { readWithRetries } from "../lib/pollRead";
 
 /**
  * Runs a space plan ("Do it"): the leftovers in one clean-up run, then each move, then each
@@ -201,11 +202,12 @@ export function consoleSpaceRunDeps(host: string, scanId: number, payloadVersion
   return {
     async cleanup(ids, onProgress) {
       const { apply_id } = await cleanupApply(host, scanId, ids);
-      let st = await cleanupApplyStatus(host, apply_id);
+      const read = () => readWithRetries(() => cleanupApplyStatus(host, apply_id));
+      let st = await read();
       while (st.state === "running") {
         onProgress(st.freed_bytes);
         await new Promise((r) => setTimeout(r, APPLY_POLL_MS));
-        st = await cleanupApplyStatus(host, apply_id);
+        st = await read();
       }
       return { done: st.done, skipped: st.skipped, failed: st.failed };
     },

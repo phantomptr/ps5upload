@@ -4,6 +4,7 @@
 
 import { consoleAddr } from "../lib/addr";
 import { getEngineUrl } from "../state/engine";
+import { engineFetch } from "../lib/engineFetch";
 
 export interface TraceState {
   tracing: boolean;
@@ -47,7 +48,7 @@ export interface TraceStatus {
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getEngineUrl()}${path}`, {
+  const res = await engineFetch(`${getEngineUrl()}${path}`, {
     headers: { "content-type": "application/json" },
     ...init,
   });

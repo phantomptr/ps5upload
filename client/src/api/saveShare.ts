@@ -4,6 +4,7 @@
 // user do the same in the engine, with no file through this computer (#612).
 
 import { getEngineUrl } from "../state/engine";
+import { ENGINE_LONG_TIMEOUT_MS, engineFetch } from "../lib/engineFetch";
 
 /** A refusal from the engine; `missing` names the target's save parts that aren't there yet
  *  (`sdimg_STARBOARD`, …: see `partLabel`). */
@@ -24,7 +25,8 @@ async function failed(r: Response): Promise<never> {
 
 /** Every image of the save folder `folder` as one zip, with the name to save it under. */
 export async function shareSave(addr: string, folder: string): Promise<{ blob: Blob; name: string }> {
-  const r = await fetch(`${getEngineUrl()}/api/save-backup/share`, {
+  const r = await engineFetch(`${getEngineUrl()}/api/save-backup/share`, {
+    timeoutMs: ENGINE_LONG_TIMEOUT_MS,
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ addr, folder }),
@@ -39,7 +41,8 @@ export async function shareSave(addr: string, folder: string): Promise<{ blob: B
  *  of the same name (backed up first, put back on failure). The parts replaced. */
 export async function putSharedSave(addr: string, folder: string, userId: number, zip: Blob): Promise<string[]> {
   const q = new URLSearchParams({ addr, folder, user_id: String(userId >>> 0) });
-  const r = await fetch(`${getEngineUrl()}/api/save-backup/use-shared?${q}`, {
+  const r = await engineFetch(`${getEngineUrl()}/api/save-backup/use-shared?${q}`, {
+    timeoutMs: ENGINE_LONG_TIMEOUT_MS,
     method: "POST",
     headers: { "content-type": "application/zip" },
     body: zip,
@@ -59,7 +62,8 @@ export interface CopyDone {
 }
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const r = await fetch(`${getEngineUrl()}${path}`, {
+  const r = await engineFetch(`${getEngineUrl()}${path}`, {
+    timeoutMs: ENGINE_LONG_TIMEOUT_MS,
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
