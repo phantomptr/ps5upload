@@ -684,6 +684,17 @@ export default function CollectionScreen({ embedded = false }: { embedded?: bool
         </div>
       )}
 
+      {/* A folder that would not list is not an empty folder: what it held stays listed. */}
+      {(s.library?.unreadable?.length ?? 0) > 0 && (
+        <p className="mb-4 rounded-2xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-2 text-xs">
+          {tr(
+            "collection.unreadable_folders",
+            { paths: (s.library?.unreadable ?? []).slice(0, 5).join(", ") },
+            "The last scan could not read: {paths}. What it found there before is kept. Check the folder or the server, then scan again.",
+          )}
+        </p>
+      )}
+
       {/* A folder the last scan could not open was skipped (#461): its games are missing
           until it is back, so say which and where to remove it. */}
       {(s.library?.missing_roots?.length ?? 0) > 0 && (

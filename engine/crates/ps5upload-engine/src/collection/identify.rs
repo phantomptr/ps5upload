@@ -11,6 +11,13 @@ use ps5upload_pkg::kind::{
 use super::PkgInfo;
 use crate::inspect::GameInspection;
 
+/// Why an item has no identity when it could not be opened or read at all: a dropped connection
+/// says nothing about the file, so this answer is not kept.
+pub const READ_FAILED: &str = "could not be read";
+
+/// What the index records for a later part of a split set: not an item, and not a package.
+pub const SPLIT_PART: &str = "part of a split package";
+
 fn failed(why: impl Into<String>) -> PkgInfo {
     PkgInfo {
         error: Some(why.into()),
@@ -65,16 +72,17 @@ fn open_any(path: &Path) -> Option<(Box<dyn ps5upload_fpkg::ReadSeek>, u64)> {
     Some((Box::new(f), size))
 }
 
-fn package(path: &Path) -> PkgInfo {
+fn package(path: &Path, set_size: Option<u64>) -> PkgInfo {
     let mut magic = [0u8; 4];
     let Some((mut f, size)) = open_any(path) else {
-        return failed("could not be read");
+        return failed(READ_FAILED);
     };
     if f.read_exact(&mut magic).is_err() {
-        return failed("could not be read");
+        return failed(READ_FAILED);
     }
     if magic == ps5upload_pkg::ps3::PS3_MAGIC {
-        return match ps5upload_pkg::ps3::parse_ps3(&mut f, size) {
+        // "Complete" is the whole set's length against what the header declares.
+        return match ps5upload_pkg::ps3::parse_ps3(&mut f, set_size.unwrap_or(size)) {
             Ok(p) => PkgInfo {
                 platform: "PS3".into(),
                 title: p.title,
@@ -93,7 +101,7 @@ fn package(path: &Path) -> PkgInfo {
         };
     }
     if std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(0)).is_err() {
-        return failed("could not be read");
+        return failed(READ_FAILED);
     }
     let head = match ps5upload_pkg::parse_pkg_from(&mut f, size, path) {
         Ok(h) => h,
@@ -159,7 +167,7 @@ fn package(path: &Path) -> PkgInfo {
 fn pfs_image(path: &Path) -> PkgInfo {
     use ps5upload_fpkg::source::SourceTree;
     let Some((reader, _)) = open_any(path) else {
-        return failed("could not be read");
+        return failed(READ_FAILED);
     };
     let mut tree =
         match ps5_dump_forge_pfs::PfsSource::from_reader(reader, path.display().to_string()) {
@@ -190,9 +198,23 @@ pub fn identify(path: &Path, kind: &str) -> Option<PkgInfo> {
     Some(info)
 }
 
+/// What a split package says about itself: its first part names it; whether it is whole is the
+/// set's (`total` bytes, and `gap` when a part is missing from the run).
+pub fn identify_set(lead: &Path, total: u64, gap: bool) -> PkgInfo {
+    let mut info = package(lead, Some(total));
+    if !info.content_id.is_empty() {
+        info.region = region_of_content_id(&info.content_id);
+    }
+    if gap {
+        info.complete = false;
+        info.kind_reason = "a part of this split package is missing".into();
+    }
+    info
+}
+
 fn identify_raw(path: &Path, kind: &str) -> Option<PkgInfo> {
     match kind {
-        "pkg" => Some(package(path)),
+        "pkg" => Some(package(path, None)),
         "mount.ffpfs" => Some(pfs_image(path)),
         "folder" | "mount.exfat" | "mount.ffpkg" | "mount.ffpfsc" => {
             Some(match crate::inspect::inspect_local(path) {

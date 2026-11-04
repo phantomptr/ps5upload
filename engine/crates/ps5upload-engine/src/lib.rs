@@ -11241,6 +11241,18 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             post(collection_tidy_api::post_organize_plan),
         )
         .route(
+            "/api/collection/organize/plan/start",
+            post(collection_tidy_api::post_organize_plan_start),
+        )
+        .route(
+            "/api/collection/organize/plan/status",
+            get(collection_tidy_api::get_organize_plan_status),
+        )
+        .route(
+            "/api/collection/organize/plan/cancel",
+            post(collection_tidy_api::post_organize_plan_cancel),
+        )
+        .route(
             "/api/collection/organize/apply",
             post(collection_tidy_api::post_organize_apply),
         )

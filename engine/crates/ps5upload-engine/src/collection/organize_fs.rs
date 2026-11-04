@@ -30,7 +30,7 @@ pub struct DirEnt {
     pub mtime: i64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Meta {
     pub size: u64,
     pub mtime: i64,
@@ -75,6 +75,101 @@ pub trait Tree: Send + Sync {
     /// the preview to say so rather than show a quietly smaller plan.
     fn trouble(&self) -> Option<String> {
         None
+    }
+    /// A file's first four bytes (does it start a package?), or `None` when they cannot be read.
+    fn head(&self, _p: &Path) -> Option<[u8; 4]> {
+        None
+    }
+}
+
+/// One plan's view of a tree: each folder is listed once and each file's first bytes are read
+/// once, however many packages ask. (A plan asks about a package's folder several times per
+/// package, which on a big folder is a walk of it per package.) Writes go straight through.
+pub struct PlanTree<'a> {
+    inner: &'a dyn Tree,
+    lists: Mutex<HashMap<std::path::PathBuf, Option<Vec<DirEnt>>>>,
+    heads: Mutex<HashMap<std::path::PathBuf, Option<[u8; 4]>>>,
+}
+
+impl<'a> PlanTree<'a> {
+    pub fn new(inner: &'a dyn Tree) -> Self {
+        Self {
+            inner,
+            lists: Mutex::new(HashMap::new()),
+            heads: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl Tree for PlanTree<'_> {
+    fn list(&self, dir: &Path) -> Option<Vec<DirEnt>> {
+        if let Some(v) = self
+            .lists
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(dir)
+        {
+            return v.clone();
+        }
+        let v = self.inner.list(dir);
+        self.lists
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(dir.to_path_buf(), v.clone());
+        v
+    }
+
+    fn meta(&self, p: &Path) -> Option<Meta> {
+        let from_listing = p.parent().zip(p.file_name()).and_then(|(dir, name)| {
+            self.list(dir)?
+                .into_iter()
+                .find(|e| name.to_string_lossy() == e.name.as_str())
+                .map(|e| Meta {
+                    size: e.size,
+                    mtime: e.mtime,
+                })
+        });
+        from_listing.or_else(|| self.inner.meta(p))
+    }
+
+    fn exists(&self, p: &Path) -> Result<bool, OpError> {
+        self.inner.exists(p)
+    }
+
+    fn create_dir(&self, p: &Path) -> Result<(), OpError> {
+        self.inner.create_dir(p)
+    }
+
+    fn rename_new(&self, from: &Path, to: &Path) -> Result<(), OpError> {
+        self.inner.rename_new(from, to)
+    }
+
+    fn remove_dir(&self, p: &Path) -> Result<(), OpError> {
+        self.inner.remove_dir(p)
+    }
+
+    fn is_removable_junk(&self, p: &Path) -> bool {
+        self.inner.is_removable_junk(p)
+    }
+
+    fn remove_junk(&self, p: &Path) {
+        self.inner.remove_junk(p);
+    }
+
+    fn trouble(&self) -> Option<String> {
+        self.inner.trouble()
+    }
+
+    fn head(&self, p: &Path) -> Option<[u8; 4]> {
+        if let Some(v) = self.heads.lock().unwrap_or_else(|e| e.into_inner()).get(p) {
+            return *v;
+        }
+        let v = self.inner.head(p);
+        self.heads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(p.to_path_buf(), v);
+        v
     }
 }
 
@@ -161,6 +256,12 @@ impl Tree for LocalTree {
         if super::junk::is_removable_junk(p) {
             let _ = std::fs::remove_file(p);
         }
+    }
+
+    fn head(&self, p: &Path) -> Option<[u8; 4]> {
+        let mut head = [0u8; 4];
+        std::io::Read::read_exact(&mut std::fs::File::open(p).ok()?, &mut head).ok()?;
+        Some(head)
     }
 }
 
@@ -416,6 +517,17 @@ impl Tree for RemoteTree {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    fn head(&self, p: &Path) -> Option<[u8; 4]> {
+        let s = self.server(p).ok()?;
+        let bytes = self
+            .run(|fs| {
+                let s = s.clone();
+                async move { fs.open(&s).await?.read_at(0, 4).await }
+            })
+            .ok()?;
+        bytes.get(..4)?.try_into().ok()
     }
 }
 

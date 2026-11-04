@@ -21,6 +21,7 @@ pub mod online;
 pub mod organize;
 pub mod organize_fs;
 pub mod scan;
+pub mod split;
 pub mod store;
 
 use std::collections::BTreeMap;
@@ -106,6 +107,11 @@ pub struct Location {
     pub added_ts: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pkg: Option<PkgInfo>,
+    /// The location's other files, when it is more than one: the later parts of a split package
+    /// or the later volumes of a `.rar` set (`absolute_path` is the first). They count in
+    /// `size_bytes` and go wherever it goes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<String>,
 }
 
 impl Location {
@@ -208,10 +214,51 @@ pub struct Library {
     /// so they are cheap to read again when they come back.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing_roots: Vec<String>,
+    /// Folders the last scan could not read (a dropped connection, no permission). What the scan
+    /// before it found there is kept: a folder that cannot be read is not an empty folder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unreadable: Vec<String>,
     #[serde(default, rename = "_folder_cache")]
     pub folder_cache: BTreeMap<String, FolderCacheEntry>,
     #[serde(default, rename = "_pkg_cache")]
     pub pkg_cache: BTreeMap<String, PkgCacheEntry>,
+    /// What the title sites last answered, so a game they do not know is not asked about on
+    /// every scan.
+    #[serde(
+        default,
+        rename = "_online",
+        skip_serializing_if = "online::OnlineMemory::is_empty"
+    )]
+    pub online: online::OnlineMemory,
+}
+
+impl Library {
+    /// The same index but for when it was made: nothing a save would change on disk but the date.
+    pub fn same_index(&self, other: &Library) -> bool {
+        let Library {
+            version,
+            roots,
+            library_root,
+            generated_at: _,
+            summary,
+            games,
+            missing_roots,
+            unreadable,
+            folder_cache,
+            pkg_cache,
+            online,
+        } = self;
+        *version == other.version
+            && *roots == other.roots
+            && *library_root == other.library_root
+            && *summary == other.summary
+            && *games == other.games
+            && *missing_roots == other.missing_roots
+            && *unreadable == other.unreadable
+            && *folder_cache == other.folder_cache
+            && *pkg_cache == other.pkg_cache
+            && *online == other.online
+    }
 }
 
 pub const INDEX_VERSION: u32 = 1;

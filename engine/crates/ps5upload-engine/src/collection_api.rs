@@ -44,6 +44,8 @@ pub struct ScanStatus {
     pub roots_done: u64,
     pub games_total: u64,
     pub games_done: u64,
+    /// Folders the last good scan could not read (what it found there before is kept).
+    pub unreadable: Vec<String>,
 }
 
 struct State {
@@ -53,6 +55,8 @@ struct State {
     progress: scan::Progress,
     /// Unix ms of the last scan's end (or of a fresh interval after sleep), for auto refresh.
     last_ms: AtomicU64,
+    /// Unix ms the index last reached the disk (0: not since this engine started, or it failed).
+    saved_ms: AtomicU64,
 }
 
 fn state() -> &'static State {
@@ -67,7 +71,18 @@ fn state() -> &'static State {
         cancel: AtomicBool::new(false),
         progress: scan::Progress::default(),
         last_ms: AtomicU64::new(0),
+        saved_ms: AtomicU64::new(0),
     })
+}
+
+/// A scan that found no change does not write the index again (it can be megabytes, and scans run
+/// every minute), but at least this often, so its date on disk does not fall far behind.
+const SAVE_UNCHANGED_EVERY_MS: u64 = 60 * 60 * 1000;
+
+/// Whether this scan's result needs writing, given what the last one left and when it was saved.
+fn index_needs_saving(previous: Option<&Library>, lib: &Library, now: u64, saved: u64) -> bool {
+    previous.is_none_or(|p| !p.same_index(lib))
+        || now.saturating_sub(saved) >= SAVE_UNCHANGED_EVERY_MS
 }
 
 fn now_ms() -> u64 {
@@ -79,6 +94,15 @@ fn now_ms() -> u64 {
 
 pub(crate) fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
+}
+
+/// A refusal with a `code` the client turns into the user's language; `error` stays English.
+pub(crate) fn err_coded(status: StatusCode, code: &str, msg: impl Into<String>) -> Response {
+    (
+        status,
+        Json(serde_json::json!({ "error": msg.into(), "code": code })),
+    )
+        .into_response()
 }
 
 pub(crate) fn library() -> Option<Arc<Library>> {
@@ -107,6 +131,7 @@ fn claim_scan(st: &mut ScanStatus, deep: bool) -> bool {
         started_ms: now_ms(),
         games: st.games,
         locations: st.locations,
+        unreadable: std::mem::take(&mut st.unreadable),
         ..ScanStatus::default()
     };
     true
@@ -187,16 +212,24 @@ pub fn start_scan(deep: bool) -> Result<(), String> {
         st.done = s.progress.done.load(Ordering::Relaxed);
         match result {
             Ok(lib) => {
-                if let Some(dir) = store::dir() {
-                    if let Err(e) = store::save_index_at(&dir, &lib) {
-                        crate::engine_log::record(
-                            "warn",
-                            format!("collection: index not saved: {e}"),
-                        );
+                let saved = s.saved_ms.load(Ordering::Relaxed);
+                if let Some(dir) = store::dir()
+                    .filter(|_| index_needs_saving(previous.as_deref(), &lib, now_ms(), saved))
+                {
+                    match store::save_index_at(&dir, &lib) {
+                        Ok(()) => s.saved_ms.store(now_ms(), Ordering::Relaxed),
+                        Err(e) => {
+                            s.saved_ms.store(0, Ordering::Relaxed);
+                            crate::engine_log::record(
+                                "warn",
+                                format!("collection: index not saved: {e}"),
+                            );
+                        }
                     }
                 }
                 st.games = lib.summary.total_games;
                 st.locations = lib.summary.total_locations;
+                st.unreadable = lib.unreadable.clone();
                 st.error = None;
                 crate::engine_log::record(
                     "info",
@@ -794,6 +827,35 @@ mod extras_tests {
 #[cfg(test)]
 mod scan_claim_tests {
     use super::*;
+
+    #[test]
+    fn an_unchanged_scan_writes_nothing_until_the_date_is_due() {
+        let old = Library {
+            generated_at: "t1".into(),
+            ..Library::default()
+        };
+        let same = Library {
+            generated_at: "t2".into(),
+            ..Library::default()
+        };
+        let other = Library {
+            generated_at: "t2".into(),
+            unreadable: vec!["/x".into()],
+            ..Library::default()
+        };
+        let now = SAVE_UNCHANGED_EVERY_MS * 3;
+        assert!(!index_needs_saving(Some(&old), &same, now, now - 1000));
+        assert!(index_needs_saving(Some(&old), &other, now, now - 1000));
+        assert!(index_needs_saving(None, &same, now, now - 1000));
+        assert!(index_needs_saving(
+            Some(&old),
+            &same,
+            now,
+            now - SAVE_UNCHANGED_EVERY_MS
+        ));
+        // Never saved by this engine, or the last save failed: it is due.
+        assert!(index_needs_saving(Some(&old), &same, now, 0));
+    }
 
     #[test]
     fn a_second_scan_joins_the_running_one() {
