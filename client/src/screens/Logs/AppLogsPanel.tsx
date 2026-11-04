@@ -21,6 +21,7 @@ import { useTr } from "../../state/lang";
 import { writeClipboard } from "../../lib/clipboard";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { browserDownloadText } from "../../lib/browserDownload";
+import { formatDate } from "../../lib/formatDate";
 
 const LEVEL_ORDER: LogLevel[] = ["error", "warn", "info", "debug", "trace"];
 
@@ -250,7 +251,7 @@ export default function AppLogsPanel() {
           label={tr("logs_detailed", undefined, "Detailed logs")}
           hint={
             detailedOn && detailedUntil !== null
-              ? tr("logs_detailed_on_until", { time: new Date(detailedUntil).toLocaleString() }, "On until {time}. Turns itself off then.")
+              ? tr("logs_detailed_on_until", { time: formatDate(detailedUntil) }, "On until {time}. Turns itself off then.")
               : tr(
                   "logs_detailed_hint",
                   undefined,

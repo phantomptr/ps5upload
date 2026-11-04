@@ -32,6 +32,8 @@ import {
 import { useConnectionStore } from "../state/connection";
 import { useTr } from "../state/lang";
 import { writeClipboard } from "../lib/clipboard";
+import { humanizeCaught } from "../lib/humanizeError";
+import { Badge } from "./Badge";
 
 export interface PanelAction {
   label: string;
@@ -91,16 +93,6 @@ function VerdictIcon({ v }: { v: Verdict }) {
   if (v === "bad") return <XCircle size={14} className="shrink-0 text-[var(--color-bad)]" />;
   if (v === "warn") return <AlertTriangle size={14} className="shrink-0 text-[var(--color-warn)]" />;
   return <CircleHelp size={14} className="shrink-0 text-[var(--color-muted)]" />;
-}
-
-function Badge({ children, tone = "muted" }: { children: React.ReactNode; tone?: "muted" | "accent" | "warn" }) {
-  const cls =
-    tone === "accent"
-      ? "bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
-      : tone === "warn"
-        ? "bg-[var(--color-warn)]/15 text-[var(--color-warn)]"
-        : "bg-[var(--color-surface-3)] text-[var(--color-muted)]";
-  return <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${cls}`}>{children}</span>;
 }
 
 export function PackagePanelView({
@@ -245,7 +237,7 @@ export function PackagePanelView({
               {g.identity.platform && <Badge tone="accent">{g.identity.platform.toUpperCase()}</Badge>}
               {typeLabel && <Badge>{typeLabel}</Badge>}
               {g.identity.region && <Badge>{g.identity.region}</Badge>}
-              {signLabel && <Badge tone={g.authenticity === "fake" ? "warn" : "muted"}>{signLabel}</Badge>}
+              {signLabel && <Badge tone={g.authenticity === "fake" ? "warn" : "neutral"}>{signLabel}</Badge>}
               <Badge>{g.source.format}</Badge>
               <Badge>{formatBytes(g.source.size)}</Badge>
             </div>
@@ -449,7 +441,7 @@ export function PackagePanel({
         }
       })
       .catch((e) => {
-        if (current()) setError(e instanceof Error ? e.message : String(e));
+        if (current()) setError(humanizeCaught(e));
       });
   }, [shown, host]);
 

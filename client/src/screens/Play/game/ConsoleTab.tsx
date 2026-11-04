@@ -7,6 +7,8 @@ import { transferAddr } from "../../../lib/addr";
 import { getEngineUrl } from "../../../state/engine";
 import { useTr } from "../../../state/lang";
 import { useSensors } from "../../../state/sensors";
+import { formatDate } from "../../../lib/formatDate";
+import { humanizeCaught } from "../../../lib/humanizeError";
 
 /** The engine's fan boost for a console (fan_boost.rs). */
 export interface FanBoost {
@@ -38,7 +40,7 @@ async function boostCall(addr: string, on?: boolean): Promise<FanBoost> {
   return readFanBoost(body);
 }
 
-const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const clock = (ms: number) => formatDate(ms, "time-short");
 
 /** The Console tab: temperatures (the shared 5 s reader, only while open) and fan boost. The
  *  fan's speed needs an extended read, so it is read only when asked. */
@@ -71,7 +73,7 @@ export function ConsoleTab({ host }: { host: string | null }) {
       try {
         setBoost(await boostCall(addr, on));
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(humanizeCaught(e));
       } finally {
         setBusy(false);
       }

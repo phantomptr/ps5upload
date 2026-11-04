@@ -28,6 +28,7 @@ import { powerStateFromDdp, wakeUi, type PowerState } from "../../lib/wakeState"
 import WakeSetup from "./WakeSetup";
 import { busyText } from "../../lib/helperGuard";
 import { meshFor, othersBusy, useMeshStore } from "../../state/mesh";
+import { humanizeCaught, humanizePs5Error } from "../../lib/humanizeError";
 
 /**
  * Compact power-control panel — one row of buttons (reboot, standby,
@@ -105,6 +106,16 @@ export default function PowerControl({ host }: { host: string }) {
     fn: (addr: string) => Promise<PowerControlAck>,
   ) {
     if (!host?.trim()) return;
+    const actionLabel =
+      kind === "reboot"
+        ? tr("power_action_reboot", undefined, "Reboot")
+        : kind === "shutdown"
+          ? tr("power_action_shutdown", undefined, "Shut down")
+          : tr("power_action_standby", undefined, "Rest mode");
+    const failedTitle = withConsolePrefix(
+      host,
+      tr("power_notif_failed", { action: actionLabel }, "PS5: {action} failed"),
+    );
     // Other devices working on this console lose that work too (8.0.0): say who.
     const busy = othersBusy(meshFor(useMeshStore.getState(), host).state);
     const busyNote = busy.length
@@ -115,7 +126,7 @@ export default function PowerControl({ host }: { host: string }) {
         )}`
       : "";
     const ok = await confirmDialog({
-      title: tr("power_confirm_title", { kind }, `Confirm ${kind}`),
+      title: tr("power_confirm_title", { kind: actionLabel }, `Confirm ${actionLabel}`),
       message: confirmText + busyNote,
       destructive: true,
       confirmLabel:
@@ -140,14 +151,17 @@ export default function PowerControl({ host }: { host: string }) {
       if (ack.ok) {
         pushNotification(
           "info",
-          withConsolePrefix(host, `PS5 ${kind} requested`),
+          withConsolePrefix(
+            host,
+            tr("power_notif_requested", { action: actionLabel }, "PS5: {action} requested"),
+          ),
           {
             body: ack.err
               ? ack.err
               : tr(
                   "power_ack_dispatched",
-                  { kind, host },
-                  `${kind} dispatched to ${host}.`,
+                  { kind: actionLabel, host },
+                  `${actionLabel} dispatched to ${host}.`,
                 ),
           },
         );
@@ -161,11 +175,13 @@ export default function PowerControl({ host }: { host: string }) {
           { context: host },
         );
       } else {
-        const msg = ack.err ?? "unknown error";
+        const msg = ack.err
+          ? humanizePs5Error(ack.err)
+          : tr("error_unknown", undefined, "unknown error");
         setError(msg);
         pushNotification(
           "error",
-          withConsolePrefix(host, `PS5 ${kind} failed`),
+          failedTitle,
           {
             body: msg,
           },
@@ -181,9 +197,9 @@ export default function PowerControl({ host }: { host: string }) {
         );
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = humanizeCaught(e);
       setError(msg);
-      pushNotification("error", withConsolePrefix(host, `PS5 ${kind} failed`), {
+      pushNotification("error", failedTitle, {
         body: msg,
       });
       audit(

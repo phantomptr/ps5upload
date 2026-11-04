@@ -40,6 +40,7 @@ import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** Move `name` within an autoload list, keeping pauses (`!ms`) where they are. */
 export function moveEntry(list: string[], name: string, dir: -1 | 1): string[] {
@@ -82,7 +83,7 @@ export default function PayloadManagerPanel() {
     try {
       setView(await pmOverview(h));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setLoading(false);
     }
@@ -134,7 +135,7 @@ export default function PayloadManagerPanel() {
       await refresh();
     } catch (e) {
       pushNotification("error", withConsolePrefix(host, failTitle), {
-        body: e instanceof Error ? e.message : String(e),
+        body: humanizeCaught(e),
       });
     } finally {
       setBusy(null);

@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { useTr } from "../../state/lang";
-import { formatBytes, formatDuration } from "../../lib/format";
+import { formatBytes } from "../../lib/format";
 import { fetchJobSummary, whyEntry, type JobSummary } from "../../lib/jobSummary";
+import { formatDuration } from "../../lib/formatDate";
 
 type Loaded = { state: "loading" } | { state: "none" } | { state: "ready"; summary: JobSummary };
 

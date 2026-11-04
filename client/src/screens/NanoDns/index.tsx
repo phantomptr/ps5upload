@@ -370,6 +370,7 @@ export default function NanoDnsScreen() {
               <textarea
                 value={text ?? ""}
                 onChange={(e) => setText(e.target.value)}
+                aria-label={tr("nanodns_config_label", undefined, "nanoDNS configuration")}
                 spellCheck={false}
                 className="h-[28rem] w-full resize-y rounded-[var(--radius-field)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-3 font-mono text-xs leading-relaxed outline-none focus:border-[var(--color-accent)]"
               />

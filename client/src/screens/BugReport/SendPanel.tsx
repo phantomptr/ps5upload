@@ -94,6 +94,7 @@ export default function SendPanel({
           <textarea
             readOnly
             value={discordFallback}
+            aria-label={tr("br_copy_fallback_label", undefined, "Report text to copy")}
             rows={8}
             onFocus={(e) => e.currentTarget.select()}
             className="w-full rounded-[var(--radius-field)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-2 font-mono text-xs"

@@ -31,6 +31,7 @@ import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { selectConsoleByAddress, withConsolePrefix } from "../../state/roster";
 import { formatBytes } from "../../lib/format";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /**
  * First-run setup wizard.
@@ -382,7 +383,7 @@ export default function FirstRunScreen() {
       );
     } catch (e) {
       setStep3("fail");
-      setStep3Msg(e instanceof Error ? e.message : String(e));
+      setStep3Msg(humanizeCaught(e));
       pushNotification(
         "error",
         withConsolePrefix(
@@ -390,7 +391,7 @@ export default function FirstRunScreen() {
           tr("notif_first_run_failed_title", undefined, "PS5 setup failed"),
         ),
         {
-          body: e instanceof Error ? e.message : String(e),
+          body: humanizeCaught(e),
           link: "/first-run",
         },
       );

@@ -54,14 +54,14 @@ import { usePackageViewer } from "../../state/packageViewer";
 import { GameIcon } from "../../components/GameIcon";
 import { PlatformBadge } from "../../components/PlatformBadge";
 import { humanizeJobErrorReason, listVolumes } from "../../api/ps5";
-import { humanizePs5Error } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 import { hostOf, transferAddr } from "../../lib/addr";
 import {
   platformForTitleId,
   titleIdFromContentId,
 } from "../../lib/titleDetails";
 import { useTitleInfo } from "../../lib/useTitleInfo";
-import { formatBytes, formatDuration } from "../../lib/format";
+import { formatBytes } from "../../lib/format";
 import { MAX_AUTO_RECOVER_ATTEMPTS } from "../../lib/uploadRecovery";
 import { useTr } from "../../state/lang";
 import { queueStages } from "./queueStages";
@@ -96,6 +96,7 @@ import { convertFirstState, type WorkshopHandOver } from "../../lib/convertFirst
 import { progressFigures, resumedShown } from "../../lib/resumedProgress";
 import { useInRouterContext, useNavigate } from "react-router";
 import { NetworkFixActions } from "../InstallPackage/NetworkFixActions";
+import { formatNumber, formatDuration } from "../../lib/formatDate";
 
 /** One console's slice of the queue, in first-seen order. */
 interface ConsoleGroup {
@@ -1492,10 +1493,10 @@ export function QueueRow({
                       ? tr(
                           "queue_phase_finalizing_with_counter",
                           {
-                            done: item.filesFinalized.toLocaleString(),
-                            total: item.filesFinalizingTotal.toLocaleString(),
+                            done: formatNumber(item.filesFinalized),
+                            total: formatNumber(item.filesFinalizingTotal),
                           },
-                          `Finalizing on PS5 — ${item.filesFinalized.toLocaleString()} / ${item.filesFinalizingTotal.toLocaleString()}`,
+                          `Finalizing on PS5 — ${formatNumber(item.filesFinalized)} / ${formatNumber(item.filesFinalizingTotal)}`,
                         )
                       : tr(
                           "queue_phase_finalizing",
@@ -2119,7 +2120,7 @@ function PartialFileNote({ id, path }: { id: string; path: string }) {
       setState("gone");
     } catch (e) {
       setState("idle");
-      setFailed(e instanceof Error ? e.message : String(e));
+      setFailed(humanizeCaught(e));
     }
   };
   return (

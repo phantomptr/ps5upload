@@ -3,6 +3,7 @@ import { Network, RefreshCw } from "lucide-react";
 import { netInterfacesGet, type NetInterfaceList } from "../../api/ps5";
 import { Button, ErrorCard, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 export default function NetworkPanel({ mgmtAddr }: { mgmtAddr: string }) {
   const tr = useTr();
@@ -34,7 +35,7 @@ export default function NetworkPanel({ mgmtAddr }: { mgmtAddr: string }) {
       setData(d);
     } catch (e) {
       if (myId !== reqIdRef.current) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       if (myId === reqIdRef.current) setLoading(false);
     }

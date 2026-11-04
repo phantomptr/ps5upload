@@ -105,6 +105,7 @@ import {
   imageBasename,
 } from "../../lib/mountPaths";
 import { useConfirm } from "../../components/ConfirmDialog";
+import { Modal } from "../../components/Modal";
 import { useEditSessionStore } from "../../state/editSession";
 import {
   useLibraryStore,
@@ -120,7 +121,7 @@ import { mgmtAddr } from "../../lib/addr";
 import { useImageRetry } from "../../lib/useImageRetry";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { createLimiter } from "../../lib/limitConcurrency";
-import { humanizePs5Error } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 import {
   fetchTitleInfo,
   patchesSiteName,
@@ -150,6 +151,7 @@ import {
 } from "../../components";
 import { useTr } from "../../state/lang";
 import { useSmpState } from "./SmpNeeded";
+import { formatDuration } from "../../lib/formatDate";
 
 // Module-level limiter shared across every LibraryRow mounted at once.
 // 4 concurrent FS_READs keeps the metadata fetch snappy (browser
@@ -157,16 +159,6 @@ import { useSmpState } from "./SmpNeeded";
 // payload's single-threaded mgmt port for other UI-driven calls
 // (Volumes refresh, File System navigation) to interleave cleanly.
 const metaLimit = createLimiter(4);
-
-function formatDuration(sec: number): string {
-  if (!isFinite(sec) || sec < 0) return "—";
-  if (sec < 60) return `${Math.ceil(sec)}s`;
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  if (m < 60) return `${m}m ${s}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
 
 // formatBytes moved to lib/format.ts — kept consistent across screens.
 
@@ -653,7 +645,7 @@ function LibraryRowImpl({
     // delete use; the label disambiguates by name.
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-delete", `Deleting ${entry.name}`, {
+      .start("library-delete", tr("library_activity_deleting", { name: entry.name }, "Deleting {name}"), {
         addr: consoleAddr(host),
         fromPath: entry.path,
         files: 1,
@@ -695,7 +687,7 @@ function LibraryRowImpl({
     // the op is still running if they tab away.
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-chmod", `Setting permissions on ${entry.name}`, {
+      .start("library-chmod", tr("library_activity_chmod", { name: entry.name }, "Setting permissions on {name}"), {
         addr: consoleAddr(host),
         fromPath: entry.path,
       });
@@ -778,7 +770,7 @@ function LibraryRowImpl({
     // for the slow case.
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-mount", `Mounting ${entry.name}`, {
+      .start("library-mount", tr("library_activity_mounting", { name: entry.name }, "Mounting {name}"), {
         addr: consoleAddr(host),
         fromPath: entry.path,
         toPath: opts.mountPoint,
@@ -829,7 +821,11 @@ function LibraryRowImpl({
           const msg = e instanceof Error ? e.message : String(e);
           setError(
             humanizePs5Error(
-              `Couldn't hand "${entry.name}" to ShadowMount+, so nothing was mounted: ${msg}`,
+              tr(
+                "library_smp_handoff_failed",
+                { name: entry.name, error: msg },
+                'Couldn\'t hand "{name}" to ShadowMount+, so nothing was mounted: {error}',
+              ),
             ),
           );
           return;
@@ -875,7 +871,11 @@ function LibraryRowImpl({
         const waitMs = sourceUnstable ? 3500 : 350;
         if (sourceUnstable) {
           setMountNote(
-            `Image was modified seconds ago — waiting ${(waitMs / 1000).toFixed(1)}s for the upload to settle, then retrying mount…`,
+            tr(
+              "library_mount_waiting_settle",
+              { seconds: (waitMs / 1000).toFixed(1) },
+              "The image changed seconds ago. Waiting {seconds} s for the upload to settle, then trying the mount again…",
+            ),
           );
         }
         await new Promise((resolve) => setTimeout(resolve, waitMs));
@@ -916,7 +916,9 @@ function LibraryRowImpl({
       // the user understands "Mount" was a no-op (the image was
       // already mounted), not a new mount they should expect to see
       // appear in Volumes for the first time.
-      const roSuffix = res.read_only ? " (read-only)" : "";
+      const roSuffix = res.read_only
+        ? ` (${tr("volumes_read_only", undefined, "read-only")})`
+        : "";
       // Image-layout pre-flight (added 2.2.32 payload). When the
       // payload reports `layout_valid: false`, the image was built
       // with an extra top-level folder so Register + Launch will
@@ -926,7 +928,7 @@ function LibraryRowImpl({
       // doesn't false-warn on pre-2.2.32 mounts.
       const layoutWarning =
         res.layout_valid === false
-          ? " ⚠ Image is missing sce_sys/param.json at root — Register/Launch will fail. Re-build the image with files at root (no extra folder)."
+          ? ` ⚠ ${tr("library_mount_warn_layout", undefined, "The image has no sce_sys/param.json at its root, so Register and Launch will fail. Rebuild the image with the files at the root, with no extra folder.")}`
           : "";
       // Mount-point mismatch warning. Triggered when the user
       // picked a mountPoint via the modal but the payload landed
@@ -939,7 +941,7 @@ function LibraryRowImpl({
       // do (update the payload).
       const mismatch =
         opts.mountPoint && res.mount_point !== opts.mountPoint
-          ? ` ⚠ Note: payload landed the mount at ${res.mount_point} instead of the path you picked (${opts.mountPoint}). This usually means the running payload predates 2.2.25 and silently ignored the mount-point. Push the bundled payload from Connection → Refresh to update.`
+          ? ` ⚠ ${tr("library_mount_warn_mismatch", { landed: res.mount_point, picked: opts.mountPoint }, "The helper mounted it at {landed} instead of the path you picked ({picked}). The running helper is probably too old to choose a mount point. Update it from the Connection screen.")}`
           : "";
       // Kernel-RO surprise. The user picked RW but the mount came
       // back read-only — Sony's UFS_DOWNLOAD_DATA image_type does
@@ -951,7 +953,7 @@ function LibraryRowImpl({
       // false-warn.
       const kernelRoNote =
         res.kernel_ro && !res.read_only
-          ? ` ⚠ Kernel mounted this read-only despite the RW pick — common for UFS .ffpkg images on some firmwares. Reads (and the Library scan) work; writes through the mount will fail.`
+          ? ` ⚠ ${tr("library_mount_warn_kernel_ro", undefined, "The PS5 mounted this read-only even though you picked read-write. This is common for UFS .ffpkg images on some firmwares. Reading works, and so does the Library scan. Writing through the mount will fail.")}`
           : "";
       // Geometry diagnostics. Show the f_bsize / f_iosize so a user
       // reporting "mount succeeded but games are invisible" can
@@ -966,8 +968,8 @@ function LibraryRowImpl({
           : "";
       setMountNote(
         res.reused
-          ? `Already mounted at ${res.mount_point}${roSuffix}${geomNote} — reused the existing mount.${layoutWarning}${mismatch}${kernelRoNote}`
-          : `Mounted at ${res.mount_point}${roSuffix}${geomNote}. Games inside the image will appear in the Library shortly.${layoutWarning}${mismatch}${kernelRoNote}`,
+          ? `${tr("library_mount_note_reused", { path: `${res.mount_point}${roSuffix}${geomNote}` }, "Already mounted at {path}. Reused the existing mount.")}${layoutWarning}${mismatch}${kernelRoNote}`
+          : `${tr("library_mount_note_done", { path: `${res.mount_point}${roSuffix}${geomNote}` }, "Mounted at {path}. Games inside the image will appear in the Library shortly.")}${layoutWarning}${mismatch}${kernelRoNote}`,
       );
       // Delay the rescan + retry once. The freshly-mounted volume
       // can take 1-2 seconds to surface in getmntinfo on some
@@ -1048,7 +1050,7 @@ function LibraryRowImpl({
       libraryMoveDeps,
       {
         onStart: (opId) => {
-          activityId = history().start("library-move", `Moving ${entry.name}`, {
+          activityId = history().start("library-move", tr("library_activity_moving", { name: entry.name }, "Moving {name}"), {
             fromPath: entry.path,
             toPath: destPath,
             opId,
@@ -1062,8 +1064,8 @@ function LibraryRowImpl({
           history().update(activityId, {
             error:
               threshold === "2.2.16"
-                ? "Live progress unavailable — payload predates 2.2.16 FS_OP_STATUS_ACK fix. Click Replace payload on the Connection screen, or run `make send-payload`."
-                : "Live progress unavailable — payload predates 2.2.7 FS_OP_STATUS. Click Replace payload on the Connection screen.",
+                ? tr("library_move_progress_unsupported_2_2_16")
+                : tr("library_move_progress_unsupported_2_2_7"),
           }),
         onEnd: (m) => {
           const raw = m.error ?? "";
@@ -1087,7 +1089,11 @@ function LibraryRowImpl({
             // Copied but the source remains: a failure, so the duplicate is visible.
             failed(
               moveDeleteFailedText(tr, m.to, m.from, raw),
-              `copy ok, source delete failed: ${raw}`,
+              tr(
+                "library_move_note_source_kept",
+                { error: raw },
+                "Copied, but the source could not be deleted: {error}",
+              ),
             );
           }
         },
@@ -1129,7 +1135,7 @@ function LibraryRowImpl({
     const history = () => useActivityHistoryStore.getState();
     const activityId = history().start(
       "library-download",
-      `Downloading ${entry.name}`,
+      tr("library_activity_downloading", { name: entry.name }, "Downloading {name}"),
       { addr, fromPath: entry.path, toPath: picked },
     );
     void watchJob(
@@ -1245,7 +1251,7 @@ function LibraryRowImpl({
       .getState()
       .start(
         "library-edit-checkout",
-        `Checking out ${entry.name} for editing`,
+        tr("library_activity_checkout", { name: entry.name }, "Checking out {name} for editing"),
         {
           addr: consoleAddr(host),
           fromPath: entry.path,
@@ -1266,7 +1272,11 @@ function LibraryRowImpl({
       // rather than on the next screen mount.
       await useEditSessionStore.getState().refresh(host);
       setMountNote(
-        `Checked out for editing — mounted read-write at ${res.mount.mount_point}. Use "Open files" in the banner above to change its contents, then Finish editing to put it back.`,
+        tr(
+          "library_checked_out_note",
+          { path: res.mount.mount_point },
+          'Checked out for editing and mounted read-write at {path}. Use "Open files" in the banner above to change its contents, then Finish editing to put it back.',
+        ),
       );
       onChanged();
     } catch (e) {
@@ -1316,7 +1326,7 @@ function LibraryRowImpl({
     setMountNote(null);
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-unmount", `Unmounting ${entry.name}`, {
+      .start("library-unmount", tr("library_activity_unmounting", { name: entry.name }, "Unmounting {name}"), {
         addr: consoleAddr(host),
         fromPath: mountPointToUnmount,
       });
@@ -1363,8 +1373,8 @@ function LibraryRowImpl({
       if (titleIdsToUnregister.length > 0) {
         setMountNote(
           titleIdsToUnregister.length === 1
-            ? `Unregistering ${titleIdsToUnregister[0]}…`
-            : `Unregistering ${titleIdsToUnregister.length} titles…`,
+            ? tr("library_unregistering_one", { id: titleIdsToUnregister[0] }, "Unregistering {id}…")
+            : tr("library_unregistering_many", { count: titleIdsToUnregister.length }, "Unregistering titles: {count}…"),
         );
         for (const tid of titleIdsToUnregister) {
           try {
@@ -1383,7 +1393,7 @@ function LibraryRowImpl({
       // Optimistic mountMap remove so the row flips to NOT-mounted
       // immediately; the background rescan will confirm.
       useLibraryStore.getState().removeMount(host, imageKey);
-      setMountNote(`Unmounted ${mountPointToUnmount}.`);
+      setMountNote(tr("library_unmounted_note", { path: mountPointToUnmount }, "Unmounted {path}."));
       // Delay the rescan slightly so the unmount fully propagates
       // through the kernel mount table before scanLibrary reads it
       // — without the delay, the just-unmounted volume sometimes
@@ -1429,7 +1439,7 @@ function LibraryRowImpl({
     setMountNote(null);
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-launch", `Launching ${entry.name}`, {
+      .start("library-launch", tr("library_activity_launching", { name: entry.name }, "Launching {name}"), {
         addr: consoleAddr(host),
         fromPath: entry.path,
       });
@@ -1446,7 +1456,7 @@ function LibraryRowImpl({
       // feedback: always register first (idempotent if already
       // registered), and try patch-DRM register if normal fails.
       // Then launch.
-      setMountNote(`Registering ${entry.name}…`);
+      setMountNote(tr("library_registering_note", { name: entry.name }, "Registering {name}…"));
       try {
         await appRegister(addr, entry.path);
       } catch (regErr) {
@@ -1465,7 +1475,11 @@ function LibraryRowImpl({
           // proceed to launch
         } else {
           setMountNote(
-            `${entry.name} register failed — retrying with DRM-type patch…`,
+            tr(
+              "library_register_retry_drm",
+              { name: entry.name },
+              "Couldn't register {name}. Trying again with the DRM-type patch…",
+            ),
           );
           try {
             await appRegister(addr, entry.path, { patchDrmType: true });
@@ -1488,10 +1502,14 @@ function LibraryRowImpl({
         return;
       }
       setBusy("launch");
-      setMountNote(`Launching ${entry.titleId}…`);
+      setMountNote(tr("library_launching_note", { id: entry.titleId }, "Launching {id}…"));
       await appLaunch(addr, entry.titleId);
       setMountNote(
-        `Launching ${entry.titleId}. Check the PS5 — the title should appear in the foreground in a few seconds.`,
+        tr(
+          "library_launching_check",
+          { id: entry.titleId },
+          "Launching {id}. Check the PS5: the title should come to the foreground in a few seconds.",
+        ),
       );
       // Refresh so the just-registered title surfaces correctly in
       // any "registered" UI surfaces and stays consistent with
@@ -1537,7 +1555,7 @@ function LibraryRowImpl({
     setMountNote(null);
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-register", `Registering ${entry.name}`, {
+      .start("library-register", tr("library_activity_registering", { name: entry.name }, "Registering {name}"), {
         addr: consoleAddr(host),
         fromPath: entry.path,
       });
@@ -1584,10 +1602,14 @@ function LibraryRowImpl({
           patchDrmType: opts.patchDrmType,
         });
         const drmSuffix = opts.patchDrmType
-          ? " (DRM type patched to standard)"
+          ? ` (${tr("library_registered_drm_patched", undefined, "DRM type patched to standard")})`
           : "";
         setMountNote(
-          `Registered ${res.title_name || res.title_id} (${res.title_id})${drmSuffix}. Launch should now succeed; tile appears in the PS5 home screen.`,
+          tr(
+            "library_registered_note",
+            { name: `${res.title_name || res.title_id} (${res.title_id})${drmSuffix}` },
+            "Registered {name}. Launch should now work, and its tile appears on the PS5 home screen.",
+          ),
         );
         onChanged();
       }
@@ -1630,13 +1652,20 @@ function LibraryRowImpl({
       await startTransferDownload(entry.path, dest, addr, "folder");
       pushNotification(
         "info",
-        withConsolePrefix(host, `Backup started: ${entry.name}`),
+        withConsolePrefix(
+          host,
+          tr("notif_library_backup_started", { name: entry.name }, "Backup started: {name}"),
+        ),
         {
-          body: `Downloading ${entry.path} → ${dest}. Track progress in the Activity tab.`,
+          body: tr(
+            "notif_library_backup_started_body",
+            { from: entry.path, to: dest },
+            "Downloading {from} → {to}. Track progress in the Activity tab.",
+          ),
         },
       );
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = humanizePs5Error(e instanceof Error ? e.message : String(e));
       setError(msg);
       pushNotification(
         "error",
@@ -1659,34 +1688,64 @@ function LibraryRowImpl({
       const res = await healAppmeta(addr, entry.titleId, entry.path);
       const summary =
         res.copied > 0
-          ? `Healed ${res.copied} file${res.copied === 1 ? "" : "s"} to ${res.appmeta_dir}`
-          : `Nothing to heal — ${res.already_present} files already present in ${res.appmeta_dir}`;
+          ? tr(
+              "library_heal_done",
+              { count: res.copied, dir: res.appmeta_dir },
+              "Files restored to {dir}: {count}",
+            )
+          : tr(
+              "library_heal_nothing",
+              { count: res.already_present, dir: res.appmeta_dir },
+              "Nothing to heal. Files already in {dir}: {count}",
+            );
       setMountNote(summary);
       if (res.errors > 0) {
         const firstErr = res.outcomes.find((o) => o.status === "error");
         setError(
-          `Some files failed: ${firstErr?.error ?? "unknown error"} — see Logs for details.`,
+          tr(
+            "library_heal_some_failed",
+            {
+              error: firstErr?.error
+                ? humanizePs5Error(firstErr.error)
+                : tr("error_unknown", undefined, "unknown error"),
+            },
+            "Some files failed: {error}. See Logs for details.",
+          ),
         );
         pushNotification(
           "warning",
-          withConsolePrefix(host, `Heal partial: ${entry.titleId}`),
+          withConsolePrefix(
+            host,
+            tr("notif_library_heal_partial", { id: entry.titleId }, "Some files not restored: {id}"),
+          ),
           {
-            body: `${res.copied} copied, ${res.errors} failed for ${entry.name}`,
+            body: tr(
+              "notif_library_heal_partial_body",
+              { name: entry.name, copied: res.copied, failed: res.errors },
+              "{name}. Copied: {copied}. Failed: {failed}.",
+            ),
             link: "/games",
           },
         );
       } else if (res.copied > 0) {
         pushNotification(
           "success",
-          withConsolePrefix(host, `Healed ${entry.name}`),
+          withConsolePrefix(
+            host,
+            tr("notif_library_healed", { name: entry.name }, "Healed {name}"),
+          ),
           {
-            body: `Restored ${res.copied} file${res.copied === 1 ? "" : "s"} for ${entry.titleId} — home-screen tile should refresh.`,
+            body: tr(
+              "notif_library_healed_body",
+              { id: entry.titleId, count: res.copied },
+              "Files restored for {id}: {count}. The home-screen tile should refresh.",
+            ),
             link: "/games",
           },
         );
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = humanizePs5Error(e instanceof Error ? e.message : String(e));
       setError(msg);
       pushNotification(
         "error",
@@ -1703,12 +1762,26 @@ function LibraryRowImpl({
 
   const runUnregister = async () => {
     if (entry.kind !== "game" || !entry.titleId) return;
+    const ok = await confirmDialog({
+      title: tr(
+        "library_unregister_confirm_title",
+        { name: entry.name },
+        "Remove {name} from the home screen?",
+      ),
+      message: tr(
+        "library_unregister_confirm_body",
+        undefined,
+        "The PS5 forgets this title and its tile goes away. Its files stay on disk, so you can register it again later.",
+      ),
+      confirmLabel: tr("library_unregister", undefined, "Remove from home screen"),
+    });
+    if (!ok) return;
     setBusy("unregister");
     setError(null);
     setMountNote(null);
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-unregister", `Unregistering ${entry.name}`, {
+      .start("library-unregister", tr("library_activity_unregistering", { name: entry.name }, "Unregistering {name}"), {
         addr: consoleAddr(host),
         fromPath: entry.path,
       });
@@ -1720,8 +1793,16 @@ function LibraryRowImpl({
       // #476: say so when the PS5 still lists the title, rather than claim the tile is gone.
       setMountNote(
         stillPresent
-          ? `Unregistered ${entry.titleId}, but the PS5 still lists it. Refresh in a moment; if it stays, delete it from the PS5's Settings → Storage. The source files on disk were not touched.`
-          : `Unregistered ${entry.titleId}. The XMB tile is removed; the source files on disk were not touched.`,
+          ? tr(
+              "library_unregistered_still_listed",
+              { id: entry.titleId },
+              "Unregistered {id}, but the PS5 still lists it. Refresh in a moment. If it stays, delete it from the PS5's Settings → Storage. The source files on disk were not touched.",
+            )
+          : tr(
+              "library_unregistered_note",
+              { id: entry.titleId },
+              "Unregistered {id}. Its home-screen tile is gone. The source files on disk were not touched.",
+            ),
       );
       onChanged();
     } catch (e) {
@@ -1793,7 +1874,7 @@ function LibraryRowImpl({
           {isMounted && (
             <div
               className="mt-1 inline-block rounded-full border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-xs font-medium uppercase tracking-wide text-[var(--color-accent)]"
-              title={`Mounted at ${currentMount}`}
+              title={tr("library_mounted_at_tooltip", { path: currentMount ?? "" }, "Mounted at {path}")}
             >
               {tr("library_badge_mounted", undefined, "mounted")}
             </div>
@@ -1864,7 +1945,7 @@ function LibraryRowImpl({
                 onClick={runUnmount}
                 disabled={busy !== null}
                 loading={busy === "unmount"}
-                title={`Unmount ${currentMount}`}
+                title={tr("library_unmount_path_tooltip", { path: currentMount ?? "" }, "Unmount {path}")}
               >
                 {tr("library_unmount", undefined, "Unmount")}
               </Button>
@@ -2555,15 +2636,6 @@ function GameDetailsModal({
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  // Escape closes the modal — same standard-dialog UX as Mount/Move.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-
   // Kick off the PSN fetch on mount. AbortController so closing the
   // modal mid-fetch doesn't write into a torn-down component (React
   // would warn about state-update-after-unmount; the abort makes the
@@ -2580,7 +2652,7 @@ function GameDetailsModal({
       })
       .catch((e: unknown) => {
         if (controller.signal.aborted) return;
-        setFetchError(e instanceof Error ? e.message : String(e));
+        setFetchError(humanizeCaught(e));
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
@@ -2597,19 +2669,14 @@ function GameDetailsModal({
   // looked like nothing happened. Belt-and-suspenders with the .anim-screen
   // fill-mode fix in index.css.
   return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
-      onClick={onCancel}
+    <Modal
+      open
+      onClose={onCancel}
+      title={tr("library_details_modal_title", undefined, "Game details")}
+      titleIcon={<Info size={14} />}
+      size="xl"
+      bodyClassName="p-6"
     >
-      <div
-        className="glass-float max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-[var(--radius-panel)] p-6"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="mb-3 flex items-center gap-2 text-sm font-semibold">
-          <Info size={14} />
-          {tr("library_details_modal_title", undefined, "Game details")}
-        </header>
-
         <div className="grid gap-4 md:grid-cols-[200px_1fr]">
           <div className="flex flex-col gap-2">
             {info?.coverImageUrl ? (
@@ -2720,8 +2787,7 @@ function GameDetailsModal({
             {tr("close", undefined, "Close")}
           </Button>
         </div>
-      </div>
-    </div>,
+    </Modal>,
     document.body,
   );
 }
@@ -2765,18 +2831,6 @@ function MoveModal({
   const noop = isMoveNoop(entry.path, resolved);
   const nameInvalid = isInvalidName(customName);
 
-  // Escape closes the modal — standard dialog UX. Click-outside is
-  // already wired to onCancel via the backdrop, but keyboards
-  // shouldn't have to reach for the mouse to dismiss. Window-level
-  // listener so it works regardless of focus inside the modal.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-
   // Pre-flight: probe whether the resolved destination already exists
   // and warn the user inline. Catches both name clashes against an
   // unrelated folder and stale partials left behind by a previously
@@ -2808,24 +2862,19 @@ function MoveModal({
       clearTimeout(timer);
     };
   }, [addr, resolved, noop, nameInvalid]);
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
-      onClick={onCancel}
+  return createPortal(
+    <Modal
+      open
+      onClose={onCancel}
+      title={tr(
+        "library_move_modal_title",
+        { name: entry.name },
+        'Move "{name}"',
+      )}
+      titleIcon={<FolderInput size={14} />}
+      size="lg"
+      bodyClassName="p-6"
     >
-      <div
-        className="glass-float max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-[var(--radius-panel)] p-6"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="mb-3 flex items-center gap-2 text-sm font-semibold">
-          <FolderInput size={14} />
-          {tr(
-            "library_move_modal_title",
-            { name: entry.name },
-            'Move "{name}"',
-          )}
-        </header>
-
         <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
           <dt className="text-[var(--color-muted)]">
             {tr("library_move_modal_source", undefined, "From")}
@@ -2956,8 +3005,8 @@ function MoveModal({
             "Copies to the new location first, then removes the original once the copy succeeds. If anything goes wrong mid-copy, the original stays put.",
           )}
         </p>
-      </div>
-    </div>
+    </Modal>,
+    document.body,
   );
 }
 
@@ -3119,15 +3168,6 @@ function MountModal({
     return payloadVersion ? true : false;
   }, [payloadVersion]);
 
-  // Escape closes the modal — same standard-dialog UX as MoveModal.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-
   // Resolved final mount path. The picker is hidden on pre-2.2.25
   // payloads, so falling back to a "/mnt/ps5upload/<name>" preview
   // matches what the payload would actually do.
@@ -3170,34 +3210,36 @@ function MountModal({
 
   const formatFree = (bytes: number) => {
     const gib = bytes / 1024 ** 3;
-    if (gib >= 1024) return `${(gib / 1024).toFixed(1)} TB free`;
-    if (gib >= 10) return `${gib.toFixed(0)} GB free`;
-    return `${gib.toFixed(1)} GB free`;
+    const size =
+      gib >= 1024
+        ? `${(gib / 1024).toFixed(1)} TB`
+        : gib >= 10
+          ? `${gib.toFixed(0)} GB`
+          : `${gib.toFixed(1)} GB`;
+    return tr("library_mount_free_space", { size }, "{size} free");
   };
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
-      onClick={onCancel}
+  return createPortal(
+    <Modal
+      open
+      onClose={onCancel}
+      title={
+        intent === "edit"
+          ? tr(
+              "library_edit_modal_title",
+              { name: entry.name },
+              `Edit "${entry.name}"`,
+            )
+          : tr(
+              "library_mount_modal_title",
+              { name: entry.name },
+              `Mount "${entry.name}"`,
+            )
+      }
+      titleIcon={intent === "edit" ? <FilePenLine size={14} /> : <Play size={14} />}
+      size="lg"
+      bodyClassName="p-6"
     >
-      <div
-        className="glass-float max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-[var(--radius-panel)] p-6"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="mb-3 flex items-center gap-2 text-sm font-semibold">
-          {intent === "edit" ? <FilePenLine size={14} /> : <Play size={14} />}
-          {intent === "edit"
-            ? tr(
-                "library_edit_modal_title",
-                { name: entry.name },
-                `Edit "${entry.name}"`,
-              )
-            : tr(
-                "library_mount_modal_title",
-                { name: entry.name },
-                `Mount "${entry.name}"`,
-              )}
-        </header>
         {intent === "edit" && (
           <p className="mb-3 text-xs text-[var(--color-muted)]">
             {tr(
@@ -3464,8 +3506,8 @@ function MountModal({
               : tr("library_mount_modal_run", undefined, "Mount")}
           </Button>
         </div>
-      </div>
-    </div>
+    </Modal>,
+    document.body,
   );
 }
 

@@ -7,11 +7,12 @@ import { humanizeJobErrorReason } from "../api/ps5";
 import { KindIcon } from "../components/TaskList";
 import { ProgressBar } from "../components/ProgressBar";
 import { Spinner } from "../components/Spinner";
-import { formatBytes, formatDuration } from "../lib/format";
+import { formatBytes } from "../lib/format";
 import type { ActivitySummary, FinishedRow, ActivityRow, QueuedRow } from "../state/activitySummary";
 import { routeForTask, shortLabel, shortLabelKey } from "../state/activitySummary";
 import { useTr } from "../state/lang";
 import type { Task, TaskKind } from "../state/tasks";
+import { formatDuration } from "../lib/formatDate";
 
 type Tr = ReturnType<typeof useTr>;
 

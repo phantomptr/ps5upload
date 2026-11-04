@@ -44,6 +44,7 @@ import PowerControl from "./PowerControl";
 import { BringUpPanel } from "./BringUpPanel";
 import { useHelperReplaceGuard } from "./useHelperReplaceGuard";
 import { formatBytes } from "../../lib/format";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** "rest": the console answered that it is in rest mode — not a failure, so it reads calm. */
 type StepState = "idle" | "busy" | "ok" | "fail" | "rest";
@@ -211,7 +212,7 @@ function AllowPairing({ host }: { host: string }) {
             await pairingAllow(host);
             setState("open");
           } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
+            setError(humanizeCaught(e));
             setState("failed");
           }
         }}
@@ -888,7 +889,7 @@ function DiscoverPanel({
       setScannedMs(res.scanned_ms);
       if (res.error) setError(res.error);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
       setCandidates([]);
     } finally {
       setScanning(false);
@@ -1060,7 +1061,7 @@ function DiscoverRow({
           )}
           <span
             className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${tierColor}`}
-            title={`confidence: ${row.confidence}/100`}
+            title={tr("connection_confidence_tooltip", { score: row.confidence }, "Confidence: {score}/100")}
           >
             {tierLabel}
           </span>
@@ -1114,7 +1115,7 @@ function BundledPayloadBanner() {
   useEffect(() => {
     bundledPayloadInfo()
       .then(setInfo)
-      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+      .catch((e) => setErr(humanizeCaught(e)));
   }, []);
   if (err) {
     /* Show the backend's actual error string so the user knows WHY
@@ -1426,9 +1427,10 @@ function CompanionSuggestion() {
 }
 
 function CompanionPill({ row, host }: { row: CompanionStatus; host: string }) {
+  const tr = useTr();
   const tooltip = row.reachable
-    ? `${row.role} — listening on port ${row.port}`
-    : row.error ?? "not reachable";
+    ? tr("connection_companion_listening", { role: row.role, port: row.port }, "{role}. Listening on port {port}.")
+    : row.error ?? tr("browse_not_reachable", undefined, "not reachable");
   // A tool with its own web UI opens in the browser: Payload Manager's and LZ4
   // Compression's pages are the tool, not a status readout.
   if (row.web && row.reachable) {
@@ -1437,7 +1439,7 @@ function CompanionPill({ row, host }: { row: CompanionStatus; host: string }) {
     return (
       <button
         type="button"
-        title={`${tooltip} — open its page`}
+        title={tr("connection_open_port_page", { tooltip }, "{tooltip}. Click to open its page.")}
         onClick={() => void openExternalUrl(url)}
         className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-good-soft)] px-2 py-0.5 text-[var(--color-good)] hover:underline"
       >

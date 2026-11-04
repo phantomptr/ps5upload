@@ -17,6 +17,7 @@ import { useUploadQueueStore } from "../state/uploadQueue";
 import { humanizePs5Error } from "../lib/humanizeError";
 import { Button } from "./Button";
 import { ProgressBar } from "./ProgressBar";
+import { formatNumber } from "../lib/formatDate";
 
 const POLL_MS = 2000;
 
@@ -167,10 +168,10 @@ function RunningJobRow({ job, onGone }: { job: RunningEngineJob; onGone: () => v
               ` ${tr(
                 "engine_job_files_done",
                 {
-                  done: filesFinalized.toLocaleString(),
-                  total: filesFinalizingTotal.toLocaleString(),
+                  done: formatNumber(filesFinalized),
+                  total: formatNumber(filesFinalizingTotal),
                 },
-                `${filesFinalized.toLocaleString()} of ${filesFinalizingTotal.toLocaleString()} files`,
+                `${formatNumber(filesFinalized)} of ${formatNumber(filesFinalizingTotal)} files`,
               )}`}
           </span>
         )}

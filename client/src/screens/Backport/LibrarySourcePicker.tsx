@@ -13,6 +13,8 @@ import {
   type ScanTitleInput,
 } from "../../state/fakelibCorpus";
 import { beginTask, trackTask } from "../../state/trackTask";
+import { humanizeCaught } from "../../lib/humanizeError";
+import { trStatic } from "../../lib/trStatic";
 
 /** The two ways to get backport libraries.
  *
@@ -55,10 +57,13 @@ export function LibrarySourcePicker({
         // One import is one set, named after where it came from. Sets are
         // installed whole; mixing libraries between them makes a combination
         // no game has ever run.
-        const source = list.length === 1 ? list[0].name : `${list.length} files`;
+        const source =
+          list.length === 1
+            ? list[0].name
+            : tr("backport_library_source_files", { count: list.length }, "Files: {count}");
         const label = deriveLabel(list);
         const outcome = await trackTask(
-          { kind: "fakelib-import", origin: "backport", label: `Library import ${label}` },
+          { kind: "fakelib-import", origin: "backport", label: tr("backport_task_library_import", { name: label }, "Library import {name}") },
           () => importFakelibSet(label, source, list),
         );
         if (outcome.duplicate) {
@@ -73,7 +78,7 @@ export function LibrarySourcePicker({
         }
         onChanged();
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(humanizeCaught(e));
       } finally {
         setBusy(null);
         if (fileInput.current) fileInput.current.value = "";
@@ -145,7 +150,7 @@ export function LibrarySourcePicker({
         const task = beginTask({
           kind: "fakelib-scan",
           origin: "backport",
-          label: `Library scan ${target.name}`,
+          label: tr("backport_task_library_scan", { name: target.name }, "Library scan {name}"),
           consoleId: target.host,
         });
         try {
@@ -190,7 +195,7 @@ export function LibrarySourcePicker({
       if (totals.errors.length > 0) setError(totals.errors.slice(0, 4).join("\n"));
       onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
       setScanningName(null);
@@ -306,13 +311,14 @@ function SourceCard({
 
 /** A name the user will recognise later, from what they picked. */
 export function deriveLabel(files: File[]): string {
-  if (files.length === 0) return "Imported set";
+  if (files.length === 0) return trStatic("backport_imported_set", "Imported set");
   // Directory uploads carry a relative path; its first segment is the folder
   // the user actually chose, which is a far better name than a file name.
   const withPath = files.find((f) => (f as File & { webkitRelativePath?: string }).webkitRelativePath);
   const rel = (withPath as (File & { webkitRelativePath?: string }) | undefined)?.webkitRelativePath;
   if (rel && rel.includes("/")) return rel.split("/")[0];
-  return files.length === 1 ? files[0].name.replace(/\.(sprx|prx)$/i, "") : `Imported set (${files.length} files)`;
+  return files.length === 1 ? files[0].name.replace(/\.(sprx|prx)$/i, "")
+    : trStatic("backport_imported_set_files", "Imported set (files: {count})", { count: files.length });
 }
 
 /** Outcome of a sweep across several consoles, collapsed into one line.

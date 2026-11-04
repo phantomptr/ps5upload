@@ -7,6 +7,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { fallbackNetworkFixOffers, networkFixOffers } from "../../lib/networkFix";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { useTr } from "../../state/lang";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** The two fixes for "the console cannot reach this computer" on Windows (F2.1). Neither runs
  *  by itself: the first only opens Windows Settings, the second asks first and then Windows
@@ -41,7 +42,7 @@ export function NetworkFixActions({ diag }: { diag: NetDiag | null }) {
         ),
       });
     } catch (e) {
-      setNote({ ok: false, text: e instanceof Error ? e.message : String(e) });
+      setNote({ ok: false, text: humanizeCaught(e) });
     }
   };
 
@@ -74,7 +75,7 @@ export function NetworkFixActions({ diag }: { diag: NetDiag | null }) {
         ),
       });
     } catch (e) {
-      setNote({ ok: false, text: e instanceof Error ? e.message : String(e) });
+      setNote({ ok: false, text: humanizeCaught(e) });
     } finally {
       setBusy(false);
     }

@@ -44,6 +44,7 @@ import {
   resetMeshCursor,
   useMeshStore,
 } from "../../state/mesh";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 export const KIND_ICONS: Record<string, LucideIcon> = {
   android: Smartphone,
@@ -242,7 +243,7 @@ export default function DevicesScreen() {
       await f();
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     }
   };
 

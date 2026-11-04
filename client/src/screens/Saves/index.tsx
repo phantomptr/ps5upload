@@ -109,7 +109,8 @@ import ServerBackupCard from "./ServerBackupCard";
 import MoveFromPs4 from "./MoveFromPs4";
 import SwitchSaves from "./SwitchSaves";
 import Ps2Saves from "./Ps2Saves";
-import { formatDate } from "../../lib/formatDate";
+import { formatDate, formatNumber } from "../../lib/formatDate";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /**
  * Save data manager.
@@ -353,7 +354,7 @@ export default function SavesScreen() {
           : tr("saves_closed_unchanged", undefined, "Nothing changed; the save is as it was."),
       });
     } catch (e) {
-      pushNotification("error", tr("saves_open_failed", { error: e instanceof Error ? e.message : String(e) }, "Could not close the save: {error}"));
+      pushNotification("error", tr("saves_open_failed", { error: humanizeCaught(e) }, "Could not close the save: {error}"));
     } finally {
       setOpenBusy(false);
     }
@@ -450,7 +451,7 @@ export default function SavesScreen() {
       setSaves(r.saves);
     } catch (e) {
       if (probe.isStale()) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setLoading(false);
     }
@@ -538,13 +539,13 @@ export default function SavesScreen() {
         ? ""
         : await saveDialog({
             defaultPath: destZipName,
-            filters: [{ name: "ZIP archive", extensions: ["zip"] }],
+            filters: [{ name: tr("saves_zip_filter", undefined, "ZIP archive"), extensions: ["zip"] }],
             title: tr("saves_download_picker", undefined, "Save backup as…"),
           });
       if (!android && (!destZip || typeof destZip !== "string")) return;
       // 1) Scratch dir under the OS temp root. The engine's download
       // walker will create `<scratch>/<title_id>/<files>` for us.
-      task = beginTask({ kind: "save-backup", origin: "saves", label: `Save backup ${entry.title_id}`, consoleId: host.trim() });
+      task = beginTask({ kind: "save-backup", origin: "saves", label: tr("saves_task_backup", { id: entry.title_id }, "Save backup {id}"), consoleId: host.trim() });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       // 2) Pull the PS5 save folder into the scratch dir.
       const jobId = await startTransferDownload(
@@ -563,18 +564,18 @@ export default function SavesScreen() {
       const savedTo = await saveArchiveZip(tempDir, entry.title_id, destZip ?? "", destZipName);
       pushNotification(
         "success",
-        withConsolePrefix(host, `Backed up ${entry.title_id}`),
+        withConsolePrefix(host, tr("saves_notif_backed_up", { id: entry.title_id }, "Backed up {id}")),
         {
-          body: `Saved to ${savedTo}`,
+          body: tr("saves_notif_saved_to", { path: savedTo }, "Saved to {path}"),
         },
       );
     } catch (e) {
       task?.fail(e);
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = humanizeCaught(e);
       setError(msg);
       pushNotification(
         "error",
-        withConsolePrefix(host, `Backup failed: ${entry.title_id}`),
+        withConsolePrefix(host, tr("saves_notif_backup_failed", { id: entry.title_id }, "Backup failed: {id}")),
         {
           body: msg,
         },
@@ -636,7 +637,7 @@ export default function SavesScreen() {
       if (!localZip || typeof localZip !== "string") return;
       // 1) Scratch dir + strict-validate the zip layout before we touch
       // the live save. Bad layout → throw before any delete fires.
-      task = beginTask({ kind: "save-restore", origin: "saves", label: `Save restore ${entry.title_id}`, consoleId: restoreHost });
+      task = beginTask({ kind: "save-restore", origin: "saves", label: tr("saves_task_restore", { id: entry.title_id }, "Save restore {id}"), consoleId: restoreHost });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       await saveArchiveUnzip(localZip, tempDir, entry.title_id);
       // 1.5) Format-aware prep: re-add `sdimg_` prefix to any bare image
@@ -688,22 +689,26 @@ export default function SavesScreen() {
       await waitForJob(jobId);
       pushNotification(
         "success",
-        withConsolePrefix(restoreHost, `Restored ${entry.title_id}`),
+        withConsolePrefix(restoreHost, tr("saves_notif_restored", { id: entry.title_id }, "Restored {id}")),
         {
           body:
-            `Uploaded ${entry.title_id}.zip back to ${entry.path}.` +
+            tr(
+              "saves_notif_restored_body",
+              { file: `${entry.title_id}.zip`, path: entry.path },
+              "Uploaded {file} back to {path}.",
+            ) +
             (entry.kind === "ps4"
-              ? " (PS4 save — if it doesn't appear in-game, close and reopen the game or restart the console.)"
+              ? ` ${tr("saves_notif_restored_ps4", undefined, "This is a PS4 save. If it doesn't appear in-game, close and reopen the game or restart the console.")}`
               : ""),
         },
       );
     } catch (e) {
       task?.fail(e);
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = humanizeCaught(e);
       setError(msg);
       pushNotification(
         "error",
-        withConsolePrefix(restoreHost, `Restore failed: ${entry.title_id}`),
+        withConsolePrefix(restoreHost, tr("saves_notif_restore_failed", { id: entry.title_id }, "Restore failed: {id}")),
         {
           body: msg,
         },
@@ -751,7 +756,7 @@ export default function SavesScreen() {
         }
       }
       // 1) Scratch dir + pull the PS5 save folder, same as handleDownload.
-      task = beginTask({ kind: "save-backup", origin: "saves", label: `Save backup ${entry.title_id} to USB`, consoleId: backupHost });
+      task = beginTask({ kind: "save-backup", origin: "saves", label: tr("saves_task_backup_usb", { id: entry.title_id }, "Save backup {id} to USB"), consoleId: backupHost });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       const jobId = await startTransferDownload(entry.path, tempDir, addr, "folder");
       await waitForJob(jobId);
@@ -802,16 +807,16 @@ export default function SavesScreen() {
       await waitForJob(jobId2);
       pushNotification(
         "success",
-        withConsolePrefix(backupHost, `Backed up ${entry.title_id} to USB`),
-        { body: `Saved to ${remoteZip}` },
+        withConsolePrefix(backupHost, tr("saves_notif_backed_up_usb", { id: entry.title_id }, "Backed up {id} to USB")),
+        { body: tr("saves_notif_saved_to", { path: remoteZip }, "Saved to {path}") },
       );
     } catch (e) {
       task?.fail(e);
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = humanizeCaught(e);
       setError(msg);
       pushNotification(
         "error",
-        withConsolePrefix(backupHost, `USB backup failed: ${entry.title_id}`),
+        withConsolePrefix(backupHost, tr("saves_notif_usb_backup_failed", { id: entry.title_id }, "USB backup failed: {id}")),
         { body: msg },
       );
       throw e; // let the bulk handler count this as a failure
@@ -929,7 +934,7 @@ export default function SavesScreen() {
         if (!ok) return "ok"; // user cancelled — not an error or a skip
       }
       // 1) Scratch dir + pull the zip off the USB drive (single-file download).
-      task = beginTask({ kind: "save-restore", origin: "saves", label: `Save restore ${entry.title_id} from USB`, consoleId: restoreHost });
+      task = beginTask({ kind: "save-restore", origin: "saves", label: tr("saves_task_restore_usb", { id: entry.title_id }, "Save restore {id} from USB"), consoleId: restoreHost });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       const jobId = await startTransferDownload(remoteZip, tempDir, addr, "file");
       await waitForJob(jobId);
@@ -968,17 +973,17 @@ export default function SavesScreen() {
       await waitForJob(jobId2);
       pushNotification(
         "success",
-        withConsolePrefix(restoreHost, `Restored ${entry.title_id} from USB`),
-        { body: `Restored from ${remoteZip} → ${entry.path}` },
+        withConsolePrefix(restoreHost, tr("saves_notif_restored_usb", { id: entry.title_id }, "Restored {id} from USB")),
+        { body: tr("saves_notif_restored_usb_body", { from: remoteZip, to: entry.path }, "Restored from {from} → {to}") },
       );
       return "ok";
     } catch (e) {
       task?.fail(e);
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = humanizeCaught(e);
       setError(msg);
       pushNotification(
         "error",
-        withConsolePrefix(restoreHost, `USB restore failed: ${entry.title_id}`),
+        withConsolePrefix(restoreHost, tr("saves_notif_usb_restore_failed", { id: entry.title_id }, "USB restore failed: {id}")),
         { body: msg },
       );
       throw e; // let the bulk handler count this as a failure
@@ -1033,7 +1038,7 @@ export default function SavesScreen() {
           `No USB/external drive found at ${base}. Plug it into the PS5 and try again.`,
         );
         setError(msg);
-        pushNotification("error", withConsolePrefix(restoreHost, "USB restore failed"), {
+        pushNotification("error", withConsolePrefix(restoreHost, tr("saves_notif_usb_restore_failed_plain", undefined, "USB restore failed")), {
           body: msg,
         });
         return;
@@ -1097,7 +1102,7 @@ export default function SavesScreen() {
           `No writable USB/external drive found at ${base}. Plug it into the PS5 and try again.`,
         );
         setError(msg);
-        pushNotification("error", withConsolePrefix(backupHost, "USB backup failed"), {
+        pushNotification("error", withConsolePrefix(backupHost, tr("saves_notif_usb_backup_failed_plain", undefined, "USB backup failed")), {
           body: msg,
         });
         return;
@@ -1668,8 +1673,7 @@ function SaveGroupHeader({
         )}
       </h3>
       <span className="shrink-0 text-xs text-[var(--color-muted)]">
-        {folderCount} {tr("saves_folder", undefined, "folder")}
-        {folderCount === 1 ? "" : "s"}
+        {tr("saves_folder_count", { count: formatNumber(folderCount) }, "Folders: {count}")}
       </span>
       {/* Jump to this title's save directory in the File System browser —
           quick way to inspect/manage the raw files. */}

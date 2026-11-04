@@ -274,7 +274,11 @@ export default function HealthScreen() {
                         )}
                 </div>
                 <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-                  {`${s.pass} passed · ${s.warn} warnings · ${s.fail} problems · ${s.skip} not applicable`}
+                  {tr(
+                    "health_summary_counts",
+                    { pass: s.pass, warn: s.warn, fail: s.fail, skip: s.skip },
+                    "Passed: {pass} · Warnings: {warn} · Problems: {fail} · Not applicable: {skip}",
+                  )}
                 </div>
               </div>
             </div>

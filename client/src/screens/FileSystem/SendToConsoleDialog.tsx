@@ -12,6 +12,7 @@ import { useRosterStore } from "../../state/roster";
 import { useC2cRoutes, type C2cRoute, type C2cRouteMode } from "../../state/c2cRoutes";
 import { testPs5Connection } from "../../api/ava1";
 import { testLines, type TestLine } from "../../lib/c2cTest";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 function parentDir(p: string): string {
   if (p === "/" || p === "") return "/";
@@ -66,7 +67,7 @@ export function SendToConsoleDialog({
       .catch((e) => {
         if (!live) return;
         setVolumes([]);
-        setReachError(e instanceof Error ? e.message : String(e));
+        setReachError(humanizeCaught(e));
       });
     return () => {
       live = false;
@@ -414,7 +415,7 @@ function ConnectionTestBlock({
       const t = await testPs5Connection(from, to, route, deep && route.mode !== "relay");
       setResult({ lines: testLines(t, fromName, toName), error: null });
     } catch (e) {
-      setResult({ lines: [], error: e instanceof Error ? e.message : String(e) });
+      setResult({ lines: [], error: humanizeCaught(e) });
     } finally {
       setBusy(false);
     }

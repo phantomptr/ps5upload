@@ -14,6 +14,7 @@ import { pushNotification } from "../../state/notifications";
 import { useAutoSaveBackupStore } from "../../state/autoSaveBackup";
 import { useTr } from "../../state/lang";
 import { SaveBackupsList } from "../GameHub/SaveBackupsList";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** The PlayStation 2 emulators' memory cards and saved states (Crux2, PS5SX2), and the PlayStation
  *  emulator PSSwanStation's, with their backups: a group for each kind, shown only when the console
@@ -209,7 +210,7 @@ function Ps2SaveRow({
           { title: save.emulator },
           "Couldn't back up {title}",
         ),
-        { body: e instanceof Error ? e.message : String(e) },
+        { body: humanizeCaught(e) },
       );
     } finally {
       setBusy(false);

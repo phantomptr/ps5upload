@@ -382,11 +382,7 @@ export function MoreRow({
         {showErrors && (
           <span
             className="rounded-full bg-[var(--color-bad)] px-2 py-0.5 text-xs font-semibold tabular-nums text-[var(--color-accent-contrast)]"
-            title={tr(
-              errorCount === 1 ? "logged_error_one" : "logged_error_many",
-              { count: errorCount },
-              `${errorCount} logged error${errorCount === 1 ? "" : "s"}`,
-            )}
+            title={tr("logged_error_count", { count: errorCount }, "Logged errors: {count}")}
           >
             {errorCount > 99 ? "99+" : errorCount}
           </span>

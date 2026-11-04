@@ -70,16 +70,7 @@ export default function HomeScreen() {
   const power = sensorSample?.power ?? null;
   const [recentFilter, setRecentFilter] = useState<RecentFilter>("all");
 
-  const allActivity = useActivityHistoryStore((s) => s.entries);
   const allNotifs = useNotificationsStore((s) => s.entries);
-  const recentActivity = useMemo(
-    () =>
-      allActivity
-        .filter((e) => recentFilter === "all" || e.outcome === recentFilter)
-        .slice(-5)
-        .reverse(),
-    [allActivity, recentFilter],
-  );
   const recentNotifs = useMemo(() => allNotifs.slice(0, 5), [allNotifs]);
   const runningTitleIds = useRunningTitleIds(host);
   const cpuHistory = useMemo(
@@ -284,48 +275,7 @@ export default function HomeScreen() {
                     "Latest operations across every console.",
                   )}
                 </p>
-                {recentActivity.length === 0 ? (
-                  <CompactEmpty
-                    icon={ActivityIcon}
-                    title={tr("v5_home_no_activity", "No activity yet")}
-                    body={tr(
-                      "v5_home_no_activity_desc",
-                      "Uploads, installs, and file jobs will appear here.",
-                    )}
-                  />
-                ) : (
-                  <ul className="space-y-1">
-                    {recentActivity.map((entry) => (
-                      <li
-                        key={entry.id}
-                        className="flex min-h-11 items-center gap-3 rounded-2xl px-3 py-2 text-xs hover:bg-[var(--color-surface-3)]"
-                      >
-                        {entry.outcome === "done" ? (
-                          <CheckCircle2
-                            size={15}
-                            className="shrink-0 text-[var(--color-good)]"
-                          />
-                        ) : entry.outcome === "failed" ? (
-                          <XCircle
-                            size={15}
-                            className="shrink-0 text-[var(--color-bad)]"
-                          />
-                        ) : entry.outcome === "running" ? (
-                          <Spinner size={13} className="shrink-0" />
-                        ) : (
-                          <ActivityIcon
-                            size={15}
-                            className="shrink-0 text-[var(--color-muted)]"
-                          />
-                        )}
-                        <span className="min-w-0 flex-1 truncate font-medium">
-                          {entry.label}
-                        </span>
-                        <ConsoleChip addr={entry.addr} className="shrink-0" />
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <RecentActivityList filter={recentFilter} />
               </Card>
             </section>
           </div>
@@ -703,8 +653,12 @@ function ActionTile({
         <span className="line-clamp-2 block text-[0.9375rem] font-medium leading-tight tracking-[-0.01em]">
           {label}
         </span>
-        <span className="mt-0.5 block truncate text-[0.6875rem] text-[var(--color-muted)]">
-          {detail}
+        {/* Why a tile is off is written out, not left to a tooltip: a phone has no hover and a
+            keyboard can't reach one. */}
+        <span
+          className={`mt-0.5 block text-[0.6875rem] text-[var(--color-muted)] ${readiness.ready ? "truncate" : "line-clamp-3"}`}
+        >
+          {readiness.ready || readiness.blockers.length === 0 ? detail : readiness.blockers.join(" ")}
         </span>
       </span>
       {readiness.ready && (
@@ -720,7 +674,6 @@ function ActionTile({
     return (
       <div
         aria-disabled="true"
-        title={readiness.blockers.join(" ")}
         className="action-tile"
       >
         {content}
@@ -731,6 +684,67 @@ function ActionTile({
     <Link to={to} className="action-tile">
       {content}
     </Link>
+  );
+}
+
+/** The latest operations. Its own component, subscribed on its own: a running upload rewrites its
+ *  history entry on every progress tick, and only these few rows care. */
+function RecentActivityList({ filter }: { filter: RecentFilter }) {
+  const tr = useTr();
+  const allActivity = useActivityHistoryStore((s) => s.entries);
+  const recentActivity = useMemo(
+    () =>
+      allActivity
+        .filter((e) => filter === "all" || e.outcome === filter)
+        .slice(-5)
+        .reverse(),
+    [allActivity, filter],
+  );
+  return (
+    <>
+      {recentActivity.length === 0 ? (
+        <CompactEmpty
+          icon={ActivityIcon}
+          title={tr("v5_home_no_activity", "No activity yet")}
+          body={tr(
+            "v5_home_no_activity_desc",
+            "Uploads, installs, and file jobs will appear here.",
+          )}
+        />
+      ) : (
+        <ul className="space-y-1">
+          {recentActivity.map((entry) => (
+            <li
+              key={entry.id}
+              className="flex min-h-11 items-center gap-3 rounded-2xl px-3 py-2 text-xs hover:bg-[var(--color-surface-3)]"
+            >
+              {entry.outcome === "done" ? (
+                <CheckCircle2
+                  size={15}
+                  className="shrink-0 text-[var(--color-good)]"
+                />
+              ) : entry.outcome === "failed" ? (
+                <XCircle
+                  size={15}
+                  className="shrink-0 text-[var(--color-bad)]"
+                />
+              ) : entry.outcome === "running" ? (
+                <Spinner size={13} className="shrink-0" />
+              ) : (
+                <ActivityIcon
+                  size={15}
+                  className="shrink-0 text-[var(--color-muted)]"
+                />
+              )}
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {entry.label}
+              </span>
+              <ConsoleChip addr={entry.addr} className="shrink-0" />
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }
 

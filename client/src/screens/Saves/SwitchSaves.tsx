@@ -14,6 +14,7 @@ import { pushNotification } from "../../state/notifications";
 import { useAutoSaveBackupStore } from "../../state/autoSaveBackup";
 import { useTr } from "../../state/lang";
 import { SaveBackupsList } from "../GameHub/SaveBackupsList";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** The profile folder's number as the engine gives it (its first 7 hex digits; 0 for the
  *  console's own save), as a label's id. */
@@ -122,7 +123,7 @@ function SwitchSaveRow({ host, save }: { host: string; save: SwitchSave }) {
       pushNotification(
         "error",
         tr("saves_switch_backup_failed", { title: save.title_id }, "Couldn't back up {title}"),
-        { body: e instanceof Error ? e.message : String(e) },
+        { body: humanizeCaught(e) },
       );
     } finally {
       setBusy(false);

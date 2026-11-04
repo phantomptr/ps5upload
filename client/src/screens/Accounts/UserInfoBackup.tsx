@@ -10,6 +10,7 @@ import { browserDownloadText } from "../../lib/browserDownload";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { userSlots } from "./userSlots";
 import { userInfoFileName, userInfoSummary } from "./userInfoSummary";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** Back up the console's user information: a text file with every user, account ID and sign-in
  *  state, and how to give a new user an old account ID (its saves follow the ID). */
@@ -35,7 +36,7 @@ export function UserInfoBackup({ addr }: { addr: string }) {
         try {
           np.set(u.uid, await profileNpState(slot.slot, u.uid, addr));
         } catch (e) {
-          np.set(u.uid, { error: e instanceof Error ? e.message : String(e) });
+          np.set(u.uid, { error: humanizeCaught(e) });
         }
       }
       const conn = useConnectionStore.getState();
@@ -66,7 +67,7 @@ export function UserInfoBackup({ addr }: { addr: string }) {
       await writeTextFileToPath(dest, text, fileName);
       setDone(dest);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(false);
     }

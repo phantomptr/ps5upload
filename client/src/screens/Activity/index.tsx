@@ -31,7 +31,7 @@ import {
   type ActivityEntry,
   type ActivityOutcome,
 } from "../../state/activityHistory";
-import { formatBytes, formatDuration } from "../../lib/format";
+import { formatBytes } from "../../lib/format";
 import { averageRate } from "../../lib/rollingRate";
 import { fsOpCancel } from "../../api/ps5";
 import { hostOf } from "../../lib/addr";
@@ -43,7 +43,7 @@ import { useConnectionStore } from "../../state/connection";
 import { activityForHost } from "../../lib/activityScope";
 import { profileNameForAddr, useRosterStore } from "../../state/roster";
 import { ConsoleChip } from "../../components/ConsoleChip";
-import { formatDate } from "../../lib/formatDate";
+import { formatDate, formatNumber, formatDuration } from "../../lib/formatDate";
 
 /**
  * Tasks screen. Three tabs (`?tab=`):
@@ -414,10 +414,10 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
               ? tr(
                   "activity_phase_finalizing_with_counter",
                   {
-                    done: (entry.filesFinalized ?? 0).toLocaleString(),
-                    total: entry.filesFinalizingTotal.toLocaleString(),
+                    done: formatNumber((entry.filesFinalized ?? 0)),
+                    total: formatNumber(entry.filesFinalizingTotal),
                   },
-                  `Finalizing on PS5 — ${(entry.filesFinalized ?? 0).toLocaleString()} / ${entry.filesFinalizingTotal.toLocaleString()} files`,
+                  `Finalizing on PS5 — ${formatNumber((entry.filesFinalized ?? 0))} / ${formatNumber(entry.filesFinalizingTotal)} files`,
                 )
               : tr("activity_phase_finalizing", undefined, "Finalizing on PS5")}
           </span>

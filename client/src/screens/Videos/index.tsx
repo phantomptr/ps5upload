@@ -34,7 +34,7 @@ import { CaptureSortSelect } from "../Captures/CaptureSortSelect";
 import { sortCaptures, type CaptureSort } from "../Captures/sortCaptures";
 import { CaptureToolbar } from "../Captures/CaptureToolbar";
 import { useCaptureDelete } from "../Captures/useCaptureDelete";
-import { humanizePs5Error } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 import { formatDate } from "../../lib/formatDate";
 import { useTr } from "../../state/lang";
 import { pickPath } from "../../lib/pickPath";
@@ -167,7 +167,7 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
       );
       await waitForJob(jobId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusyPaths((s) => {
         const next = new Set(s);

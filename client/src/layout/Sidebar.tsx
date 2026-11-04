@@ -215,7 +215,7 @@ export default function Sidebar() {
                   ? "absolute right-1 top-1 h-2 w-2 rounded-full bg-[var(--color-bad)]"
                   : "rounded-full bg-[var(--color-bad)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--color-accent-contrast)]"
               }
-              aria-label={`${errorCount} logged errors`}
+              aria-label={tr("logged_error_count", { count: errorCount }, "Logged errors: {count}")}
             >
               {!collapsed && (errorCount > 99 ? "99+" : errorCount)}
             </span>

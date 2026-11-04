@@ -15,6 +15,7 @@ import { formatCollectionBytes } from "../../lib/collectionView";
 import { loadCollection } from "../../state/collection";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 const moveKey = (m: OrganizeMove) => `${m.container}|${m.from}`;
 
@@ -47,7 +48,7 @@ export function OrganizeModal({
       setPlan(p);
       setRuns(r);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     }
   };
 
@@ -90,7 +91,7 @@ export function OrganizeModal({
       await loadCollection();
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(false);
     }
@@ -122,7 +123,7 @@ export function OrganizeModal({
       await loadCollection();
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(false);
     }

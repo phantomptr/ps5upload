@@ -44,6 +44,7 @@ import { hostOf } from "../../lib/addr";
 import { useLangStore, useTr } from "../../state/lang";
 import UsbAutoloaderModal from "./UsbAutoloaderModal";
 import { payloadCardLink } from "./payloadTabs";
+import { relativeAge } from "../../lib/formatDate";
 
 /**
  * Catalog tab of the Payloads screen — curated catalogue of
@@ -991,21 +992,3 @@ function PayloadCard({
   );
 }
 
-/** "57 days ago", "3 hours ago" … in the app's language (Intl, no strings of our own). */
-export function relativeAge(secs: number, lang: string): string {
-  const steps: Array<[Intl.RelativeTimeFormatUnit, number]> = [
-    ["day", 86400],
-    ["hour", 3600],
-    ["minute", 60],
-  ];
-  let rtf: Intl.RelativeTimeFormat;
-  try {
-    rtf = new Intl.RelativeTimeFormat(lang, { numeric: "auto" });
-  } catch {
-    rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
-  }
-  for (const [unit, size] of steps) {
-    if (secs >= size) return rtf.format(-Math.floor(secs / size), unit);
-  }
-  return rtf.format(-Math.max(1, Math.floor(secs)), "second");
-}

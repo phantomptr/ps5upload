@@ -22,6 +22,7 @@ import { formatBytes } from "../lib/format";
 import { useFormatDate } from "../lib/formatDate";
 import { isMobile } from "../lib/platform";
 import { useLangStore, useTr } from "../state/lang";
+import { humanizeCaught } from "../lib/humanizeError";
 
 /**
  * The app's captures, large: one at a time with previous/next (buttons, the
@@ -52,7 +53,7 @@ export function CaptureViewer() {
         const at = start ? list.findIndex((s) => s.name === start) : 0;
         setIndex(at < 0 ? 0 : at);
       })
-      .catch((e) => live && (setShots([]), setError(e instanceof Error ? e.message : String(e))));
+      .catch((e) => live && (setShots([]), setError(humanizeCaught(e))));
     return () => {
       live = false;
     };
@@ -113,7 +114,7 @@ export function CaptureViewer() {
       if (!gone.includes(current.name)) throw new Error(tr("cap_delete_failed", undefined, "The capture could not be deleted."));
       setIndex((i) => indexAfterDelete(i, count - 1));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(false);
     }
