@@ -141,7 +141,7 @@ pub fn parse_reply(reply: &Value) -> Vec<ConsoleTask> {
     let now = reply
         .get("now")
         .and_then(Value::as_i64)
-        .unwrap_or_else(|| unix_now());
+        .unwrap_or_else(unix_now);
     if let Some(jobs) = reply.get("smb_jobs").and_then(Value::as_array) {
         out.extend(jobs.iter().filter_map(|j| smb_task(j, now)));
     }
