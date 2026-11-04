@@ -14,14 +14,15 @@
 //!   `{"stage": "asking"}` (waiting for the host), `{"stage": "waiting", "why": "host_stopped"}`
 //!   (a guest coming back while the host restarts Play), then `{"stage": "joined", "player": n,
 //!   "token": t, "hevc": bool}` or `{"stage": "refused", "why": "key" | "expired" | "full" |
-//!   "denied" | "closed" | "not_playing" | "old_helper" | "unreachable" | "slow_down" (5 wrong
-//!   codes in a minute)}`.
+//!   "denied" | "no_answer" (the host did not answer in time) | "closed" | "not_playing" |
+//!   "old_helper" | "unreachable" | "slow_down" (5 wrong codes in a minute)}`.
 //! * guest → engine: binary pad frames ([`parse_pad`]), `{"ping": t}` (answered `{"pong": t}`),
 //!   `{"leave": 1}`.
 //! * engine → guest: the session's picture and sound exactly as the watch party gets them (same
 //!   binary kinds, `rp_stream_api::add_player`), `{"status": {...}}` every second,
 //!   `{"rumble": [l, r], "light": [r, g, b]}` when the game changes them, `{"bye": "kicked" |
-//!   "closed" | "replaced" | "host_stopped"}` (the socket then closes). The engine also sends a
+//!   "closed" | "replaced" | "host_stopped" | "lost" (the console no longer has their
+//!   controller)}` (the socket then closes). The engine also sends a
 //!   WebSocket ping every second; the browser's automatic pong gives the guest's round trip.
 //!
 //! The `token` is the guest's resume credential: a guest whose socket drops keeps their player
@@ -46,7 +47,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -255,6 +256,8 @@ pub(crate) struct Stats {
     /// Pictures waiting in its queue.
     queue: AtomicUsize,
     pad_frames: AtomicU64,
+    /// Pictures were skipped in the last few seconds: this guest's connection can't keep up.
+    behind: AtomicBool,
 }
 
 impl Stats {
@@ -278,6 +281,8 @@ pub(crate) struct Guest {
     /// The helper slot's owner token (sent to the console only).
     pad_token: String,
     conn: Option<Conn>,
+    /// The address of their last socket (never shown or logged): see [`holds_a_place`].
+    ip: Option<IpAddr>,
     /// Since when the guest's socket is gone (Reconnecting).
     away_since: Option<Instant>,
     left: Option<(Instant, &'static str)>,
@@ -313,6 +318,8 @@ impl Guest {
 pub(crate) enum Decision {
     Allow,
     Deny,
+    /// The host did not answer in time.
+    NoAnswer,
     /// The host stopped playing while the guest waited.
     HostStopped,
     /// Play Together closed while the guest waited.
@@ -512,6 +519,7 @@ impl Party {
             token,
             pad_token,
             conn: None,
+            ip: None,
             away_since: Some(now),
             left: None,
             playing: false,
@@ -566,6 +574,7 @@ impl Party {
             let bye = match why {
                 "kicked" => Some("kicked"),
                 "closed" => Some("closed"),
+                "lost" => Some("lost"),
                 _ => None,
             };
             if let Some(b) = bye {
@@ -580,8 +589,7 @@ impl Party {
         let n = s.rtt_n.load(Ordering::Relaxed);
         let avg = s.rtt_sum.load(Ordering::Relaxed).checked_div(n);
         fx.push(Effect::Log(format!(
-            "join: {} (Player {}) left ({why}) after {}s: rtt avg {} ms, max {} ms; {} pictures skipped to a keyframe; {} pad frames",
-            g.name,
+            "join: Player {} left ({why}) after {}s: rtt avg {} ms, max {} ms; {} pictures skipped to a keyframe; {} pad frames",
             g.player,
             now.duration_since(g.joined_at).as_secs(),
             avg.map(|a| a.to_string()).unwrap_or_else(|| "?".into()),
@@ -744,6 +752,7 @@ impl Party {
                     "rtt_ms": g.stats.rtt_now(),
                     "queue": g.stats.queue.load(Ordering::Relaxed),
                     "skipped": g.stats.skipped.load(Ordering::Relaxed),
+                    "behind": g.stats.behind.load(Ordering::Relaxed),
                     "since_s": now.duration_since(g.joined_at).as_secs(),
                     "why": g.left.map(|(_, w)| w),
                 })
@@ -949,31 +958,63 @@ fn spawn_watch(key: String) {
 
 // ── Guest socket ─────────────────────────────────────────────────────────────────────────────────
 
-static CONNECTS: Mutex<Option<HashMap<IpAddr, VecDeque<Instant>>>> = Mutex::new(None);
+/// Sockets per address per minute: what a socket costs before it has said who it is.
+pub(crate) struct ConnectLimit(Mutex<Option<HashMap<IpAddr, VecDeque<Instant>>>>);
 
-/// At most [`CONNECTS_PER_MIN`] guest sockets per address per minute (this computer itself,
-/// which has the host API anyway, [`LOOPBACK_CONNECTS_PER_MIN`]).
-fn connect_allowed(ip: IpAddr, now: Instant) -> bool {
-    let limit = if ip.is_loopback() {
+impl ConnectLimit {
+    pub(crate) const fn new() -> Self {
+        ConnectLimit(Mutex::new(None))
+    }
+
+    /// One more socket from `ip`, unless it has had `limit` this minute.
+    pub(crate) fn allow(&self, ip: IpAddr, limit: usize, now: Instant) -> bool {
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let m = g.get_or_insert_with(HashMap::new);
+        let minute = Duration::from_secs(60);
+        m.retain(|_, q| {
+            while q.front().is_some_and(|t| now.duration_since(*t) >= minute) {
+                q.pop_front();
+            }
+            !q.is_empty()
+        });
+        let q = m.entry(ip).or_default();
+        if q.len() >= limit {
+            return false;
+        }
+        q.push_back(now);
+        true
+    }
+}
+
+/// This address's limit: this computer has the host API anyway.
+pub(crate) fn connects_per_min(ip: IpAddr) -> usize {
+    if ip.is_loopback() {
         LOOPBACK_CONNECTS_PER_MIN
     } else {
         CONNECTS_PER_MIN
-    };
-    let mut g = CONNECTS.lock().unwrap_or_else(|e| e.into_inner());
-    let m = g.get_or_insert_with(HashMap::new);
-    let minute = Duration::from_secs(60);
-    m.retain(|_, q| {
-        while q.front().is_some_and(|t| now.duration_since(*t) >= minute) {
-            q.pop_front();
-        }
-        !q.is_empty()
-    });
-    let q = m.entry(ip).or_default();
-    if q.len() >= limit {
-        return false;
     }
-    q.push_back(now);
-    true
+}
+
+static CONNECTS: ConnectLimit = ConnectLimit::new();
+
+/// A guest on a flaky link reconnects every 4 s or so, and each try counted against the limit
+/// would lock them out of the place the engine is keeping for them.
+fn holds_a_place(ip: IpAddr) -> bool {
+    with_parties(|m| {
+        m.values()
+            .any(|p| p.guests.iter().any(|g| g.active() && g.ip == Some(ip)))
+    })
+}
+
+/// At most [`CONNECTS_PER_MIN`] guest sockets per address per minute (this computer itself, or an
+/// address with a guest in the game, [`LOOPBACK_CONNECTS_PER_MIN`]).
+fn connect_allowed(ip: IpAddr, now: Instant) -> bool {
+    let limit = if holds_a_place(ip) {
+        LOOPBACK_CONNECTS_PER_MIN
+    } else {
+        connects_per_min(ip)
+    };
+    CONNECTS.allow(ip, limit, now)
 }
 
 /// `GET /api/join/ws`: a guest's socket (reached from the LAN; the socket checks the invite or
@@ -1056,7 +1097,8 @@ struct HelloMsg {
     hello: Hello,
 }
 
-/// A guest's name as they gave it: printable, short.
+/// A guest's name as they gave it: printable, short. Empty when they gave none: the host's own
+/// app says "Friend" in its language.
 fn clean_name(n: Option<&str>) -> String {
     let n: String = n
         .unwrap_or("")
@@ -1064,12 +1106,7 @@ fn clean_name(n: Option<&str>) -> String {
         .filter(|c| !c.is_control())
         .take(32)
         .collect();
-    let n = n.trim();
-    if n.is_empty() {
-        "Friend".into()
-    } else {
-        n.to_string()
-    }
+    n.trim().to_string()
 }
 
 async fn read_hello(socket: &mut WebSocket) -> Option<Hello> {
@@ -1210,7 +1247,7 @@ async fn guest_session(mut socket: WebSocket, ip: IpAddr) {
             (c, id)
         }
     };
-    play(socket, console, id).await;
+    play(socket, console, id, ip).await;
 }
 
 /// A guest coming back with `token`: None when the socket closed while waiting for the host.
@@ -1402,7 +1439,9 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
     if let Err(why) = queued {
         return Some(Admit::Refused(why));
     }
-    crate::log_info!("join: {name} asks to play on {console}");
+    // By number in the log: a bug report is posted in public, and names are the host's friends.
+    crate::log_info!("join: a guest asks to play on {console}");
+    crate::log_detail!("join: {name} asks to play on {console}");
     if socket
         .send(say(serde_json::json!({"stage": "asking"})))
         .await
@@ -1415,7 +1454,7 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
     let d = tokio::select! {
         // Err: Play Together closed and the asks were dropped with it
         a = rx => a.ok(),
-        _ = tokio::time::sleep(ASK_WAIT) => Some(Decision::Deny),
+        _ = tokio::time::sleep(ASK_WAIT) => Some(Decision::NoAnswer),
         _ = closed(socket) => { gave_up = true; Some(Decision::Deny) }
     };
     with_party(&key, |p| p.pending.retain(|a| a.id != id));
@@ -1434,6 +1473,7 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
     match d {
         None => return Some(Admit::Refused("closed")),
         Some(Decision::Deny) => return Some(Admit::Refused("denied")),
+        Some(Decision::NoAnswer) => return Some(Admit::Refused("no_answer")),
         Some(Decision::HostStopped) => return Some(Admit::Refused("not_playing")),
         Some(Decision::Closed) => return Some(Admit::Refused("closed")),
         Some(Decision::Allow) => {}
@@ -1468,7 +1508,8 @@ async fn ask(socket: &mut WebSocket, entry: Entry, name: &str, ip: IpAddr) -> Op
                 link::send(&console, link::Cmd::Close { slot: player });
                 return Some(Admit::Refused("closed"));
             }
-            crate::log_info!("join: {name} is Player {player} on {console}");
+            crate::log_info!("join: a guest is Player {player} on {console}");
+            crate::log_detail!("join: {name} is Player {player} on {console}");
             return Some(Admit::New(console, gid));
         }
         // Not made: this guest record goes (quietly: they never played).
@@ -1548,6 +1589,9 @@ fn forward_pad(key: &str, console: &str, id: u64, gen: u64, mut st: PadState) {
     }
 }
 
+/// A skipped picture says a guest is behind for this many status ticks (the host's panel).
+const BEHIND_FOR_TICKS: u32 = 5;
+
 /// The least time between a guest's keyframe requests that reach the console.
 const KEY_ASK_GAP: Duration = Duration::from_millis(1000);
 
@@ -1577,17 +1621,16 @@ fn now_ms() -> u64 {
 }
 
 /// A guest who is in: picture and sound out, pad states in, until they leave or are let go.
-async fn play(mut socket: WebSocket, console: String, id: u64) {
+async fn play(mut socket: WebSocket, console: String, id: u64, ip: IpAddr) {
     static GEN: AtomicU64 = AtomicU64::new(1);
     let gen = GEN.fetch_add(1, Ordering::Relaxed);
     let key = host_key(&console);
     let (tx, mut rx) = mpsc::channel::<Out>(64);
     let Some((fx, player, token, stats)) = with_party(&key, |p| {
         let fx = p.attach(id, gen, tx);
-        p.guests
-            .iter()
-            .find(|g| g.id == id)
-            .map(|g| (fx, g.player, g.token.clone(), g.stats.clone()))
+        let g = p.guest_mut(id)?;
+        g.ip = Some(ip);
+        Some((fx, g.player, g.token.clone(), g.stats.clone()))
     })
     .flatten() else {
         let _ = socket.send(refused("closed")).await;
@@ -1620,6 +1663,8 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
     let mut left = false;
     let mut pacer = PadPacer::new(Instant::now());
     let mut key_ask = KeyAsk::default();
+    let mut skipped_seen = stats.skipped.load(Ordering::Relaxed);
+    let mut behind_for = 0u32;
     loop {
         if ended {
             break; // the joined message could not go: the socket is gone
@@ -1674,7 +1719,7 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
                                     "join: Player {player} on {console} asks for a keyframe ({} pictures skipped so far)",
                                     stats.skipped.load(Ordering::Relaxed)
                                 );
-                                crate::rp_stream_api::request_keyframe(&console);
+                                crate::rp_stream_api::request_keyframe(&console, spect);
                             } else {
                                 crate::log_detail!("join: Player {player} on {console}: keyframe ask held back (one a second)");
                             }
@@ -1724,6 +1769,10 @@ async fn play(mut socket: WebSocket, console: String, id: u64) {
                 None => video = None,
             },
             _ = tick.tick() => {
+                let skipped = stats.skipped.load(Ordering::Relaxed);
+                behind_for = if skipped != skipped_seen { BEHIND_FOR_TICKS } else { behind_for.saturating_sub(1) };
+                skipped_seen = skipped;
+                stats.behind.store(behind_for > 0, Ordering::Relaxed);
                 let _ = socket.send(Message::Ping(now_ms().to_le_bytes().to_vec().into())).await;
                 let status = with_party(&key, |p| {
                     p.is_current(id, gen).then(|| p.guest_status(id)).flatten()
@@ -2171,6 +2220,9 @@ pub(crate) mod link {
     /// Helper failures wait this long, doubling up to [`BACKOFF_MAX`].
     const BACKOFF_MIN: Duration = Duration::from_millis(250);
     const BACKOFF_MAX: Duration = Duration::from_secs(4);
+    /// A pad the helper had and now refuses to make again (a user signed out, say) is given up
+    /// after this long: the guest is told, rather than staying "playing" with dead input.
+    pub(crate) const REOPEN_GIVE_UP: Duration = Duration::from_secs(30);
     /// The rumble and light bar are read this often while they change, else every
     /// [`OUTPUT_IDLE`].
     const OUTPUT_FAST: Duration = Duration::from_millis(50);
@@ -2385,6 +2437,8 @@ pub(crate) mod link {
         waiters: Vec<oneshot::Sender<OpenResult>>,
         seq: u32,
         io: SlotIo,
+        /// Since when the helper has refused to make this pad again.
+        refused_since: Option<Instant>,
         /// The guest is connected and sending: heartbeats say `live` (the helper keeps a held
         /// stick held). False while they reconnect (the pad stays, neutral).
         live: bool,
@@ -2404,6 +2458,7 @@ pub(crate) mod link {
                 waiters: Vec::new(),
                 seq: 0,
                 io: SlotIo::default(),
+                refused_since: None,
                 live: false,
                 last_call: now,
                 last_input: now,
@@ -2549,6 +2604,7 @@ pub(crate) mod link {
                             && (o.resumed == Some(false)
                                 || (o.resumed.is_none() && s.handle != Some(o.handle)));
                         s.opened = true;
+                        s.refused_since = None;
                         s.handle = Some(o.handle);
                         s.last_call = now;
                         // every open (and resume) starts the helper's seq for the slot again
@@ -2581,9 +2637,12 @@ pub(crate) mod link {
                     Ok(Some(o)) => {
                         let busy = o.err.as_deref() == Some(vpad::ERR_BUSY);
                         if !busy && !first {
-                            // a reopen the helper refused for now: try again later
-                            self.fail(now);
-                            return;
+                            // a reopen the helper refused for now: try again later, for a while
+                            let since = *s.refused_since.get_or_insert(now);
+                            if now.saturating_duration_since(since) < REOPEN_GIVE_UP {
+                                self.fail(now);
+                                return;
+                            }
                         }
                         let res = if busy {
                             OpenResult::Busy
@@ -2895,23 +2954,52 @@ pub(crate) mod link {
             }
             let since = *idle_since.get_or_insert_with(Instant::now);
             if since.elapsed() > IDLE_END {
-                let mut g = LINKS.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(map) = g.as_mut() {
-                    if map.get(&key).is_some_and(|(g2, _)| *g2 == gen) {
-                        map.remove(&key);
-                    }
-                }
-                drop(g);
-                // Anything sent between the last look and the removal is still served.
-                while let Ok(c) = rx.try_recv() {
-                    st.on_cmd(c, Instant::now());
-                }
-                if st.idle() {
+                if try_end(&mut st, &rx, &key, gen, Instant::now()) {
                     return;
                 }
+                idle_since = None;
                 st.tick(Instant::now());
             }
         }
+    }
+
+    /// An idle link leaves [`LINKS`], unless a command came in at the last moment. All under the
+    /// lock [`send`] sends under: what was sent is in the channel, and nothing can be sent after.
+    /// Removed first and looked at afterwards, an open that came between them left a pad nobody
+    /// heartbeats or closes, with the only sender gone and the next look ending this thread.
+    pub(crate) fn try_end(
+        st: &mut LinkState,
+        rx: &mpsc::Receiver<Cmd>,
+        key: &str,
+        gen: u64,
+        now: Instant,
+    ) -> bool {
+        let mut g = LINKS.lock().unwrap_or_else(|e| e.into_inner());
+        while let Ok(c) = rx.try_recv() {
+            st.on_cmd(c, now);
+        }
+        if !st.idle() {
+            return false;
+        }
+        if let Some(map) = g.as_mut() {
+            if map.get(key).is_some_and(|(g2, _)| *g2 == gen) {
+                map.remove(key);
+            }
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_put_link(key: &str, gen: u64, tx: mpsc::Sender<Cmd>) {
+        let mut g = LINKS.lock().unwrap_or_else(|e| e.into_inner());
+        g.get_or_insert_with(HashMap::new)
+            .insert(key.to_string(), (gen, tx));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_has_link(key: &str) -> bool {
+        let g = LINKS.lock().unwrap_or_else(|e| e.into_inner());
+        g.as_ref().is_some_and(|m| m.contains_key(key))
     }
 
     /// Sends `cmd` to `console`'s link; an open starts one when none runs.
@@ -3094,6 +3182,25 @@ mod tests {
         }
         assert!(!connect_allowed(ip, t));
         assert!(connect_allowed(ip, t + Duration::from_secs(61)));
+    }
+
+    /// A flaky guest comes back every few seconds: those tries must not lock them out of the
+    /// place the engine is keeping for them.
+    #[test]
+    fn an_address_with_a_place_may_come_back_often() {
+        let ip: IpAddr = "192.0.2.91".parse().unwrap();
+        let t = Instant::now();
+        let mut p = party();
+        let id = admit(&mut p, "Ann", t);
+        p.guest_mut(id).unwrap().ip = Some(ip);
+        let key = "192.0.2.200-place".to_string();
+        with_parties(|m| m.insert(key.clone(), p));
+        for _ in 0..(CONNECTS_PER_MIN * 2) {
+            assert!(connect_allowed(ip, t));
+        }
+        // Their place gone: the usual limit.
+        with_parties(|m| m.remove(&key));
+        assert!(!connect_allowed(ip, t));
     }
 
     #[test]
@@ -3522,6 +3629,8 @@ mod tests {
         not_open: Mutex<Option<u8>>,
         /// states refuse a whole batch holding this slot (an item it cannot read)
         unreadable: Mutex<Option<u8>>,
+        /// opens are refused with this (the helper says no, for a pad it had)
+        refuse_open: Mutex<Option<String>>,
         /// opens take this long (a slow helper)
         open_delay: Mutex<Duration>,
         out: Mutex<Output>,
@@ -3561,6 +3670,13 @@ mod tests {
                     ..Default::default()
                 }));
             }
+            if let Some(e) = self.refuse_open.lock().unwrap().clone() {
+                return Ok(Some(Opened {
+                    err: Some(e),
+                    ..Default::default()
+                }));
+            }
+            *self.not_open.lock().unwrap() = None;
             // the first open, or one after a restart, makes a new pad
             let fresh = self.restarted.swap(false, Ordering::Relaxed)
                 || self.handle.load(Ordering::Relaxed) == 0;
@@ -3905,6 +4021,107 @@ mod tests {
             "nothing lost"
         );
         assert!(reopens(&ev) == 0, "the same pad: no new user prompt");
+    }
+
+    /// Only a pad that was playing: refused for good at the first open, a guest is told at once.
+    #[test]
+    fn a_pad_the_helper_keeps_refusing_ends_in_lost_not_a_loop() {
+        let f = Arc::new(FakeHelper::default());
+        let (mut st, ev) = link_with(&f);
+        let t = Instant::now();
+        open_slot_t(&mut st, 2, "a", t);
+        let lost = |ev: &Events| {
+            ev.lock()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, Event::Lost { slot: 2 }))
+        };
+        // The helper restarted, and now refuses (nobody signed in).
+        *f.not_open.lock().unwrap() = Some(2);
+        *f.refuse_open.lock().unwrap() = Some("vpad_no_user".into());
+        st.on_cmd(
+            Cmd::State {
+                slot: 2,
+                state: st_(0x40),
+            },
+            t,
+        );
+        st.tick(t);
+        let mut now = t;
+        while now < t + link::REOPEN_GIVE_UP - Duration::from_secs(1) {
+            now += Duration::from_millis(500);
+            st.tick(now);
+        }
+        assert!(!lost(&ev), "still trying: it may come back");
+        // It comes back in time: nothing lost, and the clock starts over.
+        *f.refuse_open.lock().unwrap() = None;
+        now += Duration::from_secs(5);
+        st.tick(now);
+        assert!(!lost(&ev));
+        // Refused again, and this time it stays that way.
+        *f.refuse_open.lock().unwrap() = Some("vpad_failed".into());
+        st.on_cmd(
+            Cmd::State {
+                slot: 2,
+                state: st_(0x80),
+            },
+            now,
+        );
+        st.tick(now);
+        let t2 = now;
+        while now < t2 + link::REOPEN_GIVE_UP + Duration::from_secs(10) {
+            now += Duration::from_millis(500);
+            st.tick(now);
+        }
+        assert!(lost(&ev), "the guest is told");
+        assert!(st.idle());
+    }
+
+    /// The party's side of that: their socket is told why, and the token is void.
+    #[test]
+    fn a_lost_pad_is_said_to_the_guest() {
+        let t = Instant::now();
+        let mut p = party();
+        let id = admit(&mut p, "Ann", t);
+        let (tx, _rx) = conn();
+        p.attach(id, 1, tx);
+        assert_eq!(byes(p.leave(id, "lost", t)), vec!["lost"]);
+        // A guest whose time ran out has no socket to say it on.
+        let mut p = party();
+        let id = admit(&mut p, "Ann", t);
+        assert!(byes(p.leave(id, "timeout", t)).is_empty());
+    }
+
+    /// An open that arrives as an idle link is ending keeps the link alive; without one it goes.
+    #[test]
+    fn an_open_at_idle_shutdown_keeps_the_link() {
+        let f = Arc::new(FakeHelper::default());
+        let (mut st, _ev) = link_with(&f);
+        let t = Instant::now();
+        let key = "192.0.2.201-idle";
+        let (tx, rx) = std::sync::mpsc::channel();
+        link::test_put_link(key, 77, tx.clone());
+        let (reply, _r) = oneshot::channel();
+        tx.send(Cmd::Open {
+            slot: 2,
+            token: "a".into(),
+            reply,
+        })
+        .unwrap();
+        assert!(!link::try_end(&mut st, &rx, key, 77, t), "a pad to serve");
+        assert!(link::test_has_link(key), "still reachable for its Close");
+        st.on_cmd(Cmd::Close { slot: 2 }, t);
+        st.tick(t);
+        assert!(st.idle());
+        assert!(link::try_end(&mut st, &rx, key, 77, t));
+        assert!(!link::test_has_link(key));
+    }
+
+    #[test]
+    fn a_guest_without_a_name_is_named_by_the_host_app() {
+        assert_eq!(clean_name(None), "");
+        assert_eq!(clean_name(Some(" \u{7} ")), "");
+        assert_eq!(clean_name(Some(" Ann ")), "Ann");
     }
 
     #[test]

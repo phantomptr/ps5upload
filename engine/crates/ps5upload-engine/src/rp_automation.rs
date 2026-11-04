@@ -55,7 +55,7 @@ const MAX_HOLD_MS: u64 = 5000;
 /// The longest side a frame request may ask to scale to (and the smallest).
 const MAX_WIDTH_RANGE: std::ops::RangeInclusive<u32> = 16..=7680;
 /// The largest picture a page may answer with.
-const MAX_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
+pub(crate) const MAX_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
 
 struct Pending {
     id: u64,

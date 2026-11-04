@@ -823,10 +823,28 @@ pub fn run_stream(
     max: Duration,
     sink: &mut impl StreamSink,
 ) -> Result<StreamReport> {
+    // Stopped already (the page left, or Stop): no need to touch the console at all.
+    if sink.stopped() {
+        return Ok(StreamReport::default());
+    }
     // Readiness without touching the Remote Play slot (see guard.rs).
-    guard::prepare(host, creds, cfg.wake, Duration::from_secs(60), &mut || {
-        sink.progress(Progress::Waking)
-    })?;
+    let hooks = std::cell::RefCell::new(&mut *sink);
+    let ready = guard::prepare(
+        host,
+        creds,
+        cfg.wake,
+        Duration::from_secs(60),
+        &mut || hooks.borrow_mut().progress(Progress::Waking),
+        &mut || hooks.borrow_mut().stopped(),
+    );
+    match ready {
+        Err(e) if e.is::<guard::Cancelled>() => return Ok(StreamReport::default()),
+        r => r?,
+    }
+    // A stop during the wake: a session init would reserve the console's one slot for nobody.
+    if sink.stopped() {
+        return Ok(StreamReport::default());
+    }
     let nonce = match session_init(host, &creds.regist_key) {
         Ok(n) => n,
         Err(e) if format!("{e:#}").contains(guard::REASON_IN_USE) => {
@@ -867,6 +885,10 @@ pub fn run_stream(
                     "rp ctrl: {host}: attempt {attempt}/{CTRL_ATTEMPTS} failed: {e:#}; again in 1 s"
                 );
                 std::thread::sleep(Duration::from_secs(1));
+                if sink.stopped() {
+                    // The slot stays reserved for a while (`_release` holds off a new session).
+                    return Ok(StreamReport::default());
+                }
             }
             r => break r,
         }
@@ -888,6 +910,9 @@ pub fn run_stream(
         Err(e) => return Err(e),
     };
     sink.progress(Progress::SessionId);
+    if sink.stopped() {
+        return Ok(StreamReport::default());
+    }
     // DualSense features and the keyboard on, the mic muted twice (chiaki
     // `ctrl_enable_features`); like chiaki, a failed send is not fatal.
     for (kind, payload) in start_ctrl_messages(cfg.mic, cfg.dualsense, cfg.keyboard) {
@@ -927,6 +952,13 @@ pub fn run_stream(
     let mut stream_info: Option<proto::StreamInfo> = None;
     let deadline = Instant::now() + Duration::from_secs(10);
     while stream_info.is_none() {
+        if sink.stopped() {
+            // As a stop during the stream: DISCONNECT over Takion, then ctrl closes.
+            takion.close();
+            drop(ctrl);
+            _release.clean.set(true);
+            return Ok(report);
+        }
         if Instant::now() > deadline {
             bail!(if have_bang {
                 "the console never sent STREAMINFO"
@@ -1015,8 +1047,8 @@ pub fn run_stream(
         if started.elapsed() > max || sink.stopped() {
             break Ok(());
         }
-        // Before, a console that went quiet, or closed ctrl, left the page on a frozen
-        // picture until the four-hour limit: end the stream and say why.
+        // A console that went quiet, or closed ctrl, would leave the page on a frozen picture
+        // for as long as it stayed open: end the stream and say why.
         if takion.last_rx.elapsed() > SILENCE_LIMIT {
             break Err(anyhow!(
                 "the console stopped sending: nothing for {} s (the network dropped, or the console ended the stream)",
@@ -1272,6 +1304,44 @@ pub fn run_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A page that already said stop: nothing goes to the console, not even discovery.
+    #[test]
+    fn a_stream_stopped_before_it_starts_never_touches_the_console() {
+        struct Stopped;
+        impl StreamSink for Stopped {
+            fn progress(&mut self, _: Progress) {
+                panic!("nothing to report");
+            }
+            fn video(&mut self, _: &[u8], _: bool) -> bool {
+                false
+            }
+            fn audio(&mut self, _: &[u8], _: bool) -> bool {
+                false
+            }
+            fn input(&mut self) -> Option<ControllerState> {
+                None
+            }
+            fn stopped(&mut self) -> bool {
+                true
+            }
+        }
+        let creds = SessionCreds {
+            regist_key: [0; 16],
+            morning: [0; 16],
+        };
+        let t0 = Instant::now();
+        // An address nothing answers on: a probe would take its 2 s.
+        let r = run_stream(
+            "192.0.2.1",
+            &creds,
+            StreamConfig::default(),
+            Duration::MAX,
+            &mut Stopped,
+        );
+        assert_eq!(r.unwrap().video.frames, 0);
+        assert!(t0.elapsed() < Duration::from_secs(1));
+    }
 
     #[test]
     fn launch_spec_is_valid_json() {
