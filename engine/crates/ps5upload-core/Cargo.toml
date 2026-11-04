@@ -59,4 +59,4 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # engine starts and talks to over pipes (src/rar_helper.rs). Do not add the
 # `unrar` crate (or any crate that links UnRAR) to this crate or anything the
 # engine/desktop binaries link: see LICENSES/UnRAR-exception.md. RAR stays
-# desktop-only: the code is `#[cfg(not(target_os = "android"))]`.
+# desktop-only: the code is `#[cfg(not(any(target_os = "android", target_os = "ios")))]`.

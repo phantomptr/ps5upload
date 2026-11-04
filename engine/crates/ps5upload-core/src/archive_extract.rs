@@ -385,17 +385,17 @@ fn extract_7z(archive: &Path, sink: &mut Sink) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn rar_size(archive: &Path, password: Option<&str>) -> Result<u64> {
     Ok(crate::transfer::rar_plan_entries(archive, password, &[])?.0)
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 fn rar_size(_: &Path, _: Option<&str>) -> Result<u64> {
-    bail!("RAR archives can't be opened on Android; use .zip or .7z")
+    bail!("RAR archives can't be opened on a phone; use .zip or .7z")
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn extract_rar(archive: &Path, password: Option<&str>, sink: &mut Sink) -> Result<()> {
     use crate::rar_stream::{next_entry, EntryReader};
     for dir in crate::transfer::rar_dirs(archive, password)? {
@@ -414,9 +414,9 @@ fn extract_rar(archive: &Path, password: Option<&str>, sink: &mut Sink) -> Resul
     result
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 fn extract_rar(_: &Path, _: Option<&str>, _: &mut Sink) -> Result<()> {
-    bail!("RAR archives can't be opened on Android; use .zip or .7z")
+    bail!("RAR archives can't be opened on a phone; use .zip or .7z")
 }
 
 /// Folders a find never descends into: archive tools' sidecars.

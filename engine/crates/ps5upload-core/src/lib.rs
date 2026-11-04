@@ -35,7 +35,7 @@ pub mod payload_manager;
 pub mod pkg_install;
 pub mod process_mgr;
 pub mod profile;
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod rar_helper;
 pub mod rar_stream;
 pub mod remoteplay;
