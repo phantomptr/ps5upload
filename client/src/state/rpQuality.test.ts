@@ -46,13 +46,35 @@ describe("the 720p offer and switch", () => {
     await useRpQualityStore.getState().switchTo720();
     expect(stop).toHaveBeenCalledTimes(1);
     expect(start).toHaveBeenCalledTimes(2);
-    expect(start).toHaveBeenLastCalledWith(target);
+    // For this session only: the setting stays what the user chose.
+    expect(start).toHaveBeenLastCalledWith(target, { quality: { res: "1280x720" } });
     const rp = useRemotePlayStore.getState();
-    expect(rp.prefs.res).toBe("1280x720");
+    expect(rp.prefs.res).toBe("1920x1080");
     expect(rp.phase).toBe("playing");
     // The busy answer was the plan, not an error to show.
     expect(rp.error).toBeNull();
     expect(useRpQualityStore.getState().switching).toBeNull();
+  }, 10_000);
+
+  it("adds to what this session already changed, and never saves it", async () => {
+    const start = vi.fn(async () => {
+      useRemotePlayStore.setState({ stream: fakeStream(), phase: "playing", error: null });
+    });
+    const stop = vi.fn(() => useRemotePlayStore.setState({ stream: null, phase: "ended" }));
+    const prefs = { ...useRemotePlayStore.getState().prefs, res: "1920x1080" as const, codec: "auto" as const, bitrateKbps: 0 };
+    useRemotePlayStore.setState({
+      stream: fakeStream(),
+      target,
+      phase: "playing",
+      error: null,
+      prefs,
+      sessionQuality: { res: "1280x720" },
+      start,
+      stop,
+    });
+    await useRpQualityStore.getState().restartWith({ codec: "h264", bitrateKbps: 6000 });
+    expect(start).toHaveBeenCalledWith(target, { quality: { res: "1280x720", codec: "h264", bitrateKbps: 6000 } });
+    expect(useRemotePlayStore.getState().prefs).toEqual(prefs);
   }, 10_000);
 
   it("stops trying when cancelled", async () => {

@@ -184,6 +184,9 @@ export interface RpTarget {
   rpKey: string;
 }
 
+/** The fixed-for-a-session settings a restart may change for that session alone. */
+export type SessionQuality = Partial<Pick<RpPrefs, "res" | "codec" | "bitrateKbps">>;
+
 interface RpState {
   stream: RemotePlayStream | null;
   target: RpTarget | null;
@@ -209,7 +212,10 @@ interface RpState {
   pip: PipKind | null;
   /** The picture-in-picture window, when the picture is in one (not for "video"). */
   pipWindow: Window | null;
-  start: (t: RpTarget, opts?: { attach?: boolean }) => Promise<void>;
+  /** What this session runs at instead of the saved prefs ("Switch to 720p", Go live's restart).
+   *  Ends with the session: the saved settings are what the next one starts with. */
+  sessionQuality: SessionQuality | null;
+  start: (t: RpTarget, opts?: { attach?: boolean; quality?: SessionQuality | null }) => Promise<void>;
   stop: () => void;
   setPrefs: (p: Partial<RpPrefs>) => void;
   setKeymap: (k: Record<string, KeyAction> | null) => void;
@@ -309,12 +315,14 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
   onScreen: false,
   pip: null,
   pipWindow: null,
+  sessionQuality: null,
 
   async start(t, opts) {
     const cur = get().stream;
     if (cur && cur.currentPhase !== "ended") return;
     const { prefs } = get();
-    const [width, height] = prefs.res.split("x").map(Number);
+    const quality = opts?.quality ?? null;
+    const [width, height] = (quality?.res ?? prefs.res).split("x").map(Number);
     // A DualSense here: the session starts in DualSense mode (triggers and haptics). Only the
     // desktop app looks (and only it waits for the answer).
     const ds = prefs.dualSense && dualSenseCapable() ? await findDualSense() : null;
@@ -341,8 +349,8 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       replayS: prefs.replayS,
       picture: prefs.picture,
       decoding: prefs.decoding,
-      codec: prefs.codec,
-      bitrateKbps: prefs.bitrateKbps || undefined,
+      codec: quality?.codec ?? prefs.codec,
+      bitrateKbps: (quality?.bitrateKbps ?? prefs.bitrateKbps) || undefined,
       onPictureOff: (why) =>
         pushNotification(
           "warning",
@@ -379,7 +387,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
         if (p === "ended") {
           dualSense?.stop();
           rpInput.held.clear();
-          set({ stream: null, light: null, keyboard: null, passcode: null });
+          set({ stream: null, light: null, keyboard: null, passcode: null, sessionQuality: null });
         }
       },
       onStats: (st) => get().stream === stream && set({ stats: st }),
@@ -403,7 +411,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       gamepads: rpGamepads,
     });
     stream.setVolume(prefs.muted ? 0 : prefs.volume);
-    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null, passcode: null });
+    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null, passcode: null, sessionQuality: quality });
     await stream.start();
   },
 
