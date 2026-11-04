@@ -70,7 +70,7 @@
 # 15) Storage on Android 7 to 10: the runtime prompt (PS5UploadStorage). See step (15) below.
 #
 # A WebView renderer crash is handled in wry's generated RustWebViewClient, which this script
-# cannot patch (it is written during the Rust build): see client/src-tauri/.cargo/config.toml.
+# cannot patch (it is written during the Rust build): see client/.cargo/config.toml.
 
 
 set -euo pipefail

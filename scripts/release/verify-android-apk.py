@@ -72,7 +72,7 @@ def dump(apk: Path) -> str:
 
 
 def has_renderer_crash_handler(apk: Path) -> bool:
-    """wry's generated client overrides this only through client/src-tauri/.cargo/config.toml."""
+    """wry's generated client overrides this only through client/.cargo/config.toml."""
     with zipfile.ZipFile(apk) as z:
         return any(
             b"onRenderProcessGone" in z.read(n)
