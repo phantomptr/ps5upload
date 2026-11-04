@@ -163,7 +163,12 @@ pub(crate) fn split_share(raw: &str, start: &str) -> (String, String) {
 /// whether there was one (then the first name after it is the server).
 fn strip_smb_scheme(raw: &str) -> (&str, bool) {
     for scheme in ["smb://", "cifs://"] {
-        if raw.len() >= scheme.len() && raw[..scheme.len()].eq_ignore_ascii_case(scheme) {
+        // By `get`, not `[..n]`: a name in Chinese (3 bytes a letter) has no letter boundary at
+        // byte 6 or 7, and slicing there panicked: every such share failed from 11.0.2 (#663).
+        if raw
+            .get(..scheme.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(scheme))
+        {
             return (&raw[scheme.len()..], true);
         }
     }
@@ -507,6 +512,32 @@ mod tests {
         assert_eq!(
             split_share("Media\\Games\\PS5", "x"),
             ("Media".into(), "/Games/PS5/x".into())
+        );
+    }
+
+    /// #663: names in Chinese (3 bytes a letter) were sliced mid-letter and panicked.
+    #[test]
+    fn smb_names_in_any_script_go_through() {
+        assert_eq!(
+            split_share("共享文件夹", ""),
+            ("共享文件夹".into(), String::new())
+        );
+        assert_eq!(
+            split_share("共享文件夹/游戏/PS5", ""),
+            ("共享文件夹".into(), "/游戏/PS5".into())
+        );
+        assert_eq!(split_share("ゲーム", ""), ("ゲーム".into(), String::new()));
+        assert_eq!(split_smb_host("我的NAS"), ("我的NAS".into(), String::new()));
+        assert_eq!(
+            split_smb_host("\\\\群晖\\共享文件夹"),
+            ("群晖".into(), "共享文件夹".into())
+        );
+        let (c, _) = parse_body(smb_form("群晖", "共享文件夹/游戏", ""))
+            .ok()
+            .unwrap();
+        assert_eq!(
+            (c.host.as_str(), c.share.as_str(), c.start_path.as_str()),
+            ("群晖", "共享文件夹", "/游戏")
         );
     }
 

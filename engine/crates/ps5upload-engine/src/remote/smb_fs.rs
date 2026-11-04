@@ -76,7 +76,10 @@ pub(crate) fn samba_renamed_message<'a>(
 fn server_addr(host: &str, port: u16) -> String {
     let mut h = host.trim();
     for scheme in ["smb://", "cifs://", "//", "\\\\"] {
-        if h.len() >= scheme.len() && h[..scheme.len()].eq_ignore_ascii_case(scheme) {
+        // `get`: a host named in Chinese has no letter boundary there (#663).
+        if h.get(..scheme.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(scheme))
+        {
             h = &h[scheme.len()..];
         }
     }
@@ -499,6 +502,12 @@ mod tests {
         let mapped = map_err("nas", error);
         assert!(!matches!(mapped, RemoteError::Auth(_)));
         assert!(mapped.to_string().contains("permission"));
+    }
+
+    #[test]
+    fn a_server_named_in_chinese_gets_its_port() {
+        assert_eq!(server_addr("群晖NAS", 445), "群晖NAS:445");
+        assert_eq!(server_addr("smb://群晖", 445), "群晖:445");
     }
 
     #[test]

@@ -4,6 +4,13 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.0.7
+
+- **NAS connections with Chinese (or Japanese, Korean…) names work again (For #663).** Since
+  11.0.2, a NAS whose share or server name started with three or more letters of such a
+  script failed to connect: the code that tidies up pasted addresses cut the name in the middle
+  of a letter. Names in any script go through again.
+
 ## 11.0.6
 
 - **Go live works on macOS.** Going live to YouTube, Twitch, Kick or Facebook from a Mac said
