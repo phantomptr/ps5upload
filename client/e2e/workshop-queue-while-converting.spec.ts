@@ -184,7 +184,7 @@ test("the next game gets its own choices while one is being made", async ({ page
   const options = main.getByTestId("queue-item-options");
   await options.getByTestId("cq-output").fill("/mine/out");
   await expect(main.getByText(/Waiting — \/mine\/out/)).toBeVisible();
-  await expect(options.getByText("Compression")).toBeVisible();
+  await expect(options.getByText("Compression", { exact: true })).toBeVisible();
   await expect(options.getByText("Game language")).toBeVisible();
   await expect(options.getByText("Full verification")).toBeVisible();
   await options.getByRole("radio", { name: "Game image" }).click();

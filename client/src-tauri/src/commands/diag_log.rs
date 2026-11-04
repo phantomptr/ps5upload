@@ -81,7 +81,7 @@ pub(crate) fn civil_from_days(z: i64) -> (i64, i64, i64) {
 }
 
 /// `app-YYYYMMDD.jsonl` for the day containing `ms` (UTC).
-fn file_name_for(ms: u64) -> String {
+pub(crate) fn file_name_for(ms: u64) -> String {
     let (y, m, d) = civil_from_days((ms / 86_400_000) as i64);
     format!("app-{y:04}{m:02}{d:02}.jsonl")
 }

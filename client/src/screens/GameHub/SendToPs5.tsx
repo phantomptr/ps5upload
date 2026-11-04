@@ -23,7 +23,8 @@ import { isRemotePath } from "../../lib/remotePath";
 import { useFpkgConversion } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import { useUploadQueueStore } from "../../state/uploadQueue";
-import { useUploadStore } from "../../state/upload";
+import { imageDrive, imageDriveChoices } from "../../lib/imageUpload";
+import { destinationVolumeFor } from "../../state/upload";
 import { ActivityLine } from "./ActivityLine";
 import { useCopyActivity } from "../../state/copyActivity";
 import { useConnectionStore } from "../../state/connection";
@@ -58,9 +59,8 @@ export function SendToPs5({
   const [how, setHow] = useState<How>("as-is");
   const radioName = useId();
   const [volumes, setVolumes] = useState<Volume[] | null>(null);
-  const [volume, setVolume] = useState<string | null>(
-    useUploadStore.getState().destinationVolume ?? "/data",
-  );
+  // Picked here or on the Upload screen; none: this console's drive for packages (#673).
+  const [picked, setVolume] = useState<string | null>(() => destinationVolumeFor(host));
   const [subpath, setSubpath] = useState(DEFAULT_SEND_SUBPATH);
   const [register, setRegister] = useState(true);
   const pipelineBusy = useFpkgConversion((s) => s.pipeline.phase === "running");
@@ -70,14 +70,15 @@ export function SendToPs5({
   useEffect(() => {
     let live = true;
     fetchVolumes(consoleAddr(host))
-      .then((v) => live && setVolumes(v.filter((x) => x.writable && !x.is_placeholder)))
+      .then((v) => live && setVolumes(imageDriveChoices(v)))
       .catch(() => live && setVolumes([]));
     return () => {
       live = false;
     };
   }, [host]);
 
-  const vol = volumes?.find((v) => v.path === (volume ?? "/data"));
+  const volume = imageDrive(host, picked, volumes).volume;
+  const vol = volumes?.find((v) => v.path === volume);
   // Only a certain shortfall blocks; the PS5's write-time reserve only warns.
   const needed = how === "image" ? Math.round(loc.size_bytes * 0.8) : loc.size_bytes;
   const fits: "yes" | "tight" | "no" | "unknown" = !vol
@@ -91,7 +92,7 @@ export function SendToPs5({
   // Clean up's planner with this game's size and drive filled in, and a way back here after.
   const planLink = spacePlanLink({
     neededBytes: needed,
-    drive: volume ?? "/data",
+    drive: volume,
     retry: { kind: "back", to: location.pathname, label: game.title },
   });
   const dest = useMemo(() => sendDestination(loc, plan), [loc, volume, subpath]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -168,7 +169,7 @@ export function SendToPs5({
         <Select
           block={false}
           label={tr("collection.send_drive", undefined, "Drive")}
-          value={volume ?? "/data"}
+          value={volume}
           onChange={(e) => setVolume(e.target.value)}
           options={(volumes && volumes.length > 0
             ? volumes
@@ -238,7 +239,7 @@ export function SendToPs5({
           size="sm"
           variant="primary"
           leftIcon={how === "image" ? <Layers size={13} /> : <Upload size={13} />}
-          disabled={busy || fits === "no" || (how === "image" && pipelineBusy)}
+          disabled={busy || volumes === null || fits === "no" || (how === "image" && pipelineBusy)}
           onClick={send}
         >
           {how === "image"

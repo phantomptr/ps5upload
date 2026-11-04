@@ -112,6 +112,9 @@ export default function WorkshopScreen() {
   };
   const drives = useLocalDrives();
   const host = useConnectionStore((s) => s.host) ?? "";
+  // Where an image goes (#673): the Upload screen's own choice, for one place to pick it.
+  const destVolume = useUploadStore((s) => s.destinationVolume);
+  const destSubpath = useUploadStore((s) => s.destinationSubpath);
   const profiles = useRosterStore((s) => s.profiles);
   const payloadUp = useConnectionStore((s) => s.payloadStatus === "up");
   const canInstall = payloadUp && host.trim() !== "";
@@ -804,6 +807,14 @@ export default function WorkshopScreen() {
     onDeleteAfter: setDeleteAfter,
     canInstall,
     lz4: lz4Choice,
+    dest: host
+      ? {
+          host,
+          volume: destVolume,
+          subpath: destSubpath,
+          onChange: (volume, subpath) => useUploadStore.getState().setDestination(volume, subpath),
+        }
+      : undefined,
   };
   const barRun = idleRun(
     {

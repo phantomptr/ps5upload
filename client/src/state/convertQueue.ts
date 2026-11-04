@@ -94,6 +94,7 @@ export type ConvertItemChange = Partial<
     | "then"
     | "host"
     | "deleteAfterInstall"
+    | "imageDest"
     | "outputDir"
     | "keepBoth"
     | "compression"

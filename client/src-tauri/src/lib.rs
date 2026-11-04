@@ -28,6 +28,9 @@ mod linux_gpu;
 mod quit_signals;
 
 mod commands;
+// Every panic to a file and the app log; a failure to start to a message box (#672).
+#[cfg_attr(mobile, allow(dead_code))]
+mod crash_hook;
 // The engine runs as a spawned sidecar binary on desktop, but in-process
 // (linked library) on mobile, where Tauri has no sidecar model. Same
 // `start`/`stop`/`url` surface either way; see engine.rs / engine_mobile.rs.
@@ -128,6 +131,11 @@ pub fn screenshot_decoder_child() -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before anything that can fail, so that it leaves a word behind (#672). Phones have theirs
+    // in mobile_log.
+    #[cfg(desktop)]
+    crash_hook::install();
+
     // Linux WebKitGTK white-screen rescue, matched to the graphics stack.
     //
     // The shipped `PS5Upload.sh` launcher exports one of these too, but a user
@@ -188,7 +196,7 @@ pub fn run() {
     // stages the download first, see commands/dragout.rs).
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.plugin(tauri_plugin_drag::init());
-    let app = builder
+    let built = builder
         // ps5upload:// links (a Play Together invite's "Open in the PS5Upload app"), after
         // single-instance so a second launch's link reaches this one (open_links.rs).
         .plugin(tauri_plugin_deep_link::init())
@@ -210,18 +218,18 @@ pub fn run() {
             // A package this launch was asked to open (Windows / Linux pass it as an
             // argument; macOS sends RunEvent::Opened below). The page takes it on load.
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            {
+            crash_hook::optional("files this launch was asked to open", || {
                 let argv: Vec<String> = std::env::args_os()
                     .map(|a| a.to_string_lossy().into_owned())
                     .collect();
                 let cwd = std::env::current_dir().unwrap_or_default();
                 opened_files::push(opened_files::package_args(&argv, &cwd));
-            }
+            });
 
             // ps5upload:// links: the one this launch was opened with, and any that arrive later.
             // Installers register the scheme (bundle config); Windows and Linux also register it
             // at run time, for the portable zip and the AppImage.
-            {
+            crash_hook::optional("ps5upload:// links", || {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 #[cfg(any(windows, target_os = "linux"))]
                 match app.deep_link().register_all() {
@@ -243,10 +251,17 @@ pub fn run() {
                         tray::show_main(&handle);
                     }
                 });
-            }
+            });
 
             // The main window (built here, not from the config, so Remote Play's picture in
             // picture can open from it; see pip_window).
+            // Tauri turns an error from setup into a panic with no explanation, and the app is
+            // nothing without this window: end here and say why (#672).
+            #[cfg(desktop)]
+            if let Err(e) = pip_window::build_main(app.handle()) {
+                crash_hook::fatal(crash_hook::Stage::Window, &e.to_string());
+            }
+            #[cfg(mobile)]
             pip_window::build_main(app.handle())?;
 
             // Linux: SIGTERM / SIGINT / SIGHUP quit through the normal exit, so the
@@ -257,19 +272,19 @@ pub fn run() {
             // Open the main window centred + fully on-screen. Desktop-only —
             // the centre/monitor/size window APIs don't exist on mobile, so
             // this is a no-op there (see center_main_window).
-            center_main_window(app.handle());
+            crash_hook::optional("placing the window", || center_main_window(app.handle()));
 
             // One-time 6.0 upgrade clean-up of this app's data folder (old files are moved
             // aside, never reset). Desktop-only: mobile installs start on 6.x.
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            {
+            crash_hook::optional("the 6.0 data clean-up", || {
                 use tauri::Manager;
                 if let Ok(dir) = app.path().app_data_dir() {
                     for line in migrate_6::run(&dir) {
                         eprintln!("[tauri] 6.0 upgrade: {line}");
                     }
                 }
-            }
+            });
 
             // Before the engine: its first lines go to the log file too.
             #[cfg(mobile)]
@@ -727,8 +742,14 @@ pub fn run() {
             open_links::open_links_take,
             open_links::open_links_status,
         ])
-        .build(tauri::generate_context!())
-        .expect("tauri runtime failed to build");
+        .build(tauri::generate_context!());
+    let app = match built {
+        Ok(app) => app,
+        #[cfg(desktop)]
+        Err(e) => crash_hook::fatal(crash_hook::Stage::Start, &e.to_string()),
+        #[cfg(mobile)]
+        Err(e) => panic!("tauri runtime failed to build: {e}"),
+    };
 
     // App-level run loop. We use `RunEvent::Exit` (fires once when the
     // Tauri runtime is about to leave its run loop, regardless of how
