@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { gamesApi, type ConsoleEntry, type GameView } from "../../api/games";
-import { hostOf, mgmtAddr } from "../../lib/addr";
+import { mgmtAddr } from "../../lib/addr";
 import { hasTitleId } from "../../lib/gamePage";
 import { useConnectionStore } from "../../state/connection";
-import { useRosterStore } from "../../state/roster";
 import { useUploadQueueStore } from "../../state/uploadQueue";
 import { finishedBaseline, finishedFor, loadTitled, resultFor, type TitledResult } from "./gameViewState";
 
