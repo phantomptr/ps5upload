@@ -354,6 +354,8 @@ pub struct Status {
     pub conflicts: usize,
     /// Deletes held back for confirmation.
     pub held_deletes: usize,
+    /// The first of them (see [`HELD_SHOWN`]), so a person can see what they are confirming.
+    pub held_paths: Vec<String>,
     /// The drive's size, as this folder and the console last agreed on it.
     pub bytes: u64,
     /// The pass running now: how many changes, how many done, the file at hand.
@@ -849,6 +851,18 @@ struct Pass<'a> {
     side_rev: Option<u64>,
     /// Set by the lock's heartbeat when another engine holds the drive now: the pass stops.
     lost: std::sync::Arc<AtomicBool>,
+}
+
+/// How many held deletes are named in a status: enough to tell a moved folder from a clean-up.
+const HELD_SHOWN: usize = 200;
+
+/// The paths of the deletes in `ops`, the first [`HELD_SHOWN`].
+fn held_shown(ops: &[Op]) -> Vec<String> {
+    ops.iter()
+        .filter(|o| o.is_delete())
+        .take(HELD_SHOWN)
+        .map(|o| o.path().to_string())
+        .collect()
 }
 
 /// The drive's lock, held while a pass runs: a heartbeat renews it however long one file takes,
@@ -1687,6 +1701,7 @@ impl Pass<'_> {
             keep
         });
         let mut held = 0;
+        let mut held_paths = Vec::new();
         // A confirmation covers the deletes it was given for: used up by this pass either way.
         let was_confirmed = confirmed()
             .lock()
@@ -1694,6 +1709,7 @@ impl Pass<'_> {
             .remove(member_id);
         if too_many_deletes(&ops, base.len()) && !was_confirmed {
             held = ops.iter().filter(|o| o.is_delete()).count();
+            held_paths = held_shown(&ops);
             ops.retain(|o| !o.is_delete());
         }
         if !ops.is_empty() {
@@ -1985,6 +2001,7 @@ impl Pass<'_> {
             s.deleted = del;
             s.conflicts = conf;
             s.held_deletes = held;
+            s.held_paths = held_paths;
             if let Some(e) = &first_error {
                 s.state = "error".into();
                 s.detail = e.clone();
@@ -4076,6 +4093,15 @@ pub async fn confirm(Json(req): Json<MemberReq>) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_held_mass_delete_names_what_it_would_delete() {
+        let mut ops: Vec<Op> = (0..250).map(|i| Op::DeleteHub(format!("a/{i}"))).collect();
+        ops.insert(0, Op::Upload("kept".into()));
+        let shown = held_shown(&ops);
+        assert_eq!(shown.len(), HELD_SHOWN);
+        assert_eq!(shown[0], "a/0");
+    }
+
     #[test]
     fn a_deleted_folder_takes_its_emptied_folders_deepest_first() {
         let gone = [

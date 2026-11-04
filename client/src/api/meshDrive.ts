@@ -72,6 +72,8 @@ export interface DriveStatus {
   deleted: number;
   conflicts: number;
   held_deletes: number;
+  /** The first of the held deletes, by path. Absent from an older engine. */
+  held_paths?: string[];
   bytes?: number;
   todo?: number;
   done?: number;

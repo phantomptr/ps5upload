@@ -253,6 +253,15 @@ function MemberRow({
   );
 }
 
+/** The files a held mass delete would take: the first ones by path, and how many more. */
+export function heldDetails(status: { held_deletes: number; held_paths?: string[] }, tr: Translator): string[] {
+  const shown = status.held_paths ?? [];
+  const more = status.held_deletes - shown.length;
+  return more > 0 && shown.length > 0
+    ? [...shown, tr("drive_confirm_more", { count: more }, "…and {count} more")]
+    : shown;
+}
+
 function DriveCard({
   d,
   data,
@@ -377,6 +386,7 @@ function DriveCard({
         undefined,
         "They were deleted in one place, so the drive would delete them on every device. Check that no folder was moved or a drive unplugged first. Deleted files stay in the drive's trash folder for 30 days.",
       ),
+      details: heldDetails(mine.status, tr),
       confirmLabel: tr("drive_confirm_go", undefined, "Delete everywhere"),
       destructive: true,
     });
