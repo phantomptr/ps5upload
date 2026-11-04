@@ -4,9 +4,14 @@
  * them. Nothing here can block without a bound:
  *   - the listener is non-blocking and polled in 200 ms slices, so the accept
  *     thread notices stop/rebind requests and never sticks in accept();
+ *   - a new connection waits on the accept thread until it sends something, so
+ *     an idle one (a browser's speculative connect, or four from anyone on the
+ *     LAN) holds no worker; it is closed at its deadline;
+ *   - one address cannot take the whole server (WEBUI_PER_SOURCE_MAX);
  *   - a full queue closes the new connection instead of waiting;
  *   - every connection has a deadline of accept time + 5 s; a worker reads in
  *     poll slices up to that deadline and drops an expired connection unread;
+ *   - what was turned away is counted and logged every few seconds;
  *   - writes carry SO_SNDTIMEO and a total budget, so a client that stops
  *     reading frees the worker.
  *
@@ -40,6 +45,8 @@
 
 #define WEBUI_WORKERS        4
 #define WEBUI_QUEUE_DEPTH    32
+#define WEBUI_WAITING_MAX    32      /* connections waiting for their first bytes */
+#define WEBUI_PER_SOURCE_MAX 16      /* one address's connections anywhere in the server: a browser opens 6 */
 #define WEBUI_CONN_MS        5000u   /* read timeout / idle-connection drop */
 #define WEBUI_BIND_RETRY_MS  5000u
 #define WEBUI_STOP_MS        2000u
@@ -57,6 +64,7 @@
 typedef struct {
     int fd;
     uint64_t deadline_ms;
+    uint32_t src;                   /* the peer's IPv4 address */
 } conn_t;
 
 struct srv;
@@ -94,6 +102,8 @@ typedef struct srv {
     int w_started[WEBUI_WORKERS];
     int w_done[WEBUI_WORKERS];
     int w_fd[WEBUI_WORKERS];        /* connection being served, -1 if none */
+    uint32_t w_src[WEBUI_WORKERS];  /* its address */
+    unsigned expired;               /* queued connections past their deadline before a worker got to them */
     worker_arg_t wargs[WEBUI_WORKERS];
     char *wbuf[WEBUI_WORKERS];
 } srv_t;
@@ -464,11 +474,16 @@ static void *worker_main(void *arg) {
         s->qhead = (s->qhead + 1) % WEBUI_QUEUE_DEPTH;
         s->qlen--;
         s->w_fd[idx] = c.fd;
+        s->w_src[idx] = c.src;
         pthread_mutex_unlock(&s->mu);
 
         if (mono_ms() < c.deadline_ms) {
             serve(s, idx, c);
             finish_conn(c.fd, s->wbuf[idx], WEBUI_BUF_CAP);
+        } else {
+            pthread_mutex_lock(&s->mu);
+            s->expired++;
+            pthread_mutex_unlock(&s->mu);
         }
         pthread_mutex_lock(&s->mu);
         s->w_fd[idx] = -1;
@@ -522,18 +537,91 @@ static void watch_listener(srv_t *s, uint64_t *mono_prev, int64_t *real_prev) {
     if (changed) fprintf(stderr, "webui: console addresses changed (%d now); rebinding port %u\n", n, (unsigned)s->port);
 }
 
+/* What the accept thread turned away since it last said so. */
+typedef struct {
+    unsigned queue_full, per_source, idle_evicted;
+} drops_t;
+
+/* One line every WEBUI_WATCH_MS at most, only when something was turned away: a console page that
+ * stops answering must leave a trace of why. */
+static void report_drops(srv_t *s, drops_t *d) {
+    unsigned expired;
+    pthread_mutex_lock(&s->mu);
+    expired = s->expired;
+    s->expired = 0;
+    pthread_mutex_unlock(&s->mu);
+    if (d->queue_full || d->per_source || d->idle_evicted || expired)
+        fprintf(stderr,
+                "webui: connections turned away: %u queue full, %u over %d from one address, "
+                "%u idle evicted, %u expired in the queue\n",
+                d->queue_full, d->per_source, WEBUI_PER_SOURCE_MAX, d->idle_evicted, expired);
+    memset(d, 0, sizeof *d);
+}
+
+/* To a worker, or closed when the queue is full: never wait. */
+static void hand_to_worker(srv_t *s, const conn_t *c, drops_t *d) {
+    int queued = 0;
+    pthread_mutex_lock(&s->mu);
+    if (!s->stop && s->qlen < WEBUI_QUEUE_DEPTH) {
+        s->q[(s->qhead + s->qlen) % WEBUI_QUEUE_DEPTH] = *c;
+        s->qlen++;
+        pthread_cond_signal(&s->cv);
+        queued = 1;
+    }
+    pthread_mutex_unlock(&s->mu);
+    if (!queued) {
+        close(c->fd);
+        d->queue_full++;
+    }
+}
+
+/* The connections `src` has anywhere in the server. */
+static int source_count(srv_t *s, const conn_t *waiting, int n_waiting, uint32_t src) {
+    int n = 0, i;
+    for (i = 0; i < n_waiting; i++)
+        if (waiting[i].src == src) n++;
+    pthread_mutex_lock(&s->mu);
+    for (i = 0; i < s->qlen; i++)
+        if (s->q[(s->qhead + i) % WEBUI_QUEUE_DEPTH].src == src) n++;
+    for (i = 0; i < WEBUI_WORKERS; i++)
+        if (s->w_fd[i] >= 0 && s->w_src[i] == src) n++;
+    pthread_mutex_unlock(&s->mu);
+    return n;
+}
+
+/* After a poll over `pfs` (pfs[1 + i] is waiting[i]): what has something to read, or was closed, goes
+ * to a worker; what reached its deadline without a byte is closed here. */
+static int sweep_waiting(srv_t *s, conn_t *waiting, int n_waiting, const struct pollfd *pfs, drops_t *d) {
+    uint64_t now = mono_ms();
+    int i, keep = 0;
+    for (i = 0; i < n_waiting; i++) {
+        if (pfs[1 + i].revents) hand_to_worker(s, &waiting[i], d);
+        else if (now >= waiting[i].deadline_ms) close(waiting[i].fd);
+        else waiting[keep++] = waiting[i];
+    }
+    return keep;
+}
+
 static void *accept_main(void *arg) {
     srv_t *s = (srv_t *)arg;
     unsigned fails = 0;
     uint64_t next_watch = mono_ms() + WEBUI_WATCH_MS, mono_prev = mono_ms(), err_since = 0;
     int64_t real_prev = real_ms();
+    conn_t waiting[WEBUI_WAITING_MAX];
+    struct pollfd pfs[1 + WEBUI_WAITING_MAX];
+    int n_waiting = 0, i;
+    drops_t drops;
+    memset(&drops, 0, sizeof drops);
     proc_name_set_self(WEBUI_THREAD_NAME);
     while (!stopping(s)) {
-        struct pollfd pf;
-        int fd, r, lan, fl;
+        struct sockaddr_in peer;
+        socklen_t peer_len = sizeof peer;
+        conn_t c;
+        int fd, r, lan, fl, listener;
 
         if (mono_ms() >= next_watch) {
             watch_listener(s, &mono_prev, &real_prev);
+            report_drops(s, &drops);
             next_watch = mono_ms() + WEBUI_WATCH_MS;
         }
 
@@ -579,15 +667,22 @@ static void *accept_main(void *arg) {
             continue;
         }
 
-        pf.fd = fd;
-        pf.events = POLLIN;
-        pf.revents = 0;
-        r = poll(&pf, 1, WEBUI_SLICE_MS);
-        if (r == 0) {
+        pfs[0].fd = fd;
+        pfs[0].events = POLLIN;
+        pfs[0].revents = 0;
+        for (i = 0; i < n_waiting; i++) {
+            pfs[1 + i].fd = waiting[i].fd;
+            pfs[1 + i].events = POLLIN;
+            pfs[1 + i].revents = 0;
+        }
+        r = poll(pfs, (nfds_t)(1 + n_waiting), WEBUI_SLICE_MS);
+        if (r >= 0) n_waiting = sweep_waiting(s, waiting, n_waiting, pfs, &drops);
+        listener = pfs[0].revents;
+        if (r == 0 || (r > 0 && listener == 0)) {
             err_since = 0; /* a quiet, healthy listener */
             continue;
         }
-        if (r < 0 || (pf.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+        if (r < 0 || (listener & (POLLERR | POLLHUP | POLLNVAL))) {
             if (r < 0 && errno == EINTR) continue;
             /* A broken listener (the network went away under it): rebind once it has failed for
              * WEBUI_BROKEN_MS, instead of failing every slice forever. */
@@ -604,7 +699,7 @@ static void *accept_main(void *arg) {
             nap_ms(50);
             continue;
         }
-        r = accept(fd, NULL, NULL);
+        r = accept(fd, (struct sockaddr *)&peer, &peer_len);
         if (r < 0) {
             /* Never leave the loop on an accept error (a stray errno once killed a helper's
              * server); back off briefly on the ones that would otherwise spin, and rebind when they
@@ -640,18 +735,24 @@ static void *accept_main(void *arg) {
             (void)setsockopt(r, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
         }
 #endif
-        pthread_mutex_lock(&s->mu);
-        if (!s->stop && s->qlen < WEBUI_QUEUE_DEPTH) {
-            int tail = (s->qhead + s->qlen) % WEBUI_QUEUE_DEPTH;
-            s->q[tail].fd = r;
-            s->q[tail].deadline_ms = mono_ms() + WEBUI_CONN_MS;
-            s->qlen++;
-            pthread_cond_signal(&s->cv);
-            r = -1;
+        c.fd = r;
+        c.deadline_ms = mono_ms() + WEBUI_CONN_MS;
+        c.src = peer_len >= sizeof peer && peer.sin_family == AF_INET ? ntohl(peer.sin_addr.s_addr) : 0;
+        if (source_count(s, waiting, n_waiting, c.src) >= WEBUI_PER_SOURCE_MAX) {
+            close(r);
+            drops.per_source++;
+            continue;
         }
-        pthread_mutex_unlock(&s->mu);
-        if (r >= 0) close(r); /* queue full: drop now, never wait */
+        /* It waits here until it sends something, on the next poll if it already has. */
+        if (n_waiting == WEBUI_WAITING_MAX) {
+            close(waiting[0].fd); /* the oldest, the closest to its deadline */
+            memmove(waiting, waiting + 1, sizeof waiting[0] * (WEBUI_WAITING_MAX - 1));
+            n_waiting--;
+            drops.idle_evicted++;
+        }
+        waiting[n_waiting++] = c;
     }
+    for (i = 0; i < n_waiting; i++) close(waiting[i].fd);
     pthread_mutex_lock(&s->mu);
     if (s->listen_fd >= 0) close(s->listen_fd);
     s->listen_fd = -1;

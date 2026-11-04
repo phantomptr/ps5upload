@@ -1044,7 +1044,7 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/webui_server_selftest.c $(PAYLOAD_DIR)/src/webui_server.c \
 		$(PAYLOAD_DIR)/src/webui_http.c $(PAYLOAD_DIR)/src/webui_auth.c
 	@$(RUN_LIMITED) /tmp/ps5upload-webui-server-selftest
-	@echo "✓ silent, half-sent and flooding web clients never stall the helper"
+	@echo "✓ silent, half-sent and flooding web clients never stall the helper; an idle connection holds no worker"
 	@echo "Running webui codec self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
 		-o /tmp/ps5upload-webui-codec-selftest \
