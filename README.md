@@ -69,7 +69,7 @@
     sound.
   - A step-by-step setup (Play › Set up) that checks each requirement on the console and fixes
     what it can (sign-in, account ID, Remote Play switches, pairing, or pairing with the PIN the
-    PS5 shows), plus a PIN for Sony's PS Remote Play app or chiaki-ng if you prefer those.
+    PS5 shows). If you prefer Sony's PS Remote Play app or chiaki-ng, **Accounts** has a PIN for those.
   - **Play Together:** friends join your game as Player 2, 3 and 4, each with their own
     controller on the PS5, from any browser or the app. Share a QR code, a link or a short
     code, allow each friend, and they pick Quick Play on the TV. They play with a controller,
@@ -131,7 +131,7 @@ Pre-built downloads land on the
 | Linux — AppImage (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.AppImage` | The bare AppImage, for AppImage managers (Gear Lever, AppImageLauncher). `chmod +x` and run it. On Wayland with an NVIDIA card it restarts itself once with the system `libwayland-client`, which is what the `.zip`'s `PS5Upload.sh` does. |
 | Linux — NixOS (x64 / ARM64) | no release artifact | Packaged in [NUR](https://github.com/GriefNorth/nur-packages) as `ps5upload` — see **NixOS** below. |
 | Android | `PS5Upload-<ver>-android.apk` (older 32-bit phones: `-android-armv7.apk`) | Enable "install unknown apps" for your browser/file manager, then open the `.apk`. Same interface, mobile-friendly; connects to and manages your PS5 over Wi-Fi. On Android 17, allow local network access ("nearby devices") when asked. |
-| iPhone | `PS5Upload-<ver>-ios-unsigned.ipa` | Sideload with AltStore or Sideloadly and an Apple ID (a free one works; it is re-signed every 7 days). AltStore, SideStore and Feather can also add the source `https://github.com/phantomptr/ps5upload/releases/latest/download/altstore.json` and update the app from there. Turn on Developer Mode and trust your Apple ID on the iPhone; see the FAQ. Copy games into the app's folder with the Files app. |
+| iPhone | `PS5Upload-<ver>-ios-unsigned.ipa` | Sideload with AltStore or Sideloadly and an Apple ID (a free one works; it is re-signed every 7 days). AltStore, SideStore and Feather can also add the source `https://ps5upload.phantomptr.com/altstore.json` and update the app from there (a raw GitHub link doesn't work; see the FAQ). Turn on Developer Mode and trust your Apple ID on the iPhone; see the FAQ. Copy games into the app's folder with the Files app. |
 
 ### NixOS
 
@@ -390,7 +390,8 @@ with **Settings → Engine URL**.
 - **No password.** Anyone allowed can read, write and delete on your PS5. Keep it on a trusted
   LAN, never on the internet.
 - For a dedicated reverse-proxy hostname, leave `PS5UPLOAD_BASE_URL` unset. It is a **path prefix**,
-  not a full URL, and the web page is built with it, so a prefix needs its own image build. See [reverse-proxy setup](REVERSE_PROXY.md) for nginx,
+  not a full URL, and the web page is built with it, so a prefix needs its own image build. The
+  variables a self-hoster may need are in [engine/README.md](engine/README.md#environment-variables). See [reverse-proxy setup](REVERSE_PROXY.md) for nginx,
   proxy authentication, Docker bridge networking, and sub-path hosting.
 - **Scripting it:** [ps5upctl](https://github.com/yuanzhengze/ps5upctl) is a community
   command-line client for the engine API (unofficial; the API can change between versions).

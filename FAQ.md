@@ -2606,7 +2606,7 @@ Yes, from 10.6.0, on the computer the engine runs on. While Play runs in the app
 script can ask for the picture the app shows (PNG or JPEG), hold controller buttons, sticks and
 triggers for a moment, and ask for a newer picture to see what happened. You keep watching and
 playing: nothing on screen changes and the script is one more controller next to yours. It never
-starts a stream, and nothing is reachable from other machines. The endpoints, with curl and
+starts a stream, and its pictures and input can't be reached from other machines. The endpoints, with curl and
 Python examples, are in [Remote Play automation](https://github.com/phantomptr/ps5upload/blob/main/AUTOMATION.md).
 They are not a stable API yet and can change between versions.
 

@@ -210,7 +210,8 @@ blindly: take a frame first and decide from what the screen shows.
 - If the app window is minimised or hidden, the browser may stop drawing: `frame_age_ms` grows.
   Keep the Play screen visible.
 - One automation controller per session: two scripts at once share it (the latest input wins).
-- The engine's own access rules are unchanged: nothing here is reachable from the network.
+- The engine's own access rules are unchanged: only the status endpoint can be reached from the
+  network, by a machine you listed in `PS5UPLOAD_ALLOW_IP`, and without the session id.
 
 ## The live feed (OBS, ffmpeg)
 
