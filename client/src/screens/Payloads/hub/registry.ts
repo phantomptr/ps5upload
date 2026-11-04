@@ -60,7 +60,7 @@ const EXTRA_PROCESS_NAMES: Record<string, string[]> = {
 };
 
 /** The integrations as the browser build knows them: it has no catalogue (that lives in the
- *  desktop app), so these stand in for it. Mirrors commands/payloads.rs. */
+ *  desktop app), so these stand in for it. Mirrors ps5upload-core payload_library. */
 export const BUILTIN_ENTRIES: readonly HubEntry[] = [
   {
     id: "shadowmountplus",

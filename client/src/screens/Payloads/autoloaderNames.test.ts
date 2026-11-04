@@ -13,7 +13,7 @@ describe("the three 'autoloader' features", () => {
   const names = [
     en.autoloader_title_v2,
     en.usb_wizard_title_v2,
-    read("../../../src-tauri/src/commands/payloads.rs").match(
+    read("../../../../engine/crates/ps5upload-core/src/payload_library/catalogue.rs").match(
       /id: "webkit-autoloader",\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*display_name: "([^"]+)"/,
     )?.[1],
   ];
