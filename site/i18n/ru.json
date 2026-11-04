@@ -47,7 +47,7 @@
   "community.x": "Подпишитесь на @phantomptr, чтобы следить за релизами.",
   "dl.android": "Телефоны и планшеты",
   "dl.android_armv7": "Старые 32-битные телефоны",
-  "dl.ios": "iPhone, sideload",
+  "dl.ios": "iPhone, ручная установка",
   "dl.linux_arm64_deb": "ARM64 Debian, Ubuntu",
   "dl.linux_arm64_rpm": "ARM64 Fedora, openSUSE",
   "dl.linux_arm64_zip": "ARM64 любой дистрибутив",

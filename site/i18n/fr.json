@@ -47,7 +47,7 @@
   "community.x": "Suis @phantomptr pour les nouvelles versions.",
   "dl.android": "Téléphones et tablettes",
   "dl.android_armv7": "Anciens téléphones 32 bits",
-  "dl.ios": "iPhone, sideload",
+  "dl.ios": "iPhone, installation manuelle",
   "dl.linux_arm64_deb": "ARM64 Debian, Ubuntu",
   "dl.linux_arm64_rpm": "ARM64 Fedora, openSUSE",
   "dl.linux_arm64_zip": "ARM64 toute distribution",

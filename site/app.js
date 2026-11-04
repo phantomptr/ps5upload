@@ -188,7 +188,23 @@ function detectOs() {
   return null;
 }
 
-const mb = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`);
+/** A file size in the page's language: 1.2 GB, 1,2 GB, 1,2 Go. */
+const mb = (n) => {
+  const big = n >= 1e9;
+  const value = big ? n / 1e9 : Math.max(1, Math.round(n / 1e6));
+  const digits = big ? 1 : 0;
+  try {
+    return new Intl.NumberFormat(lang, {
+      style: "unit",
+      unit: big ? "gigabyte" : "megabyte",
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(value);
+  } catch {
+    // Browsers from before Intl's unit style.
+    return `${value.toFixed(digits)} ${big ? "GB" : "MB"}`;
+  }
+};
 const date = (iso) =>
   iso ? new Date(iso).toLocaleDateString(lang, { year: "numeric", month: "short", day: "numeric" }) : "";
 
