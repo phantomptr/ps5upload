@@ -688,6 +688,7 @@ fn missing_error(title_id: &str, who: &str, missing: Vec<String>) -> Failed {
 /// first (tagged `beforeshare`), unless `backup` is one already taken, and put back, every image
 /// of it, if a step fails. `compat`: the image a file from before 10.6.0 goes into. The images
 /// replaced.
+#[cfg(test)]
 pub fn import(
     c: &dyn Console,
     folder: &str,
@@ -1304,32 +1305,34 @@ fn send_file(shared: SharedZip, tx: tokio::sync::mpsc::Sender<std::io::Result<ax
 const SHARED_ZIP_MAX: u64 = 32 * 1024 * 1024 * 1024;
 
 /// A request body written to `dest`, without holding it in memory. `Err` carries the refusal.
-async fn spool_body(body: axum::body::Body, dest: &Path, max: u64) -> Result<(), Response> {
+async fn spool_body(
+    body: axum::body::Body,
+    dest: &Path,
+    max: u64,
+) -> Result<(), (StatusCode, String)> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
-    let trouble = |e: String| local::json_error(StatusCode::INTERNAL_SERVER_ERROR, e);
-    let mut file = tokio::fs::File::create(dest)
-        .await
-        .map_err(|e| trouble(format!("save the file: {e}")))?;
+    let trouble = |e: std::io::Error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("save the file: {e}"),
+        )
+    };
+    let mut file = tokio::fs::File::create(dest).await.map_err(trouble)?;
     let mut stream = body.into_data_stream();
     let mut total = 0u64;
     while let Some(piece) = stream.next().await {
-        let piece = piece
-            .map_err(|e| local::json_error(StatusCode::BAD_REQUEST, format!("receive: {e}")))?;
+        let piece = piece.map_err(|e| (StatusCode::BAD_REQUEST, format!("receive: {e}")))?;
         total += piece.len() as u64;
         if total > max {
-            return Err(local::json_error(
+            return Err((
                 StatusCode::PAYLOAD_TOO_LARGE,
-                "This file is too large to be a save.",
+                "This file is too large to be a save.".to_string(),
             ));
         }
-        file.write_all(&piece)
-            .await
-            .map_err(|e| trouble(format!("save the file: {e}")))?;
+        file.write_all(&piece).await.map_err(trouble)?;
     }
-    file.flush()
-        .await
-        .map_err(|e| trouble(format!("save the file: {e}")))?;
+    file.flush().await.map_err(trouble)?;
     Ok(())
 }
 
@@ -1355,9 +1358,9 @@ pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::
     };
     let tmp_s = tmp.to_string_lossy().into_owned();
     let incoming = tmp.join("incoming.zip");
-    if let Err(refused) = spool_body(body, &incoming, SHARED_ZIP_MAX).await {
+    if let Err((status, why)) = spool_body(body, &incoming, SHARED_ZIP_MAX).await {
         let _ = cleanup_temp_dir(&tmp_s);
-        return refused;
+        return local::json_error(status, why);
     }
     let response = blocking(
         move || {
@@ -1460,12 +1463,9 @@ mod tests {
         assert!(spool_body(body, &dest, 8192).await.is_ok());
         assert_eq!(std::fs::metadata(&dest).unwrap().len(), 4096);
         let body = axum::body::Body::from(vec![7u8; 4096]);
-        let refused = spool_body(body, &dest, 1024).await.unwrap_err();
-        assert_eq!(refused.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        let bytes = axum::body::to_bytes(refused.into_body(), 4096)
-            .await
-            .unwrap();
-        assert!(String::from_utf8_lossy(&bytes).contains("too large"));
+        let (status, why) = spool_body(body, &dest, 1024).await.unwrap_err();
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(why.contains("too large"));
         let _ = cleanup_temp_dir(&tmp.to_string_lossy());
     }
 
