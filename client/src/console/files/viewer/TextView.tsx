@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Search, WrapText } from "lucide-react";
-import { t } from "../../strings";
+import { getLanguage, t } from "../../strings";
 import {
   BLOCK_ROWS,
   findMatches,
@@ -19,8 +19,8 @@ import "./viewer.css";
 export function findCountText(query: string, count: number, current: number, capped: boolean): string | null {
   if (!query) return null;
   if (!count) return t("cw_files_vw_find_none");
-  if (capped && current < 0) return t("cw_files_vw_find_many", { n: count.toLocaleString() });
-  const at = t("cw_files_vw_find_at", { at: current + 1, n: count.toLocaleString() });
+  if (capped && current < 0) return t("cw_files_vw_find_many", { n: count.toLocaleString(getLanguage()) });
+  const at = t("cw_files_vw_find_at", { at: current + 1, n: count.toLocaleString(getLanguage()) });
   return capped ? `${at} · ${t("cw_files_vw_find_capped")}` : at;
 }
 
@@ -237,7 +237,7 @@ export function TextView({ rows, initialQuery }: { rows: Row[]; /** Tests: start
             data-action="earlier-lines"
             onClick={() => setWin({ start: Math.max(0, win.start - ROW_WINDOW), end: win.end })}
           >
-            <span>{t("cw_files_vw_earlier_lines", { n: win.start.toLocaleString() })}</span>
+            <span>{t("cw_files_vw_earlier_lines", { n: win.start.toLocaleString(getLanguage()) })}</span>
           </button>
         ) : null}
         {blocks.slice(firstBlock, lastBlock).map((b, i) => {
@@ -251,7 +251,7 @@ export function TextView({ rows, initialQuery }: { rows: Row[]; /** Tests: start
             data-action="more-lines"
             onClick={() => setWin({ start: win.start, end: Math.min(rows.length, win.end + ROW_WINDOW) })}
           >
-            <span>{t("cw_files_vw_more_lines", { n: (rows.length - win.end).toLocaleString() })}</span>
+            <span>{t("cw_files_vw_more_lines", { n: (rows.length - win.end).toLocaleString(getLanguage()) })}</span>
           </button>
         ) : null}
       </div>

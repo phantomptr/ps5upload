@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api";
 import { SECTIONS } from "../sections";
-import { t } from "../strings";
+import { _setStringsLoaderForTests, chooseLanguage, t } from "../strings";
 import { closeGame, GamesView, launchErrorText, uninstallErrorText, type GamesViewProps } from "./Games";
 import type { Game, RunningGame } from "./model";
 
@@ -52,6 +52,24 @@ const html = (over: Partial<GamesViewProps> = {}) => renderToStaticMarkup(<Games
 const run = (appId = 7, pid = 120): RunningGame => ({ appId, pid });
 
 describe("Games section", () => {
+  it("writes Last played in the page's language, not the browser's", () => {
+    const ms = Date.UTC(2026, 2, 7, 12);
+    const open = { openId: "PPSA01650", data: { games: [game({ lastPlayed: ms })], incomplete: false, hiddenKnown: true } };
+    _setStringsLoaderForTests(() => Promise.resolve({}));
+    try {
+      chooseLanguage("ja");
+      const ja = new Date(ms).toLocaleDateString("ja");
+      expect(html(open)).toContain(ja);
+      chooseLanguage("de");
+      const de = new Date(ms).toLocaleDateString("de");
+      expect(de).not.toBe(ja);
+      expect(html(open)).toContain(de);
+    } finally {
+      chooseLanguage("");
+      _setStringsLoaderForTests(null);
+    }
+  });
+
   it("is in the rail after Home, before Saves and Files", () => {
     expect(SECTIONS.map((s) => s.id).slice(0, 4)).toEqual(["home", "games", "saves", "files"]);
     expect(SECTIONS.find((s) => s.id === "games")?.labelKey).toBe("cw_games_title");

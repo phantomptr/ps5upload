@@ -3,7 +3,7 @@ import { ArrowUp, ChevronRight, Files as FilesIcon, Folder, FolderOpen, RotateCw
 import { formatBytes } from "../../../lib/format";
 import { errorText, type Volume } from "../../home/Home";
 import { focusElement } from "../../nav";
-import { t } from "../../strings";
+import { getLanguage, t } from "../../strings";
 import { Modal } from "../../ui/Modal";
 import { parentPath, volumeOf } from "../move";
 import { barPercent, sortRows, startUsage, stopUsage, type UsageRow, type UsageSnapshot } from "./usage";
@@ -14,7 +14,7 @@ export function usageLine(s: UsageSnapshot | null, refused: boolean): { text: st
   if (refused) return { text: t("cw_files_usage_busy"), tone: "error" };
   if (!s) return { text: t("cw_home_loading"), tone: "plain" };
   const total = s.rows.reduce((a, r) => a + r.bytes, 0);
-  const items = s.entries.toLocaleString();
+  const items = s.entries.toLocaleString(getLanguage());
   switch (s.end) {
     case null:
       return { text: t("cw_files_usage_running", { at: s.measured, n: s.folders, items }), tone: "plain" };
