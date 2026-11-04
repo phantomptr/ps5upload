@@ -1,4 +1,4 @@
-import { consoleAddr } from "../../lib/addr";
+import { consoleAddr, hostOf } from "../../lib/addr";
 import { isAndroid } from "../../lib/platform";
 import { backupStamp } from "./backupStamp";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -41,18 +41,14 @@ import { saveFile } from "../../lib/rpCapture";
 import { openInFileSystem } from "../../state/fsNavigation";
 import {
   savesList,
-  startTransferDir,
   startTransferFile,
   checkDestinationFreeSpace,
-  fsDelete,
   fsListDir,
   waitForJob,
   saveArchiveMakeTemp,
   saveArchiveCleanupTemp,
   saveArchiveZip,
-  saveArchiveUnzip,
   saveArchiveBackupFinalize,
-  saveArchiveRestorePrepare,
   type SaveEntry,
   savesOpen,
   savesClose,
@@ -353,7 +349,10 @@ export default function SavesScreen() {
           : tr("saves_closed_unchanged", undefined, "Nothing changed; the save is as it was."),
       });
     } catch (e) {
-      pushNotification("error", tr("saves_open_failed", { error: e instanceof Error ? e.message : String(e) }, "Could not close the save: {error}"));
+      const why = e instanceof Error ? e.message : String(e);
+      // Refused writing the edits back, but the save is closed: the helper says so.
+      if (/the save is closed/.test(why)) setOpenSave(null);
+      pushNotification("error", tr("saves_open_failed", { error: why }, "Could not close the save: {error}"));
     } finally {
       setOpenBusy(false);
     }
@@ -560,7 +559,8 @@ export default function SavesScreen() {
       // savemgr's view of the save and the cross-tool resigner format.
       await saveArchiveBackupFinalize(tempDir, entry.title_id);
       // 4) Zip the cleaned `<scratch>/<title_id>/` → user-picked .zip.
-      const savedTo = await saveArchiveZip(tempDir, entry.title_id, destZip ?? "", destZipName);
+      const note = await saveBackupApi.note(hostOf(host.trim()), entry.user_id >>> 0);
+      const savedTo = await saveArchiveZip(tempDir, entry.title_id, destZip ?? "", destZipName, note);
       pushNotification(
         "success",
         withConsolePrefix(host, `Backed up ${entry.title_id}`),
@@ -614,7 +614,7 @@ export default function SavesScreen() {
         message: tr(
           "saves_restore_confirm_body",
           undefined,
-          "Pick a .zip whose top-level folder is named the same as the title ID. This WIPES the current PS5 save first, then uploads the backup — if the upload is interrupted (network drop, disk full), the save can be left empty with no automatic rollback. Back up the existing save first if it matters." +
+          "Close the game first. Pick a .zip backup of this game made by this PS5 and this user. The save on the PS5 is copied, then replaced, and put back if the restore fails. That copy is kept afterwards only if a backup folder or server is set under Automatic backups." +
             (entry.kind === "ps4"
               ? "\n\n⚠ PS4-format save: the PS4 emulator may not pick up the restored data immediately. If the save doesn't appear in-game after restore, close and reopen the game or restart the console."
               : ""),
@@ -634,58 +634,16 @@ export default function SavesScreen() {
         ),
       });
       if (!localZip || typeof localZip !== "string") return;
-      // 1) Scratch dir + strict-validate the zip layout before we touch
-      // the live save. Bad layout → throw before any delete fires.
+      // The engine does the rest, on the console picked at click time, so this and Restore…
+      // share one set of refusals, the backup first and the putting back if it fails.
       task = beginTask({ kind: "save-restore", origin: "saves", label: `Save restore ${entry.title_id}`, consoleId: restoreHost });
-      tempDir = await saveArchiveMakeTemp(entry.title_id);
-      await saveArchiveUnzip(localZip, tempDir, entry.title_id);
-      // 1.5) Format-aware prep: re-add `sdimg_` prefix to any bare image
-      // file (PS4-style backups have it stripped) so the PS5 path matches
-      // what Sony's emulator expects. PS5-native / .bin / sce_sys/ pass
-      // through unchanged.
-      await saveArchiveRestorePrepare(tempDir, entry.title_id);
-      // 2) Wipe the existing save's CONTENTS but leave the title_id
-      // folder itself in place. The savedata_prospero parent on PS5 is
-      // managed by Sony's PFS subsystem and rejects raw POSIX mkdir of
-      // a fresh title_id subdir (EACCES from ensure_parent_dir, see
-      // payload/src/runtime.c:2877). By preserving the folder we side-
-      // step that mkdir entirely — the upload's ensure_parent_dir hits
-      // EEXIST and proceeds.
-      //
-      // Host-stale guard (2.9.0): refuse to wipe if the user changed
-      // PS5 roster during the prior async steps (confirm/dialog/unzip
-      // can together run for ~30s on big saves). Without this check
-      // the recursive fsDelete fires against whatever IP is *current*
-      // at this point — possibly a different console than the one the
-      // user was looking at when they clicked Restore. Compare against
-      // the freshly-read store value, not our captured `host` ref,
-      // because `host` is a render-time closure and won't see writes.
-      const currentHost = useConnectionStore.getState().host?.trim();
-      if (currentHost !== restoreHost) {
-        throw new Error(
-          `Host changed during restore (was ${restoreHost}, now ${currentHost || "(none)"}). ` +
-            "Aborted before wipe — your other console's saves are untouched.",
-        );
-      }
-      const addr = consoleAddr(restoreHost);
-      const children = await fsListDir(addr, entry.path, { limit: 4096 });
-      for (const child of children) {
-        const childPath = entry.path.endsWith("/")
-          ? `${entry.path}${child.name}`
-          : `${entry.path}/${child.name}`;
-        // fsDelete is recursive on the payload side, so passing a
-        // subdir wipes its whole tree in one round trip.
-        await fsDelete(addr, childPath);
-      }
-      const extractedRoot = `${tempDir}/${entry.title_id}`;
-      const jobId = await startTransferDir(
-        extractedRoot,
-        entry.path,
-        addr,
-        null,
-        [],
-      );
-      await waitForJob(jobId);
+      await saveBackupApi.restoreFile({
+        addr: hostOf(restoreHost),
+        title_id: entry.title_id,
+        zip: localZip,
+        save_path: entry.path,
+        user_id: entry.user_id >>> 0,
+      });
       pushNotification(
         "success",
         withConsolePrefix(restoreHost, `Restored ${entry.title_id}`),
@@ -762,7 +720,8 @@ export default function SavesScreen() {
       // the zip never needs to leave the temp dir before it's uploaded).
       const zipName = `${entry.title_id}.zip`;
       const hostZip = `${tempDir}/${zipName}`;
-      await saveArchiveZip(tempDir, entry.title_id, hostZip, zipName);
+      const note = await saveBackupApi.note(hostOf(backupHost), entry.user_id >>> 0);
+      await saveArchiveZip(tempDir, entry.title_id, hostZip, zipName, note);
       // 4) Size the zip (via the scratch dir listing) and confirm the USB
       // target has room for it. Best-effort: an unreadable size or an
       // unmatched volume just skips the check rather than blocking.
@@ -916,8 +875,7 @@ export default function SavesScreen() {
           message: tr(
             "saves_restore_usb_confirm_body",
             { title: entry.title_id, timestamp: latest },
-            `This WIPES the current PS5 save for ${entry.title_id} and replaces it with the backup from ${latest}. ` +
-              "There is no automatic rollback if the upload is interrupted. Back up the existing save first if it matters.",
+            `Close the game first. The save for ${entry.title_id} is copied, then replaced with the backup from ${latest}, and put back if the restore fails. That copy is kept afterwards only if a backup folder or server is set under Automatic backups.`,
           ),
           destructive: true,
           confirmLabel: tr(
@@ -933,39 +891,15 @@ export default function SavesScreen() {
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       const jobId = await startTransferDownload(remoteZip, tempDir, addr, "file");
       await waitForJob(jobId);
-      // 2) Strict layout validation: abort before touching the live save
-      // if the zip doesn't contain exactly one top-level folder named
-      // after the title_id (same guard as handleRestore).
-      const hostZip = `${tempDir}/${zipName}`;
-      await saveArchiveUnzip(hostZip, tempDir, entry.title_id);
-      // 3) Format-aware prep: re-add sdimg_ prefix stripped during backup
-      // finalization (PS4-style saves). PS5-native / .bin / sce_sys/ pass through.
-      await saveArchiveRestorePrepare(tempDir, entry.title_id);
-      // 4) Stale-host guard before the destructive wipe. The download +
-      // unzip steps above can run for many seconds on large saves, and
-      // the user may have switched PS5 in the roster sidebar. Same guard
-      // as handleRestore — compare against the live store value, not the
-      // closure-captured `host` ref.
-      const currentHost = useConnectionStore.getState().host?.trim();
-      if (currentHost !== restoreHost) {
-        throw new Error(
-          `Host changed during USB restore (was ${restoreHost}, now ${currentHost || "(none)"}). ` +
-            "Aborted before wipe — your other console's saves are untouched.",
-        );
-      }
-      // 5) Wipe live save contents but keep the title_id folder itself —
-      // see handleRestore lines 269-275 for why we can't mkdir it fresh.
-      const children = await fsListDir(addr, entry.path, { limit: 4096 });
-      for (const child of children) {
-        const childPath = entry.path.endsWith("/")
-          ? `${entry.path}${child.name}`
-          : `${entry.path}/${child.name}`;
-        await fsDelete(addr, childPath);
-      }
-      // 6) Upload the unpacked save back to the live PS5 path.
-      const extractedRoot = `${tempDir}/${entry.title_id}`;
-      const jobId2 = await startTransferDir(extractedRoot, entry.path, addr, null, []);
-      await waitForJob(jobId2);
+      // 2) The engine does the rest, with the refusals, the backup first and the putting back
+      // on failure of Restore…, on the console picked at click time.
+      await saveBackupApi.restoreFile({
+        addr: hostOf(restoreHost),
+        title_id: entry.title_id,
+        zip: `${tempDir}/${zipName}`,
+        save_path: entry.path,
+        user_id: entry.user_id >>> 0,
+      });
       pushNotification(
         "success",
         withConsolePrefix(restoreHost, `Restored ${entry.title_id} from USB`),
@@ -1013,8 +947,8 @@ export default function SavesScreen() {
         message: tr(
           "saves_restore_usb_all_confirm_body",
           undefined,
-          "This will WIPE the current PS5 save for each game and replace it with its latest USB backup. " +
-            "Games with no backup on the USB drive are skipped. There is no automatic rollback if an upload is interrupted.",
+          "Close any running game first. Each game's save is copied, then replaced with its latest USB backup, and put back if its restore fails. " +
+            "Games with no backup on the USB drive are skipped. Those copies are kept afterwards only if a backup folder or server is set under Automatic backups.",
         ),
         destructive: true,
         confirmLabel: tr(
