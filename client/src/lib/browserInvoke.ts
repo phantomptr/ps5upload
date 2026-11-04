@@ -1298,6 +1298,7 @@ export async function browserInvoke<T>(
       return postJson<T>("/api/ps5/health/fix", {
         addr: args["addr"],
         action: args["action"],
+        paths: args["paths"],
       });
 
     case "speed_test_prepare":

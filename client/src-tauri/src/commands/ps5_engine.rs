@@ -1020,10 +1020,18 @@ pub async fn health_junk(addr: Option<String>) -> Result<JsonValue, String> {
 }
 
 #[tauri::command]
-pub async fn health_fix(addr: Option<String>, action: String) -> Result<JsonValue, String> {
+pub async fn health_fix(
+    addr: Option<String>,
+    action: String,
+    paths: Option<Vec<String>>,
+) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/ps5/health/fix");
-    post_json(&url, &serde_json::json!({ "addr": addr, "action": action })).await
+    post_json(
+        &url,
+        &serde_json::json!({ "addr": addr, "action": action, "paths": paths }),
+    )
+    .await
 }
 
 /// Makes the speed test's file on this computer (see the engine's `/api/speed-test/prepare`).

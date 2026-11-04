@@ -350,6 +350,26 @@ fn checks(c: &dyn Console, title_id: &str) -> Result<(), String> {
 /// Every image of the save folder `folder`, as one shared-save zip: `<TITLE>/<image>/<files>`
 /// for each, sce_sys left out, and a manifest naming them. The file's name with it.
 pub fn share(c: &dyn Console, folder: &str) -> Result<(String, Vec<u8>), String> {
+    let shared = share_file(c, folder)?;
+    let bytes = std::fs::read(&shared.zip).map_err(|e| format!("zip: {e}"))?;
+    Ok((shared.name.clone(), bytes))
+}
+
+/// A shared save's zip on this computer's disk, gone with this value.
+pub struct SharedZip {
+    pub name: String,
+    pub zip: PathBuf,
+    tmp: String,
+}
+
+impl Drop for SharedZip {
+    fn drop(&mut self) {
+        let _ = cleanup_temp_dir(&self.tmp);
+    }
+}
+
+/// [`share`], leaving the zip in a file: a save can be larger than is sensible to hold in memory.
+pub fn share_file(c: &dyn Console, folder: &str) -> Result<SharedZip, String> {
     let folder = folder.trim_end_matches('/');
     let title_id = title_of_folder(folder)?;
     checks(c, &title_id)?;
@@ -359,7 +379,7 @@ pub fn share(c: &dyn Console, folder: &str) -> Result<(String, Vec<u8>), String>
     }
     let tmp = make_temp_dir(&title_id)?;
     let tmp_s = tmp.to_string_lossy().into_owned();
-    let result = (|| {
+    let result: Result<(String, PathBuf), String> = (|| {
         let dir = tmp.join(&title_id);
         std::fs::create_dir_all(&dir).map_err(|e| format!("copy: {e}"))?;
         for name in &images {
@@ -378,15 +398,23 @@ pub fn share(c: &dyn Console, folder: &str) -> Result<(String, Vec<u8>), String>
             .map_err(|e| format!("manifest: {e}"))?;
         let zip = tmp.join("share.zip");
         zip_folder(&tmp, &title_id, &zip).map_err(|e| format!("zip: {e:#}"))?;
-        let bytes = std::fs::read(&zip).map_err(|e| format!("zip: {e}"))?;
         let file = format!(
             "{title_id} save shared {}.zip",
             local::stamp(local::now_ms())
         );
-        Ok((file, bytes))
+        Ok((file, zip))
     })();
-    let _ = cleanup_temp_dir(&tmp_s);
-    result
+    match result {
+        Ok((name, zip)) => Ok(SharedZip {
+            name,
+            zip,
+            tmp: tmp_s,
+        }),
+        Err(e) => {
+            let _ = cleanup_temp_dir(&tmp_s);
+            Err(e)
+        }
+    }
 }
 
 /// One image's files in a shared save. `name` is None for a file from before 10.6.0 that did not
@@ -668,7 +696,34 @@ pub fn import(
     backup: Option<&Path>,
     compat: Option<&str>,
 ) -> Result<Vec<String>, Failed> {
-    import_as(c, folder, user_id, "this user", zip_bytes, backup, compat)
+    import_as(
+        c,
+        folder,
+        user_id,
+        "this user",
+        ZipIn::Bytes(zip_bytes),
+        backup,
+        compat,
+    )
+}
+
+/// A shared save's zip: in memory (one made here a moment ago) or a file taken over from the
+/// caller (one that came over the network, which can be large).
+enum ZipIn<'a> {
+    Bytes(&'a [u8]),
+    File(&'a Path),
+}
+
+impl ZipIn<'_> {
+    fn write_to(&self, dest: &Path) -> std::io::Result<()> {
+        match self {
+            ZipIn::Bytes(b) => std::fs::write(dest, b),
+            ZipIn::File(p) => std::fs::rename(p, dest).or_else(|_| {
+                std::fs::copy(p, dest)?;
+                std::fs::remove_file(p)
+            }),
+        }
+    }
 }
 
 /// `import`, `who` naming the user the folder belongs to in a refusal.
@@ -677,7 +732,7 @@ fn import_as(
     folder: &str,
     user_id: u32,
     who: &str,
-    zip_bytes: &[u8],
+    zip_in: ZipIn<'_>,
     backup: Option<&Path>,
     compat: Option<&str>,
 ) -> Result<Vec<String>, Failed> {
@@ -690,7 +745,9 @@ fn import_as(
     let tmp_s = tmp.to_string_lossy().into_owned();
     let result = (|| {
         let zip = tmp.join("shared.zip");
-        std::fs::write(&zip, zip_bytes).map_err(|e| format!("save the file: {e}"))?;
+        zip_in
+            .write_to(&zip)
+            .map_err(|e| format!("save the file: {e}"))?;
         let unpacked = tmp.join("x");
         std::fs::create_dir_all(&unpacked).map_err(|e| format!("unpack: {e}"))?;
         let base = unpack_shared(&zip, &unpacked, &title_id)?;
@@ -838,7 +895,15 @@ pub fn copy_to_user(c: &dyn Console, b: &CopyBody) -> Result<Done, Failed> {
         return Err(missing_error(&title_id, "the other user", missing));
     }
     let (_, zip) = share(c, &from.path)?;
-    let parts = import_as(c, &to.path, b.to_user, "the other user", &zip, None, None)?;
+    let parts = import_as(
+        c,
+        &to.path,
+        b.to_user,
+        "the other user",
+        ZipIn::Bytes(&zip),
+        None,
+        None,
+    )?;
     Ok(Done {
         from: from.path.clone(),
         to: to.path.clone(),
@@ -914,7 +979,7 @@ pub fn restore_to_user(
                 &to.path,
                 to_user,
                 "the other user",
-                &zip,
+                ZipIn::Bytes(&zip),
                 Some(&theirs),
                 None,
             ),
@@ -1181,9 +1246,13 @@ pub async fn post_share(Json(b): Json<ShareBody>) -> Response {
         move || {
             let folder = folder_asked(b.folder.as_deref(), b.image.as_deref())?;
             let host = b.addr.trim().to_string();
-            Ok(share(&Live::new(&host), &folder)?)
+            Ok(share_file(&Live::new(&host), &folder)?)
         },
-        |(file, bytes)| {
+        |shared| {
+            let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<axum::body::Bytes>>(4);
+            let name = shared.name.replace('"', "");
+            // Read a piece at a time; the temp copy goes when this ends, sent or not.
+            tokio::task::spawn_blocking(move || send_file(shared, tx));
             (
                 [
                     (
@@ -1192,15 +1261,76 @@ pub async fn post_share(Json(b): Json<ShareBody>) -> Response {
                     ),
                     (
                         axum::http::header::CONTENT_DISPOSITION,
-                        format!("attachment; filename=\"{}\"", file.replace('"', "")),
+                        format!("attachment; filename=\"{name}\""),
                     ),
                 ],
-                bytes,
+                axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
             )
                 .into_response()
         },
     )
     .await
+}
+
+fn send_file(shared: SharedZip, tx: tokio::sync::mpsc::Sender<std::io::Result<axum::body::Bytes>>) {
+    use std::io::Read;
+    let mut file = match std::fs::File::open(&shared.zip) {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = tx.blocking_send(Err(e));
+            return;
+        }
+    };
+    loop {
+        let mut piece = vec![0u8; 1024 * 1024];
+        match file.read(&mut piece) {
+            Ok(0) => return,
+            Ok(n) => {
+                piece.truncate(n);
+                // A send error means the other side hung up.
+                if tx.blocking_send(Ok(piece.into())).is_err() {
+                    return;
+                }
+            }
+            Err(e) => {
+                let _ = tx.blocking_send(Err(e));
+                return;
+            }
+        }
+    }
+}
+
+/// Far above any save a PS5 keeps: a request this long is not one.
+const SHARED_ZIP_MAX: u64 = 32 * 1024 * 1024 * 1024;
+
+/// A request body written to `dest`, without holding it in memory. `Err` carries the refusal.
+async fn spool_body(body: axum::body::Body, dest: &Path, max: u64) -> Result<(), Response> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    let trouble = |e: String| local::json_error(StatusCode::INTERNAL_SERVER_ERROR, e);
+    let mut file = tokio::fs::File::create(dest)
+        .await
+        .map_err(|e| trouble(format!("save the file: {e}")))?;
+    let mut stream = body.into_data_stream();
+    let mut total = 0u64;
+    while let Some(piece) = stream.next().await {
+        let piece = piece
+            .map_err(|e| local::json_error(StatusCode::BAD_REQUEST, format!("receive: {e}")))?;
+        total += piece.len() as u64;
+        if total > max {
+            return Err(local::json_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "This file is too large to be a save.",
+            ));
+        }
+        file.write_all(&piece)
+            .await
+            .map_err(|e| trouble(format!("save the file: {e}")))?;
+    }
+    file.flush()
+        .await
+        .map_err(|e| trouble(format!("save the file: {e}")))?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -1217,8 +1347,19 @@ pub struct UseSharedQuery {
 }
 
 /// `POST /api/save-backup/use-shared?addr=&folder=&user_id=` with the shared zip as the body.
-pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::Bytes) -> Response {
-    blocking(
+pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::Body) -> Response {
+    // On disk, not in memory: a save can run to gigabytes. Its own temp folder, gone at the end.
+    let tmp = match make_temp_dir("use-shared") {
+        Ok(t) => t,
+        Err(e) => return local::json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let tmp_s = tmp.to_string_lossy().into_owned();
+    let incoming = tmp.join("incoming.zip");
+    if let Err(refused) = spool_body(body, &incoming, SHARED_ZIP_MAX).await {
+        let _ = cleanup_temp_dir(&tmp_s);
+        return refused;
+    }
+    let response = blocking(
         move || {
             let folder = folder_asked(q.folder.as_deref(), q.image.as_deref())?;
             let compat = q
@@ -1228,18 +1369,21 @@ pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::
                 .map(String::from);
             let user_id = user_of_folder(&folder, q.user_id)?;
             let host = q.addr.trim().to_string();
-            import(
+            import_as(
                 &Live::new(&host),
                 &folder,
                 user_id,
-                &body,
+                "this user",
+                ZipIn::File(&incoming),
                 None,
                 compat.as_deref(),
             )
         },
         |parts| Json(json!({ "ok": true, "parts": parts })).into_response(),
     )
-    .await
+    .await;
+    let _ = cleanup_temp_dir(&tmp_s);
+    response
 }
 
 /// `POST /api/save-backup/copy` `{addr, title_id, from_user, to_user}`: one user's PS5 save into
@@ -1308,6 +1452,34 @@ pub async fn post_restore_to_user(Json(b): Json<RestoreToUserBody>) -> Response 
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn a_shared_zip_is_written_to_disk_and_a_giant_one_is_told_so() {
+        let tmp = make_temp_dir("spool-test").unwrap();
+        let dest = tmp.join("in.zip");
+        let body = axum::body::Body::from(vec![7u8; 4096]);
+        assert!(spool_body(body, &dest, 8192).await.is_ok());
+        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 4096);
+        let body = axum::body::Body::from(vec![7u8; 4096]);
+        let refused = spool_body(body, &dest, 1024).await.unwrap_err();
+        assert_eq!(refused.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let bytes = axum::body::to_bytes(refused.into_body(), 4096)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("too large"));
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
+    #[test]
+    fn a_zip_taken_from_a_file_leaves_nothing_behind() {
+        let tmp = make_temp_dir("zipin-test").unwrap();
+        let (from, to) = (tmp.join("a"), tmp.join("b"));
+        std::fs::write(&from, b"zip").unwrap();
+        ZipIn::File(&from).write_to(&to).unwrap();
+        assert!(!from.exists());
+        assert_eq!(std::fs::read(&to).unwrap(), b"zip");
+        let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    }
+
     use super::*;
     use std::cell::{Cell, RefCell};
     use std::collections::BTreeMap;

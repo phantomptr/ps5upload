@@ -1,3 +1,4 @@
+import { checkDetail, checkRemedy, checkTitle } from "./checkText";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Stethoscope,
@@ -139,22 +140,31 @@ export default function HealthScreen() {
         const out = await healthFix(
           action,
           probe.host ? mgmtAddr(probe.host) : undefined,
+          action === "clean_junk" ? (junk ?? []).map((f) => f.path) : undefined,
         );
         if (probe.isStale()) return;
         setNote(
-          out.changed.length
-            ? out.changed.join("; ")
+          action === "clean_junk"
+            ? tr("health_junk_deleted", { count: out.changed.length }, "Deleted: {count}.")
             : tr("health_fix_done", undefined, "Done."),
         );
         await scan();
       } catch (e) {
         if (probe.isStale()) return;
-        setError(String(e));
+        setError(
+          /health_fix_busy/.test(String(e))
+            ? tr(
+                "health_fix_busy",
+                undefined,
+                "A transfer or install is running on this PS5, and it may be using these files. Try again when it has finished.",
+              )
+            : String(e),
+        );
       } finally {
         setFixing(null);
       }
     },
-    [guard, scan, tr],
+    [guard, scan, tr, junk],
   );
 
   const openJunk = useCallback(async () => {
@@ -388,13 +398,13 @@ function CheckRow({
     >
       <Icon size={16} className={`mt-0.5 shrink-0 ${ui.cls}`} />
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium">{check.title}</div>
+        <div className="text-sm font-medium">{checkTitle(tr, check)}</div>
         <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-          {check.detail}
+          {checkDetail(tr, check)}
         </div>
         {check.remedy && (
           <div className="mt-1.5 text-xs text-[var(--color-text)]">
-            {check.remedy}
+            {checkRemedy(tr, check)}
           </div>
         )}
       </div>
