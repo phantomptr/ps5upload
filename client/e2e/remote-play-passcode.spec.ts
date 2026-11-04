@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { routeEngine, seedConsole } from "./fixtures/engine";
 
 // The PS5 user's sign-in passcode (#608): the console asks for it before it starts the stream,
 // the engine says so ({"stage":"passcode"}), and a four-digit prompt shows over the stream. The
@@ -12,34 +13,13 @@ type Engine = {
 };
 
 async function mockConsole(page: Page): Promise<Engine> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("ps5upload.host", "192.168.1.100");
-    window.localStorage.setItem(
-      "ps5upload.roster.v1",
-      JSON.stringify({
-        active_id: "p1",
-        profiles: [
-          {
-            id: "p1",
-            name: "Living room",
-            host: "192.168.1.100",
-            wake_regist_key: "00112233",
-            wake_rp_key: "0f".repeat(16), // made up (built here so it reads as no secret)
-          },
-        ],
-      }),
-    );
+  await seedConsole(page);
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "10.5.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "10.5.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
   const engine: Engine = { start: null, passcodes: [], cancels: 0, send: () => {} };
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     engine.send = (m) => ws.send(JSON.stringify(m));

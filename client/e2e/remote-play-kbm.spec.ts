@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { routeEngine } from "./fixtures/engine";
 
 // Native keyboard & mouse (lib/kbmInput.ts): Settings › Controls picks Controller, Keyboard & mouse or
 // Mixed; the console's answer gates them; keys go to exactly one sink; everything is let go on blur;
@@ -43,28 +44,24 @@ async function mockConsole(
       }),
     );
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "10.2.1", caps: {} };
-      if (path === "/api/ps5/status") body = status;
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      if (path === "/api/ps5/vinput/caps") {
-        engine.capsAsked++;
-        body = {
-          supported: true,
-          ...caps,
-          open: false,
-          backend: caps.mouse ? "ps5" : "stub",
-          ...(caps.mouse || caps.keyboard ? {} : { reason: "vinput_unsupported" }),
-          ...extra,
-        };
-      }
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "10.2.1", caps: {} };
+    if (path === "/api/ps5/status") body = status;
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    if (path === "/api/ps5/vinput/caps") {
+      engine.capsAsked++;
+      body = {
+        supported: true,
+        ...caps,
+        open: false,
+        backend: caps.mouse ? "ps5" : "stub",
+        ...(caps.mouse || caps.keyboard ? {} : { reason: "vinput_unsupported" }),
+        ...extra,
+      };
+    }
+    return body;
+  });
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
       if (typeof m !== "string") {

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { routeEngine } from "./fixtures/engine";
 
 // #580's report: several packages picked or dropped together could only be uploaded first (the
 // review list had no Stream & install since Upload and Install Package became one screen in
@@ -7,29 +8,24 @@ import { expect, test, type Page } from "@playwright/test";
 
 async function fakeEngine(page: Page) {
   await page.addInitScript(() => window.localStorage.setItem("ps5upload.host", "192.168.1.100"));
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const req = route.request();
-      const path = new URL(req.url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "10.0.1", caps: {} };
-      if (path === "/api/ps5/status") body = { ok: true };
-      if (path === "/api/ps5/volumes") body = { volumes: [] };
-      if (path === "/api/files/upload") {
-        const name = /filename="([^"]+)"/.exec(req.postDataBuffer()?.toString("latin1") ?? "")?.[1] ?? "x";
-        body = { upload_id: `up-${name}`, path: `/tmp/staged/${name}`, size: 5, filename: name };
-      }
-      if (path === "/api/pkg/parse-split") {
-        const p = (req.postDataJSON() as { path: string }).path;
-        const game = p.includes("GameA") ? "CUSA00001" : "CUSA00002";
-        // The name says what it is: an update (gp), a DLC (ac), else a game (gd).
-        const category = p.includes("Update") ? "gp" : p.includes("DLC") ? "ac" : "gd";
-        body = { head: { content_id: `UP0000-${game}_00-0000000000000000`, title: p, category, platform: "ps4" }, parts: [], total_size: 1 << 30 };
-      }
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path, req) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "10.0.1", caps: {} };
+    if (path === "/api/ps5/status") body = { ok: true };
+    if (path === "/api/ps5/volumes") body = { volumes: [] };
+    if (path === "/api/files/upload") {
+      const name = /filename="([^"]+)"/.exec(req.postDataBuffer()?.toString("latin1") ?? "")?.[1] ?? "x";
+      body = { upload_id: `up-${name}`, path: `/tmp/staged/${name}`, size: 5, filename: name };
+    }
+    if (path === "/api/pkg/parse-split") {
+      const p = (req.postDataJSON() as { path: string }).path;
+      const game = p.includes("GameA") ? "CUSA00001" : "CUSA00002";
+      // The name says what it is: an update (gp), a DLC (ac), else a game (gd).
+      const category = p.includes("Update") ? "gp" : p.includes("DLC") ? "ac" : "gd";
+      body = { head: { content_id: `UP0000-${game}_00-0000000000000000`, title: p, category, platform: "ps4" }, parts: [], total_size: 1 << 30 };
+    }
+    return body;
+  });
   await page.goto("/send", { waitUntil: "domcontentloaded" });
 }
 

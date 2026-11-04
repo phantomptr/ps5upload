@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
+import { routeEngine } from "./fixtures/engine";
 
 // Play Together (#641): friends play the host's PS5 as Player 2–4. The host opens it from the
 // stream bar (QR, Allow, Remove); a friend's browser opens /join (the engine's join_page.html,
@@ -59,60 +60,55 @@ test("the host invites, allows a friend, sees their delay and removes them", asy
   await consoleSetUp(page);
   const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
   let phase: "open" | "asked" | "playing" | "kicked" = "open";
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const req = route.request();
-      const path = new URL(req.url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "10.8.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      if (path.startsWith("/api/join")) {
-        if (req.method() === "POST") {
-          const b = req.postDataJSON() as Record<string, unknown>;
-          posts.push({ path, body: b });
-          if (path === "/api/join/decide") phase = "playing";
-          if (path === "/api/join/kick") phase = "kicked";
-        }
-        // What the engine answers (join.rs): GET, open and close the whole state; invite the
-        // invite; decide and kick {ok}; settings {settings}.
-        const invite = {
-          key: INVITE,
-          code: "K7M2QX",
-          code_display: "K7M-2QX",
-          url: LINK,
-          urls: [LINK, `http://100.64.0.7:19113/join#i=${INVITE}&n=Ann`],
-          expires_in_s: 1800,
-        };
-        const guest = (state: string) => ({
-          id: 4, name: "Ben", player: 2, state, connected: state !== "left", reconnect_left_s: null,
-          rtt_ms: state === "left" ? null : 180, queue: 0, skipped: 0, since_s: 5, why: state === "left" ? "kicked" : null,
-        });
-        const whole = {
-          open: true,
-          console: "192.168.1.100",
-          playing: true,
-          host_away_s: null,
-          invite,
-          players_in: phase === "playing" ? 1 : 0,
-          guests: phase === "playing" ? [guest("playing")] : phase === "kicked" ? [guest("left")] : [],
-          pending: phase === "asked" ? [{ id: 4, name: "Ben", state: "asking" }] : [],
-          settings: { block_system_buttons: true, max_players: 3 },
-          max_guests: 3,
-          ws: "ws://192.168.1.50:19113/api/join/ws",
-        };
-        body =
-          path === "/api/join/invite"
-            ? invite
-            : path === "/api/join/decide" || path === "/api/join/kick"
-              ? { ok: true }
-              : path === "/api/join/settings"
-                ? { settings: whole.settings }
-                : whole;
+  await routeEngine(page, (path, req) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "10.8.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    if (path.startsWith("/api/join")) {
+      if (req.method() === "POST") {
+        const b = req.postDataJSON() as Record<string, unknown>;
+        posts.push({ path, body: b });
+        if (path === "/api/join/decide") phase = "playing";
+        if (path === "/api/join/kick") phase = "kicked";
       }
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+      // What the engine answers (join.rs): GET, open and close the whole state; invite the
+      // invite; decide and kick {ok}; settings {settings}.
+      const invite = {
+        key: INVITE,
+        code: "K7M2QX",
+        code_display: "K7M-2QX",
+        url: LINK,
+        urls: [LINK, `http://100.64.0.7:19113/join#i=${INVITE}&n=Ann`],
+        expires_in_s: 1800,
+      };
+      const guest = (state: string) => ({
+        id: 4, name: "Ben", player: 2, state, connected: state !== "left", reconnect_left_s: null,
+        rtt_ms: state === "left" ? null : 180, queue: 0, skipped: 0, since_s: 5, why: state === "left" ? "kicked" : null,
+      });
+      const whole = {
+        open: true,
+        console: "192.168.1.100",
+        playing: true,
+        host_away_s: null,
+        invite,
+        players_in: phase === "playing" ? 1 : 0,
+        guests: phase === "playing" ? [guest("playing")] : phase === "kicked" ? [guest("left")] : [],
+        pending: phase === "asked" ? [{ id: 4, name: "Ben", state: "asking" }] : [],
+        settings: { block_system_buttons: true, max_players: 3 },
+        max_guests: 3,
+        ws: "ws://192.168.1.50:19113/api/join/ws",
+      };
+      body =
+        path === "/api/join/invite"
+          ? invite
+          : path === "/api/join/decide" || path === "/api/join/kick"
+            ? { ok: true }
+            : path === "/api/join/settings"
+              ? { settings: whole.settings }
+              : whole;
+    }
+    return body;
+  });
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
       if ((JSON.parse(String(m)) as { host?: string }).host) ws.send(JSON.stringify({ stage: "first_frame" }));
@@ -557,16 +553,12 @@ test("an invite opened in the app asks only for the name, filled in from last ti
 
 test("the app joins a friend from Play, and asks before starting its own Play", async ({ page }) => {
   await consoleSetUp(page);
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "10.8.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "10.8.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
+  });
   let relayUrl = "";
   const hellos: Array<Record<string, unknown>> = [];
   await page.routeWebSocket(/\/api\/join\/relay/, (ws) => {

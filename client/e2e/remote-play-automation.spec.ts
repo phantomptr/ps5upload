@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
+import { routeEngine } from "./fixtures/engine";
 
 // #615: a local script asks the engine for the picture (GET /api/ps5/rp/frame); the engine asks
 // the page that shows the session ({"snapshot": …} on its socket) and the page answers with what
@@ -58,16 +59,12 @@ async function open(page: Page): Promise<{ ws: () => WebSocketRoute; replies: Re
         /^(hev1|hvc1)/.test(cfg.codec) ? Promise.resolve({ supported: false, config: cfg }) : orig(cfg);
     }
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "10.6.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null, session: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "10.6.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null, session: null };
+    return body;
+  });
   const replies: Reply[] = [];
   const texts: string[] = [];
   let socket: WebSocketRoute | null = null;

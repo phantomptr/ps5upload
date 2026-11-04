@@ -1,39 +1,19 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
+import { routeEngine, seedConsole } from "./fixtures/engine";
 
 // Remote Play belongs to the app, not to its screen (8.10): leaving the screen keeps the
 // stream, a dropped socket rejoins, and only Stop ends it, with no "connection dropped".
 
 test("Remote Play survives leaving the screen and a dropped socket", async ({ page }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("ps5upload.host", "192.168.1.100");
-    window.localStorage.setItem(
-      "ps5upload.roster.v1",
-      JSON.stringify({
-        active_id: "p1",
-        profiles: [
-          {
-            id: "p1",
-            name: "Living room",
-            host: "192.168.1.100",
-            wake_regist_key: "00112233",
-            wake_rp_key: "00112233445566778899aabbccddeeff",
-          },
-        ],
-      }),
-    );
+  await seedConsole(page);
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "8.10.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "8.10.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
   const starts: Array<Record<string, unknown>> = [];
   let stops = 0;
   let socket: WebSocketRoute | null = null;
@@ -119,16 +99,12 @@ test("Remote Play shows the selected console while another one streams", async (
       }),
     );
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "8.11.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "8.11.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
+  });
   const starts: Array<Record<string, unknown>> = [];
   let stops = 0;
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
@@ -199,16 +175,12 @@ test("Remote Play moves into picture in picture and back", async ({ page }) => {
       },
     });
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "8.11.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "8.11.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
+  });
   let stops = 0;
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
@@ -295,34 +267,13 @@ test("Remote Play moves into picture in picture and back", async ({ page }) => {
 // Esc in full screen: a quick press is Circle on the console, holding it leaves full screen
 // (without pressing Circle).
 test("Remote Play: Esc is Circle in full screen, held it leaves", async ({ page }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("ps5upload.host", "192.168.1.100");
-    window.localStorage.setItem(
-      "ps5upload.roster.v1",
-      JSON.stringify({
-        active_id: "p1",
-        profiles: [
-          {
-            id: "p1",
-            name: "Living room",
-            host: "192.168.1.100",
-            wake_regist_key: "00112233",
-            wake_rp_key: "00112233445566778899aabbccddeeff",
-          },
-        ],
-      }),
-    );
+  await seedConsole(page);
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "8.10.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "8.10.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
   const pads: number[] = [];
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
@@ -382,16 +333,12 @@ test("Remote Play without an H.264 decoder says what to install and never starts
       }),
     );
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "9.4.1", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "9.4.1", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
+  });
   let sockets = 0;
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, () => {
     sockets++;
@@ -408,34 +355,13 @@ test("Remote Play without an H.264 decoder says what to install and never starts
 
 /** One console set up for Wake & sign in, an engine that answers, and a stream that plays. */
 async function playableConsole(page: Page) {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("ps5upload.host", "192.168.1.100");
-    window.localStorage.setItem(
-      "ps5upload.roster.v1",
-      JSON.stringify({
-        active_id: "p1",
-        profiles: [
-          {
-            id: "p1",
-            name: "Living room",
-            host: "192.168.1.100",
-            wake_regist_key: "00112233",
-            wake_rp_key: "00112233445566778899aabbccddeeff",
-          },
-        ],
-      }),
-    );
+  await seedConsole(page);
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "9.5.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "9.5.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
       const msg = JSON.parse(String(m)) as { host?: string };
@@ -603,16 +529,12 @@ async function rpPage(page: Page, prefs: Record<string, unknown> = {}) {
         /^(hev1|hvc1)/.test(cfg.codec) ? Promise.resolve({ supported: false, config: cfg }) : orig(cfg);
     }
   }, prefs);
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "9.5.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "9.5.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
+  });
 }
 
 /** A fake engine that streams the fixture for the size asked for and answers pings. `extra`
