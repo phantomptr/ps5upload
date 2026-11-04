@@ -10,6 +10,7 @@ import { create } from "zustand";
 import { joinSocketUrl, type JoinLink } from "../lib/joinProtocol";
 import { JoinSession } from "../join/session";
 import { getEngineUrl } from "./engine";
+import { useJoinPresence } from "./joinPresence";
 
 /** The app reaches the friend's engine through its own (an app page may not open a plain ws://
  *  to another machine: Android blocks cleartext, iOS ATS; its own loopback it may), the way the
@@ -41,18 +42,22 @@ export const useJoinStore = create<JoinStoreState>((set, get) => ({
       code: link.code ?? null,
       name,
       host: link.name,
+      keysLive: () => useJoinPresence.getState().onScreen,
     });
     set({ session: s, link });
+    useJoinPresence.setState({ host: link.name, leave: () => get().leave() });
     s.start();
     return s;
   },
   leave: () => {
     get().session?.leave();
     set({ session: null, link: null });
+    useJoinPresence.setState({ host: null, leave: null });
   },
   clear: () => {
     get().session?.stop();
     set({ session: null, link: null });
+    useJoinPresence.setState({ host: null, leave: null });
   },
 }));
 

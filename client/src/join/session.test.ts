@@ -109,6 +109,22 @@ describe("guest keyboard (#654)", () => {
     expect(isPadKey({ ...base, metaKey: true, code: "KeyC", target: body })).toBe(false);
   });
 
+  it("leaves a focused button's keys to it, and gives a keyboard the way to Leave", () => {
+    const body = { tagName: "BODY" } as unknown as EventTarget;
+    const button = { tagName: "BUTTON" } as unknown as EventTarget;
+    const link = { tagName: "A" } as unknown as EventTarget;
+    const roled = { tagName: "DIV", getAttribute: () => "button" } as unknown as EventTarget;
+    const base = { ctrlKey: false, metaKey: false, altKey: false };
+    for (const target of [button, link, roled]) {
+      expect(isPadKey({ ...base, code: "Enter", target })).toBe(false);
+      expect(isPadKey({ ...base, code: "Space", target })).toBe(false);
+      expect(isPadKey({ ...base, code: "Tab", target })).toBe(false);
+    }
+    // Tab is the game's Options; Shift+Tab moves to the page's own buttons.
+    expect(isPadKey({ ...base, code: "Tab", target: body })).toBe(true);
+    expect(isPadKey({ ...base, shiftKey: true, code: "Tab", target: body })).toBe(false);
+  });
+
   it("holds keys while joined, blocks their default, and lets go on blur", () => {
     const window = stubDom();
     vi.stubGlobal("WebSocket", QuietSocket);

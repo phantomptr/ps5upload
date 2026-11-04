@@ -126,6 +126,11 @@ function PlayerCard({ addr, player, guest }: { addr: string; player: number; gue
                 {Math.round(guest.rttMs)} ms
               </span>
             )}
+            {guest.behind && guest.status === "playing" && (
+              <span className="text-xs text-[var(--color-warn)]" data-testid="pt-player-behind">
+                {tr("pt_player_behind", undefined, "Connection can't keep up")}
+              </span>
+            )}
           </div>
           {guest.status !== "left" && (
             <Button
@@ -430,9 +435,9 @@ export function PlayTogetherPanel({
             )}
           >
             {tr(
-              "pt_slow_body",
+              "pt_slow_body2",
               undefined,
-              "Lower Play quality in Settings › Stream (720p or 30 fps) for a smoother picture for everyone.",
+              "Lower Play quality in Settings › Picture (720p or 30 fps) for a smoother picture for everyone.",
             )}
           </Callout>
         </div>

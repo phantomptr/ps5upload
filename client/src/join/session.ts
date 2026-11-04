@@ -40,6 +40,8 @@ export interface JoinSnapshot {
 const MUTED_KEY = "ps5upload.join.muted";
 
 export interface JoinSessionOptions {
+  /** The page shows the game now (the app: its Play screen). Absent: always. */
+  keysLive?: () => boolean;
   /** The guest socket (direct, or through this app's engine). */
   url: string;
   invite: string | null;
@@ -58,11 +60,24 @@ export const GUEST_KEYMAP: Record<string, KeyAction> = Object.fromEntries(
 export const guestHeld = new Set<string>();
 
 /** Whether a key event is the guest's pad: a mapped key, not typed into a field. */
-export function isPadKey(e: Pick<KeyboardEvent, "code" | "target" | "ctrlKey" | "metaKey" | "altKey">): boolean {
+export function isPadKey(
+  e: Pick<KeyboardEvent, "code" | "target" | "ctrlKey" | "metaKey" | "altKey"> & { shiftKey?: boolean },
+): boolean {
   if (!(e.code in GUEST_KEYMAP) || e.ctrlKey || e.metaKey || e.altKey) return false;
   const t = e.target as (HTMLElement & { isContentEditable?: boolean }) | null;
+  // Tab is the game's Options: Shift+Tab is how a keyboard reaches the page's own buttons (Leave),
+  // and from there Tab moves between them.
+  if (e.code === "Tab" && (e.shiftKey || isControl(t))) return false;
   const tag = t?.tagName;
-  return !(tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable);
+  return !(tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable || isControl(t));
+}
+
+/** A button or a link with the focus: Enter and Space are its own. */
+function isControl(t: HTMLElement | null): boolean {
+  const tag = t?.tagName;
+  if (tag === "BUTTON" || tag === "A") return true;
+  const role = t?.getAttribute?.("role");
+  return role === "button" || role === "link" || role === "menuitem" || role === "tab" || role === "switch";
 }
 
 /** The pad this device is: connected controllers (standard mapping), the keyboard and the
@@ -152,6 +167,8 @@ export class JoinSession {
     // The keyboard plays (#654) while joined; a key typed into a field stays the field's.
     const keyDown = (e: KeyboardEvent) => {
       if (this.client.current.kind !== "joined" || !isPadKey(e)) return;
+      // The app's other screens are the user's own: the keyboard plays only on the game's.
+      if (this.opts.keysLive && !this.opts.keysLive()) return;
       e.preventDefault();
       guestHeld.add(e.code);
     };

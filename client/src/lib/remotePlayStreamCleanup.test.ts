@@ -135,7 +135,14 @@ beforeEach(() => {
     requestAnimationFrame: (cb: () => void) => setTimeout(cb, 16) as unknown as number,
     cancelAnimationFrame: (id: number) => clearTimeout(id),
   });
-  vi.stubGlobal("document", { createElement: () => fakeCanvas() });
+  const docEvents = new EventTarget();
+  vi.stubGlobal("document", {
+    createElement: () => fakeCanvas(),
+    addEventListener: docEvents.addEventListener.bind(docEvents),
+    removeEventListener: docEvents.removeEventListener.bind(docEvents),
+    dispatchEvent: docEvents.dispatchEvent.bind(docEvents),
+    visibilityState: "visible",
+  });
   ctxs = [];
   nodes = [];
   workers = [];
@@ -268,5 +275,94 @@ describe("RemotePlayStream at its end", () => {
     const before = ctx.resumes;
     window.dispatchEvent(new Event("pointerdown"));
     expect(ctx.resumes).toBe(before);
+  });
+
+  it("does not start behind a stop that came while it checked the codecs", async () => {
+    const s = new RemotePlayStream(options());
+    const starting = s.start();
+    s.stop();
+    await starting;
+    await flush();
+    expect(sockets).toHaveLength(0);
+  });
+
+  const opened = async (o = options()) => {
+    const errors: Array<{ code: string; detail: string }> = [];
+    o.onError = (e) => errors.push(e);
+    const s = new RemotePlayStream(o);
+    await s.start();
+    const ws = sockets[sockets.length - 1];
+    ws.onopen?.();
+    return { s, ws, errors, o };
+  };
+
+  it("says why the console ended the stream, and that nothing is running any more", async () => {
+    const a = await opened();
+    a.ws.onmessage?.({ data: JSON.stringify({ stage: "ended", reason: "Server shutting down" }) });
+    expect(a.errors).toEqual([{ code: "console_ended", detail: "Server shutting down" }]);
+    a.s.stop();
+    await flush();
+
+    const b = await opened();
+    b.ws.onmessage?.({ data: JSON.stringify({ stage: "ended", reason: "no session" }) });
+    expect(b.errors[0].code).toBe("no_session");
+    b.s.stop();
+    await flush();
+  });
+
+  it("says nothing about a stream the player stopped", async () => {
+    const a = await opened();
+    a.s.stop();
+    a.ws.onmessage?.({ data: JSON.stringify({ stage: "ended", reason: "Client stopped" }) });
+    expect(a.errors).toEqual([]);
+    await flush();
+  });
+
+  it("sends what is held again on a new socket: the engine let go when the old one left", async () => {
+    const sent: string[] = [];
+    const o = options();
+    o.readPad = () => ({ buttons: 1, l2: 0, r2: 0, lx: 0, ly: 0, rx: 0, ry: 0 });
+    const s = new RemotePlayStream(o);
+    await s.start();
+    const first = sockets[0] as unknown as { readyState: number; send: (m: string) => void; onopen?: () => void };
+    first.readyState = 1;
+    first.send = (m) => sent.push(m);
+    vi.stubGlobal("WebSocket", Object.assign(FakeSocket, { OPEN: 1 }));
+    s.sendPad();
+    s.sendPad();
+    expect(sent.filter((m) => m.includes('"pad"'))).toHaveLength(1);
+    (s as unknown as { connect: (a: boolean) => void }).connect(true);
+    const second = sockets[1] as unknown as { readyState: number; send: (m: string) => void };
+    second.readyState = 1;
+    second.send = (m) => sent.push(m);
+    s.sendPad();
+    expect(sent.filter((m) => m.includes('"pad"'))).toHaveLength(2);
+    s.stop();
+    await flush();
+  });
+
+  it("lets go when the page goes to the background, where no frame will read the pad", async () => {
+    const o = options();
+    let hidden = 0;
+    o.onHidden = () => hidden++;
+    const s = new RemotePlayStream(o);
+    await s.start();
+    const send = vi.spyOn(s, "sendPad");
+    (document as unknown as { visibilityState: string }).visibilityState = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(hidden).toBe(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    s.stop();
+    await flush();
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(hidden).toBe(1);
+  });
+
+  it("ends a session no decoder will ever take, rather than stream to nothing", async () => {
+    const a = await opened();
+    (a.s as unknown as { cannotDecode: (d: string) => void }).cannotDecode("no");
+    expect(a.errors[0].code).toBe("decode");
+    expect((a.s as unknown as { stopping: boolean }).stopping).toBe(true);
+    await flush();
   });
 });

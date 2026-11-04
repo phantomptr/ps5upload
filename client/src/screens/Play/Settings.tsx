@@ -9,9 +9,9 @@ import { androidPipAvailable } from "../../lib/androidPip";
 import { appSavesToPhotos } from "../../lib/rpCapture";
 import { gameModeKind } from "../../lib/gameMode";
 import { keysFor, rebind, PAD_ACTIONS, type KeyAction } from "../../lib/remotePlayStream";
-import { RP_BITRATES, useRemotePlayStore, type RpPrefs } from "../../state/remotePlay";
+import { RP_BITRATES, useRemotePlayStore, type RpPrefs, padsCannotVibrate } from "../../state/remotePlay";
 import { askMotion, motionAvailable } from "../../lib/motion";
-import { dualSenseCapable } from "../../lib/dualSense";
+import { dualSenseBlocked, dualSenseCapable } from "../../lib/dualSense";
 import { connectWebHidTouchpad, webHidTouchpadAvailable, webHidTouchpadConnected } from "../../lib/padTouchpad";
 import { MicSetting } from "./MicControl";
 import { ControllerSetup } from "./ControllerSetup";
@@ -265,6 +265,29 @@ function Hint({ children }: { children: React.ReactNode }) {
 
 /** One tab of Remote Play's settings. While a stream runs, what only applies on the next start
  *  says so; everything else applies at once. */
+/** Linux with no udev rule for the DualSense: said, not a pad that silently lacks half of itself. */
+function DualSenseBlockedNote() {
+  const tr = useTr();
+  const [blocked, setBlocked] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void dualSenseBlocked().then((b) => live && setBlocked(b));
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!blocked) return null;
+  return (
+    <p className="text-xs text-[var(--color-warn)]" data-testid="rp-dualsense-blocked">
+      {tr(
+        "rp_dualsense_blocked",
+        undefined,
+        "This computer doesn't let the app open your DualSense, so its touchpad, motion and adaptive triggers are off. The FAQ has the one line to add (a udev rule).",
+      )}
+    </p>
+  );
+}
+
 export function SettingsBody({ tab, running }: { tab: SettingsTab; running: boolean }) {
   const tr = useTr();
   const prefs = useRemotePlayStore((s) => s.prefs);
@@ -531,6 +554,11 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
           checked={prefs.rumble}
           onChange={(v) => setPrefs({ rumble: v })}
           label={tr("rp_rumble", undefined, "Controller vibration")}
+          hint={
+            padsCannotVibrate()
+              ? tr("rp_rumble_none", undefined, "This controller can't vibrate here: this app reads it without the browser, which has no way to reach its motors.")
+              : undefined
+          }
         />
         {dualSenseCapable() && (
           <Toggle
@@ -544,6 +572,7 @@ export function SettingsBody({ tab, running }: { tab: SettingsTab; running: bool
             )}
           />
         )}
+        {dualSenseCapable() && <DualSenseBlockedNote />}
         {motionAvailable() && typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches && (
           <Toggle
             checked={prefs.motion}

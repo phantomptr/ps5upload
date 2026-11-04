@@ -9,6 +9,7 @@
 import { safeGetItem, safeSetItem } from "./safeStorage";
 import {
   guessProfile,
+  hatPosition,
   PadButton,
   STANDARD_PROFILE,
   type PadAxis,
@@ -70,6 +71,12 @@ export function detectPress(rest: PadSnapshot, now: PadSnapshot): PadSource | nu
     if (v > 0.5 && moved > 0.5 && (!best || moved > best.amount)) best = { src: { b: i }, amount: moved };
   });
   if (best) return (best as { src: PadSource }).src;
+  // A d-pad on one axis: resting outside -1..1, each direction a value of its own. Taken as half an
+  // axis, up, right and down would all be one source, and left too small a move to count.
+  for (let i = 0; i < now.axes.length; i++) {
+    const at = Math.abs(rest.axes[i] ?? 0) > 1.05 ? hatPosition(now.axes[i]) : null;
+    if (at !== null) return { h: i, at };
+  }
   now.axes.forEach((v, i) => {
     const r = rest.axes[i] ?? 0;
     const moved = v - r;
@@ -153,7 +160,7 @@ export function addExtra(prof: PadProfile, bit: number, src: PadSource): PadProf
  *  standard meaning). */
 export function withStandardGaps(prof: PadProfile): PadProfile {
   const have = new Set(prof.buttons.map(([bit]) => bit));
-  const key = (s: PadSource) => ("b" in s ? `b${s.b}` : `a${s.a}${s.d}`);
+  const key = (s: PadSource) => ("b" in s ? `b${s.b}` : "h" in s ? `h${s.h}.${s.at}` : `a${s.a}${s.d}`);
   const used = new Set([...prof.buttons.map(([, s]) => key(s)), ...[prof.l2, prof.r2].filter((s): s is PadSource => !!s).map(key)]);
   return {
     buttons: [

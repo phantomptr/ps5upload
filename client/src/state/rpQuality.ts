@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import type { RemotePlayStream } from "../lib/remotePlayStream";
-import { useRemotePlayStore, type RpPrefs } from "./remotePlay";
+import { useRemotePlayStore, type RpPrefs, type RpTarget } from "./remotePlay";
 
 /** Sessions the lower quality was already offered for (once each, taken or not). */
 const offered = new WeakSet<RemotePlayStream>();
@@ -13,15 +13,20 @@ export function wasOffered(s: RemotePlayStream): boolean {
 /** How long a switch keeps trying while the PS5 still holds its last session, ms. */
 const SWITCH_FOR_MS = 90_000;
 
+/** What is under way: `quality`, a switch to 720p; `restart`, Play again with other settings;
+ *  `wait`, a plain Start waiting for the PS5 to free its last session. */
+export type SwitchKind = "quality" | "restart" | "wait";
+
 interface QualityState {
   /** The session the 720p offer is showing for. */
   offerFor: RemotePlayStream | null;
-  /** A switch to 720p in progress, and when the next try is (while the PS5 frees its slot). */
-  switching: { retryAt: number | null } | null;
+  /** A restart in progress, and when the next try is (while the PS5 frees its slot). */
+  switching: { kind: SwitchKind; retryAt: number | null } | null;
   offer: (s: RemotePlayStream) => void;
   dismiss: () => void;
   switchTo720: () => Promise<void>;
-  restartWith: (prefs: Partial<RpPrefs>) => Promise<void>;
+  restartWith: (prefs: Partial<RpPrefs>, kind?: SwitchKind) => Promise<void>;
+  startWhenFree: (t: RpTarget) => Promise<void>;
   cancelSwitch: () => void;
 }
 
@@ -32,39 +37,10 @@ async function until(done: () => boolean, ms: number): Promise<void> {
   for (const end = Date.now() + ms; !done() && Date.now() < end; ) await sleep(100);
 }
 
-export const useRpQualityStore = create<QualityState>((set, get) => ({
-  offerFor: null,
-  switching: null,
-
-  offer(s) {
-    if (offered.has(s)) return;
-    offered.add(s);
-    set({ offerFor: s });
-  },
-
-  dismiss() {
-    set({ offerFor: null });
-  },
-
-  /** Stop the stream and start it again at 720p (see restartWith). */
-  async switchTo720() {
-    if (!useRemotePlayStore.getState().stream || get().switching) return;
-    set({ offerFor: null });
-    await get().restartWith({ res: "1280x720" });
-  },
-
-  /** Stop the stream and start it again with `prefs` (720p, or H.264 at a site's bitrate for
-   *  Go live). Resolution, codec and bitrate are fixed for a session, and the PS5 keeps its one
-   *  Remote Play slot for ~12 s after a session ends: the engine answers "busy, try in N s"
-   *  without asking the console, and this waits that long and tries again. */
-  async restartWith(prefs) {
-    const rp = useRemotePlayStore.getState();
-    const t = rp.target;
-    if (!t || !rp.stream || get().switching) return;
-    set({ switching: { retryAt: null } });
-    rp.setPrefs(prefs);
-    rp.stop();
-    await until(() => !useRemotePlayStore.getState().stream, 10_000);
+export const useRpQualityStore = create<QualityState>((set, get) => {
+  /** Start `t` and go on trying while the engine answers "busy, try in N s" (it does so without
+   *  asking the console). */
+  const startAndWait = async (t: RpTarget, kind: SwitchKind) => {
     const deadline = Date.now() + SWITCH_FOR_MS;
     while (get().switching && Date.now() < deadline) {
       if (useRemotePlayStore.getState().stream) break; // started again by hand
@@ -75,18 +51,68 @@ export const useRpQualityStore = create<QualityState>((set, get) => ({
         return s.phase === "playing" || !s.stream || !!s.error;
       }, 60_000);
       const err = useRemotePlayStore.getState().error;
-      if (err?.code !== "busy") break;
+      // After a stop of our own, "in use" is that session still leaving too.
+      if (err?.code !== "busy" && !(kind !== "wait" && err?.code === "in_use")) break;
       // Not an error to show: the wait is the plan.
       const wait = Math.max(1, err.retryS ?? 5) * 1000 + 500;
       useRemotePlayStore.setState({ error: null });
-      set({ switching: { retryAt: Date.now() + wait } });
+      set({ switching: { kind, retryAt: Date.now() + wait } });
       await until(() => !get().switching, wait);
       await until(() => !useRemotePlayStore.getState().stream, 5_000);
     }
     set({ switching: null });
-  },
+  };
 
-  cancelSwitch() {
-    set({ switching: null });
-  },
-}));
+  return {
+    offerFor: null,
+    switching: null,
+
+    offer(s) {
+      if (offered.has(s)) return;
+      offered.add(s);
+      set({ offerFor: s });
+    },
+
+    dismiss() {
+      set({ offerFor: null });
+    },
+
+    /** Stop the stream and start it again at 720p (see restartWith). */
+    async switchTo720() {
+      if (!useRemotePlayStore.getState().stream || get().switching) return;
+      set({ offerFor: null });
+      await get().restartWith({ res: "1280x720" }, "quality");
+    },
+
+    /** Stop the stream and start it again with `prefs` (720p, or H.264 at a site's bitrate for
+     *  Go live). Resolution, codec and bitrate are fixed for a session, and the PS5 keeps its one
+     *  Remote Play slot for ~12 s after a session ends. Friends stay in: the engine keeps Play
+     *  Together open through a host's restart. */
+    async restartWith(prefs, kind = "restart") {
+      const rp = useRemotePlayStore.getState();
+      const t = rp.target;
+      if (!t || !rp.stream || get().switching) return;
+      set({ switching: { kind, retryAt: null } });
+      rp.setPrefs(prefs);
+      rp.stopForRestart();
+      await until(() => !useRemotePlayStore.getState().stream, 10_000);
+      await startAndWait(t, kind);
+    },
+
+    /** A Start the engine answered "busy" (the error is still up): wait it out and start. */
+    async startWhenFree(t) {
+      if (get().switching) return;
+      const retryS = useRemotePlayStore.getState().error?.retryS ?? 5;
+      const wait = Math.max(1, retryS) * 1000 + 500;
+      useRemotePlayStore.setState({ error: null });
+      set({ switching: { kind: "wait", retryAt: Date.now() + wait } });
+      await until(() => !get().switching, wait);
+      await until(() => !useRemotePlayStore.getState().stream, 5_000);
+      await startAndWait(t, "wait");
+    },
+
+    cancelSwitch() {
+      set({ switching: null });
+    },
+  };
+});

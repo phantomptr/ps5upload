@@ -5,6 +5,7 @@ import { isInstallPackagePath } from "../../../lib/pkgDropDedupe";
 import { pkgLibraryStore } from "../../../state/pkgLibrary";
 import { pushNotification } from "../../../state/notifications";
 import { useRemotePlayStore } from "../../../state/remotePlay";
+import { useRpQualityStore } from "../../../state/rpQuality";
 import { trStatic } from "../../../lib/trStatic";
 
 /** A package dropped on the stream: a path on this computer (the desktop app) or a file the
@@ -102,5 +103,11 @@ export function flushHeldDrops(): void {
 useRemotePlayStore.subscribe((s, prev) => {
   const over = (p: typeof s.phase) => p === "ended" || p === "error";
   const ended = (prev.stream && !s.stream) || (over(s.phase) && !over(prev.phase));
-  if (ended) flushHeldDrops();
+  // A restart with other settings is not the end: the stream is back in a moment.
+  if (ended && !useRpQualityStore.getState().switching) flushHeldDrops();
+});
+
+// That restart called off, or failed: nothing is streaming now.
+useRpQualityStore.subscribe((s, prev) => {
+  if (prev.switching && !s.switching && !useRemotePlayStore.getState().stream) flushHeldDrops();
 });

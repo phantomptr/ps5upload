@@ -368,24 +368,34 @@ pub(crate) mod reader {
         }
     }
 
-    /// Is a DualSense attached, and on USB? A quick look, without opening it.
-    pub fn find() -> (bool, bool) {
+    /// Is a DualSense attached, on USB, and can it be opened? On Linux `/dev/hidraw*` is root's
+    /// without a udev rule: the pad lists fine and then opens for nobody, so the session must not
+    /// go into DualSense mode for it. Elsewhere a look is enough, and some systems give a device
+    /// to one opener at a time.
+    pub fn find() -> Found {
         host::with_api(|api| {
             let _ = api.reset_devices();
             let _ = api.add_devices(SONY_VID, 0);
-            let mut found = (false, false);
+            let mut found = Found::default();
             for d in api
                 .device_list()
                 .filter(|d| DUALSENSE_PIDS.contains(&d.product_id()))
             {
-                found.0 = true;
+                found.connected = true;
                 if matches!(d.bus_type(), hidapi::BusType::Usb) {
-                    found.1 = true;
+                    found.usb = true;
                 }
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(d) = api
+                .device_list()
+                .find(|d| DUALSENSE_PIDS.contains(&d.product_id()))
+            {
+                found.blocked = api.open_path(d.path()).is_err();
             }
             found
         })
-        .unwrap_or((false, false))
+        .unwrap_or_default()
     }
 
     /// Sleep `d` in short steps; false once stopped.
@@ -524,15 +534,24 @@ pub(crate) mod reader {
     }
 }
 
-/// Is a DualSense attached (first), and on USB (second)? Desktop only.
-pub fn find_dualsense() -> (bool, bool) {
+/// What a look for a DualSense found.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Found {
+    pub connected: bool,
+    pub usb: bool,
+    /// This computer doesn't let the app open it.
+    pub blocked: bool,
+}
+
+/// Is a DualSense attached, and how? Desktop only.
+pub fn find_dualsense() -> Found {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         reader::find()
     }
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        (false, false)
+        Found::default()
     }
 }
 

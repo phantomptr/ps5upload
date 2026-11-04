@@ -28,9 +28,12 @@ import { isMobile } from "../../lib/platform";
 import { getEngineUrl, isLoopbackUrl } from "../../state/engine";
 import { useGoLiveStore } from "../../state/goLive";
 import { useTr } from "../../state/lang";
+import { presetName, problemText, runSite } from "./goLiveText";
 import { useRpQualityStore } from "../../state/rpQuality";
 
 type Tr = ReturnType<typeof useTr>;
+
+export { presetName, problemText };
 
 /** The Stream button and panel are for computers: the desktop app and the web UI (where Go
  *  live runs on the engine's computer). The phone apps have no streaming pipeline in 11.0.0. */
@@ -54,10 +57,6 @@ const PRESET_COLOR: Record<PresetId, string> = {
   facebook: "#0866ff",
   custom: "#8b8b8b",
 };
-
-export function presetName(tr: Tr, id: PresetId): string {
-  return id === "custom" ? tr("golive_custom", undefined, "Custom server") : ({ youtube: "YouTube", twitch: "Twitch", kick: "Kick", facebook: "Facebook" } as const)[id];
-}
 
 /** Where the key is, per site. */
 function keyHelp(tr: Tr, id: PresetId): string {
@@ -149,85 +148,6 @@ export function checkText(tr: Tr, c: LiveCheck, site: string): string {
   }
 }
 
-/** An engine error code in the user's language (the engine's sentence when there is none). */
-export function problemText(tr: Tr, code: string, fallback: string, site?: string): string {
-  const s = site ?? tr("golive_the_site", undefined, "the site");
-  switch (code) {
-    case "unreachable":
-      return tr("golive_err_unreachable", { site: s }, `Can't reach ${s}'s server. Check this computer's internet connection (and the server address).`);
-    case "tls":
-      return tr(
-        "golive_err_tls",
-        { site: s },
-        `Can't make a secure connection to ${s}: its certificate could not be checked. Set SSL_CERT_FILE to this computer's certificate bundle, or check the server address.`,
-      );
-    case "rejected":
-      return tr(
-        "golive_err_rejected",
-        { site: s },
-        `${s} refused the stream. That is almost always the stream key: copy it again from ${s} (keys change when you reset them).`,
-      );
-    case "codec_not_allowed":
-      return tr("golive_err_codec", { site: s }, `${s} doesn't take this video format. Restart Play in H.264 and go live again.`);
-    case "dropped":
-      return tr("golive_err_dropped", { site: s }, `The connection to ${s} dropped.`);
-    case "stopped":
-      return tr("golive_err_stopped", { site: s }, `Streaming to ${s} stopped.`);
-    case "all_failed":
-      return tr("golive_err_all_failed", undefined, "None of the sites took the stream.");
-    case "ffmpeg_failed":
-      return tr("golive_err_ffmpeg_failed", undefined, "The streaming helper (ffmpeg) could not start on this computer.");
-    case "destination_missing":
-    case "not_found":
-      return tr("golive_err_destination_missing", undefined, "That site is gone. Add it again.");
-    case "preset_unknown":
-      return tr("golive_err_preset_unknown", undefined, "Pick YouTube, Twitch, Kick, Facebook or Custom.");
-    case "key_lost":
-      return tr("golive_err_key_lost", undefined, "A saved stream key can't be read. Remove that site and add it again.");
-    case "key_missing":
-      return tr("golive_err_key_missing", undefined, "Paste the stream key from the site.");
-    case "key_invalid":
-      return tr("golive_err_key_invalid", undefined, "That doesn't look like a stream key: paste only the key, without spaces.");
-    case "server_missing":
-      return tr("golive_err_server_missing", undefined, "Paste the Server URL from your Kick dashboard.");
-    case "url_invalid":
-      return tr("golive_err_url_custom", undefined, "Enter a server address starting with rtmp://, rtmps:// or srt://.");
-    case "store":
-      return tr("golive_err_store", undefined, "Your saved sites can't be read right now. Try again in a moment.");
-    case "disk":
-      return tr("golive_err_disk", undefined, "Couldn't save to this computer's disk. Check that it has free space, then try again.");
-    case "unsupported":
-      return tr("golive_ffmpeg_unsupported", undefined, "Going live isn't available on this computer's system.");
-    case "unpack":
-      return tr("golive_err_unpack", undefined, "The download could not be unpacked. Try again.");
-    case "network":
-      return tr("golive_no_engine", undefined, "Can't reach the engine.");
-    case "play_ended":
-      return tr("golive_err_play_ended", undefined, "Remote Play stopped, so the stream ended.");
-    case "no_session":
-      return tr("golive_err_no_session", undefined, "Start Remote Play first: Go live sends what it shows.");
-    case "ffmpeg_missing":
-      return tr("golive_err_ffmpeg_missing", undefined, "Download the streaming helper first.");
-    case "no_destinations":
-      return tr("golive_err_no_destinations", undefined, "Tick at least one place to stream to.");
-    case "already_live":
-      return tr("golive_err_already_live", undefined, "Already live.");
-    case "checksum":
-      return tr("golive_err_checksum", undefined, "The download was not the expected file, so it was deleted and not used. Try again later.");
-    case "download":
-      return tr("golive_err_download", undefined, "The download failed. Check this computer's internet connection and try again.");
-    default: {
-      // Not one of the engine's own refusals: "HTTP 500" from something in between.
-      const http = /^http_(\d+)$/.exec(code);
-      return http ? tr("golive_err_http", { status: http[1] }, `The engine refused that (HTTP ${http[1]}). Try again.`) : fallback;
-    }
-  }
-}
-
-/** The site to name in a run's message: the one site it streams to, else none. */
-function runSite(tr: Tr, run: LiveRun): string | undefined {
-  return run.destinations.length === 1 ? presetName(tr, run.destinations[0].preset) : undefined;
-}
 
 function SiteDot({ id }: { id: PresetId }) {
   return <span aria-hidden className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: PRESET_COLOR[id] }} />;
@@ -667,16 +587,20 @@ function GoLiveTab({ status }: { status: StreamStatus }) {
           <p className="text-xs">
             {fix.codec && fix.bitrateKbps
               ? tr(
-                  "golive_fix_both",
+                  "golive_fix_both2",
                   { mbps: String(fix.bitrateKbps / 1000) },
-                  `Restart Remote Play in H.264 at ${fix.bitrateKbps / 1000} Mbps? The game keeps running; the picture comes back in a few seconds.`,
+                  `Restart Remote Play in H.264 at ${fix.bitrateKbps / 1000} Mbps? The game keeps running; the picture comes back in about 15 s. Play keeps these settings until you change them in Settings › Picture.`,
                 )
               : fix.codec
-                ? tr("golive_fix_codec", undefined, "Restart Remote Play in H.264? The game keeps running; the picture comes back in a few seconds.")
+                ? tr(
+                    "golive_fix_codec2",
+                    undefined,
+                    "Restart Remote Play in H.264? The game keeps running; the picture comes back in about 15 s. Play keeps this setting until you change it in Settings › Picture.",
+                  )
                 : tr(
-                    "golive_fix_bitrate",
+                    "golive_fix_bitrate2",
                     { mbps: String((fix.bitrateKbps ?? 0) / 1000) },
-                    `Restart Remote Play at ${(fix.bitrateKbps ?? 0) / 1000} Mbps? The game keeps running; the picture comes back in a few seconds.`,
+                    `Restart Remote Play at ${(fix.bitrateKbps ?? 0) / 1000} Mbps? The game keeps running; the picture comes back in about 15 s. Play keeps this setting until you change it in Settings › Picture.`,
                   )}
           </p>
           <Button

@@ -211,6 +211,8 @@ interface RpState {
   pipWindow: Window | null;
   start: (t: RpTarget, opts?: { attach?: boolean }) => Promise<void>;
   stop: () => void;
+  /** Stop to start again at once (Play Together stays open). */
+  stopForRestart: () => void;
   setPrefs: (p: Partial<RpPrefs>) => void;
   setKeymap: (k: Record<string, KeyAction> | null) => void;
   setOnScreen: (v: boolean) => void;
@@ -221,6 +223,16 @@ interface RpState {
  *  Picture-in-Picture; video: the browser's video picture in picture (picture only). */
 export type PipKind = "popup" | "document" | "video";
 
+/** Who holds the game's input back now (Settings, the passcode box, the keyboard box). */
+const inputPauses = new Set<string>();
+
+/** While any `owner` has it on, the console gets an idle pad. Each lets go only of its own: the
+ *  keyboard box closing must not hand the pad back under open Settings. */
+export function pauseRpInput(owner: "settings" | "passcode" | "keyboard", on: boolean): void {
+  if (on) inputPauses.add(owner);
+  else inputPauses.delete(owner);
+}
+
 /** Keys held on the picture and a finger on the touchpad: read by the stream every frame. */
 export const rpInput = {
   held: new Set<string>(),
@@ -229,9 +241,11 @@ export const rpInput = {
   touchPad: IDLE_PAD as PadState,
   /** A controller is being mapped: its presses are answers, not play. */
   mapping: false,
-  /** Remote Play's settings are open over the stream: keys, controllers and touch are the
-   *  settings', and the console gets an idle pad until they close. */
-  paused: false,
+  /** Remote Play's settings or a box are open over the stream: keys, controllers and touch are
+   *  theirs, and the console gets an idle pad until they close ([`pauseRpInput`]). */
+  get paused(): boolean {
+    return inputPauses.size > 0;
+  },
   /** The phone's latest motion reading, while motion controls are on. */
   motion: null as MotionReading | null,
 };
@@ -252,6 +266,15 @@ export function rpGamepads(): Array<Gamepad | null> {
   if (typeof window !== "undefined") add(window);
   add(useRemotePlayStore.getState().pipWindow);
   return out;
+}
+
+/** A controller is connected, and neither it nor anything the browser sees has motors to run. */
+export function padsCannotVibrate(
+  pads: ReadonlyArray<Gamepad | null> = rpGamepads(),
+  browserPads: ReadonlyArray<Gamepad | null> = globalThis.navigator?.getGamepads?.() ?? [],
+): boolean {
+  const motors = (g: Gamepad | null) => !!(g as (Gamepad & { vibrationActuator?: unknown }) | null)?.vibrationActuator;
+  return pads.some((g) => !!g?.connected) && !pads.some(motors) && !browserPads.some(motors);
 }
 
 function readPad(): PadState {
@@ -385,6 +408,15 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       onStats: (st) => get().stream === stream && set({ stats: st }),
       onError: (e) => get().stream === stream && set({ error: e }),
       onLight: (rgb) => get().stream === stream && set({ light: rgb }),
+      onHidden: () => {
+        if (get().stream !== stream) return;
+        // Picture in picture is the stream on show: its window has its own keys and focus.
+        const pip = get().pipWindow;
+        if (pip && !pip.closed) return;
+        rpInput.held.clear();
+        rpInput.touch = null;
+        rpInput.touchPad = IDLE_PAD;
+      },
       onKbm: (v) => {
         if (get().stream !== stream) return;
         const kbm = useKbmStore.getState();
@@ -405,6 +437,11 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
     stream.setVolume(prefs.muted ? 0 : prefs.volume);
     set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null, passcode: null });
     await stream.start();
+  },
+
+  stopForRestart() {
+    // A restart with other settings: the engine keeps friends' places through it.
+    get().stream?.stop();
   },
 
   stop() {
@@ -460,7 +497,13 @@ setPadTouchpad(false, () => useRemotePlayStore.getState().stream?.sendPad());
 useRemotePlayStore.subscribe((s) => setPadTouchpad(!!s.stream && s.phase === "playing"));
 
 /** The session the engine is running, if any (it outlives a reload of this page). */
-export async function fetchRunningSession(): Promise<{ host: string | null; playing?: boolean; attached?: boolean }> {
+export async function fetchRunningSession(): Promise<{
+  host: string | null;
+  playing?: boolean;
+  attached?: boolean;
+  /** It was told to stop and is finishing (a wake or handshake it can't cut short at once). */
+  stopping?: boolean;
+}> {
   try {
     const r = await fetch(`${getEngineUrl()}/api/ps5/rp/session`);
     return r.ok ? await r.json() : { host: null };

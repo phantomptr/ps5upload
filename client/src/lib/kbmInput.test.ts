@@ -18,8 +18,7 @@ import {
   readKbmStatus,
   routeFor,
   wheelNotches,
-  type KbmMode,
-} from "./kbmInput";
+  type KbmMode, kbmBlockReason } from "./kbmInput";
 
 const BOTH = { mouse: true, keyboard: true };
 const NONE = { mouse: false, keyboard: false };
@@ -299,5 +298,14 @@ describe("the stream bar's mode button", () => {
       icon: "controller",
       blocked: "needs_loader",
     });
+  });
+});
+
+describe("why keyboard and mouse are off", () => {
+  // A stream started from rest is up before the PS5's helper: not an old helper.
+  it("does not blame the helper's version when the helper does not answer", () => {
+    expect(kbmBlockReason({ mouse: false, keyboard: false, supported: false, reason: "unreachable" })).toBe("unreachable");
+    expect(kbmBlockReason({ mouse: false, keyboard: false, supported: false, reason: "helper_old" })).toBe("helper_old");
+    expect(kbmBlockReason({ mouse: false, keyboard: false, supported: false })).toBe("helper_old");
   });
 });

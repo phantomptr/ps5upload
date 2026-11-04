@@ -17,6 +17,8 @@ export interface JoinGuest {
   reconnectingLeftS: number | null;
   rttMs: number | null;
   connected: boolean;
+  /** Pictures were skipped in the last few seconds: their connection can't keep up. */
+  behind: boolean;
 }
 
 export interface JoinHostState {
@@ -83,6 +85,7 @@ export function readJoinState(v: unknown): JoinHostState {
       reconnectingLeftS: num(g.reconnect_left_s) ?? num(g.reconnecting_left_s),
       rttMs: num(g.rtt_ms),
       connected: g.connected !== false,
+      behind: g.behind === true,
     }))
     .sort((a, b) => a.player - b.player);
   // Friends asking to join: the engine's `pending` (`asks` kept for an older one).

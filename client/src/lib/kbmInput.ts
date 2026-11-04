@@ -486,10 +486,14 @@ export interface KbmCapsInfo extends KbmCaps {
 }
 
 /** Why no keyboard & mouse mode can be picked on this console. */
-export type KbmBlock = "helper_old" | "needs_loader" | "companion_failed" | "unavailable";
+export type KbmBlock = "unreachable" | "helper_old" | "needs_loader" | "companion_failed" | "unavailable";
 
 /** The text for each KbmBlock: the i18n key and its English. */
 export const KBM_BLOCK_TEXT: Readonly<Record<KbmBlock, { key: string; en: string }>> = {
+  unreachable: {
+    key: "rp_kbm_unreachable",
+    en: "The PS5's helper isn't running yet. Keyboard and mouse come on when it's back.",
+  },
   helper_old: { key: "rp_kbm_helper_old", en: "Update the PS5 helper to use a keyboard and mouse." },
   needs_loader: { key: "rp_kbm_needs_loader", en: "Needs a payload loader on port 9021" },
   companion_failed: {
@@ -501,6 +505,8 @@ export const KBM_BLOCK_TEXT: Readonly<Record<KbmBlock, { key: string; en: string
 
 /** Why `caps` rules out every mode but Controller (no caps yet, or a reason the engine gave). */
 export function kbmBlockReason(caps: KbmCapsInfo | null): KbmBlock {
+  // Not asked yet is not an old helper: after a wake it is often not back at the first frame.
+  if (caps?.reason === "unreachable") return "unreachable";
   if (caps && caps.supported === false) return "helper_old";
   if (caps?.reason === "helper_old") return "helper_old";
   if (caps?.reason === "vinput_needs_loader") return "needs_loader";

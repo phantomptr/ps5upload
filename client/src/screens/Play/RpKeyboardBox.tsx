@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Keyboard } from "lucide-react";
 
 import { useTr } from "../../state/lang";
-import { rpInput, useRemotePlayStore } from "../../state/remotePlay";
+import { pauseRpInput, rpInput, useRemotePlayStore } from "../../state/remotePlay";
 import { KeyboardTyper } from "../../lib/rpKeyboard";
 
 /** Presses and keys in the box are the box's: never the picture's (it would take the focus
@@ -23,7 +23,7 @@ const MAX_CHARS = 1000;
 
 /** The game gets an idle pad while the box has the keys, and its own input back after. */
 function pauseInput(on: boolean): void {
-  rpInput.paused = on;
+  pauseRpInput("keyboard", on);
   if (on) {
     rpInput.held.clear();
     rpInput.touch = null;

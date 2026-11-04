@@ -150,7 +150,11 @@ export function QualityNotice() {
       >
         <span className="flex items-center gap-2 font-medium">
           <Spinner size={14} tone="inherit" />
-          {tr("rp_switching", undefined, "Switching to 720p…")}
+          {switching.kind === "wait"
+            ? tr("rp_waiting_free", undefined, "Starting as soon as the PS5 is free…")
+            : switching.kind === "restart"
+              ? tr("golive_fix_restarting", undefined, "Restarting Play…")
+              : tr("rp_switching", undefined, "Switching to 720p…")}
         </span>
         {left !== null && (
           <span className="text-xs text-white/70">

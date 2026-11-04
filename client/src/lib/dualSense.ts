@@ -22,6 +22,8 @@ export interface DualSenseInfo {
   usb: boolean;
   /** Its USB audio device is there, for the haptics. */
   haptics: boolean;
+  /** This computer doesn't let the app open it (Linux with no udev rule for it). */
+  blocked?: boolean;
 }
 
 /** Only the desktop app reads a DualSense natively. */
@@ -34,9 +36,21 @@ export async function findDualSense(): Promise<DualSenseInfo | null> {
   if (!dualSenseCapable()) return null;
   try {
     const info = await invoke<DualSenseInfo>("pad_dualsense_info");
-    return info?.connected ? info : null;
+    // One the app can't open: the console would send effects that are never played.
+    return info?.connected && !info.blocked ? info : null;
   } catch {
     return null;
+  }
+}
+
+/** A DualSense is attached and this computer doesn't let the app open it. */
+export async function dualSenseBlocked(): Promise<boolean> {
+  if (!dualSenseCapable()) return false;
+  try {
+    const info = await invoke<DualSenseInfo>("pad_dualsense_info");
+    return !!info?.connected && !!info.blocked;
+  } catch {
+    return false;
   }
 }
 
