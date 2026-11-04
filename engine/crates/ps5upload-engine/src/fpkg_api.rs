@@ -2041,7 +2041,7 @@ pub(crate) async fn fpkg_extract_handler(
         .into_response();
     }
     let out = output_dir(req.output_dir.as_deref());
-    if let Err(e) = std::fs::create_dir_all(&out) {
+    if let Err(e) = tokio::fs::create_dir_all(&out).await {
         return json_err(StatusCode::BAD_REQUEST, format!("{}: {e}", out.display()))
             .into_response();
     }

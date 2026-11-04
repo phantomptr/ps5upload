@@ -544,6 +544,11 @@ fn remove_copies(roots: &[PathBuf]) -> Vec<(PathBuf, std::io::Error)> {
 
 /// Folder the engine copies server files into when the caller names none.
 fn default_copy_root() -> PathBuf {
+    super::store::staging_root().join("ps5upload-remote")
+}
+
+/// Where an older version copied to, swept like the rest so nothing stays behind in it.
+fn legacy_copy_root() -> PathBuf {
     std::env::temp_dir().join("ps5upload-remote")
 }
 
@@ -556,6 +561,7 @@ const STALE_COPY_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 
 /// another engine's copy in progress is safe.
 pub fn sweep_stale_copies() {
     sweep_stale_copies_in(&default_copy_root(), STALE_COPY_AGE);
+    sweep_stale_copies_in(&legacy_copy_root(), STALE_COPY_AGE);
 }
 
 fn sweep_stale_copies_in(root: &Path, max_age: std::time::Duration) {

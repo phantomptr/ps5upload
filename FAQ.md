@@ -536,8 +536,9 @@ phone or another computer?" below walks through it from start to finish.
   `PS5UPLOAD_BROWSE_ROOTS=/pkgs` (comma-separated for several) so the picker opens there.
   In **Upload & Install**, **From this device…** stages files from your browser machine on the
   engine, then opens the normal review before sending to the PS5. Keep the tab open until
-  staging finishes. This needs free space on the engine; temporary uploads expire after seven
-  days. A package staged this way offers **Stream & install** on its card like any other.
+  staging finishes. This needs free space on the engine, in its data folder (`/data` in the Docker
+  image; `PS5UPLOAD_STAGING_DIR` puts it elsewhere); temporary uploads expire after seven days. A
+  package staged this way offers **Stream & install** on its card like any other.
 - An upload keeps running when you close the tab; reopening shows it. Only one tab runs the queue.
 - **Payloads → Send payload** accepts an ELF from your browser machine and forwards it through
   the engine to the selected console's loader (9021 by default). Sending bytes does not confirm

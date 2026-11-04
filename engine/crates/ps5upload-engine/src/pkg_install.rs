@@ -428,6 +428,11 @@ mod persist {
 /// engine's other scratch state; each upload gets a UUID subdir so concurrent
 /// uploads and the same filename don't collide.
 fn pkg_upload_dir() -> std::path::PathBuf {
+    crate::remote::store::staging_root().join("ps5upload-pkg-upload")
+}
+
+/// Where an older version staged uploads, swept like the rest so nothing stays behind in it.
+fn legacy_pkg_upload_dir() -> std::path::PathBuf {
     std::env::temp_dir().join("ps5upload-pkg-upload")
 }
 
@@ -438,7 +443,12 @@ fn pkg_upload_dir() -> std::path::PathBuf {
 const PKG_UPLOAD_STALE_AGE: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
 
 fn cleanup_stale_pkg_uploads() {
-    let Ok(entries) = std::fs::read_dir(pkg_upload_dir()) else {
+    cleanup_stale_uploads_in(&pkg_upload_dir());
+    cleanup_stale_uploads_in(&legacy_pkg_upload_dir());
+}
+
+fn cleanup_stale_uploads_in(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     let now = std::time::SystemTime::now();
@@ -499,26 +509,36 @@ struct RemoveOnDrop(Option<PathBuf>);
 impl Drop for RemoveOnDrop {
     fn drop(&mut self) {
         if let Some(dir) = self.0.take() {
-            let _ = std::fs::remove_dir_all(dir);
+            // Tens of GB on a slow disk: not on an async worker, which serves every console.
+            match tokio::runtime::Handle::try_current() {
+                Ok(rt) => {
+                    rt.spawn_blocking(move || std::fs::remove_dir_all(dir));
+                }
+                Err(_) => {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+            }
         }
     }
 }
 
-async fn pkg_upload_handler(form: axum::extract::Multipart) -> Response<Body> {
-    stage_browser_upload(form, true).await
+async fn pkg_upload_handler(headers: HeaderMap, form: axum::extract::Multipart) -> Response<Body> {
+    stage_browser_upload(headers, form, true).await
 }
 
-async fn file_upload_handler(form: axum::extract::Multipart) -> Response<Body> {
-    stage_browser_upload(form, false).await
+async fn file_upload_handler(headers: HeaderMap, form: axum::extract::Multipart) -> Response<Body> {
+    stage_browser_upload(headers, form, false).await
 }
 
 async fn stage_browser_upload(
+    headers: HeaderMap,
     mut form: axum::extract::Multipart,
     packages_only: bool,
 ) -> Response<Body> {
     use tokio::io::AsyncWriteExt;
 
-    cleanup_stale_pkg_uploads();
+    // Removes week-old uploads, tens of GB each on a slow disk: not on an async worker.
+    tokio::task::spawn_blocking(cleanup_stale_pkg_uploads);
     let id = Uuid::new_v4();
     let dir = pkg_upload_dir().join(id.to_string());
     if let Err(e) = tokio::fs::create_dir_all(&dir).await {
@@ -5653,6 +5673,77 @@ mod host_net_tests {
 #[cfg(test)]
 mod browser_file_intake_tests {
     use super::*;
+
+    /// The size is known from the first line: a package that cannot fit is refused before any of
+    /// its tens of gigabytes arrive, not half-way through with a raw I/O error.
+    #[tokio::test]
+    async fn an_upload_that_cannot_fit_is_refused_before_its_bytes_arrive() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let state = Arc::new(PkgInstallState::restored());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server =
+            tokio::spawn(async move { axum::serve(listener, router(state)).await.unwrap() });
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        let huge = u64::MAX / 2;
+        stream
+            .write_all(
+                format!(
+                    "POST /api/pkg/upload HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+                     Content-Type: multipart/form-data; boundary=boundary\r\n\
+                     Content-Length: {huge}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut reply = Vec::new();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            stream.read_to_end(&mut reply),
+        )
+        .await;
+        server.abort();
+        read.expect("answered with no body sent").unwrap();
+        let reply = String::from_utf8_lossy(&reply);
+        assert!(reply.starts_with("HTTP/1.1 507"), "{reply}");
+        assert!(reply.contains("Not enough space"), "{reply}");
+    }
+
+    /// Two clicks at once: both get the one link. The second used to meet the first's new session
+    /// and be refused as "an install of this exact package is already running".
+    #[tokio::test]
+    async fn two_copy_link_clicks_at_once_get_one_link() {
+        let dir = std::env::temp_dir().join(format!("ps5u-link-race-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pkg = dir.join("game.pkg");
+        let mut bytes: Vec<u8> = (0..8192).map(|i| (i * 31 + 7) as u8).collect();
+        bytes[..4].copy_from_slice(b"\x7FCNT");
+        std::fs::write(&pkg, &bytes).unwrap();
+        let state = Arc::new(PkgInstallState::restored());
+        let create = || {
+            let (state, path) = (state.clone(), pkg.to_string_lossy().into_owned());
+            tokio::spawn(async move {
+                let req = LinkCreateRequest {
+                    ps5_addr: "127.0.0.1".into(),
+                    path,
+                };
+                let resp = link_create_handler(State(state), Json(req)).await;
+                let status = resp.status();
+                let body = axum::body::to_bytes(resp.into_body(), 1 << 16)
+                    .await
+                    .unwrap();
+                let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                (status, v)
+            })
+        };
+        let (a, b) = (create(), create());
+        let ((a_status, a), (b_status, b)) = (a.await.unwrap(), b.await.unwrap());
+        assert_eq!(a_status, StatusCode::OK, "{a}");
+        assert_eq!(b_status, StatusCode::OK, "{b}");
+        assert_eq!(a["id"], b["id"], "one file, one link");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     #[tokio::test]
     async fn a_browser_can_stage_a_non_package_file_and_remove_only_its_upload() {
         let state = Arc::new(PkgInstallState::restored());
