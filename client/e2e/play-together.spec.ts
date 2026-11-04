@@ -601,3 +601,37 @@ test("the app joins a friend from Play, and asks before starting its own Play", 
   await page.getByRole("radio", { name: "Join a friend" }).click();
   await expect(page.getByTestId("join-player")).toBeVisible();
 });
+
+test.describe("a friend's phone in the app", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  test("the buttons sit under the picture, and Full screen is easy to hit", async ({ page }) => {
+    await consoleSetUp(page);
+    await page.addInitScript(() => window.localStorage.setItem("ps5upload.join.name", "Ben"));
+    await page.route(
+      (url) => url.pathname.startsWith("/api/"),
+      async (route) => {
+        const path = new URL(route.request().url()).pathname;
+        const body = path === "/api/version" ? { version: "10.8.0", caps: {} } : path === "/api/ps5/rp/session" ? { host: null } : {};
+        await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+      },
+    );
+    await page.routeWebSocket(/\/api\/join\/relay/, (ws) => {
+      ws.onMessage((m) => {
+        if (typeof m === "string" && m.includes("hello")) ws.send(JSON.stringify({ stage: "joined", player: 2, token: "APP", hevc: false }));
+      });
+    });
+    await page.goto(`/play?join=${encodeURIComponent(LINK)}`, { waitUntil: "domcontentloaded" });
+    await page.getByTestId("join-invite-go").tap({ timeout: 30_000 });
+    const full = page.getByTestId("join-fullscreen-below");
+    await expect(full).toBeVisible({ timeout: 30_000 });
+    // Big enough for a thumb, and not over the picture.
+    const box = (await full.boundingBox())!;
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    const stage = (await page.getByTestId("join-stage-view").boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(stage.y + stage.height - 1);
+    await expect(page.getByTestId("join-leave-below")).toBeVisible();
+    await full.tap();
+    await expect(full).toHaveCount(0);
+  });
+});

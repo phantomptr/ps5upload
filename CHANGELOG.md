@@ -10,6 +10,13 @@ What's new in ps5upload, written for humans.
   using their controller; until someone picked a user, the card with the buttons stayed in the
   middle of a phone's screen with no way to hide it. It now shows the ask once, and **Hide** (or
   press and hold) puts it away at once.
+- **Full screen is easy to reach for a friend on a phone.** Joining inside the app on a phone,
+  the game's buttons crowded the small picture. They now sit in a bar under it, with a big
+  **Full screen** button, sound and **Leave**, and turning the phone sideways goes full screen,
+  as the host's player does.
+- **Friends' PS button works by default.** A friend's PS and Create buttons (and holding PS)
+  now reach the PS5 like the host's. To stop a stray press pulling everyone out of the game,
+  turn on **Block PS & Create for friends** in the Play Together panel.
 
 ## 11.0.7
 

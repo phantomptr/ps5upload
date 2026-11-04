@@ -49,7 +49,7 @@ describe("Play Together host state", () => {
     expect(s.guests).toEqual([
       { id: 1, name: "?", player: 0, status: "playing", reconnectingLeftS: null, rttMs: null, connected: true },
     ]);
-    expect(s.settings.blockSystemButtons).toBe(true);
+    expect(s.settings.blockSystemButtons).toBe(false);
     expect(readJoinState(null).helperOk).toBe(true);
     // An older engine's names still read.
     const old = readJoinState({ asks: [{ id: 2, name: "Eve" }], guests: [{ id: 3, player: 2, status: "reconnecting", reconnecting_left_s: 9 }] });

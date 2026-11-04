@@ -43,7 +43,7 @@ export const EMPTY_JOIN: JoinHostState = {
   invite: null,
   guests: [],
   asks: [],
-  settings: { blockSystemButtons: true, maxPlayers: 3 },
+  settings: { blockSystemButtons: false, maxPlayers: 3 },
   helperOk: true,
   reason: null,
   ws: null,
@@ -95,7 +95,7 @@ export function readJoinState(v: unknown): JoinHostState {
     guests,
     asks,
     settings: {
-      blockSystemButtons: s.block_system_buttons !== false,
+      blockSystemButtons: s.block_system_buttons === true,
       maxPlayers: num(s.max_players) ?? 3,
     },
     helperOk: o.helper_ok !== false,

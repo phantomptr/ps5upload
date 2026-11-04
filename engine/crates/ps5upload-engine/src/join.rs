@@ -204,6 +204,7 @@ pub(crate) fn parse_pad(b: &[u8]) -> Option<(u32, PadState)> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Settings {
     /// Take PS and Create from guests who are playing (they keep them while picking a user).
+    /// Off unless the host turns it on: a friend's PS (and holding it) works like the host's.
     pub block_system_buttons: bool,
     /// Guests at most (1-3).
     pub max_players: u8,
@@ -212,7 +213,7 @@ pub(crate) struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            block_system_buttons: true,
+            block_system_buttons: false,
             max_players: MAX_GUESTS,
         }
     }
@@ -3349,6 +3350,9 @@ mod tests {
     #[test]
     fn ps_and_create_are_blocked_once_playing_not_while_picking_a_user() {
         let mut p = party();
+        // Off by default: a friend's PS works like the host's.
+        assert!(!p.settings.block_system_buttons);
+        p.settings.block_system_buttons = true;
         let t = Instant::now();
         let id = admit(&mut p, "A", t);
         let (tx, _rx) = conn();
@@ -4262,6 +4266,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn guests_join_play_come_back_and_are_let_go() {
         let _turn = PARTY_TESTS.lock().await;
+        // The host turned blocking on (off by default): PS and Create are taken once playing.
+        *SETTINGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settings {
+            block_system_buttons: true,
+            ..Settings::default()
+        });
         let console = "10.77.0.1";
         let f = Arc::new(FakeHelper::default());
         set_helper(console, f.clone());
