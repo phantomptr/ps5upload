@@ -1728,6 +1728,8 @@ export interface HwInfo {
 }
 
 export interface HwTemps {
+  /** Set when only the basic temperatures could be read: why the full read failed. */
+  extended_error?: string;
   /** celsius */
   cpu_temp: number;
   /** celsius */

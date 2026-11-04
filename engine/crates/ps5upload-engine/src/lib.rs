@@ -3294,6 +3294,34 @@ async fn ps5_hw_info(
     }
 }
 
+/// The fallback read's deadline: with the full read's 30 s, it stays inside the app's 60 s.
+const HW_TEMPS_FALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The full read, or when it fails or stalls the basic temperatures with `extended_error` saying
+/// why the rest is missing. The helper answers one reply for a read: a single getter that fails or
+/// hangs (seen while a game runs) would otherwise hide the temperatures it read fine.
+fn hw_temps_with_fallback(
+    full: impl FnOnce() -> anyhow::Result<HwTemps>,
+    basic: impl FnOnce() -> anyhow::Result<HwTemps>,
+    has_more_than_basic: bool,
+) -> anyhow::Result<HwTemps> {
+    let e = match full() {
+        Ok(t) => return Ok(t),
+        Err(e) if !has_more_than_basic => return Err(e),
+        Err(e) => e,
+    };
+    let why = format!("{e:#}");
+    crate::log_warn!("hw_temps: the full read failed, trying the basic one: {why}");
+    match basic() {
+        Ok(mut t) => {
+            t.extended_error = Some(why);
+            Ok(t)
+        }
+        // The helper is not answering at all: the first error says so best.
+        Err(_) => Err(e),
+    }
+}
+
 async fn ps5_hw_temps(
     State(state): State<AppState>,
     Query(q): Query<HwTempsQuery>,
@@ -3301,11 +3329,16 @@ async fn ps5_hw_temps(
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
     let extended = q.extended.unwrap_or(0) != 0;
     let clocks = q.clocks.unwrap_or(0) != 0;
-    let r: Result<HwTemps, anyhow::Error> =
-        tokio::task::spawn_blocking(move || hw_temps_with_clocks(&addr, extended, clocks))
-            .await
-            .map_err(anyhow::Error::from)
-            .and_then(|r| r);
+    let r: Result<HwTemps, anyhow::Error> = tokio::task::spawn_blocking(move || {
+        hw_temps_with_fallback(
+            || hw_temps_with_clocks(&addr, extended, clocks),
+            || ps5upload_core::hw::hw_temps_basic_within(&addr, HW_TEMPS_FALLBACK_TIMEOUT),
+            extended || clocks,
+        )
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
@@ -12994,6 +13027,73 @@ mod helpers_tests {
         assert_eq!(v["resumed_bytes"].as_u64(), Some(60));
         let done = serde_json::json!({"status": "done"});
         assert_eq!(merge_live_notes(Some(&n), done.clone()), done);
+    }
+
+    #[test]
+    fn ntp_servers_are_names_or_addresses_only() {
+        for good in [
+            "pool.ntp.org",
+            "time.apple.com",
+            "ntp",
+            "192.168.1.1",
+            "fe80::1",
+        ] {
+            assert!(valid_ntp_server(good), "{good}");
+        }
+        for bad in [
+            "",
+            "http://pool.ntp.org",
+            "pool.ntp.org/x",
+            "pool.ntp.org:123",
+            "a b",
+            "-bad.example",
+            "bad..example",
+            "[::1]",
+        ] {
+            assert!(!valid_ntp_server(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn test_only_routes_answer_only_when_debug_is_on() {
+        assert!(!debug_routes_allowed(None));
+        assert!(!debug_routes_allowed(Some("0")));
+        assert!(debug_routes_allowed(Some("1")));
+        assert_eq!(no_such_route().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn a_failed_full_sensor_read_still_shows_the_temperatures() {
+        let temps = || {
+            Ok(HwTemps {
+                cpu_temp: 41,
+                ..Default::default()
+            })
+        };
+        // The full read works: nothing else runs, nothing is marked.
+        let t = hw_temps_with_fallback(temps, || panic!("no second read"), true).unwrap();
+        assert_eq!(t.extended_error, None);
+        // It fails: the temperatures, and why the rest is missing.
+        let t =
+            hw_temps_with_fallback(|| Err(anyhow::anyhow!("mgmt timed out")), temps, true).unwrap();
+        assert_eq!(t.cpu_temp, 41);
+        assert_eq!(t.extended_error.as_deref(), Some("mgmt timed out"));
+        // Nothing answers: the first error, not a second one about the fallback.
+        let e = hw_temps_with_fallback(
+            || Err(anyhow::anyhow!("refused")),
+            || Err(anyhow::anyhow!("also refused")),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(e.to_string(), "refused");
+        // The basic read was already what was asked for: no point asking twice.
+        let e = hw_temps_with_fallback(
+            || Err(anyhow::anyhow!("refused")),
+            || panic!("no second read"),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(e.to_string(), "refused");
     }
 
     #[test]

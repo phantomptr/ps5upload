@@ -319,6 +319,7 @@ connection_step3_ready: "PS5 is ready",
 
 // Hardware screen — sensor row labels and hints
 hw_sensor_no_reading: "The console returned no reading for this sensor",
+hw_sensors_partial: "Only the temperatures could be read. The other sensors did not answer. Press Read sensors to try again.",
 hw_m2_not_installed: "No M.2 drive installed or sensor unavailable",
 hw_sensor_on_demand: "Click Read sensors for a live reading",
 hw_cpu_usage: "CPU usage",

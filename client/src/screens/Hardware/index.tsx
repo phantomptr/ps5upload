@@ -355,6 +355,8 @@ export default function HardwareScreen() {
   const sensorBusy = useRef(false);
   const [sensorLoading, setSensorLoading] = useState(false);
   const [sensorReadAt, setSensorReadAt] = useState<number | null>(null);
+  // The last read got only the basic temperatures: one of the other sensors did not answer.
+  const [sensorsPartial, setSensorsPartial] = useState(false);
 
   // Guard flag: if a previous refresh is still pending, skip new
   // ticks. Prevents overlapping requests if the PS5 is slow to
@@ -381,6 +383,7 @@ export default function HardwareScreen() {
     setDrives(null);
     setError(null);
     setSensorReadAt(null);
+    setSensorsPartial(false);
   }, [host]);
 
   const refresh = useCallback(async () => {
@@ -469,6 +472,7 @@ export default function HardwareScreen() {
       ]);
       if (probe.isStale()) return;
       setTemps(next);
+      setSensorsPartial(!!next.extended_error);
       if (nextDrives) setDrives(nextDrives);
       setSensorReadAt(Date.now());
     } catch (e) {
@@ -553,6 +557,15 @@ export default function HardwareScreen() {
 
       {/* Only surface the error card when the payload IS up — otherwise
           the ConnectionGate below already explains the state. */}
+      {sensorsPartial && (
+        <p className="mb-4 text-xs text-[var(--color-muted)]">
+          {tr(
+            "hw_sensors_partial",
+            undefined,
+            "Only the temperatures could be read. The other sensors did not answer. Press Read sensors to try again.",
+          )}
+        </p>
+      )}
       {error && payloadStatus === "up" && (
         <div className="mb-4">
           <ErrorCard
