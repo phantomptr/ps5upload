@@ -167,3 +167,57 @@ pub async fn spa_fallback(req: Request) -> Response {
     // directly to e.g. `/library`.
     spa_response("index.html")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn hashed_assets_are_kept_for_good_and_the_shell_is_asked_for_each_time() {
+        assert_eq!(
+            cache_control_for("assets/index-abc123.js"),
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(cache_control_for("index.html"), "no-cache");
+        assert_eq!(cache_control_for("favicon.ico"), "no-cache");
+    }
+
+    #[test]
+    fn a_path_is_decoded_as_the_bundle_names_files() {
+        assert_eq!(
+            decode_path("/assets/my%20font.woff2"),
+            "/assets/my font.woff2"
+        );
+        assert_eq!(decode_path("/plain.js"), "/plain.js");
+        // Not an escape, or not text: as it came, and simply not found.
+        assert_eq!(decode_path("/100%.js"), "/100%.js");
+        assert_eq!(decode_path("/a%zz.js"), "/a%zz.js");
+        assert_eq!(decode_path("/a%ff.js"), "/a%ff.js");
+    }
+
+    async fn status_of(path: &str) -> StatusCode {
+        let req = Request::builder()
+            .uri(path)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        spa_fallback(req).await.status()
+    }
+
+    /// A missing font or script must not come back as the shell with a 200, and a page of the
+    /// app must still get the shell.
+    #[tokio::test]
+    async fn a_missing_file_is_a_404_and_a_page_is_the_shell() {
+        assert_eq!(
+            status_of("/assets/gone-abc123.js").await,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            status_of("/assets/my%20gone.woff2").await,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(status_of("/library").await, StatusCode::OK);
+        assert_eq!(status_of("/games/PPSA01234").await, StatusCode::OK);
+        assert_eq!(status_of("/api/nope").await, StatusCode::NOT_FOUND);
+    }
+}

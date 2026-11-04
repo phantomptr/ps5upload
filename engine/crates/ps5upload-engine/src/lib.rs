@@ -13079,6 +13079,38 @@ mod helpers_tests {
         assert_eq!(merge_live_notes(Some(&n), done.clone()), done);
     }
 
+    /// With two consoles, a request that names none used to act on the default one with a 200.
+    #[tokio::test]
+    async fn requests_that_change_a_console_must_name_it() {
+        macro_rules! refused {
+            ($handler:ident, $body:tt) => {{
+                let req = serde_json::from_value(serde_json::json!($body)).unwrap();
+                let status = $handler(Json(req)).await.into_response().status();
+                assert_eq!(status, StatusCode::BAD_REQUEST, stringify!($handler));
+            }};
+        }
+        refused!(ps5_fs_mkdir, { "path": "/data/x" });
+        refused!(ps5_fs_mkdir, { "addr": "", "path": "/data/x" });
+        refused!(ps5_fs_mkdir, { "addr": ":9113", "path": "/data/x" });
+        refused!(ps5_usb_eject, { "mount_point": "/mnt/usb0" });
+        refused!(ps5_save_close, {});
+        refused!(ps5_smp_checkout_finish, {});
+        refused!(ps5_smp_image_rw_finish, {});
+        refused!(user_create_handler, { "name": "x" });
+        for status in [
+            activity_reset_handler(Query(AddrQuery { addr: None }))
+                .await
+                .into_response()
+                .status(),
+            notif_clear_handler(Query(AddrQuery { addr: None }))
+                .await
+                .into_response()
+                .status(),
+        ] {
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        }
+    }
+
     #[test]
     fn ntp_servers_are_names_or_addresses_only() {
         for good in [

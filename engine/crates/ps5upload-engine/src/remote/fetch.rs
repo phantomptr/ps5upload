@@ -938,6 +938,68 @@ mod tests {
         assert!(!dest_dir.join("a.pkg").exists());
     }
 
+    /// A folder is listed inside its job, so what only the listing can tell ends the job.
+    #[tokio::test]
+    async fn a_folder_gets_its_job_at_once_and_no_room_ends_it_with_the_reason() {
+        let (r, id) = setup(&[("/game/a.bin", &[1u8; 4096])]);
+        let (d, jobs) = deps(tiny);
+        let dest_dir = crate::remote::store::test_dir();
+        let (code, out) = json_of(
+            start_fetch(
+                r,
+                d,
+                FetchBody {
+                    path: format!("remote://{id}/game"),
+                    dest_dir: Some(dest_dir.display().to_string()),
+                },
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(code, StatusCode::ACCEPTED);
+        let job: Uuid = out["job_id"].as_str().unwrap().parse().unwrap();
+        let JobState::Failed { error, .. } = wait(&jobs, job).await else {
+            panic!("the job must fail");
+        };
+        assert!(error.contains("Not enough space"), "{error}");
+        assert!(!dest_dir.join("game").exists());
+    }
+
+    /// Cancel works from the moment the job has an id, and reads as a cancel: the client compares
+    /// the text.
+    #[tokio::test]
+    async fn a_folder_being_listed_can_be_cancelled() {
+        let (r, id) = setup(&[("/game/a.bin", &[1u8; 16])]);
+        let (d, jobs) = deps(plenty);
+        let dest_dir = crate::remote::store::test_dir();
+        let (code, out) = json_of(
+            start_fetch(
+                r,
+                d,
+                FetchBody {
+                    path: format!("remote://{id}/game"),
+                    dest_dir: Some(dest_dir.display().to_string()),
+                },
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(code, StatusCode::ACCEPTED);
+        let job: Uuid = out["job_id"].as_str().unwrap().parse().unwrap();
+        assert!(crate::signal_transfer_cancel(job));
+        let JobState::Failed { error, .. } = wait(&jobs, job).await else {
+            panic!("the job must end as cancelled");
+        };
+        assert_eq!(error, "cancelled");
+        assert!(!dest_dir.join("game").exists());
+    }
+
+    #[test]
+    fn a_cancelled_walk_keeps_the_text_the_client_compares() {
+        let e = crate::remote::walk_cancelled();
+        assert_eq!(crate::remote::api::error_with_hint(&e), "cancelled");
+    }
+
     #[tokio::test]
     async fn a_failed_copy_leaves_nothing_behind() {
         let mem = Arc::new(MemFs::new(&[("/a.pkg", &[1u8; 100])]));
