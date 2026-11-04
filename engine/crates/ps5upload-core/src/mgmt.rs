@@ -706,7 +706,7 @@ mod tests {
         let e = call("127.0.0.1:1", m::HW_INFO, b"").unwrap_err();
         assert_eq!(
             e.to_string(),
-            "payload rejected HW_INFO: helper_not_ava1: The PS5 helper is not running or is an old version. Desktop app: send it from the Connection screen, or click Update helper. Web UI: start the ps5upload payload on the console with your payload loader, or click Update helper."
+            format!("payload rejected HW_INFO: helper_not_ava1: {HELPER_NOT_AVA1_MESSAGE}")
         );
         assert!(e.downcast_ref::<MgmtError>().is_some());
 
