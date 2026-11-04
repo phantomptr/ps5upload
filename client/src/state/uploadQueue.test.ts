@@ -9,6 +9,7 @@ const materializeRemote = vi.fn(async (p: string) => p);
 vi.mock("../lib/materialize", () => ({
   releaseCopy: (...a: unknown[]) => releaseCopy(...(a as [])),
   materializeRemote: (p: string) => materializeRemote(p),
+  existingCopyOf: () => null,
 }));
 vi.mock("../lib/ensurePayloadCurrent", () => ({
   ensurePayloadCurrent: vi.fn(async () => {}),
@@ -1417,7 +1418,11 @@ describe("resumeFailedRecoverable", () => {
     expect(byId(recoverB).status).toBe("failed"); // other host → untouched
     expect(startHost).toHaveBeenCalledTimes(1);
     // Nobody clicked for this run: it must not send a helper the user stopped (#471).
-    expect(startHost).toHaveBeenCalledWith("192.168.1.10:9113", { unattended: true });
+    // And limited to the rows it reset: what a user merely queued stays waiting.
+    expect(startHost).toHaveBeenCalledWith("192.168.1.10:9113", {
+      onlyIds: [recoverA],
+      unattended: true,
+    });
   });
 
   it("no-ops and never starts the queue when autoResume is off", async () => {

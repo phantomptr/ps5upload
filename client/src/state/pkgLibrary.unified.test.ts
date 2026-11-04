@@ -206,7 +206,7 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
     const o = statusToOutcome(
       status({ phase: "failed", verdict: "failed", reason: "stalled", hint: "the console stopped fetching" }),
     );
-    expect(o.errMessage).toMatch(/^The PS5 stopped fetching/);
+    expect(o.errMessage).toMatch(/^The PS5 has not asked for the package/);
   });
 
   it("a regressed patch gets the update-specific copy, not a raw error", () => {

@@ -6064,7 +6064,7 @@ export interface InstallStatus {
   retry_with_stream?: boolean;
   /** With `reason: "destructive_guard"`: what the install would replace, "game" or "update". */
   replaces?: string | null;
-  /** The package's type as the engine came to know it (`PS4DP`, `PS5GD`…). */
+  /** What the engine took the package to be (`PS4DP`, `PS5GD`…). */
   package_type?: string | null;
   /** Windows only: the local adapter facing the console and what Windows says about it, set
    *  when the console could not reach this computer. Absent elsewhere and from an older engine. */

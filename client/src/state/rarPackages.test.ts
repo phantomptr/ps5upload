@@ -139,7 +139,7 @@ describe("installRarPackages", () => {
     // The unpack asked for the package allow-list, into the console's package folder.
     const call = vi.mocked(startTransferRar).mock.calls[0];
     expect(call[1]).toBe("/user/data/ps5upload/pkg_library/rar_Multi");
-    expect(call[5]).toEqual(["!*.pkg"]);
+    expect(call[5]).toEqual(["!*.pkg", "!*.fpkg"]);
     expect(installFromConsolePath.mock.calls.map((c) => c[0])).toEqual([
       "/user/data/ps5upload/pkg_library/rar_Multi/Game/Base.pkg",
       "/user/data/ps5upload/pkg_library/rar_Multi/Update/Patch.pkg",
@@ -255,7 +255,11 @@ describe("space and clean-up", () => {
   it("refuses only what certainly cannot fit; past the estimate it warns", () => {
     const d = "/user/data/ps5upload/pkg_library/rar_X";
     const v = [vol("/user", 100, { allocatable_bytes: 100, likely_fits_bytes: 80 })];
-    expect(archiveSpaceCheck(v, d, 50).kind).toBe("fits");
+    expect(archiveSpaceCheck(v, d, 30).kind).toBe("fits");
+    // The install lands beside the unpacked copy on internal storage: it warns, nothing refuses.
+    expect(archiveSpaceCheck(v, d, 50).kind).toBe("tight");
+    const ext = [vol("/mnt/ext0", 100, { allocatable_bytes: 100, likely_fits_bytes: 80 })];
+    expect(archiveSpaceCheck(ext, "/mnt/ext0/pkg/rar_X", 50).kind).toBe("fits");
     expect(archiveSpaceCheck(v, d, 90).kind).toBe("tight");
     expect(archiveSpaceCheck(v, d, 100).kind).toBe("tight");
     expect(archiveSpaceCheck(v, d, 101)).toEqual({ kind: "no_room", need: 101, room: 100, drive: "/user" });
@@ -386,13 +390,13 @@ describe("archives of any kind", () => {
     let call = vi.mocked(startTransferZip).mock.calls[0];
     expect(call[0]).toBe("/x/Bundle.zip");
     expect(call[1]).toBe("/user/data/ps5upload/pkg_library/zip_Bundle");
-    expect(call[4]).toEqual(["!*.pkg"]);
+    expect(call[4]).toEqual(["!*.pkg", "!*.fpkg"]);
 
     r = await installRarPackages({ host: HOST, archivePath: "/x/Bundle.7z" });
     expect(r.ok).toBe(true);
     call = vi.mocked(startTransfer7z).mock.calls[0];
     expect(call[1]).toBe("/user/data/ps5upload/pkg_library/7z_Bundle");
-    expect(call[4]).toEqual(["!*.pkg"]);
+    expect(call[4]).toEqual(["!*.pkg", "!*.fpkg"]);
     expect(vi.mocked(startTransferRar)).not.toHaveBeenCalled();
   });
 });

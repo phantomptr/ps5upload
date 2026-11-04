@@ -29,7 +29,7 @@ use axum::{
 use ps5upload_core::pkg_install::PkgInstallStatus;
 use ps5upload_pkg::{
     extract_from_ffpkg, inspect_ffpkg, metadata_from_reader, package_fingerprint_from_reader,
-    parse_pkg, parse_split_pkg, PkgKind, PkgMetadata, SplitPkgMetadata,
+    parse_pkg, parse_split_pkg, PkgMetadata, SplitPkgMetadata,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -1624,9 +1624,6 @@ pub struct InstallStartRequest {
     /// or fall back to "PS4GD". Useful for unknown-magic PKGs where
     /// the user picks the type manually in the UI.
     pub package_type_override: Option<String>,
-    /// Caller-supplied content id, for a source this handler cannot parse.
-    #[serde(default)]
-    pub content_id: Option<String>,
     /// Expected exact source size and sampled identity. Current clients pass
     /// these from the local parser; older clients may omit them, in which case
     /// a staged PS5 path is sampled here before installation.
@@ -1712,7 +1709,7 @@ pub(crate) async fn install_start_handler(
             Err(e) => return json_err(StatusCode::BAD_REQUEST, &e),
         };
 
-    let mut package_type = req
+    let package_type = req
         .package_type_override
         .clone()
         .or_else(|| head_meta.package_type.clone())
@@ -3109,7 +3106,6 @@ async fn remote_probe_handler(Json(req): Json<RemoteProbeRequest>) -> Response<B
         split_root: None,
         remote_url: Some(url.clone()),
         package_type_override: None,
-        content_id: None,
         expected_size: None,
         package_fingerprint: None,
         serve_only: true,
@@ -3177,7 +3173,6 @@ async fn console_probe_handler(Json(req): Json<ConsoleProbeRequest>) -> Response
         split_root: None,
         remote_url: None,
         package_type_override: None,
-        content_id: None,
         expected_size: None,
         package_fingerprint: None,
         serve_only: true,
