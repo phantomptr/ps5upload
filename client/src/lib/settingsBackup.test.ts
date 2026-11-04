@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { applyBundle, buildBundle, pickSlot, trimBundle, type Bundle } from "./settingsBackup";
+import {
+  applyBundle,
+  buildBundle,
+  forConsole,
+  keepLiveWakeKeys,
+  pickSlot,
+  trimBundle,
+  type Bundle,
+} from "./settingsBackup";
 
 // The node test environment has no window: a small in-memory localStorage (as fsLastPath.test).
 function installLocalStorageStub() {
@@ -44,6 +52,67 @@ describe("settings bundles", () => {
     expect(() => applyBundle({ local_storage: { "ps5upload.c": 5 } })).toThrow();
     // Nothing was written by the refused one.
     expect(window.localStorage.getItem("ps5upload.c")).toBeNull();
+  });
+
+  describe("wake keys", () => {
+    const ROSTER = "ps5upload.roster.v1";
+    const roster = (profiles: Record<string, unknown>[]) => JSON.stringify({ profiles, active_id: "a" });
+    const keys = { wake_credential: "111", wake_regist_key: "aa", wake_rp_key: "bb" };
+    const read = (text: string | null) => JSON.parse(text ?? "{}").profiles as Record<string, unknown>[];
+
+    it("a restore without the keys keeps the ones this device has", () => {
+      window.localStorage.setItem(ROSTER, roster([{ id: "a", host: "10.0.0.2", ...keys }]));
+      applyBundle({
+        meta: { secrets_withheld: true },
+        local_storage: { [ROSTER]: roster([{ id: "a", host: "10.0.0.2", name: "Restored" }]) },
+      });
+      const [p] = read(window.localStorage.getItem(ROSTER));
+      expect(p).toMatchObject({ name: "Restored", ...keys });
+    });
+
+    it("a restore that has the keys brings them to a wiped device", () => {
+      applyBundle({
+        meta: {},
+        local_storage: { [ROSTER]: roster([{ id: "a", host: "10.0.0.2", ...keys }]) },
+      });
+      expect(read(window.localStorage.getItem(ROSTER))[0]).toMatchObject(keys);
+    });
+
+    it("matches a console by id, then by address, and never overrides what the backup holds", () => {
+      const live = roster([{ id: "other", host: "10.0.0.2", wake_rp_key: "live" }]);
+      const out = read(
+        keepLiveWakeKeys(roster([{ id: "a", host: "10.0.0.2", wake_regist_key: "kept" }]), live),
+      );
+      expect(out[0]).toMatchObject({ wake_regist_key: "kept", wake_rp_key: "live" });
+      const unrelated = read(keepLiveWakeKeys(roster([{ id: "z", host: "10.0.0.9" }]), live));
+      expect(unrelated[0].wake_rp_key).toBeUndefined();
+    });
+
+    it("leaves text that is no roster as it is", () => {
+      expect(keepLiveWakeKeys("not json", roster([]))).toBe("not json");
+      expect(keepLiveWakeKeys(roster([]), "not json")).toBe(roster([]));
+    });
+
+    it("a console's copy holds only that console's keys", () => {
+      const b: Bundle = {
+        meta: { generated_at_ms: 1, schema: 1 },
+        local_storage: {
+          [ROSTER]: roster([
+            { id: "a", host: "10.0.0.2", ...keys },
+            { id: "b", host: "10.0.0.3", ...keys },
+          ]),
+          "ps5upload.theme": "dark",
+        },
+      };
+      const out = forConsole(b, " 10.0.0.2 ");
+      const [mine, other] = read(out.local_storage[ROSTER]);
+      expect(mine).toMatchObject(keys);
+      expect(other.wake_regist_key).toBeUndefined();
+      expect(other.wake_credential).toBeUndefined();
+      expect(out.local_storage["ps5upload.theme"]).toBe("dark");
+      // The bundle it was made from is not touched: the engine's copy needs it whole.
+      expect(read(b.local_storage[ROSTER])[1]).toMatchObject(keys);
+    });
   });
 
   it("the console copy drops the largest values first to fit", () => {

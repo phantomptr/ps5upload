@@ -368,6 +368,15 @@ pub fn begin(
         );
     }
 
+    // Before the journal: a journal naming a staged image that was there all along would leave a
+    // session nothing can finish. A move never replaces what is already there.
+    if path_exists(addr, &staged_path) {
+        bail!(
+            "{staged_path} is already in the staging folder, left from an earlier edit session. \
+             Move or delete it, then start again."
+        );
+    }
+
     fs_mkdir(addr, &staging_dir).with_context(|| format!("create staging folder {staging_dir}"))?;
     // The journal lives on /data regardless of which volume the image is on,
     // so its directory is a SEPARATE mkdir. Skipping it worked only for images
@@ -441,12 +450,22 @@ pub fn finish(addr: &str) -> Result<CheckoutState> {
         return Ok(state);
     }
 
-    fs_move(addr, &state.staged_path, &state.original_path).with_context(|| {
-        format!(
-            "put {} back so ShadowMount+ can pick it up again",
-            state.original_path
-        )
-    })?;
+    if let Err(e) = fs_move(addr, &state.staged_path, &state.original_path) {
+        if format!("{e:#}").contains("fs_move_exists") {
+            bail!(
+                "{} exists again, so the edited image stays at {}. Delete or move one of them, \
+                 then finish the edit session again.",
+                state.original_path,
+                state.staged_path
+            );
+        }
+        return Err(e).with_context(|| {
+            format!(
+                "put {} back so ShadowMount+ can pick it up again",
+                state.original_path
+            )
+        });
+    }
     clear_state(addr)?;
     Ok(state)
 }

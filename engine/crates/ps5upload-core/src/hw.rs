@@ -47,6 +47,10 @@ pub struct HwInfo {
 /// where any of these are legitimately 0 during normal operation.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HwTemps {
+    /// Set when only the basic temperatures could be read: why the full read failed. Everything
+    /// beyond the temperatures then reads as unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extended_error: Option<String>,
     pub cpu_temp: i32,
     pub soc_temp: i32,
     /// M.2 NVMe expansion slot temperature (°C). Channel 2 of the SoC
@@ -339,6 +343,18 @@ pub fn hw_temps_with_clocks(addr: &str, extended: bool, clocks: bool) -> Result<
     Ok(sanitize_temps(parse_hw_temps(&body)))
 }
 
+/// The basic temperatures alone, with its own deadline: what is left when the full read fails.
+pub fn hw_temps_basic_within(addr: &str, timeout: std::time::Duration) -> Result<HwTemps> {
+    let body = mgmt::call_with(
+        addr,
+        m::HW_TEMPS,
+        m::HW_TEMPS.label,
+        hw_temps_selector(false, false),
+        Some(timeout),
+    )?;
+    Ok(sanitize_temps(parse_hw_temps(&body)))
+}
+
 /// The HW_TEMPS request body. "ufs" = usage + fan + shape (NOT power — see [`hw_temps`]); each
 /// is independently gated payload-side so this set is the verified-safe one. "c" adds the
 /// clocks; an older helper ignores the letter it does not know.
@@ -367,6 +383,7 @@ fn parse_core_list(v: &str) -> Vec<u32> {
 fn parse_hw_temps(body: &[u8]) -> HwTemps {
     let get = parse_kv(body);
     HwTemps {
+        extended_error: None,
         cpu_temp: get("cpu_temp").and_then(|v| v.parse().ok()).unwrap_or(0),
         soc_temp: get("soc_temp").and_then(|v| v.parse().ok()).unwrap_or(0),
         m2_temp: get("m2_temp").and_then(|v| v.parse().ok()).unwrap_or(0),

@@ -206,6 +206,27 @@ import { humanizePs5Error } from "../../lib/humanizeError";
  * moves.
  */
 
+/** The console refused a move or copy because something already has that name. */
+function isMoveExistsError(raw: string): boolean {
+  return /fs_move_exists|fs_copy_dest_exists/.test(raw);
+}
+
+/** What to show for a failed move of `name`. */
+function moveErrorText(
+  tr: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
+  raw: string,
+  name: string,
+): string {
+  if (isMoveExistsError(raw)) {
+    return tr(
+      "fs_move_exists",
+      { name },
+      `"${name}" is already there, so nothing was replaced. Pick another name or delete it first.`,
+    );
+  }
+  return humanizePs5Error(raw) || raw;
+}
+
 interface DirEntry {
   name: string;
   kind: string; // "file" | "dir" | "link" | "other" | "unknown"
@@ -1114,9 +1135,8 @@ export default function FileSystemScreen() {
       );
       return;
     }
-    // Don't silently clobber: the payload's rename() over an existing file
-    // destroys it and reports success. Block when the target name is already
-    // taken in this folder (the Move modal guards this too).
+    // Say so before asking the console, which would refuse an existing name anyway
+    // (`fs_move_exists`). The Move modal guards this too.
     if ((entries ?? []).some((en) => en.name === newName)) {
       setError(
         tr(
@@ -1139,7 +1159,7 @@ export default function FileSystemScreen() {
       await refresh();
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
-      const human = humanizePs5Error(raw) || raw;
+      const human = moveErrorText(tr, raw, newName);
       setError(human);
       pushNotification(
         "error",
@@ -1290,7 +1310,7 @@ export default function FileSystemScreen() {
         okCount++;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        failures.push(`${r.from} → ${r.to}: ${humanizePs5Error(msg) || msg}`);
+        failures.push(`${r.from} → ${r.to}: ${moveErrorText(tr, msg, r.to)}`);
       }
     }
     if (failures.length > 0) {
@@ -2373,7 +2393,7 @@ export default function FileSystemScreen() {
         try {
           if (op === "cut") {
             try {
-              await fsMove(addr, item.path, target, opId);
+              await fsMove(addr, item.path, target, opId, overwrite);
             } catch (e) {
               // Cross-filesystem move failure → fall back to copy + delete.
               // The payload emits "fs_move_cross_mount" for EXDEV; matching
@@ -2421,7 +2441,11 @@ export default function FileSystemScreen() {
           // cancelled, and a "cancelled" entry would look like a
           // failure in the post-op summary.
           if (!msg.includes("cancelled")) {
-            errors.push(`${item.name}: ${msg}`);
+            errors.push(
+              isMoveExistsError(msg)
+                ? moveErrorText(tr, msg, item.name)
+                : `${item.name}: ${msg}`,
+            );
           }
         } finally {
           pollerStopped = true;

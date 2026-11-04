@@ -290,8 +290,20 @@ pub(crate) fn wait_job(job_id: &str) -> Result<(), String> {
     }
 }
 
-/// A transfer to or from `host` is running: a backup would only compete with it.
+/// The install table the router built: installs live in their own state, not in `/api/jobs`.
+static INSTALLS: OnceLock<crate::pkg_install::PkgInstallStateHandle> = OnceLock::new();
+
+pub(crate) fn watch_installs(installs: crate::pkg_install::PkgInstallStateHandle) {
+    let _ = INSTALLS.set(installs);
+}
+
+/// A transfer, an install or a console file job on `host` is running: a backup would only compete
+/// with it. Its management traffic slows an install's disk writes a lot (measured on exFAT: from
+/// 120 to 10 MB/s).
 pub(crate) fn console_busy(host: &str) -> bool {
+    if console_job_running(host, INSTALLS.get()) {
+        return true;
+    }
     let Ok(Value::Array(jobs)) = get("/api/jobs") else {
         return false;
     };
@@ -301,6 +313,14 @@ pub(crate) fn console_busy(host: &str) -> bool {
                 .map(|job| mentions_host(&job.to_string(), host))
                 .unwrap_or(false)
     })
+}
+
+/// A job this engine runs in-process against `host`: no round trip to ask.
+fn console_job_running(
+    host: &str,
+    installs: Option<&crate::pkg_install::PkgInstallStateHandle>,
+) -> bool {
+    crate::helper_stop::is_busy(host) || installs.is_some_and(|i| i.jobs.active_for(host))
 }
 
 /// `text` names `host` as a whole address: `1.2.3.4` is not found in `1.2.3.40`.
@@ -499,6 +519,34 @@ fn set_status(f: impl FnOnce(&mut Status)) {
     f(&mut shared().lock().unwrap_or_else(|e| e.into_inner()).status);
 }
 
+/// Marks a pass running, and clears that however the pass ends. A panic used to leave it set, and
+/// every later tick then returned at once: no automatic backup until the engine restarted, with
+/// no error anywhere.
+struct PassRunning;
+
+impl PassRunning {
+    /// `None`: a pass already runs.
+    fn begin() -> Option<Self> {
+        let mut g = shared().lock().unwrap_or_else(|e| e.into_inner());
+        if g.status.running {
+            return None;
+        }
+        g.status.running = true;
+        Some(Self)
+    }
+}
+
+impl Drop for PassRunning {
+    fn drop(&mut self) {
+        set_status(|st| {
+            st.running = false;
+            if std::thread::panicking() {
+                st.last_error = Some("the backup pass stopped unexpectedly".to_string());
+            }
+        });
+    }
+}
+
 /// One pass over every console in the settings. Does nothing when the feature is off, no folder
 /// is set, or a pass is already running.
 pub fn run_pass() -> Result<(), String> {
@@ -506,13 +554,9 @@ pub fn run_pass() -> Result<(), String> {
     if !s.enabled || s.dir.trim().is_empty() {
         return Ok(());
     }
-    {
-        let mut g = shared().lock().unwrap_or_else(|e| e.into_inner());
-        if g.status.running {
-            return Ok(());
-        }
-        g.status.running = true;
-    }
+    let Some(_running) = PassRunning::begin() else {
+        return Ok(());
+    };
     let mut done: Done = load(DONE_FILE);
     let (mut backed_up, mut failed, mut last_error) = (0u32, 0u32, None::<String>);
     for host in &s.hosts {
@@ -585,17 +629,15 @@ pub(crate) fn running_of<'a>(host: &str, titles: &[&'a str]) -> Result<Option<&'
 /// list measures it; one of an emulator as deep as its saves are measured (and one loose in a
 /// folder, as only its own entries there).
 fn fingerprint(host: &str, entry: &SaveEntry) -> Result<Vec<(String, u64, i64)>, String> {
-    let list = |p: &str| -> Result<Vec<Value>, String> {
-        let v = get(&format!(
-            "/api/ps5/list-dir?addr={}&path={}&offset=0&limit=512",
-            enc(host),
-            enc(p)
-        ))?;
-        Ok(v.get("entries")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default())
-    };
+    fingerprint_with(&|p| folder_entries(host, p), entry)
+}
+
+/// [`fingerprint`] over `list`, which answers a folder's whole listing: a write past the first
+/// page has to change the fingerprint as well.
+fn fingerprint_with(
+    list: &dyn Fn(&str) -> Result<Vec<Value>, String>,
+    entry: &SaveEntry,
+) -> Result<Vec<(String, u64, i64)>, String> {
     let depth = if crate::emulator_saves::is_emulator_save(entry) {
         crate::emulator_saves::DEPTH
     } else {
@@ -605,7 +647,7 @@ fn fingerprint(host: &str, entry: &SaveEntry) -> Result<Vec<(String, u64, i64)>,
     let folder = place.as_ref().map_or(entry.path.as_str(), |p| p.folder);
     let keep = |name: &str| place.as_ref().is_none_or(|p| p.holds(name));
     let mut out = Vec::new();
-    fingerprint_in(&list, folder, "", depth, &keep, &mut out)?;
+    fingerprint_in(list, folder, "", depth, &keep, &mut out)?;
     out.sort();
     Ok(out)
 }
@@ -1808,6 +1850,70 @@ mod tests {
         let due = needing_backup("h", &saves, &Done::new(), 2000, &BTreeSet::new());
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].title_id, "PPSA01234");
+    }
+
+    #[test]
+    fn a_console_file_job_or_an_install_makes_the_console_busy() {
+        let host = "192.0.2.77";
+        let installs = std::sync::Arc::new(crate::pkg_install::PkgInstallState::default());
+        assert!(!console_job_running(host, Some(&installs)));
+        assert!(!console_job_running(host, None));
+
+        let job = crate::helper_stop::enter(host);
+        assert!(console_job_running(host, None));
+        drop(job);
+        assert!(!console_job_running(host, None));
+
+        let install = installs.jobs.begin(host).unwrap();
+        assert!(console_job_running(host, Some(&installs)));
+        assert!(!console_job_running("192.0.2.78", Some(&installs)));
+        installs.jobs.finish(&install);
+        assert!(!console_job_running(host, Some(&installs)));
+    }
+
+    #[test]
+    fn a_write_past_the_first_page_changes_the_fingerprint() {
+        // A save folder with more files than one listing page: the snapshot's "nothing changed
+        // while it was copied" check has to see all of them.
+        let fingerprint_when_last_file_is = |size: u64| {
+            let list = move |_: &str| {
+                all_entries(&|offset| {
+                    let page: Vec<Value> = (offset..300)
+                        .take(LIST_PAGE as usize)
+                        .map(|i| {
+                            let size = if i == 299 { size } else { 1 };
+                            json!({ "name": format!("f{i:03}"), "kind": "file", "size": size })
+                        })
+                        .collect();
+                    Ok(json!({ "entries": page }))
+                })
+            };
+            let entry = save("/user/home/1/savedata_prospero/PPSA01234", 1000);
+            fingerprint_with(&list, &entry).unwrap()
+        };
+        let before = fingerprint_when_last_file_is(1);
+        assert_eq!(before.len(), 300);
+        assert_ne!(before, fingerprint_when_last_file_is(2));
+    }
+
+    #[test]
+    fn a_pass_that_panics_does_not_stay_running() {
+        let panicked = std::panic::catch_unwind(|| {
+            let _running = PassRunning::begin().expect("no other pass in this test");
+            panic!("a pass died");
+        });
+        assert!(panicked.is_err());
+        let running = PassRunning::begin();
+        assert!(running.is_some(), "the next pass can start");
+        assert!(PassRunning::begin().is_none(), "one at a time");
+        drop(running);
+        assert!(
+            !shared()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .status
+                .running
+        );
     }
 
     /// A save folder with more entries than one page holds is listed whole, so a restore

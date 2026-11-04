@@ -63,7 +63,7 @@ fn console_files(addr: &str, root: &str, kind: DownloadKind) -> Result<Vec<(Stri
 }
 
 fn remote_err(e: RemoteError) -> anyhow::Error {
-    anyhow!("{e}")
+    anyhow!("{}", remote::api::error_with_hint(&e))
 }
 
 /// Makes `dir` and every missing parent on the server.

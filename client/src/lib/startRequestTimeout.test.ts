@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { fetchStart, START_TIMEOUT_MS } from "./startRequestTimeout";
+import { fetchStart, isRequestTimeout, START_TIMEOUT_MS } from "./startRequestTimeout";
+
+describe("isRequestTimeout", () => {
+  it("knows a timeout from any other failure", () => {
+    expect(isRequestTimeout("engine request failed: error sending request: operation timed out")).toBe(true);
+    expect(isRequestTimeout("signal timed out")).toBe(true);
+    expect(isRequestTimeout("TimeoutError")).toBe(true);
+    expect(isRequestTimeout("engine HTTP 502: payload rejected FS_LIST")).toBe(false);
+  });
+});
 
 describe("fetchStart", () => {
   it("gives a start request a time limit", async () => {

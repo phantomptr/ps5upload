@@ -490,7 +490,7 @@
   "cw_files_smb_err_full": "Too many network shares are saved. Remove one first.",
   "cw_files_smb_err_generic": "Something went wrong with the network share.",
   "cw_files_smb_err_loader": "Network shares need the ELF loader on port 9021, and it is not running.",
-  "cw_files_smb_err_no_share": "The server has no share with that name.",
+  "cw_files_smb_err_no_share": "The server has no share with that name. The share is the first folder name only (for example Media in \\\\nas\\Media\\Games); folders inside it go in Folder to open.",
   "cw_files_smb_err_no_space": "There is not enough free space for this copy.",
   "cw_files_smb_err_not_supported": "The server does not allow that on this share.",
   "cw_files_smb_err_timeout": "The server took too long to answer.",

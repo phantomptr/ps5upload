@@ -687,14 +687,28 @@ fn pass_host(
     Ok(())
 }
 
-/// Marks a pass running; false when one already is.
-fn begin() -> bool {
+/// Holds a pass running and clears that however the pass ends: a panic used to leave it set, and
+/// every later tick then returned at once, with no backup and no error until a restart.
+struct PassRunning;
+
+impl Drop for PassRunning {
+    fn drop(&mut self) {
+        let mut g = lock();
+        g.state.status.running = false;
+        if std::thread::panicking() {
+            g.state.status.last_error = Some("the backup pass stopped unexpectedly".to_string());
+        }
+    }
+}
+
+/// Marks a pass running; `None` when one already is.
+fn begin() -> Option<PassRunning> {
     let mut g = lock();
     if g.state.status.running {
-        return false;
+        return None;
     }
     g.state.status.running = true;
-    true
+    Some(PassRunning)
 }
 
 fn finish(trigger: &str, tally: Tally, checked: bool) {
@@ -725,9 +739,9 @@ pub fn tick() {
     if s.mode == Mode::Off || s.target.trim().is_empty() {
         return;
     }
-    if !begin() {
+    let Some(_running) = begin() else {
         return;
-    }
+    };
     let mut tally = Tally::default();
     let now = now_ms();
     let mut checked = false;
@@ -804,9 +818,9 @@ pub fn run_now() -> Result<(), String> {
     if s.target.trim().is_empty() {
         return Err("choose a server folder for the backups first".into());
     }
-    if !begin() {
+    let Some(_running) = begin() else {
         return Ok(());
-    }
+    };
     let mut tally = Tally::default();
     let mut checked = false;
     for host in hosts_of(&s) {
@@ -1071,6 +1085,20 @@ mod tests {
             mtime,
             kind: "ps5".into(),
         }
+    }
+
+    #[test]
+    fn a_pass_that_panics_does_not_stay_running() {
+        let panicked = std::panic::catch_unwind(|| {
+            let _running = begin().expect("no other pass in this test");
+            panic!("a pass died");
+        });
+        assert!(panicked.is_err());
+        let running = begin();
+        assert!(running.is_some(), "the next pass can start");
+        assert!(begin().is_none(), "one at a time");
+        drop(running);
+        assert!(!lock().state.status.running);
     }
 
     #[test]

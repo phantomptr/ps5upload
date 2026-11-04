@@ -131,13 +131,13 @@ export const remoteApi = {
     path: string,
   ): Promise<import("./ps5").FolderInspection> {
     const r = await call<
-      { ok: boolean; error?: string } & import("./ps5").FolderInspection
+      { ok: boolean; error?: string; hint?: string; host_key?: string } & import("./ps5").FolderInspection
     >(
       "POST",
       "/inspect-folder",
       { path },
     );
-    if (!r.ok) throw new RemoteApiError(r.error ?? "Could not read that folder.");
+    if (!r.ok) throw new RemoteApiError(r.error ?? "Could not read that folder.", r.hint, r.host_key);
     return { result: r.result, wrapped_hint: r.wrapped_hint };
   },
   async acceptHostKey(id: string, fingerprint: string): Promise<void> {

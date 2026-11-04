@@ -11,6 +11,7 @@ import {
   blocksOf,
   cachedFolder,
   forgetWalks,
+  isWalkBusy,
   rememberWalk,
   runWalk,
   type DuBlock,
@@ -226,7 +227,15 @@ export function DiskUsagePanel({
       {error && (
         <ErrorCard
           title={tr("disk_usage_failed", undefined, "Couldn't read this folder")}
-          detail={humanizePs5Error(error) || error}
+          detail={
+            isWalkBusy(error)
+              ? tr(
+                  "disk_usage_busy",
+                  undefined,
+                  "Another folder on this PS5 is being counted. Wait for it to finish, then try again.",
+                )
+              : humanizePs5Error(error) || error
+          }
           action={
             <Button variant="secondary" size="sm" onClick={refresh}>
               {tr("disk_usage_retry", undefined, "Retry")}
