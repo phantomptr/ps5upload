@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ScrollText,
   Trash2,
@@ -389,7 +389,7 @@ function FilterPill({
   );
 }
 
-function LogRow({ entry }: { entry: LogEntry }) {
+const LogRow = memo(function LogRow({ entry }: { entry: LogEntry }) {
   const [expanded, setExpanded] = useState(false);
   const meta = LEVEL_META[entry.level];
   const hasDetail = !!entry.detail;
@@ -430,4 +430,4 @@ function LogRow({ entry }: { entry: LogEntry }) {
       )}
     </li>
   );
-}
+});

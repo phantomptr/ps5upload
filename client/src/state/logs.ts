@@ -32,7 +32,13 @@ export interface LogEntry {
  * inline chips.
  */
 const LOG_CAP = 500;
+/** Debug and trace lines have their own smaller share of the ring. The engine writes a debug line
+ *  per HTTP request; sharing one cap, they pushed a warning out in about two minutes (the sidebar's
+ *  error badge went down by itself, and a web UI bug report had nothing else to read). */
+const QUIET_CAP = 300;
 let nextId = 0;
+
+const isQuiet = (level: LogLevel): boolean => level === "debug" || level === "trace";
 
 /** One line for `appendMany`. */
 export interface LogInput {
@@ -99,17 +105,29 @@ export const useLogsStore = create<LogsState>((set, get) => ({
       detail: stringifyDetail(i.detail),
     }));
     const { entries: current, errorCount } = get();
-    const overflow = Math.max(0, current.length + added.length - LOG_CAP);
-    // Only the dropped lines need counting, not the whole ring.
-    const dropped =
-      overflow > 0
-        ? countErrors(current.slice(0, Math.min(overflow, current.length)))
-        : 0;
-    const merged = [...current, ...added].slice(overflow);
-    const keptAdded = added.slice(Math.max(0, overflow - current.length));
+    let merged = [...current, ...added];
+    let quiet = 0;
+    for (const e of merged) if (isQuiet(e.level)) quiet++;
+    // Oldest first, each kind against its own cap.
+    let dropQuiet = Math.max(0, quiet - QUIET_CAP);
+    let dropLoud = Math.max(0, merged.length - quiet - LOG_CAP);
+    let droppedErrors = 0;
+    if (dropQuiet > 0 || dropLoud > 0) {
+      merged = merged.filter((e) => {
+        if (isQuiet(e.level)) {
+          if (dropQuiet === 0) return true;
+          dropQuiet--;
+          return false;
+        }
+        if (dropLoud === 0) return true;
+        dropLoud--;
+        if (e.level === "error") droppedErrors++;
+        return false;
+      });
+    }
     set({
       entries: merged,
-      errorCount: errorCount - dropped + countErrors(keptAdded),
+      errorCount: errorCount + countErrors(added) - droppedErrors,
     });
     // Mirror to the durable on-disk log (gated by the configured level) so a
     // bug report can package a time window even after a crash. Best-effort.

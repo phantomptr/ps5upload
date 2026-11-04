@@ -108,22 +108,31 @@ async function tick() {
   }
 }
 
-/** Start the poller. Idempotent: calling twice is a no-op. */
+/** Start the poller. Idempotent: calling twice is a no-op. The next read is set when the last one
+ *  has answered: with a fixed timer, an answer slower than a second meant two reads from the same
+ *  cursor, and every line in them twice. */
 export function installEngineLogBridge() {
   if (running) return;
   running = true;
-  const interval = setInterval(tick, POLL_INTERVAL_MS);
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout>;
+  const loop = () => {
+    void tick().finally(() => {
+      if (!stopped) timer = setTimeout(loop, POLL_INTERVAL_MS);
+    });
+  };
+  timer = setTimeout(loop, POLL_INTERVAL_MS);
 
   // Vite HMR cleanup: when this module is re-evaluated (file save in
   // dev), `import.meta.hot.dispose` runs BEFORE the new module
-  // evaluates. Clearing the old interval here prevents timer
+  // evaluates. Clearing the old timer here prevents timer
   // accumulation across saves. Without this, each save in dev
   // doubles the engine-log poll rate, which over a long dev session
   // would multi-count log entries (each timer's `tick()` advances
   // the SAME `nextSince` cursor by the entries it sees).
   //
   // In production builds `import.meta.hot` is undefined and the
-  // dispose call is a typeof-guarded no-op — the interval runs for
+  // dispose call is a typeof-guarded no-op — the loop runs for
   // the lifetime of the renderer page (which exits when the user
   // closes the desktop window).
   //
@@ -135,7 +144,8 @@ export function installEngineLogBridge() {
   };
   if (meta.hot) {
     meta.hot.dispose(() => {
-      clearInterval(interval);
+      stopped = true;
+      clearTimeout(timer);
       running = false;
     });
   }
