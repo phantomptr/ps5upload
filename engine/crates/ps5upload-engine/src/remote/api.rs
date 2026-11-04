@@ -410,13 +410,14 @@ pub(crate) async fn test_saved(r: &Remote, id: &str) -> Response {
 
 /// The form's secret, or — for an edit that did not retype it — the saved one, but only while
 /// the form still points at the server that secret was saved for. Otherwise editing the host
-/// and pressing Test would send the NAS password to whatever host was typed.
+/// and pressing Test would send the NAS password to whatever host was typed. Stricter than Save,
+/// which keeps a password across a port fix: this one sends it now, to a port nobody has saved yet.
 fn form_secret(r: &Remote, id: Option<&str>, conn: &Connection, secret: Option<Secret>) -> Secret {
     if let Some(s) = secret {
         return s;
     }
     id.and_then(|id| r.store.get(id))
-        .filter(|(saved, _)| super::store::same_machine(saved, conn))
+        .filter(|(saved, _)| super::store::same_machine(saved, conn) && saved.port == conn.port)
         .map(|(_, s)| s)
         .unwrap_or(Secret::None)
 }
@@ -982,6 +983,20 @@ mod tests {
             json!({"id": id, "connection": {"name":"NAS","protocol":"smb","host":"10.0.0.5","share":"games","user":"me"}}),
         );
         assert!(body(test_form(&r, same).await).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("a password"));
+        // Only the host's capitals changed: still that server.
+        let mut named = nas_form();
+        named.connection.host = "NAS.local".into();
+        let named = body(add_connection(&r, named).await).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let respelt = form(
+            json!({"id": named, "connection": {"name":"NAS","protocol":"smb","host":" nas.LOCAL ","share":"games","user":"me"}}),
+        );
+        assert!(body(test_form(&r, respelt).await).await["error"]
             .as_str()
             .unwrap()
             .contains("a password"));

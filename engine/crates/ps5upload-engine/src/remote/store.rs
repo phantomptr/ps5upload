@@ -609,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn test_and_save_agree_on_what_is_the_same_machine() {
+    fn a_port_or_the_hosts_capitals_are_still_the_same_machine() {
         let saved = conn("NAS", Protocol::Smb);
         let same = |edit: &dyn Fn(&mut Connection)| {
             let mut c = saved.clone();
