@@ -1161,6 +1161,18 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/backup_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-backup-selftest
 	@echo "✓ a snapshot restores byte for byte, the newest five are kept, the list stays valid and inside its buffer"
+	@echo "Running file replace self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-atomic-file-selftest \
+		$(PAYLOAD_DIR)/tests/atomic_file_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-atomic-file-selftest
+	@echo "✓ a replaced file is on disk before its rename, and a failure leaves the old one"
+	@echo "Running PSN sign-in backup self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-profile-np-selftest \
+		$(PAYLOAD_DIR)/tests/profile_np_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-profile-np-selftest
+	@echo "✓ a sign-in backup restores byte for byte, stays the first one, and a damaged one writes nothing wrong"
 	@echo "Running JSON string escape self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-json-escape-selftest \

@@ -76,6 +76,7 @@
 #include "fan_servo.h"
 #include "json_escape.h"
 #include "user_guard.h"
+#include "atomic_file.h"
 #include "sigpipe_guard.h"
 #include "path_policy.h"
 #include "cross_device.h"
@@ -494,22 +495,6 @@ static int mgmt_reply(uint16_t frame_type, const void *body, uint64_t body_len) 
     return mgmt_capture_frame(frame_type, body, body_len);
 }
 
-
-/* Loop until `len` bytes have been written (EINTR retried). 0 on success, -1 on a hard error. */
-static int write_full(int fd, const void *buf, size_t len) {
-    const unsigned char *p = (const unsigned char *)buf;
-    size_t written = 0;
-    while (written < len) {
-        ssize_t w = write(fd, p + written, len - written);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        if (w == 0) return -1;
-        written += (size_t)w;
-    }
-    return 0;
-}
 
 /* Creates a joinable worker thread with a bounded 512 KiB stack (the FreeBSD default is several MiB and the
  * console's per-process memory budget is small). Falls back to the default stack if attribute setup fails. */
@@ -9264,23 +9249,11 @@ static void profile_sync_online_json_firstname(uint32_t uid, const char *name) {
         return;
     }
 
-    /* Atomic replace: write a sibling tmp then rename over the original so a
-     * crash mid-write can't leave a truncated online.json. */
+    /* A sibling tmp on disk before the rename, so a crash can't leave a truncated online.json. */
     char tmp[300];
     snprintf(tmp, sizeof(tmp), "%s.ps5up-tmp", path);
-    int wf = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (wf < 0) {
-        free(out);
-        return;
-    }
-    int wr = write_full(wf, out, (size_t)w);
-    close(wf);
+    (void)atomic_file_write(path, tmp, out, (size_t)w, 0644);
     free(out);
-    if (wr != 0) {
-        (void)unlink(tmp);
-        return;
-    }
-    if (rename(tmp, path) != 0) (void)unlink(tmp);
 }
 
 static int handle_profile_set_local_username(const char *body) {
