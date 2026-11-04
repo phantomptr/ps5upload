@@ -4,6 +4,21 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.0.3
+
+- **Invites open straight into the game.** Opening a Play Together invite on a phone with the app
+  closed could land on the last screen used with nothing filled in. The app now picks the invite
+  up however it was opened, and asks only for your name (the last one used is filled in): one tap
+  on **Join**.
+- **True full screen for friends.** A friend's Leave and Full screen buttons no longer cover the
+  on-screen controller. In full screen (and on the browser page) they hide after 3 seconds; tap the
+  picture away from the controller, move the mouse, press Esc or the controller's menu button to
+  bring them back. Leave is always one tap away.
+- **Scan QR no longer covers the link** you paste in Join a friend.
+- **Updates wait for every transfer (For #660).** An update downloading in the background waited
+  for the upload queue only; it now also waits while any upload, copy, install or backup runs in
+  Activity.
+
 ## 11.0.2
 
 - **No more green picture on some Linux PCs (For #656).** On some Linux PCs, the Linux app's fast

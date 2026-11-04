@@ -6998,6 +6998,8 @@ helper_mismatch_boot_copy: "你的 PS5 启动了为开机保留的旧版助手�
 "join_code_label": "或输入短代码",
 "join_code_unknown": "附近没有人用这个代码主持游戏。请核对代码，或粘贴链接。",
 "join_scan": "扫描 QR 码",
+"join_invite_title": "加入 {host} 的游戏",
+"join_show_controls": "显示控制按钮",
 "join_scan_hint": "将相机对准好友屏幕上的 QR 码。",
 "join_scan_failed": "相机未能打开。请改为粘贴链接。",
 "join_scan_denied": "PS5Upload 需要使用相机来扫描二维码。请点“重试”并允许，或在设置中打开相机权限。",

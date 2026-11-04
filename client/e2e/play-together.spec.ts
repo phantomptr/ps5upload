@@ -376,6 +376,21 @@ test.describe("a friend's phone", () => {
     await page.getByTestId("join-guide-ok").tap();
     await page.getByRole("button", { name: "✕" }).tap();
     await expect.poll(() => frames.some((f) => f[5] === 1)).toBe(true);
+
+    // Leave and Full screen sit in the middle of the picture, clear of the controller's buttons,
+    // then hide after a quiet moment; the controller's menu button brings them back.
+    const bar = page.getByTestId("join-bar");
+    await expect(bar).toHaveAttribute("data-shown", "0", { timeout: 6_000 });
+    await page.getByTestId("rp-menu-handle").tap();
+    await expect(bar).toHaveAttribute("data-shown", "1");
+    const card = (await bar.boundingBox())!;
+    const parts = ["L1", "R1", "L2", "R2", "Touchpad", "PS", "Options", "Create", "↑", "↓", "←", "→", "△", "□", "○", "✕"];
+    for (const name of parts) {
+      const b = (await page.getByLabel(name, { exact: true }).first().boundingBox())!;
+      const apart = card.x + card.width <= b.x || b.x + b.width <= card.x || card.y + card.height <= b.y || b.y + b.height <= card.y;
+      expect(apart, `the buttons overlap ${name}`).toBe(true);
+    }
+    await expect(bar).toHaveAttribute("data-shown", "0", { timeout: 6_000 });
   });
 });
 
@@ -450,6 +465,38 @@ test("the host stopping keeps the friend's place until they play again", async (
   back();
   await expect(page.getByTestId("join-host-away")).toHaveCount(0);
   await expect(page.getByTestId("join-player")).toBeVisible();
+});
+
+test("an invite opened in the app asks only for the name, filled in from last time", async ({ page }) => {
+  await consoleSetUp(page);
+  await page.addInitScript(() => window.localStorage.setItem("ps5upload.join.name", "Ben"));
+  await page.route(
+    (url) => url.pathname.startsWith("/api/"),
+    async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      const body = path === "/api/version" ? { version: "10.8.0", caps: {} } : path === "/api/ps5/rp/session" ? { host: null } : {};
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+    },
+  );
+  const hellos: Array<Record<string, unknown>> = [];
+  await page.routeWebSocket(/\/api\/join\/relay/, (ws) => {
+    ws.onMessage((m) => {
+      if (typeof m === "string" && m.includes("hello")) {
+        hellos.push((JSON.parse(m) as { hello: Record<string, unknown> }).hello);
+        ws.send(JSON.stringify({ stage: "joined", player: 2, token: "APP", hevc: false }));
+      }
+    });
+  });
+
+  await page.goto(`/play?join=${encodeURIComponent(LINK)}`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("join-invite-title")).toHaveText("Join Ann's game", { timeout: 30_000 });
+  await expect(page.getByTestId("join-invite-name")).toHaveValue("Ben");
+  await expect(page.getByTestId("join-link")).toHaveCount(0);
+  await page.getByTestId("join-invite-name").fill("Benny");
+  await page.getByTestId("join-invite-go").click();
+  await expect(page.getByTestId("join-player")).toHaveText("Playing at Ann's · You are Player 2", { timeout: 30_000 });
+  expect(hellos[0]).toEqual({ name: "Benny", invite: INVITE });
+  expect(await page.evaluate(() => window.localStorage.getItem("ps5upload.join.name"))).toBe("Benny");
 });
 
 test("the app joins a friend from Play, and asks before starting its own Play", async ({ page }) => {

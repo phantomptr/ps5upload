@@ -7343,6 +7343,8 @@ helper_mismatch_boot_copy: "A PS5 a segédprogram egy régebbi, induláshoz tár
 "join_code_label": "Vagy a rövid kód",
 "join_code_unknown": "A közelben senki sem hosztol ezzel a kóddal. Ellenőrizd, vagy illeszd be a linket.",
 "join_scan": "QR beolvasása",
+"join_invite_title": "Csatlakozás {host} játékához",
+"join_show_controls": "Vezérlők megjelenítése",
 "join_scan_hint": "Irányítsd a kamerát a barátod képernyőjén lévő QR-kódra.",
 "join_scan_failed": "A kamera nem nyílt meg. Illeszd be inkább a linket.",
 "join_scan_denied": "A PS5Uploadnak kamera kell a kód beolvasásához. Nyomd meg az Újra gombot és engedélyezd, vagy kapcsold be a kamerát a beállításokban.",

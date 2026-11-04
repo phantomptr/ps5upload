@@ -7351,6 +7351,8 @@ helper_mismatch_boot_copy: "Your PS5 started an older copy of the helper that it
 "join_code_label": "Or the short code",
 "join_code_unknown": "No one nearby is hosting with that code. Check it, or paste the link.",
 "join_scan": "Scan QR",
+"join_invite_title": "Join {host}'s game",
+"join_show_controls": "Show controls",
 "join_scan_hint": "Point the camera at the QR code on your friend's screen.",
 "join_scan_failed": "The camera didn't open. Paste the link instead.",
 "join_scan_denied": "PS5Upload needs the camera to scan the code. Press Try again and allow it, or turn on the camera in settings.",

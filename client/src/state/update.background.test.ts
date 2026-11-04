@@ -357,3 +357,14 @@ describe("closed to the tray", () => {
     expect(await titles()).toHaveLength(1);
   });
 });
+
+describe("busyTasks (#660)", () => {
+  it("holds the update back while any data-moving task runs", async () => {
+    const { busyTasks } = await import("./update");
+    expect(busyTasks([{ kind: "upload-dir", status: "running" }])).toBe(true);
+    expect(busyTasks([{ kind: "pkg-install", status: "queued" }])).toBe(true);
+    expect(busyTasks([{ kind: "upload-dir", status: "done" }])).toBe(false);
+    expect(busyTasks([{ kind: "icon-fetch", status: "running" }])).toBe(false);
+    expect(busyTasks([])).toBe(false);
+  });
+});
