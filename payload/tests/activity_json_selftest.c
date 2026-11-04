@@ -136,6 +136,39 @@ int main(void) {
     check(strstr(buf, "\"title_id\":\"CUSA11111\",\"name\"") == NULL,
           "a title absent from app.db gets no name key, rather than \"\"");
 
+    /* ── the clock moved back during a session ───────────────────────── */
+    printf("clock moved back mid-session\n");
+    record_launch("CUSA22222");
+    {
+        entry_t *e = find_entry("CUSA22222");
+        /* Started and last launched two hours ahead of the clock as it reads now, last seen before
+         * its own start: what a step back leaves (this app sets the clock; NTP can step it). */
+        e->session_started_ts += 7200;
+        e->last_launch_ts = e->session_started_ts;
+        e->last_seen_ts = e->session_started_ts - 3600;
+        assert(activity_get_json(buf, sizeof(buf), &written) == 0);
+        check(strstr(buf, "\"total_seconds\":1844") == NULL,
+              "the live total of a session that started ahead of the clock does not underflow");
+        record_launch("CUSA22222");
+        check(e->launches == 2, "a launch after the step is a launch, not a bounce");
+        check(e->total_seconds == 0, "a span that runs backwards banks nothing");
+    }
+
+    /* ── a total an older helper saved after underflowing ────────────── */
+    printf("underflowed total on disk\n");
+    {
+        entry_t *e = find_entry("CUSA22222");
+        e->total_seconds = 18446744073709551000ull;
+        e->session_started_ts = 0;
+        save_state();
+        e->total_seconds = 0;
+        g_count = 0;
+        load_state();
+        e = find_entry("CUSA22222");
+        check(e != NULL, "the title is still there after the reload");
+        check(e && e->total_seconds == 0, "the impossible total is dropped at load");
+    }
+
     /* ── 3. play time carries a name ────────────────────────────────── */
     printf("play-time name join\n");
     assert(activity_db_query_json("play_time", buf, sizeof(buf), &written) == 0);
