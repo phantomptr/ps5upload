@@ -8,8 +8,8 @@
 //! macOS/Linux, producing a split-brain user experience where the
 //! Changelog screen works on one platform and errors out on another.
 //!
-//! Embedding adds a few hundred KB to the binary (the two files
-//! together; the FAQ alone is ~2000 lines) — small against the desktop
+//! Embedding adds under a megabyte to the binary (the two files
+//! together) — small against the desktop
 //! binary with its embedded engine — in exchange for "always works, no
 //! matter how the app is packaged." Updates to CHANGELOG/FAQ require a
 //! rebuild, which is how release cuts already work.

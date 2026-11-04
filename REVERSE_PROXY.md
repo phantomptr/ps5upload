@@ -1,5 +1,9 @@
 # Reverse proxy for the self-hosted web UI
 
+A proxy with TLS is also how **Play works in a browser on another device**. Browsers only give a
+page the video decoder on `https://` (or on `localhost`), so `http://<nas>:19113` can open the whole
+app except Play. Over plain http, play with the desktop or phone app instead.
+
 Use the published web UI image unchanged. `PS5UPLOAD_BASE_URL` is a **URL path prefix**,
 such as `/ps5/`, not a hostname or a full URL. Leave it unset for a dedicated hostname. It is
 read when the engine starts, so it needs no rebuild. A value that is not a path is ignored with a
@@ -45,14 +49,21 @@ server {
 }
 ```
 
-Forward the `Host` header exactly as above. The engine compares it with the browser's
-`Origin` to refuse cross-site requests, and nginx rewrites `Host` by default, so without
-that line every browser request fails with a 403 that names the two values. A proxy that has to
-rewrite `Host` can send what the browser asked for in `X-Forwarded-Host` instead.
+Three of those lines matter more than they look:
 
-Without the `Upgrade` and `Connection` lines, every socket fails and the page only shows a dropped
-connection. Other proxies that handle all this by themselves: Caddy
-(`reverse_proxy 192.168.1.10:19113`) and `tailscale serve`.
+- `Upgrade` and `Connection`: Play, the phone controller, watching and Play Together all run on
+  WebSockets, and nginx does not forward those two headers unless told to. Without them the file
+  screens work, and every socket fails with only a dropped connection on the page.
+- `Host $http_host`, not `$host`: `$http_host` keeps the port. The engine compares the browser's
+  `Origin` with `Host` and answers `403` with the two values when they differ, so `$host` breaks on
+  any port other than 443 and 80. A proxy that has to rewrite `Host` can send what the browser asked
+  for in `X-Forwarded-Host` instead.
+- Use a certificate the browser trusts: your own CA installed on each device, or a name with a real
+  certificate. One you only clicked past a warning for can still stop the WebSockets (not tested in
+  every browser).
+
+Other proxies that handle all this by themselves: Caddy (`reverse_proxy 192.168.1.10:19113`) and
+`tailscale serve`.
 
 Buffering off keeps the live answers live: the engine marks its event streams
 `X-Accel-Buffering: no`, but uploads from the browser need `proxy_request_buffering off` too.
@@ -139,7 +150,8 @@ Forward the prefix unchanged, with **no trailing slash** on nginx's `proxy_pass`
 location = /ps5 { return 308 /ps5/; }
 location /ps5/ {
     proxy_pass http://192.168.1.10:19113;
-    # Include the same proxy headers, buffering, size and timeout settings above.
+    # Include the same proxy headers (Upgrade and Connection too), buffering, size and timeout
+    # settings as above.
 }
 ```
 

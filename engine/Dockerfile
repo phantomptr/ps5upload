@@ -84,6 +84,7 @@ RUN cargo build --locked --release -p ps5upload-engine -p ps5upload-unrar
 RUN mkdir -p /rootfs/tmp /rootfs-data/data && chmod 1777 /rootfs/tmp /rootfs-data/data
 
 FROM scratch
+COPY LICENSE /LICENSE
 COPY --from=builder /build/engine/target/release/ps5upload-engine /ps5upload-engine
 # The engine looks for the RAR helper next to its own binary.
 COPY --from=builder /build/engine/target/release/ps5upload-unrar /ps5upload-unrar

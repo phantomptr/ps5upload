@@ -71,7 +71,7 @@ describe("More's sidebar switch", () => {
 
 describe("More's pin switch", () => {
   it("pins from every row, on phones too", () => {
-    const pin = button(row("/files"), "Pin File System");
+    const pin = button(row("/files"), "Pin Files");
     expect(pin).toContain('aria-pressed="false"');
     // Not desktop-only like the hide switch: Pinned shows on this screen as well.
     expect(pin).not.toMatch(/\bhidden\b/);
@@ -80,12 +80,12 @@ describe("More's pin switch", () => {
 
   it("unpins a pinned row", () => {
     store.pinned = ["/files"];
-    expect(button(row("/files"), "Unpin File System")).toContain('aria-pressed="true"');
+    expect(button(row("/files"), "Unpin Files")).toContain('aria-pressed="true"');
   });
 
   it("can't pin a thirteenth screen, but can still unpin", () => {
     store.pinned = NAV_ITEMS.filter((i) => i.to !== "/files" && !i.beta).slice(0, 12).map((i) => i.to);
-    const pin = button(row("/files"), "Pin File System");
+    const pin = button(row("/files"), "Pin Files");
     expect(pin).toContain('disabled=""');
     expect(pin).toContain('title="You can pin up to 12 screens"');
     expect(button(row(store.pinned[0]), "Unpin [^\"]+")).not.toContain('disabled=""');
@@ -94,8 +94,8 @@ describe("More's pin switch", () => {
   it("moves a pinned row up and down, not past the ends", () => {
     store.pinned = ["/files", "/send"];
     const first = row("/files", { first: true, last: false });
-    expect(button(first, "Move File System up")).toContain('disabled=""');
-    expect(button(first, "Move File System down")).not.toContain('disabled=""');
+    expect(button(first, "Move Files up")).toContain('disabled=""');
+    expect(button(first, "Move Files down")).not.toContain('disabled=""');
     // The Pinned group's rows have no hide switch.
     expect(first).not.toContain("from the sidebar");
     const last = row("/send", { first: false, last: true });
@@ -104,7 +104,7 @@ describe("More's pin switch", () => {
     // Arrows take the chevron's place while editing.
     expect(first).not.toContain("lucide-chevron-right");
     // Not editing (and outside the Pinned group): no move buttons, the chevron is back.
-    expect(row("/files")).not.toContain("Move File System");
+    expect(row("/files")).not.toContain("Move Files");
     expect(row("/files")).toContain("lucide-chevron-right");
   });
 });

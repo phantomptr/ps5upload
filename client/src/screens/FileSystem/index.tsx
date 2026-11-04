@@ -3238,7 +3238,7 @@ export default function FileSystemScreen() {
       {promptDialogNode}
       <PageHeader
         icon={FolderTree}
-        title={tr("file_system", undefined, "File System")}
+        title={tr("file_system", undefined, "Files")}
         loading={loading}
         right={
           // On a phone, Add folder / New folder / Refresh / ⋯ show their icon alone

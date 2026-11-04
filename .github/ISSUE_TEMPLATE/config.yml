@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Question / discussion
-    url: https://github.com/phantomptr/ps5upload/discussions
-    about: Ask questions and discuss with the community in GitHub Discussions.
+  - name: Question
+    url: https://discord.gg/fzK3xddtrM
+    about: Ask on Discord. The FAQ is in the app under Help, and in FAQ.md.

@@ -10,8 +10,7 @@ import type { LucideIcon } from "lucide-react";
 import { openExternalUrl as openExternal } from "../../lib/openExternalUrl";
 import { COFFEE_URL } from "../../lib/supportLinks";
 import { getAppVersion } from "../../lib/appVersion";
-import { isTauriEnv } from "../../lib/tauriEnv";
-import { visibleFeatures } from "./features";
+import { FEATURES } from "./features";
 
 import { useNavigate } from "react-router";
 
@@ -116,7 +115,7 @@ export default function AboutScreen({ embedded = false }: { embedded?: boolean }
           {tr("about_what_it_does", undefined, "What it does")}
         </SectionTitle>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {visibleFeatures(isTauriEnv()).map((f) => (
+          {FEATURES.map((f) => (
             <FeatureTile
               key={f.titleKey}
               icon={f.icon}

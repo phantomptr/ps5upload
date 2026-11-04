@@ -68,7 +68,12 @@ export function parseFaq(md: string): FaqDoc {
     return out;
   };
   const flush = () => {
-    const text = buf.join("\n").trim();
+    // The `---` between two sections belongs to neither.
+    const text = buf
+      .join("\n")
+      .trim()
+      .replace(/(?:^|\n)\s*-{3,}$/, "")
+      .trim();
     buf = [];
     if (item) item.answer = text;
     else if (topic) topic.intro = text;
@@ -141,6 +146,11 @@ export interface FaqHit {
   excerpt: string;
 }
 
+// `_` is emphasis only at the edge of a word. Inside one it is part of a name people search for,
+// like PS5UPLOAD_PKG_HOST_IP. (Not lookbehind: an older WebKit refuses the whole file for it.)
+const EMPHASIS_OPEN = /(^|[^\p{L}\p{N}_])_+(?=[\p{L}\p{N}])/gu;
+const EMPHASIS_CLOSE = /([\p{L}\p{N}])_+(?![\p{L}\p{N}_])/gu;
+
 /** Markdown reduced to readable text, for matching and excerpts. */
 export function plainText(md: string): string {
   return md
@@ -149,7 +159,9 @@ export function plainText(md: string): string {
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/^#{1,6}\s+/gm, "")
     .replace(/^\s*[-*]\s+/gm, "")
-    .replace(/[*_`|>]/g, "")
+    .replace(/[*`|>]/g, "")
+    .replace(EMPHASIS_OPEN, "$1")
+    .replace(EMPHASIS_CLOSE, "$1")
     .replace(/\s+/g, " ")
     .trim();
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // The local gate. Quick repo checks run first, one after another; then three independent lanes
 // (engine, desktop, client) run side by side, each with its own log under output/validate/, since
-// they share no build directory and the engine tests mostly sit in sleeps. A lane that fails
+// the engine tests mostly sit in sleeps. (The desktop lane's first step builds in engine/target, so
+// it waits on cargo's lock while the engine lane builds there.) A lane that fails
 // prints the tail of its log; the others are left to finish so one run reports every failure.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";

@@ -134,7 +134,7 @@ jobs:
       - name: Build payload ELF
         env:
           PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
-          # SDK v0.42's prospero-llvm-config candidate search maxes at 21,
+          # The SDK's prospero-llvm-config only looks for LLVM versions it knows,
           # so point it at the CI-installed LLVM 22 explicitly.
           LLVM_CONFIG: /usr/bin/llvm-config-22
         run: make payload
@@ -558,7 +558,8 @@ jobs:
               chmod +x "$staging/PS5Upload.AppImage"
               cp -v scripts/release/linux-launcher.sh "$staging/PS5Upload.sh"
               chmod +x "$staging/PS5Upload.sh"
-              (cd "$staging" && zip -9 "$dist_abs/PS5Upload.zip" PS5Upload.AppImage PS5Upload.sh)
+              cp -v LICENSE "$staging/LICENSE"
+              (cd "$staging" && zip -9 "$dist_abs/PS5Upload.zip" PS5Upload.AppImage PS5Upload.sh LICENSE)
               rm -rf "$staging"
               # The bare AppImage too, for AppImage managers (Shelly, Gear Lever, AppImageLauncher):
               # it applies the launcher's Wayland + NVIDIA fix itself (linux_gpu.rs).
@@ -587,12 +588,14 @@ jobs:
               staging="$dist_abs/_stage"
               mkdir -p "$staging"
               cp -v "$raw_exe" "$staging/PS5Upload.exe"
+              cp -v LICENSE "$staging/LICENSE"
               rm -f "$dist_abs/PS5Upload.zip"
               # PowerShell, rather than Bash, expands the $env variables below.
               # shellcheck disable=SC2016
               PS5UP_EXE="$staging/PS5Upload.exe" \
+              PS5UP_LICENSE="$staging/LICENSE" \
               PS5UP_ZIP="$dist_abs/PS5Upload.zip" \
-                pwsh -NoProfile -Command 'Compress-Archive -LiteralPath $env:PS5UP_EXE -DestinationPath $env:PS5UP_ZIP -CompressionLevel Optimal'
+                pwsh -NoProfile -Command 'Compress-Archive -LiteralPath $env:PS5UP_EXE,$env:PS5UP_LICENSE -DestinationPath $env:PS5UP_ZIP -CompressionLevel Optimal'
               rm -rf "$staging"
               # Also ship the NSIS installer (includes WebView2 bootstrapper
               # for Windows 10 users who don't have Edge/WebView2 installed).
@@ -985,6 +988,9 @@ jobs:
             arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
             cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.rpm"
           done
+          # The licence every download is under, for the files that cannot carry it themselves
+          # (the standalone engine and the helper are bare programs).
+          cp -v LICENSE release/LICENSE
           # Standalone engine binary per OS/arch (matches the desktop bundles).
           for f in artifacts/ps5upload-*/ps5upload-engine artifacts/ps5upload-*/ps5upload-engine.exe; do
             [ -f "$f" ] || continue
@@ -1155,18 +1161,28 @@ jobs:
 
       # The iOS source for AltStore / SideStore / Feather (#512): read from the .ipa, so it can
       # only describe what it links. `releases/latest/download/altstore.json` then always names
-      # the newest promoted release.
+      # the newest promoted release. The last promoted release's file goes in too: it keeps the
+      # older versions listed, and it stands in when this build has no .ipa (build-ios is not a
+      # gate), because a promoted release without this file is a 404 for every source user.
       - name: Generate altstore.json iOS source
         env:
           TAG_VERSION: ${{ steps.tag.outputs.version }}
           TAG_NAME: ${{ steps.tag.outputs.tag }}
         run: |
+          previous="$RUNNER_TEMP/previous-altstore.json"
+          curl -fsSL --retry 3 --max-time 60 -o "$previous" \
+            https://github.com/phantomptr/ps5upload/releases/latest/download/altstore.json \
+            || echo "::warning::could not fetch the previous altstore.json"
           python3 -I scripts/gen-altstore-source.py \
             --ipa "release/PS5Upload-${TAG_VERSION}-ios-unsigned.ipa" \
             --tag "$TAG_NAME" \
             --repo phantomptr/ps5upload \
             --notes release/RELEASE_NOTES.md \
+            --previous "$previous" \
             --out release/altstore.json
+          if [ ! -s release/altstore.json ]; then
+            echo "::warning::no altstore.json in this release: do not promote it, source users would lose updates"
+          fi
 
       - name: Move release notes out of assets dir
         run: mv release/RELEASE_NOTES.md "$RUNNER_TEMP/RELEASE_NOTES.md"

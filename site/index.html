@@ -7,11 +7,16 @@
   <meta name="description" data-i18n-attr="content:meta.description2" content="PS5Upload streams your PS5 to your computer, phone or browser, lets friends join your game from a link, and manages the console from there: play, install, move games and saves, all in one app. Free and open source for macOS, Windows, Linux, Android, iPhone and Docker." />
   <meta property="og:title" content="PS5Upload" />
   <meta property="og:description" data-i18n-attr="content:meta.og2" content="Play and manage your PS5 from any screen, and play together with friends from a link. Free and open source for macOS, Windows, Linux, Android, iPhone and Docker." />
-  <meta property="og:image" content="https://ps5upload.phantomptr.com/assets/shots/play-dark.webp" />
+  <meta property="og:image" content="https://ps5upload.phantomptr.com/assets/og.jpg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="750" />
+  <meta property="og:url" content="https://ps5upload.phantomptr.com/" />
   <meta property="og:type" content="website" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="color-scheme" content="light dark" />
+  <link rel="canonical" id="canonical" href="https://ps5upload.phantomptr.com/" />
   <link rel="icon" href="assets/favicon.png" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
   <link rel="stylesheet" href="style.css" />
   <!-- The language, decided before anything is drawn (the same list as app.js): the page waits
        for its words instead of flashing English, and right-to-left languages lay out that way
@@ -39,6 +44,10 @@
       var root = document.documentElement;
       root.lang = lang;
       root.dir = lang === "ar" || lang === "fa" ? "rtl" : "ltr";
+      // Each language's address is its own page to a search engine (the hreflang list below).
+      if (/[?&]lang=/.test(location.search)) {
+        document.getElementById("canonical").href = "https://ps5upload.phantomptr.com/?lang=" + lang;
+      }
       if (lang !== "en") {
         root.classList.add("i18n-wait");
         setTimeout(function () { root.classList.remove("i18n-wait"); }, 2500);
@@ -82,6 +91,7 @@
         <a href="#play" data-i18n="nav.play">Play</a>
         <a href="#tour" data-i18n="nav.features">Features</a>
         <a href="#guide" data-i18n="nav.guide">Guide</a>
+        <a href="https://github.com/phantomptr/ps5upload/blob/main/FAQ.md" data-i18n="nav.faq">FAQ</a>
         <a href="#download" data-i18n="nav.download">Download</a>
         <a href="#news" data-i18n="nav.news">News</a>
         <a href="#thanks" data-i18n="nav.thanks">Thanks &amp; Support</a>
@@ -331,13 +341,13 @@
             <ul class="ticks">
               <li data-i18n="play.release.t1">A card shows the keys the first time, and again when you seem to be looking for the way out</li>
               <li data-i18n="play.release.t2">A faint "⌃ ⌥ to release" stays at the top while you play</li>
-              <li data-i18n="play.release.t3">Both shortcuts can be changed in Settings › Controls › Shortcuts</li>
+              <li data-i18n="play.release.t3">Both shortcuts can be changed in Play › Settings › Controls › Shortcuts</li>
             </ul>
           </div>
           <figure class="shot tilt-l">
             <picture>
               <source srcset="assets/shots/kbm-settings-dark.webp" media="(prefers-color-scheme: dark)" data-theme-src="kbm-settings" />
-              <img src="assets/shots/kbm-settings-light.webp" data-i18n-attr="alt:alt.kbm_settings" alt="Settings › Controls: Controller, Keyboard &amp; mouse and Mixed, and the Shortcuts with a new key being recorded." width="1600" height="1000" loading="lazy" data-theme-img="kbm-settings" />
+              <img src="assets/shots/kbm-settings-light.webp" data-i18n-attr="alt:alt.kbm_settings" alt="Play › Settings › Controls: Controller, Keyboard &amp; mouse and Mixed, and the Shortcuts with a new key being recorded." width="1600" height="1000" loading="lazy" data-theme-img="kbm-settings" />
             </picture>
           </figure>
         </div>
@@ -361,14 +371,14 @@
       </div>
       <div class="wrap">
         <div class="grid chips">
-          <div class="chip-card"><span class="ico">🎮</span><b data-i18n="chips.controls.title">Per-game controls</b><span data-i18n="chips.controls.text">Turbo, mouse aim and macros, kept for each game.</span></div>
-          <div class="chip-card"><span class="ico">✨</span><b data-i18n="chips.upscale.title">Upscale to your screen</b><span data-i18n="chips.upscale.text">AMD FSR 1 on the graphics card, on any GPU.</span></div>
-          <div class="chip-card"><span class="ico">🎨</span><b data-i18n="chips.picture.title">Picture tools</b><span data-i18n="chips.picture.text">Sharpen, brightness, colour and a 21:9 crop.</span></div>
-          <div class="chip-card"><span class="ico">⏪</span><b data-i18n="chips.replay.title">Instant replay</b><span data-i18n="chips.replay.text">Save the last 15 to 60 seconds as a video.</span></div>
-          <div class="chip-card"><span class="ico">🎙️</span><b data-i18n="chips.voice.title">Voice</b><span data-i18n="chips.voice.text">Your microphone to the console, for party chat.</span></div>
-          <div class="chip-card"><span class="ico">🧩</span><b data-i18n="chips.panel.title">Game panel</b><span data-i18n="chips.panel.text">Cheats, the console's state and controls, beside the picture.</span></div>
-          <div class="chip-card"><span class="ico">🔴</span><b data-i18n="chips.live.title">Go live</b><span data-i18n="chips.live.text">Stream to YouTube, Twitch, Kick or Facebook, or into OBS.</span></div>
-          <div class="chip-card"><span class="ico">🖼️</span><b data-i18n="chips.mini.title">Mini player</b><span data-i18n="chips.mini.text">The game in a corner while you use the rest of the app.</span></div>
+          <div class="chip-card"><span class="ico" aria-hidden="true">🎮</span><b data-i18n="chips.controls.title">Per-game controls</b><span data-i18n="chips.controls.text">Turbo, mouse aim and macros, kept for each game.</span></div>
+          <div class="chip-card"><span class="ico" aria-hidden="true">✨</span><b data-i18n="chips.upscale.title">Upscale to your screen</b><span data-i18n="chips.upscale.text">AMD FSR 1 on the graphics card, on any GPU.</span></div>
+          <div class="chip-card"><span class="ico" aria-hidden="true">🎨</span><b data-i18n="chips.picture.title">Picture tools</b><span data-i18n="chips.picture.text">Sharpen, brightness, colour and a 21:9 crop.</span></div>
+          <div class="chip-card"><span class="ico" aria-hidden="true">⏪</span><b data-i18n="chips.replay.title">Instant replay</b><span data-i18n="chips.replay.text">Save the last 15 to 60 seconds as a video.</span></div>
+          <div class="chip-card"><span class="ico" aria-hidden="true">🎙️</span><b data-i18n="chips.voice.title">Voice</b><span data-i18n="chips.voice.text">Your microphone to the console, for party chat.</span></div>
+          <div class="chip-card"><span class="ico" aria-hidden="true">🧩</span><b data-i18n="chips.panel.title">Game panel</b><span data-i18n="chips.panel.text">Cheats, the console's state and controls, beside the picture.</span></div>
+          <div class="chip-card"><span class="ico" aria-hidden="true">🔴</span><b data-i18n="chips.live.title">Go live</b><span data-i18n="chips.live.text">Stream to YouTube, Twitch, Kick or Facebook, or into OBS.</span></div>
+          <div class="chip-card"><span class="ico" aria-hidden="true">🖼️</span><b data-i18n="chips.mini.title">Mini player</b><span data-i18n="chips.mini.text">The game in a corner while you use the rest of the app.</span></div>
         </div>
       </div>
     </section>
@@ -533,7 +543,7 @@
                 <li data-i18n="howto.together.s2">Send your friend the link, or let them scan the QR code. Press <b>Allow</b> when their name pops up.</li>
                 <li data-i18n="howto.together.s3">On the TV, they press PS and pick <b>Quick Play</b> (or their own user), then play.</li>
               </ol>
-              <p class="muted" data-i18n="howto.together.note">Not on your network? Both of you join the same Tailscale network and pick <b>Tailscale</b> above the QR code. The FAQ has the details.</p>
+              <p class="muted" data-i18n="howto.together.note">Not on your network? Both of you join the same Tailscale network and pick <b>Tailscale</b> above the QR code. The <a href="https://github.com/phantomptr/ps5upload/blob/main/FAQ.md">FAQ</a> has the details (in English).</p>
             </div>
           </details>
           <details class="guide">
@@ -594,7 +604,7 @@
               <ol>
                 <li data-i18n="howto.docker.s1">Run the Docker image on your NAS or server (the command is below).</li>
                 <li data-i18n="howto.docker.s2">Open port 19113 on that machine in a browser.</li>
-                <li data-i18n="howto.docker.s3">The whole app is there, including Play.</li>
+                <li data-i18n="howto.docker.s3">The whole app is there. Play needs an https:// page, so to play from another computer or a phone, put the engine behind an https proxy or use the desktop or phone app.</li>
               </ol>
             </div>
           </details>
@@ -606,7 +616,7 @@
                 <li data-i18n="howto.phone.s2">Open <b>Connection</b>, enter the PS5's address and send the helper. The app talks to the PS5 directly, Play included.</li>
                 <li data-i18n="howto.phone.s3">Rather use a browser? Open port 19113 of a computer at home that runs the Docker image, or port 9180 of the PS5 for its own page (first turn on <b>Allow other devices on the network</b> in that page's Settings).</li>
               </ol>
-              <p class="muted" data-i18n="howto.phone.note">Play in a phone's browser needs an https:// page. Over a plain http:// address, play with the app.</p>
+              <p class="muted" data-i18n="howto.phone.note">Play in a browser needs an https:// page. Over a plain http:// address, play with the app.</p>
             </div>
           </details>
           <details class="guide">
@@ -649,7 +659,7 @@
                 <li data-i18n="howto.help.s2">Attach it to an issue on GitHub, or ask on Discord.</li>
                 <li data-i18n="howto.help.s3">Hard to catch? Turn on <b>Detailed logs</b> in the Logs tab, make it happen again, then build the report. It turns itself off after 24 hours.</li>
               </ol>
-              <p class="muted" data-i18n="howto.help.note">The in-app <b>Help</b> screen answers most questions, in your language.</p>
+              <p class="muted" data-i18n="howto.help.note">The in-app <b>Help</b> screen answers most questions. Its FAQ is in English, and it is also <a href="https://github.com/phantomptr/ps5upload/blob/main/FAQ.md">on GitHub</a>.</p>
             </div>
           </details>
         </div>
@@ -671,11 +681,25 @@
         <div class="card docker">
           <div>
             <h3 data-i18n="download.docker.title">Docker (the app as a web page on your NAS or server)</h3>
-            <p class="muted" data-i18n="download.docker.text">Serves the full app on your network. Open port 19113 in a browser. Fill in your PS5's address and the network allowed to use it, or start from <a href="https://github.com/phantomptr/ps5upload/blob/main/engine/compose.yaml">engine/compose.yaml</a>.</p>
+            <p class="muted" data-i18n="download.docker.text">Serves the app on your network: open port 19113 in a browser. Start from <a href="https://github.com/phantomptr/ps5upload/blob/main/engine/compose.yaml">engine/compose.yaml</a>, or change the command's two addresses and its folder to your own. Docker Desktop on a Mac or Windows PC has no host networking; follow the <a href="https://github.com/phantomptr/ps5upload/blob/main/FAQ.md">FAQ</a> there.</p>
           </div>
           <div class="copy">
-            <code id="docker-cmd">docker run -d --name ps5upload --network host -v ps5upload-data:/data -e PS5_ADDR=&lt;your PS5's IP&gt; -e PS5UPLOAD_ALLOW_IP=&lt;your LAN, e.g. 192.168.1.0/24&gt; ghcr.io/phantomptr/ps5upload-engine-webui:latest</code>
+            <code id="docker-cmd">docker run -d --name ps5upload --network host -v ps5upload-data:/data -v /srv/ps5/pkgs:/pkgs:ro -e PS5_ADDR=192.168.1.50 -e PS5UPLOAD_ALLOW_IP=192.168.1.0/24 -e PS5UPLOAD_BROWSE_ROOTS=/pkgs ghcr.io/phantomptr/ps5upload-engine-webui:latest</code>
             <button class="btn small" type="button" data-copy="docker-cmd" data-i18n="download.copy">Copy</button>
+          </div>
+        </div>
+        <div class="card docker" id="ios-source">
+          <div>
+            <h3 data-i18n="download.ios.title">iPhone: updates through AltStore, SideStore or Feather</h3>
+            <p class="muted" data-i18n="download.ios.text">Add this source once and the app shows up there with its updates. In Feather, paste it into <b>Source URL</b> and press <b>Save</b>; <b>Import</b> is for lists from other apps. Feather also needs your own signing certificate.</p>
+            <p class="extras">
+              <a class="btn small" href="feather://source/https://ps5upload.phantomptr.com/altstore.json" data-i18n="download.ios.add_feather">Add to Feather</a>
+              <a class="btn small" href="altstore-classic://source?url=https%3A%2F%2Fps5upload.phantomptr.com%2Faltstore.json" data-i18n="download.ios.add_altstore">Add to AltStore</a>
+            </p>
+          </div>
+          <div class="copy">
+            <code id="ios-source-url">https://ps5upload.phantomptr.com/altstore.json</code>
+            <button class="btn small" type="button" data-copy="ios-source-url" data-i18n="download.copy">Copy</button>
           </div>
         </div>
         <details class="more">
@@ -725,9 +749,9 @@
                 <h3 data-i18n="thanks.crypto_title">Crypto</h3>
                 <p class="muted" data-i18n="thanks.crypto_sub">Straight to my hardware wallet</p>
               </div>
-              <div class="coin-tabs" role="tablist" id="coin-tabs"></div>
+              <div class="coin-tabs" role="tablist" id="coin-tabs" data-i18n-attr="aria-label:thanks.coin_tabs" aria-label="Choose a coin"></div>
             </div>
-            <div class="coin-panel" role="tabpanel">
+            <div class="coin-panel" role="tabpanel" id="coin-panel">
               <img id="coin-qr" class="coin-qr" src="assets/donate/btc.svg" width="148" height="148" alt="QR code">
               <div class="coin-info">
                 <p class="coin-name" id="coin-name">Bitcoin</p>
@@ -782,6 +806,7 @@
     </div>
   </footer>
 
+  <script src="platform.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

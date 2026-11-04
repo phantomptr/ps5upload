@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  PS5 Upload gets your games, apps and homebrew onto a jailbroken PS5 quickly and reliably: uploads resume after a dropped connection, installs pick the route that works, and you can browse files, manage the console and run cheats from your computer, phone or browser.
+  PS5Upload gets your games, apps and homebrew onto a jailbroken PS5 quickly and reliably: uploads resume after a dropped connection, installs pick the route that works, and you can browse files, manage the console and run cheats from your computer, phone or browser.
 </p>
 
 <p align="center">
@@ -54,7 +54,7 @@
   **Copy to…** another user on the same PS5, or a file for a friend or another PS5 that loads
   under their own account; open a save for save editors. PS1 (PSSwanStation), PS2 (Crux2,
   PS5SX2) and Switch (ProsperoEden) emulator saves are backed up and restored too.
-- **Remote Play.** Play the PS5 from your computer, phone or browser, no PS Remote Play app
+- **Play.** Play the PS5 from your computer, phone or browser, no PS Remote Play app
   needed:
   - Start wakes a console in rest mode and signs your user in; the stream keeps playing while
     you use other screens, and a dropped connection rejoins by itself.
@@ -69,7 +69,7 @@
     sound.
   - A step-by-step setup (Play › Set up) that checks each requirement on the console and fixes
     what it can (sign-in, account ID, Remote Play switches, pairing, or pairing with the PIN the
-    PS5 shows), plus a PIN for Sony's PS Remote Play app or chiaki-ng if you prefer those.
+    PS5 shows). If you prefer Sony's PS Remote Play app or chiaki-ng, **Accounts** has a PIN for those.
   - **Play Together:** friends join your game as Player 2, 3 and 4, each with their own
     controller on the PS5, from any browser or the app. Share a QR code, a link or a short
     code, allow each friend, and they pick Quick Play on the TV. They play with a controller,
@@ -107,13 +107,14 @@
 
 - **System package patches** (NPXS Store or Settings updates). Use the PS5's own
   Settings → Debug Settings → Game → Package Installer.
-- **Sign packages with fake keys.** It only installs packages the console already trusts.
+- **Re-sign retail packages.** The packages Workshop builds are fake packages, and they need
+  fake-package support (kstuff) running on the console.
 
 ## A quick look
 
-<img width="1080" height="675" alt="ps5upload-a-free-open-source-app-that-does-everything-for-a-v0-e95o1uwuqhxh1" src="https://github.com/user-attachments/assets/df6839af-6fca-47ce-91b8-30e5a0d5da62" />
-<img width="1080" height="675" alt="ps5upload-a-free-open-source-app-that-does-everything-for-a-v0-8rh1ecgwqhxh1" src="https://github.com/user-attachments/assets/9688e93f-a80d-45cd-9b4f-0a0d189b7cd6" />
-<img width="1080" height="675" alt="ps5upload-a-free-open-source-app-that-does-everything-for-a-v0-i4cquz8xqhxh1" src="https://github.com/user-attachments/assets/a112c6a5-6270-47e2-84ce-c7ae3a455d50" />
+<img width="1080" alt="Play: a PS5 game streaming in the app, with the stream's controls on the picture." src="site/assets/shots/play-dark.webp" />
+<img width="1080" alt="Play Together: friends joining a game from a link or a QR code." src="site/assets/shots/together-dark.webp" />
+<img width="1080" alt="Games: a grid of game covers with their sizes and where they are." src="site/assets/shots/games-dark.webp" />
 
 ## Install
 
@@ -122,15 +123,15 @@ Pre-built downloads land on the
 
 | Platform | File | How to install |
 |---|---|---|
-| macOS (Apple Silicon / Intel) | `PS5Upload-<ver>-mac-{arm64,x64}.dmg` | Open the `.dmg`, drag PS5Upload into Applications. See **First launch on macOS** below — Gatekeeper blocks downloaded apps the first time. |
-| Windows (x64 / ARM64) | `PS5Upload-<ver>-win-{x64,arm64}-setup.exe` or `PS5Upload-<ver>-win-{x64,arm64}.zip` | Run the `-setup.exe` installer (it updates itself later), or unzip the `.zip` and double-click `PS5Upload.exe` — portable, no installer. See **First launch on Windows** — SmartScreen warns on first run. |
+| macOS (Apple Silicon / Intel) | `PS5Upload-<ver>-mac-{arm64,x64}.dmg` | Open the `.dmg`, drag PS5Upload into Applications. See [First-launch warnings](#first-launch-warnings-and-why-theyre-there) below — Gatekeeper blocks downloaded apps the first time. |
+| Windows (x64 / ARM64) | `PS5Upload-<ver>-win-{x64,arm64}-setup.exe` or `PS5Upload-<ver>-win-{x64,arm64}.zip` | Run the `-setup.exe` installer (it updates itself later), or unzip the `.zip` and double-click `PS5Upload.exe` — portable, no installer. See [First-launch warnings](#first-launch-warnings-and-why-theyre-there) — SmartScreen warns on first run. |
 | Linux — Debian / Ubuntu (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.deb` | `sudo apt install ./PS5Upload-<ver>-linux-<arch>.deb` — installs a normal app with a menu entry; pulls in the WebKitGTK deps automatically. |
 | Linux — Fedora / RHEL / Bazzite (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.rpm` | `sudo dnf install ./PS5Upload-<ver>-linux-<arch>.rpm` (Bazzite/Silverblue: `rpm-ostree install`; to update, `rpm-ostree uninstall ps5-upload --install ./<new>.rpm` and reboot, which Settings → Updates shows ready to copy) — menu entry + auto deps. |
 | Linux — any distro (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.zip` | Universal fallback (no install). Unzip, then `chmod +x PS5Upload.sh PS5Upload.AppImage` and run **`./PS5Upload.sh`** (the wrapper — handles the FUSE-less and WebKit white-screen cases for you). Running `./PS5Upload.AppImage` directly also works if your system has libfuse2 and a happy WebKitGTK. |
 | Linux — AppImage (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.AppImage` | The bare AppImage, for AppImage managers (Gear Lever, AppImageLauncher). `chmod +x` and run it. On Wayland with an NVIDIA card it restarts itself once with the system `libwayland-client`, which is what the `.zip`'s `PS5Upload.sh` does. |
 | Linux — NixOS (x64 / ARM64) | no release artifact | Packaged in [NUR](https://github.com/GriefNorth/nur-packages) as `ps5upload` — see **NixOS** below. |
 | Android | `PS5Upload-<ver>-android.apk` (older 32-bit phones: `-android-armv7.apk`) | Enable "install unknown apps" for your browser/file manager, then open the `.apk`. Same interface, mobile-friendly; connects to and manages your PS5 over Wi-Fi. On Android 17, allow local network access ("nearby devices") when asked. |
-| iPhone | `PS5Upload-<ver>-ios-unsigned.ipa` | Sideload with AltStore or Sideloadly and an Apple ID (a free one works; it is re-signed every 7 days). AltStore, SideStore and Feather can also add the source `https://github.com/phantomptr/ps5upload/releases/latest/download/altstore.json` and update the app from there. Turn on Developer Mode and trust your Apple ID on the iPhone; see the FAQ. Copy games into the app's folder with the Files app. |
+| iPhone | `PS5Upload-<ver>-ios-unsigned.ipa` | Sideload with AltStore or Sideloadly and an Apple ID (a free one works; it is re-signed every 7 days). AltStore, SideStore and Feather can also add the source `https://ps5upload.phantomptr.com/altstore.json` and update the app from there (a raw GitHub link doesn't work; see the FAQ). Turn on Developer Mode and trust your Apple ID on the iPhone; see the FAQ. Copy games into the app's folder with the Files app. |
 
 ### NixOS
 
@@ -222,7 +223,7 @@ only needs to be done once per install.
 ### System requirements
 
 - **macOS** 11 (Big Sur) or newer. No dependencies — ad-hoc signed,
-  see *First launch* above for the one-line quarantine bypass.
+  see *First-launch warnings* above for the one-line quarantine bypass.
 - **Windows** 10 (build 19041+) or Windows 11. Ships with the
   Microsoft Edge WebView2 runtime by default; LTSC / stripped
   installs may need
@@ -231,32 +232,45 @@ only needs to be done once per install.
 - **Linux** — the `.deb` and `.rpm` packages **pull in their
   dependencies automatically** (WebKitGTK 4.1, gtk3, libsoup3, etc.) via
   the package manager, so they're the easiest route on Debian/Ubuntu and
-  Fedora/RHEL/Bazzite. The universal `.AppImage` instead expects those
-  libraries already on the host (libfuse2, gtk3, webkit2gtk 4.1,
-  libsoup3, libappindicator, librsvg2); install commands for
+  Fedora/RHEL/Bazzite. The universal `.AppImage` bundles WebKitGTK and GTK,
+  and takes glibc, X11 or Wayland client libraries and FUSE from the host;
+  install commands for a stripped-down system on
   Debian/Ubuntu/Fedora/RHEL/Arch are in
   [the FAQ](FAQ.md#prerequisites).
   **Minimum distro version:** all three Linux artifacts are built against
   **glibc 2.39**, so they need a reasonably recent distro — **Ubuntu
-  24.04+, Debian 13+ (trixie), Fedora 40+**, or equivalent. (This is a
+  24.04+, Debian 13+ (trixie), Fedora 40+, RHEL/Rocky/Alma 10+**, or equivalent. (This is a
   glibc floor, not a package dependency — the `.deb`/`.rpm` install fine
   on older releases but the app won't launch, and the AppImage bundles
   WebKitGTK yet still uses the host's glibc.) On an older distro, build
   from source with `make dist-linux` on that machine.
 
-The app checks GitHub for updates once per launch (Settings → Updates)
-and downloads a fresh archive to your Downloads folder when you click
-Download. Replace the old app and relaunch; the app then offers to update the helper.
+The app updates itself. It checks GitHub at launch and downloads a new release in the background,
+never during a transfer:
+
+| Installed as | The update |
+|---|---|
+| Windows installer or `.zip`, macOS, Linux AppImage | Installs as you quit, or press **Restart now** |
+| Linux `.deb` or `.rpm` | **Install and restart** in **Settings → Updates** asks for your password |
+| Android | **Settings → Updates**, then confirm in Android's dialog |
+| iPhone | Through an AltStore, SideStore or Feather source |
+
+**Settings → Updates** has the switches, and **Get pre-release versions**. Afterwards, the app offers
+to update the helper.
 
 Building from source:
 
 ```bash
 git clone --recurse-submodules https://github.com/phantomptr/ps5upload.git
 cd ps5upload
-make install       # bootstrap dev env (auto-detects host OS)
+make install       # bootstrap dev env (auto-detects host OS); prints the next line
+export PS5_PAYLOAD_SDK="$HOME/ps5-payload-sdk"   # where it put the SDK; add it to your shell's profile
 make build         # payload ELF + engine + client UI
 make run-client    # launch the Tauri dev app
 ```
+
+`make build` needs that `export`: without it, the build looks in `/opt/ps5-payload-sdk` and stops with
+"SDK files not found".
 
 `make install` auto-detects your OS and runs one of:
 
@@ -269,10 +283,10 @@ make run-client    # launch the Tauri dev app
 - **`make install-macos`** — macOS: Xcode CLT, Homebrew, `node`, current
   `llvm` (LLVM 23 at this release), Rust via rustup, and checksum-verified
   PS5 Payload SDK v0.45.
-- **`make install-windows`** — Windows 11: Node.js LTS, Rust, VS 2022 Build
-  Tools (C++ workload), WebView2 Runtime, 7-Zip, and PS5 Payload SDK
-  via `winget`. Run from an elevated PowerShell (or any shell with
-  `pwsh` / `powershell.exe` on PATH).
+- **`.\scripts\install-windows.ps1`** — Windows 11: Node.js LTS, Rust, VS 2022 Build
+  Tools (C++ workload), WebView2 Runtime, 7-Zip, LLVM, and PS5 Payload SDK
+  via `winget`. Run it from an elevated PowerShell. The `make` targets also need GNU Make
+  (Git Bash, MSYS2 or `winget install ezwinports.make`), and then `make install-windows` does the same.
 
 All three install scripts are idempotent — re-running them after a partial
 setup is safe. A stale or unmarked SDK is upgraded to the repository pin and
@@ -294,11 +308,12 @@ For per-platform bundles only (no full dev env): `make dist-mac`,
    remembers each one (**Devices**). To make new devices type a code shown on the TV first, turn
    on **Ask before a new device can connect** there.
 
-The helper stays until the PS5 reboots or enters rest mode. The app connects to ports **9120**
+The helper stays until the PS5 reboots, and usually keeps running through rest mode; if the dot
+stays red after a wake, send it again. The app connects to ports **9120**
 (the helper) and **9021** (the loader); allow both in your firewall. For **Stream & install**
 the PS5 connects back to this computer on port **19113**, so allow the app through the firewall
-too (on Windows, for Private and Public networks). 6.0 cannot talk to a
-v5.x helper: the banner's **Send helper** replaces it in one click.
+too (on Windows, for Private and Public networks). If the app says the helper is older, the
+banner's **Send helper** replaces it in one click.
 
 ## Architecture
 
@@ -325,10 +340,10 @@ All workflows go through the root `Makefile` (`make help`).
 |---|---|
 | `make build` | Payload + engine + client |
 | `make run-client` | Tauri dev app |
-| `make run-engine` | Engine on port 19113 (binds all interfaces; answers loopback, `PS5UPLOAD_ALLOW_IP` and the PS5-facing `/pkg-host/` only) |
+| `make run-engine` | Engine on port 19113 (binds all interfaces; see [SECURITY.md](SECURITY.md) for who it answers) |
 | `make test-engine` | Rust tests, no PS5 needed |
 | `make test-payload` | Console C code compiled and run on the host |
-| `npm run validate` | Full non-hardware gate |
+| `npm run validate` | The main non-hardware gate; [TESTING.md](TESTING.md) has what it leaves out |
 | `make dist` | Tauri bundle |
 
 See [`TESTING.md`](TESTING.md) for the full workflow, and [`CONTRIBUTING.md`](CONTRIBUTING.md).
@@ -346,7 +361,8 @@ See [`TESTING.md`](TESTING.md) for the full workflow, and [`CONTRIBUTING.md`](CO
 - **Android:** the `.apk` from Releases.
 - **iPhone:** the unsigned `.ipa` from Releases, sideloaded with AltStore or Sideloadly (see the
   FAQ). New and not yet widely tested.
-- **Web UI:** the self-hosted Docker image, in any browser on your LAN (see below).
+- **Web UI:** the self-hosted Docker image, in any browser on your LAN (see below). Play in a
+  browser needs an `https://` page, so over plain `http://` play with an app instead.
 - **PS5 firmware:** 1.00 through 14.10 on every model; one payload binary for all. Tested on
   5.10, 9.60 and 13.60 (14.00 and 14.10 are new in SDK v0.45 and not tested yet). In practice the limit is your jailbreak's ELF loader on port 9021.
 
@@ -373,8 +389,9 @@ with **Settings → Engine URL**.
 - An upload keeps running when you close the tab.
 - **No password.** Anyone allowed can read, write and delete on your PS5. Keep it on a trusted
   LAN, never on the internet.
-- For a dedicated reverse-proxy hostname, leave `PS5UPLOAD_BASE_URL` unset. It is a build-time
-  **path prefix**, not a full URL. See [reverse-proxy setup](REVERSE_PROXY.md) for nginx,
+- For a dedicated reverse-proxy hostname, leave `PS5UPLOAD_BASE_URL` unset. It is a **path prefix**,
+  not a full URL, and the web page is built with it, so a prefix needs its own image build. The
+  variables a self-hoster may need are in [engine/README.md](engine/README.md#environment-variables). See [reverse-proxy setup](REVERSE_PROXY.md) for nginx,
   proxy authentication, Docker bridge networking, and sub-path hosting.
 - **Scripting it:** [ps5upctl](https://github.com/yuanzhengze/ps5upctl) is a community
   command-line client for the engine API (unofficial; the API can change between versions).
@@ -503,7 +520,7 @@ adapted file by file), **library** (a dependency the build pulls in), **fetched 
 * Remote Play instant replay: [Mediabunny](https://mediabunny.dev/) (MPL-2.0, used unmodified from npm) writes the saved clip as MP4
 * Remote Play upscaling: [AMD FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT) — **ported**: its EASU and RCAS shaders rewritten as WebGL 2 GLSL in `client/src/lib/rpPicture.ts`
 * Engine: [tokio](https://tokio.rs/), [axum](https://github.com/tokio-rs/axum), [serde](https://serde.rs/), [anyhow](https://github.com/dtolnay/anyhow), [uuid](https://github.com/uuid-rs/uuid), [zip](https://github.com/zip-rs/zip2), and the other crates in the `Cargo.lock` files
-* [UnRAR](https://www.rarlab.com/) (Alexander Roshal) — `.rar` extraction on **desktop**, compiled from the source the `unrar_sys` crate bundles into its own program, `ps5upload-unrar`, which holds only ps5upload's own code and UnRAR and which the engine runs over pipes (UnRAR is never linked into the engine); used to *extract only*, never to compress.
+* [UnRAR](https://www.rarlab.com/) (Alexander Roshal) — `.rar` extraction on **desktop and Docker**, compiled from the source the `unrar_sys` crate bundles into its own program, `ps5upload-unrar`, which holds only ps5upload's own code and UnRAR and which the engine runs over pipes (UnRAR is never linked into the engine); used to *extract only*, never to compress.
 
 **Fetched at runtime:**
 * The Payloads catalogue — kstuff-lite (EchoStretch, drakmor), [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus) and nanoDNS (drakmor), etaHEN and Itemzflow (LightningMods), ftpsrv, websrv, shsrv and klogsrv (ps5-payload-dev), ps5-app-dumper, CheatRunner, BackPork, itsPLK's Payload Manager and WebKit Autoloader, earthonion's tools (np-fake-signin, Remote Play Unlock and more), Ghostpad, HearBridge, Hush (disco-trooper), ps5debug-NG and more — each downloaded from its own releases when you choose it

@@ -128,10 +128,10 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       # Built exactly as the published image is (no build-args: root prefix).
-      # The URL prefix is applied at run time from PS5UPLOAD_BASE_URL and the
-      # bundle's asset paths are relative, so the prefixed deployment is the
-      # same image run with that variable — smoke-tested below without a
-      # second build (which used to be a full engine rebuild).
+      # The engine reads its URL prefix at run time from PS5UPLOAD_BASE_URL, so
+      # its routes under a prefix are smoke-tested below on this same image,
+      # without a second build (which used to be a full engine rebuild). The web
+      # page takes its prefix at build time (REVERSE_PROXY.md).
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .

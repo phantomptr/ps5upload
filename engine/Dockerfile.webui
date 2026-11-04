@@ -94,6 +94,7 @@ RUN mkdir -p /rootfs/tmp /rootfs-data/data && chmod 1777 /rootfs/tmp /rootfs-dat
 # ── Stage 3: minimal scratch image ───────────────────────────────────────────
 FROM scratch
 ARG PS5UPLOAD_BASE_URL=
+COPY LICENSE /LICENSE
 COPY --from=builder /build/engine/target/release/ps5upload-engine /ps5upload-engine
 # The engine looks for the RAR helper next to its own binary.
 COPY --from=builder /build/engine/target/release/ps5upload-unrar /ps5upload-unrar

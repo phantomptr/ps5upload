@@ -35,7 +35,7 @@ import { deviceName, meshFor, othersRemotePlaying, remotePlayPads, useMeshStore 
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { isLinuxDesktop, isMobile } from "../../lib/platform";
 import {
-  canStream,
+  streamRefusal,
   stopEngineSession,
   touchAt,
   FIT_ORDER,
@@ -954,20 +954,26 @@ export function StreamPanel() {
     requestCapture(el);
   }, [prefs.capturePointer, kbm.mouseNative]);
 
-  if (!canStream()) {
+  const refusal = streamRefusal();
+  if (refusal === "insecure_page") {
+    return (
+      <Callout tone="warn" title={tr("rp_insecure_page", undefined, "Play needs an https:// page")}>
+        {tr(
+          "rp_insecure_page_body",
+          undefined,
+          "Browsers only decode video on an https:// page or on the computer running the engine, and this page is plain http://. Open it over https through a proxy, open it as localhost on the engine's computer, or use the app for Windows, macOS, Linux, Android or iPhone.",
+        )}
+      </Callout>
+    );
+  }
+  if (refusal) {
     return (
       <Callout tone="warn" title={tr("rp_no_webcodecs", undefined, "This browser cannot play a stream")}>
-        {window.isSecureContext === false
-          ? tr(
-              "rp_no_webcodecs_http",
-              undefined,
-              "This page came over plain http, and browsers keep video decoding from such pages. Open it through https (see REVERSE_PROXY.md) or on the computer running the engine, or use the desktop app.",
-            )
-          : tr(
-              "rp_no_webcodecs_body2",
-              undefined,
-              "Remote Play here decodes video with WebCodecs, which this browser does not have. Use a current Chrome, Edge or Safari, or the desktop app on Windows, macOS or Linux.",
-            )}
+        {tr(
+          "rp_no_webcodecs_body",
+          undefined,
+          "Play decodes video with WebCodecs, which this browser does not have. Use a current Chrome, Edge or Safari, or the app for Windows, macOS, Linux, Android or iPhone.",
+        )}
       </Callout>
     );
   }

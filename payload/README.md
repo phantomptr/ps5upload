@@ -3,7 +3,8 @@
 The C payload that runs on the PS5. Built with the
 [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) (version pinned
 in [`../scripts/ps5-sdk.env`](../scripts/ps5-sdk.env)), sent to the
-console's ELF loader, and left resident until reboot or rest mode.
+console's ELF loader, and left resident until reboot. It keeps running through rest mode on the
+firmware tested (13.60), and its listener rebinds after the wake.
 
 Its main port is **9120**, AVA1 (`third_party/ava1/spec/SPEC.md`): transfers,
 status, filesystem, mount, app, hardware, package and shell calls all
@@ -21,9 +22,10 @@ and the short-lived archive extractor (`extractor/`, no socket).
 the takeover, starting the AVA1 server, and cleanup. It binds no
 socket of its own. `src/runtime.c` holds the management handlers the AVA1
 table (`src/mgmt_table.def`, dispatched by `src/mgmt_rpc.c`) calls, and the
-instance lifecycle (ownership record, reap, shutdown). `ava1/` is the AVA1 protocol in C (frames,
-generated codecs in `ava1/gen/`, Noise handshake, server); never edit
-`ava1/gen/` by hand. `src/takeover.c`
+instance lifecycle (ownership record, reap, shutdown). The AVA1 protocol in C (frames, Noise
+handshake, server) is the `third_party/ava1/c` submodule, with its generated codecs in `c/gen/`; the
+helper's own methods are generated into `gen/ava1_app_gen.{c,h}`. Never edit either by hand.
+`src/takeover.c`
 asks an older resident payload to stand down before binding.
 
 The rest of `src/` is one module per capability: registration and launch,

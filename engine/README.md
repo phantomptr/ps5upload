@@ -29,8 +29,10 @@ out at the same release (`make ava1-version-check`).
 | `ps5upload-ava1` | ps5upload over AVA1: uploads, downloads, the helper's management methods (`protocol/ps5upload-ava1/app.toml`, generated with `make ava1-app-gen`), the connection pool. |
 | `ps5upload-ctest` | Builds the payload's C (the AVA1 library from the submodule plus the payload's own AVA1 code) on the host so `cargo test` checks it against the Rust side. |
 | `ps5upload-core` | The bulk of the logic — socket helpers, the management seam, archive inspection and plan previews, filesystem and app RPCs, volume parsing, package install, saves, cheats, hardware, SMB, BPS patching. |
-| `ps5upload-engine` | The Axum HTTP service (~100 routes), job tracking, SSE progress events, and the desktop + mobile entry points. |
+| `ps5upload-engine` | The Axum HTTP service (several hundred routes), job tracking, SSE progress events, and the desktop + mobile entry points. |
 | `ps5upload-pkg` | `.pkg` parsing — headers, entries, split-file sets. |
+| `ps5upload-fpkg` | Builds fake packages (Workshop). |
+| `ps5-dump-forge-ufs2`, `ps5-dump-forge-pfs` | Build UFS2 and PFS game images from a folder (Convert). |
 | `ps5upload-lab` | CLI for driving the console by hand over AVA1: management calls, uploads, benchmarks (`bench`), pairing and chaos tools. Useful when you want one call, not a workflow. |
 | `ps5upload-tests` | Integration tests that run against in-process and loopback AVA1 peers, with no console. |
 | `ps5upload-unrar` | The RAR helper program: the only binary that contains UnRAR, holding nothing else but ps5upload's own code. The engine starts it for every RAR operation and talks to it over stdin/stdout (`ps5upload-core/src/rar_helper.rs`); it is shipped next to the engine (desktop app, Docker images, release assets). It must not depend on any other crate here — see `LICENSES/UnRAR-exception.md`. |
@@ -38,7 +40,7 @@ out at the same release (`make ava1-version-check`).
 ## Working on it
 
 ```sh
-cargo test --workspace          # no PS5 required — loopback peers
+cargo test --workspace --exclude ps5upload-ctest   # no PS5 required — loopback peers
 cargo test -p ps5upload-ctest -- --test-threads=1   # payload AVA1 C vs Rust, on the host
 cargo fmt --all -- --check      # CI fails on this; client/src-tauri has its own
 cargo build --release -p ps5upload-engine
@@ -54,6 +56,32 @@ curl "http://127.0.0.1:19113/api/ps5/status?addr=<ip>"
 `PS5UPLOAD_ALLOW_IP` lets another machine reach it. The API is
 **unauthenticated and can read, write and delete files on the console** —
 keep it on a trusted LAN.
+
+## Environment variables
+
+For a self-hosted engine (Docker, a NAS, or a standalone program). None is needed on a desktop.
+
+| Variable | What it does | Default |
+|---|---|---|
+| `PS5_ADDR` | The console's address, for calls that don't name one | none |
+| `PS5UPLOAD_ALLOW_IP` | Who else may use the engine: addresses and CIDR ranges, comma-separated | loopback only |
+| `PS5UPLOAD_ENGINE_PORT` | The port it listens on | `19113` |
+| `PS5UPLOAD_BROWSE_ROOTS` | Folders the web UI's file picker opens on, comma-separated | the engine's home folder |
+| `PS5UPLOAD_PKG_HOST_IP` | The address the PS5 is told to download packages from, when the engine can't work it out (Docker bridge networking, several networks) | detected |
+| `PS5UPLOAD_BASE_URL` | URL path prefix, such as `/ps5/`. The web page is built with it ([REVERSE_PROXY.md](../REVERSE_PROXY.md)) | none |
+| `PS5UPLOAD_DEVICE_NAME` | The name the console and other devices see | the computer's name |
+| `PS5UPLOAD_DATA_DIR` | Where the engine keeps its identity and state | `~/.ps5upload` |
+| `PS5UPLOAD_STATE_DIR` | Install history and console snapshots | `<data dir>/state` |
+| `PS5UPLOAD_CACHE_DIR` | The artwork cache | inside the data dir |
+| `PS5UPLOAD_FAKELIBS_DIR` | Fake libraries for backporting | inside the data dir |
+| `PS5UPLOAD_LINK_DOWNLOAD_DIR` | Where downloads from a link go | `~/Downloads/ps5upload` |
+| `PS5UPLOAD_FFMPEG` | The ffmpeg program Go live uses | the one the app installs |
+| `PS5UPLOAD_7Z_THREADS` | Threads for unpacking `.7z`. Memory use grows with each | `1` |
+| `PS5UPLOAD_URL_THREADS` | Parallel fetches when installing from a link, 1 to 32. Setting it turns off the automatic choice | `8`, adapting up to 32 |
+| `PS5UPLOAD_PKG_SESSION_MAX_AGE_SEC` | How long a Stream & install's package address stays valid, at least 60 | `7200` |
+
+Only in the desktop app: `PS5UPLOAD_SAFE_GRAPHICS=1` (Linux white-screen fix, see the FAQ) and
+`PS5UPLOAD_UPDATE_MANIFEST_URL` (test an update from another address).
 
 ## Testing
 

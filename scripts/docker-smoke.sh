@@ -13,11 +13,11 @@ webui="${2:-}"
 name="ps5upload-smoke-$$"
 port="${SMOKE_PORT:-19313}"
 base="http://127.0.0.1:${port}${SMOKE_BASE_PATH:-}"
-# SMOKE_BASE_PATH (e.g. /ps5) also runs the engine under that URL prefix: the
-# prefix is read from PS5UPLOAD_BASE_URL at start-up and the web bundle's asset
-# paths are relative, so the image built for the root serves a prefixed
-# deployment too. CI tests the one image it ships both ways instead of
-# building a second image with the prefix baked in.
+# SMOKE_BASE_PATH (e.g. /ps5) also runs the engine under that URL prefix, which it
+# reads from PS5UPLOAD_BASE_URL at start-up. That checks the engine's routes and API
+# under a prefix, on the one image CI ships. The web page takes its prefix when the
+# image is built (Dockerfile.webui, VITE_BASE_URL), so this does not prove a page
+# works there: REVERSE_PROXY.md has the build for that.
 prefix_env=()
 if [ -n "${SMOKE_BASE_PATH:-}" ]; then prefix_env=(-e "PS5UPLOAD_BASE_URL=${SMOKE_BASE_PATH}/"); fi
 

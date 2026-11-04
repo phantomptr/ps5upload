@@ -14,6 +14,7 @@ import {
   rebind,
   nextRtt,
   isPasscode,
+  streamRefusal,
 } from "./remotePlayStream";
 
 describe("rebind", () => {
@@ -109,6 +110,24 @@ describe("canDecodeAvc", () => {
   it("is false with no WebCodecs at all", async () => {
     vi.stubGlobal("VideoDecoder", undefined);
     expect(await canDecodeAvc(1920, 1080)).toBe(false);
+  });
+});
+
+describe("streamRefusal", () => {
+  it("has nothing to refuse where a stream can play", () => {
+    vi.stubGlobal("VideoDecoder", class {});
+    vi.stubGlobal("window", { isSecureContext: false });
+    expect(streamRefusal()).toBeNull();
+  });
+  it("names a plain http page, where a newer browser would not help", () => {
+    vi.stubGlobal("VideoDecoder", undefined);
+    vi.stubGlobal("window", { isSecureContext: false });
+    expect(streamRefusal()).toBe("insecure_page");
+  });
+  it("blames the browser only on a secure page", () => {
+    vi.stubGlobal("VideoDecoder", undefined);
+    vi.stubGlobal("window", { isSecureContext: true });
+    expect(streamRefusal()).toBe("no_decoder");
   });
 });
 

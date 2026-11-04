@@ -171,9 +171,9 @@ export function ArchivePackagesCard({ host }: { host: string }) {
             )
           : st?.error === "rar_needs_desktop"
             ? tr(
-                "err_rar_unsupported",
+                "err_rar_phones",
                 undefined,
-                "RAR archives aren't supported on this build (Android uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.",
+                "RAR archives aren't supported on phones (the app uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.",
               )
             : (st?.error ?? null);
 
