@@ -174,8 +174,9 @@ network, and plays your PS5 as Player 2, 3 or 4 while you play as Player 1.
    their own user) under "Who's using this controller?".
 
 They play with a controller connected to their device, the keyboard, or the on-screen controls on
-a phone, and hear the game. PS and Create are blocked for friends unless you turn that off in the
-panel (they can still press PS once in their first minute to pick a user on the TV). Up to three
+a phone, and hear the game. Their PS and Create buttons work like yours; to stop a stray press
+pulling everyone out of the game, turn on **Block PS & Create for friends** in the panel (they can
+still press PS once in their first minute to pick a user on the TV). Up to three
 friends at once. Each friend has a card in the panel with what they're doing and their delay, and
 **Remove** takes them out. **New link** makes a fresh invite and the old one stops working. If a
 friend's delay shows red, a lower Play quality (720p or 30 fps) makes it smoother for everyone.

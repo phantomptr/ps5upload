@@ -191,8 +191,14 @@ export function JoinView({
   // (away from the controller), the controller's menu button or Hide; full screen starts
   // without them. A mouse or keyboard keeps the quiet-moment hiding.
   const touch = coarsePointer();
-  const chrome = useAutoHide(autoHide, reconnecting || picking || barHover || barFocus, touch);
+  // Picking a user on the TV holds the buttons up for a mouse; on touch it only shows them
+  // once (below), and Hide works at once: a friend wasn't left with a card in the middle of
+  // the game until someone picked a user on the TV.
+  const chrome = useAutoHide(autoHide, reconnecting || (picking && !touch) || barHover || barFocus, touch);
   const { poke } = chrome;
+  useEffect(() => {
+    if (picking && touch) poke();
+  }, [picking, touch, poke]);
   const hold = useRef<{ id: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const endHold = () => {
     if (hold.current) clearTimeout(hold.current.timer);
@@ -242,6 +248,25 @@ export function JoinView({
     if (!full) return;
     return () => void onFullscreen?.(false);
   }, [full, onFullscreen]);
+
+  // A phone in the app turned sideways (or already sideways when the game starts): full screen,
+  // as the host's player. Only on a turn: leaving full screen sideways stays left.
+  const fullNow = useRef(full);
+  useEffect(() => {
+    fullNow.current = full;
+  }, [full]);
+  useEffect(() => {
+    if (!inApp || !live || !coarsePointer() || typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(orientation: landscape)");
+    const turn = () => {
+      if (!mq.matches || fullNow.current) return;
+      setFull(true);
+      void onFullscreen?.(true);
+    };
+    turn();
+    mq.addEventListener?.("change", turn);
+    return () => mq.removeEventListener?.("change", turn);
+  }, [inApp, live, onFullscreen]);
 
   // Esc shows the buttons and leaves full screen (the desktop app's window has no Esc of its
   // own; a browser that kept Esc for the page gets it here). A guest's Esc is never the pad's.
@@ -339,6 +364,10 @@ export function JoinView({
     setFull(next);
     await onFullscreen?.(next);
   };
+  // A phone in the app, the game in its small box: the buttons go in a bar under the picture
+  // (big, nothing over the game) and turning the phone sideways goes full screen, as the host's
+  // player does. Full screen keeps them over the picture, hidden until asked for.
+  const below = inApp && !full && coarse && live;
 
   const info = (
     <>
@@ -374,7 +403,7 @@ export function JoinView({
   );
   const actions = (
     <>
-      {autoHide && touch && chrome.shown && !(reconnecting || picking) && (
+      {autoHide && touch && chrome.shown && !reconnecting && (
         <button
           type="button"
           onClick={chrome.hide}
@@ -500,7 +529,7 @@ export function JoinView({
             <div className="flex flex-wrap items-center justify-center gap-2">{info}</div>
             <div className="flex flex-wrap items-center justify-center gap-2">{actions}</div>
           </div>
-        ) : (
+        ) : below ? null : (
           <div
             className={`absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-2 bg-gradient-to-b from-black/70 to-transparent px-3 pb-5 pt-[max(8px,env(safe-area-inset-top))] text-xs transition-opacity duration-300 ${fade}`}
             {...barProps}
@@ -648,6 +677,55 @@ export function JoinView({
           </div>
         )}
       </div>
+      {below && (
+        // Under the picture on a phone: big, easy to hit, nothing over the game.
+        <div
+          className="flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] bg-neutral-900 px-3 py-2 text-xs text-white"
+          data-testid="join-bar"
+          data-shown="1"
+          data-below="1"
+        >
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-2">{info}</div>
+          <button
+            type="button"
+            onClick={() => void toggleFull()}
+            className="flex h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full bg-white/15 px-3 text-sm font-medium hover:bg-white/25"
+            data-testid="join-fullscreen-below"
+          >
+            <Expand size={15} />
+            {tr("pad_fill", undefined, "Full screen")}
+          </button>
+          {snap.sound && !snap.noSound ? (
+            <button
+              type="button"
+              onClick={() => session.setMuted(!snap.muted)}
+              aria-pressed={snap.muted}
+              aria-label={snap.muted ? tr("rp_unmute", undefined, "Sound on") : tr("rp_mute", undefined, "Mute")}
+              className="flex h-11 w-11 items-center justify-center rounded-full bg-white/15 hover:bg-white/25"
+            >
+              {snap.muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+            </button>
+          ) : !snap.sound ? (
+            <button
+              type="button"
+              onClick={() => session.startSound()}
+              className="flex h-11 items-center justify-center gap-1.5 rounded-full bg-white px-3 text-sm font-medium text-black"
+            >
+              <Volume2 size={15} />
+              {tr("join_sound", undefined, "Tap for sound")}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={leave}
+            className="flex h-11 items-center justify-center gap-1.5 rounded-full bg-[var(--color-danger,#dc2626)] px-4 text-sm font-medium"
+            data-testid="join-leave-below"
+          >
+            <LogOut size={15} />
+            {tr("join_leave", undefined, "Leave")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -363,7 +363,9 @@ test.describe("a friend's phone", () => {
   test("plays with the on-screen controller", async ({ page }) => {
     await serveJoinPage(page);
     const frames: number[][] = [];
+    let say: (m: object) => void = () => {};
     await page.routeWebSocket(/\/api\/join\/ws/, (ws) => {
+      say = (m) => ws.send(JSON.stringify(m));
       ws.onMessage((m) => {
         if (typeof m !== "string") return void frames.push([...m]);
         if (m.includes("hello")) ws.send(JSON.stringify({ stage: "joined", player: 3, token: "T3", hevc: false }));
@@ -411,6 +413,14 @@ test.describe("a friend's phone", () => {
     await press(700);
     await expect(bar).toHaveAttribute("data-shown", "1");
     await press(700);
+    await expect(bar).toHaveAttribute("data-shown", "0");
+
+    // The TV asks who's using the controller: the card shows with the ask, and Hide works at
+    // once (it used to stay pinned until someone picked a user on the TV).
+    say({ status: { player: 3, state: "picking_user", rtt_ms: 12, host: "Ann", block_system: true } });
+    await expect(bar).toHaveAttribute("data-shown", "1");
+    await expect(page.getByTestId("join-picking")).toBeVisible();
+    await page.getByTestId("join-hide-controls").tap();
     await expect(bar).toHaveAttribute("data-shown", "0");
   });
 });
@@ -590,4 +600,38 @@ test("the app joins a friend from Play, and asks before starting its own Play", 
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("radio", { name: "Join a friend" }).click();
   await expect(page.getByTestId("join-player")).toBeVisible();
+});
+
+test.describe("a friend's phone in the app", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  test("the buttons sit under the picture, and Full screen is easy to hit", async ({ page }) => {
+    await consoleSetUp(page);
+    await page.addInitScript(() => window.localStorage.setItem("ps5upload.join.name", "Ben"));
+    await page.route(
+      (url) => url.pathname.startsWith("/api/"),
+      async (route) => {
+        const path = new URL(route.request().url()).pathname;
+        const body = path === "/api/version" ? { version: "10.8.0", caps: {} } : path === "/api/ps5/rp/session" ? { host: null } : {};
+        await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+      },
+    );
+    await page.routeWebSocket(/\/api\/join\/relay/, (ws) => {
+      ws.onMessage((m) => {
+        if (typeof m === "string" && m.includes("hello")) ws.send(JSON.stringify({ stage: "joined", player: 2, token: "APP", hevc: false }));
+      });
+    });
+    await page.goto(`/play?join=${encodeURIComponent(LINK)}`, { waitUntil: "domcontentloaded" });
+    await page.getByTestId("join-invite-go").tap({ timeout: 30_000 });
+    const full = page.getByTestId("join-fullscreen-below");
+    await expect(full).toBeVisible({ timeout: 30_000 });
+    // Big enough for a thumb, and not over the picture.
+    const box = (await full.boundingBox())!;
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    const stage = (await page.getByTestId("join-stage-view").boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(stage.y + stage.height - 1);
+    await expect(page.getByTestId("join-leave-below")).toBeVisible();
+    await full.tap();
+    await expect(full).toHaveCount(0);
+  });
 });
