@@ -26,7 +26,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 use tokio::task::AbortHandle;
@@ -228,6 +231,13 @@ fn prefers_async(headers: &HeaderMap) -> bool {
         })
 }
 
+/// An id for a console file operation that goes out in `fs_op_id`, so it stays under 2^53: a
+/// JavaScript client reads a bigger JSON number wrongly and would then ask about another operation.
+fn next_readable_fs_op_id() -> u64 {
+    static COUNTER: AtomicU64 = AtomicU64::new((1 << 52) + 1);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
 /// For a route with its own cancel: the body with an `op_id` (the caller's, or a new one), and
 /// the console and id to cancel with. A body that does not parse goes through as it is, for the
 /// route to refuse it.
@@ -241,7 +251,7 @@ fn prepare_fs_op(path: &str, body: Bytes) -> (Bytes, Option<FsOp>) {
     let op_id = match map.get("op_id").and_then(Value::as_u64) {
         Some(id) if id != 0 => id,
         _ => {
-            let id = crate::next_fs_op_id();
+            let id = next_readable_fs_op_id();
             map.insert("op_id".into(), json!(id));
             id
         }
@@ -600,6 +610,7 @@ mod tests {
         let op = op.unwrap();
         assert_eq!(v["op_id"].as_u64(), Some(op.op_id));
         assert_ne!(op.op_id, 0);
+        assert!(op.op_id < 1 << 53, "a JSON client reads it exactly");
         assert_eq!(op.addr.as_deref(), Some("10.0.0.2"));
         assert_eq!(v["from"], "/a", "the rest of the body is kept");
 
