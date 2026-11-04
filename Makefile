@@ -1155,6 +1155,12 @@ test-payload: payload
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) /tmp/ps5upload-webui-cheats-store-selftest
 	@echo "✓ a downloaded cheat is stored only under a plain name with its format's extension, through a same-folder temp + rename"
+	@echo "Running snapshots self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o /tmp/ps5upload-backup-selftest \
+		$(PAYLOAD_DIR)/tests/backup_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-backup-selftest
+	@echo "✓ a snapshot restores byte for byte, the newest five are kept, the list stays valid and inside its buffer"
 	@echo "Running left-behind extraction request self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-archive-request-selftest \
