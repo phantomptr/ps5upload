@@ -1608,9 +1608,23 @@ fn cancel_flag(job_id: Uuid) -> Option<Arc<AtomicBool>> {
         .and_then(Weak::upgrade)
 }
 
-/// Pause or resume a running Workshop job. False when there is none by that id.
-pub(crate) fn set_job_paused(job_id: Uuid, paused: bool) -> bool {
-    cancel_flag(job_id).is_some_and(|f| ps5upload_fpkg::workshop::set_paused(&f, paused))
+/// How asking a job to pause or go on ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JobPause {
+    Done,
+    /// There is no running job by that id.
+    NotRunning,
+    /// There is, and it is not one that can wait (only a Workshop job's workers can).
+    NotPausable,
+}
+
+/// Pause or resume a running Workshop job.
+pub(crate) fn set_job_paused(job_id: Uuid, paused: bool) -> JobPause {
+    match cancel_flag(job_id) {
+        None => JobPause::NotRunning,
+        Some(f) if ps5upload_fpkg::workshop::set_paused(&f, paused) => JobPause::Done,
+        Some(_) => JobPause::NotPausable,
+    }
 }
 
 /// Register a fresh cancel flag for `job_id` and return it to thread into
@@ -10259,8 +10273,19 @@ async fn transfer_dir_reconcile_handler(
         .into_response()
 }
 
-/// GET /api/jobs/{id}
-async fn get_job(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+/// GET /api/jobs/{id}: a transfer job, or an install by its own id (`<epoch>-<seq>`, the same
+/// status as `/api/pkg/install/status`).
+async fn get_job(
+    State(state): State<AppState>,
+    installs: pkg_install::PkgInstallStateHandle,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if install::is_install_job_id(&id) {
+        return match installs.jobs.get(&id) {
+            Some(st) => (StatusCode::OK, Json(st)).into_response(),
+            None => json_err(StatusCode::NOT_FOUND, "job not found").into_response(),
+        };
+    }
     let uuid = match id.parse::<Uuid>() {
         Ok(u) => u,
         Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid job id").into_response(),
@@ -10310,8 +10335,21 @@ async fn get_job_files(State(state): State<AppState>, Path(id): Path<String>) ->
 /// registered cancel flag; the core aborts at its next shard boundary with
 /// `transfer_cancelled` and the partial tx is left interrupted/resumable (same
 /// as a dropped connection). Idempotent — cancelling an unknown/finished job is
-/// a no-op 200 (`cancelled:false`); the client may race the job ending.
-async fn cancel_job(Path(id): Path<String>) -> impl IntoResponse {
+/// a no-op 200 (`cancelled:false`); the client may race the job ending. An install's id stops
+/// that install, as `/api/pkg/install/stop` does.
+async fn cancel_job(
+    installs: pkg_install::PkgInstallStateHandle,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if install::is_install_job_id(&id) {
+        let cancelled = installs.jobs.request_cancel(&id);
+        crate::log_info!("cancel_job: install job={id} cancelled={cancelled}");
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({ "cancelled": cancelled })),
+        )
+            .into_response();
+    }
     let uuid = match id.parse::<Uuid>() {
         Ok(u) => u,
         Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid job id").into_response(),
@@ -10473,23 +10511,30 @@ async fn activity_handler(
     Json(activity::snapshot(q.since, active))
 }
 
-/// GET /api/jobs
-async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
-    let jobs = state.jobs.lock().unwrap_or_else(|e| e.into_inner());
-    let summary: Vec<serde_json::Value> = jobs
-        .iter()
-        .map(|(id, s)| {
-            serde_json::json!({
-                "job_id": id.to_string(),
-                "status": match s {
-                    JobState::Running { .. } => "running",
-                    JobState::Done {..} => "done",
-                    JobState::Failed {..} => "failed",
-                },
-                "job": s,
+/// GET /api/jobs: transfers (`kind: "transfer"`) and installs (`kind: "install"`, whose `job` is
+/// the status `/api/pkg/install/status` gives). `GET /api/jobs/{id}` and its `cancel` take either id.
+async fn list_jobs(
+    State(state): State<AppState>,
+    installs: pkg_install::PkgInstallStateHandle,
+) -> impl IntoResponse {
+    let mut summary: Vec<serde_json::Value> = {
+        let jobs = state.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        jobs.iter()
+            .map(|(id, s)| {
+                serde_json::json!({
+                    "job_id": id.to_string(),
+                    "kind": "transfer",
+                    "status": match s {
+                        JobState::Running { .. } => "running",
+                        JobState::Done {..} => "done",
+                        JobState::Failed {..} => "failed",
+                    },
+                    "job": s,
+                })
             })
-        })
-        .collect();
+            .collect()
+    };
+    summary.extend(installs.jobs.all().iter().map(install::job_list_entry));
     Json(summary)
 }
 
@@ -10908,6 +10953,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     }
 
     let activity_installs = pkg_state.clone();
+    let jobs_installs = pkg_state.clone();
     let helper_stop_installs = pkg_state.clone();
     let cleanup_installs = pkg_state.clone();
     let app = Router::new()
@@ -11570,14 +11616,32 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         )
         .route("/api/version", get(engine_version))
         .route("/api/engine/update", get(engine_update::check))
-        .route("/api/jobs", get(list_jobs))
+        .route(
+            "/api/jobs",
+            get({
+                let installs = jobs_installs.clone();
+                move |st: State<AppState>| list_jobs(st, installs.clone())
+            }),
+        )
         .route("/api/jobs/summaries", get(telemetry::summaries_handler))
         .route("/api/jobs/{id}/summary", get(telemetry::summary_handler))
         .route("/api/metrics", get(telemetry::metrics_handler))
         .route("/api/bug-report/bundle", post(bug_report_bundle_handler))
-        .route("/api/jobs/{id}", get(get_job))
+        .route(
+            "/api/jobs/{id}",
+            get({
+                let installs = jobs_installs.clone();
+                move |st: State<AppState>, id: Path<String>| get_job(st, installs.clone(), id)
+            }),
+        )
         .route("/api/jobs/{id}/files", get(get_job_files))
-        .route("/api/jobs/{id}/cancel", post(cancel_job))
+        .route(
+            "/api/jobs/{id}/cancel",
+            post({
+                let installs = jobs_installs.clone();
+                move |id: Path<String>| cancel_job(installs.clone(), id)
+            }),
+        )
         .route("/api/jobs/{id}/pause", post(workshop_api::pause_job))
         .route("/api/jobs/{id}/resume", post(workshop_api::resume_job))
         .route(
@@ -12303,7 +12367,9 @@ mod cancel_registry_tests {
         let job_id = Uuid::new_v4();
         let flag = register_transfer_cancel(job_id);
         if cancel {
-            let r = cancel_job(Path(job_id.to_string())).await.into_response();
+            let r = cancel_job(Default::default(), Path(job_id.to_string()))
+                .await
+                .into_response();
             assert_eq!(r.status(), StatusCode::OK);
         }
         let jobs2 = Arc::clone(&jobs);
@@ -12676,16 +12742,25 @@ mod helpers_tests {
             events_tx,
         };
         let snap = body_json(
-            get_job(State(state.clone()), Path(job_id.to_string()))
-                .await
-                .into_response(),
+            get_job(
+                State(state.clone()),
+                Default::default(),
+                Path(job_id.to_string()),
+            )
+            .await
+            .into_response(),
         )
         .await;
         assert_eq!(snap["status"], "running");
         assert_eq!(snap["files_count"], 3);
         assert!(snap.get("files").is_none(), "full list in the poll: {snap}");
 
-        let listed = body_json(list_jobs(State(state.clone())).await.into_response()).await;
+        let listed = body_json(
+            list_jobs(State(state.clone()), Default::default())
+                .await
+                .into_response(),
+        )
+        .await;
         assert!(listed[0]["job"].get("files").is_none());
         assert_eq!(listed[0]["job"]["files_count"], 3);
 

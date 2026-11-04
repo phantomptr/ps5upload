@@ -547,6 +547,23 @@ async fn stage_browser_upload(
             serde_json::json!({ "error": format!("could not create upload dir: {e}") }),
         );
     }
+    // The size is known before the first byte: say so now rather than half-way through. The
+    // multipart wrapping makes this a little more than the file, which is no harm.
+    let announced = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    if let Some(want) = announced {
+        let room = dir.clone();
+        let free = tokio::task::spawn_blocking(move || ps5upload_fpkg::build::free_bytes(&room))
+            .await
+            .ok()
+            .flatten();
+        if let Some(refusal) = free.and_then(|f| crate::remote::fetch::no_room(f, want)) {
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+            return refusal;
+        }
+    }
     // A browser that goes away mid-upload drops this handler at an await, past every cleanup
     // below: the partial package (tens of GB) would sit in the temp dir for a week.
     let mut partial = RemoveOnDrop(Some(dir.clone()));
@@ -938,6 +955,11 @@ async fn link_create_handler(
     State(state): State<PkgInstallStateHandle>,
     Json(req): Json<LinkCreateRequest>,
 ) -> Response<Body> {
+    // One at a time, from looking for an existing link to marking a new one as a link. Two clicks
+    // raced past the look, and the second start then met the first's new session and was refused
+    // as "an install of this exact package is already running", for a link nobody installs yet.
+    static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _turn = ONE_AT_A_TIME.lock().await;
     // An existing link for the same file is handed back, not doubled.
     {
         let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());

@@ -855,7 +855,8 @@ export async function startTransferDownload(
 
 /** Download a PS5 file/folder straight into a `.zip` at `destZip`, streamed
  *  through Deflate as it downloads (no scratch dir). Returns the job_id —
- *  poll job_status for progress, same as a plain download. */
+ *  poll job_status for progress, same as a plain download. The caller has its person's answer
+ *  about a file already at `destZip` (the save dialog asks, and the phones pick a free name). */
 export async function startTransferDownloadZip(
   srcPath: string,
   destZip: string,
@@ -6058,18 +6059,26 @@ export interface InstallStatus {
   updated_at: number;
 }
 
-/** Start an install; returns the job id (or a busy error with the active job). */
+/** Start an install; returns the job id, or `error: "busy"` when the console already has one
+ *  running. The engine refuses that with a 409 (an engine before 11.1 with a 200), which both
+ *  transports turn into a thrown message ending in the body's `error`. */
 export async function pkgInstall(
   req: InstallRequestBody,
 ): Promise<{ ok: boolean; job?: string; error?: string }> {
-  return invoke("pkg_install", { req }) as Promise<{
-    ok: boolean;
-    job?: string;
-    error?: string;
-  }>;
+  try {
+    return (await invoke("pkg_install", { req })) as {
+      ok: boolean;
+      job?: string;
+      error?: string;
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (/(^|: )busy$/.test(message.trim())) return { ok: false, error: "busy" };
+    throw e;
+  }
 }
 
-/** Stop a running install job; the engine ends it as `cancelled` within a few seconds. */
+/** Stop a running install job; the engine ends it as `cancelled` at once. */
 export async function pkgInstallStop(job: string): Promise<void> {
   await invoke("pkg_install_stop", { job });
 }

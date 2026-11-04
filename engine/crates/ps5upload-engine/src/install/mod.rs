@@ -106,6 +106,11 @@ impl JobStore {
         }
     }
 
+    /// Every status still known, running or finished (up to `KEEP_FINISHED` of those).
+    pub fn all(&self) -> Vec<InstallStatus> {
+        lock(&self.jobs).values().cloned().collect()
+    }
+
     /// Statuses of the installs still holding a console's slot.
     pub fn running(&self) -> Vec<InstallStatus> {
         let ids: Vec<String> = lock(&self.active).values().cloned().collect();
@@ -182,6 +187,31 @@ impl JobStore {
             st.updated_at = status::now_unix();
         }
     }
+}
+
+/// An install's job id (`<epoch>-<seq>`), which a transfer's UUID can never be taken for: a UUID has
+/// four dashes.
+pub fn is_install_job_id(id: &str) -> bool {
+    id.split_once('-').is_some_and(|(epoch, seq)| {
+        !epoch.is_empty()
+            && !seq.is_empty()
+            && epoch.bytes().all(|b| b.is_ascii_digit())
+            && seq.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+/// One install in the `/api/jobs` list, beside the transfers.
+pub fn job_list_entry(st: &InstallStatus) -> serde_json::Value {
+    serde_json::json!({
+        "job_id": st.job,
+        "kind": "install",
+        "status": match st.phase {
+            Phase::Done => "done",
+            Phase::Failed => "failed",
+            _ => "running",
+        },
+        "job": st,
+    })
 }
 
 /// Drops the oldest finished statuses until at most `keep` remain. Running ones (those holding
@@ -744,8 +774,8 @@ fn name_hint(title_id: Option<&str>) -> String {
 }
 
 /// `POST /api/pkg/install` — reserve the console, start the async state
-/// machine, return the job id. `busy` (with the active job) if an install is
-/// already running for that console.
+/// machine, return the job id. A 409 `busy` (with the active job) if an install
+/// is already running for that console.
 pub async fn install_handler(
     State(state): State<PkgInstallStateHandle>,
     Json(req): Json<InstallRequest>,
@@ -792,7 +822,10 @@ pub async fn install_handler(
     let job = match state.jobs.begin(&req.ps5_addr) {
         Ok(j) => j,
         Err(active) => {
-            return Json(serde_json::json!({"ok":false,"error":"busy","job":active}))
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"ok":false,"error":"busy","job":active})),
+            )
                 .into_response()
         }
     };
@@ -2661,6 +2694,56 @@ mod tests {
         assert_eq!(st.phase, Phase::Failed);
         assert_eq!(st.reason, Some(FailReason::Cancelled));
         assert!(!state.jobs.active_for("10.0.0.4"), "the slot is released");
+    }
+
+    #[test]
+    fn an_install_id_is_told_from_a_transfer_id() {
+        assert!(is_install_job_id("1790000000-3"));
+        assert!(!is_install_job_id("f983a63c-e6f7-489c-b2d7-14d994eff321"));
+        assert!(!is_install_job_id("1790000000"));
+        assert!(!is_install_job_id("-3"));
+        assert!(!is_install_job_id("1-"));
+        assert!(!is_install_job_id("a-1"));
+        assert!(!is_install_job_id(""));
+    }
+
+    #[test]
+    fn the_job_list_carries_installs_with_their_kind_and_state() {
+        let store = JobStore::new();
+        let job = store.begin("10.0.0.5").unwrap();
+        let running = job_list_entry(&store.get(&job).unwrap());
+        assert_eq!(running["kind"], "install");
+        assert_eq!(running["job_id"], job.as_str());
+        assert_eq!(running["status"], "running");
+        store.update(&job, |s| {
+            s.phase = Phase::Failed;
+            s.reason = Some(FailReason::Cancelled);
+        });
+        let all = store.all();
+        assert_eq!(all.len(), 1);
+        let failed = job_list_entry(&all[0]);
+        assert_eq!(failed["status"], "failed");
+        assert_eq!(failed["job"]["reason"], "cancelled");
+    }
+
+    /// A refusal must not read as a success: the client told the two apart only by the body.
+    #[tokio::test]
+    async fn a_second_install_on_a_busy_console_is_a_409_naming_the_running_one() {
+        let state = std::sync::Arc::new(crate::pkg_install::PkgInstallState::default());
+        let running = state.jobs.begin("10.0.0.6").unwrap();
+        let req = bare_req(Source::Url("http://h/x.pkg".into()));
+        let req = InstallRequest {
+            ps5_addr: "10.0.0.6".into(),
+            ..req
+        };
+        let resp = install_handler(State(state.clone()), Json(req)).await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"], "busy");
+        assert_eq!(v["job"], running.as_str());
     }
 
     #[test]
