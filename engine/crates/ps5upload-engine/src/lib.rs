@@ -34,6 +34,7 @@
 //!   POST /api/ps5/disk-usage          → start a recursive size walk (see `disk_usage`)
 //!   POST /api/ps5/cleanup/scan        → console clean-up scan / apply (see `console_cleanup_api`)
 //!   GET  /api/ps5/console-shares      → the console's own saved network shares (see `console_shares_api`)
+//!   GET  /api/ps5/console-tasks       → tasks started on the console page, with cancel (see `console_tasks_api`)
 
 mod activity;
 mod ampr_index_api;
@@ -54,6 +55,7 @@ mod console_payload;
 mod console_read;
 mod console_shares_api;
 mod console_snapshot;
+mod console_tasks_api;
 mod convert_source;
 mod diag_api;
 mod disk_usage;
@@ -11296,6 +11298,11 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             get(console_cleanup_api::apply_status),
         )
         .route("/api/ps5/cleanup/cancel", post(console_cleanup_api::cancel))
+        .route("/api/ps5/console-tasks", get(console_tasks_api::list))
+        .route(
+            "/api/ps5/console-tasks/cancel",
+            post(console_tasks_api::cancel),
+        )
         .route("/api/ps5/console-shares", get(console_shares_api::list))
         .route(
             "/api/ps5/console-shares/save",

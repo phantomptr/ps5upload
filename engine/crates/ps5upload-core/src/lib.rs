@@ -8,6 +8,7 @@ pub mod cleanup;
 pub mod console_cleanup;
 pub mod console_files;
 pub mod console_shares;
+pub mod console_tasks;
 pub mod ddp;
 pub mod diagnostics;
 pub mod download;

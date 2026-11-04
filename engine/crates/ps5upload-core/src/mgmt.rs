@@ -199,6 +199,8 @@ methods! {
     (VPAD_CLOSE, 192, "VPAD_CLOSE"),
     (VPAD_OUTPUT, 193, "VPAD_OUTPUT"),
     (VPAD_STATUS, 194, "VPAD_STATUS"),
+    (CONSOLE_TASKS, 195, "CONSOLE_TASKS"),
+    (CONSOLE_TASK_CANCEL, 196, "CONSOLE_TASK_CANCEL"),
 }
 
 /// A management call the payload refused.
