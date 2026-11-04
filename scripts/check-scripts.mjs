@@ -142,6 +142,16 @@ function checkSdkPin() {
   return true;
 }
 
+// LICENSE was a stub for a long time and nothing noticed. GPLv3 section 4 needs the real text with
+// every copy, so it is pinned to the hash of https://www.gnu.org/licenses/gpl-3.0.txt.
+const GPL3_SHA256 = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986";
+function checkLicense() {
+  const hash = createHash("sha256").update(fs.readFileSync(path.join(repoRoot, "LICENSE"))).digest("hex");
+  if (hash === GPL3_SHA256) return true;
+  process.stderr.write(`\n[check-scripts] LICENSE is not the unmodified GPL-3.0 text (sha256 ${hash})\n`);
+  return false;
+}
+
 const files = walk(repoRoot);
 const nodeFiles = files.filter((f) => /\.(mjs|js)$/i.test(f));
 const shellFiles = files.filter((f) => /\.sh$/i.test(f));
@@ -150,6 +160,7 @@ const psFiles = files.filter((f) => /\.ps1$/i.test(f));
 
 let ok = true;
 ok = checkSdkPin() && ok;
+ok = checkLicense() && ok;
 for (const f of nodeFiles) ok = run(path.relative(repoRoot, f), "node", ["--check", f]) && ok;
 // Scripts with logic worth pinning carry a node:test file beside them.
 const nodeTests = nodeFiles.filter((f) => f.endsWith(".test.mjs"));

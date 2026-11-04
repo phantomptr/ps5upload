@@ -558,7 +558,8 @@ jobs:
               chmod +x "$staging/PS5Upload.AppImage"
               cp -v scripts/release/linux-launcher.sh "$staging/PS5Upload.sh"
               chmod +x "$staging/PS5Upload.sh"
-              (cd "$staging" && zip -9 "$dist_abs/PS5Upload.zip" PS5Upload.AppImage PS5Upload.sh)
+              cp -v LICENSE "$staging/LICENSE"
+              (cd "$staging" && zip -9 "$dist_abs/PS5Upload.zip" PS5Upload.AppImage PS5Upload.sh LICENSE)
               rm -rf "$staging"
               # The bare AppImage too, for AppImage managers (Shelly, Gear Lever, AppImageLauncher):
               # it applies the launcher's Wayland + NVIDIA fix itself (linux_gpu.rs).
@@ -587,12 +588,14 @@ jobs:
               staging="$dist_abs/_stage"
               mkdir -p "$staging"
               cp -v "$raw_exe" "$staging/PS5Upload.exe"
+              cp -v LICENSE "$staging/LICENSE"
               rm -f "$dist_abs/PS5Upload.zip"
               # PowerShell, rather than Bash, expands the $env variables below.
               # shellcheck disable=SC2016
               PS5UP_EXE="$staging/PS5Upload.exe" \
+              PS5UP_LICENSE="$staging/LICENSE" \
               PS5UP_ZIP="$dist_abs/PS5Upload.zip" \
-                pwsh -NoProfile -Command 'Compress-Archive -LiteralPath $env:PS5UP_EXE -DestinationPath $env:PS5UP_ZIP -CompressionLevel Optimal'
+                pwsh -NoProfile -Command 'Compress-Archive -LiteralPath $env:PS5UP_EXE,$env:PS5UP_LICENSE -DestinationPath $env:PS5UP_ZIP -CompressionLevel Optimal'
               rm -rf "$staging"
               # Also ship the NSIS installer (includes WebView2 bootstrapper
               # for Windows 10 users who don't have Edge/WebView2 installed).
@@ -982,6 +985,9 @@ jobs:
             arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
             cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.rpm"
           done
+          # The licence every download is under, for the files that cannot carry it themselves
+          # (the standalone engine and the helper are bare programs).
+          cp -v LICENSE release/LICENSE
           # Standalone engine binary per OS/arch (matches the desktop bundles).
           for f in artifacts/ps5upload-*/ps5upload-engine artifacts/ps5upload-*/ps5upload-engine.exe; do
             [ -f "$f" ] || continue
