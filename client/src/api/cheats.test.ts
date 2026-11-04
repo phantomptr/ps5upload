@@ -75,6 +75,13 @@ describe("cheats API", () => {
     });
   });
 
+  it("a refused delete or engine switch rejects instead of reading as success", async () => {
+    mockedInvoke.mockResolvedValueOnce({ ok: false, error: "busy" });
+    await expect(cheatsDelete("CUSA00001")).rejects.toThrow("busy");
+    mockedInvoke.mockResolvedValueOnce({ ok: false, enabled: true });
+    await expect(cheatsEngineSet(false)).rejects.toThrow("failed");
+  });
+
   it("cheatsReload calls correct command", async () => {
     mockedInvoke.mockResolvedValueOnce({ ok: true });
     await cheatsReload("192.168.1.50:9021");

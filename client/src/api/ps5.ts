@@ -4263,7 +4263,7 @@ export async function checkDestinationFreeSpace(
     if (!volume) {
       return { volume: null, freeBytes: null, insufficient: false, shortBy: 0 };
     }
-    const freeBytes = volume.free_bytes;
+    const freeBytes = volumeAllocatableBytes(volume);
     const insufficient = freeBytes < requiredBytes;
     return {
       volume,
@@ -5611,9 +5611,10 @@ export async function cheatsDelete(
   titleId: string,
   addr?: string,
 ): Promise<{ ok: boolean }> {
-  return invoke("cheats_delete", {
+  const resp = await invoke<{ ok: boolean; error?: string | null }>("cheats_delete", {
     req: { addr: addr ?? null, title_id: titleId },
   });
+  return assertOk(resp, "Remove cheats");
 }
 
 export async function cheatsReload(addr?: string): Promise<{ ok: boolean }> {
@@ -5633,7 +5634,11 @@ export async function cheatsEngineSet(
   enabled: boolean,
   addr?: string,
 ): Promise<{ ok: boolean; enabled: boolean }> {
-  return invoke("cheats_engine_set", { req: { addr: addr ?? null, enabled } });
+  const resp = await invoke<{ ok: boolean; enabled: boolean; error?: string | null }>(
+    "cheats_engine_set",
+    { req: { addr: addr ?? null, enabled } },
+  );
+  return assertOk(resp, "Turn cheats on or off");
 }
 
 /** A few fields of one title's appinfo.db row: its version, size, content
@@ -5956,7 +5961,8 @@ export interface InstallStatus {
   updated_at: number;
 }
 
-/** Start an install; returns the job id (or a busy error with the active job). */
+/** Start an install; returns the job id (or a busy error with the active job).
+ *  ok-checked-by-caller: pkgLibrary words "busy" and a refusal itself. */
 export async function pkgInstall(
   req: InstallRequestBody,
 ): Promise<{ ok: boolean; job?: string; error?: string }> {

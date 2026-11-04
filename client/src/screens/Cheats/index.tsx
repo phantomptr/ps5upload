@@ -171,7 +171,7 @@ export default function CheatsScreen() {
   async function setEngine(enabled: boolean) {
     try {
       const r = await cheatsEngineSet(enabled, addr);
-      if (r.ok) setStatus((prev) => (prev ? { ...prev, enabled: r.enabled } : prev));
+      setStatus((prev) => (prev ? { ...prev, enabled: r.enabled } : prev));
     } catch (e) {
       setError(humanizePs5Error(String(e)));
     }

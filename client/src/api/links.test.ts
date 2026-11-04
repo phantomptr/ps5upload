@@ -14,7 +14,7 @@ describe("link + rar package api", () => {
     inv.mockResolvedValue({ kind: "pkg", filename: "a", total_size: 1, ranges: true, content_type: "" });
     const r = await linkProbe("https://h/x", true);
     expect(r.kind).toBe("pkg");
-    expect(inv).toHaveBeenCalledWith("link_probe", { url: "https://h/x", insecure_tls: true });
+    expect(inv).toHaveBeenCalledWith("link_probe", { url: "https://h/x", insecureTls: true });
   });
 
   it("starts a download to a console folder and returns the job id", async () => {

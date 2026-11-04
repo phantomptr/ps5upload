@@ -21,6 +21,22 @@ vi.mock("../state/engine", () => ({
  * dropped in translation does not error. It silently changes what the
  * console's clock gets set to.
  */
+describe("an engine error", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("reports a plain-text body, not a bare status code", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("Failed to parse the request body", { status: 422 })));
+    await expect(browserInvoke("ps5_volumes", { addr: "a" })).rejects.toThrow("Failed to parse the request body");
+  });
+
+  it("reports the JSON error, and the status when the body is empty", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "busy" }), { status: 502 })));
+    await expect(browserInvoke("ps5_volumes", { addr: "a" })).rejects.toThrow("busy");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 503 })));
+    await expect(browserInvoke("ps5_volumes", { addr: "a" })).rejects.toThrow("engine HTTP 503");
+  });
+});
+
 describe("timeSyncBody", () => {
   it("maps a PC-time sync to the engine's snake_case keys", () => {
     expect(

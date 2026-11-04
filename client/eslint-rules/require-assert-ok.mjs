@@ -48,6 +48,8 @@ const STATUS_ENDPOINTS = new Set([
   "sdkScan",
   "procModulesGet",
   "netInterfacesGet",
+  // Each folder's own `ok` is what the Mesh Drive form shows next to that folder.
+  "checkFolders",
 ]);
 
 /** Only the API modules — this is a rule about where guards belong. */
@@ -101,8 +103,11 @@ const rule = {
 
         // The declared shape: return type, invoke<...> generic, or a
         // named type in this file that carries `ok`.
+        //
+        // The return type comes from the AST: slicing the text at the first `{` stopped inside
+        // `Promise<{ ok: boolean }>`, so an inline shape never counted.
         const text = source.getText(decl);
-        const header = text.slice(0, text.indexOf("{"));
+        const header = decl.returnType ? source.getText(decl.returnType) : "";
         const namedOk = [...okTypes].some((t) =>
           new RegExp(`\\b${t}\\b`).test(header),
         );
@@ -114,10 +119,17 @@ const rule = {
 
         // Already guarded, either via the shared helper or by hand.
         const body = source.getText(decl.body);
+        // `!res.ok` on a fetch Response is an HTTP check; it says nothing about the answer's `ok`.
+        const httpResponses = new Set(
+          [...body.matchAll(/\b(\w+)\s*=\s*await\s+fetch\(/g)].map((m) => m[1]),
+        );
+        const checksField = [...body.matchAll(/!(\w+)\.ok\b/g)].some(
+          (m) => !httpResponses.has(m[1]),
+        );
         if (
           body.includes("assertOk(") ||
           /\bok\s*===\s*false\b/.test(body) ||
-          /!\w+\.ok\b/.test(body)
+          checksField
         )
           return;
 

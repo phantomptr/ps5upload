@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { toMeshState, type MeshState } from "../api/mesh";
 import { busyText, replaceCheck } from "../lib/helperGuard";
-import { deviceName, othersBusy, othersOnline, othersRemotePlaying, presenceItems, remotePlayPads, RP_ACTIVITY } from "./mesh";
+import { deviceName, nearbyJoins, othersBusy, othersOnline, othersRemotePlaying, presenceItems, remotePlayPads, RP_ACTIVITY } from "./mesh";
 import { mergeShared, type SharedProfile } from "./rosterShare";
 import type { Task } from "./tasks";
 
@@ -80,6 +80,30 @@ describe("who is busy", () => {
       devices: [{ id: "pc", online: true, activity: [{ kind: RP_ACTIVITY, pad: "ws://192.168.1.20:19113/api/pad/ws" }] }],
     });
     expect(parsed.supported && !parsed.same && parsed.devices[0].activity[0].pad).toBe("ws://192.168.1.20:19113/api/pad/ws");
+  });
+
+  it("keeps a friend's Play Together through the engine's answer being checked", () => {
+    const join = {
+      code: "ABC123",
+      players: 1,
+      max: 4,
+      host_name: "Sam",
+      console_name: "PS5 Pro",
+      game_title: "Astro",
+      ws: "ws://192.168.1.20:19113/api/join/ws",
+    };
+    const parsed = toMeshState({
+      supported: true,
+      you: "me",
+      devices: [
+        { id: "me", online: true, activity: [] },
+        { id: "pc", online: true, activity: [{ kind: RP_ACTIVITY, join }] },
+        // Nothing to join with: a damaged or partial entry is not offered.
+        { id: "odd", online: true, activity: [{ kind: RP_ACTIVITY, join: { code: "X" } }] },
+      ],
+    });
+    expect(parsed.supported && !parsed.same).toBe(true);
+    expect(nearbyJoins(parsed as MeshState)).toEqual([{ device: expect.objectContaining({ id: "pc" }), join }]);
   });
 
   it("names an app from before 8.0.0 plainly, and prefers the nickname", () => {

@@ -131,13 +131,14 @@ const TIMEOUT_STANDARD = 60_000; // 60 s — matches Rust http_client
 const TIMEOUT_LONG = 3_600_000; // 1 h  — matches Rust http_client_long
 
 async function extractEngineError(r: Response): Promise<string> {
+  // One read: a body can only be consumed once, so parse the text rather than r.json().
+  const text = await r.text().catch(() => "");
   try {
-    const j = (await r.json()) as Record<string, unknown>;
+    const j = JSON.parse(text) as Record<string, unknown>;
     if (j && typeof j["error"] === "string") return j["error"] as string;
   } catch {
-    /* fall through */
+    /* plain text: a JSON extractor's rejection, or a reverse proxy's message */
   }
-  const text = await r.text().catch(() => "");
   return text.trim() || `engine HTTP ${r.status}`;
 }
 

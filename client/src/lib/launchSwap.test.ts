@@ -61,6 +61,28 @@ describe("starting a game while another one is running", () => {
     expect(await closeRunningGameFirst("PPSA00002", d)).toBe("close_failed");
   });
 
+  it("looks again when the first read fails, so a blip does not launch over a running game", async () => {
+    const { d } = deps();
+    const real = d.running.getMockImplementation()!;
+    d.running.mockImplementationOnce(async () => {
+      throw new Error("busy");
+    });
+    d.running.mockImplementation(real);
+    expect(await closeRunningGameFirst("PPSA00002", d)).toBe("closed");
+    expect(d.confirm).toHaveBeenCalled();
+  });
+
+  it("does not read a failed look after the close as the game being gone", async () => {
+    let calls = 0;
+    const { d } = deps({
+      running: vi.fn(async () => {
+        if (++calls === 1) return new Map([["PPSA00001", game("PPSA00001")]]);
+        throw new Error("busy");
+      }),
+    });
+    expect(await closeRunningGameFirst("PPSA00002", d)).toBe("close_failed");
+  });
+
   it("goes ahead when the running list cannot be read: the launch itself will say", async () => {
     const { d } = deps({
       running: vi.fn(async () => {
