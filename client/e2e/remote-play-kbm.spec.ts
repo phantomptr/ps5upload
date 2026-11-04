@@ -431,7 +431,11 @@ test("after Got it on the card the keys still reach the PS5", async ({ page }) =
   await start(page);
   await nativeMode(page, engine);
   await page.getByTestId("rp-stage").filter({ visible: true }).click();
-  await page.getByTestId("rp-kbm-card-ok").click();
+  // Focus on the button, as where a click puts it there (Chromium on a Mac leaves it on the stage,
+  // so a real click there passes either way).
+  const ok = page.getByTestId("rp-kbm-card-ok");
+  await ok.focus();
+  await ok.dispatchEvent("click");
   await expect(page.getByTestId("rp-kbm-card")).toHaveCount(0);
   await expect(page.getByTestId("rp-stage").filter({ visible: true })).toBeFocused();
   engine.reports.length = 0;
