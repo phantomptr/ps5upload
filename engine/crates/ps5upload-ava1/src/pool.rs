@@ -24,20 +24,7 @@ pub fn ava1_addr(console: &str) -> String {
 }
 
 /// The console string without its port (the pool's key).
-pub(crate) fn host_of(console: &str) -> String {
-    // `[v6]` and `[v6]:port` keep their brackets; `host:port` loses the port; a bare IPv6
-    // literal (several colons, no brackets) has no port to lose.
-    if let Some(rest) = console.strip_prefix('[') {
-        if let Some(i) = rest.find(']') {
-            return format!("[{}]", &rest[..i]);
-        }
-        return console.to_string();
-    }
-    match console.split_once(':') {
-        Some((h, port)) if !port.contains(':') => h.to_string(),
-        _ => console.to_string(),
-    }
-}
+pub(crate) use ps5upload_core::events::console_addr as host_of;
 
 /// `ERR_BUSY` on a `JobOpen` is retried this many times (jittered doubling backoff, 250 ms to 5 s: about 45 s in
 /// all) before the transfer fails with a clear reason. The console says BUSY while it recovers a job's files or

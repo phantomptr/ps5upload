@@ -54,6 +54,10 @@ pub struct Event {
     pub count: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub last_ts: Option<u64>,
+    /// The engine's event number (the `id:` of `/api/events`), set when the event enters the
+    /// journal; `/api/event-journal?since_seq=` resumes from it. None on app-side records.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub seq: Option<u64>,
 }
 
 pub fn now_ms() -> u64 {
@@ -74,15 +78,31 @@ fn trim_utf8(mut s: String, max: usize) -> String {
     s
 }
 
-/// The console's host from an address: `192.168.86.100:9120` -> `192.168.86.100`.
-pub fn console_host(addr: &str) -> String {
+/// The console's address without its port, brackets kept: `10.0.0.2:9120` -> `10.0.0.2`,
+/// `[fe80::1]:9120` -> `[fe80::1]`. A bare IPv6 literal (several colons, no brackets) has no port
+/// to lose. AVA1 has one port, so a `:port` from an older client or a saved address means nothing.
+/// This is the form that takes a port again: the session pool's key.
+pub fn console_addr(addr: &str) -> String {
     let a = addr.trim();
     if let Some(rest) = a.strip_prefix('[') {
-        return rest.split(']').next().unwrap_or(rest).to_string();
+        return match rest.find(']') {
+            Some(i) => format!("[{}]", &rest[..i]),
+            None => a.to_string(),
+        };
     }
-    match a.rsplit_once(':') {
-        Some((h, p)) if !h.contains(':') && p.chars().all(|c| c.is_ascii_digit()) => h.to_string(),
+    match a.split_once(':') {
+        Some((host, port)) if !port.contains(':') => host.to_string(),
         _ => a.to_string(),
+    }
+}
+
+/// The console's bare host, as a peer's IP prints: [`console_addr`] without the brackets.
+/// `192.168.86.100:9120` -> `192.168.86.100`, `[fe80::1]:9120` -> `fe80::1`.
+pub fn console_host(addr: &str) -> String {
+    let a = console_addr(addr);
+    match a.strip_prefix('[') {
+        Some(rest) => rest.strip_suffix(']').unwrap_or(rest).to_string(),
+        None => a,
     }
 }
 
@@ -112,6 +132,7 @@ impl Event {
             detail,
             count: None,
             last_ts: None,
+            seq: None,
         }
     }
 }
@@ -205,6 +226,26 @@ mod tests {
         assert_eq!(console_host("192.168.86.100:9120"), "192.168.86.100");
         assert_eq!(console_host("[fe80::1]:9120"), "fe80::1");
         assert_eq!(console_host("ps5.local"), "ps5.local");
+        assert_eq!(console_host("fe80::1"), "fe80::1");
+        assert_eq!(console_host("[::1]:"), "::1");
+        assert_eq!(console_host("[2001:db8::1]:foo"), "2001:db8::1");
+        assert_eq!(console_host(" 10.0.0.2:9120 "), "10.0.0.2");
+        assert_eq!(console_host(""), "");
+    }
+
+    #[test]
+    fn console_addr_keeps_brackets_for_the_port_it_will_get_back() {
+        for (typed, want) in [
+            ("10.0.0.2", "10.0.0.2"),
+            ("10.0.0.2:9113", "10.0.0.2"),
+            ("ps5.lan:9120", "ps5.lan"),
+            ("[::1]", "[::1]"),
+            ("[::1]:9113", "[::1]"),
+            ("fe80::1", "fe80::1"),
+            (":1234", ""),
+        ] {
+            assert_eq!(console_addr(typed), want, "{typed}");
+        }
     }
 
     #[test]

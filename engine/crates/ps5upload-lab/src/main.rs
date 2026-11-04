@@ -26,20 +26,8 @@ const DEFAULT_ADDR: &str = "192.168.137.2";
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// The console's host from whatever the caller typed: `host`, `host:9113` and `host:9114` all
-/// mean the same console (the ports they name no longer exist; AVA1 has one). A bracketed IPv6
-/// literal keeps its brackets; a bare one (several colons) has no port to lose.
-fn console_host(addr: &str) -> String {
-    if let Some(rest) = addr.strip_prefix('[') {
-        return match rest.find(']') {
-            Some(i) => format!("[{}]", &rest[..i]),
-            None => addr.to_string(),
-        };
-    }
-    match addr.split_once(':') {
-        Some((host, port)) if !port.contains(':') => host.to_string(),
-        _ => addr.to_string(),
-    }
-}
+/// mean the same console (the ports they name no longer exist; AVA1 has one).
+use ps5upload_core::events::console_addr as console_host;
 
 fn parse_tx_id(hex: &str) -> Result<[u8; 16]> {
     if hex.len() != 32 {

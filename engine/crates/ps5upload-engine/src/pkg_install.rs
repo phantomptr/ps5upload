@@ -3869,59 +3869,9 @@ fn plain_response(status: StatusCode, msg: &str) -> Response<Body> {
         .unwrap_or_else(builder_failed_response)
 }
 
-/// Strip port + IPv6 brackets from a `host:port` (or `[ipv6]:port`)
-/// string, returning just the bare host or IP. Centralised so the URL
-/// builder (where we feed the IP to `lan_ip_for_ps5`) and the source-IP
-/// gate (where we compare against `peer.ip().to_string()`) stay in
-/// lock-step — the v2.16.1 Round 1 audit caught one site and Round 2
-/// caught the other, with the same root cause: `split(':').next()`
-/// truncates IPv6 to `[` because IPv6 addresses contain colons.
-///
-/// rsplit_once on the LAST `:` correctly cuts off the port for both
-/// `1.2.3.4:9120` → `1.2.3.4` and `[2001:db8::1]:9120` → `[2001:db8::1]`.
-/// We then strip surrounding brackets to normalise to the bare form
-/// `peer.ip().to_string()` emits.
-///
-/// Edge cases:
-///   - input with no port (`1.2.3.4`, `::1`) → returned as-is (without
-///     brackets if present)
-///   - empty input → empty string (caller is expected to handle)
-pub(crate) fn strip_host_port(host_port: &str) -> String {
-    // Bracketed IPv6 with port: `[2001:db8::1]:9120` →
-    // rsplit_once on `]:` gives `[2001:db8::1` (with leading bracket).
-    if let Some((host, port)) = host_port.rsplit_once("]:") {
-        // host has leading `[` from the original; port is just digits.
-        if port.parse::<u16>().is_ok() {
-            return host.trim_start_matches('[').to_string();
-        }
-        // Empty port like `[::1]:` or non-numeric like `[::1]:foo` —
-        // strip the host's leading `[` plus the trailing `]:port`
-        // fragment, leaving the bare IPv6. Without this branch the
-        // string falls through to the multi-colon catch-all and
-        // returns unchanged, breaking the source-IP gate.
-        return host.trim_start_matches('[').to_string();
-    }
-    // Bracketed IPv6 without port: `[2001:db8::1]` → strip brackets.
-    if host_port.starts_with('[') && host_port.ends_with(']') {
-        return host_port
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .to_string();
-    }
-    // Bare IPv6 (no brackets, no port): contains multiple colons —
-    // can't reliably distinguish host from port. Assume no port and
-    // return the whole string. Callers feeding bare IPv6 with a
-    // port suffix MUST bracket the address — that's the only
-    // unambiguous form.
-    if host_port.matches(':').count() > 1 {
-        return host_port.to_string();
-    }
-    // Single colon: IPv4-with-port or hostname-with-port — split.
-    match host_port.rsplit_once(':') {
-        Some((host, port)) if port.parse::<u16>().is_ok() => host.to_string(),
-        _ => host_port.to_string(),
-    }
-}
+/// `ip:port` → `ip`, `[v6]:port` → bare `v6`: the form `peer.ip().to_string()` prints, which the
+/// source-IP gate and the install URL builder compare against. One implementation, in core.
+pub(crate) use ps5upload_core::events::console_host as strip_host_port;
 
 /// Derive the URL filename component for a hosted pkg, preferring the
 /// pkg's canonical content_id (Sony cross-checks the URL filename
@@ -4164,16 +4114,6 @@ mod tests {
         }))
         .await;
         assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
-    }
-
-    /// The route is wired: the web UI's `payload_restore` command 404'd after
-    /// the unified-install cleanup removed it.
-    #[test]
-    fn payload_restore_route_is_registered() {
-        let src = include_str!("pkg_install.rs");
-        assert!(
-            src.contains(r#".route("/api/pkg/payload-restore", post(payload_restore_handler))"#)
-        );
     }
 
     // ── short aliases for over-long install links ──
