@@ -602,7 +602,6 @@ export default function SavesScreen() {
     const restoreHost = host.trim();
     // Claim before any dialog — see comment in handleDownload.
     markBusy(entry.path, true);
-    let tempDir: string | null = null;
     let task: TaskHandle | null = null;
     try {
       const ok = await confirmDialog({
@@ -668,7 +667,6 @@ export default function SavesScreen() {
       );
     } finally {
       task?.done();
-      if (tempDir) await saveArchiveCleanupTemp(tempDir).catch(() => {});
       markBusy(entry.path, false);
     }
   }

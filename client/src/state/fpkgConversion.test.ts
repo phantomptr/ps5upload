@@ -27,6 +27,7 @@ const jobPause = vi.fn();
 const jobResume = vi.fn();
 const installStream = vi.fn();
 const runningJobs = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
+const inspect = vi.fn(async (..._a: unknown[]): Promise<{ content_id?: string | null }> => ({}));
 const uploadInstall = vi.fn();
 // The staged row an upload install reports through; the test drives it.
 type Listener = (s: { entries: { path: string; status: string; bytes?: number; totalBytes?: number }[] }) => void;
@@ -40,6 +41,7 @@ vi.mock("../api/fpkg", () => ({
     extract: (...a: unknown[]) => extract(...a),
     cleanupExtract: (...a: unknown[]) => cleanupExtract(...(a as [])),
     runningJobs: (...a: unknown[]) => runningJobs(...a),
+    inspect: (...a: unknown[]) => inspect(...a),
     deletePackage: (...a: unknown[]) => deletePackage(...(a as [])),
   },
 }));
@@ -824,6 +826,23 @@ describe("fpkg pipeline", () => {
     const second = remoteFetch.mock.calls[0][1] as string;
     expect(first.startsWith("/out/.ps5upload-source/")).toBe(true);
     expect(second).not.toBe(first);
+  });
+
+  it("says after unpacking when the game inside would not play as a package here", async () => {
+    const { pushNotification } = await import("./notifications");
+    vi.mocked(pushNotification).mockClear();
+    const was = (conn as { ps5Kernel?: string | null }).ps5Kernel;
+    (conn as { ps5Kernel?: string | null }).ps5Kernel = "r229358/releases/13.60";
+    inspect.mockResolvedValueOnce({ content_id: "UP9000-PPSA03671_00-X" });
+    jobStatus
+      .mockResolvedValueOnce({ status: "done", dest: "/out/.ps5upload-extract-x2/G", bytes_sent: 1 })
+      .mockResolvedValueOnce({ status: "failed", error: "stop here" });
+    await useFpkgConversion.getState().start({ source: "/dl/g.7z", outputDir: "/out" }, { install: false, host: null });
+    await tick();
+    await tick();
+    expect(inspect).toHaveBeenCalledWith("/out/.ps5upload-extract-x2/G", "/out");
+    expect(pushNotification).toHaveBeenCalledWith("warning", expect.anything(), expect.objectContaining({ link: "/workshop" }));
+    (conn as { ps5Kernel?: string | null }).ps5Kernel = was;
   });
 
   it("unpacks a local archive, builds the game inside, then removes the unpack", async () => {
