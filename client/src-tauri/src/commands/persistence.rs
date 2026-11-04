@@ -214,7 +214,13 @@ pub async fn send_payload_history_add(app: AppHandle, record: JsonValue) -> Resu
     let _guard = store_mutex(Store::SendPayloadHistory)
         .lock()
         .map_err(|e| format!("history store mutex poisoned: {e}"))?;
-    let mut current = load_json_or_default(&path, empty_send_payload_history())?;
+    history_add(&path, record)?;
+    Ok(true)
+}
+
+/// The read-modify-write of one add; the caller holds the store's lock.
+fn history_add(path: &PathBuf, record: JsonValue) -> Result<(), String> {
+    let mut current = load_json_or_default(path, empty_send_payload_history())?;
 
     // Dedupe: if an entry with the same (path, host, port) already exists,
     // replace it with the new record (which carries the fresh timestamp
@@ -234,8 +240,7 @@ pub async fn send_payload_history_add(app: AppHandle, record: JsonValue) -> Resu
     if let Some(obj) = current.as_object_mut() {
         obj.insert("updated_at".to_string(), serde_json::json!(now_unix_ms()));
     }
-    write_json_atomic(&path, &current)?;
-    Ok(true)
+    write_json_atomic(path, &current)
 }
 
 /// Stable identity for dedup purposes. Empty string is treated as
@@ -340,7 +345,12 @@ pub async fn resume_txid_lookup(
     let _guard = store_mutex(Store::ResumeTxids)
         .lock()
         .map_err(|e| format!("resume-txid store mutex poisoned: {e}"))?;
-    let mut store = load_json_or_default(&path, empty_resume_txids())?;
+    resume_lookup(&path, &req)
+}
+
+/// The prune and read of one lookup; the caller holds the store's lock.
+fn resume_lookup(path: &PathBuf, req: &ResumeTxidLookupReq) -> Result<JsonValue, String> {
+    let mut store = load_json_or_default(path, empty_resume_txids())?;
     let pruned = resume_txid_prune_expired(&mut store);
     let key = resume_txid_match_key(&req.host, &req.src, &req.dest);
     let tx_id_hex = store
@@ -363,7 +373,7 @@ pub async fn resume_txid_lookup(
         // user still gets back the live tx_id — but the next launch
         // will repeat the prune work and silently fail again. Log
         // so the pattern surfaces in support requests.
-        if let Err(e) = write_json_atomic(&path, &store) {
+        if let Err(e) = write_json_atomic(path, &store) {
             eprintln!("[resume-txid] post-prune save failed: {e} (will retry next time)");
         }
     }
@@ -399,7 +409,13 @@ pub async fn resume_txid_remember(
     let _guard = store_mutex(Store::ResumeTxids)
         .lock()
         .map_err(|e| format!("resume-txid store mutex poisoned: {e}"))?;
-    let mut store = load_json_or_default(&path, empty_resume_txids())?;
+    resume_remember(&path, req)?;
+    Ok(true)
+}
+
+/// The prune and upsert of one remember; the caller holds the store's lock.
+fn resume_remember(path: &PathBuf, req: ResumeTxidRememberReq) -> Result<(), String> {
+    let mut store = load_json_or_default(path, empty_resume_txids())?;
     let _ = resume_txid_prune_expired(&mut store);
     let key = resume_txid_match_key(&req.host, &req.src, &req.dest);
     let now = now_unix_ms();
@@ -429,8 +445,7 @@ pub async fn resume_txid_remember(
     if let Some(obj) = store.as_object_mut() {
         obj.insert("updated_at".to_string(), serde_json::json!(now));
     }
-    write_json_atomic(&path, &store)?;
-    Ok(true)
+    write_json_atomic(path, &store)
 }
 
 #[derive(serde::Deserialize)]
@@ -450,7 +465,13 @@ pub async fn resume_txid_forget(app: AppHandle, req: ResumeTxidForgetReq) -> Res
     let _guard = store_mutex(Store::ResumeTxids)
         .lock()
         .map_err(|e| format!("resume-txid store mutex poisoned: {e}"))?;
-    let mut store = load_json_or_default(&path, empty_resume_txids())?;
+    resume_forget(&path, &req)?;
+    Ok(true)
+}
+
+/// The prune and removal of one forget; the caller holds the store's lock.
+fn resume_forget(path: &PathBuf, req: &ResumeTxidForgetReq) -> Result<(), String> {
+    let mut store = load_json_or_default(path, empty_resume_txids())?;
     let key = resume_txid_match_key(&req.host, &req.src, &req.dest);
     let mut dirty = resume_txid_prune_expired(&mut store);
     if let Some(records) = store.get_mut("records").and_then(|v| v.as_array_mut()) {
@@ -464,9 +485,9 @@ pub async fn resume_txid_forget(app: AppHandle, req: ResumeTxidForgetReq) -> Res
         if let Some(obj) = store.as_object_mut() {
             obj.insert("updated_at".to_string(), serde_json::json!(now_unix_ms()));
         }
-        write_json_atomic(&path, &store)?;
+        write_json_atomic(path, &store)?;
     }
-    Ok(true)
+    Ok(())
 }
 
 // ── Upload queue (whole-document store) ─────────────────────────────────────
@@ -525,4 +546,317 @@ fn now_unix_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// An empty folder of this test's own under the system temp folder.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "ps5upload-persistence-{name}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn file(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+
+        fn names(&self) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(&self.0)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn read(path: &PathBuf) -> JsonValue {
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    fn lookup_req(src: &str) -> ResumeTxidLookupReq {
+        ResumeTxidLookupReq {
+            host: "h".into(),
+            src: src.into(),
+            dest: "/d".into(),
+        }
+    }
+
+    fn remember_req(src: &str, tx: &str) -> ResumeTxidRememberReq {
+        ResumeTxidRememberReq {
+            host: "h".into(),
+            src: src.into(),
+            dest: "/d".into(),
+            tx_id_hex: tx.into(),
+            mode: None,
+        }
+    }
+
+    fn sent(path: &str, host: &str, port: u64) -> JsonValue {
+        json!({ "path": path, "host": host, "port": port })
+    }
+
+    /// Existing installs have these files: a rename here forgets everybody's data.
+    #[test]
+    fn the_file_names_stay_what_existing_installs_have() {
+        assert_eq!(
+            Store::SendPayloadHistory.filename(),
+            "send_payload_history.json"
+        );
+        assert_eq!(Store::ResumeTxids.filename(), "resume_txids.json");
+        assert_eq!(Store::UploadQueue.filename(), "upload_queue.json");
+        assert_eq!(Store::PayloadPlaylists.filename(), "payload_playlists.json");
+    }
+
+    #[test]
+    fn a_missing_or_empty_file_loads_the_default() {
+        let dir = Scratch::new("default");
+        let path = dir.file("a.json");
+        assert_eq!(
+            load_json_or_default(&path, json!({"d": 1})).unwrap(),
+            json!({"d": 1})
+        );
+        // What a crash could leave before the fsync went in.
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(
+            load_json_or_default(&path, json!({"d": 1})).unwrap(),
+            json!({"d": 1})
+        );
+    }
+
+    /// Treating damage as "empty" would let the next save overwrite what could still be repaired.
+    #[test]
+    fn a_damaged_file_is_an_error_and_stays_on_disk() {
+        let dir = Scratch::new("damaged");
+        let path = dir.file("a.json");
+        std::fs::write(&path, b"{not json").unwrap();
+        let err = load_json_or_default(&path, json!({})).unwrap_err();
+        assert!(err.contains("parse"), "{err}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"{not json");
+    }
+
+    #[test]
+    fn a_save_replaces_the_file_and_leaves_no_temporary_behind() {
+        let dir = Scratch::new("save");
+        let path = dir.file("a.json");
+        write_json_atomic(&path, &json!({"v": 1})).unwrap();
+        write_json_atomic(&path, &json!({"v": 2})).unwrap();
+        assert_eq!(read(&path), json!({"v": 2}));
+        assert_eq!(dir.names(), ["a.json"]);
+    }
+
+    #[test]
+    fn a_save_sweeps_this_stores_orphans_and_no_others() {
+        let dir = Scratch::new("orphans");
+        std::fs::write(dir.file("a.json.tmp.7"), b"crashed mid-write").unwrap();
+        std::fs::write(dir.file("b.json.tmp.7"), b"another store's").unwrap();
+        std::fs::write(dir.file("a.json.bak"), b"not ours to delete").unwrap();
+        write_json_atomic(&dir.file("a.json"), &json!({})).unwrap();
+        assert_eq!(dir.names(), ["a.json", "a.json.bak", "b.json.tmp.7"]);
+    }
+
+    #[test]
+    fn a_save_into_a_missing_folder_fails_and_says_so() {
+        let dir = Scratch::new("nofolder");
+        let path = dir.file("gone/a.json");
+        assert!(write_json_atomic(&path, &json!({})).is_err());
+        assert_eq!(dir.names(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn sending_the_same_payload_again_moves_it_to_the_newest() {
+        let dir = Scratch::new("dedupe");
+        let path = dir.file("h.json");
+        history_add(&path, sent("/a.elf", "h1", 9021)).unwrap();
+        history_add(&path, sent("/b.elf", "h1", 9021)).unwrap();
+        history_add(&path, sent("/a.elf", "h1", 9021)).unwrap();
+        let store = read(&path);
+        assert_eq!(
+            store["records"],
+            json!([sent("/b.elf", "h1", 9021), sent("/a.elf", "h1", 9021)])
+        );
+        assert!(store["updated_at"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn the_same_payload_to_another_console_or_port_is_its_own_row() {
+        let dir = Scratch::new("distinct");
+        let path = dir.file("h.json");
+        history_add(&path, sent("/a.elf", "h1", 9021)).unwrap();
+        history_add(&path, sent("/a.elf", "h2", 9021)).unwrap();
+        history_add(&path, sent("/a.elf", "h1", 9020)).unwrap();
+        assert_eq!(read(&path)["records"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_record_without_an_identity_is_kept_not_merged() {
+        assert_eq!(
+            record_match_key(&sent("/a.elf", "h", 1)).as_deref(),
+            Some("/a.elf|h|1")
+        );
+        assert_eq!(
+            record_match_key(&json!({"path": "/a.elf", "host": "h"})),
+            None
+        );
+        assert_eq!(record_match_key(&sent("", "h", 1)), None);
+        assert_eq!(record_match_key(&sent("/a.elf", "", 1)), None);
+        assert_eq!(record_match_key(&json!("text")), None);
+
+        let dir = Scratch::new("noid");
+        let path = dir.file("h.json");
+        history_add(&path, json!({"path": "/a.elf"})).unwrap();
+        history_add(&path, json!({"path": "/a.elf"})).unwrap();
+        assert_eq!(read(&path)["records"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn the_history_drops_its_oldest_at_the_limit() {
+        let dir = Scratch::new("cap");
+        let path = dir.file("h.json");
+        for i in 0..SEND_PAYLOAD_HISTORY_MAX + 2 {
+            history_add(&path, sent(&format!("/{i}.elf"), "h", 9021)).unwrap();
+        }
+        let store = read(&path);
+        let records = store["records"].as_array().unwrap();
+        assert_eq!(records.len(), SEND_PAYLOAD_HISTORY_MAX);
+        assert_eq!(records[0]["path"], "/2.elf");
+        assert_eq!(
+            records[records.len() - 1]["path"],
+            format!("/{}.elf", SEND_PAYLOAD_HISTORY_MAX + 1)
+        );
+    }
+
+    #[test]
+    fn a_remembered_id_is_found_again_only_for_the_same_upload() {
+        let dir = Scratch::new("txid");
+        let path = dir.file("t.json");
+        let none = json!({ "tx_id_hex": null });
+        assert_eq!(resume_lookup(&path, &lookup_req("/a")).unwrap(), none);
+
+        resume_remember(&path, remember_req("/a", "aa")).unwrap();
+        assert_eq!(
+            resume_lookup(&path, &lookup_req("/a")).unwrap(),
+            json!({ "tx_id_hex": "aa" })
+        );
+        assert_eq!(resume_lookup(&path, &lookup_req("/b")).unwrap(), none);
+        let other_console = ResumeTxidLookupReq {
+            host: "other".into(),
+            ..lookup_req("/a")
+        };
+        assert_eq!(resume_lookup(&path, &other_console).unwrap(), none);
+        assert_eq!(read(&path)["records"][0]["mode"], "reconcile");
+    }
+
+    #[test]
+    fn remembering_again_replaces_and_forgetting_removes_only_that_one() {
+        let dir = Scratch::new("replace");
+        let path = dir.file("t.json");
+        resume_remember(&path, remember_req("/a", "aa")).unwrap();
+        resume_remember(&path, remember_req("/b", "bb")).unwrap();
+        resume_remember(&path, remember_req("/a", "a2")).unwrap();
+        assert_eq!(read(&path)["records"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            resume_lookup(&path, &lookup_req("/a")).unwrap()["tx_id_hex"],
+            "a2"
+        );
+
+        resume_forget(
+            &path,
+            &ResumeTxidForgetReq {
+                host: "h".into(),
+                src: "/a".into(),
+                dest: "/d".into(),
+            },
+        )
+        .unwrap();
+        assert!(resume_lookup(&path, &lookup_req("/a")).unwrap()["tx_id_hex"].is_null());
+        assert_eq!(
+            resume_lookup(&path, &lookup_req("/b")).unwrap()["tx_id_hex"],
+            "bb"
+        );
+    }
+
+    #[test]
+    fn forgetting_what_was_never_there_does_not_write() {
+        let dir = Scratch::new("forget-none");
+        let path = dir.file("t.json");
+        resume_forget(
+            &path,
+            &ResumeTxidForgetReq {
+                host: "h".into(),
+                src: "/a".into(),
+                dest: "/d".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(dir.names(), Vec::<String>::new());
+    }
+
+    /// Seven days from the last contact (#440): the console keeps the job that long.
+    #[test]
+    fn an_id_lasts_seven_days_from_its_last_use_and_then_goes_from_disk() {
+        let dir = Scratch::new("ttl");
+        let path = dir.file("t.json");
+        resume_remember(&path, remember_req("/old", "oo")).unwrap();
+        resume_remember(&path, remember_req("/fresh", "ff")).unwrap();
+        let mut store = read(&path);
+        let day = 24 * 60 * 60 * 1000;
+        // An hour under the limit is still good: the store keeps both.
+        store["records"][0]["last_seen_ms"] = json!(now_unix_ms() - 7 * day + 3_600_000);
+        write_json_atomic(&path, &store).unwrap();
+        assert_eq!(
+            resume_lookup(&path, &lookup_req("/old")).unwrap()["tx_id_hex"],
+            "oo"
+        );
+
+        store["records"][0]["last_seen_ms"] = json!(now_unix_ms() - 7 * day - 3_600_000);
+        write_json_atomic(&path, &store).unwrap();
+        assert!(resume_lookup(&path, &lookup_req("/old")).unwrap()["tx_id_hex"].is_null());
+        let left = read(&path);
+        assert_eq!(left["records"].as_array().unwrap().len(), 1);
+        assert_eq!(left["records"][0]["tx_id_hex"], "ff");
+    }
+
+    #[test]
+    fn a_record_with_no_time_is_treated_as_expired() {
+        let mut store = json!({ "records": [{ "key": "k", "tx_id_hex": "aa" }] });
+        assert!(resume_txid_prune_expired(&mut store));
+        assert_eq!(store["records"], json!([]));
+        assert!(!resume_txid_prune_expired(&mut store), "nothing left to do");
+    }
+
+    #[test]
+    fn the_id_store_drops_its_oldest_at_the_limit() {
+        let dir = Scratch::new("txcap");
+        let path = dir.file("t.json");
+        for i in 0..RESUME_TXID_MAX_RECORDS + 1 {
+            resume_remember(&path, remember_req(&format!("/{i}"), "aa")).unwrap();
+        }
+        assert_eq!(
+            read(&path)["records"].as_array().unwrap().len(),
+            RESUME_TXID_MAX_RECORDS
+        );
+        assert!(resume_lookup(&path, &lookup_req("/0")).unwrap()["tx_id_hex"].is_null());
+        assert_eq!(
+            resume_lookup(&path, &lookup_req("/1")).unwrap()["tx_id_hex"],
+            "aa"
+        );
+    }
 }
