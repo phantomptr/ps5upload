@@ -324,7 +324,7 @@ export function RunCard(props: RunCardProps) {
             ) : null}
           </div>
           {r.state === "active" && (
-            <div className="pl-6">
+            <div className="ps-6">
               <ProgressBar
                 value={r.total ? (r.done ?? 0) / r.total : null}
                 label={label(r.stage)}

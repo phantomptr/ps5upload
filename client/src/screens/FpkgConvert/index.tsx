@@ -1120,7 +1120,7 @@ export default function WorkshopScreen() {
                 <summary className="cursor-pointer">
                   {tr("fpkg.aboutChecks", undefined, "What the check looks for")}
                 </summary>
-                <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-5">
+                <ul className="mt-1.5 flex list-disc flex-col gap-1 ps-5">
                   <li>
                     {tr(
                       "fpkg.checkEboot",

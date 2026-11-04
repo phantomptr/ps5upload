@@ -19,8 +19,6 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOTS = ["client/src/screens", "client/src/components", "client/src/layout"];
-/** Worked on elsewhere for now; nothing about it is different. */
-const SKIP = ["client/src/screens/FpkgConvert/"];
 
 // A class starts the string, or follows a space, a quote, a variant's colon or an important's "!".
 const START = "(?<=^|[\\s\"'`:!])(-?)";
@@ -58,7 +56,6 @@ export function sourceFiles(root = repoRoot) {
   const walk = (dir) => {
     for (const e of fs.readdirSync(path.join(root, dir), { withFileTypes: true })) {
       const rel = `${dir}/${e.name}`;
-      if (SKIP.some((s) => `${rel}/`.startsWith(s))) continue;
       if (e.isDirectory()) walk(rel);
       else if (e.name.endsWith(".tsx") && !e.name.endsWith(".test.tsx")) out.push(rel);
     }

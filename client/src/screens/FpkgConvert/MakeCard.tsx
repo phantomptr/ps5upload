@@ -106,7 +106,7 @@ export function MakeCard({
                 disabled={locked}
                 onClick={() => onMake(t.id)}
                 title={t.body}
-                className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] px-2.5 py-2 text-left disabled:opacity-60 sm:px-3 ${
+                className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] px-2.5 py-2 text-start disabled:opacity-60 sm:px-3 ${
                   on
                     ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
                     : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"

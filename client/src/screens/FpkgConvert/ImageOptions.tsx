@@ -205,7 +205,7 @@ export function ImageChoice({
             type="button"
             aria-pressed={format === o.id}
             onClick={() => setFormat(o.id)}
-            className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] px-3.5 py-3 text-left text-xs ${
+            className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] px-3.5 py-3 text-start text-xs ${
               format === o.id
                 ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
                 : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
@@ -281,7 +281,7 @@ export function FfpfscLevelOption({
     <div
       role="radiogroup"
       aria-label={tr("fpkg.compression", undefined, "Compression")}
-      className="ml-6 grid gap-2 2xl:grid-cols-3"
+      className="ms-6 grid gap-2 2xl:grid-cols-3"
       data-testid="ffpfsc-level"
     >
       {levels.map((l) => (
@@ -291,7 +291,7 @@ export function FfpfscLevelOption({
           role="radio"
           aria-checked={level === l.id ? "true" : "false"}
           onClick={() => setLevel(l.id)}
-          className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] px-3 py-2 text-left text-xs ${
+          className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] px-3 py-2 text-start text-xs ${
             level === l.id
               ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
               : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
