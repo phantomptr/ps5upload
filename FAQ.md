@@ -309,13 +309,19 @@ Things to know:
 - **Each site's limits.** Twitch takes H.264 at up to about 6 Mbps, Kick H.264 up to 8 Mbps,
   Facebook H.264 up to about 9 Mbps; YouTube also takes HEVC. When a site needs something
   else, the panel says so and offers to restart Play in H.264 at the right bitrate (the game
-  keeps running; the picture comes back in a few seconds). HDR can't be streamed.
+  keeps running; the picture comes back in about 15 s, friends in Play Together stay in, and Play
+  keeps those settings until you change them in Settings › Picture). HDR can't be streamed.
 - **YouTube** turns live streaming on for a channel the first time you ask, which can take up to
   24 hours. To try it privately, set the stream to Unlisted or Private in YouTube Studio.
 - **Twitch**: **Test without going public** (on by default when you add Twitch) sends a
   bandwidth test that nobody sees. Turn it off to go live for real.
 - **A refused key**: "refused the stream" almost always means the key is wrong or was reset
   on the site: copy it again.
+- **Docker image**: it can't run the ffmpeg download (the image has no system libraries), and the
+  panel says so. Mount a static ffmpeg into the container and point `PS5UPLOAD_FFMPEG` at it, with
+  `SSL_CERT_FILE` at a certificate bundle for `rtmps://` sites.
+- **Certificate errors**: if the site's certificate can't be checked, set `SSL_CERT_FILE` to this
+  computer's certificate bundle.
 
 ---
 
@@ -2525,6 +2531,18 @@ still looks wrong, set Play › Settings › **Video decoding** to **Software** 
 **Q: Does my phone controller (Backbone, Razer Kishi, GameSir, Scuf Nomad...) work with Remote Play?**
 Yes. Phone controllers, USB-C or Bluetooth, are game controllers to the phone, so Remote Play reads them like any other: connect it, press a button, and it plays (the on-screen controller hides). If the browser doesn't recognise one, it still plays in the usual layout; if a button is wrong, open Play › Settings › Controllers › **Map buttons** and press each button as asked (any step can be skipped). **Set an extra button** gives a back button or paddle any PS5 button. Mappings are saved per controller. In the Android app the app also hands controllers to the page itself, for phones whose system browser misses them; on iPhone the app makes sure the page has the focus controllers need.
 
+**Q: Linux: my DualSense has no touchpad, motion or adaptive triggers.**
+The app needs to open the controller, and on Linux `/dev/hidraw*` is root's unless a udev rule says
+otherwise. The `.deb` and `.rpm` install that rule. With the AppImage or the `.zip`, add it once as
+`/etc/udev/rules.d/70-ps5upload-dualsense.rules`, then unplug the controller and plug it in again:
+
+```
+KERNEL=="hidraw*", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", KERNELS=="*054C:0CE6*", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", KERNELS=="*054C:0DF2*", MODE="0660", TAG+="uaccess"
+```
+
 **Q: Windows: my DualSense works in Windows but Play says "No controller seen yet".**
 Some Windows setups never hand a DualSense (often over Bluetooth) to the app's web view. The
 Windows app now reads a DualSense itself whenever the web view sees no controller, over USB or
@@ -2683,7 +2701,10 @@ can (see "How do I set Play up?"):
    changing the user. If it fails, the message gives the console's reason, and **Pair with the
    PIN shown on the PS5** pairs the way PS Remote Play does: on the PS5 open Settings › System ›
    Remote Play › Link Device and type the 8-digit number it shows. That needs no helper, so it
-   works on any firmware. Some consoles drop the first try (one on FW 11.60 also showed
+   works on any firmware. If it says 80108b03, the step is on the console: open Settings › System ›
+   Remote Play and turn on Enable Remote Play (greyed out or won't stay on: run the offline sign-in
+   in Play › Set up and restart the PS5), then press Pair again; unpairing doesn't change it. Some
+   consoles drop the first try (one on FW 11.60 also showed
    CE-110024-8 "Something went wrong"): the app tries again by itself, and if it still fails,
    press Pair again; the same PIN works while the PS5 shows it. Closing the CE-110024-8 dialog
    is harmless.
