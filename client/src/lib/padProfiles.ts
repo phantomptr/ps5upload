@@ -62,7 +62,25 @@ let cache: Record<string, PadProfile> | null = null;
 /** The profile `g` plays with: its saved one, else the browser's standard layout or the guess. */
 export function profileFor(g: Gamepad): PadProfile {
   cache ??= loadProfiles();
-  return cache[g.id] ?? guessProfile(g);
+  return cache[g.id] ?? migratedProfile(cache, g.id) ?? guessProfile(g);
+}
+
+/** A forwarded controller is named `<name> (app)` since #668. A mapping saved under the name the
+ *  browser gave it applies still, and is copied to the new name on first use; the old entry stays,
+ *  for a browser or an older version that still reads it. */
+function migratedProfile(all: Record<string, PadProfile>, id: string): PadProfile | null {
+  if (!id.endsWith(" (app)")) return null;
+  const name = id.slice(0, -" (app)".length).trim().toLowerCase();
+  if (!name) return null;
+  const same = Object.keys(all).filter((k) => {
+    const key = k.trim().toLowerCase();
+    return key === name || key.includes(name);
+  });
+  const exact = same.find((k) => k.trim().toLowerCase() === name);
+  const from = exact ?? (same.length === 1 ? same[0] : null);
+  if (!from) return null;
+  cache = saveProfile(id, all[from]);
+  return all[from];
 }
 
 /** A controller as one moment of its buttons and axes. */

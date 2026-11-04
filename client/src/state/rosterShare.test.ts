@@ -6,9 +6,11 @@ import {
   asDoc,
   mergeShared,
   RosterShare,
+  startRosterShare,
   seedDefaultConsole,
   sharedForm,
   UNSAVED_KEY,
+  PULL_MS,
   type ShareApi,
   type SharedProfile,
 } from "./rosterShare";
@@ -362,5 +364,100 @@ describe("asDoc", () => {
     };
     await expect(new RosterShare(api).start()).rejects.toThrow();
     expect(ids()).toEqual(["a"]);
+  });
+});
+
+describe("a change made before the engine answered", () => {
+  beforeEach(() => {
+    stubStorage();
+    vi.useFakeTimers();
+    vi.stubGlobal("document", { visibilityState: "visible", addEventListener: () => {}, removeEventListener: () => {} });
+    Object.assign(window, { setInterval, clearInterval, addEventListener: () => {}, removeEventListener: () => {} });
+    useRosterStore.setState({ profiles: [p("a") as PS5Profile, p("b") as PS5Profile], active_id: null });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const downThenUp = (e: ReturnType<typeof fakeEngine>) => {
+    const state = { down: true };
+    const api: ShareApi = {
+      get: async () => {
+        if (state.down) throw new Error("engine not up");
+        return e.api.get();
+      },
+      put: e.api.put,
+    };
+    return { api, state };
+  };
+
+  it("a console removed while the engine is down stays removed", async () => {
+    const e = fakeEngine([p("a"), p("b")]);
+    const d = downThenUp(e);
+    const stop = startRosterShare(d.api);
+    await vi.advanceTimersByTimeAsync(0);
+    useRosterStore.setState({ profiles: [p("a") as PS5Profile] });
+    expect(safeGetItem(UNSAVED_KEY)).not.toBeNull();
+    d.state.down = false;
+    await vi.advanceTimersByTimeAsync(PULL_MS);
+    expect(ids()).toEqual(["a"]);
+    expect(e.doc.value?.profiles?.map((x) => x.id)).toEqual(["a"]);
+    expect(safeGetItem(UNSAVED_KEY)).toBeNull();
+    stop();
+  });
+
+  it("a console added during a failed start is kept and saved", async () => {
+    const e = fakeEngine([p("a"), p("b")]);
+    const d = downThenUp(e);
+    const stop = startRosterShare(d.api);
+    await vi.advanceTimersByTimeAsync(0);
+    useRosterStore.setState({ profiles: [p("a") as PS5Profile, p("b") as PS5Profile, p("c") as PS5Profile] });
+    d.state.down = false;
+    await vi.advanceTimersByTimeAsync(PULL_MS);
+    expect(ids().sort()).toEqual(["a", "b", "c"]);
+    expect(e.doc.value?.profiles?.map((x) => x.id).sort()).toEqual(["a", "b", "c"]);
+    stop();
+  });
+});
+
+describe("keys the engine holds and this app lacks", () => {
+  beforeEach(() => {
+    stubStorage();
+    useRosterStore.setState({ profiles: [p("a") as PS5Profile], active_id: null });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("come to the app, and are no reason to save again", async () => {
+    const e = fakeEngine([p("a", { wake_rp_key: "held" })]);
+    const share = new RosterShare(e.api, useRosterStore, "union");
+    await share.start();
+    const rev = e.doc.rev;
+    expect(useRosterStore.getState().profiles[0].wake_rp_key).toBe("held");
+    await share.pull();
+    await share.pull();
+    expect(e.doc.rev).toBe(rev);
+  });
+
+  it("appearing at the same revision are not read as a lost store", async () => {
+    const e = fakeEngine([p("a")]);
+    const share = new RosterShare(e.api, useRosterStore, "union");
+    await share.start();
+    const rev = e.doc.rev;
+    e.doc.value = { profiles: [p("a", { wake_rp_key: "held" })] };
+    await share.pull();
+    await share.pull();
+    expect(e.doc.rev).toBe(rev);
+    expect(useRosterStore.getState().profiles[0].wake_rp_key).toBe("held");
+  });
+
+  it("removed here stay removed", async () => {
+    const e = fakeEngine([p("a", { wake_rp_key: "old" })]);
+    useRosterStore.setState({ profiles: [p("a", { wake_rp_key: "old" }) as PS5Profile], active_id: null });
+    const share = new RosterShare(e.api, useRosterStore, "union");
+    await share.start();
+    useRosterStore.setState({ profiles: [p("a") as PS5Profile] });
+    await share.pull();
+    expect(useRosterStore.getState().profiles[0].wake_rp_key).toBeFalsy();
   });
 });

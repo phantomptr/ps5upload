@@ -57,6 +57,32 @@ function canonical(v: unknown): unknown {
 
 const same = (a: unknown, b: unknown) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 
+/** What wakes a console and signs in to it. A save that leaves one out keeps the engine's. */
+const KEY_FIELDS = ["wake_credential", "wake_regist_key", "wake_rp_key"] as const;
+
+const withoutKeys = (list: readonly SharedProfile[]) =>
+  list.map((p) => {
+    const copy: Record<string, unknown> = { ...p };
+    for (const f of KEY_FIELDS) delete copy[f];
+    return copy;
+  });
+
+/** The same list, whichever keys each side holds: the engine keeps keys this app never had. */
+const sameBesidesKeys = (a: readonly SharedProfile[], b: readonly SharedProfile[]) =>
+  same(withoutKeys(a), withoutKeys(b));
+
+/** `mine`, with the keys the engine holds and this app never had. One the app had (in `base`) and
+ *  no longer has was removed here, and stays removed. */
+function withHeldKeys(mine: SharedProfile, base: SharedProfile | undefined, theirs: SharedProfile): SharedProfile {
+  const out = { ...mine } as Record<string, unknown>;
+  const b = (base ?? {}) as Record<string, unknown>;
+  const t = theirs as Record<string, unknown>;
+  for (const f of KEY_FIELDS) {
+    if (!out[f] && !b[f] && t[f]) out[f] = t[f];
+  }
+  return out as SharedProfile;
+}
+
 /**
  * Three-way merge of console lists by id. `base` is the last copy both sides had, `mine` this
  * browser's, `theirs` the engine's. Their list is the starting point; then each of my changes
@@ -75,7 +101,7 @@ export function mergeShared(
     .map((p) => {
       const m = mineById.get(p.id);
       const b = baseById.get(p.id);
-      return m && !same(m, b) ? m : p;
+      return m && !same(m, b) ? withHeldKeys(m, b, p) : p;
     });
   const have = new Set(out.map((p) => p.id));
   for (const p of mine) {
@@ -269,14 +295,23 @@ export class RosterShare {
       // Revisions only go up. One that went back, or the same one holding another list, is a store
       // that was lost or replaced, not a change someone made. Never apply that as a removal.
       const lost =
-        doc.rev < this.rev || (doc.rev === this.rev && !same(theirs, this.base)) || (this.rev > 0 && !holdsList(doc));
+        doc.rev < this.rev || (doc.rev === this.rev && !sameBesidesKeys(theirs, this.base)) || (this.rev > 0 && !holdsList(doc));
       if (lost) {
         await this.handOver(doc);
         return;
       }
       const mine = this.local();
       if (doc.rev === this.rev) {
-        if (!same(mine, this.base)) await this.save();
+        // Keys the engine holds and this app lacks are no change to save: they come here.
+        const theirById = new Map(theirs.map((p) => [p.id, p]));
+        const baseById = new Map(this.base.map((p) => [p.id, p]));
+        const filled = mine.map((p) => {
+          const t = theirById.get(p.id);
+          return t ? withHeldKeys(p, baseById.get(p.id), t) : p;
+        });
+        this.base = theirs;
+        this.apply(filled);
+        if (!same(filled, theirs)) await this.save();
         return;
       }
       const merged = same(mine, this.base) ? theirs : mergeShared(this.base, mine, theirs);
@@ -384,8 +419,14 @@ export function startRosterShare(api: ShareApi = engineShareApi): () => void {
     })
     .catch(warn);
   const unsub = useRosterStore.subscribe((s, prev) => {
-    if (!started || share.applyingRemote || s.profiles === prev.profiles) return;
+    if (share.applyingRemote || s.profiles === prev.profiles) return;
     if (same(sharedForm(s.profiles), sharedForm(prev.profiles))) return; // last-seen only
+    if (!started) {
+      // The engine hasn't answered yet. First contact merges this change in, from the list it was
+      // made on, rather than bringing a removed console back or dropping an added one.
+      if (!readUnsaved()) safeSetItem(UNSAVED_KEY, JSON.stringify({ base: sharedForm(prev.profiles) }));
+      return;
+    }
     void share.push().then(ok).catch(warn);
   });
   const pull = () => {

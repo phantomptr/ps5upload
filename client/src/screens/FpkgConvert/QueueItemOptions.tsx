@@ -12,7 +12,7 @@ import { thenFor, type ConvertBuild, type ConvertItem, type ConvertItemChange, t
 import { isArchiveSource, isFolderableSource } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
-import { DEFAULT_IMAGE_SUBPATH } from "../../lib/imageUpload";
+import { imageDestFor } from "../../lib/imageDest";
 import { ImageDestination } from "./ImageDestination";
 import { FullVerifyOption, ImageChoice } from "./ImageOptions";
 
@@ -212,8 +212,8 @@ export function QueueItemOptions({
       {kind === "image" && item.then !== "keep" && (item.host ?? host) && (
         <ImageDestination
           host={(item.host ?? host)!}
-          volume={item.imageDest?.volume ?? null}
-          subpath={item.imageDest?.subpath ?? DEFAULT_IMAGE_SUBPATH}
+          volume={imageDestFor(item.imageDest, (item.host ?? host)!).volume}
+          subpath={imageDestFor(item.imageDest, (item.host ?? host)!).subpath}
           onChange={(volume, subpath) => onChange({ imageDest: { volume, subpath } })}
         />
       )}

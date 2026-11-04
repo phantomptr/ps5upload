@@ -8,8 +8,9 @@
 import { ENGINE_TIMEOUT_MS, engineFetch } from "../lib/engineFetch";
 import { getEngineUrl } from "../state/engine";
 
-/** The engine lets a hold lapse after this, so a closed app holds nothing for long. */
-const HOLD_TTL_S = 30;
+/** The engine lets a hold lapse after this, so a closed app holds nothing for long. Past the once a
+ *  minute a browser throttles a hidden tab's timers to, or a renewal could come too late. */
+const HOLD_TTL_S = 150;
 const RENEW_EVERY_MS = 10_000;
 /** Shorter than the engine's pause between items, so the app gets in between two of them. */
 const ASK_AGAIN_MS = 2_000;
@@ -71,11 +72,57 @@ export async function holdConsoleFromEngineQueue(
   } finally {
     if (waited) turn.onWaiting(false);
   }
-  const renew = setInterval(() => {
-    void askForHold(host, holder);
-  }, RENEW_EVERY_MS);
+  const hold: Held = { holder, turn, askedAt: Date.now(), lost: false };
+  held.set(host, hold);
+  const renew = setInterval(() => void renewHold(host, hold), RENEW_EVERY_MS);
   return () => {
     clearInterval(renew);
+    if (held.get(host) === hold) held.delete(host);
     void post("/api/queue/release", { console: host, holder }).catch(() => undefined);
   };
+}
+
+interface Held {
+  holder: string;
+  turn: EngineQueueTurn;
+  askedAt: number;
+  /** The engine's queue started something here: it lapsed, and must be taken again. */
+  lost: boolean;
+}
+
+const held = new Map<string, Held>();
+
+async function renewHold(host: string, hold: Held): Promise<void> {
+  hold.askedAt = Date.now();
+  const kept = await askForHold(host, hold.holder);
+  if (!kept) hold.lost = true;
+}
+
+/** An upload made progress: renews a hold that is due. A hidden tab's timers can run late, and
+ *  this path runs whenever the work does. Cheap when none is due. */
+export function keepEngineQueueHold(host: string): void {
+  const hold = held.get(host);
+  if (hold && Date.now() - hold.askedAt >= RENEW_EVERY_MS) void renewHold(host, hold);
+}
+
+/** Before a job starts: a hold that lapsed is taken again first, waiting out what the engine's
+ *  queue started meanwhile. Does nothing when the hold is known to be good. */
+export async function retakeEngineQueueHold(host: string): Promise<void> {
+  const hold = held.get(host);
+  if (!hold || (!hold.lost && Date.now() - hold.askedAt < RENEW_EVERY_MS)) return;
+  let waited = false;
+  try {
+    hold.askedAt = Date.now();
+    while (!(await askForHold(host, hold.holder))) {
+      if (!waited) {
+        waited = true;
+        hold.turn.onWaiting(true);
+      }
+      await new Promise((resolve) => setTimeout(resolve, ASK_AGAIN_MS));
+      if (!hold.turn.isLive()) return;
+    }
+    hold.lost = false;
+  } finally {
+    if (waited) hold.turn.onWaiting(false);
+  }
 }

@@ -61,7 +61,7 @@ import {
 } from "./pkgLibrary";
 import { useInstallSettingsStore } from "./installSettings";
 import type { UploadStrategy } from "./transfer";
-import { holdConsoleFromEngineQueue } from "../api/engineQueue";
+import { holdConsoleFromEngineQueue, keepEngineQueueHold, retakeEngineQueueHold } from "../api/engineQueue";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useRecentHostMetricsStore } from "./recentHostMetrics";
 import { pushNotification } from "./notifications";
@@ -2074,6 +2074,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       const moved = `${bytesSent}/${snap.skip_done_bytes ?? 0}/${snap.stage?.id ?? ""}/${snap.stage?.done ?? 0}`;
       if (moved !== lastMoved) {
         lastMoved = moved;
+        keepEngineQueueHold(hostOf(item.addr));
         // A second tab shows what the runner saves (syncFollower): save progress now and then,
         // or its bar stands still until the next state change.
         if (!isTauriEnv() && now - lastProgressSave >= PROGRESS_SAVE_MS) {
@@ -2192,6 +2193,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
         if (!isLive()) return;
         continue;
       }
+      await retakeEngineQueueHold(nh);
+      if (!isLive()) return;
 
       // The console is in rest mode: this upload waits for the wake instead of failing on
       // a console that cannot answer (it resumes on the helper-up edge after it).

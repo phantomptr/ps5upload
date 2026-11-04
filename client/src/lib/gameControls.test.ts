@@ -31,6 +31,18 @@ describe("per-game controls", () => {
     expect(applyControls(pad(held), c, none, st, 110).buttons).toBe(held);
   });
 
+  it("still repeats when frames come slower than turbo's half-period", () => {
+    const st = newControlsState();
+    const c = ctl({ turbo: PadButton.CROSS, turboHz: 30 });
+    const seen: boolean[] = [];
+    for (let i = 0; i < 8; i++) {
+      // 30 frames a second: the clock's phase alone would read the same at every frame.
+      const b = applyControls(pad(PadButton.CROSS), c, none, st, (i * 1000) / 30).buttons;
+      seen.push(b === PadButton.CROSS);
+    }
+    expect(seen.slice(1)).toEqual([false, true, false, true, false, true, false]);
+  });
+
   it("tells the engine which buttons turbo presses only above 10 a second", () => {
     const st = newControlsState();
     const at = (turboHz: number, turbo: number = PadButton.CROSS) =>

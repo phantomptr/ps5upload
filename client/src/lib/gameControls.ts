@@ -102,10 +102,13 @@ export interface ControlsState {
   macro: MacroRun | null;
   /** The keys held at the last read (a macro starts on its key's press, not while held). */
   lastKeys: Set<string>;
+  /** When turbo was last read, and whether the button was let go then. */
+  turboAt: number | null;
+  turboOff: boolean;
 }
 
 export function newControlsState(): ControlsState {
-  return { mouse: newMouseAim(), macro: null, lastKeys: new Set() };
+  return { mouse: newMouseAim(), macro: null, lastKeys: new Set(), turboAt: null, turboOff: false };
 }
 
 const clampStick = (v: number) => Math.max(-STICK, Math.min(STICK, Math.round(v)));
@@ -140,7 +143,15 @@ export function applyControls(
 
   // Turbo: a held turbo button is let go every other half-period.
   if (c.turbo && c.turboHz > 0) {
-    const off = Math.floor((now / 1000) * Math.min(c.turboHz, TURBO_MAX_HZ) * 2) % 2 === 1;
+    const hz = Math.min(c.turboHz, TURBO_MAX_HZ);
+    const halfPeriodMs = 500 / hz;
+    const sinceRead = st.turboAt === null ? 0 : now - st.turboAt;
+    // Reads further apart than a half-period (a slow frame rate, a phone in low-power mode) would
+    // alias against the clock, stuck held or stuck let go: flip at each read, the best rate there is.
+    const off =
+      sinceRead > halfPeriodMs ? !st.turboOff : Math.floor((now / 1000) * hz * 2) % 2 === 1;
+    st.turboAt = now;
+    st.turboOff = off;
     if (off) {
       out.buttons &= ~(c.turbo & ~(L2_BIT | R2_BIT));
       if (c.turbo & L2_BIT) out.l2 = 0;

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { padFromGamepads, PadButton, STANDARD_PROFILE } from "./remotePlayStream";
 import { addExtra, applyStep, blankProfile, detectAxis, detectPress, loadProfiles, MAP_STEPS, withStandardGaps } from "./padProfiles";
 import * as storage from "./safeStorage";
+import { installWindowStub } from "../test-utils/storage";
 
 /** A controller as the Gamepad API gives it. */
 function pad(over: { buttons?: number[]; axes?: number[]; mapping?: string; id?: string } = {}): Gamepad {
@@ -205,5 +206,30 @@ describe("loadProfiles", () => {
     get.mockReturnValue("[]");
     expect(loadProfiles()).toEqual({});
     get.mockRestore();
+  });
+});
+
+describe("a mapping saved before the app read controllers itself (#668)", () => {
+  const paddles = blankProfile();
+
+  it("applies under the app's name, and is copied there without losing the old entry", async () => {
+    installWindowStub();
+    const mod = await import("./padProfiles");
+    mod.saveProfile("Sony DualSense", paddles);
+    const applied = mod.profileFor(pad({ id: "Sony DualSense (app)" }));
+    expect(applied).toEqual(paddles);
+    expect(Object.keys(mod.loadProfiles()).sort()).toEqual(["Sony DualSense", "Sony DualSense (app)"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("does not guess between two saved controllers", async () => {
+    installWindowStub();
+    const mod = await import("./padProfiles");
+    mod.saveProfile("0ce6 Pad", paddles);
+    mod.saveProfile("0df2 Pad", paddles);
+    expect(Object.keys(mod.loadProfiles())).toHaveLength(2);
+    mod.profileFor(pad({ id: "Pad (app)" }));
+    expect(Object.keys(mod.loadProfiles())).toHaveLength(2);
+    vi.unstubAllGlobals();
   });
 });

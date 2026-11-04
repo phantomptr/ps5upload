@@ -96,8 +96,10 @@ export const useRpQualityStore = create<QualityState>((set, get) => {
       set({ switching: { kind, retryAt: null } });
       // On top of an earlier restart of this session (720p, then Go live's H.264).
       // The picture on this device stays as it is now, when that is not what a new session gets.
+      const { pictureHere: _earlier, ...earlier } = rp.sessionQuality ?? {};
+      void _earlier;
       const quality = {
-        ...rp.sessionQuality,
+        ...earlier,
         ...next,
         ...(rp.pictureHere === rp.prefs.pictureHere ? {} : { pictureHere: rp.pictureHere }),
       };

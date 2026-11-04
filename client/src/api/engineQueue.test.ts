@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { holdConsoleFromEngineQueue } from "./engineQueue";
+import { holdConsoleFromEngineQueue, keepEngineQueueHold, retakeEngineQueueHold } from "./engineQueue";
 
 vi.mock("../state/engine", () => ({ getEngineUrl: () => "http://engine" }));
 
@@ -79,6 +79,45 @@ describe("holdConsoleFromEngineQueue", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     // It never held: nothing to keep going or give back.
     expect(calls(fetchMock).filter((c) => c === "/api/queue/release")).toEqual([]);
+  });
+
+  it("notices a lost hold and takes it again before the next job", async () => {
+    fetchMock.mockImplementation(async () => answer(200, { held: true }));
+    const { waits, turn: t } = turn();
+    const release = await holdConsoleFromEngineQueue("192.168.1.6", t);
+    fetchMock.mockImplementationOnce(async () => running());
+    await vi.advanceTimersByTimeAsync(10_000);
+    fetchMock.mockImplementationOnce(async () => running());
+    const retake = retakeEngineQueueHold("192.168.1.6");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(waits).toEqual([true]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await retake;
+    expect(waits).toEqual([true, false]);
+    release();
+  });
+
+  it("a good hold costs nothing before the next job", async () => {
+    fetchMock.mockImplementation(async () => answer(200, { held: true }));
+    const { turn: t } = turn();
+    const release = await holdConsoleFromEngineQueue("192.168.1.7", t);
+    const before = fetchMock.mock.calls.length;
+    await retakeEngineQueueHold("192.168.1.7");
+    expect(fetchMock.mock.calls.length).toBe(before);
+    release();
+  });
+
+  it("progress renews a hold that is due, whatever the timers do", async () => {
+    fetchMock.mockImplementation(async () => answer(200, { held: true }));
+    const { turn: t } = turn();
+    const release = await holdConsoleFromEngineQueue("192.168.1.8", t);
+    const before = fetchMock.mock.calls.length;
+    keepEngineQueueHold("192.168.1.8");
+    expect(fetchMock.mock.calls.length).toBe(before);
+    vi.setSystemTime(Date.now() + 10_000);
+    keepEngineQueueHold("192.168.1.8");
+    expect(fetchMock.mock.calls.length).toBe(before + 1);
+    release();
   });
 
   it("goes on when the engine cannot say", async () => {

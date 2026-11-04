@@ -136,6 +136,26 @@ describe("the 720p offer and switch", () => {
     expect(useRemotePlayStore.getState().prefs).toEqual(prefs);
   }, 10_000);
 
+  it("a picture turned back on stays on through a later restart", async () => {
+    const start = vi.fn(async () => {
+      useRemotePlayStore.setState({ stream: fakeStream(), phase: "playing", error: null });
+    });
+    const prefs = { ...useRemotePlayStore.getState().prefs, pictureHere: true };
+    useRemotePlayStore.setState({
+      stream: fakeStream(),
+      target,
+      phase: "playing",
+      error: null,
+      prefs,
+      pictureHere: true,
+      sessionQuality: { codec: "h264", pictureHere: false },
+      start,
+      stopForRestart: () => useRemotePlayStore.setState({ stream: null, phase: "ended" }),
+    });
+    await useRpQualityStore.getState().restartWith({ res: "1280x720" });
+    expect(start).toHaveBeenCalledWith(target, { quality: { codec: "h264", res: "1280x720" } });
+  }, 10_000);
+
   it("stops trying when cancelled", async () => {
     const start = vi.fn(async () => {
       useRemotePlayStore.setState({ stream: null, phase: "ended", error: { code: "busy", retryS: 3, detail: "" } });
