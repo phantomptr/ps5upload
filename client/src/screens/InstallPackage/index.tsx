@@ -4,7 +4,7 @@ import {
 } from "../../lib/streamSelection";
 import { invoke } from "../../lib/invokeLogged";
 import { FpkgNote } from "./FpkgNote";
-import { formatDate } from "../../lib/formatDate";
+import { formatDate, formatDuration } from "../../lib/formatDate";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   failedStreamInstallIds,
@@ -106,7 +106,7 @@ import { Tabs } from "../../components/Tabs";
 import { linkModeFacts } from "../../lib/linkModes";
 import { useRecentLinksStore } from "../../state/recentLinks";
 import type { LinkInstallMode } from "../../state/linkInstallPrefs";
-import { formatBytes, formatDuration } from "../../lib/format";
+import { formatBytes } from "../../lib/format";
 import { canResumeExisting, type ExistingChoice } from "../../lib/linkDownload";
 import { remainingSeconds } from "../../lib/rollingRate";
 import { acceptPkgDrop, isInstallPackagePath } from "../../lib/pkgDropDedupe";
@@ -1812,8 +1812,8 @@ export default function InstallPackageScreen({
                           variant="soft"
                         >
                           {unresolved > 0
-                            ? `${unresolved} choice${unresolved === 1 ? "" : "s"} needed`
-                            : `${alternatives.length} variant choice${alternatives.length === 1 ? "" : "s"} set`}
+                            ? tr("pkglib.variant.choicesNeeded", { count: unresolved }, "Choices needed: {count}")
+                            : tr("pkglib.variant.choicesSet", { count: alternatives.length }, "Variant choices set: {count}")}
                         </Badge>
                       )}
                     </div>

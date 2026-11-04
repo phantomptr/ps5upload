@@ -42,7 +42,7 @@ import { isAndroid, isMobile } from "../../lib/platform";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
 import { log } from "../../state/logs";
 import { physicalPointInRect } from "./dropZone";
-import { formatDate } from "../../lib/formatDate";
+import { formatAgo } from "../../lib/formatDate";
 
 /**
  * Playlist editor + runner panel for the SendPayload screen.
@@ -865,6 +865,7 @@ function PlaylistCard({
             <input
               ref={renameRef}
               value={draftName}
+              aria-label={tr("playlist_rename_label", undefined, "Playlist name")}
               onChange={(e) => setDraftName(e.target.value)}
               onBlur={commitRename}
               onKeyDown={(e) => {
@@ -1323,17 +1324,4 @@ function StepStatusIcon({
 
 function basename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
-}
-
-/** Compact "just now / 2m ago / 3h ago / Apr 18" for the recently-run
- *  strip. Mirrors the SendPanel history formatter; coarse enough that a
- *  stale render between ticks reads fine. */
-function formatAgo(ms: number): string {
-  if (ms <= 0) return "";
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d ago`;
-  return formatDate(ms, "date");
 }

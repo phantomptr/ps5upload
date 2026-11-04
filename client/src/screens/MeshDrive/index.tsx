@@ -51,6 +51,7 @@ import { ConflictsDialog, LinkDialog, LinkedConsoles, linkName } from "./LinksAn
 import { useRosterStore } from "../../state/roster";
 import { AwayActions, AwayFolders, awayText, useConsoleName } from "./AwayFolders";
 import { driveDetailText } from "./driveDetail";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 type Tone = "good" | "warn" | "bad" | "neutral" | "accent";
 
@@ -625,7 +626,7 @@ export function MeshDriveSection() {
       setPollError(null);
       setNow(Date.now());
     } catch (e) {
-      if (mine === seq.current) setPollError(e instanceof Error ? e.message : String(e));
+      if (mine === seq.current) setPollError(humanizeCaught(e));
     } finally {
       inFlight.current = false;
     }
@@ -657,7 +658,7 @@ export function MeshDriveSection() {
     try {
       await f();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     }
     inFlight.current = false;
     await load();

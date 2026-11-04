@@ -1010,6 +1010,7 @@ function SlotRow({
         <input
           className="min-w-0 flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1 text-sm"
           value={draft}
+          aria-label={tr("profile.username.slot_label", { n: slot }, "User name in slot {n}")}
           maxLength={31}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {

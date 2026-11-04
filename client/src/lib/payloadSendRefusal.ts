@@ -3,10 +3,11 @@
 import { PayloadSendRefused } from "../api/ps5";
 import { t as translate } from "../i18n";
 import { useLangStore } from "../state/lang";
+import { humanizeCaught } from "./humanizeError";
 
 /** The sentence for a refused send; any other error as it is. */
 export function payloadSendRefusalText(e: unknown): string {
-  if (!(e instanceof PayloadSendRefused)) return e instanceof Error ? e.message : String(e);
+  if (!(e instanceof PayloadSendRefused)) return humanizeCaught(e);
   const lang = useLangStore.getState().lang;
   switch (e.code) {
     case "pkg_install_busy":

@@ -7,6 +7,7 @@ import { formatCollectionBytes } from "../../lib/collectionView";
 import { loadCollection } from "../../state/collection";
 import type { Translator } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 export async function trashCopies(
   paths: string[],
@@ -25,9 +26,7 @@ export async function trashCopies(
             undefined,
             "A copy changed since the last scan. Scan again, then try again.",
           )
-        : e instanceof Error
-          ? e.message
-          : String(e),
+        : humanizeCaught(e),
     );
     return;
   }
@@ -124,7 +123,7 @@ export async function trashCopies(
       );
     }
   } catch (e) {
-    pushNotification("error", e instanceof Error ? e.message : String(e));
+    pushNotification("error", humanizeCaught(e));
   }
   await loadCollection();
 }

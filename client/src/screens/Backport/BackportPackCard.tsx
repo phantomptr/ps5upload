@@ -28,6 +28,7 @@ import {
   type PackTransport,
 } from "../../lib/backportPack";
 import { trackTask } from "../../state/trackTask";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 const gb = (bytes: number) =>
   bytes >= 1 << 30
@@ -132,7 +133,7 @@ export function BackportPackCard({
         }),
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
     }
@@ -145,7 +146,7 @@ export function BackportPackCard({
     setNote(null);
     try {
       const done = await trackTask(
-        { kind: "fakelib-import", origin: "backport", label: "Install backport pack" },
+        { kind: "fakelib-import", origin: "backport", label: tr("backport_task_install_pack", undefined, "Install backport pack") },
         () => applyPackInstall(plan, transport),
       );
       setRecord(done);
@@ -162,7 +163,7 @@ export function BackportPackCard({
         "Pack installed. The eboot came pre-patched, so no SDK patch was applied."));
     } catch (e) {
       if (e instanceof PackInstallError) setRecord(e.record);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
     }
@@ -177,7 +178,7 @@ export function BackportPackCard({
       setRecord(null);
       setNote(tr("pack_undone", undefined, "Put back what the pack replaced."));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
     }

@@ -139,6 +139,7 @@ import { dropTarget, usePackageViewer } from "../state/packageViewer";
 import { installConvertRunner } from "../lib/convertQueueRunner";
 import { recordAppEvent } from "../lib/appJournal";
 import { engineProbeVerdict } from "../lib/engineUnreachable";
+import { useConfirm } from "../components/ConfirmDialog";
 
 // The Convert queue builds through the Convert pipeline wherever the user is in the app.
 installConvertRunner();
@@ -1790,6 +1791,28 @@ function TopBarActions() {
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
   const searchLabel = tr("topbar_search_label", undefined, "Search screens and commands");
+  const { confirm: confirmReload, dialog: reloadDialog } = useConfirm();
+  // A reload restarts the app (lib/preventAccidentalReload.ts): the progress of running work
+  // disappears and a Remote Play stream or Play Together session ends. Ask only when it would.
+  const reloadPage = async () => {
+    const busy =
+      useTaskStore.getState().tasks.some((t) => t.status === "running") ||
+      useRemotePlayStore.getState().stream != null;
+    if (busy) {
+      const ok = await confirmReload({
+        title: tr("topbar_reload_confirm_title", undefined, "Reload while work is running?"),
+        message: tr(
+          "topbar_reload_confirm_body",
+          undefined,
+          "Reloading restarts the app window. A Remote Play stream or Play Together session ends, and running tasks disappear from this window until the app finds them again.",
+        ),
+        confirmLabel: tr("topbar_reload_page", undefined, "Reload page"),
+        destructive: true,
+      });
+      if (!ok) return;
+    }
+    window.location.reload();
+  };
   // With several consoles the tab strip shares this row. Between 1024 and
   // 1280 the full search field left it room for less than one tab (the pill
   // on show was cut mid-name), so there the field is the round button it
@@ -1818,13 +1841,14 @@ function TopBarActions() {
       </button>
       <button
         type="button"
-        onClick={() => window.location.reload()}
+        onClick={() => void reloadPage()}
         aria-label={tr("topbar_reload_page", undefined, "Reload page")}
         title={tr("topbar_reload_page", undefined, "Reload page")}
         className="icon-orb-button"
       >
         <RotateCw size={18} aria-hidden />
       </button>
+      {reloadDialog}
       <UpdateCheckButton variant="orb" />
       <NotificationInbox align="right" placement="below" variant="orb" />
       <button

@@ -55,6 +55,7 @@ import {
   type IntegrationId,
   type IntegrationReport,
 } from "./registry";
+import { humanizeCaught } from "../../../lib/humanizeError";
 
 /** The process list is re-read this often while the tab is open. Slower than Processes'
  *  3 s: cards change state rarely, and this shares the helper with everything else. */
@@ -176,7 +177,7 @@ function OnPs5Body() {
       setError(null);
     } catch (e) {
       if (gen !== genRef.current) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       inFlight.current = false;
       if (gen === genRef.current) setProcsLoaded(true);
@@ -309,7 +310,7 @@ function OnPs5Body() {
       }
       log.info("payloads", `stopped ${card.name}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
       await refreshProcs();
@@ -334,7 +335,7 @@ function OnPs5Body() {
       await hbAct(host, { action: "stop" });
       log.info("payloads", "stopped HearBridge");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
       await hb.refresh();

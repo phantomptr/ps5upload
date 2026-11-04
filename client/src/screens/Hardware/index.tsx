@@ -66,6 +66,7 @@ import {
   type SmpMetaStats,
 } from "../../api/ps5";
 import { formatDate } from "../../lib/formatDate";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** Hardware Monitor tab — live sensor + uptime view.
  *  The payload side is in payload/src/hw_info.c with
@@ -439,7 +440,7 @@ export default function HardwareScreen() {
       }
     } catch (e) {
       if (probe.isStale()) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       busy.current = false;
       setLoading(false);
@@ -477,7 +478,7 @@ export default function HardwareScreen() {
       setSensorReadAt(Date.now());
     } catch (e) {
       if (probe.isStale()) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       sensorBusy.current = false;
       setSensorLoading(false);
@@ -1477,7 +1478,7 @@ function SystemTimeCard({
       setError(null);
     } catch (e) {
       if (probe.isStale()) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     }
   }, [host, payloadUp, guardSys]);
 
@@ -1527,7 +1528,7 @@ function SystemTimeCard({
         await refreshPs5();
       } catch (e) {
         if (probe.isStale()) return;
-        setError(e instanceof Error ? e.message : String(e));
+        setError(humanizeCaught(e));
       } finally {
         setBusy(false);
       }
@@ -1707,7 +1708,7 @@ function SmpMetaCard({
       if (s.poll_seconds > 0 && !pollDragging.current) setPollDraft(s.poll_seconds);
     } catch (e) {
       if (probe.isStale()) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     }
   }, [canTalk, guard]);
 
@@ -1730,7 +1731,7 @@ function SmpMetaCard({
       await refresh();
     } catch (e) {
       if (probe.isStale()) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       // Always clear the local busy flag — gating it on !isStale() left the
       // panel permanently disabled when the host switched mid-RPC (busy is
@@ -1757,7 +1758,7 @@ function SmpMetaCard({
       await refresh();
     } catch (e) {
       if (probe.isStale()) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       // Always clear the local busy flag — gating it on !isStale() left the
       // panel permanently disabled when the host switched mid-RPC (busy is
@@ -1799,7 +1800,7 @@ function SmpMetaCard({
         await refresh();
       } catch (e) {
         if (probe.isStale()) return;
-        setError(e instanceof Error ? e.message : String(e));
+        setError(humanizeCaught(e));
       } finally {
         // Always clear the local busy flag — gating it on !isStale() left the
         // whole SMP card permanently disabled when the host switched mid-RPC

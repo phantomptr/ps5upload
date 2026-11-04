@@ -26,6 +26,7 @@ import { ActivityLine } from "./ActivityLine";
 import { isConvertible } from "../../lib/collectionConvert";
 import { startCopyChecks, useCopyCheck } from "../../state/copyChecks";
 import { CopyCheckLine } from "./CopyCheckLine";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 // One copy of a game on the drives: what it is, where, and what can be done with it. One
 // line of facts, one of path, the primary action as a button and the rest behind a menu, so
@@ -114,7 +115,7 @@ export function CopyRow({
         "error",
         tr(
           "collection.link_failed",
-          { error: e instanceof Error ? e.message : String(e) },
+          { error: humanizeCaught(e) },
           "Could not make a link: {error}",
         ),
       );

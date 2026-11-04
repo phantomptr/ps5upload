@@ -5,6 +5,7 @@ import { formatBytes } from "../../lib/format";
 import { formatEtaSeconds } from "../../lib/uploadEta";
 import { useRateEta } from "../../lib/useRateEta";
 import type { BottleneckCause, JobLive } from "../../lib/jobLive";
+import { formatNumber } from "../../lib/formatDate";
 
 /** Catalog key and English fallback for each cause (written out so the i18n scripts see them). */
 const CAUSE: Record<BottleneckCause, { key: string; text: string }> = {
@@ -89,8 +90,8 @@ export function SettlingLine({ live }: { live: JobLive }) {
         <span className="font-mono" data-testid="settling-count">
           {tr(
             "upload_phase_settling_count",
-            { left: left.toLocaleString(), total: total.toLocaleString() },
-            `${left.toLocaleString()} of ${total.toLocaleString()} files left`,
+            { left: formatNumber(left), total: formatNumber(total) },
+            `${formatNumber(left)} of ${formatNumber(total)} files left`,
           )}
           {rate > 0 && ` · ${rate < 10 ? rate.toFixed(1) : Math.round(rate)} ${tr("upload_phase_settling_rate", undefined, "files/s")}`}
           {etaSeconds !== null &&

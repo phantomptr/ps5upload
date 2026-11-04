@@ -130,17 +130,19 @@ export function clearWalkCache(): void {
 
 export const POLL_MS = 500;
 
-const sleep = (ms: number, signal: AbortSignal) =>
+export const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
-    const t = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(t);
-        resolve();
-      },
-      { once: true },
-    );
+    // One listener per poll, taken off again: a walk of a few minutes would otherwise pile up
+    // hundreds of them on this one signal.
+    const onAbort = () => {
+      clearTimeout(t);
+      resolve();
+    };
+    const t = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 
 /** The engine's refusal while another folder on this console is being walked. */

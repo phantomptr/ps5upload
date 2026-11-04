@@ -29,6 +29,29 @@ function te(key: string, vars?: Record<string, string | number>): string {
   return t(useLangStore.getState().lang, key, vars);
 }
 
+/** The text of anything a `catch` can receive. A rejection is not always an Error: Tauri commands
+ *  reject with strings, some with an object, where `String(e)` prints "[object Object]". */
+export function caughtText(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object") {
+    const o = e as { message?: unknown; error?: unknown };
+    if (typeof o.message === "string") return o.message;
+    if (typeof o.error === "string") return o.error;
+    try {
+      return JSON.stringify(e);
+    } catch {
+      // A cycle: fall through.
+    }
+  }
+  return String(e);
+}
+
+/** What a console-facing screen shows for a caught error: the sentence when we know the code. */
+export function humanizeCaught(e: unknown): string {
+  return humanizePs5Error(caughtText(e));
+}
+
 /** Rewrite a raw engine/payload error string into a single line of
  *  user-facing copy. Unknown strings are returned as-is.
  *

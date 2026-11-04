@@ -20,6 +20,7 @@ import { usePoll } from "../../../lib/usePoll";
 import { useDocumentVisible } from "../../../lib/visibility";
 import { useTr } from "../../../state/lang";
 import { log } from "../../../state/logs";
+import { humanizeCaught } from "../../../lib/humanizeError";
 
 /** HearBridge's status is re-read this often while its card is on screen. Each read
  *  counts as its page being open on the console side only for the volume re-query, so
@@ -48,7 +49,7 @@ export function useHearBridge(host: string, active: boolean, fast = false) {
       const v = await hbOverview(host);
       if (g === gen.current) setView(v);
     } catch (e) {
-      if (g === gen.current) setView({ present: false, error: e instanceof Error ? e.message : String(e) });
+      if (g === gen.current) setView({ present: false, error: humanizeCaught(e) });
     }
   }, [host]);
   usePoll(refresh, fast ? POLL_MS : POLL_SLOW_MS, { host, enabled: active && visible && !!host.trim() });
@@ -158,7 +159,7 @@ export function HearBridgePanel({
       await refresh();
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
       return false;
     } finally {
       setBusy(false);

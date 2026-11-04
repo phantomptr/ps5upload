@@ -76,6 +76,7 @@ export default function NotificationInbox({
   const remove = useNotificationsStore((s) => s.remove);
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const fit = useFitOnScreen(panelRef, open);
 
@@ -94,7 +95,10 @@ export default function NotificationInbox({
       }
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
     }
     document.addEventListener("mousedown", onClick, true);
     document.addEventListener("keydown", onKey);
@@ -108,15 +112,12 @@ export default function NotificationInbox({
     setOpen(false);
     navigate(to);
   };
-  const unreadLabel = tr(
-    unread === 1 ? "notifications_unread_one" : "notifications_unread_many",
-    { count: unread },
-    `${unread} unread notification${unread === 1 ? "" : "s"}`,
-  );
+  const unreadLabel = tr("notifications_unread_count", { count: unread }, "Unread notifications: {count}");
 
   return (
     <div ref={wrapperRef} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label={tr("notifications_open", undefined, "Open notifications")}
@@ -159,7 +160,10 @@ export default function NotificationInbox({
             </h3>
             <button
               type="button"
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                setOpen(false);
+                triggerRef.current?.focus();
+              }}
               aria-label={tr("close", undefined, "Close")}
               title={tr("close", undefined, "Close")}
               className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] max-md:p-2.5"

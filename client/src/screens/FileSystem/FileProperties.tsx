@@ -12,6 +12,7 @@ import {
   parseMode,
 } from "../../lib/filePermissions";
 import { useTr } from "../../state/lang";
+import { formatNumber, formatDate } from "../../lib/formatDate";
 
 interface Props {
   path: string;
@@ -46,11 +47,11 @@ export function FilePropertiesView(p: Props) {
               {tr(`cw_files_kind_${p.stat.kind}`, undefined, p.stat.kind)}
             </dd>
             <dt>{tr("cw_files_info_size", undefined, "Size (bytes)")}</dt>
-            <dd>{p.stat.size.toLocaleString()} B</dd>
+            <dd>{formatNumber(p.stat.size)} B</dd>
             <dt>{tr("cw_files_info_modified", undefined, "Modified")}</dt>
             <dd>
               {p.stat.mtime
-                ? new Date(p.stat.mtime * 1000).toLocaleString()
+                ? formatDate(p.stat.mtime * 1000)
                 : "—"}
             </dd>
             <dt>

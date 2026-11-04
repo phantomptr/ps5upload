@@ -26,6 +26,7 @@ import { useLocalPickerStore } from "../state/localPicker";
 import { usePackageViewer } from "../state/packageViewer";
 import { activateFocusTrap } from "../lib/focusTrap";
 import { useTr } from "../state/lang";
+import { humanizeCaught } from "../lib/humanizeError";
 
 /**
  * Global in-app file/folder browser. Mounted once at the app root; driven
@@ -450,7 +451,7 @@ export function LocalPathPicker() {
         }
         setCwd(path);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(humanizeCaught(e));
         setHint(e instanceof RemoteApiError ? (e.hint ?? null) : null);
         setCwd(path);
       } finally {
@@ -489,7 +490,7 @@ export function LocalPathPicker() {
       if (rs.length) await loadDir(rs[0]);
       else setLoading(false);
     } catch (e) {
-      setError(String(e));
+      setError(humanizeCaught(e));
       setGranted(true); // don't trap the user on a probe failure
       setLoading(false);
     }

@@ -11,6 +11,7 @@ import {
 import type { Translator } from "../../state/lang";
 import type { ToastOptions } from "../../state/toasts";
 import type { RowMenuItem } from "./RowActions";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 export interface ConsolePins {
   /** The console's pinned folders; null when the helper has none to share (older, or not up). */
@@ -106,7 +107,7 @@ export function showOnConsoleItems(
               tone: "warn",
               message: tr(
                 "fs_show_on_console_failed",
-                { error: e instanceof Error ? e.message : String(e) },
+                { error: humanizeCaught(e) },
                 `Couldn't send it to the PS5: ${e instanceof Error ? e.message : String(e)}`,
               ),
             }),

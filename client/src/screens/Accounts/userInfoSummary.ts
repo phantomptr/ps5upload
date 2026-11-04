@@ -5,6 +5,7 @@
 import type { NpState, ProfileInfo, ProfileSlot } from "../../api/ps5";
 import { accountIdToB64, accountIdToDecimal, formatAccountId } from "./accountId";
 import { userSlots } from "./userSlots";
+import { trStatic } from "../../lib/trStatic";
 
 export interface UserInfoInput {
   at: Date;
@@ -71,7 +72,7 @@ export function userInfoSummary(i: UserInfoInput): string {
   const rule = "=".repeat(72);
   const out: string[] = [];
 
-  out.push("PS5Upload: user information backup", rule, "");
+  out.push(trStatic("user_info_title", "PS5Upload: user information backup"), rule, "");
   out.push(`Made:           ${stamp(i.at)}`);
   out.push(`PS5Upload:      ${i.appVersion || "unknown"}`);
   out.push(`Console:        ${i.consoleName}${i.consoleAddr ? ` (${i.consoleAddr})` : ""}`);
@@ -80,10 +81,15 @@ export function userInfoSummary(i: UserInfoInput): string {
   const fg = info.users.find((u) => u.uid === info.uid);
   out.push(`Signed in now:  ${fg ? `${fg.username} (user ${info.uid_hex})` : info.username || "nobody"}`);
   out.push(`Users:          ${info.users.length}`, "");
-  out.push("Keep this file private: an account ID identifies your account.", "");
+  out.push(
+    trStatic("user_info_private", "Keep this file private: an account ID identifies your account."),
+    "",
+  );
 
-  out.push(rule, "USERS", rule, "");
-  if (info.users.length === 0) out.push("No users were found on this console.", "");
+  out.push(rule, trStatic("user_info_users", "USERS"), rule, "");
+  if (info.users.length === 0) {
+    out.push(trStatic("user_info_no_users", "No users were found on this console."), "");
+  }
   info.users.forEach((u, n) => {
     out.push(`${n + 1}. ${u.username || "(no name)"}${u.uid === info.uid ? "   [signed in now]" : ""}`);
     out.push(`   User ID:             ${u.uid_hex} (${u.uid})`);
@@ -93,23 +99,28 @@ export function userInfoSummary(i: UserInfoInput): string {
   });
 
   if (others.length > 0) {
-    out.push(rule, "OTHER ACCOUNT SLOTS (no user on this console goes with them)", rule, "");
+    out.push(
+      rule,
+      trStatic("user_info_other_slots", "OTHER ACCOUNT SLOTS (no user on this console goes with them)"),
+      rule,
+      "",
+    );
     for (const s of others) {
       out.push(...accountLines(s, "   "), "");
     }
   }
 
-  out.push(rule, "RESTORING", rule, "");
+  out.push(rule, trStatic("user_info_restoring", "RESTORING"), rule, "");
   out.push(
-    "Saves, trophies and licences are tied to the account ID, not to the user's name.",
-    "After a console reset, a crash that lost a user, or on a new user:",
+    trStatic("user_info_restore_tied", "Saves, trophies and licences are tied to the account ID, not to the user's name."),
+    trStatic("user_info_restore_when", "After a console reset, a crash that lost a user, or on a new user:"),
     "",
-    "  1. Add the user on the PS5 (Switch User > Add User) and sign in to it once.",
-    "  2. In PS5Upload, open Accounts > Users and find that user.",
-    "  3. Set its Account ID to the hex value above, for example 0x1234abcd, and activate it.",
-    "  4. Restore its saves from a backup (a game's page > Saves > Restore).",
+    `  1. ${trStatic("user_info_restore_step1", "Add the user on the PS5 (Switch User > Add User) and sign in to it once.")}`,
+    `  2. ${trStatic("user_info_restore_step2", "In PS5Upload, open Accounts > Users and find that user.")}`,
+    `  3. ${trStatic("user_info_restore_step3", "Set its Account ID to the hex value above, for example 0x1234abcd, and activate it.")}`,
+    `  4. ${trStatic("user_info_restore_step4", "Restore its saves from a backup (a game's page > Saves > Restore).")}`,
     "",
-    "A save restores only to the same account ID and the same game.",
+    trStatic("user_info_restore_same", "A save restores only to the same account ID and the same game."),
     "",
   );
   return out.join("\n");

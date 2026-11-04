@@ -7,6 +7,7 @@ import { formatBytes } from "../../lib/format";
 import { planMove, quickDestinations, recentDestinations } from "../../lib/moveTo";
 import { useTr } from "../../state/lang";
 import { consoleParentDir as parentDir } from "../../lib/consolePath";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 export interface MoveItem {
   path: string;
@@ -65,7 +66,7 @@ export function MoveToDialog({
       .catch((e) => {
         if (!cancelled) {
           setDirs([]);
-          setListError(e instanceof Error ? e.message : String(e));
+          setListError(humanizeCaught(e));
         }
       });
     return () => {

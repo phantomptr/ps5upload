@@ -27,8 +27,7 @@ import { isRemotePath } from "../../lib/remotePath";
 import { PlaylistsPanel } from "./PlaylistsPanel";
 import { dropIsOwnedElsewhere } from "./dropZone";
 import { probeVerdict } from "./probeVerdict";
-import { formatDate } from "../../lib/formatDate";
-import { trStatic } from "../../lib/trStatic";
+import { formatAgo } from "../../lib/formatDate";
 
 /**
  * Send tab of the Payloads screen — send any custom ELF (or BIN/JS/
@@ -97,14 +96,6 @@ function loaderPortForExt(path: string): number | null {
 /** "2m ago", "1h ago", "Apr 18" — compact timestamps for the history
  *  list. Uses absolute date only once a row is older than a week so
  *  users don't have to interpret "240h ago". */
-function formatAgo(ms: number): string {
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d ago`;
-  return formatDate(ms, "date");
-}
 
 function fileNameFrom(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
@@ -193,11 +184,11 @@ export default function SendPanel() {
       // User-initiated: clicking Clear and seeing nothing happen is
       // confusing. The on-disk file might be read-only, full, or
       // gone — surface so the user knows to investigate.
-      pushNotification("warning", trStatic("payloads_clear_history_failed", "Couldn't clear send history"), {
+      pushNotification("warning", tr("send_notif_clear_failed", undefined, "Couldn't clear send history"), {
         body: e instanceof Error ? e.message : String(e),
       });
     }
-  }, []);
+  }, [tr]);
 
   /** Keep elfPath (authoritative for the send call) in sync with the
    *  editable text field. Empty text clears the picked file so the
@@ -223,7 +214,7 @@ export default function SendPanel() {
         ],
       });
     } catch (e) {
-      pushNotification("warning", trStatic("payloads_picker_failed", "Couldn't open file picker"), {
+      pushNotification("warning", tr("send_notif_picker_failed", undefined, "Couldn't open file picker"), {
         body: e instanceof Error ? e.message : String(e),
       });
       return;
@@ -527,8 +518,8 @@ export default function SendPanel() {
               }}
               placeholder={
                 dropActive
-                  ? "Drop the payload file…"
-                  : "/path/to/payload.elf — or drag a file onto the window"
+                  ? tr("send_path_placeholder_drop", undefined, "Drop the payload file…")
+                  : tr("send_path_placeholder", undefined, "/path/to/payload.elf, or drag a file onto the window")
               }
               spellCheck={false}
               className={`input flex-1 font-mono text-xs ${

@@ -10,8 +10,7 @@ import { formatBytes } from "../../lib/format";
 import { pushNotification } from "../../state/notifications";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { activityToCsv, computeStats, type ComputedStats } from "./stats";
-import { formatDate } from "../../lib/formatDate";
-import { trStatic } from "../../lib/trStatic";
+import { formatDate, formatNumber, formatDuration } from "../../lib/formatDate";
 
 /**
  * Stats tab of the Tasks screen: aggregates of the activity history the
@@ -43,11 +42,11 @@ export function StatsPanel({ entries }: { entries: ActivityEntry[] }) {
         if (!dest || typeof dest !== "string") return;
         await writeTextFileToPath(dest, csv, fileName);
       }
-      pushNotification("success", trStatic("activity_exported", "Activity exported"), {
-        body: trStatic("activity_exported_rows", "Rows saved: {count}", { count: entries.length.toLocaleString() }),
+      pushNotification("success", tr("activity_notif_exported", undefined, "Activity exported"), {
+        body: tr("activity_notif_exported_body", { count: formatNumber(entries.length) }, "Rows saved: {count}"),
       });
     } catch (e) {
-      pushNotification("error", trStatic("activity_export_failed", "Couldn't export activity"), {
+      pushNotification("error", tr("activity_notif_export_failed", undefined, "Couldn't export activity"), {
         body: e instanceof Error ? e.message : String(e),
       });
     }
@@ -124,7 +123,7 @@ function KpiRow({ stats }: { stats: ComputedStats }) {
         label={tr("stats_avg_duration", undefined, "Avg duration")}
         value={
           stats.averageDurationMs !== null
-            ? formatDuration(stats.averageDurationMs)
+            ? formatAverage(stats.averageDurationMs)
             : "—"
         }
       />
@@ -178,7 +177,7 @@ function DailyChart({
             <div
               key={d.date}
               className="group relative flex-1"
-              title={`${d.date}: ${d.count} operations · ${formatBytes(d.bytes)}`}
+              title={tr("activity_stats_day_tooltip", { date: d.date, count: formatNumber(d.count), size: formatBytes(d.bytes) }, "{date} · Operations: {count} · {size}")}
             >
               <div
                 className="rounded-t-md bg-[image:var(--accent-fill)] transition-all hover:opacity-80"
@@ -280,10 +279,6 @@ function TopTransfers({
   );
 }
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms.toFixed(0)} ms`;
-  const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(1)} s`;
-  const m = Math.floor(s / 60);
-  return `${m}m ${Math.floor(s % 60)}s`;
+function formatAverage(ms: number): string {
+  return ms < 1000 ? `${formatNumber(Math.round(ms))} ms` : formatDuration(ms / 1000);
 }

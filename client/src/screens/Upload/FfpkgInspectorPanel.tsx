@@ -21,7 +21,7 @@ import { Button, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { formatBytes } from "../../lib/format";
-import { trStatic } from "../../lib/trStatic";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /**
  * Local UFS2 inspector panel — collapsed by default, expands into
@@ -55,7 +55,7 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
       setMeta(m);
       setOpen(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
       setOpen(true);
     } finally {
       setBusy(false);
@@ -79,13 +79,17 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
     try {
       const r = await ffpkgExtract(path, innerPath, dest);
       setExtractResult(r);
-      pushNotification("success", trStatic("ffpkg_extracted", "Extracted {name}", { name: displayName }), {
-        body: trStatic("ffpkg_extracted_body", "Files: {count}. {size} written to {dest}.", { count: r.file_count, size: formatBytes(r.bytes_written), dest }),
+      pushNotification("success", tr("ffpkg_notif_extracted", { name: displayName }, "Extracted {name}"), {
+        body: tr(
+          "ffpkg_notif_extracted_body",
+          { count: r.file_count, size: formatBytes(r.bytes_written), dest },
+          "Files: {count}. {size} written to {dest}.",
+        ),
       });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = humanizeCaught(e);
       setError(msg);
-      pushNotification("error", trStatic("ffpkg_extract_failed", "Extract failed: {name}", { name: displayName }), { body: msg });
+      pushNotification("error", tr("ffpkg_notif_extract_failed", { name: displayName }, "Extract failed: {name}"), { body: msg });
     } finally {
       setExtractBusy(null);
     }

@@ -13,6 +13,7 @@ import {
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** The ports in use on the PS5, what usually listens on each, and a link to the ones a PC can
  *  open (Discord ask). The helper finds them by binding each port, never by connecting. */
@@ -32,7 +33,7 @@ export default function PortsPanel() {
     try {
       setView(await consolePorts(h));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setLoading(false);
     }

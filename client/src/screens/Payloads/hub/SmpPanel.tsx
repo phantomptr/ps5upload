@@ -11,6 +11,7 @@ import {
 import { smpStatus, type SmpStatus } from "../../../api/ps5";
 import { Button, ErrorCard, Spinner } from "../../../components";
 import { useTr } from "../../../state/lang";
+import { humanizeCaught } from "../../../lib/humanizeError";
 
 /**
  * Read-only ShadowMount+ status panel. Renders nothing until the
@@ -388,7 +389,7 @@ function SmpAutotuneTable({
         onSaved();
       }
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      setSaveError(humanizeCaught(e));
     } finally {
       setSaving(false);
     }

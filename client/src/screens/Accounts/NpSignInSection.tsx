@@ -24,6 +24,7 @@ import {
   npSignInReadiness,
   npUndo,
 } from "./npSignIn";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** "Sign in to PlayStation Network (offline)": earthonion's np-fake-signin, run from here.
  *
@@ -99,7 +100,7 @@ export function NpSignInSection({
       );
       await refreshNpState();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(null);
     }
@@ -145,7 +146,7 @@ export function NpSignInSection({
         const wrapped = new Error(
           tr(
             "profile.np.backup_failed",
-            { error: e instanceof Error ? e.message : String(e) },
+            { error: humanizeCaught(e) },
             "The PS5 could not keep a copy of the account's settings, so np-fake-signin was not run. Replace the helper with this app's version and try again. ({error})",
           ),
         );

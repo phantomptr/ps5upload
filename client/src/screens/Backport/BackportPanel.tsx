@@ -52,6 +52,9 @@ import {
   removeBackportRecord,
   saveBackportRecord,
 } from "../../state/backportRecords";
+import { formatNumber } from "../../lib/formatDate";
+import { humanizeCaught } from "../../lib/humanizeError";
+import { useConfirm } from "../../components/ConfirmDialog";
 
 /** How long to watch a launched title before judging it.
  *
@@ -90,6 +93,7 @@ export function BackportPanel({
   onLaunch: (title: InstalledTitle) => void;
 }) {
   const tr = useTr();
+  const { confirm: confirmStopGame, dialog: stopGameDialog } = useConfirm();
   const [plan, setPlan] = useState<BackportPlan | null>(null);
   /* Sets already tried and rejected for this title. No signal in the data
    * predicts which set a game needs, so working down the ranked list is
@@ -159,7 +163,7 @@ export function BackportPanel({
       }
       setPlan(planBackport(title, candidate, existingLibraries(present), corpusRoot));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(false);
     }
@@ -187,9 +191,32 @@ export function BackportPanel({
 
   const imageBacked = title.imageBacked || title.source.startsWith("/mnt/shadowmnt/");
 
-  /** Run a mutation while an SMP image is mounted read-write. Clicking
-   * Backport/Undo is the user's authorization to stop that title; leaving it
-   * running while its backing image is blipped risks a busy unmount. */
+  /** Asked once when the user starts Backport, Auto or Undo: an image-backed title that is running
+   * has to stop first, which loses unsaved progress. Not asked inside withWritableTitle, because
+   * Auto stops its own test launches there and those hold nothing to lose. */
+  const okToStopRunningGame = async (): Promise<boolean> => {
+    if (!imageBacked) return true;
+    try {
+      const { processes } = await processList(mgmtAddr(host));
+      if (!processes.some((p) => p.title_id === title.titleId)) return true;
+    } catch {
+      return true; // Can't tell: the operation itself will report the console's state.
+    }
+    return confirmStopGame({
+      title: tr("backport_close_game_title", { name: title.titleName }, "Close {name} first?"),
+      message: tr(
+        "backport_close_game_body",
+        undefined,
+        "This game is running, and its files have to change. Closing it loses any progress you haven't saved.",
+      ),
+      confirmLabel: tr("backport_close_game_yes", undefined, "Close game and continue"),
+      destructive: true,
+    });
+  };
+
+  /** Run a mutation while an SMP image is mounted read-write. A running title is stopped first:
+   * leaving it running while its backing image is blipped risks a busy unmount. The user has
+   * agreed to that already (okToStopRunningGame). */
   const withWritableTitle = async <T,>(
     operation: () => Promise<T>,
     onCompleted?: (result: T) => void,
@@ -202,7 +229,7 @@ export function BackportPanel({
       );
       if (running) {
         const stopped = await processKill(addr, running.pid);
-        if (!stopped.ok) throw new Error(stopped.err || `Could not stop ${title.titleName}`);
+        if (!stopped.ok) throw new Error(stopped.err || tr("backport_stop_failed", { name: title.titleName }, "Could not stop {name}"));
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
       await smpImageRwBegin(transferAddr(host), title.titleId);
@@ -320,7 +347,7 @@ export function BackportPanel({
           setLastFailure(null);
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(humanizeCaught(e));
       } finally {
         setVerifying(false);
       }
@@ -330,13 +357,14 @@ export function BackportPanel({
 
   const apply = async () => {
     if (!plan) return;
+    if (!(await okToStopRunningGame())) return;
     setBusy(true);
     setError(null);
     try {
       await withWritableTitle(
         () =>
           trackTask(
-            { kind: "backport-patch", origin: "backport", label: `Backport ${title.titleId}`, consoleId: host },
+            { kind: "backport-patch", origin: "backport", label: tr("backport_task_apply", { id: title.titleId }, "Backport {id}"), consoleId: host },
             () => applyBackport(plan, transport, patchLibc),
           ),
         (completed) => {
@@ -361,7 +389,7 @@ export function BackportPanel({
         saveBackportRecord(host, partial);
         setRecord(partial);
       }
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(false);
     }
@@ -379,6 +407,7 @@ export function BackportPanel({
    *  working through the rest would reach the same verdict a dozen times. */
   const runAuto = async () => {
     if (!overlayReady || autoRunning) return;
+    if (!(await okToStopRunningGame())) return;
     cancelAuto.current = false;
     setAutoRunning(true);
     setAutoNote(null);
@@ -498,7 +527,7 @@ export function BackportPanel({
           `Stopped after trying ${tried} set(s).`));
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setVerifying(false);
       setAutoRunning(false);
@@ -512,13 +541,14 @@ export function BackportPanel({
 
   const undo = async () => {
     if (!record) return;
+    if (!(await okToStopRunningGame())) return;
     setBusy(true);
     setError(null);
     try {
       await withWritableTitle(
         () =>
           trackTask(
-            { kind: "backport-patch", origin: "backport", label: `Undo backport ${title.titleId}`, consoleId: host },
+            { kind: "backport-patch", origin: "backport", label: tr("backport_task_undo", { id: title.titleId }, "Undo backport {id}"), consoleId: host },
             () => undoBackport(record, transport),
           ),
         () => removeBackportRecord(host, title.titleId),
@@ -530,7 +560,7 @@ export function BackportPanel({
       setPlan(null);
       setVerdict(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setBusy(false);
     }
@@ -547,6 +577,7 @@ export function BackportPanel({
   return (
     <Modal open={open} onClose={onClose} title={tr("backport_title", { name: title.titleName }, `Backport ${title.titleName}`)} titleIcon={<Layers size={16} />} size="lg">
       {makeWayDialog}
+      {stopGameDialog}
       <div className="space-y-4 p-4 text-sm">
         {overlayBlocked ? (
           <Callout tone="warn" title={tr("backport_overlay_unavailable", undefined, "Library overlay is not available")}>
@@ -623,7 +654,7 @@ export function BackportPanel({
             </details>
             <p className="text-xs text-[var(--color-muted)]">{tr("backport_candidates", { n: candidates.length }, `${candidates.length} set${candidates.length === 1 ? "" : "s"} available. If the game does not start, Undo and try the next one.`)}</p>
             <ul className="max-h-40 overflow-auto rounded bg-[var(--color-surface-3)] p-3 font-mono text-xs">
-              {plan.copies.map((copy) => <li key={copy.name}>{tr("backport_library_size", { name: copy.name, size: copy.size.toLocaleString() }, `${copy.name} (${copy.size.toLocaleString()} bytes)`)}</li>)}
+              {plan.copies.map((copy) => <li key={copy.name}>{tr("backport_library_size", { name: copy.name, size: formatNumber(copy.size) }, `${copy.name} (${formatNumber(copy.size)} bytes)`)}</li>)}
             </ul>
             <Toggle
               checked={patchLibc}

@@ -1,6 +1,6 @@
 import { Clock } from "lucide-react";
 
-import { formatDuration } from "../../lib/format";
+import { formatDuration } from "../../lib/formatDate";
 import { formatDate } from "../../lib/formatDate";
 import { useTr } from "../../state/lang";
 

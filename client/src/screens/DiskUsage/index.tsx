@@ -3,7 +3,7 @@ import { PieChart, RefreshCw, ChevronUp, Square, Eraser, FolderOpen } from "luci
 import { Navigate, useNavigate } from "react-router";
 import { useConnectionStore } from "../../state/connection";
 import { Button, EmptyState, ErrorCard, Spinner } from "../../components";
-import { humanizePs5Error } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
 import { mgmtAddr } from "../../lib/addr";
@@ -109,7 +109,7 @@ export function DiskUsagePanel({
         }
       })
       .catch((e) => {
-        if (!ac.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+        if (!ac.signal.aborted) setError(humanizeCaught(e));
       })
       .finally(() => {
         if (!ac.signal.aborted) setScanning(false);

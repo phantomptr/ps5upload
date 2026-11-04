@@ -3,6 +3,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   t as translate,
   ensureLocale,
+  ensureLocaleWithRetry,
+  pickLanguage,
   type LanguageCode,
 } from "./i18n";
 
@@ -97,5 +99,61 @@ describe("lazy-load contract", () => {
     await ensureLocale("ja");
     await ensureLocale("ja");
     expect(translate("ja", "app_title")).toBeTruthy();
+  });
+});
+
+describe("pickLanguage", () => {
+  const have = ["en", "de", "es", "pt-BR", "zh-CN", "zh-TW"] as const;
+  it("takes an exact code in any case", () => {
+    expect(pickLanguage(["zh-tw"], have)).toBe("zh-TW");
+    expect(pickLanguage(["DE"], have)).toBe("de");
+  });
+  it("sends Chinese by script or region", () => {
+    expect(pickLanguage(["zh-HK"], have)).toBe("zh-TW");
+    expect(pickLanguage(["zh-Hant-TW"], have)).toBe("zh-TW");
+    expect(pickLanguage(["zh-MO"], have)).toBe("zh-TW");
+    expect(pickLanguage(["zh-Hans-CN"], have)).toBe("zh-CN");
+    expect(pickLanguage(["zh"], have)).toBe("zh-CN");
+  });
+  it("falls to the same primary language", () => {
+    expect(pickLanguage(["pt-PT"], have)).toBe("pt-BR");
+    expect(pickLanguage(["es-419"], have)).toBe("es");
+    expect(pickLanguage(["de-AT"], have)).toBe("de");
+  });
+  it("walks the preference list before giving up on English", () => {
+    expect(pickLanguage(["sv-SE", "de-DE", "en-US"], have)).toBe("de");
+    expect(pickLanguage(["sv-SE", undefined, ""], have)).toBe("en");
+    expect(pickLanguage([], have)).toBe("en");
+  });
+});
+
+describe("ensureLocaleWithRetry", () => {
+  it("retries once and stays quiet when the retry works", async () => {
+    let calls = 0;
+    const load = async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("chunk failed");
+    };
+    let gaveUp = false;
+    await ensureLocaleWithRetry("de", () => (gaveUp = true), 0, load);
+    expect(calls).toBe(2);
+    expect(gaveUp).toBe(false);
+  });
+  it("reports once when the retry fails too, and never rejects", async () => {
+    let calls = 0;
+    const seen: unknown[] = [];
+    const load = async () => {
+      calls += 1;
+      throw new Error(`fail ${calls}`);
+    };
+    await expect(ensureLocaleWithRetry("de", (e) => seen.push(e), 0, load)).resolves.toBeUndefined();
+    expect(calls).toBe(2);
+    expect(seen).toHaveLength(1);
+    expect(String(seen[0])).toContain("fail 2");
+  });
+  it("does not retry when the first load works", async () => {
+    let calls = 0;
+    await ensureLocaleWithRetry("de", () => {}, 0, async () => void (calls += 1));
+    expect(calls).toBe(1);
   });
 });

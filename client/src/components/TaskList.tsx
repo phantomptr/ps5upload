@@ -56,10 +56,11 @@ import {
   type TaskProgressUnit,
   type TaskStatus,
 } from "../state/tasks";
-import { formatBytes, formatDuration } from "../lib/format";
+import { formatBytes } from "../lib/format";
 import { useRosterStore } from "../state/roster";
 import { consoleAddr } from "../lib/addr";
 import { commandTask, taskCapabilities } from "../state/taskControls";
+import { formatDuration } from "../lib/formatDate";
 
 /** Render the icon for a TaskKind. */
 export function KindIcon({ kind, size = 14 }: { kind: TaskKind; size?: number }) {

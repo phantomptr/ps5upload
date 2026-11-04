@@ -35,6 +35,8 @@ import { agoText } from "../Devices";
 import { driveDetailText } from "./driveDetail";
 import { PathPicker, useFolderCheck } from "./DriveDialogs";
 import { FolderCheckNote } from "./FolderCheckNote";
+import { formatDate } from "../../lib/formatDate";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** A console's name as the user knows it: the link's own, the console list's, or its address. */
 export function linkName(l: Pick<DriveLink, "console" | "console_name">, profiles: { host: string; name: string }[]) {
@@ -316,7 +318,7 @@ export function LinkDialog({
   );
 }
 
-const when = (secs: number | null) => (secs ? new Date(secs * 1000).toLocaleString() : "—");
+const when = (secs: number | null) => (secs ? formatDate(secs * 1000) : "—");
 
 /** The drive's conflict copies beside their originals, each settled with one choice. */
 export function ConflictsDialog({
@@ -343,7 +345,7 @@ export function ConflictsDialog({
       setList(await fetchConflicts(host, drive.id));
       setLoadError(null);
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      setLoadError(humanizeCaught(e));
     }
   }, [host, drive.id]);
   useEffect(() => {

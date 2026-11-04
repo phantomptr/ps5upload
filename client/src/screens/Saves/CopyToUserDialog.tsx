@@ -7,6 +7,7 @@ import { Button, Modal } from "../../components";
 import { useTr, type Translator } from "../../state/lang";
 import type { CopyTarget } from "./copyTargets";
 import { userHex } from "./saveUsers";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 export type CopyState =
   | { step: "pick" }
@@ -214,7 +215,7 @@ export default function CopyToUserDialog({
       go({ type: "done" });
       onDone?.();
     } catch (e) {
-      go({ type: "failed", error: e instanceof Error ? e.message : String(e) });
+      go({ type: "failed", error: humanizeCaught(e) });
     }
   };
   return (

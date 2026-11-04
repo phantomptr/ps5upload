@@ -18,6 +18,7 @@ import { loadCollection } from "../../state/collection";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { moveKey, planProgressText, toggleMove } from "./organizePlan";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** PS Game Library's package organizer: preview every move, untick any, apply, undo later. */
 export function OrganizeModal({
@@ -49,9 +50,7 @@ export function OrganizeModal({
           undefined,
           "The organizer is busy with something else. Try again in a moment.",
         )
-      : e instanceof Error
-        ? e.message
-        : String(e);
+      : humanizeCaught(e);
 
   /** A preview, followed until it ends. An engine without preview jobs answers in one call. */
   const makePlan = async (mine: number) => {

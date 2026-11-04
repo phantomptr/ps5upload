@@ -26,6 +26,7 @@ import { ActivityLine } from "./ActivityLine";
 import { installOffers } from "./collectionInstall";
 import { SendToPs5 } from "./SendToPs5";
 import { filesViewLink } from "../FileSystem/filesViews";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** Live enough to say "now": read in the last minute. */
 const LIVE_SEC = 60;
@@ -191,7 +192,7 @@ function ConsoleRow({
     try {
       await refresh(host);
     } catch (e) {
-      setFailed(e instanceof Error ? e.message : String(e));
+      setFailed(humanizeCaught(e));
     } finally {
       setBusy(false);
     }

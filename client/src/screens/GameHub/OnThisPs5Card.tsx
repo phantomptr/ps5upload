@@ -247,22 +247,6 @@ export function OnThisPs5Card({
     if (hidden === undefined) return;
     const probe = guard.capture();
     const hide = !hidden;
-    if (hide) {
-      const ok = await confirm({
-        title: tr(
-          "installed_hide_confirm_title",
-          { name: title.titleName },
-          `Hide ${title.titleName} from the home screen?`,
-        ),
-        message: tr(
-          "installed_hide_confirm_body",
-          undefined,
-          "Only its icon is hidden: it stays installed, keeps its saves, and you can still start it from here. Show it again from this menu. The PS5's home screen updates the next time you open and close any app.",
-        ),
-        confirmLabel: tr("installed_hide_from_home", undefined, "Hide from home screen"),
-      });
-      if (!ok || probe.isStale()) return;
-    }
     setBusy("hide");
     setActionError(null);
     try {
@@ -270,7 +254,18 @@ export function OnThisPs5Card({
       audit(hide ? "app_icon_hide" : "app_icon_show", withConsolePrefix(probe.host, title.titleName), {
         context: title.titleId,
       });
-      if (!probe.isStale()) setHidden(hide);
+      if (probe.isStale()) return;
+      setHidden(hide);
+      // No question first: this undoes from the same menu. It still says what it did and did not do.
+      if (hide) {
+        pushNotification("success", withConsolePrefix(probe.host, title.titleName), {
+          body: tr(
+            "installed_hide_confirm_body",
+            undefined,
+            "Only its icon is hidden: it stays installed, keeps its saves, and you can still start it from here. Show it again from this menu. The PS5's home screen updates the next time you open and close any app.",
+          ),
+        });
+      }
     } catch (e) {
       if (probe.isStale()) return;
       const raw = e instanceof Error ? e.message : String(e);

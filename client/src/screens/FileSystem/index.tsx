@@ -182,11 +182,11 @@ import { nameKey, type FsExistingEntry } from "../../state/fsUploadPlan";
 import { fsUploadDeps } from "../../state/fsUploadRuntime";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
-import { formatDuration, formatBytes } from "../../lib/format";
+import { formatBytes } from "../../lib/format";
 import { formatEtaSeconds } from "../../lib/uploadEta";
 import { useRateEta } from "../../lib/useRateEta";
 import { resumedShown } from "../../lib/resumedProgress";
-import { humanizePs5Error } from "../../lib/humanizeError";
+import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
 
 /**
  * PS5 file explorer with multi-select + cut/copy/paste.
@@ -251,6 +251,8 @@ import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { labelEngineJob } from "../../lib/bgWork";
 import { canEjectUsb, useUsbEject } from "../../lib/useUsbEject";
 import { useMeshDriveShortcuts } from "./useMeshDriveShortcuts";
+import { formatNumber, formatDuration } from "../../lib/formatDate";
+import { Modal } from "../../components/Modal";
 
 function parent(p: string): string {
   if (p === "/" || p === "") return "/";
@@ -1072,7 +1074,7 @@ export default function FileSystemScreen() {
     const itemPath = joinPath(path, name);
     const activityId = useActivityHistoryStore
       .getState()
-      .start("fs-delete", trStatic("task_deleting", "Deleting {name}", { name }), {
+      .start("fs-delete", tr("fs_activity_deleting", { name }, "Deleting {name}"), {
         fromPath: itemPath,
         files: 1,
       });
@@ -1084,7 +1086,7 @@ export default function FileSystemScreen() {
         {
           kind: "fs-delete",
           origin: "files.delete",
-          label: `Delete ${name}`,
+          label: tr("fs_task_delete", { name }, "Delete {name}"),
           consoleId: host,
         },
         () => fsDelete(consoleAddr(host), itemPath),
@@ -1177,16 +1179,25 @@ export default function FileSystemScreen() {
    *    - `lower` / `upper` → case transform
    *
    *  Shows a preview dialog of what would change before applying. */
+  const moreLine = (count: number) =>
+    tr("fs_list_and_more", { count }, "…and {count} more");
   const runBulkRename = async (selectedNames: string[]) => {
     const pattern = await promptDialog({
-      title: `Bulk rename ${selectedNames.length} item(s)`,
-      message:
-        "Pattern grammar:\n" +
-        "  s/old/new/[gi]   substring replace\n" +
-        "  ^prefix_         add prefix\n" +
-        "  _suffix$         add suffix (before extension)\n" +
-        "  lower / upper    change case",
-      placeholder: "e.g. s/CUSA/PCSA/  or  ^backup_  or  lower",
+      title: tr(
+        "fs_bulk_rename_prompt_title",
+        { count: selectedNames.length },
+        "Bulk rename. Items: {count}",
+      ),
+      message: tr(
+        "fs_bulk_rename_grammar",
+        undefined,
+        "Pattern grammar:\n  s/old/new/[gi]   replace text\n  ^prefix_         add a prefix\n  _suffix$         add a suffix (before the extension)\n  lower / upper    change case",
+      ),
+      placeholder: tr(
+        "fs_bulk_rename_placeholder",
+        undefined,
+        "e.g. s/CUSA/PCSA/  or  ^backup_  or  lower",
+      ),
       okLabel: tr("fs_bulk_rename_next", undefined, "Next"),
     });
     if (!pattern) return;
@@ -1216,7 +1227,7 @@ export default function FileSystemScreen() {
             .slice(0, 10)
             .map((x) => `  ${x}`)
             .join("\n") +
-          (invalid.length > 10 ? `\n  ...and ${invalid.length - 10} more` : ""),
+          (invalid.length > 10 ? `\n  ${moreLine(invalid.length - 10)}` : ""),
       });
       return;
     }
@@ -1243,11 +1254,15 @@ export default function FileSystemScreen() {
       const conflicts: string[] = [];
       for (const r of renames) {
         if (seenTargets.has(r.to)) {
-          conflicts.push(`${r.to}  (two items rename to this)`);
+          conflicts.push(
+            `${r.to}  ${tr("fs_bulk_rename_conflict_twice", undefined, "(two items rename to this)")}`,
+          );
         }
         seenTargets.add(r.to);
         if (existing.has(r.to) && !fromSet.has(r.to)) {
-          conflicts.push(`${r.to}  (already exists)`);
+          conflicts.push(
+            `${r.to}  ${tr("fs_bulk_rename_conflict_exists", undefined, "(already exists)")}`,
+          );
         }
       }
       if (conflicts.length > 0) {
@@ -1269,7 +1284,7 @@ export default function FileSystemScreen() {
               .map((c) => `  ${c}`)
               .join("\n") +
             (conflicts.length > 10
-              ? `\n  …and ${conflicts.length - 10} more`
+              ? `\n  ${moreLine(conflicts.length - 10)}`
               : ""),
         });
         return;
@@ -1287,7 +1302,7 @@ export default function FileSystemScreen() {
       ),
       message:
         preview +
-        (renames.length > 10 ? `\n  …and ${renames.length - 10} more` : ""),
+        (renames.length > 10 ? `\n  ${moreLine(renames.length - 10)}` : ""),
       confirmLabel: tr("fs_bulk_rename_apply", undefined, "Rename"),
     });
     if (!ok) return;
@@ -1308,14 +1323,19 @@ export default function FileSystemScreen() {
       }
     }
     if (failures.length > 0) {
-      setError(`First failure: ${failures[0]}`);
+      const firstFailure = tr(
+        "fs_bulk_rename_first_failure",
+        { error: failures[0] },
+        "First failure: {error}",
+      );
+      setError(firstFailure);
       pushNotification(
         "error",
         withConsolePrefix(
           host,
           tr("notif_fs_rename_failed", undefined, "Rename failed"),
         ),
-        { body: trStatic("fs_first_failure", "First failure: {error}", { error: failures[0] }) },
+        { body: firstFailure },
       );
     }
     await alertDialog({
@@ -1333,7 +1353,7 @@ export default function FileSystemScreen() {
               .map((f) => `  ${f}`)
               .join("\n") +
             (failures.length > 10
-              ? `\n  …and ${failures.length - 10} more`
+              ? `\n  ${moreLine(failures.length - 10)}`
               : "")
           : undefined,
     });
@@ -1499,7 +1519,7 @@ export default function FileSystemScreen() {
             try {
               for (const f of files) paths.push((await stageBrowserFile(f)).path);
             } catch (e) {
-              setError(e instanceof Error ? e.message : String(e));
+              setError(humanizeCaught(e));
             }
             if (paths.length > 0) await addPicked(paths, "file");
           })();
@@ -1935,7 +1955,7 @@ export default function FileSystemScreen() {
     const task = beginTask({
       kind: "fs-unpack",
       origin: "files",
-      label: trStatic("task_decompress", "Decompress {name}", { name: entry.name }),
+      label: tr("fs_task_decompress", { name: entry.name }, "Decompress {name}"),
       consoleId: host.trim(),
     });
     let stopped = false;
@@ -2026,7 +2046,7 @@ export default function FileSystemScreen() {
     const task = beginTask({
       kind: "fs-extract",
       origin: "files",
-      label: trStatic("task_extract", "Extract {name}", { name: entry.name }),
+      label: tr("fs_task_extract", { name: entry.name }, "Extract {name}"),
       consoleId: host.trim(),
     });
     let stopped = false;
@@ -2271,7 +2291,7 @@ export default function FileSystemScreen() {
         .map((c) => c.name)
         .join(", ");
       const more =
-        conflicts.length > 6 ? ` and ${conflicts.length - 6} more` : "";
+        conflicts.length > 6 ? ` ${moreLine(conflicts.length - 6)}` : "";
       overwrite = await confirmDialog({
         title: tr(
           "fs_paste_conflict_title",
@@ -2531,7 +2551,7 @@ export default function FileSystemScreen() {
     } catch (e) {
       await alertDialog({
         title: tr("fs_preview_failed", undefined, "Preview failed"),
-        message: e instanceof Error ? e.message : String(e),
+        message: humanizeCaught(e),
       });
     }
   };
@@ -2574,7 +2594,7 @@ export default function FileSystemScreen() {
     } catch (e) {
       await alertDialog({
         title: tr("fs_verify_failed", undefined, "Verify failed"),
-        message: e instanceof Error ? e.message : String(e),
+        message: humanizeCaught(e),
       });
     }
   };
@@ -2630,7 +2650,7 @@ export default function FileSystemScreen() {
     } catch (e) {
       await alertDialog({
         title: tr("fs_crc32_error", undefined, "CRC32 error"),
-        message: e instanceof Error ? e.message : String(e),
+        message: humanizeCaught(e),
       });
     }
   };
@@ -3591,7 +3611,7 @@ export default function FileSystemScreen() {
                             tone: "warn",
                             message: tr(
                               "fs_console_pin_failed",
-                              { error: e instanceof Error ? e.message : String(e) },
+                              { error: humanizeCaught(e) },
                               `Couldn't change the console's pinned folders: ${e instanceof Error ? e.message : String(e)}`,
                             ),
                           }),
@@ -3609,11 +3629,7 @@ export default function FileSystemScreen() {
               <ClipboardPaste size={14} className="text-[var(--color-accent)]" />
               <span>
                 <span className="font-medium">
-                  {tr(
-                    clipboard.items.length === 1 ? "fs_item_one" : "fs_item_many",
-                    { count: clipboard.items.length },
-                    `${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}`,
-                  )}
+                  {tr("fs_item_count", { count: clipboard.items.length }, "Items: {count}")}
                 </span>{" "}
                 {clipboard.op === "cut"
                   ? tr("fs_to_move", undefined, "to move")
@@ -4106,11 +4122,7 @@ export default function FileSystemScreen() {
                   title={tr("fs_select_all", undefined, "Select all")}
                 />
                 <span>
-                  {tr(
-                    entries.length === 1 ? "fs_item_one" : "fs_item_many",
-                    { count: entries.length },
-                    `${entries.length} item${entries.length === 1 ? "" : "s"}`,
-                  )}
+                  {tr("fs_item_count", { count: entries.length }, "Items: {count}")}
                 </span>
                 <span className="ms-auto flex items-center gap-1">
                   {(
@@ -4188,6 +4200,7 @@ export default function FileSystemScreen() {
                       <input
                         autoFocus
                         value={renameDraft}
+                        aria-label={tr("fs_rename_input_label", { name: e.name }, "New name for {name}")}
                         onChange={(ev) => setRenameDraft(ev.target.value)}
                         onKeyDown={(ev) => {
                           if (ev.key === "Enter") runRename(e.name);
@@ -4261,44 +4274,28 @@ export default function FileSystemScreen() {
             )}
           </div>
           {preview && (
-            <div
-              className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
-              onClick={() => setPreview(null)}
+            <Modal
+              open
+              onClose={() => setPreview(null)}
+              title={preview.name}
+              size="xl"
+              bodyClassName="p-3"
             >
-              <div
-                className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] flex max-h-[90dvh] w-full max-w-3xl flex-col overflow-hidden"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <header className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-2">
-                  <div>
-                    <div className="text-sm font-semibold">{preview.name}</div>
-                    <div className="text-xs text-[var(--color-muted)]">
-                      {formatBytes(preview.size)} · {preview.kind}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setPreview(null)}
-                    className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
-                  >
-                    ✕
-                  </button>
-                </header>
-                <div className="flex-1 overflow-auto p-3">
-                  {preview.kind === "image" ? (
-                    <img
-                      src={preview.body}
-                      alt={preview.name}
-                      className="mx-auto max-h-full"
-                    />
-                  ) : (
-                    <pre className="whitespace-pre-wrap break-all font-mono text-xs">
-                      {preview.body}
-                    </pre>
-                  )}
-                </div>
+              <div className="mb-2 text-xs text-[var(--color-muted)]">
+                {formatBytes(preview.size)} · {preview.kind}
               </div>
-            </div>
+              {preview.kind === "image" ? (
+                <img
+                  src={preview.body}
+                  alt={preview.name}
+                  className="mx-auto max-h-full"
+                />
+              ) : (
+                <pre className="whitespace-pre-wrap break-all font-mono text-xs">
+                  {preview.body}
+                </pre>
+              )}
+            </Modal>
           )}
         </div>
       </ConnectionGate>
@@ -4433,8 +4430,8 @@ function UploadProgressDetail({
             {settleLeft !== undefined &&
               ` ${tr(
                 "fs_finishing_files_left",
-                { left: settleLeft.toLocaleString() },
-                `${settleLeft.toLocaleString()} files left`,
+                { left: formatNumber(settleLeft) },
+                `${formatNumber(settleLeft)} files left`,
               )}`}
           </span>
         )}

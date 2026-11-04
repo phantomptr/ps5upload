@@ -1203,6 +1203,7 @@ function SchedulesPanel() {
         />
         <Input
           type="time"
+          aria-label={tr("schedule_time_label", undefined, "Time of day")}
           value={hhmmDraft}
           onChange={(e) => setHhmmDraft(e.target.value)}
           block={false}

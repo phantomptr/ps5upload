@@ -9,6 +9,8 @@ import { formatBytes } from "../../lib/format";
 import { filterFiles, visibleWindow } from "../../lib/viewerLists";
 import { useTr } from "../../state/lang";
 import { Spinner } from "../index";
+import { formatNumber } from "../../lib/formatDate";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 const ROW = 28;
 const VIEWPORT = 420;
@@ -37,7 +39,7 @@ export function FilesListView(props: {
       <div className="text-xs text-[var(--color-muted)]">
         {tr(
           "viewer_files_count",
-          { count: shown.length.toLocaleString(), size: formatBytes(total) },
+          { count: formatNumber(shown.length), size: formatBytes(total) },
           "{count} files · {size}",
         )}
         {props.truncated && ` · ${tr("viewer_files_truncated", undefined, "list shortened")}`}
@@ -90,7 +92,7 @@ export function FilesTab({ token }: { token: string }) {
         setFiles(r.files);
         setTruncated(r.truncated);
       })
-      .catch((e) => live && setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => live && setError(humanizeCaught(e)));
     return () => {
       live = false;
     };

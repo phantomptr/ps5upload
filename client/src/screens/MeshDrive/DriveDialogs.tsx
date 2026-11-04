@@ -21,6 +21,7 @@ import { useTr } from "../../state/lang";
 import { profileNameForAddr, useRosterStore } from "../../state/roster";
 import { useToastStore } from "../../state/toasts";
 import { FolderCheckNote } from "./FolderCheckNote";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /** Debounced engine check of whatever is chosen so far. */
 export function useFolderCheck(
@@ -53,7 +54,7 @@ export function useFolderCheck(
           }
         })
         .catch((e) => {
-          if (mine === seq.current) setError(e instanceof Error ? e.message : String(e));
+          if (mine === seq.current) setError(humanizeCaught(e));
         })
         .finally(() => {
           if (mine === seq.current) setBusy(false);
@@ -166,7 +167,7 @@ export function CreateDriveDialog({
       await driveApi.create(host, name.trim(), hub, local.path, password.trim());
       onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
     } finally {
       setSaving(false);
     }

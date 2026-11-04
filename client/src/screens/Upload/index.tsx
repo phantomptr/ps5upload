@@ -57,7 +57,7 @@ import {
 import { useConnectionStore } from "../../state/connection";
 import { log } from "../../state/logs";
 import { hostOf } from "../../lib/addr";
-import { useScrollLock } from "../../lib/useScrollLock";
+import { Modal } from "../../components/Modal";
 import { pushNotification } from "../../state/notifications";
 import { useRosterStore } from "../../state/roster";
 import { Link, useNavigate } from "react-router";
@@ -124,13 +124,13 @@ import { BottleneckLine, JobLiveNotes, UnsettledLine } from "./Bottleneck";
 import { WhySlowPanel } from "./WhySlow";
 import { SlowTransferHint } from "./SlowTransferHint";
 import { ElfSourceHint } from "./ElfSourceHint";
-import { humanizePs5Error } from "../../lib/humanizeError";
-import { formatDuration, formatBytes } from "../../lib/format";
+import { humanizePs5Error, humanizeCaught } from "../../lib/humanizeError";
+import { formatBytes } from "../../lib/format";
 import { FoldSection } from "../../components/FoldSection";
 import { resumeSummary } from "../../lib/resumeSummary";
 import { progressFigures, resumedShown } from "../../lib/resumedProgress";
 import { useTr, type Translator } from "../../state/lang";
-import { trStatic } from "../../lib/trStatic";
+import { formatNumber, formatDuration } from "../../lib/formatDate";
 
 // formatBytes moved to lib/format.ts.
 
@@ -652,7 +652,7 @@ export default function UploadScreen({
           ...s.phasesByHost,
           "": {
             kind: "failed",
-            error: "Set your PS5's IP on the Connection tab first.",
+            error: tr("upload_err_no_console", undefined, "Set your PS5's IP on the Connection tab first."),
           },
         },
       }));
@@ -705,7 +705,7 @@ export default function UploadScreen({
       // catch the try/finally swallowed the throw and the button just
       // de-busied with no UI feedback, so the user clicked Upload and
       // nothing visible happened.
-      setPreflightError(e instanceof Error ? e.message : String(e));
+      setPreflightError(humanizeCaught(e));
     } finally {
       setPreflightBusy(false);
     }
@@ -717,7 +717,19 @@ export default function UploadScreen({
   const [batchStrategy, setBatchStrategy] = useState<"overwrite" | "resume">(
     "resume",
   );
-  const queueItems = useUploadQueueStore((s) => s.items);
+  // Only what the batch check reads, flattened so a progress tick on a queued item (its bytes,
+  // twice a second) doesn't re-render this whole screen.
+  const queueOccupied = useUploadQueueStore(
+    useShallow((s) =>
+      s.items
+        .filter(
+          (q) =>
+            (q.status === "pending" || q.status === "running") &&
+            hostOf(q.addr) === hostOf(host ?? ""),
+        )
+        .flatMap((q) => [q.sourcePath, q.resolvedDest]),
+    ),
+  );
   const hasBatchPkg = batchRows.some((r) => r.source?.kind === "pkg");
   // The preview uses fixed name parts; the add below makes real ones.
   // Each archive in the list is unpacked or sent as it is by its own row's choice (#645).
@@ -747,13 +759,9 @@ export default function UploadScreen({
         needsPassword: r.status === "needs-password",
         setIssue: r.setIssue,
       })),
-    queueItems
-      .filter(
-        (q) =>
-          (q.status === "pending" || q.status === "running") &&
-          hostOf(q.addr) === hostOf(host ?? ""),
-      )
-      .map((q) => ({ sourcePath: q.sourcePath, resolvedDest: q.resolvedDest })),
+    queueOccupied.flatMap((sourcePath, i, all) =>
+      i % 2 === 0 ? [{ sourcePath, resolvedDest: all[i + 1] }] : [],
+    ),
     new Map(
       availableVolumes.map(
         (v) => [v.path, volumeAllocatableBytes(v)] as [string, number | null],
@@ -1588,7 +1596,7 @@ function Step2Options(props: {
                             "Scanning archive… {count} entries",
                           ).replace(
                             "{count}",
-                            zipInspectEntries.toLocaleString(),
+                            formatNumber(zipInspectEntries),
                           )
                         : tr(
                             "upload_scanning_archive_title",
@@ -2086,12 +2094,12 @@ function MirrorToRosterButton({
                     : await startTransferZip(srcPath, dest, addr, null, excludes)
                 : await startTransferDir(srcPath, dest, addr, null, excludes);
           await waitForJob(jobId);
-          pushNotification("info", trStatic("upload_mirrored", "Mirrored to {name}", { name: p.name }), {
+          pushNotification("info", tr("upload_notif_mirrored", { name: p.name }, "Mirrored to {name}"), {
             body: `${srcPath} → ${dest}`,
           });
         } catch (e) {
-          pushNotification("error", trStatic("upload_mirror_failed", "Mirror failed: {name}", { name: p.name }), {
-            body: e instanceof Error ? e.message : String(e),
+          pushNotification("error", tr("upload_notif_mirror_failed", { name: p.name }, "Mirror failed: {name}"), {
+            body: humanizeCaught(e),
           });
         }
       });
@@ -2158,8 +2166,6 @@ function ExistingDestinationDialog({
   onCancel: () => void;
 }) {
   const tr = useTr();
-  // This dialog mounts only while shown — lock background scroll for its life.
-  useScrollLock();
   // Clean destination → simple Start/Cancel confirm.
   // Existing content → three-way Override/Resume/Cancel for folders,
   // two-way Override/Cancel for single files (no resume concept on a
@@ -2168,10 +2174,10 @@ function ExistingDestinationDialog({
   const canResume = hasExisting && isFolder;
 
   const title = !hasExisting
-    ? "Start upload?"
+    ? tr("upload_dialog_title_start", undefined, "Start upload?")
     : isFolder
-      ? "Folder already has files"
-      : "File already exists";
+      ? tr("upload_dialog_title_folder_exists", undefined, "Folder already has files")
+      : tr("upload_dialog_title_file_exists", undefined, "File already exists");
 
   const subtitle = !hasExisting ? (
     <>
@@ -2180,18 +2186,27 @@ function ExistingDestinationDialog({
     </>
   ) : (
     <>
-      <span className="font-mono text-xs">{dest}</span>
-      {" "}
+      <span className="font-mono text-xs break-all">{dest}</span>
+      <br />
       {isFolder
-        ? tr("upload_dest_has_items", { count: `${entryCount.toLocaleString()}${more ? "+" : ""}` }, `already holds items: ${entryCount.toLocaleString()}${more ? "+" : ""}`)
-        : tr("upload_dest_on_ps5", undefined, "is already on your PS5.")}
+        ? tr(
+            "upload_dialog_folder_item_count",
+            { count: `${formatNumber(entryCount)}${more ? "+" : ""}` },
+            "Items already in this folder: {count}",
+          )
+        : tr("upload_dialog_file_on_ps5", undefined, "This file is already on your PS5.")}
     </>
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4 backdrop-blur-sm">
-      <div className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto p-5 shadow-2xl">
-        <h2 className="mb-1 text-base font-semibold">{title}</h2>
+    <Modal
+      open
+      onClose={onCancel}
+      title={title}
+      role="alertdialog"
+      closeOnScrim={false}
+      bodyClassName="p-5"
+    >
         <p className="mb-4 text-sm text-[var(--color-muted)]">{subtitle}</p>
 
         <div className="grid gap-2">
@@ -2263,8 +2278,7 @@ function ExistingDestinationDialog({
             "You can turn off this prompt in Settings → Upload.",
           )}
         </p>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -2347,7 +2361,7 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
           <span>
             {tr(
               "upload_status_preparing_files",
-              { count: files.length.toLocaleString() },
+              { count: formatNumber(files.length) },
               "Preparing transfer of {count} files…",
             )}
           </span>
@@ -2380,8 +2394,8 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
             {tr(
               "upload_status_resuming",
               {
-                done: resuming.done.toLocaleString(),
-                total: resuming.total.toLocaleString(),
+                done: formatNumber(resuming.done),
+                total: formatNumber(resuming.total),
                 have: formatBytes(resuming.haveBytes),
                 send: formatBytes(resuming.sendBytes),
               },
@@ -2413,15 +2427,15 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
               {files.length > 0 && (
                 <>
                   {" · "}
-                  {filesCompleted.toLocaleString()}{" "}
-                  {tr("upload_status_of", "of")} {files.length.toLocaleString()}{" "}
+                  {formatNumber(filesCompleted)}{" "}
+                  {tr("upload_status_of", "of")} {formatNumber(files.length)}{" "}
                   {tr("upload_status_files", "files")}
                 </>
               )}
               {skippedFiles > 0 && (
                 <>
                   {" · "}
-                  {skippedFiles.toLocaleString()}{" "}
+                  {formatNumber(skippedFiles)}{" "}
                   {tr("upload_status_skipped", "skipped")}
                 </>
               )}
@@ -2509,10 +2523,10 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
                 {tr(
                   "upload_status_finalizing_counter",
                   {
-                    done: phase.filesFinalized.toLocaleString(),
-                    total: phase.filesFinalizingTotal.toLocaleString(),
+                    done: formatNumber(phase.filesFinalized),
+                    total: formatNumber(phase.filesFinalizingTotal),
                   },
-                  `Finalized ${phase.filesFinalized.toLocaleString()} / ${phase.filesFinalizingTotal.toLocaleString()} files. `,
+                  `Finalized ${formatNumber(phase.filesFinalized)} / ${formatNumber(phase.filesFinalizingTotal)} files. `,
                 )}
               </>
             ) : null}
@@ -2564,7 +2578,7 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
                   <>
                     {" "}
                     {tr("upload_done_across", "across")}{" "}
-                    {phase.filesSent.toLocaleString()}{" "}
+                    {formatNumber(phase.filesSent)}{" "}
                     {tr("upload_done_files", "files")}
                   </>
                 )}
@@ -2579,7 +2593,7 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
                   : tr("upload_skipped", "Skipped")}
               </dt>
               <dd className="text-[var(--color-text)]">
-                {phase.skippedFiles.toLocaleString()}{" "}
+                {formatNumber(phase.skippedFiles)}{" "}
                 {tr("upload_done_skipped_files", "files (")}
                 {formatBytes(phase.skippedBytes)}
                 {tr("upload_done_skipped_suffix", ") already on PS5")}
@@ -2841,7 +2855,7 @@ function FileListPanel({
       <div className="mb-1 flex items-center justify-between text-[var(--color-muted)]">
         <span>{tr("upload_file_list_files", "Files")}</span>
         <span>
-          {completed.toLocaleString()} / {total.toLocaleString()}
+          {formatNumber(completed)} / {formatNumber(total)}
           {windowed && (
             <>
               {" · "}
@@ -2916,9 +2930,6 @@ function FileListPanel({
   );
 }
 
-/** Human-friendly duration: "3s", "1m 22s", "2h 14m". Used for
- *  ETA display in the progress row — rounds to whole seconds because
- *  a sub-second ETA is meaningless (noise from the rate smoother). */
 function WrappedHintChip({
   hint,
   onUse,
@@ -3002,12 +3013,12 @@ function GameMetaCard({
           <div className="truncate text-lg font-semibold">
             <GameTitleLink
               id={meta.title_id}
-              title={meta.title ?? "(untitled)"}
+              title={meta.title ?? tr("upload_untitled", undefined, "(untitled)")}
             />
           </div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">
             {meta.content_version ? `v${meta.content_version} · ` : ""}
-            {formatBytes(meta.total_size)} · {meta.file_count.toLocaleString()}{" "}
+            {formatBytes(meta.total_size)} · {formatNumber(meta.file_count)}{" "}
             {tr("upload_game_meta_files", "files")}
           </div>
           <div className="mt-1 flex items-center gap-1 text-xs text-[var(--color-muted)]">
@@ -3032,7 +3043,7 @@ function FolderStatsCard({
   return (
     <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-4 text-sm text-[var(--color-muted)]">
       {formatBytes(totalBytes)} {tr("upload_folder_stats_across", "across")}{" "}
-      {fileCount.toLocaleString()} {tr("upload_folder_stats_files", "files")}
+      {formatNumber(fileCount)} {tr("upload_folder_stats_files", "files")}
     </section>
   );
 }
@@ -3130,7 +3141,7 @@ function PreflightEtaBanner({
         )}
       </div>
       <div className="mb-3 text-[var(--color-muted)]">
-        {fileCount.toLocaleString()} {tr("upload_folder_stats_files", "files")}{" "}
+        {formatNumber(fileCount)} {tr("upload_folder_stats_files", "files")}{" "}
         · {formatBytes(totalBytes)}
       </div>
       <div className="mb-2 text-xs uppercase tracking-wide text-[var(--color-muted)]">
@@ -3436,7 +3447,7 @@ function ZipArchiveCard({
               <div className="truncate text-lg font-semibold">
                 <GameTitleLink
                   id={info.title_id}
-                  title={info.title ?? "(untitled)"}
+                  title={info.title ?? tr("upload_untitled", undefined, "(untitled)")}
                 />
               </div>
             </>
@@ -3460,7 +3471,7 @@ function ZipArchiveCard({
                 {tr("upload_zip_extracted", "extracted")}
               </>
             )}{" "}
-            · {info.file_count.toLocaleString()}{" "}
+            · {formatNumber(info.file_count)}{" "}
             {tr("upload_folder_stats_files", "files")}
           </div>
           {savedPct > 0 && (
@@ -3945,6 +3956,7 @@ function DestinationCard({
           block={false}
           className="flex-1"
           value={subpath}
+          aria-label={tr("upload_dest_subpath_label", undefined, "Folder on the drive")}
           onChange={(e) => onChange(volume, e.target.value)}
         />
       </div>
@@ -4066,7 +4078,7 @@ function ExcludesCard({
                   type="button"
                   onClick={() => onRemove(rule.pattern)}
                   className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
-                  title={`Remove ${rule.pattern}`}
+                  title={tr("upload_exclude_remove", { pattern: rule.pattern }, "Remove {pattern}")}
                 >
                   <X size={12} />
                 </button>

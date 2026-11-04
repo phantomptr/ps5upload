@@ -8,6 +8,7 @@ import { formatBytes } from "../../lib/format";
 import { formatDate } from "../../lib/formatDate";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
+import { humanizeCaught } from "../../lib/humanizeError";
 
 /**
  * Measure how the game reads its files, for an LZ4 image that loads the way it plays: the
@@ -45,7 +46,7 @@ export function TraceCard({
         setStatus(s && s.state ? s : null);
         setError(null);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => setError(humanizeCaught(e)));
   }, [titleId]);
   useEffect(load, [load]);
 
@@ -61,7 +62,7 @@ export function TraceCard({
       setStatus(r && r.state ? r : null);
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeCaught(e));
       return false;
     } finally {
       setBusy(null);

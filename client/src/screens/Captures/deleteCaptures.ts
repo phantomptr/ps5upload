@@ -1,3 +1,4 @@
+import { humanizeCaught } from "../../lib/humanizeError";
 /**
  * Deleting captures from the Captures screen.
  *
@@ -41,7 +42,7 @@ export async function deleteCaptures(
     try {
       await deleter(main);
     } catch (e) {
-      out.failed.push({ path: listed, error: e instanceof Error ? e.message : String(e) });
+      out.failed.push({ path: listed, error: humanizeCaught(e) });
       continue;
     }
     for (const p of extra) {
