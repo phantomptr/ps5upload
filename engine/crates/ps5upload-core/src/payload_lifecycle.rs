@@ -43,8 +43,8 @@ pub const DPI_REASON_NO_BRINGUP: &str = "no_bringup";
 
 /// Classify a loader-send failure.
 ///
-/// Both senders (`send_elf_to_loader` here, and the desktop's
-/// `do_payload_send`) report a failure to reach the loader as
+/// Both senders (`send_elf_to_loader` and `send_payload_image`) report a
+/// failure to reach the loader as
 /// `connect <addr>: <cause>`; every other failure they can return happens
 /// after the socket is up. Keying off that prefix keeps the distinction the
 /// user needs — "your loader isn't listening" vs "the send broke" — without a
@@ -168,9 +168,9 @@ pub enum LoaderImage {
 }
 
 /// Stream raw ELF bytes to the PS5's loader and half-close so it executes
-/// them. This is the engine-side twin of the desktop client's
-/// `do_payload_send`: same ELF-magic gate, same old-payload eviction, same
-/// bounded half-close.
+/// them: the ELF-magic gate, old-payload eviction and half-close of
+/// `send_payload_image`, without its stamping or Payload Manager fallback,
+/// for the images the install cascade loads itself.
 ///
 /// It exists because the install cascade's DPI fallback — the only path
 /// that lands a game *patch* — needs to load a daemon onto the console,
