@@ -1,3 +1,4 @@
+import { cancelConsoleTaskRow } from "./consoleTasks";
 import { useFpkgConversion } from "./fpkgConversion";
 import { useFsBulkOpStore } from "./fsBulkOp";
 import { retryInstallReverify } from "./pkgLibrary";
@@ -5,6 +6,8 @@ import { useTransferStore } from "./transfer";
 import { useUploadQueueStore } from "./uploadQueue";
 import { isTerminal, type Task } from "./tasks";
 import { invoke } from "../lib/invokeLogged";
+import { trStatic } from "../lib/trStatic";
+import { useToastStore } from "./toasts";
 
 export type TaskCommand = "cancel" | "retry";
 
@@ -39,6 +42,9 @@ export function taskCapabilities(task: Task): TaskCapabilities {
   }
   if (control.owner === "remote-fetch") {
     return { ...none, canCancel: task.status === "running" };
+  }
+  if (control.owner === "console-task") {
+    return { ...none, canCancel: task.status === "running" && control.cancellable };
   }
   if (control.owner === "fpkg-convert") {
     // Only the run that owns this row: an old Convert row must never stop a newer conversion.
@@ -97,6 +103,23 @@ export async function commandTask(task: Task, command: TaskCommand): Promise<boo
       // The fetch stops at its next chunk; materializeRemote then settles the task as cancelled.
       await invoke("job_cancel", { jobId: control.jobId });
       return true;
+    }
+    if (control.owner === "console-task") {
+      try {
+        await cancelConsoleTaskRow(control.host, control.taskId);
+        return true;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        useToastStore.getState().push({
+          tone: "warn",
+          message: trStatic(
+            "engine_job_cancel_failed",
+            "Couldn't stop it: {msg}. It is still running; try again.",
+            { msg },
+          ),
+        });
+        return false;
+      }
     }
     useUploadQueueStore.getState().cancelItem(control.itemId);
     return true;

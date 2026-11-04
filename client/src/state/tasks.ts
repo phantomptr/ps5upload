@@ -82,7 +82,9 @@ export type TaskKind =
   // a payload playlist (or the auto-loader) sending its steps
   | "payload-playlist"
   // this app downloading its own update
-  | "app-update";
+  | "app-update"
+  // started on the console's own page (PS5Upload Minion), running on the console (state/consoleTasks)
+  | "console-task";
 
 export type TaskStatus =
   | "queued"
@@ -138,7 +140,9 @@ export type TaskControlRef =
   // A Convert or .ffpfsc run; Cancel stops its build job.
   | { owner: "fpkg-convert" }
   // A copy from a saved server (NAS) to this computer: Cancel stops the engine's fetch job.
-  | { owner: "remote-fetch"; jobId: string };
+  | { owner: "remote-fetch"; jobId: string }
+  // A task started on the console's own page: Cancel asks the console to stop it.
+  | { owner: "console-task"; host: string; taskId: string; cancellable: boolean };
 
 /** Per-kind specifics. Kept loose (record of string→unknown) so each
  *  feature can store what it needs without forcing a union. The typed
@@ -227,7 +231,10 @@ function loadInitial(): Task[] {
     if (!parsed || !Array.isArray(parsed.tasks)) return [];
     // Any task that was non-terminal when the app closed is now stale.
     // Mark as "interrupted" so the user sees what happened + can retry.
-    return parsed.tasks.map((t) => {
+    // A console page's task is not this app's to interrupt: it keeps running on the console, and
+    // the next read lists it again if it does (state/consoleTasks).
+    const tasks = parsed.tasks.filter((t) => t.kind !== "console-task" || isTerminal(t.status));
+    return tasks.map((t) => {
       if (isTerminal(t.status)) return t;
       interruptedAtLoad.add(t.id);
       return { ...t, status: "interrupted" as TaskStatus, endedAtMs: t.updatedAtMs };

@@ -71,6 +71,7 @@ import {
 import { ensureOsNotificationPermission } from "../lib/osNotify";
 import { powerTick } from "../api/ps5";
 import { anyAwakeWork, awakeConsoles } from "../lib/awakeWork";
+import { readConsoleTasks } from "../state/consoleTasks";
 import { useTaskStore } from "../state/tasks";
 import { transferBytesMoved, transferScreenBusy } from "../lib/ps5Transfers";
 import {
@@ -499,6 +500,9 @@ function useStatusPolling() {
         if (s.reachable || sessionNeedsAttention(s.session)) {
           missCountRef.current[key] = 0;
           newStatus = "up";
+          // What the console's own page has running, for Activity (#658): one small read with
+          // this tick, and only when the helper can answer it.
+          if (s.reachable && !sessionNeedsAttention(s.session)) void readConsoleTasks(probedHost);
           // A helper answering well after the user stopped it was started another way: the
           // console is not "stopped by you" any more (state/helperStopped).
           if (noteHelperAnswering(probedHost))
