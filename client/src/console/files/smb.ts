@@ -119,8 +119,10 @@ export interface ShareForm {
  * do the same (remote/api.rs split_share).
  */
 export function splitShare(share: string, startPath: string): { share: string; start_path: string } {
-  const raw = share.trim();
-  const unc = raw.startsWith("\\\\") || raw.startsWith("//");
+  const typed = share.trim();
+  const scheme = /^(smb|cifs):\/\//i.exec(typed);
+  const raw = scheme ? typed.slice(scheme[0].length) : typed;
+  const unc = scheme !== null || raw.startsWith("\\\\") || raw.startsWith("//");
   const segs = raw.split(/[\\/]/).filter((x) => x.trim() !== "");
   if (unc && segs.length >= 2) segs.shift();
   if (segs.length <= 1) return { share: (segs[0] ?? raw).trim(), start_path: startPath };

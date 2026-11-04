@@ -333,5 +333,7 @@ describe("splitShare", () => {
     expect(splitShare("\\\\nas\\Media\\Games", "")).toEqual({ share: "Media", start_path: "Games" });
     expect(splitShare("//nas/Media", "x")).toEqual({ share: "Media", start_path: "x" });
     expect(splitShare("/Media/", "")).toEqual({ share: "Media", start_path: "" });
+    expect(splitShare("smb://nas/Media/Games", "x")).toEqual({ share: "Media", start_path: "Games/x" });
+    expect(splitShare("CIFS://nas/Media", "")).toEqual({ share: "Media", start_path: "" });
   });
 });
