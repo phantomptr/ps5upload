@@ -1,7 +1,10 @@
 /**
  * Run `fn` now and every `ms` while the page is visible. While it is hidden
  * (the PS5 browser in the background, another tab) nothing runs; when it shows
- * again `fn` runs at once and the interval starts over. Returns the stop function.
+ * again `fn` runs at once and the interval starts over. A promise it returns
+ * holds the next ticks until it settles: on a slow helper reads must not stack
+ * up behind each other and take every connection the browser has for this site.
+ * Returns the stop function.
  */
 export interface VisibilityDoc {
   readonly hidden: boolean;
@@ -9,12 +12,24 @@ export interface VisibilityDoc {
   removeEventListener(type: "visibilitychange", fn: () => void): void;
 }
 
-export function pollWhileVisible(fn: () => void, ms: number, doc: VisibilityDoc = document): () => void {
+export function pollWhileVisible(fn: () => unknown, ms: number, doc: VisibilityDoc = document): () => void {
   let timer: ReturnType<typeof setInterval> | undefined;
+  let busy = false;
+  const tick = () => {
+    if (busy) return;
+    const r = fn();
+    if (r instanceof Promise) {
+      busy = true;
+      const free = () => {
+        busy = false;
+      };
+      r.then(free, free);
+    }
+  };
   const start = () => {
     if (timer !== undefined) return;
-    fn();
-    timer = setInterval(fn, ms);
+    tick();
+    timer = setInterval(tick, ms);
   };
   const pause = () => {
     if (timer !== undefined) clearInterval(timer);

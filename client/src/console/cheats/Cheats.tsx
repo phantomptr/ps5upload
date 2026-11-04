@@ -317,7 +317,7 @@ export function Cheats() {
   useEffect(() => {
     const c = createCheatsController(setState);
     ctl.current = c;
-    const stop = pollWhileVisible(() => void c.loadStatus(), CHEATS_POLL_MS);
+    const stop = pollWhileVisible(() => c.loadStatus(), CHEATS_POLL_MS);
     const onVisible = () => {
       if (!document.hidden) void c.loadList();
     };

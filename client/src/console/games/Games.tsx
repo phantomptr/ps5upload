@@ -511,7 +511,7 @@ export function Games({ ctx, switcher }: { ctx: SectionContext; switcher?: React
   useEffect(() => {
     void load();
   }, [load]);
-  useEffect(() => pollWhileVisible(() => void pollRunning(), GAMES_POLL_MS), [pollRunning]);
+  useEffect(() => pollWhileVisible(pollRunning, GAMES_POLL_MS), [pollRunning]);
 
   // Create (refresh): read the list again; App's fallback re-reads the status.
   useEffect(

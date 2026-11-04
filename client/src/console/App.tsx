@@ -103,7 +103,7 @@ export function App({ inputMap }: { inputMap: InputMap }) {
   useEffect(() => {
     if (expired) return;
     let live = true;
-    const load = () => {
+    const load = () =>
       call<ConsoleStatus>("/api/status").then(
         (s) => {
           if (!live) return;
@@ -114,7 +114,6 @@ export function App({ inputMap }: { inputMap: InputMap }) {
           if (live && isOffline(e)) setOffline(true);
         },
       );
-    };
     // Not while the page is hidden (the browser in the background): no reason to wake the helper.
     const stop = pollWhileVisible(load, STATUS_POLL_MS);
     return () => {

@@ -44,6 +44,39 @@ describe("pollWhileVisible", () => {
     expect(d.listeners()).toBe(0);
   });
 
+  it("a read still running holds the next ticks: reads never stack up on a slow helper", async () => {
+    vi.useFakeTimers();
+    const d = fakeDoc(false);
+    let finish: (() => void) | undefined;
+    const fn = vi.fn(
+      () =>
+        new Promise<void>((res) => {
+          finish = res;
+        }),
+    );
+    const stop = pollWhileVisible(fn, 1000, d.doc);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fn).toHaveBeenCalledTimes(1);
+    // Hidden and shown again meanwhile: still that one read.
+    d.set(true);
+    d.set(false);
+    expect(fn).toHaveBeenCalledTimes(1);
+    finish?.();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fn).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it("a read that failed frees the next tick too", async () => {
+    vi.useFakeTimers();
+    const d = fakeDoc(false);
+    const fn = vi.fn(() => Promise.reject(new Error("x")));
+    const stop = pollWhileVisible(fn, 1000, d.doc);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fn).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
   it("a page opened hidden waits until it shows", () => {
     vi.useFakeTimers();
     const d = fakeDoc(true);
