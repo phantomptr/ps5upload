@@ -32,6 +32,7 @@ import { pickPath } from "../../lib/pickPath";
 import { useTr, type Translator } from "../../state/lang";
 import { profileNameForAddr, useRosterStore } from "../../state/roster";
 import { agoText } from "../Devices";
+import { driveDetailText } from "./driveDetail";
 import { PathPicker, useFolderCheck } from "./DriveDialogs";
 import { FolderCheckNote } from "./FolderCheckNote";
 
@@ -123,7 +124,11 @@ export function LinkedConsoles({
                     .filter(Boolean)
                     .join(" · ")}
                 </p>
-                {l.error && <p className="break-words text-xs text-[var(--color-bad)]">{l.error}</p>}
+                {l.error && (
+                  <p className="break-words text-xs text-[var(--color-bad)]">
+                    {driveDetailText(tr, l.error_code, l.error_args, l.error)}
+                  </p>
+                )}
                 {l.state === "confirm" && canManage && (
                   <Button
                     className="mt-1"

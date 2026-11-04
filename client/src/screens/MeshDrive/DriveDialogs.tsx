@@ -18,6 +18,8 @@ import {
 } from "../../api/meshDrive";
 import { pickPath } from "../../lib/pickPath";
 import { useTr } from "../../state/lang";
+import { profileNameForAddr, useRosterStore } from "../../state/roster";
+import { useToastStore } from "../../state/toasts";
 import { FolderCheckNote } from "./FolderCheckNote";
 
 /** Debounced engine check of whatever is chosen so far. */
@@ -416,7 +418,20 @@ export function PasswordDialog({
     setSaving(true);
     setError(null);
     try {
-      await driveApi.setPassword(host, drive.id, value, needCurrent ? current.trim() : undefined);
+      const { pending } = await driveApi.setPassword(host, drive.id, value, needCurrent ? current.trim() : undefined);
+      // A linked console that was away still asks for the old password, until a device that
+      // reaches both consoles carries the change over.
+      if (pending.length > 0) {
+        const profiles = useRosterStore.getState().profiles;
+        useToastStore.getState().push({
+          tone: "warn",
+          message: tr(
+            "drive_password_pending",
+            { consoles: pending.map((c) => profileNameForAddr(c, profiles) || c).join(", ") },
+            "{consoles} did not answer. It keeps the old password until a device reaches both consoles.",
+          ),
+        });
+      }
       setNext("");
       setCurrent("");
       onDone();

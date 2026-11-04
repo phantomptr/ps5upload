@@ -50,6 +50,7 @@ import { CreateDriveDialog, JoinDriveDialog, PasswordDialog } from "./DriveDialo
 import { ConflictsDialog, LinkDialog, LinkedConsoles, linkName } from "./LinksAndConflicts";
 import { useRosterStore } from "../../state/roster";
 import { AwayActions, AwayFolders, awayText, useConsoleName } from "./AwayFolders";
+import { driveDetailText } from "./driveDetail";
 
 type Tone = "good" | "warn" | "bad" | "neutral" | "accent";
 
@@ -70,6 +71,7 @@ function statusOf(
   consoleName: string,
 ): { tone: Tone; short: string; long: string } {
   const s = l.status;
+  const detail = driveDetailText(tr, s.detail_code, s.detail_args, s.detail);
   const ago = s.last_ok ? agoText(tr, now - s.last_ok) : "";
   // Its console is away: say which way, and that nothing made here is lost.
   if (s.state === "offline" && s.away) return { tone: "warn", ...awayText(tr, s, consoleName, now) };
@@ -109,12 +111,12 @@ function statusOf(
       return {
         tone: "neutral",
         short: tr("drive_badge_waiting", undefined, "Waiting"),
-        long: s.detail || tr("drive_waiting", undefined, "Another device is syncing it"),
+        long: detail || tr("drive_waiting", undefined, "Another device is syncing it"),
       };
     case "paused":
       return { tone: "neutral", short: tr("drive_paused", undefined, "Paused"), long: "" };
     case "offline":
-      return { tone: "warn", short: tr("drive_offline", undefined, "Folder offline"), long: s.detail };
+      return { tone: "warn", short: tr("drive_offline", undefined, "Folder offline"), long: detail };
     case "confirm":
       return {
         tone: "warn",
@@ -129,7 +131,7 @@ function statusOf(
       return {
         tone: "bad",
         short: tr("drive_badge_error", undefined, "Problem"),
-        long: s.detail || tr("drive_error", undefined, "The last sync failed"),
+        long: detail || tr("drive_error", undefined, "The last sync failed"),
       };
     case "removed":
       return { tone: "neutral", short: tr("drive_removed", undefined, "No longer in this drive"), long: "" };
@@ -222,7 +224,11 @@ function MemberRow({
               ].join(" · ")
             : tr("drive_member_joined", { ago: agoText(tr, now - m.joined) }, `joined ${agoText(tr, now - m.joined)}`)}
         </p>
-        {m.error && <p className="break-words text-xs text-[var(--color-bad)]">{m.error}</p>}
+        {m.error && (
+          <p className="break-words text-xs text-[var(--color-bad)]">
+            {driveDetailText(tr, m.error_code, m.error_args, m.error)}
+          </p>
+        )}
       </div>
       <div className="flex shrink-0 items-center justify-end gap-1">
         {/* On a phone the icons alone, so the device's name keeps the room. */}
