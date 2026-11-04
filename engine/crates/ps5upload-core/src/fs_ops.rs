@@ -437,6 +437,32 @@ pub fn fs_read_with_timeout(
     Ok(resp)
 }
 
+/// One read through the helper. It caps a single read (2 MiB), so a whole file takes a loop.
+const FS_READ_WHOLE_CHUNK: u64 = 1 << 20;
+
+/// A whole `size`-byte file from the console. An error when it ends early: nothing that wants the
+/// whole file can use part of one.
+pub fn fs_read_whole(addr: &str, path: &str, size: u64) -> Result<Vec<u8>> {
+    read_whole_with(path, size, |at, want| fs_read(addr, path, at, want))
+}
+
+fn read_whole_with(
+    path: &str,
+    size: u64,
+    mut read: impl FnMut(u64, u64) -> Result<Vec<u8>>,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+    while (out.len() as u64) < size {
+        let at = out.len() as u64;
+        let piece = read(at, FS_READ_WHOLE_CHUNK.min(size - at))?;
+        if piece.is_empty() {
+            anyhow::bail!("{path} ended at {at} of {size} bytes");
+        }
+        out.extend_from_slice(&piece);
+    }
+    Ok(out)
+}
+
 // ─── Destructive ops (delete / move / chmod / mkdir) ────────────────────────
 
 /// Delete a file or directory recursively on the PS5. Path must be under
@@ -1509,6 +1535,37 @@ fn blake3_file(path: &std::path::Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::UnregisterOutcome;
+
+    /// What the console does: one read returns at most 2 MiB, and the file ends where it ends.
+    fn read_capped(file: &[u8], at: u64, want: u64) -> anyhow::Result<Vec<u8>> {
+        let start = (at as usize).min(file.len());
+        let end = (start + want.min(2 * 1024 * 1024) as usize).min(file.len());
+        Ok(file[start..end].to_vec())
+    }
+
+    #[test]
+    fn a_whole_file_is_read_past_the_helpers_ceiling() {
+        let file: Vec<u8> = (0..5 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+        let got = super::read_whole_with("/f", file.len() as u64, |at, want| {
+            read_capped(&file, at, want)
+        })
+        .unwrap();
+        assert_eq!(got, file);
+    }
+
+    #[test]
+    fn a_file_shorter_than_its_listing_is_an_error_not_a_short_result() {
+        let file = vec![7u8; 1000];
+        let e = super::read_whole_with("/f", 3000, |at, want| read_capped(&file, at, want))
+            .unwrap_err();
+        assert_eq!(e.to_string(), "/f ended at 1000 of 3000 bytes");
+    }
+
+    #[test]
+    fn an_empty_file_needs_no_read() {
+        let got = super::read_whole_with("/f", 0, |_, _| panic!("no read expected")).unwrap();
+        assert!(got.is_empty());
+    }
 
     /// The request is the payload's args JSON as-is: snake_case keys, `dlc` on unless said.
     #[test]
