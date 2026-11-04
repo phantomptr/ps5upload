@@ -28,6 +28,7 @@ import {
   type FsUploadStopped,
 } from "./fsUpload";
 import { nameKey, type FsExistingEntry } from "./fsUploadPlan";
+import { trStatic } from "../lib/trStatic";
 
 export interface PendingFsUpload {
   id: string;
@@ -235,7 +236,7 @@ export async function drainFsUploadQueue(host: string, deps: FsUploadDeps): Prom
           const allowed = new Set(item.allowedExisting);
           const taken = new Set(present.map((e) => nameKey(e.name)));
           const conflict = names(item.request).find((n) => taken.has(nameKey(n)) && !allowed.has(nameKey(n)));
-          if (conflict) throw new Error(`Destination changed while queued: ${conflict}. Remove this queued pick and add it again to choose Replace, Keep both or Skip.`);
+          if (conflict) throw new Error(trStatic("fsq_dest_changed", "Destination changed while queued: {conflict}. Remove this queued pick and add it again to choose Replace, Keep both or Skip.", { conflict }));
         }
         const result = await runFsUpload(item.request, deps);
         if (result.error === FS_UPLOAD_BUSY) break;

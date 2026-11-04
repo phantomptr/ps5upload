@@ -13,6 +13,7 @@ import {
   type FsExistingEntry,
   type FsUploadStep,
 } from "./fsUploadPlan";
+import { isJobUnknownError } from "../lib/pollRead";
 
 /**
  * An "Add files" / drag-in upload on the Files screen, kept outside the screen.
@@ -204,9 +205,7 @@ const RETRY_WAIT_SLICE_MS = 250;
 /** Status reads that may fail in a row before the step counts as failed (the queue's bound).
  *  The engine runs the job by itself: one failed read is not a failed job. */
 const MAX_POLL_FAILURES = 6;
-/** The engine answered that it has no such job (it restarted, or the job ended long ago). */
-const jobNotFound = (e: unknown) =>
-  /job not found/i.test(e instanceof Error ? e.message : String(e));
+const jobNotFound = isJobUnknownError;
 
 /** A failed job, with the engine's reason kept beside its message. */
 class JobFailed extends Error {

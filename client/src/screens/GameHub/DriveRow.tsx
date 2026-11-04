@@ -114,8 +114,8 @@ import {
   type RegisteredTitle,
 } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
-import { cachedGameMeta, peekGameMeta } from "../../lib/gameMetaCache";
-import { formatBytes } from "../../lib/format";
+import { cachedGameMeta, forgetGameMeta, peekGameMeta } from "../../lib/gameMetaCache";
+import { formatDuration, formatBytes } from "../../lib/format";
 import { mgmtAddr } from "../../lib/addr";
 import { useImageRetry } from "../../lib/useImageRetry";
 import { isTauriEnv } from "../../lib/tauriEnv";
@@ -150,6 +150,7 @@ import {
 } from "../../components";
 import { useTr } from "../../state/lang";
 import { useSmpState } from "./SmpNeeded";
+import { trStatic } from "../../lib/trStatic";
 
 // Module-level limiter shared across every LibraryRow mounted at once.
 // 4 concurrent FS_READs keeps the metadata fetch snappy (browser
@@ -157,16 +158,6 @@ import { useSmpState } from "./SmpNeeded";
 // payload's single-threaded mgmt port for other UI-driven calls
 // (Volumes refresh, File System navigation) to interleave cleanly.
 const metaLimit = createLimiter(4);
-
-function formatDuration(sec: number): string {
-  if (!isFinite(sec) || sec < 0) return "—";
-  if (sec < 60) return `${Math.ceil(sec)}s`;
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  if (m < 60) return `${m}m ${s}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
 
 // formatBytes moved to lib/format.ts — kept consistent across screens.
 
@@ -662,6 +653,7 @@ function LibraryRowImpl({
     let errMsg: string | null = null;
     try {
       await fsDelete(consoleAddr(host), entry.path);
+      forgetGameMeta(host, entry.path);
       audit("fs_delete", withConsolePrefix(host, entry.path));
       onChanged();
     } catch (e) {
@@ -1659,28 +1651,28 @@ function LibraryRowImpl({
       const res = await healAppmeta(addr, entry.titleId, entry.path);
       const summary =
         res.copied > 0
-          ? `Healed ${res.copied} file${res.copied === 1 ? "" : "s"} to ${res.appmeta_dir}`
-          : `Nothing to heal — ${res.already_present} files already present in ${res.appmeta_dir}`;
+          ? trStatic("heal_done_note", "Files healed: {count}, in {dir}", { count: res.copied, dir: res.appmeta_dir })
+          : trStatic("heal_nothing_note", "Nothing to heal. Files already in {dir}: {count}", { count: res.already_present, dir: res.appmeta_dir });
       setMountNote(summary);
       if (res.errors > 0) {
         const firstErr = res.outcomes.find((o) => o.status === "error");
         setError(
-          `Some files failed: ${firstErr?.error ?? "unknown error"} — see Logs for details.`,
+          trStatic("heal_some_failed", "Some files failed: {error}. See Logs for details.", { error: firstErr?.error ?? trStatic("heal_unknown_error", "unknown error") }),
         );
         pushNotification(
           "warning",
-          withConsolePrefix(host, `Heal partial: ${entry.titleId}`),
+          withConsolePrefix(host, trStatic("heal_partial_title", "Heal partial: {title}", { title: entry.titleId })),
           {
-            body: `${res.copied} copied, ${res.errors} failed for ${entry.name}`,
+            body: trStatic("heal_partial_body", "{name}: {copied} copied, {failed} failed", { name: entry.name, copied: res.copied, failed: res.errors }),
             link: "/games",
           },
         );
       } else if (res.copied > 0) {
         pushNotification(
           "success",
-          withConsolePrefix(host, `Healed ${entry.name}`),
+          withConsolePrefix(host, trStatic("heal_done_title", "Healed {name}", { name: entry.name })),
           {
-            body: `Restored ${res.copied} file${res.copied === 1 ? "" : "s"} for ${entry.titleId} — home-screen tile should refresh.`,
+            body: trStatic("heal_done_body", "Files restored for {title}: {count}. The home screen tile should refresh.", { title: entry.titleId, count: res.copied }),
             link: "/games",
           },
         );

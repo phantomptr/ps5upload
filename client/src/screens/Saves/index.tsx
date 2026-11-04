@@ -111,6 +111,7 @@ import MoveFromPs4 from "./MoveFromPs4";
 import SwitchSaves from "./SwitchSaves";
 import Ps2Saves from "./Ps2Saves";
 import { formatDate } from "../../lib/formatDate";
+import { trStatic } from "../../lib/trStatic";
 
 /**
  * Save data manager.
@@ -327,7 +328,7 @@ export default function SavesScreen() {
     if (!host?.trim() || openBusy) return;
     setOpenBusy(true);
     try {
-      const children = await fsListDir(consoleAddr(host.trim()), entry.path, { limit: 4096 });
+      const children = await fsListDir(consoleAddr(host.trim()), entry.path);
       const images = saveImagesOf(entry, children);
       if (images.length === 0) {
         pushNotification("info", tr("saves_open_none", undefined, "No save image in this folder."));
@@ -564,7 +565,7 @@ export default function SavesScreen() {
       const savedTo = await saveArchiveZip(tempDir, entry.title_id, destZip ?? "", destZipName);
       pushNotification(
         "success",
-        withConsolePrefix(host, `Backed up ${entry.title_id}`),
+        withConsolePrefix(host, trStatic("saves_backed_up_title", "Backed up {title}", { title: entry.title_id })),
         {
           body: `Saved to ${savedTo}`,
         },
@@ -575,7 +576,7 @@ export default function SavesScreen() {
       setError(msg);
       pushNotification(
         "error",
-        withConsolePrefix(host, `Backup failed: ${entry.title_id}`),
+        withConsolePrefix(host, trStatic("saves_backup_failed_title", "Backup failed: {title}", { title: entry.title_id })),
         {
           body: msg,
         },
@@ -669,7 +670,7 @@ export default function SavesScreen() {
         );
       }
       const addr = consoleAddr(restoreHost);
-      const children = await fsListDir(addr, entry.path, { limit: 4096 });
+      const children = await fsListDir(addr, entry.path);
       for (const child of children) {
         const childPath = entry.path.endsWith("/")
           ? `${entry.path}${child.name}`
@@ -689,7 +690,7 @@ export default function SavesScreen() {
       await waitForJob(jobId);
       pushNotification(
         "success",
-        withConsolePrefix(restoreHost, `Restored ${entry.title_id}`),
+        withConsolePrefix(restoreHost, trStatic("saves_restored", "Restored {title}", { title: entry.title_id })),
         {
           body:
             `Uploaded ${entry.title_id}.zip back to ${entry.path}.` +
@@ -704,7 +705,7 @@ export default function SavesScreen() {
       setError(msg);
       pushNotification(
         "error",
-        withConsolePrefix(restoreHost, `Restore failed: ${entry.title_id}`),
+        withConsolePrefix(restoreHost, trStatic("saves_restore_failed_title", "Restore failed: {title}", { title: entry.title_id })),
         {
           body: msg,
         },
@@ -803,7 +804,7 @@ export default function SavesScreen() {
       await waitForJob(jobId2);
       pushNotification(
         "success",
-        withConsolePrefix(backupHost, `Backed up ${entry.title_id} to USB`),
+        withConsolePrefix(backupHost, trStatic("saves_backed_up_usb", "Backed up {title} to USB", { title: entry.title_id })),
         { body: `Saved to ${remoteZip}` },
       );
     } catch (e) {
@@ -812,7 +813,7 @@ export default function SavesScreen() {
       setError(msg);
       pushNotification(
         "error",
-        withConsolePrefix(backupHost, `USB backup failed: ${entry.title_id}`),
+        withConsolePrefix(backupHost, trStatic("saves_usb_backup_failed", "USB backup failed: {title}", { title: entry.title_id })),
         { body: msg },
       );
       throw e; // let the bulk handler count this as a failure
@@ -955,7 +956,7 @@ export default function SavesScreen() {
       }
       // 5) Wipe live save contents but keep the title_id folder itself —
       // see handleRestore lines 269-275 for why we can't mkdir it fresh.
-      const children = await fsListDir(addr, entry.path, { limit: 4096 });
+      const children = await fsListDir(addr, entry.path);
       for (const child of children) {
         const childPath = entry.path.endsWith("/")
           ? `${entry.path}${child.name}`
@@ -968,7 +969,7 @@ export default function SavesScreen() {
       await waitForJob(jobId2);
       pushNotification(
         "success",
-        withConsolePrefix(restoreHost, `Restored ${entry.title_id} from USB`),
+        withConsolePrefix(restoreHost, trStatic("saves_restored_usb", "Restored {title} from USB", { title: entry.title_id })),
         { body: `Restored from ${remoteZip} → ${entry.path}` },
       );
       return "ok";
@@ -978,7 +979,7 @@ export default function SavesScreen() {
       setError(msg);
       pushNotification(
         "error",
-        withConsolePrefix(restoreHost, `USB restore failed: ${entry.title_id}`),
+        withConsolePrefix(restoreHost, trStatic("saves_usb_restore_failed", "USB restore failed: {title}", { title: entry.title_id })),
         { body: msg },
       );
       throw e; // let the bulk handler count this as a failure

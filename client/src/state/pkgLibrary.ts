@@ -105,8 +105,7 @@ import {
  * daemon on :9115 (also InstallByPackage since 2.25.2), then re-send the main
  * payload (the single-payload loader swapped it out). The payload's own tier
  * ladder (bgft.c) only drops to the unlaunchable `sceAppInstUtilAppInstallPkg`
- * as an absolute last resort, flagging it so we warn the user — see
- * `pkgInstallMayNotLaunch`.
+ * as an absolute last resort, flagging it so we warn the user.
  *
  * IMPORTANT: the library dir is deliberately NOT `pkg_temp/` — the payload
  * sweeps that on boot (`runtime_sweep_stale_pkg_temp`), which would wipe the
@@ -131,9 +130,12 @@ async function readVolumes(host: string): Promise<Volume[] | null> {
 export const PKG_TEMP_DIR = "/user/data/ps5upload/pkg_temp";
 
 /** Warning copy shown when an install lands via the unlaunchable last-resort
- *  path (register_path "appinst-local"); see `pkgInstallMayNotLaunch`. */
-export const PKG_MAY_NOT_LAUNCH_MESSAGE =
-  "Installed, but via a fallback that may not launch on this firmware. If the game won't start (“can't start the game or app”), re-install it from the PS5: Settings → System → Debug Settings → Game → Package Installer.";
+ *  path (register_path "appinst-local"). */
+export const pkgMayNotLaunchMessage = (): string =>
+  trStatic(
+    "pkg_may_not_launch",
+    "Installed, but via a fallback that may not launch on this firmware. If the game won't start (“can't start the game or app”), install it again from the PS5: Settings → System → Debug Settings → Game → Package Installer.",
+  );
 
 /** Shown when the background re-verify can never succeed for this package —
  *  no title id, and neither a fingerprint nor a size to match an installed
@@ -146,31 +148,6 @@ export const PKG_REVERIFY_IMPOSSIBLE_HINT =
 export const PKG_REVERIFY_GAVE_UP_HINT =
   "Still not confirmed after 30 minutes. A very large title can take longer — check the PS5's Notifications, or use Recheck to look again.";
 
-/** Whether an install response indicates the title may not launch.
- *
- *  Precedence:
- *   1. `launchable` — the engine's definitive app.db verification result
- *      (elf-arsenal `wait_for_install_row` analogue). `true` means the
- *      title_id was confirmed registered in the PS5's app.db, so the title
- *      IS launchable even if it landed via the `appinst-local` last-resort
- *      path → returns false (clean success). `false` means the title never
- *      registered within the verification window → returns true.
- *   2. When `launchable` is null/absent (verification not applicable —
- *      sqlite unavailable on this firmware, no real title_id, or an older
- *      engine/client), fall back to the heuristic: the engine's
- *      `may_not_launch` flag, or the unlaunchable `appinst-local`
- *      register_path. Every launchable tier (appinst / shellui-rpc /
- *      intdebug / regular) → false. */
-export function pkgInstallMayNotLaunch(r: {
-  register_path?: string;
-  may_not_launch?: boolean;
-  launchable?: boolean | null;
-}): boolean {
-  if (r.launchable === true) return false;
-  if (r.launchable === false) return true;
-  return r.may_not_launch ?? r.register_path === "appinst-local";
-}
-
 /** The lastResult for a SUCCESSFUL primary install — amber warn when the title
  *  may not launch, plain green success otherwise. */
 export function installedLastResult(mayNotLaunch: boolean): {
@@ -179,8 +156,8 @@ export function installedLastResult(mayNotLaunch: boolean): {
   warn?: boolean;
 } {
   return mayNotLaunch
-    ? { ok: true, warn: true, message: PKG_MAY_NOT_LAUNCH_MESSAGE }
-    : { ok: true, message: "Installed package verified on the console." };
+    ? { ok: true, warn: true, message: pkgMayNotLaunchMessage() }
+    : { ok: true, message: trStatic("pkg_verified", "Installed package verified on the console.") };
 }
 
 /** Human guidance for a unified-status `reason` (the machine-readable failure
@@ -1331,17 +1308,6 @@ export const PKG_PATCH_DID_NOT_APPLY_HINT =
 export const PKG_PATCH_REGRESSED_HINT =
   "Re-applying this update removed it — the game has gone back to its base version. The PS5's installer treats a re-applied update as one to undo. Apply the update once more to return to the updated version, and avoid re-installing an update the game already has.";
 
-/** Guidance when a PATCH/UPDATE (a "…DP" package) can't be applied even after
- *  the DPI fallback. ps5upload applies updates through Sony's safe installer
- *  (in-process appinst, or the DPI daemon when the in-process path hits a
- *  firmware authid gate) — never the destructive tier that would delete the
- *  base. When even DPI declines it, the update usually doesn't match the
- *  installed game (or the base isn't installed). The base game is untouched;
- *  the PS5's own Package Installer is the most reliable last resort. This
- *  replaces the raw, misleading "PKG header — corrupt or wrongly named" text. */
-export const PKG_PATCH_REJECTED_HINT =
-  "This update couldn’t be applied. The PS5 itself declined it — most often because the update doesn’t match your installed version of the game, or the base game isn’t installed yet. Your base game is untouched. Check that this update is meant for the version you have installed, and that the base game is installed first.";
-
 /**
  * One observation of an in-flight install, as the engine's status poll reports
  * it. `phase` is the engine's own state for the session:
@@ -1682,21 +1648,21 @@ export async function finalizePkgInstallSuccess(args: {
   // play). Surfaces in the bell even if the user navigated away while a
   // large title finished, which is exactly when a heads-up is wanted.
   const installedId = titleIdFromContentId(entry?.contentId ?? "");
-  pushNotification(mayNotLaunch ? "warning" : "success", `${label} installed`, {
+  pushNotification(mayNotLaunch ? "warning" : "success", trStatic("pkg_installed_named", "{name} installed", { name: label }), {
     jobOutcome: true,
     // Opens the game's page (play, saves, cheats) from the bell.
     ...(installedId ? { link: gamePath(installedId) } : {}),
     body: mayNotLaunch
-      ? PKG_MAY_NOT_LAUNCH_MESSAGE
-      : "Installed on the PS5 and ready to play.",
+      ? pkgMayNotLaunchMessage()
+      : trStatic("pkg_ready_to_play", "Installed on the PS5 and ready to play."),
   });
   // Flash a toast on the PS5 itself (sceNotificationSend) so the
   // confirmation shows on the console screen too — handy when the desktop
   // app isn't focused. Fire-and-forget; never let it affect the install.
-  void toastPush(mgmtAddr(host), `${label} installed`, {
+  void toastPush(mgmtAddr(host), trStatic("pkg_installed_named", "{name} installed", { name: label }), {
     subtitle: mayNotLaunch
-      ? "Installed — may need the PS5’s Package Installer to launch"
-      : "Ready to play",
+      ? trStatic("pkg_toast_may_need_installer", "Installed. It may need the PS5's Package Installer to launch.")
+      : trStatic("pkg_toast_ready", "Ready to play"),
   }).catch(() => {});
   // Optional: auto-delete the spent staged .pkg so the library doesn't
   // accumulate installed packages. The ENGINE usually already removed the
@@ -2082,7 +2048,7 @@ export async function runPkgInstall(
   const taskId = tasks.registerTask({
     kind: "pkg-install",
     origin: "pkg.install",
-    label: `Installing ${name}`,
+    label: trStatic("task_installing", "Installing {name}", { name }),
     detail: localPs5Path,
     consoleId: host,
     payload: { localPs5Path, contentId, packageType, deleteStaging, expected },
@@ -2099,7 +2065,7 @@ export async function runPkgInstall(
       onWait: () => {
         useTaskStore
           .getState()
-          .updateTask(taskId, { detail: "Waiting for the PS5 to be ready…" });
+          .updateTask(taskId, { detail: trStatic("task_waiting_ps5_ready", "Waiting for the PS5 to be ready…") });
         onStatus?.("Waiting for the PS5 to be ready…");
       },
     });
@@ -2212,11 +2178,14 @@ function showInstallFailureToast(name: string, detail: string): void {
   const compact = detail.length > 260 ? `${detail.slice(0, 257)}…` : detail;
   useToastStore.getState().push({
     tone: "critical",
-    message: `${name} was not verified as installed. ${compact}`,
+    message: trStatic("pkg_not_verified", "{name} was not verified as installed. {detail}", { name, detail: compact }),
     action: {
-      label: "Open Tasks",
+      label: trStatic("open_tasks", "Open Tasks"),
       onClick: () => {
-        window.history.pushState({}, "", "/tasks");
+        // The router's basename is not applied to a bare pushState: a web UI at a sub-path
+        // would leave the app's URL space.
+        const base = (import.meta.env.VITE_BASE_URL || "").replace(/\/+$/, "");
+        window.history.pushState({}, "", `${base}/tasks`);
         window.dispatchEvent(new PopStateEvent("popstate"));
       },
     },
@@ -2389,7 +2358,7 @@ const makePkgLibraryStore = () =>
         // An install swaps the main payload out (DPI), which kills the transfer
         // port — never start an upload while one is running.
         if (get().installing) {
-          set({ error: "Can't upload while an install is in progress." });
+          set({ error: trStatic("pkg_upload_blocked", "Can't upload while an install is in progress.") });
           return;
         }
         set({ error: null });
@@ -2401,7 +2370,7 @@ const makePkgLibraryStore = () =>
             path: localPath,
           })) as SplitParseResponse;
         } catch (e) {
-          set({ error: `Couldn't read .pkg header: ${pkgError(e)}` });
+          set({ error: trStatic("pkg_header_unreadable", "Couldn't read .pkg header: {error}", { error: pkgError(e) }) });
           return;
         }
         if ((meta.parts?.length ?? 1) > 1) {
@@ -2572,7 +2541,7 @@ const makePkgLibraryStore = () =>
               };
               // Mirror the queue item onto this row while it waits and uploads.
               unsub = pkgQueue().watch(id, (q) => {
-                if (!q) return finish({ ok: false, message: "Removed from the queue." });
+                if (!q) return finish({ ok: false, message: trStatic("queue_removed", "Removed from the queue.") });
                 if (q.status === "pending") patch({ status: "queued" });
                 else if (q.status === "running")
                   patch({
@@ -2633,8 +2602,8 @@ const makePkgLibraryStore = () =>
                       "Staged as an alternative variant. Choose which same-version patch/DLC matches this firmware; it was not auto-installed.",
                   },
                 });
-                pushNotification("info", "Package variant kept staged", {
-                  body: "Another same-version patch or DLC variant is already in the library. Install the intended one from its row; ps5upload will not silently make the last upload win.",
+                pushNotification("info", trStatic("pkg_variant_kept", "Package variant kept staged"), {
+                  body: trStatic("pkg_variant_kept_body", "Another same-version patch or DLC variant is already in the library. Install the one you want from its row; PS5Upload will not choose for you."),
                 });
               } else {
                 if (uploaded && options?.selectVariant) {
@@ -2655,7 +2624,7 @@ const makePkgLibraryStore = () =>
           // Drop the optimistic row and surface the error.
           set({
             entries: get().entries.filter((e2) => e2.path !== destPath),
-            error: `Upload failed: ${pkgError(e)}`,
+            error: trStatic("pkg_upload_failed", "Upload failed: {error}", { error: pkgError(e) }),
           });
         }
       } finally {
@@ -2754,7 +2723,7 @@ const makePkgLibraryStore = () =>
             status: "idle",
             lastResult: { ok: false, message: spaceWarn },
           });
-          pushNotification("warning", `Not enough space for ${label}`, {
+          pushNotification("warning", trStatic("pkg_no_space_title", "Not enough space for {name}", { name: label }), {
             body: spaceWarn,
             // Clean up's planner, with the size filled in: it proposes what to clear, move or
             // uninstall, and offers to install this package again once it has run.
@@ -2779,7 +2748,7 @@ const makePkgLibraryStore = () =>
         const feed = installSampleFeed(hooks);
         const actId = useActivityHistoryStore
           .getState()
-          .start("library-install", `Installing ${label}`, {
+          .start("library-install", trStatic("task_installing", "Installing {name}", { name: label }), {
             addr: mgmtAddr(host),
           });
         const {
@@ -2856,9 +2825,9 @@ const makePkgLibraryStore = () =>
           // Surface failures in the bell too (success already notifies above).
           // Without this a failed item — an update or DLC especially — was silent
           // if the user navigated away from the Library tab mid-install.
-          pushNotification("error", `${label} install failed`, {
+          pushNotification("error", trStatic("pkg_install_failed_title", "{name} install failed", { name: label }), {
             jobOutcome: true,
-            body: mainErr || "The PS5 didn’t confirm the install. Try again.",
+            body: mainErr || trStatic("pkg_install_not_confirmed", "The PS5 didn’t confirm the install. Try again."),
             link: installErrorLink(mainErr),
           });
         }
@@ -2872,7 +2841,7 @@ const makePkgLibraryStore = () =>
           (candidate) => candidate.path === path,
         );
         const label = entry?.title || entry?.contentId || basenameOf(path);
-        pushNotification("error", `${label} install failed`, {
+        pushNotification("error", trStatic("pkg_install_failed_title", "{name} install failed", { name: label }), {
           body: message,
           link: installErrorLink(message),
         });
@@ -2884,7 +2853,7 @@ const makePkgLibraryStore = () =>
     },
 
     async install(path, host) {
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return { ok: false, message: trStatic("pkg_no_host", "No PS5 host selected.") };
       const entry = get().entries.find((e) => e.path === path);
       return enqueueInstall({
         host,
@@ -2897,12 +2866,12 @@ const makePkgLibraryStore = () =>
     },
 
     async retryWithStream(path, host) {
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return { ok: false, message: trStatic("pkg_no_host", "No PS5 host selected.") };
       const entry = get().entries.find((e) => e.path === path);
       // Never start a second install of a package that is already waiting or running: the row
       // hides the button then, and this guards a double click that beats the re-render.
       if (entry && entry.status !== "idle") {
-        return { ok: false, message: "This package already has an install in progress." };
+        return { ok: false, message: trStatic("pkg_install_in_progress", "This package already has an install in progress.") };
       }
       set({
         entries: get().entries.map((e) =>
@@ -2945,11 +2914,11 @@ const makePkgLibraryStore = () =>
       if (targets.length === 0) {
         pushNotification(
           "info",
-          conflicts.length ? "Choose an update variant" : "Nothing to install",
+          conflicts.length ? trStatic("pkg_choose_variant", "Choose an update variant") : trStatic("pkg_nothing_to_install", "Nothing to install"),
           {
             body: conflicts.length
-              ? "Conflicting same-version patch/DLC variants were kept staged. Install the one intended for this firmware from its row."
-              : "Every staged package is already installed on this console.",
+              ? trStatic("pkg_conflicts_kept", "Conflicting same-version patch or DLC variants were kept staged. Install the one for this firmware from its row.")
+              : trStatic("pkg_all_already_installed", "Every staged package is already installed on this console."),
           },
         );
         return;
@@ -2963,7 +2932,7 @@ const makePkgLibraryStore = () =>
       const batchTaskId = useTaskStore.getState().registerTask({
         kind: "install-batch",
         origin: "pkg.install-all",
-        label: `Install all (${n})`,
+        label: trStatic("pkg_install_all_task", "Install all ({count})", { count: n }),
         consoleId: host,
       });
       try {
@@ -2984,7 +2953,7 @@ const makePkgLibraryStore = () =>
               else failed++;
               finished++;
               useTaskStore.getState().updateTask(batchTaskId, {
-                stage: `Installed ${finished} of ${n}`,
+                stage: trStatic("pkg_installed_progress", "Installed {done} of {total}", { done: finished, total: n }),
                 progress: { current: finished, total: n, unit: "items" },
               });
             }),
@@ -3000,7 +2969,7 @@ const makePkgLibraryStore = () =>
           useTaskStore.getState().finishTask(batchTaskId, "failed", {
             lastError: {
               code: "INSTALL_BATCH_FAILED",
-              message: `${failed} of ${ok + failed} failed`,
+              message: trStatic("pkg_some_failed", "{failed} of {total} failed", { failed, total: ok + failed }),
               recoverable: false,
             },
           });
@@ -3011,17 +2980,17 @@ const makePkgLibraryStore = () =>
       pushNotification(
         failed === 0 && conflicts.length === 0 ? "success" : "warning",
         failed === 0 && conflicts.length === 0
-          ? `Installed ${ok} package${ok === 1 ? "" : "s"}`
+          ? trStatic("pkg_installed_count", "Packages installed: {count}", { count: ok })
           : conflicts.length > 0 && failed === 0
-            ? `Installed ${ok}; skipped ${conflicts.length} conflicting variant${conflicts.length === 1 ? "" : "s"}`
-            : `Installed ${ok} of ${ok + failed}; ${failed} failed`,
+            ? trStatic("pkg_installed_skipped", "Packages installed: {count}. Conflicting variants skipped: {skipped}.", { count: ok, skipped: conflicts.length })
+            : trStatic("pkg_installed_partial", "Installed {ok} of {total}; {failed} failed", { ok, total: ok + failed, failed }),
         {
           body:
             failed === 0 && conflicts.length === 0
-              ? "All staged packages installed."
+              ? trStatic("pkg_all_installed", "All staged packages installed.")
               : conflicts.length > 0 && failed === 0
-                ? "Choose the patch or DLC variant intended for this firmware and install it from its row."
-                : "Some packages didn't install — check the rows marked failed and retry them.",
+                ? trStatic("pkg_choose_variant_body", "Choose the patch or DLC variant for this firmware and install it from its row.")
+                : trStatic("pkg_some_not_installed", "Some packages didn't install. Check the rows marked failed and retry them."),
         },
       );
     },
@@ -3046,8 +3015,8 @@ const makePkgLibraryStore = () =>
       const taskId = tasks.registerTask({
         kind: "download",
         origin: "pkg.url-download",
-        label: `Downloading ${name} to this computer`,
-        detail: "Connecting to the link…",
+        label: trStatic("task_download_to_computer", "Downloading {name} to this computer", { name }),
+        detail: trStatic("task_connecting_link", "Connecting to the link…"),
         consoleId: host,
         // Never record the URL: an install link can carry a signed token.
         payload: { remote: true },
@@ -3076,7 +3045,7 @@ const makePkgLibraryStore = () =>
         // Not a failure of the link: the user decides what happens to the file in the way.
         set({ downloadNotice: null });
         useTaskStore.getState().finishTask(taskId, "cancelled", {
-          detail: "A different file already has this name.",
+          detail: trStatic("task_name_taken", "A different file already has this name."),
         });
         return {
           ok: false,
@@ -3157,7 +3126,7 @@ const makePkgLibraryStore = () =>
 
       set({ downloadNotice: null });
       useTaskStore.getState().finishTask(taskId, "done", {
-        detail: "Downloaded. Installing on the PS5 from this computer…",
+        detail: trStatic("task_downloaded_installing", "Downloaded. Installing on the PS5 from this computer…"),
       });
       log.info("install", "download finished; installing from the local file");
       // From here it is a local file, so the link can expire freely.
@@ -3240,7 +3209,7 @@ const makePkgLibraryStore = () =>
         const directTask = useTaskStore.getState().registerTask({
           kind: "pkg-dpi-install",
           origin: "pkg.url-direct",
-          label: `PS5 downloading ${name}`,
+          label: trStatic("task_ps5_downloading", "PS5 downloading {name}", { name }),
           consoleId: host,
           payload: { remote: true, direct: true },
           status: "running",
@@ -3299,7 +3268,7 @@ const makePkgLibraryStore = () =>
     },
     async _execStream(source, host, opts, hooks) {
       if (!host?.trim()) {
-        return { ok: false, message: "No PS5 host selected." };
+        return { ok: false, message: trStatic("pkg_no_host", "No PS5 host selected.") };
       }
       // A link and a local file differ only in where the bytes come from and
       // what we call them; the install itself is one path.
@@ -3315,8 +3284,8 @@ const makePkgLibraryStore = () =>
       const taskId = tasks.registerTask({
         kind: "pkg-dpi-install",
         origin: remoteUrl ? "pkg.url-install" : "pkg.stream-install",
-        label: `Stream-installing ${sourceName}`,
-        detail: "Waiting to prepare the package…",
+        label: trStatic("task_stream_installing", "Stream-installing {name}", { name: sourceName }),
+        detail: trStatic("task_waiting_prepare", "Waiting to prepare the package…"),
         consoleId: host,
         // Never record the URL: an install link can carry a signed token and
         // task payloads reach the diagnostic bundle.
@@ -3340,7 +3309,7 @@ const makePkgLibraryStore = () =>
         if (result.ok) {
           const progress = useTaskStore.getState().getTask(taskId)?.progress;
           useTaskStore.getState().finishTask(taskId, "done", {
-            detail: "Installed and verified on the PS5.",
+            detail: trStatic("task_installed_verified", "Installed and verified on the PS5."),
             progress: progress
               ? { ...progress, current: progress.total }
               : undefined,
@@ -3368,7 +3337,7 @@ const makePkgLibraryStore = () =>
       try {
         useTaskStore.getState().updateTask(taskId, {
           status: "running",
-          detail: "Reading package metadata…",
+          detail: trStatic("task_reading_metadata", "Reading package metadata…"),
         });
 
         // 1. Parse the PC-side pkg header for content_id + category. The
@@ -3412,7 +3381,7 @@ const makePkgLibraryStore = () =>
           } catch (e) {
             return finishStreamTask({
               ok: false,
-              message: `Couldn't read a package from that link: ${pkgError(e)}`,
+              message: trStatic("pkg_link_unreadable", "Couldn't read a package from that link: {error}", { error: pkgError(e) }),
             });
           }
         } else {
@@ -3424,7 +3393,7 @@ const makePkgLibraryStore = () =>
           } catch (e) {
             return finishStreamTask({
               ok: false,
-              message: `Couldn't read .pkg header: ${pkgError(e)}`,
+              message: trStatic("pkg_header_unreadable", "Couldn't read .pkg header: {error}", { error: pkgError(e) }),
             });
           }
           if ((meta.parts?.length ?? 1) > 1) {
@@ -3442,8 +3411,8 @@ const makePkgLibraryStore = () =>
         const resolvedPackageType =
           head.package_type || pkgTypeForCategory(head.category, head.platform);
         useTaskStore.getState().updateTask(taskId, {
-          label: `Stream-installing ${label}`,
-          detail: "Preparing the PS5 installer…",
+          label: trStatic("task_stream_installing", "Stream-installing {name}", { name: label }),
+          detail: trStatic("task_preparing_installer", "Preparing the PS5 installer…"),
           progress:
             totalBytes > 0
               ? { current: 0, total: totalBytes, unit: "bytes" }
@@ -3599,12 +3568,12 @@ const makePkgLibraryStore = () =>
         const outcome = statusToOutcome(terminal);
         if (outcome.installed) {
           const installedId = titleIdFromContentId(contentId);
-          pushNotification("success", `Installed ${label}`, {
+          pushNotification("success", trStatic("pkg_installed_title", "Installed {name}", { name: label }), {
             jobOutcome: true,
             ...(installedId ? { link: gamePath(installedId) } : {}),
             body: remoteUrl
-              ? "Link install complete. The package was downloaded from the link and fed straight to the console — nothing was staged."
-              : "Stream-install complete. The pkg was fetched over HTTP — nothing was staged on the PS5.",
+              ? trStatic("pkg_link_install_done", "Link install complete. The package was downloaded from the link and fed straight to the console. Nothing was staged.")
+              : trStatic("pkg_stream_install_done", "Stream install complete. The package was fetched over HTTP. Nothing was staged on the PS5."),
           });
           return finishStreamTask({
             ok: true,
@@ -3622,7 +3591,7 @@ const makePkgLibraryStore = () =>
         if (!taskFinished) {
           finishStreamTask({
             ok: false,
-            message: "The stream install ended without a result.",
+            message: trStatic("pkg_stream_no_result", "The stream install ended without a result."),
           });
         }
         clearBusy();
@@ -3630,7 +3599,7 @@ const makePkgLibraryStore = () =>
     },
 
     async installStream(source, host, opts) {
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return { ok: false, message: trStatic("pkg_no_host", "No PS5 host selected.") };
       let name = "package";
       try {
         name =
@@ -3667,7 +3636,7 @@ const makePkgLibraryStore = () =>
     },
 
     async installExternal(pkg, host) {
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return { ok: false, message: trStatic("pkg_no_host", "No PS5 host selected.") };
       return enqueueInstall({
         host,
         request: { via: "external", pkg },
@@ -3678,7 +3647,7 @@ const makePkgLibraryStore = () =>
     },
 
     async _execExternal(pkg, host, hooks) {
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return { ok: false, message: trStatic("pkg_no_host", "No PS5 host selected.") };
       // Runs from the console queue, one install at a time per console.
       set({ installing: true, busyNotice: null });
       // The fast external scan often returns an EMPTY content id — it derives the
@@ -3848,7 +3817,7 @@ const makePkgLibraryStore = () =>
     },
 
     async installFromConsolePath(path, host, opts) {
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return { ok: false, message: trStatic("pkg_no_host", "No PS5 host selected.") };
       return enqueueInstall({
         host,
         request: { via: "console-path", path },
@@ -3880,7 +3849,7 @@ const makePkgLibraryStore = () =>
       }
       // Already on internal storage (/data, /user, …): Sony can read it in
       // place, so install directly with no wasteful copy.
-      if (!host?.trim()) return { ok: false, message: "No PS5 host selected." };
+      if (!host?.trim()) return { ok: false, message: trStatic("pkg_no_host", "No PS5 host selected.") };
       set({ installing: true, busyNotice: null });
       try {
         set({ busyNotice: `Installing ${name}…` });
@@ -3920,7 +3889,7 @@ const makePkgLibraryStore = () =>
       try {
         await fsDeleteWithRetry(mgmtAddr(host), path);
       } catch (e) {
-        set({ entries: prev, error: `Delete failed: ${pkgError(e)}` });
+        set({ entries: prev, error: trStatic("pkg_delete_failed", "Delete failed: {error}", { error: pkgError(e) }) });
       }
     },
 
@@ -4085,7 +4054,7 @@ async function bulkDelete(
         ...s.entries.filter((e) => !failedPaths.has(e.path)),
         ...failed,
       ],
-      error: `Failed to delete ${failed.length} file(s).`,
+      error: trStatic("pkg_delete_failed_count", "Files that could not be deleted: {count}", { count: failed.length }),
     }));
   }
 }

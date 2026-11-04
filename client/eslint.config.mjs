@@ -117,7 +117,13 @@ export default tseslint.config(
   },
   {
     // Text stores and helpers hand to the notification center, Tasks, Activity and toasts.
-    files: ["src/state/**/*.{ts,tsx}", "src/lib/**/*.{ts,tsx}", "src/layout/**/*.{ts,tsx}"],
+    files: [
+      "src/state/**/*.{ts,tsx}",
+      "src/lib/**/*.{ts,tsx}",
+      "src/layout/**/*.{ts,tsx}",
+      "src/screens/**/*.{ts,tsx}",
+      "src/components/**/*.{ts,tsx}",
+    ],
     ignores: ["src/**/*.test.{ts,tsx}"],
     rules: { "local/no-literal-user-text": "error" },
   },

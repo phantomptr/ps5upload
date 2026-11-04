@@ -18,6 +18,7 @@ import {
   type RarInstallResult,
   type RarPhase,
 } from "./rarPackages";
+import { trStatic } from "../lib/trStatic";
 
 /**
  * "Install the packages inside an archive", kept outside the Install screen.
@@ -184,17 +185,17 @@ export async function submitArchivePassword(
   await inspect(host, cur.archive, password);
 }
 
-/** The Tasks line for a phase. English like the other task details, which are not translated. */
+/** The Tasks line for a phase. */
 function phaseDetail(p: RarPhase): string {
   switch (p.phase) {
     case "listing":
-      return "Reading the archive";
+      return trStatic("archive_phase_listing", "Reading the archive");
     case "unpacking":
-      return "Unpacking the packages to the PS5";
+      return trStatic("archive_phase_unpacking", "Unpacking the packages to the PS5");
     case "reading":
-      return `Checking package ${p.index} of ${p.count}`;
+      return trStatic("archive_phase_reading", "Checking package {index} of {count}", { index: p.index, count: p.count });
     case "installing":
-      return `Installing ${p.index} of ${p.count}: ${p.name}`;
+      return trStatic("archive_phase_installing", "Installing {index} of {count}: {name}", { index: p.index, count: p.count, name: p.name });
   }
 }
 
@@ -217,7 +218,7 @@ export async function runArchiveInstall(host: string): Promise<void> {
   const taskId = tasks.registerTask({
     kind: "upload-archive",
     origin: "pkg.archive",
-    label: `Packages from ${name}`,
+    label: trStatic("task_packages_from", "Packages from {name}", { name }),
     consoleId: host,
     status: "running",
   });

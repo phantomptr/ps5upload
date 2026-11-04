@@ -13,7 +13,7 @@
 // The user-facing copy is localised: each branch returns `te("err_…")`,
 // which looks the key up in the active locale (falling back to English,
 // then to the key). The English source of truth for every `err_*` key
-// lives in `i18n/locales/en.ts`; the other 17 locales mirror it.
+// lives in `i18n/locales/en.ts`; the other locales mirror it.
 
 import { t } from "../i18n";
 import { useLangStore } from "../state/lang";
@@ -73,11 +73,7 @@ export function humanizePs5Error(
   // React stopped a re-render loop (error #185) while the queue updated a row. The engine's job
   // never saw it, so the transfer may well have finished. The queue logs the stack for a report.
   if (/Minified React error #185|Maximum update depth exceeded/i.test(raw)) {
-    return (
-      "The app's display hit an error while this ran (React #185) and stopped following the " +
-      "transfer, which may have finished anyway: check the PS5, or press Retry. A bug report " +
-      "sent now helps us fix it."
-    );
+    return te("err_display_crashed");
   }
 
   // ─── Source / local filesystem ─────────────────────────────────────

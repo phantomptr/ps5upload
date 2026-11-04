@@ -35,6 +35,13 @@ import { trStatic } from "../lib/trStatic";
 
 /** The speed and time left a transfer row shows, for its task too: the Tasks view had the bar
  *  but no speed or ETA, which only the Files queue row showed (#444). */
+/** The line a bulk file operation shows in Tasks and Activity. */
+export function bulkOpLabel(op: string, total: number): string {
+  if (op === "delete") return trStatic("task_deleting_items", "Deleting items: {count}", { count: total });
+  if (op === "paste-copy") return trStatic("task_copying_items", "Copying items: {count}", { count: total });
+  return trStatic("task_moving_items", "Moving items: {count}", { count: total });
+}
+
 export function speedAndEta(
   sent: number,
   total: number,
@@ -93,7 +100,7 @@ export function installTaskWiring() {
         const id = useTaskStore.getState().registerTask({
           kind: "upload-file",
           origin: "transfer.one-shot",
-          label: "Upload starting…",
+          label: trStatic("task_upload_starting", "Upload starting…"),
           consoleId: host,
           status: "running",
           control: { owner: "transfer", host },
@@ -105,8 +112,8 @@ export function installTaskWiring() {
       if (phase.kind === "running" && existingId !== null) {
         const label =
           phase.fileCount > 1
-            ? `Uploading ${phase.fileCount} files`
-            : `Uploading ${phase.files[0]?.rel_path ?? ""}`.trim();
+            ? trStatic("task_uploading_files", "Uploading files: {count}", { count: phase.fileCount })
+            : trStatic("task_uploading_file", "Uploading {name}", { name: phase.files[0]?.rel_path ?? "" }).trim();
         useTaskStore.getState().updateTask(existingId, {
           label,
           progress: {
@@ -326,16 +333,11 @@ export function installTaskWiring() {
             : cur.op === "paste-copy"
               ? "fs-copy"
               : "fs-move";
-        const verb =
-          cur.op === "delete"
-            ? "Deleting"
-            : cur.op === "paste-copy"
-              ? "Copying"
-              : "Moving";
+        const label = bulkOpLabel(cur.op, cur.total);
         const id = useTaskStore.getState().registerTask({
           kind,
           origin: "files.bulk",
-          label: `${verb} ${cur.total} item${cur.total === 1 ? "" : "s"}`,
+          label,
           detail: cur.toPath || cur.fromPath || undefined,
           consoleId: host,
           status: "running",
@@ -395,7 +397,7 @@ export function installTaskWiring() {
         const id = useTaskStore.getState().registerTask({
           kind: "download",
           origin: "files.download",
-          label: `Downloading ${cur.rootName}`,
+          label: trStatic("task_downloading", "Downloading {name}", { name: cur.rootName }),
           detail: cur.destDir,
           consoleId: host,
           status: "running",

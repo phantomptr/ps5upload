@@ -125,11 +125,12 @@ import { WhySlowPanel } from "./WhySlow";
 import { SlowTransferHint } from "./SlowTransferHint";
 import { ElfSourceHint } from "./ElfSourceHint";
 import { humanizePs5Error } from "../../lib/humanizeError";
-import { formatBytes } from "../../lib/format";
+import { formatDuration, formatBytes } from "../../lib/format";
 import { FoldSection } from "../../components/FoldSection";
 import { resumeSummary } from "../../lib/resumeSummary";
 import { progressFigures, resumedShown } from "../../lib/resumedProgress";
 import { useTr, type Translator } from "../../state/lang";
+import { trStatic } from "../../lib/trStatic";
 
 // formatBytes moved to lib/format.ts.
 
@@ -2085,11 +2086,11 @@ function MirrorToRosterButton({
                     : await startTransferZip(srcPath, dest, addr, null, excludes)
                 : await startTransferDir(srcPath, dest, addr, null, excludes);
           await waitForJob(jobId);
-          pushNotification("info", `Mirrored to ${p.name}`, {
+          pushNotification("info", trStatic("upload_mirrored", "Mirrored to {name}", { name: p.name }), {
             body: `${srcPath} → ${dest}`,
           });
         } catch (e) {
-          pushNotification("error", `Mirror failed: ${p.name}`, {
+          pushNotification("error", trStatic("upload_mirror_failed", "Mirror failed: {name}", { name: p.name }), {
             body: e instanceof Error ? e.message : String(e),
           });
         }
@@ -2180,9 +2181,10 @@ function ExistingDestinationDialog({
   ) : (
     <>
       <span className="font-mono text-xs">{dest}</span>
+      {" "}
       {isFolder
-        ? ` contains ${entryCount.toLocaleString()}${more ? "+" : ""} item${entryCount === 1 ? "" : "s"} already.`
-        : ` is already on your PS5.`}
+        ? tr("upload_dest_has_items", { count: `${entryCount.toLocaleString()}${more ? "+" : ""}` }, `already holds items: ${entryCount.toLocaleString()}${more ? "+" : ""}`)
+        : tr("upload_dest_on_ps5", undefined, "is already on your PS5.")}
     </>
   );
 
@@ -2917,16 +2919,6 @@ function FileListPanel({
 /** Human-friendly duration: "3s", "1m 22s", "2h 14m". Used for
  *  ETA display in the progress row — rounds to whole seconds because
  *  a sub-second ETA is meaningless (noise from the rate smoother). */
-function formatDuration(sec: number): string {
-  if (!isFinite(sec) || sec < 0) return "—";
-  if (sec < 60) return `${Math.ceil(sec)}s`;
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  if (m < 60) return `${m}m ${s}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
-
 function WrappedHintChip({
   hint,
   onUse,

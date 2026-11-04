@@ -3,6 +3,7 @@ import { Battery, RefreshCw } from "lucide-react";
 import { powerTelemetryGet, type PowerTelemetry } from "../../api/ps5";
 import { Button, ErrorCard, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
+import { trStatic } from "../../lib/trStatic";
 
 /**
  * Lifetime ICC telemetry — operating seconds, boot cycles, thermal
@@ -160,14 +161,14 @@ function formatSeconds(s: number | null | undefined): string {
   const minutes = Math.floor((s % 3600) / 60);
   if (hours > 24) {
     const days = Math.floor(hours / 24);
-    return `${days}d ${hours % 24}h (${hours.toLocaleString()} hours)`;
+    return trStatic("hw_uptime_days", "{d}d {h}h ({total} hours)", { d: days, h: hours % 24, total: hours.toLocaleString() });
   }
-  return `${hours}h ${minutes}m`;
+  return trStatic("playtime_hm", "{h}h {m}m", { h: hours, m: minutes });
 }
 
 function formatThermal(flags: number | null | undefined): string {
   if (flags == null) return "—";
-  if (flags === 0) return "no alerts";
+  if (flags === 0) return trStatic("hw_thermal_no_alerts", "no alerts");
   // Count the SET bits, not the raw flag value — `${flags} bits set` labelled
   // e.g. flag 0x4 as "4 bits set" when only one bit is set.
   let n = flags;
@@ -176,5 +177,5 @@ function formatThermal(flags: number | null | undefined): string {
     count += n & 1;
     n >>>= 1;
   }
-  return `0x${flags.toString(16)} (${count} bit${count === 1 ? "" : "s"} set)`;
+  return trStatic("hw_thermal_bits", "0x{flags} (bits set: {count})", { flags: flags.toString(16), count });
 }

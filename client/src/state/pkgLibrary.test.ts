@@ -117,7 +117,6 @@ import {
   pkgLibraryStore,
   evictPkgLibraryStore,
   isFinishedPkg,
-  pkgInstallMayNotLaunch,
   pkgTypeForCategory,
   pkgRowInstalled,
   installSpaceWarning,
@@ -131,7 +130,7 @@ import {
   recordPkgAlternativeSelection,
   skipPkgAlternativeSelection,
   PKG_ALTERNATIVE_SKIP,
-  PKG_MAY_NOT_LAUNCH_MESSAGE,
+  pkgMayNotLaunchMessage,
   type PkgEntry,
 } from "./pkgLibrary";
 import { useTaskStore } from "./tasks";
@@ -991,69 +990,6 @@ describe("recordPkgInstalled / isPkgInstalledHere (per-console isolation)", () =
   });
 });
 
-describe("pkgInstallMayNotLaunch", () => {
-  it("trusts the engine's explicit may_not_launch flag", () => {
-    expect(pkgInstallMayNotLaunch({ may_not_launch: true })).toBe(true);
-    expect(pkgInstallMayNotLaunch({ may_not_launch: false })).toBe(false);
-    // Flag wins even if register_path would say otherwise.
-    expect(
-      pkgInstallMayNotLaunch({
-        may_not_launch: false,
-        register_path: "appinst-local",
-      }),
-    ).toBe(false);
-  });
-
-  it("falls back to register_path for older engines without the flag", () => {
-    // Only the unlaunchable last-resort path warns.
-    expect(pkgInstallMayNotLaunch({ register_path: "appinst-local" })).toBe(
-      true,
-    );
-    // Every launchable tier does not.
-    for (const rp of [
-      "appinst",
-      "shellui-rpc",
-      "intdebug",
-      "regular",
-      "tier0-worker",
-      "none",
-      "",
-    ]) {
-      expect(pkgInstallMayNotLaunch({ register_path: rp })).toBe(false);
-    }
-    // Nothing at all (very old engine) → no warning.
-    expect(pkgInstallMayNotLaunch({})).toBe(false);
-  });
-
-  it("prefers the engine's definitive app.db launchability verdict", () => {
-    // launchable=true overrides even the unlaunchable register_path: the
-    // engine confirmed the title registered in app.db, so it's a clean
-    // success (this is the elf-arsenal wait_for_install_row payoff).
-    expect(
-      pkgInstallMayNotLaunch({
-        register_path: "appinst-local",
-        launchable: true,
-      }),
-    ).toBe(false);
-    // launchable=false is a definitive warning even on a "launchable" tier —
-    // Sony accepted it but the title never registered.
-    expect(
-      pkgInstallMayNotLaunch({ register_path: "appinst", launchable: false }),
-    ).toBe(true);
-    // launchable wins over a conflicting may_not_launch flag too.
-    expect(
-      pkgInstallMayNotLaunch({ may_not_launch: true, launchable: true }),
-    ).toBe(false);
-    // launchable null/undefined ⇒ verification not applicable ⇒ heuristic.
-    expect(
-      pkgInstallMayNotLaunch({
-        register_path: "appinst-local",
-        launchable: null,
-      }),
-    ).toBe(true);
-  });
-});
-
 
 // ── Unified install: verdict mapping + Auto-Delete of the staged pkg ─────────
 // runPkgInstall now posts one request to the engine and polls one status; the
@@ -1321,7 +1257,7 @@ describe("installedLastResult", () => {
     const r = installedLastResult(true);
     expect(r.ok).toBe(true);
     expect(r.warn).toBe(true);
-    expect(r.message).toBe(PKG_MAY_NOT_LAUNCH_MESSAGE);
+    expect(r.message).toBe(pkgMayNotLaunchMessage());
     expect(r.message).toMatch(/Package Installer/);
   });
 });

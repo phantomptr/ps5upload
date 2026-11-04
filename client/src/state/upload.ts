@@ -18,6 +18,7 @@ import { materializeRemote } from "../lib/materialize";
 import { isRemotePath } from "../lib/remotePath";
 import { platformFromTitleId, titleIdFromContentId } from "./pkgLibrary";
 import { registerSettingReload } from "../lib/liveSettings";
+import { trStatic } from "../lib/trStatic";
 
 /**
  * Detected source kind. Drives which options the Upload screen shows.
@@ -323,7 +324,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
           set({
             detecting: false,
             detectError:
-              "Split .pkg sets aren't supported — pick the single lead .pkg.",
+              trStatic("upload_split_pkg", "Split .pkg sets aren't supported. Pick the single lead .pkg."),
           });
           return;
         }
@@ -353,9 +354,9 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         if (get().source?.path !== path) return;
         set({
           detecting: false,
-          detectError: `Couldn't read .pkg header: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
+          detectError: trStatic("pkg_header_unreadable", "Couldn't read .pkg header: {error}", {
+            error: e instanceof Error ? e.message : String(e),
+          }),
         });
       }
       return;

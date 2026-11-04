@@ -40,7 +40,7 @@ import { initials, useGreetedUser } from "./consoleUser";
 import { mgmtAddr } from "../../lib/addr";
 import {
   evaluateOperationReadiness,
-  HELPER_NOT_CONNECTED,
+  helperNotConnected,
   type Operation,
 } from "../../lib/operationReadiness";
 
@@ -109,7 +109,7 @@ export default function HomeScreen() {
     const r = evaluateOperationReadiness(operation, readinessContext);
     if (!resting) return r;
     const rest = tr("status_ps5_rest_mode", "In rest mode");
-    return { ...r, blockers: r.blockers.map((b) => (b === HELPER_NOT_CONNECTED ? rest : b)) };
+    return { ...r, blockers: r.blockers.map((b) => (b === helperNotConnected() ? rest : b)) };
   };
 
   // The user at the selected console, greeted by name with their avatar; read in the background

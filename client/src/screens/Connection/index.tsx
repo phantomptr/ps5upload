@@ -324,7 +324,10 @@ export default function ConnectionScreen() {
   const sendPhase: SendPhase | null = helperSend?.phase ?? null;
 
   const step1: StepState = transientStep1 ?? storedStep1;
-  const step1Msg = transientStep1Msg ?? storedStep1Msg;
+  const step1Msg =
+    transientStep1Msg ??
+    (storedStep1Msg ||
+      tr("connection_step1_idle", undefined, "Enter your PS5's address and check"));
   const step2: StepState =
     helperSend?.state ?? transientStep2 ?? storedStep2;
   const step2Msg =
@@ -336,7 +339,7 @@ export default function ConnectionScreen() {
           undefined,
           "Stopped. You turned the helper off; it stays off until you send it again.",
         )
-      : storedStep2Msg);
+      : storedStep2Msg || tr("connection_helper_not_loaded", undefined, "Helper not loaded yet"));
   // Not "ready" while this app is not paired: the helper answers, but every upload would fail
   // with "not paired" (#415). The pairing banner above says what to do.
   const session = useConnectionStore((s) => s.session);

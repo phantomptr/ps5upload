@@ -5,6 +5,7 @@ import { updateDownloadApk, type UpdateCheck } from "../api/ps5";
 import { openExternalUrl } from "../lib/openExternalUrl";
 import { t as translate } from "../i18n";
 import { useLangStore } from "./lang";
+import { trStatic } from "../lib/trStatic";
 
 // Android: download the update APK inside the app and hand it to Android's
 // installer, so the person sees the system "Update?" dialog instead of
@@ -77,7 +78,7 @@ export function parseInstallStatus(raw: string): InstallStatus {
   } catch {
     /* fall through */
   }
-  return { state: "failed", message: `unexpected installer status: ${raw}` };
+  return { state: "failed", message: trStatic("apk_unexpected_status", "Unexpected installer status: {status}", { status: raw }) };
 }
 
 /** Whole percent of a download, or null while the size is unknown. */
@@ -165,7 +166,7 @@ async function startInstall(bridge: UpdaterBridge, path: string): Promise<string
   for (;;) {
     const s = parseInstallStatus(bridge.status());
     if (s.state === "failed") {
-      const message = s.message || "install failed";
+      const message = s.message || trStatic("apk_install_failed", "The install failed");
       setStep({ kind: "failed", message });
       return message;
     }
@@ -184,7 +185,7 @@ async function startInstall(bridge: UpdaterBridge, path: string): Promise<string
       if (s.state === "confirm" || s.state === "writing") continue;
       setStep(
         s.state === "failed"
-          ? { kind: "failed", message: s.message || "install failed" }
+          ? { kind: "failed", message: s.message || trStatic("apk_install_failed", "The install failed") }
           : { kind: "idle" },
       );
       return;
@@ -233,9 +234,9 @@ export function openInstallSettings(): void {
  */
 export async function downloadAndInstallApk(result: UpdateCheck): Promise<string | null> {
   const bridge = updaterBridge();
-  if (!bridge) return "this copy cannot install updates itself";
+  if (!bridge) return trStatic("apk_cannot_self_update", "This copy cannot install updates itself.");
   if (!result.download_url || !result.download_filename) {
-    return "no APK for this device in this release";
+    return trStatic("apk_no_build", "This release has no APK for this device.");
   }
   pendingPath = null;
   setStep({ kind: "downloading", received: 0, total: 0 });

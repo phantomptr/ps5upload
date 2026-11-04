@@ -44,6 +44,8 @@ import {
 import { rarPasswordProblem, type RarPasswordProblem } from "../lib/rarPassword";
 import { splitPkgBytes, type ListedFile } from "../lib/splitPkgSize";
 import { pkgLibraryStore } from "./pkgLibrary";
+import { readWithRetries } from "../lib/pollRead";
+import { trStatic } from "../lib/trStatic";
 
 /** The exclude entry that keeps only packages; the engine lists with the same one. */
 export const RAR_PKG_ALLOW = "!*.pkg";
@@ -79,7 +81,7 @@ export function isArchiveFirstVolume(path: string): boolean {
 
 /** Folder name for an archive's packages: `<kind>_<stem>`, deterministic so a resumed run
  *  lands in the same place. */
-export function archiveFolderName(archivePath: string): string {
+export function unpackFolderName(archivePath: string): string {
   const name = archivePath.replace(/\\/g, "/").split("/").pop() ?? "archive";
   const kind = archiveKindOf(archivePath) ?? "rar";
   const stem = name
@@ -90,7 +92,7 @@ export function archiveFolderName(archivePath: string): string {
   return `${kind}_${stem || "archive"}`.slice(0, 80);
 }
 
-/** True for a folder name `archiveFolderName` makes (`rar_…`, `zip_…`, `7z_…`). */
+/** True for a folder name `unpackFolderName` makes (`rar_…`, `zip_…`, `7z_…`). */
 export function isArchiveFolderName(name: string): boolean {
   return /^(rar|zip|7z)_[A-Za-z0-9._-]+$/.test(name);
 }
@@ -202,7 +204,7 @@ export async function planArchiveTarget(
       ? volumes
       : await fetchVolumes(transferAddr(host)).catch(() => null);
   const storage = pkgStorageFor(host, vols);
-  const dest = `${storage.dir}/${archiveFolderName(archivePath)}`;
+  const dest = `${storage.dir}/${unpackFolderName(archivePath)}`;
   const already = await consoleFolderBytes(host, dest);
   return {
     dest,
@@ -396,7 +398,7 @@ async function unpack(
   for (;;) {
     let snap: JobSnapshot;
     try {
-      snap = await jobStatus(jobId, opts.host);
+      snap = await readWithRetries(() => jobStatus(jobId, opts.host));
     } catch (e) {
       return { ok: false, message: messageOf(e) };
     }
@@ -448,7 +450,7 @@ export async function installRarPackages(
       ok: false,
       dest: "",
       outcomes: [],
-      message: "That archive has no .pkg files in it.",
+      message: trStatic("rar_no_pkgs", "That archive has no .pkg files in it."),
     };
   }
 
@@ -462,7 +464,7 @@ export async function installRarPackages(
       dest,
       outcomes: [],
       space,
-      message: `Not enough space on ${space.drive}: the packages need ${fmtGb(space.need)}, it has ${fmtGb(space.room ?? 0)} free. Nothing was unpacked.`,
+      message: trStatic("rar_no_space", "Not enough space on {drive}: the packages need {need}, it has {room} free. Nothing was unpacked.", { drive: space.drive, need: fmtGb(space.need), room: fmtGb(space.room ?? 0) }),
     };
   }
   for (const dir of pkgMkdirChain(dest)) {
@@ -502,7 +504,7 @@ export async function installRarPackages(
         entry: p.path,
         consolePath,
         status: "failed",
-        message: `Not a readable package (${messageOf(e)}). It was left at ${consolePath}.`,
+        message: trStatic("rar_not_readable", "Not a readable package ({error}). It was left at {path}.", { error: messageOf(e), path: consolePath }),
       });
     }
   }
@@ -516,7 +518,7 @@ export async function installRarPackages(
         entry: pkg.entry,
         consolePath: pkg.consolePath,
         status: "skipped",
-        message: `Skipped: the base game ${pkg.titleId} did not install, and an update or DLC cannot go on without it. The file was left at ${pkg.consolePath}.`,
+        message: trStatic("rar_base_failed", "Skipped: the base game {title} did not install, and an update or DLC cannot go on without it. The file was left at {path}.", { title: pkg.titleId, path: pkg.consolePath }),
       });
       continue;
     }
@@ -551,11 +553,11 @@ export async function installRarPackages(
       ok,
       dest,
       outcomes,
-      message: `Installed ${done} of ${outcomes.length}. The unpacked packages are still in ${dest}.`,
+      message: trStatic("rar_installed_partial", "Installed {done} of {total}. The unpacked packages are still in {dest}.", { done, total: outcomes.length, dest }),
     };
   }
   // Every install has ended (each was awaited), so nothing reads these files any more.
-  const installed = `Installed ${done} package${done === 1 ? "" : "s"} from the archive.`;
+  const installed = trStatic("rar_installed_count", "Packages installed from the archive: {count}", { count: done });
   try {
     await removeConsoleFolder(host, dest);
     return { ok, dest, outcomes, removed: true, message: `${installed} The unpacked folder was deleted.` };

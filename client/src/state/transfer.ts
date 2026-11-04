@@ -264,12 +264,12 @@ function mountWarningsOf(
   const out: string[] = [];
   if (mounted.layout_valid === false) {
     out.push(
-      "Image is missing sce_sys/param.json at root — Register/Launch will fail. Re-build the image with files at root (no extra folder).",
+      trStatic("mount_warn_no_param", "Image is missing sce_sys/param.json at root, so Register and Launch will fail. Build the image again with its files at the root, not in an extra folder."),
     );
   }
   if (mounted.kernel_ro && !readOnly) {
     out.push(
-      "Kernel mounted this read-only despite the RW pick — common for UFS .ffpkg images on some firmwares. Reads work; writes through the mount will fail.",
+      trStatic("mount_warn_kernel_ro", "The console mounted this read-only, though you picked read-write. This is common for UFS .ffpkg images on some firmwares. Reads work; writes through the mount will fail."),
     );
   }
   return out;
@@ -515,7 +515,7 @@ export const useTransferStore = create<TransferState>((set) => {
       // console UI. Best-effort over the mgmt port (responsive even during
       // a transfer); a matching "complete" toast fires on done.
       if (host) {
-        void toastPush(mgmtAddr(host), "Upload started", {
+        void toastPush(mgmtAddr(host), trStatic("toast_upload_started", "Upload started"), {
           subtitle: uploadName,
         }).catch(() => {});
       }
@@ -639,14 +639,15 @@ export const useTransferStore = create<TransferState>((set) => {
                 const r = await smpManualInstall(mgmt, finalDest);
                 handedToSmp = true;
                 mountedAt = r.added
-                  ? "handed to ShadowMount+"
-                  : "already in ShadowMount+ list";
+                  ? trStatic("smp_handed_over", "handed to ShadowMount+")
+                  : trStatic("smp_already_listed", "already in ShadowMount+ list");
               } catch (e) {
                 mountWarnings.push(
-                  `ShadowMount+ is running but the hand-off failed (${
-                    e instanceof Error ? e.message : String(e)
-                  }). Mounted it directly instead — if ShadowMount+ also ` +
-                    `picks it up you may see a duplicate or a blocked title.`,
+                  trStatic(
+                    "smp_handoff_failed",
+                    "ShadowMount+ is running but the hand-off failed ({error}). Mounted it directly instead. If ShadowMount+ also picks it up, you may see a duplicate or a blocked title.",
+                    { error: e instanceof Error ? e.message : String(e) },
+                  ),
                 );
               }
             }
@@ -710,9 +711,9 @@ export const useTransferStore = create<TransferState>((set) => {
                 if (!isLive()) return;
                 setPhase(key, {
                   kind: "failed",
-                  error: `upload completed, but mount failed: ${
-                    e instanceof Error ? e.message : String(e)
-                  }`,
+                  error: trStatic("upload_mount_failed", "upload completed, but mount failed: {error}", {
+                    error: e instanceof Error ? e.message : String(e),
+                  }),
                   retryArgs: startArgs,
                   retryMount: {
                     path: finalDest,
@@ -850,7 +851,7 @@ export const useTransferStore = create<TransferState>((set) => {
           }
           // Matching "complete" toast on the PS5 itself.
           if (host) {
-            void toastPush(mgmtAddr(host), "Upload complete", {
+            void toastPush(mgmtAddr(host), trStatic("toast_upload_complete", "Upload complete"), {
               subtitle: uploadName,
             }).catch(() => {});
           }
@@ -972,7 +973,7 @@ export const useTransferStore = create<TransferState>((set) => {
           if (!gen.isLive(thisRun)) return;
           setPhase(key, {
             kind: "failed",
-            error: `upload completed, but mount failed: ${e instanceof Error ? e.message : String(e)}`,
+            error: trStatic("upload_mount_failed", "upload completed, but mount failed: {error}", { error: e instanceof Error ? e.message : String(e) }),
             jobId,
             retryArgs,
             retryMount,

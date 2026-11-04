@@ -14,6 +14,8 @@ import { Channel } from "@tauri-apps/api/core";
 import { getEngineUrl } from "../state/engine";
 import { hostOf } from "../lib/addr";
 import { fetchConsoleStat } from "./consoleFiles";
+import { readWithRetries } from "../lib/pollRead";
+import { ENGINE_LONG_TIMEOUT_MS, ENGINE_TIMEOUT_MS, engineFetch } from "../lib/engineFetch";
 // Logging wrapper: every command leaves a trace breadcrumb + logs failures at
 // warn. See lib/invokeLogged.ts. (Channel still comes straight from core.)
 import { isTauriEnv } from "../lib/tauriEnv";
@@ -791,6 +793,8 @@ export async function resumeTxidLookup(
   src: string,
   dest: string,
 ): Promise<string | null> {
+  // The record lives in the desktop app; a browser has none and starts with a new id.
+  if (!isTauriEnv()) return null;
   const res = await invoke<{ tx_id_hex: string | null }>("resume_txid_lookup", {
     req: { host, src, dest },
   });
@@ -806,6 +810,7 @@ export async function resumeTxidRemember(
   txIdHex: string,
   mode: "reconcile" | "dir" | "file",
 ): Promise<void> {
+  if (!isTauriEnv()) return;
   await invoke("resume_txid_remember", {
     req: { host, src, dest, tx_id_hex: txIdHex, mode },
   });
@@ -820,6 +825,7 @@ export async function resumeTxidForget(
   src: string,
   dest: string,
 ): Promise<void> {
+  if (!isTauriEnv()) return;
   await invoke("resume_txid_forget", {
     req: { host, src, dest },
   });
@@ -1256,7 +1262,7 @@ export async function fsUnpack(
   path: string,
   opId: number,
 ): Promise<{ path: string; size: number }> {
-  const res = await fetch(`${getEngineUrl()}/api/ps5/fs/unpack`, {
+  const res = await engineFetch(`${getEngineUrl()}/api/ps5/fs/unpack`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ addr: toMgmtAddr(transferAddr), path, op_id: opId }),
@@ -1289,7 +1295,7 @@ export async function fsExtract(
   if (opts.password) body.password = opts.password;
   if (opts.merge) body.merge = true;
   if (opts.replace) body.replace = true;
-  const res = await fetch(`${getEngineUrl()}/api/ps5/fs/extract`, {
+  const res = await engineFetch(`${getEngineUrl()}/api/ps5/fs/extract`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -1320,7 +1326,6 @@ export interface FsDirEntry {
 export async function fsListDir(
   transferAddr: string,
   path: string,
-  _opts?: { offset?: number; limit?: number },
 ): Promise<FsDirEntry[]> {
   const addr = toMgmtAddr(transferAddr);
   const PAGE = 256; // matches the payload's hard cap
@@ -1587,7 +1592,7 @@ export async function fsMount(
  *  (the PS5's own services usually do); `force` unmounts anyway after a flush. Goes through the
  *  engine directly (desktop, browser and Docker alike). */
 export async function usbEject(host: string, mountPoint: string, force = false): Promise<void> {
-  const res = await fetch(`${getEngineUrl()}/api/ps5/usb/eject`, {
+  const res = await engineFetch(`${getEngineUrl()}/api/ps5/usb/eject`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ addr: _mgmtAddr(host), mount_point: mountPoint, force }),
@@ -2390,7 +2395,7 @@ export async function powerWake(
   host: string,
   credential: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const res = await fetch(`${getEngineUrl()}/api/ps5/power/wake`, {
+  const res = await engineFetch(`${getEngineUrl()}/api/ps5/power/wake`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ host, credential }),
@@ -2433,7 +2438,9 @@ export async function pairForWake(
    *  id, base64 of its 8 bytes. */
   manual?: { pin: string; accountIdB64: string },
 ): Promise<PairForWakeResult> {
-  const res = await fetch(`${getEngineUrl()}/api/ps5/power/pair`, {
+  const res = await engineFetch(`${getEngineUrl()}/api/ps5/power/pair`, {
+    // Asks the helper, then registers with the console: it may take a while.
+    timeoutMs: 2 * ENGINE_TIMEOUT_MS,
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(
@@ -2470,7 +2477,9 @@ export class WakeLoginError extends Error {
 }
 
 async function wakeLoginCall(path: string, payload: unknown): Promise<WakeLoginResult> {
-  const res = await fetch(`${getEngineUrl()}${path}`, {
+  const res = await engineFetch(`${getEngineUrl()}${path}`, {
+    // Answers once the user is signed in, which takes the console as long as it takes.
+    timeoutMs: ENGINE_LONG_TIMEOUT_MS,
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -2548,7 +2557,7 @@ export interface DdpStatus {
 }
 
 export async function ddpStatus(host: string): Promise<DdpStatus> {
-  const res = await fetch(
+  const res = await engineFetch(
     `${getEngineUrl()}/api/ps5/power/ddp-status?host=${encodeURIComponent(host)}`,
   );
   if (!res.ok) throw new Error(`ddp status failed (${res.status})`);
@@ -2682,7 +2691,9 @@ export interface OpenSave {
 }
 
 async function engineJson<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${getEngineUrl()}${path}`, {
+  const res = await engineFetch(`${getEngineUrl()}${path}`, {
+    // Opening or closing a save copies its image on the console before it answers.
+    timeoutMs: ENGINE_LONG_TIMEOUT_MS,
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -2779,21 +2790,6 @@ export async function saveArchiveMakeTemp(prefix: string): Promise<string> {
   return invoke<string>("save_archive_make_temp", { prefix });
 }
 
-/** Where the next automatic backup of a save goes. Makes `<dir>/<titleId>/`; called again with
- *  `prune` once the zip is written, removes that save's oldest automatic backups so `keep`
- *  remain. Desktop only. */
-export async function saveAutoBackupSlot(
-  dir: string,
-  titleId: string,
-  userId: number,
-  stamp: string,
-  keep: number,
-  prune = false,
-): Promise<string> {
-  return invoke<string>("save_auto_backup_slot", {
-    req: { dir, title_id: titleId, user_id: userId, stamp, keep, prune },
-  });
-}
 
 /** Best-effort recursive delete of a scratch dir. Refuses to remove
  *  anything outside the system temp root, so a bad call can't wipe
@@ -3034,15 +3030,6 @@ export interface ModuleInfo {
 export interface ModuleList {
   modules: ModuleInfo[];
   err?: string;
-}
-export async function procModulesGet(
-  addr: string,
-  pid?: number,
-): Promise<ModuleList> {
-  return invoke<ModuleList>("proc_modules_get", {
-    addr,
-    pid: pid ?? null,
-  });
 }
 
 export interface ProcEntry {
@@ -4140,20 +4127,6 @@ export function appIconUrl(transferAddr: string, titleId: string, size?: IconSiz
 }
 
 /**
- * Cover art as a `data:` URL, fetched through the Tauri IPC instead of by
- * pointing an `<img>` at the engine.
- *
- * Only used as a fallback (see `useImageRetry`). A direct URL is cheaper —
- * no base64 inflation, and the browser caches it — but it is also the one
- * thing the desktop renderer loads over plain HTTP rather than over the
- * IPC, so when the webview refuses it every cover in the app goes blank
- * while the engine reports a healthy 200. These go over the channel the
- * rest of the app already uses.
- *
- * Returns null rather than throwing: the caller's next step is a glyph
- * either way, and a rejected promise here is not an app error.
- */
-/**
  * Cache keys for cover art. Exported as functions rather than inlined at
  * each use so the synchronous lookups below and the async fetches above
  * cannot drift apart — a mismatch would not fail loudly, it would just
@@ -4191,6 +4164,20 @@ export function cachedGameIcon(
   return getCachedIcon(gameIconKey(toMgmtAddr(transferAddr), path, size));
 }
 
+/**
+ * Cover art as a `data:` URL, fetched through the Tauri IPC instead of by
+ * pointing an `<img>` at the engine.
+ *
+ * Only used as a fallback (see `useImageRetry`). A direct URL is cheaper —
+ * no base64 inflation, and the browser caches it — but it is also the one
+ * thing the desktop renderer loads over plain HTTP rather than over the
+ * IPC, so when the webview refuses it every cover in the app goes blank
+ * while the engine reports a healthy 200. These go over the channel the
+ * rest of the app already uses.
+ *
+ * Returns null rather than throwing: the caller's next step is a glyph
+ * either way, and a rejected promise here is not an app error.
+ */
 export async function appIconDataUrl(
   transferAddr: string,
   titleId: string,
@@ -4841,7 +4828,7 @@ export async function waitForJob(
   intervalMs = 500,
 ): Promise<JobSnapshot> {
   while (true) {
-    const snap = await jobStatus(jobId);
+    const snap = await readWithRetries(() => jobStatus(jobId));
     if (snap.status === "done") return snap;
     if (snap.status === "failed") {
       throw new UploadJobError(
@@ -4975,16 +4962,6 @@ export async function portProbe(
   return { open: !!resp?.open, error: resp?.error ?? null };
 }
 
-/**
- * Check whether the PS5 runtime (AVA1, :9120) is currently serving. Returns a
- * lightly-parsed shape — the full command's return covers more details
- * but these are the fields the status UI actually renders.
- *
- * When `reachable` is true, `payloadVersion` and `ps5Kernel` come from
- * the STATUS_ACK body (payload fills both fields). They're null when
- * unreachable or when a build predating the `ps5_kernel` field is
- * running — UI shows "—" in that case.
- */
 // ─── Self-update ─────────────────────────────────────────────────────
 //
 // Wraps the Rust-side `update_check` / `update_download` commands in
@@ -5162,6 +5139,16 @@ export function elfldrEnsure(host: string): Promise<{
   return invoke("ps5_elfldr_ensure", { host });
 }
 
+/**
+ * Check whether the PS5 runtime (AVA1, :9120) is currently serving. Returns a
+ * lightly-parsed shape — the full command's return covers more details
+ * but these are the fields the status UI actually renders.
+ *
+ * When `reachable` is true, `payloadVersion` and `ps5Kernel` come from
+ * the STATUS_ACK body (payload fills both fields). They're null when
+ * unreachable or when a build predating the `ps5_kernel` field is
+ * running — UI shows "—" in that case.
+ */
 export async function payloadCheck(ip: string): Promise<{
   reachable: boolean;
   loaded: boolean;
