@@ -10,7 +10,10 @@ use axum::http::Method;
 use serde_json::{json, Value};
 
 use super::route::route;
-use super::{console_optional, object, Args, Kind, ToolCtx, ToolDef, ToolOutput, ToolResult};
+use super::{
+    console_optional, console_required, object, Args, Kind, ToolCtx, ToolDef, ToolOutput,
+    ToolResult,
+};
 use crate::mcp::{ApiReply, Caller, McpState};
 
 const LIST_DESCRIPTION: &str =
@@ -20,6 +23,17 @@ const LIST_DESCRIPTION: &str =
 
 pub(super) fn tools() -> Vec<ToolDef> {
     vec![
+        ToolDef {
+            name: "consoles_helper_ensure",
+            title: "Make sure the helper runs",
+            description: "If the console's helper answers, says so and sends nothing. If not, \
+                          sends the helper this engine carries through the console's payload \
+                          loader (port 9021, which the user's jailbreak must have opened). It does \
+                          not replace a running helper of another version: payloads_send does.",
+            kind: Kind::Write { idempotent: true },
+            schema: object(json!({ "console": console_required() }), &["console"]),
+            run: |ctx, args| Box::pin(helper_ensure(ctx, args)),
+        },
         ToolDef {
             name: "consoles_list",
             title: "Known consoles",
@@ -274,4 +288,23 @@ pub(super) async fn saved_profiles(state: &McpState, caller: &Caller) -> Vec<Val
         .json()
         .and_then(|doc| doc.get("value")?.get("profiles")?.as_array().cloned())
         .unwrap_or_default()
+}
+
+async fn helper_ensure(ctx: ToolCtx, args: Args) -> ToolResult {
+    let console = args.text("console").unwrap_or_default().to_string();
+    let query = [("addr", console.clone())];
+    let status = ctx
+        .reply(Method::GET, "/api/ps5/status", &query, None)
+        .await?;
+    if status.is_success() {
+        let answer = json!({ "running": true, "sent": false, "status": status.json() });
+        return Ok(ToolOutput::ok("The helper is running.", answer));
+    }
+    let body = json!({ "ps5_addr": console });
+    let sent = ctx.post("/api/pkg/payload-restore", &body).await?;
+    let answer = json!({ "running": false, "sent": true, "send": sent });
+    Ok(ToolOutput::ok(
+        "Sent the helper. consoles_status says when it answers: give it a few seconds.",
+        answer,
+    ))
 }

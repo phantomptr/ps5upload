@@ -21,11 +21,13 @@ use crate::{console_addr_or_default, missing_console_addr, required_console_addr
 
 #[derive(Deserialize)]
 pub(crate) struct AddrQuery {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct CancelBody {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     id: String,
 }

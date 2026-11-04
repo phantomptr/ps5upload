@@ -81,6 +81,8 @@ locale needs an allowlist entry.
 - Keep PRs small and reviewable; unrelated cleanups belong in their own PR.
 - Hardware-specific behavior (anything that talks to a real PS5) can't be
   verified in CI — call out in your PR how you tested it on hardware.
+- A new or changed engine route or request struct changes the API's description: run
+  `( cd engine && cargo run -p ps5upload-apidoc )` and commit `api/openapi.json`. CI fails otherwise.
 - By contributing, you agree your work is licensed under the project's
   [GPLv3](LICENSE).
 

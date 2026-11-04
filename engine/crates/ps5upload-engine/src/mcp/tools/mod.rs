@@ -27,6 +27,7 @@ mod rp;
 mod saves;
 mod settings;
 mod sources;
+mod together;
 mod transfer;
 
 use std::sync::OnceLock;
@@ -105,6 +106,7 @@ fn all() -> &'static [ToolDef] {
             settings::tools(),
             mesh::tools(),
             rp::tools(),
+            together::tools(),
             notifications::tools(),
             api::tools(),
         ]

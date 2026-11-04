@@ -2113,6 +2113,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ps5upload-apidoc"
+version = "11.0.8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "ps5upload-ava1"
 version = "11.0.8"
 dependencies = [

@@ -1,4 +1,12 @@
 {
+  "agents.api.text": "Every route is described in an OpenAPI document the engine serves itself, and a guide covers errors, long calls and events.",
+  "agents.api.title": "An HTTP API for scripts",
+  "agents.lead": "Everything the app does with your PS5 is also an API on your own computer, with an MCP server built in, so an AI agent can check a console, move files, install a game or play through Remote Play.",
+  "agents.mcp.text": "Works with Claude, Cursor, Codex, Gemini CLI and other MCP clients. There is nothing extra to install, and it can run read-only.",
+  "agents.mcp.title": "MCP for AI agents",
+  "agents.safe.text": "There is no password, so by default it answers only the computer it runs on. You choose who else can reach it. Keep it off the internet.",
+  "agents.safe.title": "It stays yours",
+  "agents.title": "Let scripts and AI agents drive it",
   "alt.connection": "The Connection screen with a console found and connected.",
   "alt.files": "Files: the console's drives and folders, browsed like a folder on your computer.",
   "alt.games": "Games: a grid of game covers with their sizes and where they are.",

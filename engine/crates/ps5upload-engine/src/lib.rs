@@ -80,6 +80,7 @@ mod mgmt_route;
 mod migrate_6;
 mod net_doctor;
 mod net_health;
+mod openapi;
 mod ops;
 mod pad_link;
 mod payloads_api;
@@ -10846,6 +10847,7 @@ struct PortCheckQuery {
 /// 2.2.7).
 #[derive(serde::Deserialize)]
 struct ToastBody {
+    #[serde(alias = "console", alias = "host")]
     addr: Option<String>,
     title: String,
     subtitle: Option<String>,
@@ -12406,6 +12408,7 @@ fn build_app_and_mcp(
             get(helper_mirror::ftp_log_handler),
         )
         .route("/api/debug/crash", get(debug_crash))
+        .route("/api/openapi.json", get(openapi::serve))
         .with_state(state);
 
     // All browser APIs must be merged before nesting under the URL prefix.

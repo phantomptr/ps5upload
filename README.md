@@ -80,8 +80,8 @@
   - **Go live** to YouTube, Twitch, Kick, Facebook or any RTMP/SRT server, several at once,
     straight from Play (desktop apps and the web UI), or add the stream to **OBS** for your own
     scenes and overlays.
-  - A local automation API lets a script or AI agent on the engine's computer watch and play a
-    running session ([AUTOMATION.md](AUTOMATION.md)).
+  - A script or AI agent on the engine's computer can watch and play a running session
+    ([AUTOMATION.md](AUTOMATION.md)), and drive everything else too ([API and AI agents](#api-and-ai-agents)).
 - **Cheats, fan curve, hardware view,** payload sender with a catalogue and playlists, and
   backport tools.
 - **Bug reports in one place.** Bug Report (always in the sidebar) gathers the app's, the
@@ -393,10 +393,26 @@ with **Settings → Engine URL**.
   not a full URL, and the web page is built with it, so a prefix needs its own image build. The
   variables a self-hoster may need are in [engine/README.md](engine/README.md#environment-variables). See [reverse-proxy setup](REVERSE_PROXY.md) for nginx,
   proxy authentication, Docker bridge networking, and sub-path hosting.
-- **Scripting it:** [ps5upctl](https://github.com/yuanzhengze/ps5upctl) is a community
-  command-line client for the engine API (unofficial; the API can change between versions).
-  A script or AI agent on the engine's computer can also watch and play a running Remote Play
-  session without taking it over: see [Remote Play automation](AUTOMATION.md).
+- **Scripting it:** see [API and AI agents](#api-and-ai-agents) below. [ps5upctl](https://github.com/yuanzhengze/ps5upctl)
+  is a community command-line client for the engine API (unofficial; the API can change between
+  versions).
+
+## API and AI agents
+
+Everything the app does with a console also works from a script or an AI agent, with nothing extra
+to install. The engine, in the desktop app or the Docker image, serves all of this itself:
+
+- **[HTTP API](API.md):** `http://127.0.0.1:19113`, described route by route at `GET /api/openapi.json`
+  (OpenAPI 3.1). The guide covers who it answers, errors, long calls and events.
+- **[MCP server](MCP.md):** `http://127.0.0.1:19113/mcp`, for Claude, Cursor, Codex, Gemini CLI and
+  other MCP clients: more than 120 tools, including a generic one for any route.
+  `claude mcp add --transport http ps5upload http://127.0.0.1:19113/mcp` and you're connected.
+- **[Remote Play automation](AUTOMATION.md):** watch and play a session from a script, without taking
+  it over.
+
+There is no password, by design: it answers only the engine's own computer unless you open it with
+`PS5UPLOAD_ALLOW_IP`. An agent can do whatever you can on your console, including delete files, so
+`PS5UPLOAD_MCP_READ_ONLY=1` is there if you only want it to look.
 
 ## FAQ
 

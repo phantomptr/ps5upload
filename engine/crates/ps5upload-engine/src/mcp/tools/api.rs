@@ -1,12 +1,15 @@
 //! `api_catalog` and `api_request`: any route of the engine's API, for what the curated tools do
 //! not cover.
 
+use std::collections::BTreeSet;
+
 use axum::http::Method;
 use base64::Engine as _;
 use serde_json::{json, Map, Value};
 
 use super::{engine_failure, object, Args, Kind, ToolCtx, ToolDef, ToolOutput, ToolResult};
 use crate::mcp::catalog_routes::{self, ROUTES};
+use crate::openapi;
 
 /// Largest image shown as a picture as well as data.
 const MAX_INLINE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
@@ -36,6 +39,30 @@ pub(super) fn tools() -> Vec<ToolDef> {
             &[],
         ),
         run: |ctx, args| Box::pin(catalog(ctx, args)),
+    },
+    ToolDef {
+        name: "api_describe",
+        title: "Describe an API route",
+        description: "One route of the engine's API: what it does, its query and body fields, its \
+                      answers, who may call it, and how its console is named. From the same \
+                      document as GET /api/openapi.json, with the schemas it uses. Read this before \
+                      calling an unfamiliar route with api_request: never guess a field.",
+        kind: Kind::Read,
+        schema: object(
+            json!({
+                "method": {
+                    "type": "string",
+                    "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+                    "description": "The HTTP method. Default GET.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "The route as api_catalog lists it, like /api/jobs/{id}.",
+                },
+            }),
+            &["path"],
+        ),
+        run: |ctx, args| Box::pin(describe(ctx, args)),
     },
     ToolDef {
         name: "api_request",
@@ -89,8 +116,68 @@ fn find_routes(search: &str, method: Option<&str>) -> Vec<Value> {
                 && method.is_none_or(|wanted| wanted.eq_ignore_ascii_case(route_method))
                 && words.iter().all(|word| lower.contains(word.as_str()))
         })
-        .map(|(method, path)| json!({ "method": method, "path": path }))
+        .map(|(method, path)| {
+            let mut route = json!({ "method": method, "path": path });
+            if let Some(summary) = openapi::operation(method, path).and_then(|op| op.get("summary"))
+            {
+                route["summary"] = summary.clone();
+            }
+            route
+        })
         .collect()
+}
+
+/// Every `#/components/schemas/...` name in `value`.
+fn schema_names(value: &Value, names: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(name) = map
+                .get("$ref")
+                .and_then(Value::as_str)
+                .and_then(|target| target.strip_prefix("#/components/schemas/"))
+            {
+                names.insert(name.to_string());
+            }
+            map.values().for_each(|v| schema_names(v, names));
+        }
+        Value::Array(items) => items.iter().for_each(|v| schema_names(v, names)),
+        _ => {}
+    }
+}
+
+async fn describe(_ctx: ToolCtx, args: Args) -> ToolResult {
+    let path = args.text("path").unwrap_or_default();
+    let method = args.text("method").unwrap_or("GET");
+    if catalog_routes::holds_console_keys(path) {
+        return Err(ToolOutput::error(format!(
+            "{path} holds the keys that sign in to a console's users: it is for the app alone."
+        )));
+    }
+    let Some(operation) = openapi::operation(method, path) else {
+        return Err(ToolOutput::error(format!(
+            "No route {method} {path}. api_catalog finds routes; write {{name}} parts as it lists \
+             them."
+        )));
+    };
+    // The schemas it names, and the ones those name.
+    let mut names = BTreeSet::new();
+    schema_names(operation, &mut names);
+    let mut schemas = Map::new();
+    while let Some(name) = names.iter().find(|n| !schemas.contains_key(*n)).cloned() {
+        match openapi::component(&name) {
+            Some(schema) => {
+                schema_names(schema, &mut names);
+                schemas.insert(name, schema.clone());
+            }
+            None => {
+                schemas.insert(name, Value::Null);
+            }
+        }
+    }
+    Ok(ToolOutput::ok(
+        format!("{method} {path}."),
+        json!({ "method": method, "path": path, "operation": operation, "schemas": schemas }),
+    ))
 }
 
 async fn catalog(_ctx: ToolCtx, args: Args) -> ToolResult {

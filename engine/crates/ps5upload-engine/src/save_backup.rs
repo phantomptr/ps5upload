@@ -1743,6 +1743,7 @@ pub async fn post_restore(Json(b): Json<RestoreBody>) -> Response {
 #[derive(Deserialize)]
 pub struct RestoreFileBody {
     /// The console (bare IP).
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub title_id: String,
     /// The backup `.zip` on this computer.
@@ -1778,6 +1779,7 @@ pub async fn post_restore_file(Json(b): Json<RestoreFileBody>) -> Response {
 
 #[derive(Deserialize)]
 pub struct NoteQuery {
+    #[serde(alias = "console", alias = "host")]
     pub addr: String,
     pub user_id: u32,
 }

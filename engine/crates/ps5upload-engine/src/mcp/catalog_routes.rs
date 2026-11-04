@@ -241,6 +241,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/mgmt/call"),
     ("GET", "/api/net/doctor"),
     ("GET", "/api/net/doctor/reply"),
+    ("GET", "/api/openapi.json"),
     ("GET", "/api/ops"),
     ("GET", "/api/ops/{id}"),
     ("POST", "/api/ops/{id}/cancel"),
@@ -757,6 +758,44 @@ mod tests {
             "/api/shared/consoles",
         ] {
             assert!(!holds_console_keys(fine), "{fine}");
+        }
+    }
+
+    /// `api/openapi.json` is generated from the source, and read back here with a different scan,
+    /// so a route that one of them misses fails. Regenerate: `cargo run -p ps5upload-apidoc`.
+    #[test]
+    fn the_openapi_file_documents_exactly_what_the_router_mounts() {
+        let mounted: BTreeSet<(String, String)> = mounted_routes()
+            .into_iter()
+            .filter(|(_, path)| !HOLD_CONSOLE_KEYS.contains(&path.as_str()))
+            .chain(
+                // mcp::router, which the catalog leaves out: it is not an API route to call.
+                ["GET", "POST", "DELETE"]
+                    .iter()
+                    .map(|method| (method.to_string(), "/mcp".to_string())),
+            )
+            .collect();
+        let documented: BTreeSet<(String, String)> =
+            crate::openapi::operations().into_iter().collect();
+        let missing: Vec<_> = mounted.difference(&documented).collect();
+        assert!(
+            missing.is_empty(),
+            "routes missing from api/openapi.json, run `cargo run -p ps5upload-apidoc` in engine/: \
+             {missing:?}"
+        );
+        let stale: Vec<_> = documented.difference(&mounted).collect();
+        assert!(
+            stale.is_empty(),
+            "routes in api/openapi.json that nothing mounts, run `cargo run -p ps5upload-apidoc` in \
+             engine/: {stale:?}"
+        );
+    }
+
+    #[test]
+    fn the_openapi_file_keeps_the_routes_with_console_keys_out() {
+        let text = crate::openapi::document();
+        for secret in HOLD_CONSOLE_KEYS {
+            assert!(!text.contains(&format!("\"{secret}\"")), "{secret}");
         }
     }
 

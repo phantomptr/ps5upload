@@ -12,15 +12,20 @@ use super::jsonrpc::RpcError;
 use super::{catalog_routes, tools, Caller, McpState};
 
 const URI_CATALOG: &str = "ps5upload://catalog";
+const URI_OPENAPI: &str = "ps5upload://openapi";
 const URI_AUTOMATION: &str = "ps5upload://docs/automation";
+const URI_API: &str = "ps5upload://docs/api";
+const URI_MCP: &str = "ps5upload://docs/mcp";
 const URI_CONSOLES: &str = "ps5upload://consoles";
 pub(crate) const URI_JOBS: &str = "ps5upload://jobs";
 pub(crate) const URI_EVENTS: &str = "ps5upload://events";
 const CONSOLE_STATUS_PREFIX: &str = "ps5upload://consoles/";
 const CONSOLE_STATUS_SUFFIX: &str = "/status";
 
-/// `AUTOMATION.md`, from the repository's root: both Dockerfiles copy it for this.
+// From the repository's root: both Dockerfiles copy these, and `.dockerignore` lets them through.
 const AUTOMATION_GUIDE: &str = include_str!("../../../../../AUTOMATION.md");
+const API_GUIDE: &str = include_str!("../../../../../API.md");
+const MCP_GUIDE: &str = include_str!("../../../../../MCP.md");
 
 /// How many events `ps5upload://events` keeps.
 const RING_SIZE: usize = 200;
@@ -36,6 +41,30 @@ pub(crate) fn list() -> Value {
                 "description": "Every route of the engine's HTTP API, by method and path: what \
                                 api_request can call.",
                 "mimeType": "application/json",
+            },
+            {
+                "uri": URI_OPENAPI,
+                "name": "openapi",
+                "title": "OpenAPI document",
+                "description": "The whole API in OpenAPI 3.1, the same as GET /api/openapi.json: \
+                                large. The api_describe tool gives one route at a time.",
+                "mimeType": "application/json",
+            },
+            {
+                "uri": URI_API,
+                "name": "docs_api",
+                "title": "API guide",
+                "description": "How to reach the API, its guards, errors, long calls, events and \
+                                route families.",
+                "mimeType": "text/markdown",
+            },
+            {
+                "uri": URI_MCP,
+                "name": "docs_mcp",
+                "title": "MCP guide",
+                "description": "What this server can do, read-only mode, destructive tools and \
+                                what needs a page or ffmpeg.",
+                "mimeType": "text/markdown",
             },
             {
                 "uri": URI_AUTOMATION,
@@ -100,6 +129,13 @@ pub(crate) async fn read(
     let json_contents = |value: Value| contents(uri, "application/json", value.to_string());
     match uri {
         URI_CATALOG => Ok(json_contents(catalog_routes::as_json())),
+        URI_OPENAPI => Ok(contents(
+            uri,
+            "application/json",
+            crate::openapi::document().to_string(),
+        )),
+        URI_API => Ok(contents(uri, "text/markdown", API_GUIDE.to_string())),
+        URI_MCP => Ok(contents(uri, "text/markdown", MCP_GUIDE.to_string())),
         URI_AUTOMATION => Ok(contents(uri, "text/markdown", AUTOMATION_GUIDE.to_string())),
         URI_CONSOLES => Ok(json_contents(tools::consoles::known(state, caller).await)),
         URI_JOBS => {
@@ -321,19 +357,42 @@ mod tests {
     }
 
     #[test]
-    fn the_docker_builds_have_the_automation_guide() {
-        // `include_str!` above needs AUTOMATION.md in the image's build context, and only the
-        // release's Docker workflow would find out otherwise.
+    fn the_docker_builds_have_the_guides() {
+        // `include_str!` above needs these in the image's build context, and only the release's
+        // Docker workflow would find out otherwise.
         let ignore = include_str!("../../../../../.dockerignore");
-        assert!(ignore.lines().any(|line| line == "!AUTOMATION.md"));
-        for dockerfile in [
-            include_str!("../../../../Dockerfile"),
-            include_str!("../../../../Dockerfile.webui"),
-        ] {
-            assert!(dockerfile
-                .lines()
-                .any(|line| line.starts_with("COPY AUTOMATION.md")));
+        for file in ["AUTOMATION.md", "API.md", "MCP.md"] {
+            assert!(
+                ignore.lines().any(|line| line == format!("!{file}")),
+                "{file} in .dockerignore"
+            );
+            for dockerfile in [
+                include_str!("../../../../Dockerfile"),
+                include_str!("../../../../Dockerfile.webui"),
+            ] {
+                assert!(
+                    dockerfile
+                        .lines()
+                        .any(|line| line.starts_with("COPY ") && line.contains(file)),
+                    "{file} in a Dockerfile"
+                );
+            }
         }
         assert!(AUTOMATION_GUIDE.contains("Remote Play automation"));
+    }
+
+    /// MCP.md lists the tools a client should ask about first. A new one must be added there.
+    #[test]
+    fn the_guide_names_every_destructive_tool() {
+        let listed = tools::list();
+        for tool in listed["tools"].as_array().unwrap() {
+            if tool["annotations"]["destructiveHint"] == true {
+                let name = tool["name"].as_str().unwrap();
+                assert!(
+                    MCP_GUIDE.contains(&format!("`{name}`")),
+                    "{name} is destructive: name it in MCP.md"
+                );
+            }
+        }
     }
 }

@@ -2688,6 +2688,27 @@ starts a stream, and its pictures and input can't be reached from other machines
 Python examples, are in [Remote Play automation](https://github.com/phantomptr/ps5upload/blob/main/AUTOMATION.md).
 They are not a stable API yet and can change between versions.
 
+**Q: Can I drive PS5Upload from scripts or an AI agent?**
+Yes. Everything the app does with a console is an HTTP API on the engine, at
+`http://127.0.0.1:19113`, described route by route at `/api/openapi.json`. There is also an MCP server
+built in, at `/mcp`, for Claude, Cursor, Codex, Gemini CLI and other agents. For Claude Code:
+`claude mcp add --transport http ps5upload http://127.0.0.1:19113/mcp`. Claude Desktop can't reach
+`localhost` through a custom connector, so it uses the engine program over stdio instead. Keep the app
+open, because the agent talks to its engine. Setup for each client is in
+[MCP.md](https://github.com/phantomptr/ps5upload/blob/main/MCP.md), and the API's rules are in
+[API.md](https://github.com/phantomptr/ps5upload/blob/main/API.md).
+
+**Q: Is it safe to connect an AI agent to my PS5?**
+It can do whatever you can, including delete files, and there is no password. By default only the
+engine's own computer can reach it. Set `PS5UPLOAD_MCP_READ_ONLY=1` for an agent that may only look,
+and keep your client asking before the tools marked destructive. The keys that sign in to your console
+never reach the agent. MCP.md lists those tools.
+
+**Q: What can't the API or an agent do?**
+Schedules, play time and the notification inbox live in the app on each device, and a phone as a
+controller and a friend joining Play Together are for the person holding that device. API.md lists what
+to use instead.
+
 **Q: Can I install a package while I play?**
 Drop the .pkg or .fpkg on the Play picture. By default it installs when you stop playing,
 because an install shares the network with the stream and can make it stutter; **Install now**
