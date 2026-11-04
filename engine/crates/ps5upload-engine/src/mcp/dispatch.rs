@@ -74,7 +74,11 @@ fn instructions(read_only: bool) -> String {
          - Slow work: uploads and downloads are jobs (jobs_wait follows one), installs have \
          install_wait, and files_copy, files_move, files_delete, files_extract and the save tools \
          answer with an op_id when they run long (files_op_status follows it). If a call fails \
-         partway, look at the current state before you repeat it.",
+         partway, look at the current state before you repeat it.\n\
+         - Several uploads or installs in a row: queue_add puts them on the engine's queue for a \
+         console, which runs them in order, waits while anything else uses that console, and \
+         survives a restart. queue_list shows the same queue every client sees. Nothing on it is \
+         retried or restarted unless someone calls queue_resume.",
     );
     if read_only {
         text.push_str(

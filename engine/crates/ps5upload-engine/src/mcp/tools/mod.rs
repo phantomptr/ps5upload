@@ -21,6 +21,7 @@ mod more_files;
 mod notifications;
 mod payloads;
 mod power;
+mod queue;
 pub(crate) mod route;
 mod rp;
 mod saves;
@@ -92,6 +93,7 @@ fn all() -> &'static [ToolDef] {
             more_files::tools(),
             transfer::tools(),
             install::tools(),
+            queue::tools(),
             power::tools(),
             hw::tools(),
             games::tools(),

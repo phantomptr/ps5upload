@@ -454,6 +454,15 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/ps5/vinput/report"),
     ("GET", "/api/ps5/vinput/ws"),
     ("GET", "/api/ps5/volumes"),
+    ("GET", "/api/queue"),
+    ("POST", "/api/queue"),
+    ("POST", "/api/queue/hold"),
+    ("POST", "/api/queue/release"),
+    ("GET", "/api/queue/{id}"),
+    ("POST", "/api/queue/{id}/move"),
+    ("POST", "/api/queue/{id}/pause"),
+    ("POST", "/api/queue/{id}/remove"),
+    ("POST", "/api/queue/{id}/resume"),
     ("POST", "/api/rar/inspect"),
     ("POST", "/api/rar/packages"),
     ("GET", "/api/remote/connections"),
@@ -660,6 +669,10 @@ mod tests {
             "pub fn router<",
         )));
         routes.extend(routes_in(function(
+            include_str!("../queue_api.rs"),
+            "pub fn router<",
+        )));
+        routes.extend(routes_in(function(
             include_str!("../ops.rs"),
             "pub(crate) fn router(",
         )));
@@ -710,6 +723,7 @@ mod tests {
             "payloads_api::router",
             "pkg_install::api_router",
             "pkg_install::host_router",
+            "queue_api::router",
             "remote_download::router",
         ]);
         assert_eq!(merged, known);
