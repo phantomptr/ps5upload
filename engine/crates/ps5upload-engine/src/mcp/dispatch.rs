@@ -59,8 +59,8 @@ fn instructions(read_only: bool) -> String {
          trust.\n\
          - Pass `console` (the PS5's address) to every tool that touches a console. consoles_list \
          shows the known consoles and the default a read falls back to.\n\
-         - Use the curated tools first. For anything they do not cover, ps5upload://catalog lists \
-         every route of the engine's API and api_request calls one.\n\
+         - Use the curated tools first. For anything they do not cover, api_catalog (or \
+         ps5upload://catalog) lists every route of the engine's API and api_request calls one.\n\
          - Destructive tools (their annotations say which: deleting, overwriting, power, closing \
          a game, api_request) need the user's confirmation before you call them. Say what will \
          happen and on which console, and wait for a yes.\n\
@@ -68,9 +68,12 @@ fn instructions(read_only: bool) -> String {
          Start). rp_frame needs the app's Play screen open and visible, because the picture comes \
          from that page. A sent input only means it was sent: take a newer frame to see the \
          result.\n\
-         - Slow work: transfers are jobs (jobs_wait follows one); files_copy, files_move and \
-         files_delete answer with an op_id when they run long (files_op_status follows it). If a \
-         call fails partway, look at the current state before you repeat it.",
+         - Paths: a `src` or `local_path` is on the computer the engine runs on, which may not be \
+         the one you run on; anything else is on the console.\n\
+         - Slow work: uploads and downloads are jobs (jobs_wait follows one), installs have \
+         install_wait, and files_copy, files_move, files_delete, files_extract and the save tools \
+         answer with an op_id when they run long (files_op_status follows it). If a call fails \
+         partway, look at the current state before you repeat it.",
     );
     if read_only {
         text.push_str(

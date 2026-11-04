@@ -37,7 +37,7 @@ fn path_argument(what: &'static str) -> Value {
     json!({ "type": "string", "description": what })
 }
 
-fn wait_argument() -> Value {
+pub(super) fn wait_argument() -> Value {
     json!({
         "type": "integer",
         "minimum": 0,
@@ -48,11 +48,12 @@ fn wait_argument() -> Value {
     })
 }
 
-fn op_id_argument(description: &'static str) -> Value {
+pub(super) fn op_id_argument(description: &'static str) -> Value {
     json!({ "type": "integer", "minimum": 1, "maximum": MAX_OP_ID, "description": description })
 }
 
-const OWN_OP_ID: &str = "Your own id for this operation, to follow it with files_op_status. Left \
+pub(super) const OWN_OP_ID: &str =
+    "Your own id for this operation, to follow it with files_op_status. Left \
                          out, one is picked and given in the answer if it runs long.";
 
 const OVERWRITE: &str = "Merge into an existing destination, replacing files that collide. Only \
@@ -204,8 +205,9 @@ pub(super) fn tools() -> Vec<ToolDef> {
             name: "files_op_status",
             title: "Follow a file operation",
             description:
-                "How a copy, move or delete with this op_id stands: its progress while it \
-                          runs, and how it ended, if it was started through this server.",
+                "How an operation that answered with an op_id stands (a copy, move, delete, \
+                          extract, save backup or restore): its progress while it runs, and how \
+                          it ended, if it was started through this server.",
             kind: Kind::Read,
             schema: object(
                 json!({
@@ -374,7 +376,7 @@ fn from_to(args: &Args) -> Result<(Value, String, String), ToolOutput> {
 }
 
 /// Runs a blocking route on its own task, and waits for it for `wait_s` (see the module comment).
-async fn long_operation(
+pub(super) async fn long_operation(
     ctx: ToolCtx,
     args: &Args,
     path: &'static str,
@@ -466,8 +468,9 @@ async fn op_status(ctx: ToolCtx, args: Args) -> ToolResult {
     let reply = ctx
         .reply(Method::GET, "/api/ps5/fs/op-status", &query, None)
         .await?;
-    if reply.status.as_u16() == 404 && known.is_some() {
-        // Started here and not over, but the console has nothing to say about it yet.
+    if !reply.is_success() && known.is_some() {
+        // Started here and not over. The console has nothing to say about it (yet, or at all:
+        // not every long route reports progress), or `console` names another one.
         return Ok(ToolOutput::ok(
             format!("Operation {op_id} is still running; no progress to report yet."),
             json!({ "op_id": op_id, "finished": false }),

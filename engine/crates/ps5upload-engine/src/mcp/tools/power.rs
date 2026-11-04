@@ -1,10 +1,11 @@
-//! A console's power: `power_control`, `power_wake`.
+//! A console's power: `power_control`, `power_wake`, `power_telemetry`.
 
 use serde_json::{json, Value};
 
+use super::route::route;
 use super::{
-    console_required, consoles, object, without_nulls, Args, Kind, ToolCtx, ToolDef, ToolOutput,
-    ToolResult,
+    console_optional, console_required, consoles, object, without_nulls, Args, Kind, ToolCtx,
+    ToolDef, ToolOutput, ToolResult,
 };
 
 pub(super) fn tools() -> Vec<ToolDef> {
@@ -52,6 +53,15 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 &["console"],
             ),
             run: |ctx, args| Box::pin(wake(ctx, args)),
+        },
+        ToolDef {
+            name: "power_telemetry",
+            title: "Console power history",
+            description: "A console's lifetime records: operating time, boot cycles, thermal \
+                          alerts and what last powered it up. Do not poll it.",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_optional() }), &[]),
+            run: route!(path: "/api/ps5/power/telemetry", done: "The console's power history."),
         },
     ]
 }

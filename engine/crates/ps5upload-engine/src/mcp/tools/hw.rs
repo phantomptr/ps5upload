@@ -1,8 +1,12 @@
-//! A console's hardware: `hw_info`, `hw_temps`, `hw_storage`.
+//! A console's hardware: `hw_info`, `hw_temps`, `hw_storage`, `hw_power`, `hw_fan_threshold`.
 
 use serde_json::{json, Value};
 
-use super::{console_optional, gib, object, Args, Kind, ToolCtx, ToolDef, ToolOutput, ToolResult};
+use super::route::{route, whole};
+use super::{
+    console_optional, console_required, gib, object, Args, Kind, ToolCtx, ToolDef, ToolOutput,
+    ToolResult,
+};
 
 pub(super) fn tools() -> Vec<ToolDef> {
     vec![
@@ -46,6 +50,42 @@ pub(super) fn tools() -> Vec<ToolDef> {
             kind: Kind::Read,
             schema: object(json!({ "console": console_optional() }), &[]),
             run: |ctx, args| Box::pin(storage(ctx, args)),
+        },
+        ToolDef {
+            name: "hw_power",
+            title: "Console power use",
+            description: "A console's power use now, load, how long it has run and how many times \
+                          it has started.",
+            kind: Kind::Read,
+            schema: object(json!({ "console": console_optional() }), &[]),
+            run: route!(path: "/api/ps5/hw/power", done: "The console's power readings."),
+        },
+        ToolDef {
+            name: "hw_fan_threshold",
+            title: "Set the fan threshold",
+            description: "Sets the temperature at which a console's fan speeds up. Too high a \
+                          value lets it run hot: only as the user asked.",
+            kind: Kind::Write { idempotent: true },
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "threshold_c": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 255,
+                        "description": "The temperature in °C.",
+                    },
+                    "reapply_sec": whole(
+                        "How often to apply it again, 1 to 300 seconds. Left out, as it is.",
+                    ),
+                }),
+                &["console", "threshold_c"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/ps5/hw/fan-threshold",
+                done: "Set the fan threshold.",
+            ),
         },
     ]
 }

@@ -1,16 +1,43 @@
-//! `api_request`: any route of the engine's API, for what the curated tools do not cover.
+//! `api_catalog` and `api_request`: any route of the engine's API, for what the curated tools do
+//! not cover.
 
 use axum::http::Method;
 use base64::Engine as _;
 use serde_json::{json, Map, Value};
 
 use super::{engine_failure, object, Args, Kind, ToolCtx, ToolDef, ToolOutput, ToolResult};
+use crate::mcp::catalog_routes::ROUTES;
 
 /// Largest image shown as a picture as well as data.
 const MAX_INLINE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
 pub(super) fn tools() -> Vec<ToolDef> {
-    vec![ToolDef {
+    vec![
+        ToolDef {
+        name: "api_catalog",
+        title: "Find an API route",
+        description: "Searches the routes of the engine's HTTP API, by method and path: what \
+                      api_request can call. Every word of `search` must appear. The same list as \
+                      ps5upload://catalog, for clients that do not read resources.",
+        kind: Kind::Read,
+        schema: object(
+            json!({
+                "search": {
+                    "type": "string",
+                    "description": "Words to look for in a route's path, like `save backup`. \
+                                    Left out, every route.",
+                },
+                "method": {
+                    "type": "string",
+                    "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+                    "description": "Only routes with this method.",
+                },
+            }),
+            &[],
+        ),
+        run: |ctx, args| Box::pin(catalog(ctx, args)),
+    },
+    ToolDef {
         name: "api_request",
         title: "Call the engine's API",
         description: "Calls any route of the engine's HTTP API, for what the other tools do not \
@@ -43,7 +70,35 @@ pub(super) fn tools() -> Vec<ToolDef> {
             &["path"],
         ),
         run: |ctx, args| Box::pin(request(ctx, args)),
-    }]
+    },
+    ]
+}
+
+/// The routes under `/api/` a search finds, in the catalog's order.
+fn find_routes(search: &str, method: Option<&str>) -> Vec<Value> {
+    let words: Vec<String> = search
+        .split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .collect();
+    ROUTES
+        .iter()
+        .filter(|(route_method, path)| {
+            let lower = path.to_ascii_lowercase();
+            path.starts_with("/api/")
+                && method.is_none_or(|wanted| wanted.eq_ignore_ascii_case(route_method))
+                && words.iter().all(|word| lower.contains(word.as_str()))
+        })
+        .map(|(method, path)| json!({ "method": method, "path": path }))
+        .collect()
+}
+
+async fn catalog(_ctx: ToolCtx, args: Args) -> ToolResult {
+    let routes = find_routes(args.text("search").unwrap_or_default(), args.text("method"));
+    let summary = format!("{} route(s).", routes.len());
+    Ok(ToolOutput::ok(
+        summary,
+        json!({ "count": routes.len(), "routes": routes }),
+    ))
 }
 
 /// Why this cannot be a path of the API, if it cannot.
@@ -195,6 +250,24 @@ mod tests {
         ] {
             assert!(path_problem(bad).is_some(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_search_finds_routes_of_the_api_only() {
+        let paths = |search: &str, method: Option<&str>| -> Vec<String> {
+            find_routes(search, method)
+                .iter()
+                .map(|route| route["path"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let found = paths("ps5 volumes", None);
+        assert_eq!(found, ["/api/ps5/volumes"]);
+        assert_eq!(paths("PS5 VOLUMES", Some("get")), ["/api/ps5/volumes"]);
+        assert!(paths("ps5 volumes", Some("DELETE")).is_empty());
+        assert!(paths("no such route anywhere", None).is_empty());
+        let every = paths("", None);
+        assert!(every.len() > 300);
+        assert!(every.iter().all(|path| path.starts_with("/api/")));
     }
 
     #[test]

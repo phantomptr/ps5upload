@@ -1866,7 +1866,12 @@ async fn prompts_are_listed_and_given() {
         .collect();
     assert_eq!(
         names,
-        ["play_session", "diagnose_connection", "free_up_space"]
+        [
+            "play_session",
+            "install_game",
+            "diagnose_connection",
+            "free_up_space"
+        ]
     );
 
     let answer = server
@@ -2057,4 +2062,554 @@ async fn nothing_to_honour_still_opens_a_stream_with_no_listener() {
     );
     server.state.begin_shutdown();
     assert_eq!(next_message(&mut stream).await["id"], 7);
+}
+
+// ── Tools that are one route ────────────────────────────────────────────────────────────────────
+
+/// Says back the route that was called, whatever it is.
+async fn echo_any(
+    method: Method,
+    uri: axum::http::Uri,
+    Query(query): Query<HashMap<String, String>>,
+    body: String,
+) -> Json<Value> {
+    Json(json!({
+        "method": method.as_str(),
+        "path": uri.path(),
+        "query": query,
+        "body": serde_json::from_str::<Value>(&body).ok(),
+    }))
+}
+
+fn echo_server() -> Server {
+    server_with(Router::new().fallback(echo_any), false)
+}
+
+/// A body the route's own request type must accept: what keeps a tool's field names true to the
+/// handler it calls.
+fn reads_as<T: serde::de::DeserializeOwned>(body: &Value) {
+    if let Err(e) = serde_json::from_value::<T>(body.clone()) {
+        panic!("the route cannot read {body}: {e}");
+    }
+}
+
+/// Calls a tool and gives what the route was asked.
+async fn route_of(server: &Server, name: &str, arguments: Value) -> Value {
+    let result = server.tool(name, arguments).await;
+    assert_ne!(result["isError"], true, "{name}: {}", text_of(&result));
+    let asked = result["structuredContent"].clone();
+    if asked.get("path").is_some() {
+        return asked;
+    }
+    // A long operation's answer carries the same.
+    asked["result"].clone()
+}
+
+#[tokio::test]
+async fn each_post_tool_sends_what_its_route_reads() {
+    let server = echo_server();
+    let c = "1.2.3.4";
+
+    let asked = route_of(
+        &server,
+        "upload_file",
+        json!({"console": c, "src": "/tmp/a", "dest": "/data/a", "bandwidth_cap_mbps": 5.5}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/transfer/file");
+    assert_eq!(asked["body"]["addr"], c);
+    reads_as::<crate::TransferFileReq>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "upload_dir",
+        json!({"console": c, "src_dir": "/tmp/a", "dest_root": "/data/a",
+               "excludes": ["*.tmp"], "skip_existing": "fast"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/transfer/dir");
+    reads_as::<crate::TransferDirReq>(&asked["body"]);
+
+    for (format, path) in [
+        ("zip", "/api/transfer/zip"),
+        ("7z", "/api/transfer/7z"),
+        ("rar", "/api/transfer/rar"),
+    ] {
+        let asked = server
+            .tool(
+                "upload_archive",
+                json!({"console": c, "archive": "/tmp/a", "format": format, "dest_root": "/d"}),
+            )
+            .await;
+        let asked = &asked["structuredContent"];
+        assert_eq!(asked["path"], path);
+        let body = &asked["body"];
+        match format {
+            "zip" => reads_as::<crate::TransferZipReq>(body),
+            "7z" => reads_as::<crate::Transfer7zReq>(body),
+            _ => reads_as::<crate::TransferRarReq>(body),
+        }
+    }
+
+    let asked = route_of(
+        &server,
+        "files_download",
+        json!({"console": c, "src_path": "/data/a", "dest_dir": "/tmp", "kind": "file"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/transfer/download");
+    reads_as::<crate::TransferDownloadReq>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "files_chmod",
+        json!({"console": c, "path": "/data/a", "mode": "755", "recursive": true}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/fs/chmod");
+    reads_as::<crate::FsChmodReq>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "files_mount",
+        json!({"console": c, "image_path": "/data/a.exfat", "read_only": true}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/fs/mount");
+    reads_as::<crate::FsMountReq>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "files_unmount",
+        json!({"console": c, "mount_point": "/mnt/ps5upload/a"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/fs/unmount");
+    reads_as::<crate::FsUnmountReq>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "files_eject",
+        json!({"console": c, "mount_point": "/mnt/usb0", "force": true}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/usb/eject");
+    reads_as::<crate::UsbEjectReq>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "games_register",
+        json!({"console": c, "src_path": "/data/g"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/app/register");
+    reads_as::<crate::AppRegisterReq>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "games_unregister",
+        json!({"console": c, "title_id": "PPSA00001"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/app/unregister");
+    reads_as::<crate::AppUnregisterReq>(&asked["body"]);
+
+    let asked = route_of(&server, "processes_kill", json!({"console": c, "pid": 77})).await;
+    assert_eq!(asked["path"], "/api/ps5/process/kill");
+    reads_as::<crate::ProcessKillReq>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "cheats_toggle",
+        json!({"console": c, "title_id": "PPSA00001", "index": 2, "on": false}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/cheats/toggle");
+    reads_as::<crate::CheatsToggleReq>(&asked["body"]);
+
+    let asked = route_of(&server, "cheats_reload", json!({"console": c})).await;
+    assert_eq!(asked["path"], "/api/ps5/cheats/reload");
+    reads_as::<crate::CheatsAddrQuery>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "hw_fan_threshold",
+        json!({"console": c, "threshold_c": 70}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/hw/fan-threshold");
+    reads_as::<crate::FanThresholdReq>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "saves_backup_now",
+        json!({"console": c, "title_id": "PPSA00001", "user_id": 1, "wait_s": 5}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/save-backup/now");
+    reads_as::<crate::save_backup::BackUpNowBody>(&asked["body"]);
+    assert!(asked["body"].get("wait_s").is_none());
+
+    let asked = route_of(
+        &server,
+        "saves_restore",
+        json!({"console": c, "title_id": "PPSA00001", "file": "a.zip",
+               "save_path": "/user/x", "user_id": 1}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/save-backup/restore");
+    reads_as::<crate::save_backup::RestoreBody>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "files_extract",
+        json!({"console": c, "path": "/data/a.zip", "dest": "/data/a", "merge": true}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/fs/extract");
+    reads_as::<crate::FsExtractReq>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "sources_browse",
+        json!({"path": "remote://nas-1/games"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/remote/list");
+    reads_as::<crate::remote::api::ListBody>(&asked["body"]);
+
+    let asked = route_of(
+        &server,
+        "sources_fetch",
+        json!({"path": "remote://nas-1/a.pkg", "dest_dir": "/tmp"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/remote/fetch");
+    reads_as::<crate::remote::fetch::FetchBody>(&asked["body"]);
+}
+
+#[tokio::test]
+async fn the_routes_that_say_host_get_the_console_as_host() {
+    let server = echo_server();
+    let asked = route_of(&server, "payloads_list", json!({"console": "1.2.3.4"})).await;
+    assert_eq!(asked["path"], "/api/ps5/pldmgr");
+    assert_eq!(asked["query"]["host"], "1.2.3.4");
+    assert!(asked["query"].get("addr").is_none());
+    for (tool, path, extra) in [
+        (
+            "payloads_launch",
+            "/api/ps5/pldmgr/launch",
+            json!({"path": "/x"}),
+        ),
+        (
+            "payloads_delete",
+            "/api/ps5/pldmgr/delete",
+            json!({"filename": "x"}),
+        ),
+        (
+            "payloads_store",
+            "/api/ps5/pldmgr/store",
+            json!({"filename": "x", "local_path": "/y"}),
+        ),
+        (
+            "payloads_autoload",
+            "/api/ps5/pldmgr/autoload",
+            json!({"enabled": true, "list": ["x"]}),
+        ),
+    ] {
+        let mut arguments = extra;
+        arguments["console"] = json!("1.2.3.4");
+        let asked = route_of(&server, tool, arguments).await;
+        assert_eq!(asked["path"], path);
+        assert_eq!(asked["body"]["host"], "1.2.3.4", "{tool}");
+        assert!(asked["body"].get("console").is_none(), "{tool}");
+    }
+}
+
+#[tokio::test]
+async fn each_read_tool_asks_its_route_with_the_console_as_addr() {
+    let server = echo_server();
+    for (tool, path, extra) in [
+        ("files_volumes", "/api/ps5/volumes", json!({})),
+        ("saves_list", "/api/ps5/saves/list", json!({"user_id": 3})),
+        ("cheats_status", "/api/ps5/cheats/status", json!({})),
+        ("cheats_list", "/api/ps5/cheats/list", json!({})),
+        (
+            "cheats_get",
+            "/api/ps5/cheats/get",
+            json!({"title_id": "PPSA00001"}),
+        ),
+        ("hw_power", "/api/ps5/hw/power", json!({})),
+        ("power_telemetry", "/api/ps5/power/telemetry", json!({})),
+        ("devices_list", "/api/mesh/state", json!({})),
+        ("drive_list", "/api/drive", json!({})),
+        (
+            "install_preflight",
+            "/api/pkg/install/preflight",
+            json!({"content_id": "UP0000-PPSA00001_00-0000000000000000"}),
+        ),
+    ] {
+        let mut arguments = extra;
+        arguments["console"] = json!("1.2.3.4");
+        let asked = route_of(&server, tool, arguments).await;
+        assert_eq!(asked["method"], "GET", "{tool}");
+        assert_eq!(asked["path"], path, "{tool}");
+        assert_eq!(asked["query"]["addr"], "1.2.3.4", "{tool}");
+    }
+    // Its route has its own name for the console.
+    let asked = route_of(&server, "install_history", json!({"console": "1.2.3.4"})).await;
+    assert_eq!(asked["query"]["ps5_addr"], "1.2.3.4");
+    // No console at all.
+    let asked = route_of(
+        &server,
+        "saves_backups_list",
+        json!({"title_id": "PPSA00001"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/save-backup/list");
+    assert_eq!(asked["query"]["title_id"], "PPSA00001");
+}
+
+#[tokio::test]
+async fn an_id_goes_in_the_path_and_nowhere_else() {
+    let server = echo_server();
+    let asked = route_of(&server, "disk_usage_status", json!({"id": "a/b"})).await;
+    assert_eq!(asked["path"], "/api/ps5/disk-usage/a%2Fb");
+    assert_eq!(asked["query"], json!({}));
+
+    let asked = route_of(
+        &server,
+        "cleanup_scan_status",
+        json!({"id": 7, "console": "1.2.3.4"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/cleanup/scan/7");
+    assert_eq!(asked["query"]["addr"], "1.2.3.4");
+
+    let asked = route_of(
+        &server,
+        "cleanup_apply",
+        json!({"id": 7, "console": "1.2.3.4", "item_ids": [1, 2]}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/cleanup/scan/7/apply");
+    assert_eq!(
+        asked["body"],
+        json!({"addr": "1.2.3.4", "item_ids": [1, 2]})
+    );
+
+    let asked = route_of(&server, "sources_test", json!({"id": "nas-1"})).await;
+    assert_eq!(asked["path"], "/api/remote/connections/nas-1/test");
+}
+
+#[tokio::test]
+async fn a_post_that_reads_its_query_gets_the_console_there() {
+    let server = echo_server();
+    let asked = route_of(
+        &server,
+        "notifications_clear",
+        json!({"console": "1.2.3.4"}),
+    )
+    .await;
+    assert_eq!(asked["method"], "POST");
+    assert_eq!(asked["path"], "/api/ps5/notif/clear");
+    assert_eq!(asked["query"]["addr"], "1.2.3.4");
+    assert_eq!(asked["body"], json!({}));
+}
+
+#[tokio::test]
+async fn a_started_job_says_how_to_follow_it() {
+    let api = Router::new().route(
+        "/api/transfer/file",
+        post(|| async { Json(json!({"job_id": "j-1"})) }),
+    );
+    let result = server_with(api, false)
+        .tool(
+            "upload_file",
+            json!({"console": "c", "src": "/a", "dest": "/b"}),
+        )
+        .await;
+    let text = text_of(&result);
+    assert!(text.contains("j-1") && text.contains("jobs_wait"), "{text}");
+}
+
+#[tokio::test]
+async fn files_write_sends_base64_and_refuses_too_much() {
+    let server = echo_server();
+    let result = server
+        .tool(
+            "files_write",
+            json!({"console": "c", "path": "/data/a.txt", "text": "hello", "create_only": true}),
+        )
+        .await;
+    let asked = &result["structuredContent"];
+    assert_eq!(asked["path"], "/api/ps5/fs/write-bytes");
+    assert_eq!(asked["body"]["bytes_b64"], "aGVsbG8=");
+    reads_as::<crate::FsWriteBytesReq>(&asked["body"]);
+
+    let result = server
+        .tool(
+            "files_write",
+            json!({"console": "c", "path": "/data/a.txt"}),
+        )
+        .await;
+    assert_eq!(result["isError"], true);
+    assert!(text_of(&result).contains("`text` or `base64`"));
+}
+
+/// An install API: status moves on as it is polled, and one console is busy.
+fn install_api() -> Router {
+    static INSTALL_POLLS: AtomicUsize = AtomicUsize::new(0);
+    Router::new()
+        .route(
+            "/api/pkg/install",
+            post(|Json(body): Json<Value>| async move {
+                if body["ps5_addr"] == "busy.console" {
+                    return Json(json!({"ok": false, "error": "busy", "job": "running-1"}));
+                }
+                Json(json!({"ok": true, "job": "new-1", "got": body}))
+            }),
+        )
+        .route(
+            "/api/pkg/install/status",
+            get(|Query(q): Query<HashMap<String, String>>| async move {
+                if q.get("job").map(String::as_str) == Some("nope") {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"ok": false, "error": "no such job"})),
+                    )
+                        .into_response();
+                }
+                let phase = if INSTALL_POLLS.fetch_add(1, Ordering::SeqCst) < 1 {
+                    "deliver"
+                } else {
+                    "failed"
+                };
+                Json(
+                    json!({"job": q.get("job"), "phase": phase, "verdict": "failed",
+                            "hint": "The console refused it."}),
+                )
+                .into_response()
+            }),
+        )
+}
+
+#[tokio::test]
+async fn install_pkg_sends_what_the_route_reads() {
+    let server = server_with(install_api(), false);
+    let result = server
+        .tool(
+            "install_pkg",
+            json!({
+                "console": "1.2.3.4",
+                "source_type": "remote",
+                "source": "/a.pkg",
+                "connection": "nas-1",
+                "title_id": "PPSA00001",
+                "proxy_link": true,
+            }),
+        )
+        .await;
+    assert_ne!(result["isError"], true, "{}", text_of(&result));
+    assert!(text_of(&result).contains("new-1"));
+    let body = &result["structuredContent"]["got"];
+    let request: crate::install::InstallRequest = serde_json::from_value(body.clone()).unwrap();
+    assert_eq!(request.ps5_addr, "1.2.3.4");
+    assert_eq!(request.title_id.as_deref(), Some("PPSA00001"));
+    assert!(request.options.proxy_link);
+    assert!(!request.options.allow_destructive_reinstall);
+    assert_eq!(request.source.kind(), "remote");
+}
+
+#[tokio::test]
+async fn a_second_install_names_the_one_running() {
+    let server = server_with(install_api(), false);
+    let result = server
+        .tool(
+            "install_pkg",
+            json!({"console": "busy.console", "source_type": "url", "source": "http://x/a.pkg"}),
+        )
+        .await;
+    assert_eq!(result["isError"], true);
+    let text = text_of(&result);
+    assert!(
+        text.contains("running-1") && text.contains("install_wait"),
+        "{text}"
+    );
+    // Not the hint for a busy Remote Play frame.
+    assert!(!text.contains("frame"), "{text}");
+    assert_eq!(result["structuredContent"]["job"], "running-1");
+}
+
+#[tokio::test]
+async fn install_wait_follows_it_and_a_failure_is_a_finished_install() {
+    let server = server_with(install_api(), false);
+    let result = server
+        .tool("install_wait", json!({"job": "new-1", "timeout_s": 30}))
+        .await;
+    assert_ne!(result["isError"], true);
+    let answer = &result["structuredContent"];
+    assert_eq!(answer["finished"], true);
+    assert_eq!(answer["install"]["phase"], "failed");
+    assert!(text_of(&result).contains("The console refused it."));
+
+    let result = server.tool("install_wait", json!({"job": "nope"})).await;
+    assert_eq!(result["isError"], true);
+    assert!(text_of(&result).contains("no such job"));
+}
+
+#[tokio::test]
+async fn read_only_refuses_the_new_tools_that_change_something() {
+    let server = server_with(Router::new().fallback(echo_any), true);
+    for (tool, arguments) in [
+        (
+            "upload_file",
+            json!({"console": "c", "src": "/a", "dest": "/b"}),
+        ),
+        (
+            "install_pkg",
+            json!({"console": "c", "source_type": "url", "source": "http://x"}),
+        ),
+        ("files_write", json!({"console": "c", "path": "/a"})),
+        ("processes_kill", json!({"console": "c", "pid": 1})),
+        (
+            "cleanup_apply",
+            json!({"console": "c", "id": 1, "item_ids": [1]}),
+        ),
+    ] {
+        let result = server.tool(tool, arguments).await;
+        assert_eq!(result["isError"], true, "{tool}");
+        assert!(text_of(&result).contains("read-only"), "{tool}");
+    }
+    // A scan only looks, even though its route is a POST.
+    let asked = route_of(&server, "cleanup_scan", json!({"console": "c"})).await;
+    assert_eq!(asked["path"], "/api/ps5/cleanup/scan");
+}
+
+#[tokio::test]
+async fn the_recent_events_are_the_newest_within_the_limit() {
+    let api = Router::new().route(
+        "/api/event-journal",
+        get(|Query(q): Query<HashMap<String, String>>| async move {
+            Json(json!({"events": [1, 2, 3], "dropped": 0, "since": q.get("since")}))
+        }),
+    );
+    let result = server_with(api, false)
+        .tool("engine_events_recent", json!({"minutes": 5, "limit": 2}))
+        .await;
+    let answer = &result["structuredContent"];
+    assert_eq!(answer["events"], json!([2, 3]));
+    let since: u64 = answer["since"].as_str().unwrap().parse().unwrap();
+    assert!(crate::now_ms() - since >= 5 * 60_000);
+}
+
+#[tokio::test]
+async fn the_route_search_is_a_tool_too() {
+    let result = server()
+        .tool("api_catalog", json!({"search": "pkg install status"}))
+        .await;
+    assert_eq!(
+        result["structuredContent"]["routes"],
+        json!([{"method": "GET", "path": "/api/pkg/install/status"}])
+    );
 }

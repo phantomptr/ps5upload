@@ -27,6 +27,21 @@ pub(crate) fn list() -> Value {
                 ],
             },
             {
+                "name": "install_game",
+                "title": "Install a game",
+                "description": "Check the console, install a package from where it is, follow it \
+                                to the end, and say what happened.",
+                "arguments": [
+                    {
+                        "name": "source",
+                        "description": "The package: a path on the console or on the engine's \
+                                        computer, or a link.",
+                        "required": true,
+                    },
+                    { "name": "console", "description": CONSOLE_ARGUMENT, "required": false },
+                ],
+            },
+            {
                 "name": "diagnose_connection",
                 "title": "Diagnose a console connection",
                 "description": "Find out why a console does not answer, or answers badly, and say \
@@ -81,6 +96,14 @@ pub(crate) fn get(params: &Value) -> Result<Value, RpcError> {
             };
             ("Play through Remote Play", play_session(&console, goal))
         }
+        "install_game" => {
+            let Some(source) = argument("source") else {
+                return Err(RpcError::invalid_params(
+                    "The install_game prompt needs a \"source\".",
+                ));
+            };
+            ("Install a game", install_game(&console, source))
+        }
         "diagnose_connection" => (
             "Diagnose a console connection",
             diagnose_connection(&console),
@@ -119,6 +142,23 @@ fn play_session(console: &str, goal: &str) -> String {
     )
 }
 
+fn install_game(console: &str, source: &str) -> String {
+    format!(
+        "Install this package on {console}: {source}\n\n\
+         1. Call consoles_status and consoles_readiness. If the console is not ready, say why and \
+         stop: do not try anyway.\n\
+         2. Call install_pkg with the `source_type` that fits: console_path for a path on the \
+         console, host_file for a path on the computer the engine runs on, url for a link, remote \
+         for a saved server (sources_list).\n\
+         3. Follow it with install_wait, calling it again while `finished` is false. If it says \
+         another install runs, follow that one instead of starting over.\n\
+         4. Say how it ended, in plain words, with its `verdict` and `hint`. If it failed, do not \
+         retry on your own: say what you would change, and ask.\n\n\
+         Never set allow_destructive_reinstall or delete_source_copy_after unless I say so. Do not \
+         launch the game afterwards unless I ask."
+    )
+}
+
 fn diagnose_connection(console: &str) -> String {
     format!(
         "Find out why {console} does not answer as it should, and tell me what to do about it. \
@@ -143,16 +183,16 @@ fn free_up_space(console: &str, target_gb: Option<&str>) -> String {
     };
     format!(
         "Help me free up space on {console}. {target}\n\n\
-         1. Call hw_storage for the internal storage, and api_request GET /api/ps5/volumes with \
-         query `addr` for every drive.\n\
-         2. Call games_installed with the console, then find what takes the space: api_request \
-         POST /api/ps5/disk-usage with body {{\"addr\": console, \"path\": folder}} starts a walk \
-         of a folder, like /data; GET /api/ps5/disk-usage/{{id}} follows it until `state` says it \
-         ended, and `tree` then holds the sizes.\n\
+         1. Call hw_storage for the internal storage, and files_volumes for every drive.\n\
+         2. Call games_installed with the console, then find what takes the space: \
+         disk_usage_start walks a folder, like /data; disk_usage_status follows it until `state` \
+         says it ended, and `tree` then holds the sizes. cleanup_scan finds leftovers the console \
+         no longer needs.\n\
          3. Show me a short list, largest first: what it is, how big, and what is lost if it goes. \
          Leave out anything you cannot explain. Never suggest system folders.\n\
-         4. Delete only what I confirm by name, one thing at a time, with files_delete: it cannot \
-         be undone. If it answers with an op_id, follow it with files_op_status.\n\
+         4. Delete only what I confirm by name, one thing at a time, with files_delete or \
+         cleanup_apply: it cannot be undone. If it answers with an op_id, follow it with \
+         files_op_status.\n\
          5. Call hw_storage again and tell me what was gained."
     )
 }
@@ -170,8 +210,11 @@ mod tests {
         let prompts = list();
         for prompt in prompts["prompts"].as_array().unwrap() {
             let name = prompt["name"].as_str().unwrap();
-            let answer =
-                get(&json!({"name": name, "arguments": {"goal": "open the menu"}})).unwrap();
+            let answer = get(&json!({
+                "name": name,
+                "arguments": {"goal": "open the menu", "source": "/data/a.pkg"},
+            }))
+            .unwrap();
             assert_eq!(answer["messages"][0]["role"], "user", "{name}");
             assert!(text_of(&answer).len() > 100, "{name}");
         }
@@ -216,6 +259,7 @@ mod tests {
     fn every_tool_a_prompt_names_exists() {
         for text in [
             play_session("c", "g"),
+            install_game("c", "s"),
             diagnose_connection("c"),
             free_up_space("c", None),
         ] {
@@ -230,6 +274,10 @@ mod tests {
                         "files_",
                         "api_",
                         "jobs_",
+                        "install_",
+                        "disk_",
+                        "cleanup_",
+                        "sources_",
                     ]
                     .iter()
                     .any(|family| word.starts_with(family));

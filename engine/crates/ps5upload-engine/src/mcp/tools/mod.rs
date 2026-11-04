@@ -7,15 +7,25 @@
 //! it and act on it; JSON-RPC errors are for a call that names no such tool.
 
 mod api;
+mod cheats;
 pub(crate) mod consoles;
+mod disk;
 mod engine;
 pub(crate) mod files;
 mod games;
 mod hw;
+mod install;
 mod jobs;
+mod mesh;
+mod more_files;
 mod notifications;
+mod payloads;
 mod power;
+pub(crate) mod route;
 mod rp;
+mod saves;
+mod sources;
+mod transfer;
 
 use std::sync::OnceLock;
 
@@ -78,9 +88,18 @@ fn all() -> &'static [ToolDef] {
             consoles::tools(),
             jobs::tools(),
             files::tools(),
+            more_files::tools(),
+            transfer::tools(),
+            install::tools(),
             power::tools(),
             hw::tools(),
             games::tools(),
+            saves::tools(),
+            cheats::tools(),
+            payloads::tools(),
+            disk::tools(),
+            sources::tools(),
+            mesh::tools(),
             rp::tools(),
             notifications::tools(),
             api::tools(),
@@ -255,6 +274,11 @@ impl Args {
 
     pub(super) fn flag(&self, name: &str) -> Option<bool> {
         self.0.get(name).and_then(Value::as_bool)
+    }
+
+    /// Every argument as it came.
+    pub(super) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.0.iter()
     }
 
     /// An argument as it came, for fields passed to a route unchanged.
@@ -557,11 +581,14 @@ fn hint_for(
         .get(axum::http::header::ALLOW)
         .and_then(|v| v.to_str().ok());
     match reply.status.as_u16() {
-        404 if reply.body.is_empty() => {
-            Some("There is no such route: ps5upload://catalog lists them all.")
+        // A route's own 404 (no such job, no such file) has its own words and no `code`.
+        404 if reply.body.is_empty()
+            || reply.json().is_some_and(|body| body["code"] == "not_found") =>
+        {
+            Some("There is no such route: api_catalog and ps5upload://catalog list them all.")
         }
         405 => Some(if allow.is_some() {
-            "That route does not take this method: ps5upload://catalog lists each route's methods."
+            "That route does not take this method: api_catalog lists each route's methods."
         } else {
             "That route does not take this method."
         }),
@@ -642,7 +669,7 @@ mod tests {
     fn every_tool_has_a_name_clients_accept_and_says_what_it_can_do() {
         let tools = all();
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
-        assert!(names.len() >= 30, "{}", names.len());
+        assert!(names.len() >= 75, "{}", names.len());
         for tool in tools {
             assert!(
                 !tool.name.is_empty()
@@ -717,7 +744,25 @@ mod tests {
             "rp_input",
             "rp_input_release",
             "notifications_list",
+            "api_catalog",
             "api_request",
+            "upload_file",
+            "upload_dir",
+            "upload_archive",
+            "files_download",
+            "files_volumes",
+            "files_write",
+            "files_extract",
+            "install_pkg",
+            "install_wait",
+            "saves_backup_now",
+            "cheats_toggle",
+            "payloads_list",
+            "disk_usage_start",
+            "cleanup_apply",
+            "sources_fetch",
+            "drive_sync",
+            "notifications_clear",
         ] {
             assert!(find(name).is_some(), "{name}");
         }
@@ -740,6 +785,13 @@ mod tests {
         assert_eq!(hints("files_mkdir"), (false, false));
         assert_eq!(hints("rp_input"), (false, false));
         assert_eq!(hints("api_request"), (false, true));
+        assert_eq!(hints("api_catalog"), (true, false));
+        assert_eq!(hints("upload_file"), (false, true));
+        assert_eq!(hints("install_pkg"), (false, false));
+        assert_eq!(hints("cleanup_scan"), (true, false));
+        assert_eq!(hints("cleanup_apply"), (false, true));
+        assert_eq!(hints("saves_restore"), (false, true));
+        assert_eq!(hints("games_unregister"), (false, true));
         for tool in all() {
             assert_eq!(
                 tool.kind.annotations()["openWorldHint"],
@@ -885,6 +937,16 @@ mod tests {
             text.contains("HTTP 404") && text.contains("catalog"),
             "{text}"
         );
+        let text = message(&engine_failure(
+            "GET /api/x",
+            &reply(404, r#"{"error":"Not Found","code":"not_found"}"#),
+        ));
+        assert!(text.contains("api_catalog"), "{text}");
+        let text = message(&engine_failure(
+            "GET /api/jobs/1",
+            &reply(404, r#"{"error":"job not found"}"#),
+        ));
+        assert!(!text.contains("api_catalog"), "{text}");
     }
 
     #[test]

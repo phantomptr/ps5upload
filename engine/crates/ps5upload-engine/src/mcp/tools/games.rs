@@ -1,8 +1,9 @@
-//! Running and starting things on a console: `processes_list`, `games_installed`, `games_launch`,
-//! `games_stop`.
+//! Running and starting things on a console: `processes_list`, `processes_kill`,
+//! `games_installed`, `games_launch`, `games_stop`, `games_register`, `games_unregister`.
 
 use serde_json::{json, Value};
 
+use super::route::{flag, route, text, whole};
 use super::{
     console_optional, console_required, object, Args, Kind, ToolCtx, ToolDef, ToolOutput,
     ToolResult,
@@ -78,6 +79,69 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 &["console", "title_id"],
             ),
             run: |ctx, args| Box::pin(stop(ctx, args)),
+        },
+        ToolDef {
+            name: "games_register",
+            title: "Register a game folder",
+            description: "Registers a game folder already on a console, so it shows on the home \
+                          screen and can launch.",
+            kind: Kind::Write { idempotent: true },
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "src_path": text("The game's folder on the console."),
+                    "patch_drm_type": flag(
+                        "Rewrite the DRM type in the folder's sce_sys/param.json, for a dump the \
+                         launcher rejects. It changes the user's file: only when asked for.",
+                    ),
+                }),
+                &["console", "src_path"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/ps5/app/register",
+                done: "Registered the game.",
+            ),
+        },
+        ToolDef {
+            name: "games_unregister",
+            title: "Uninstall a title",
+            description: "Removes a title from a console through the system. Confirm with the \
+                          user first. Read the answer: `sony_uninstall_refused` means the console \
+                          said no, and `still_present` that its folders remain.",
+            kind: Kind::Destructive { idempotent: true },
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "title_id": text("The title's id, like PPSA01234."),
+                }),
+                &["console", "title_id"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/ps5/app/unregister",
+                done: "Asked the console to remove the title.",
+            ),
+        },
+        ToolDef {
+            name: "processes_kill",
+            title: "Kill a console process",
+            description: "Force-stops one process on a console. Unsaved work in it is lost, and \
+                          the wrong system process can bring the console down: for a game use \
+                          games_stop, and for anything else confirm with the user first.",
+            kind: Kind::Destructive { idempotent: true },
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "pid": whole("The process's id, from processes_list."),
+                }),
+                &["console", "pid"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/ps5/process/kill",
+                done: "Force-stopped the process.",
+            ),
         },
     ]
 }
