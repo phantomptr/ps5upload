@@ -289,7 +289,13 @@ pub fn run() {
                         bg_activity::spawn(&handle);
                     }
                     Err(e) => {
-                        let message = format!("engine failed to start: {e:#}");
+                        // A coded failure goes as it is: the renderer words it.
+                        let text = format!("{e:#}");
+                        let message = if text.starts_with('{') {
+                            text
+                        } else {
+                            format!("engine failed to start: {text}")
+                        };
                         {
                             use tauri::Emitter;
                             let _ = handle.emit("ps5upload-engine-startup-error", &message);
@@ -329,10 +335,8 @@ pub fn run() {
             commands::transfer_dir,
             commands::transfer_file_list,
             commands::transfer_zip,
-            commands::zip_inspect,
             commands::zip_inspect_stream,
             commands::transfer_7z,
-            commands::sevenz_inspect,
             commands::sevenz_inspect_stream,
             commands::transfer_rar,
             commands::rar_inspect,
@@ -343,7 +347,6 @@ pub fn run() {
             commands::profile_np_state,
             commands::profile_np_backup,
             commands::profile_np_restore,
-            commands::user_create,
             commands::user_delete,
             commands::backup_snapshot,
             commands::backup_list,
@@ -451,7 +454,6 @@ pub fn run() {
             commands::ffpkg_extract,
             commands::pkg_installed_inventory,
             commands::pkg_install_preflight,
-            commands::pkg_remote_download_start,
             commands::pkg_remote_download_status,
             commands::pkg_remote_download_cancel,
             commands::pkg_remote_probe,
@@ -659,6 +661,7 @@ pub fn run() {
             commands::user_config_save, // ~/.ps5upload/settings.json atomic write
             commands::user_config_path_resolved, // show-the-path for the Settings UI
             commands::app_data_reset,   // factory-reset: wipe all local data/metadata
+            commands::app_close_after_reset,
             // ── Connectivity + payload lifecycle probes ─────────────
             // Used by the Connection + Send payload tabs for
             // reachability checks and payload delivery.
@@ -673,6 +676,7 @@ pub fn run() {
             // commands/updates.rs for the full flow.
             commands::update_check,
             commands::update_download,
+            commands::update_download_cancel,
             commands::update_install,
             commands::update_install_on_quit,
             commands::update_last_install,
@@ -681,6 +685,7 @@ pub fn run() {
             commands::update_remove_old_downloads,
             commands::update_can_self_install,
             commands::update_open_log,
+            commands::reveal::open_local_folder,
             // Android: the APK into the app cache with progress, for the system installer.
             commands::update_download_apk,
             tray::tray_configure,

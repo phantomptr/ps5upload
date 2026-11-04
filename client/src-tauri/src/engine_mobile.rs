@@ -100,8 +100,10 @@ fn point_engine_at_app_data(app: &AppHandle) {
         return;
     }
     match app.path().app_data_dir() {
-        Ok(dir) => {
-            let dir = dir.join("ps5upload");
+        Ok(base) => {
+            let dir = base.join("ps5upload");
+            // A factory reset the last run could not finish, its engine still running.
+            crate::commands::user_config::finish_engine_data_reset(&base, &dir);
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 eprintln!(
                     "[engine] cannot create the data folder {}: {e}",
@@ -172,15 +174,17 @@ pub async fn diagnose(_app: &AppHandle) -> Diagnosis {
 
 /// The in-process engine cannot be restarted without restarting the app.
 pub async fn restart(_app: &AppHandle) -> Result<String> {
-    Err(anyhow::anyhow!(
-        "on this device the engine runs inside the app; close the app fully and open it again"
-    ))
+    Err(anyhow::anyhow!(crate::commands::shell_error::code_only(
+        "engine_restart_in_app"
+    )))
 }
 
-/// No-op on mobile. The desktop build made the engine URL runtime-configurable
-/// (point the app at a remote/self-hosted engine), but mobile links the engine
+/// No-op on mobile, returning where the proxies stay. The desktop build made the engine URL
+/// runtime-configurable (point the app at a remote/self-hosted engine), but mobile links the engine
 /// in-process — there is no sidecar and no remote-engine story here, so the
 /// `engine_url_set` command is inert. Defined so the shared command module
 /// (`commands::ps5_engine`) compiles for the Android/iOS target. The renderer
 /// may still store an Engine URL setting; mobile simply ignores it.
-pub fn set_url(_url: String) {}
+pub fn set_url(_url: String) -> String {
+    url().to_string()
+}

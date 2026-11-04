@@ -4,6 +4,7 @@ import { useNavigate } from "react-router";
 
 import { useConnectionStore, EMPTY_HOST_RUNTIME } from "../state/connection";
 import { parsePS5Firmware } from "../lib/ps5Firmware";
+import { shellErrorText } from "../lib/shellError";
 import { useTr } from "../state/lang";
 import { captureAppScreenshot } from "../lib/captureScreenshot";
 import { useCaptureViewer } from "../lib/appCaptures";
@@ -115,7 +116,7 @@ export default function StatusBar() {
       <div
         className="flex items-center gap-2"
         title={
-          engineError ??
+          (engineError && shellErrorText(engineError, tr)) ??
           tr(
             "status_engine_tooltip",
             { url: getEngineUrl() },
