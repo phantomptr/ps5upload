@@ -794,6 +794,7 @@ queue_eta: "ETA {eta}",
 "queue_other_tab": "The queue is running in another tab of this browser. Use that tab to change it.",
 "queue_handed_to_smp": "handed to ShadowMount+",
 "queue_recovering_retry": "Trying again ({attempt}/{max})…",
+"queue_verifying_pct": "Comparing with what is on the PS5: {pct}%",
 queue_recovering: "Connection lost — re-deploying payload & resuming ({attempt}/{max})…",
 queue_phase_finalizing: "Finalizing on PS5",
 queue_phase_finalizing_with_counter:

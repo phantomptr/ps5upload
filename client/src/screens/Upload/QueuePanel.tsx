@@ -1400,6 +1400,16 @@ export function QueueRow({
         </div>
       )}
 
+      {isActive && !isRecovering && !isInstall && item.verifying && (
+        <div className="mt-2 text-xs text-[var(--color-muted)]" data-testid="queue-verifying">
+          {tr(
+            "queue_verifying_pct",
+            { pct: Math.floor((100 * item.verifying.done) / item.verifying.total) },
+            "Comparing with what is on the PS5: {pct}%",
+          )}
+        </div>
+      )}
+
       {isActive && !isRecovering && !isInstall && item.stalledForMs != null && (
         <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-field)] bg-[var(--color-warn)]/10 px-2 py-1.5 text-xs text-[var(--color-warn)]">
           <span className="min-w-0 flex-1">

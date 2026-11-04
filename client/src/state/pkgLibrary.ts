@@ -3101,11 +3101,12 @@ const makePkgLibraryStore = () =>
         // (with a live %), so it stays visible while the user browses other
         // screens — same treatment uploads/downloads already get.
         const feed = installSampleFeed(hooks);
-        actId = useActivityHistoryStore
+        const activityId = useActivityHistoryStore
           .getState()
           .start("library-install", tx("pkg.task_installing", { name: label }, "Installing {name}"), {
             addr: mgmtAddr(host),
           });
+        actId = activityId;
         const {
           installed,
           mayNotLaunch,
@@ -3129,7 +3130,7 @@ const makePkgLibraryStore = () =>
             const { installedBytes, total } = sample;
             useActivityHistoryStore
               .getState()
-              .update(actId, { bytes: installedBytes, totalBytes: total });
+              .update(activityId, { bytes: installedBytes, totalBytes: total });
             if (total > 0) {
               const pct = Math.min(
                 99,
@@ -3152,7 +3153,7 @@ const makePkgLibraryStore = () =>
         );
         useActivityHistoryStore
           .getState()
-          .finish(actId, installed || unverified ? "done" : "failed");
+          .finish(activityId, installed || unverified ? "done" : "failed");
 
         if (stopped) {
           patch({ status: "idle", lastResult: undefined });

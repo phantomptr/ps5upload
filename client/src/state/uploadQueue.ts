@@ -318,6 +318,8 @@ export interface QueueItem {
   /** While running: how long nothing has moved, once that is STALL_AFTER_MS or more (the row then
    *  offers to restart the transfer, which resumes). Null otherwise. */
   stalledForMs?: number | null;
+  /** While running: the source's bytes hashed so far, before a safe-mode resume sends anything. */
+  verifying?: { done: number; total: number } | null;
   /** Live progress while running, final count when done, 0 otherwise. While running it
    *  includes `resumedBytes` (the engine counts what the console already had as done). */
   bytesSent: number;
@@ -1566,7 +1568,6 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
     const startedAtMs = Date.now();
     const samples: RateSample[] = [{ ts: startedAtMs, bytes: 0 }];
     // When bytes last moved, for the "nothing is moving" note on the row.
-    let lastBytes = -1;
     let lastMoveAt = startedAtMs;
     let lastMoved = "";
 
@@ -2077,6 +2078,10 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           totalBytes: totalNow,
           bytesPerSec,
           stalledForMs,
+          verifying:
+            snap.stage?.id === "verify" && snap.stage.total > 0
+              ? { done: snap.stage.done, total: snap.stage.total }
+              : null,
           // P3 / v2.18.0 — forward apply-phase counters so the
           // QueueRow's finalize pill can show "Finalized N of M files"
           // (analogous to transfer.ts's single-shot path). Defaults to
