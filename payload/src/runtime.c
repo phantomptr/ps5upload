@@ -75,6 +75,7 @@
 #include "mgmt_fs.h"
 #include "fan_servo.h"
 #include "json_escape.h"
+#include "user_guard.h"
 #include "sigpipe_guard.h"
 #include "path_policy.h"
 #include "cross_device.h"
@@ -5062,10 +5063,22 @@ static int handle_user_delete(runtime_state_t *state, const char *body) {
     if (uid > 0) {
         pthread_mutex_lock(&sony_api_lock);
         sceUserServiceInitialize(NULL); /* a Sony call: inside the lock (final review: console) */
-        int del_rc = sceUserServiceDestroyUser(uid);
-        usleep(SONY_API_POST_SLEEP_US);
+        /* Who is signed in, read under the same lock as the delete it decides. */
+        int foreground = -1;
+        int rc_fg = sceUserServiceGetForegroundUser(&foreground);
+        int ids[USER_SERVICE_MAX_USERS];
+        for (int i = 0; i < USER_SERVICE_MAX_USERS; i++) ids[i] = -1;
+        int rc_list = sceUserServiceGetLoginUserIdList(ids);
+        const char *refused = user_delete_refusal(uid, rc_fg, foreground, rc_list, ids, USER_SERVICE_MAX_USERS);
+        int del_rc = -1;
+        if (!refused) {
+            del_rc = sceUserServiceDestroyUser(uid);
+            usleep(SONY_API_POST_SLEEP_US);
+        }
         pthread_mutex_unlock(&sony_api_lock);
-        if (del_rc == 0) {
+        if (refused) {
+            err_msg = refused;
+        } else if (del_rc == 0) {
             rc = 0;
             /* Optional: wipe the saves Sony's cleanup leaves behind. Only after the account is
              * gone (a failed delete must not cost the user their saves), and at the home
