@@ -3,11 +3,18 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { LiveRun } from "../lib/goLive";
-import type { RemotePlayStream } from "../lib/remotePlayStream";
 import { justFailed } from "../screens/Play/goLiveText";
-import { useRemotePlayStore } from "../state/remotePlay";
 import { RemotePlayHost } from "./RemotePlayHost";
 
+// Server rendering reads a zustand store's first state, so a plain stand-in that can change.
+const h = vi.hoisted(() => ({
+  state: { stream: null, target: null, pip: null, passcode: null, error: null } as Record<string, unknown>,
+}));
+vi.mock("../state/remotePlay", () => ({
+  useRemotePlayStore: (sel: (s: unknown) => unknown) => sel(h.state),
+  pauseRpInput: () => {},
+  rpInput: { held: new Set() },
+}));
 vi.mock("../lib/pipPopups", () => ({ closeLeftoverPipPopups: async () => {} }));
 // The real box puts itself on the document, which this runner doesn't have.
 vi.mock("../components/PasscodeDialog", () => ({
@@ -22,16 +29,18 @@ const at = (path: string) =>
   );
 
 afterEach(() => {
-  useRemotePlayStore.setState({ stream: null, passcode: null, error: null, pip: null });
+  h.state = { stream: null, target: null, pip: null, passcode: null, error: null };
 });
 
 describe("the passcode a start waits for", () => {
-  const asking = () =>
-    useRemotePlayStore.setState({
-      stream: {} as RemotePlayStream,
+  const asking = () => {
+    h.state = {
+      ...h.state,
+      stream: {},
       target: { host: "10.0.0.2", name: "PS5", registKey: "", rpKey: "" },
       passcode: { retry: false, waitS: 180, seq: 1 },
-    });
+    };
+  };
 
   it("is asked over the app on any other screen", () => {
     asking();
