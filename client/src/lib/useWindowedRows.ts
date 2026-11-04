@@ -77,7 +77,8 @@ export function useWindowedRows(count: number) {
     // Zero while the screen is kept hidden: the last good one stands.
     const step =
       rows.length >= 2
-        ? (rows[1] as HTMLElement).offsetTop - (rows[0] as HTMLElement).offsetTop
+        ? (rows[1] as HTMLElement).offsetTop -
+          (rows[0] as HTMLElement).offsetTop
         : 0;
     const rowPitch = step > 0 ? step : pitchRef.current;
     pitchRef.current = rowPitch;

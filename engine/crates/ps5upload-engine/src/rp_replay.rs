@@ -133,6 +133,7 @@ impl Replay {
         self.frames.iter()
     }
 
+    #[cfg(test)]
     pub fn bytes(&self) -> usize {
         self.bytes
     }

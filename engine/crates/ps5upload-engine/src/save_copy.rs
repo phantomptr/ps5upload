@@ -660,6 +660,7 @@ fn missing_error(title_id: &str, who: &str, missing: Vec<String>) -> Failed {
 /// first (tagged `beforeshare`), unless `backup` is one already taken, and put back, every image
 /// of it, if a step fails. `compat`: the image a file from before 10.6.0 goes into. The images
 /// replaced.
+#[cfg(test)]
 pub fn import(
     c: &dyn Console,
     folder: &str,

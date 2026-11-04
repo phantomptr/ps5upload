@@ -568,7 +568,6 @@ impl Live {
 
     /// `to_spectators` with the frame in its `[kind][payload]` form.
     fn to_spectators_tagged(&self, kind: u8, msg: &Bytes, key: bool) {
-        let data = &msg[1..];
         let Ok(mut g) = self.spectators.lock() else {
             return;
         };
