@@ -2,8 +2,8 @@
 // never sees a controller, so the app reads them from the kernel (src-tauri
 // commands/pad_native.rs) and sends each change as a `pad-native` event, which goes into the
 // same bridge the Android app uses (lib/nativePad.ts). The bridge offers them only while the
-// browser sees no controller itself, so a WebKitGTK that does see them is never read twice;
-// on Linux it still takes the d-pad from them, which that WebKitGTK may not report (#668).
+// browser sees no controller itself, except on Linux, where they are preferred: a WebKitGTK that
+// sees a pad may misread it (#668, see lib/nativePad.ts).
 //
 // The Windows app does the same for a DualSense (#643): WebView2 saw none for some players
 // while Windows listed the pad as working, so the app reads it over HID itself.
@@ -12,7 +12,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import { invoke } from "./invokeLogged";
 import { log } from "../state/logs";
-import { fillDpadFromNative } from "./nativePad";
+import { preferNativePads } from "./nativePad";
 import { isLinuxDesktop, isWindows } from "./platform";
 
 interface NativePadEvent {
@@ -31,13 +31,9 @@ let started = false;
 export async function startNativePads(): Promise<void> {
   if (started || !(isLinuxDesktop() || isWindows())) return;
   started = true;
-  // Which path a controller takes, for a bug report: the browser's, or the app's own reader.
-  if (isLinuxDesktop()) {
-    fillDpadFromNative(true, (pad) =>
-      log.info("remote-play", `controller: d-pad added from the app's reader for "${pad}" (the browser reported none)`),
-    );
-  }
+  if (isLinuxDesktop()) preferNativePads();
   try {
+    // Which reader a controller goes through, for a bug report.
     const seen = new Set<number>();
     await listen<NativePadEvent>("pad-native", (e) => {
       const { slot, id, connected } = e.payload;

@@ -8,11 +8,12 @@
 // no controller at all (lib/nativePadDesktop.ts, src-tauri commands/pad_native.rs). It forwards
 // each controller under its own `slot`, and `connected: false` when one is unplugged.
 //
-// A WebKitGTK with libmanette does see the controller, but not always its d-pad (#668): the
-// kernel reports a DualSense's d-pad as a hat, and WebKit reads only buttons and analog axes, so
-// unless libmanette's mapping database knows that exact device the d-pad never reaches the page
-// while everything else works. There the browser's pad stays the controller (it has the rumble,
-// and any mapping the user saved under its name), and the forwarded pad only adds its d-pad.
+// A WebKitGTK with libmanette does see the controller, but cannot always read it (#668).
+// libmanette up to 0.2.7 (the AppImage's, Ubuntu 24.04's) has no DualSense mapping, and for an
+// unmapped pad WebKit drops the hat, so the d-pad never reaches the page, and folds other axes
+// into the sticks, so L2 and R2 move them; it still reports "standard", so the page cannot tell.
+// So on the Linux app the kernel's reading is the controller whenever the app has one, and the
+// browser's pad only lends its rumble.
 
 interface NativeState {
   id: string;
@@ -27,19 +28,12 @@ interface NativeState {
 /** The forwarded controllers by slot. */
 const pads = new Map<number, Required<Omit<NativeState, "connected">>>();
 
-/** The standard layout's d-pad: up, down, left, right. */
-const DPAD = [12, 13, 14, 15];
+/** Prefer the forwarded controllers to the browser's (the Linux app). */
+let preferNative = false;
 
-/** Fill in the d-pad of a controller the browser sees from the forwarded one (the Linux app). */
-let dpadFromNative = false;
-
-/** Told once, the first time the forwarded pad supplies a d-pad press the browser's lacks. */
-let onFilled: ((browserPad: string) => void) | null = null;
-
-/** Turn on filling in the d-pad (once, from the Linux app's start-up). */
-export function fillDpadFromNative(on = true, filled?: (browserPad: string) => void): void {
-  dpadFromNative = on;
-  onFilled = filled ?? null;
+/** Prefer the forwarded controllers (once, from the Linux app's start-up). */
+export function preferNativePads(on = true): void {
+  preferNative = on;
 }
 
 declare global {
@@ -71,7 +65,7 @@ export function installNativePad(): void {
 }
 
 /** A forwarded controller as a Gamepad (slot 0 at index 3, as the Android app's always was). */
-function nativeGamepad(s: Required<Omit<NativeState, "connected">>): Gamepad {
+function nativeGamepad(s: Required<Omit<NativeState, "connected">>, rumbleFrom?: Gamepad): Gamepad {
   return {
     id: `${s.id} (app)`,
     index: 3 + s.slot,
@@ -80,8 +74,8 @@ function nativeGamepad(s: Required<Omit<NativeState, "connected">>): Gamepad {
     timestamp: 0,
     axes: s.axes,
     buttons: s.buttons.map((v) => ({ pressed: v > 0.5, touched: v > 0, value: v })),
-    vibrationActuator: null,
-    hapticActuators: [],
+    vibrationActuator: (rumbleFrom as (Gamepad & { vibrationActuator?: unknown }) | undefined)?.vibrationActuator ?? null,
+    hapticActuators: (rumbleFrom as (Gamepad & { hapticActuators?: unknown }) | undefined)?.hapticActuators ?? [],
   } as unknown as Gamepad;
 }
 
@@ -102,52 +96,28 @@ function twins(own: ReadonlyArray<Gamepad | null>): Map<Gamepad, Required<Omit<N
   return out;
 }
 
-/** `g` with its twin's d-pad added. `g` itself while the twin's d-pad is at rest, so the rumble
- *  and everything else are the browser's own and nothing is allocated on a poll. */
-function withNativeDpad(g: Gamepad, twin: Required<Omit<NativeState, "connected">>): Gamepad {
-  if (!DPAD.some((i) => (twin.buttons[i] ?? 0) > 0.5)) return g;
-  if (onFilled && !DPAD.some((i) => g.buttons[i]?.pressed)) {
-    onFilled(g.id);
-    onFilled = null;
-  }
-  const buttons = Array.from(g.buttons, (b) => ({ pressed: b.pressed, touched: b.touched, value: b.value }));
-  for (const i of DPAD) {
-    while (buttons.length <= i) buttons.push({ pressed: false, touched: false, value: 0 });
-    if ((twin.buttons[i] ?? 0) > 0.5) buttons[i] = { pressed: true, touched: true, value: 1 };
-  }
-  // A plain copy: a Gamepad's fields are getters that refuse any other `this`.
-  return {
-    id: g.id,
-    index: g.index,
-    connected: g.connected,
-    mapping: g.mapping,
-    timestamp: g.timestamp,
-    axes: g.axes,
-    buttons,
-    vibrationActuator: (g as Gamepad & { vibrationActuator?: unknown }).vibrationActuator ?? null,
-    hapticActuators: (g as Gamepad & { hapticActuators?: unknown }).hapticActuators ?? [],
-  } as unknown as Gamepad;
-}
-
-/** The controllers `nav` sees (on the Linux app with the d-pad the kernel saw added), or the
- *  forwarded ones when it sees none. */
+/** The controllers `nav` sees, or the forwarded ones when it sees none. On the Linux app the
+ *  forwarded ones come first: each takes the place of its twin in the browser's list, and a
+ *  browser pad the app does not read stays. The result's ids and indexes do not change when the
+ *  browser notices a pad (it does on the pad's first input), so nothing jumps in mid-game. */
 export function gamepadsOf(nav: Navigator | undefined): Array<Gamepad | null> {
   const own = nav?.getGamepads?.() ?? [];
   if (pads.size === 0) return [...own];
-  if (!own.some((g) => !!g?.connected)) {
-    return [...pads.values()].sort((a, b) => a.slot - b.slot).map(nativeGamepad);
-  }
-  if (!dpadFromNative) return [...own];
+  const native = () => [...pads.values()].sort((a, b) => a.slot - b.slot);
+  if (!own.some((g) => !!g?.connected)) return native().map((n) => nativeGamepad(n));
+  if (!preferNative) return [...own];
   const twin = twins(own);
-  return own.map((g) => {
+  const taken = new Set([...twin.values()].map((n) => n.slot));
+  const out: Array<Gamepad | null> = own.map((g) => {
     const t = g ? twin.get(g) : undefined;
-    return g && t ? withNativeDpad(g, t) : g;
+    return t && g ? nativeGamepad(t, g) : g;
   });
+  for (const n of native()) if (!taken.has(n.slot)) out.push(nativeGamepad(n));
+  return out;
 }
 
 /** For tests: forget the forwarded controllers. */
 export function resetNativePad(): void {
   pads.clear();
-  dpadFromNative = false;
-  onFilled = null;
+  preferNative = false;
 }

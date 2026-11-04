@@ -6,8 +6,9 @@
 //! never sees a controller at all, even one Steam plays with. So the Linux app reads the
 //! kernel's input devices itself, with the pure-Rust `evdev` crate, and hands the page each
 //! controller in the W3C standard layout as `pad-native` events. The page forwards them into
-//! the same bridge the Android app uses (lib/nativePad.ts), which offers them only while the
-//! browser sees no controller of its own, so a WebKitGTK that does see one is never read twice.
+//! the same bridge the Android app uses (lib/nativePad.ts). On Linux the page prefers them even
+//! when WebKitGTK sees the pad: libmanette up to 0.2.7 has no DualSense mapping, and an unmapped
+//! pad comes through WebKit with no d-pad and its triggers on the sticks (#668).
 //!
 //! Which devices: an event node with the gamepad buttons (BTN_SOUTH) and a left stick
 //! (ABS_X/ABS_Y). A DualSense's motion sensors and touchpad are nodes of their own without
