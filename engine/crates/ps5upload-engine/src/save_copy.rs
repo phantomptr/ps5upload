@@ -938,11 +938,29 @@ pub fn restore_to_user(
 /// A console, through the engine's own routes.
 pub struct Live<'a> {
     host: &'a str,
+    /// Where the copies for putting a save back live when backups go only to a server.
+    scratch: ScratchDirs,
+}
+
+/// Temp folders removed when the change they were made for is over.
+#[derive(Default)]
+struct ScratchDirs(std::sync::Mutex<Vec<PathBuf>>);
+
+impl Drop for ScratchDirs {
+    fn drop(&mut self) {
+        let dirs = self.0.get_mut().map(std::mem::take).unwrap_or_default();
+        for dir in dirs {
+            let _ = cleanup_temp_dir(&dir.to_string_lossy());
+        }
+    }
 }
 
 impl<'a> Live<'a> {
     pub fn new(host: &'a str) -> Self {
-        Self { host }
+        Self {
+            host,
+            scratch: Default::default(),
+        }
     }
 }
 
@@ -981,14 +999,32 @@ impl Console for Live<'_> {
         )
     }
     fn can_back_up(&self) -> Result<(), String> {
-        if local::settings().dir.trim().is_empty() {
-            return Err("Choose a folder for save backups first (Save Data › Automatic backups): the save there now is kept there before its files are replaced.".into());
+        if local::settings().dir.trim().is_empty() && !crate::save_backup_server::configured() {
+            return Err("Choose a folder or a server for save backups first (Save Data › Automatic backups): the save there now is kept there before its files are replaced.".into());
         }
         Ok(())
     }
     fn back_up(&self, entry: &SaveEntry, tag: &str) -> Result<PathBuf, String> {
         let s = local::settings();
-        local::back_up_one(self.host, entry, &s.dir, s.keep, Some(tag), &|| Ok(()))
+        if !s.dir.trim().is_empty() {
+            return local::back_up_one(self.host, entry, &s.dir, s.keep, Some(tag), &|| Ok(()));
+        }
+        // Backups go only to a server: kept there, with a copy here until this is over, to put
+        // the save back from.
+        let dir = make_temp_dir(&entry.title_id)?;
+        if let Ok(mut held) = self.scratch.0.lock() {
+            held.push(dir.clone());
+        }
+        let zip = local::back_up_one(
+            self.host,
+            entry,
+            &dir.to_string_lossy(),
+            1,
+            Some(tag),
+            &|| Ok(()),
+        )?;
+        crate::save_backup_server::keep_on_server(entry, &zip, tag)?;
+        Ok(zip)
     }
     fn open_now(&self) -> Result<bool, String> {
         local::save_open_state(self.host)
@@ -1340,8 +1376,13 @@ mod tests {
         }
         std::fs::write(src.join(T).join("sdimg_sce_bu_STARBOARD"), b"sealed").unwrap();
         let zip = dir.join(format!("{T}_user{A:08x}_2026-11-01_101500.zip"));
-        ps5upload_core::save_archive::zip_folder_noted(&src, T, &zip, &local::backup_note(console))
-            .unwrap();
+        ps5upload_core::save_archive::zip_folder_noted(
+            &src,
+            T,
+            &zip,
+            &local::backup_note(console, None),
+        )
+        .unwrap();
         zip
     }
 

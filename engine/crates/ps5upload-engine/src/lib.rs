@@ -3859,10 +3859,19 @@ async fn ps5_save_open(
     let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
     let image = req.image;
     crate::log_info!("save_open: addr={addr} image={image}");
-    let r = tokio::task::spawn_blocking(move || ps5upload_core::saves::save_open(&addr, &image))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r);
+    let r = tokio::task::spawn_blocking(move || {
+        // The open copy is written back over the real image on close, so a game writing the save
+        // meanwhile would lose what it wrote. An empty image only reports what is open.
+        if let Some(title) = save_backup::title_of_save_image(&image) {
+            if save_backup::title_running(&addr, title).map_err(anyhow::Error::msg)? {
+                anyhow::bail!("{title} is running on the PS5. Close the game, then open its save.");
+            }
+        }
+        ps5upload_core::saves::save_open(&addr, &image)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
@@ -11198,6 +11207,11 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/save-backup/switch", get(emulator_saves::get_switch))
         .route("/api/save-backup/ps2", get(ps2_saves::get_ps2))
         .route("/api/save-backup/restore", post(save_backup::post_restore))
+        .route(
+            "/api/save-backup/restore-file",
+            post(save_backup::post_restore_file),
+        )
+        .route("/api/save-backup/note", get(save_backup::get_note))
         .route(
             "/api/save-backup/snapshot",
             post(save_backup::post_snapshot),

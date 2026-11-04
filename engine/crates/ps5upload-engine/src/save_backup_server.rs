@@ -580,40 +580,65 @@ fn back_up_one(
     let result = (|| {
         local::download_save(host, entry, &tmp, &|| Ok(()))?;
         let zip = tmp.join("backup.zip");
-        let note = local::backup_note(local::console_identity(host).as_deref());
+        let note = local::backup_note(
+            local::console_identity(host).as_deref(),
+            Some(entry.user_id as u32),
+        );
         zip_folder_noted(&tmp, &entry.title_id, &zip, &note).map_err(|e| format!("zip: {e:#}"))?;
-        let user = entry.user_id as u32;
-        let st = match tag {
-            Some(t) => format!("{}_{t}", stamp(now_ms())),
-            None => stamp(now_ms()),
-        };
-        let name = format!("{}{st}.zip", auto_backup_stem(&entry.title_id, user));
-        let scratch = tmp.join("readback.zip");
-        rt().block_on(async {
-            let (fs, folder) = open_target(&s.target).await?;
-            store_verified(
-                fs.as_ref(),
-                &zip,
-                &folder,
-                &entry.title_id,
-                user,
-                &name,
-                s.keep,
-                &scratch,
-            )
-            .await
-        })
+        store_zip(s, entry, tag, &zip, &tmp.join("readback.zip"))
     })();
     let _ = cleanup_temp_dir(&tmp_s);
+    result
+}
+
+/// The backup zip `zip` of `entry`, written to the server and verified. `scratch` is a file to
+/// read it back into.
+fn store_zip(
+    s: &ServerSettings,
+    entry: &SaveEntry,
+    tag: Option<&str>,
+    zip: &Path,
+    scratch: &Path,
+) -> Result<Verified, String> {
+    let user = entry.user_id as u32;
+    let st = match tag {
+        Some(t) => format!("{}_{t}", stamp(now_ms())),
+        None => stamp(now_ms()),
+    };
+    let name = format!("{}{st}.zip", auto_backup_stem(&entry.title_id, user));
+    let result = rt().block_on(async {
+        let (fs, folder) = open_target(&s.target).await?;
+        store_verified(
+            fs.as_ref(),
+            zip,
+            &folder,
+            &entry.title_id,
+            user,
+            &name,
+            s.keep,
+            scratch,
+        )
+        .await
+    });
     if result.is_err() {
         drop_session(&s.target);
     }
     result
 }
 
-/// Called by a restore with no local backup folder: the save there now goes to the server first.
-pub fn back_up_before_restore(host: &str, entry: &SaveEntry) -> Result<(), String> {
-    back_up_one(&settings(), host, entry, Some(BEFORE_RESTORE_TAG)).map(|_| ())
+/// Called by a change to a save with no local backup folder: the zip just made of the save there
+/// now goes to the server, so it outlives the change.
+pub fn keep_on_server(entry: &SaveEntry, zip: &Path, tag: &str) -> Result<(), String> {
+    let tmp = make_temp_dir(&entry.title_id)?;
+    let result = store_zip(
+        &settings(),
+        entry,
+        Some(tag),
+        zip,
+        &tmp.join("readback.zip"),
+    );
+    let _ = cleanup_temp_dir(&tmp.to_string_lossy());
+    result.map(|_| ())
 }
 
 /// The titles running on `host`, upper-case; Err when the console does not answer.
@@ -848,8 +873,23 @@ fn restore(
     let _ = cleanup_temp_dir(&tmp_s);
     if result.is_ok() {
         crate::log_info!("save backup to server: {file} restored on {host} ({save_path})");
+        mark_restored(host, save_path);
     }
     result
+}
+
+/// A save just put back from the server is already on it: the next pass need not store the same
+/// content again. Best effort.
+fn mark_restored(host: &str, save_path: &str) {
+    let Ok(list) = local::list_saves(host) else {
+        return;
+    };
+    let Some(entry) = list.iter().find(|e| e.path == save_path) else {
+        return;
+    };
+    let mut g = lock();
+    g.state.done.insert(done_key(host, save_path), entry.mtime);
+    persist(&g);
 }
 
 /// Copies the backup `file` of `title_id` off the server into the local file `dest` (restoring
