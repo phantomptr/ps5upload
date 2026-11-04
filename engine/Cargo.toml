@@ -3,6 +3,7 @@ members = [
   "crates/ps5upload-core",
   "crates/ps5upload-ctest",
   "crates/ps5upload-lab",
+  "crates/ps5upload-apidoc",
   "crates/ps5upload-ava1",
   "crates/ps5upload-engine",
   "crates/ps5upload-pkg",
