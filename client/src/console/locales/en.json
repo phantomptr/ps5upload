@@ -43,6 +43,7 @@
   "cw_cheats_find_your_version": "Your version",
   "cw_cheats_held": "Cheats for this game are paused: it closed right after they were applied. Switch a cheat to resume.",
   "cw_cheats_how": "✕ or □ switches the focused cheat on or off.",
+  "cw_cheats_how_cross": "✕ switches the focused cheat on or off.",
   "cw_cheats_loading": "Loading cheats…",
   "cw_cheats_no_game": "No game is running.",
   "cw_cheats_no_game_next": "Start a game, then open Cheats.",

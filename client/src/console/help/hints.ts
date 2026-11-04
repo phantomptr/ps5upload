@@ -7,7 +7,13 @@
  * DEFAULT_INPUT_MAP) is `verified`. The help overlay lists the rest as "not
  * confirmed yet", so a user is never told a button works when it may not.
  */
-import type { ButtonAction, InputMap, NavAction } from "../nav";
+import type { ButtonAction, ButtonId, InputMap, NavAction } from "../nav";
+
+/** May the page say this button works? ✕ and ○ always; any other once it was measured on a console. */
+export function buttonWorks(map: InputMap, button: ButtonId): boolean {
+  if (button === "cross" || button === "circle") return true;
+  return map.some((b) => b.button === button && b.verified);
+}
 
 /** A screen: a section id (home, files, cheats, fan, settings) or an overlay. */
 export type ScreenId = string;
