@@ -1547,7 +1547,7 @@ void runtime_arm_shutdown_watchdog(const runtime_state_t *state, int exit_code) 
     g_watchdog_state = state;
     g_watchdog_exit_code = exit_code;
     pthread_t t;
-    if (pthread_create(&t, NULL, runtime_shutdown_watchdog, NULL) == 0) {
+    if (create_worker_thread(&t, runtime_shutdown_watchdog, NULL) == 0) {
         pthread_detach(t);
     }
 }
@@ -6291,7 +6291,7 @@ static int handle_index_start(runtime_state_t *state, const char *body, uint64_t
         strcpy(args->roots[1], "/data");
         args->root_count = 2;
     }
-    if (pthread_create(&g_index_thread, NULL, index_thread_fn, args) != 0) {
+    if (create_worker_thread(&g_index_thread, index_thread_fn, args) != 0) {
         free(args);
         pthread_mutex_lock(&g_index_lock);
         g_index_phase = 0;
@@ -6923,33 +6923,23 @@ static int handle_peripheral_control(runtime_state_t *state, const char *body,
 
 /* ── Shell command exec ──────────────────────────────────────────────── */
 
-/* Run a single shell command via popen(), capturing stdout+stderr.
- *
- * Security note: the `cmd` string is passed verbatim to /bin/sh -c.
- * That's intentional — the renderer uses this for explicit
- * "advanced debugging" workflows (the user typed a command into a
- * shell prompt). We do NOT interpolate any other field into the
- * shell string (no separate cwd/env), so there is no injection
- * surface beyond what the user themselves typed. The whole RPC
- * surface (FS_DELETE, FS_CHMOD, etc.) already trusts an
- * authenticated LAN caller; this is the same trust boundary.
- *
- * There is no timeout: the built-ins run to completion on the request thread (the payload
+/* The shell has no timeout: the built-ins run to completion on the request thread (the payload
  * cannot fork, so there is no child to kill). A built-in's output is capped at 256 KB
- * (shell_builtin.c), and the reply itself at 32 KiB ("truncated":true past that). */
+ * (shell_builtin.c), and the reply itself at 32 KiB ("truncated":true past that). The engine's own
+ * deadline on the call is what bounds the wait (its timeout_secs field); this side reads the field
+ * and ignores it. */
 /* ── Built-in shell command interpreter ─────────────────────────────
  *
  * PS5 doesn't ship a shell binary (no /bin/sh, no /system/bin/sh,
- * nothing). popen("...", "r") in handle_shell_exec always fails on
- * PS5 because there's nothing for the libc shell-fork to exec. We
+ * nothing), and the payload cannot fork. We
  * implement a tiny built-in interpreter that handles the commands
  * a PS5 operator actually wants — directory listing, file read,
  * uname, ps, mount, sysctl, df, id — using the same syscalls the
  * rest of the payload already uses.
  *
  * Returns 0 on recognised command (sets *out_text + *out_exit;
- * caller frees out_text). Returns -1 on unrecognised command (caller
- * may fall through to popen path or surface "not supported").
+ * caller frees out_text). Returns -1 on unrecognised command (the caller
+ * surfaces "not supported").
  *
  * Threading: stateless — each invocation creates its own buffer. No
  * shared state, no locking. */
@@ -7082,7 +7072,7 @@ static int handle_shell_exec(runtime_state_t *state, const char *body,
         }
         (void)shell_json_string_field(tmp, body_len, "session_id",
                                       session_id, sizeof(session_id));
-        /* "timeout_secs" is accepted and ignored: nothing here can stop a running built-in. */
+        /* "timeout_secs" is the engine's deadline, not ours: nothing here can stop a running built-in. */
     }
     shell_session_get(session_id, fallback_cwd, cwd, sizeof(cwd));
     if (cmd[0] == '\0') {
@@ -7138,12 +7128,10 @@ static int handle_shell_exec(runtime_state_t *state, const char *body,
             free(builtin_out);
         }
     }
-    /* PS5 has NO shell binary — there's no /bin/sh, /system/bin/sh, or
-     * any other executable popen() could fork+exec. Skip the popen
-     * call entirely and route every command through our built-in
-     * interpreter (handle_shell_builtin) which uses the payload's
-     * existing FS/proc/uname code paths to answer the most-common
-     * "what's the state of this PS5?" queries. */
+    /* PS5 has NO shell binary and the payload cannot fork: every command
+     * goes through our built-in interpreter (handle_shell_builtin), which
+     * uses the payload's existing FS/proc/uname code paths to answer the
+     * most-common "what's the state of this PS5?" queries. */
     {
         char *builtin_out = NULL;
         int builtin_exit = -1;

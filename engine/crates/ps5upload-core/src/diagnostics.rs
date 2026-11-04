@@ -151,8 +151,9 @@ pub struct ShellRunResult {
     pub err: Option<String>,
 }
 
-/// Run a shell command on the PS5. `timeout_secs` clamps the
-/// payload-side wait. stdout (with stderr merged) capped at 256 KB.
+/// Run a shell command on the PS5. `timeout_secs` bounds how long the engine waits for the answer
+/// (at most `SHELL_MAX_SECS`); the helper cannot stop a built-in that is running and ignores it.
+/// stdout (with stderr merged) capped at 256 KB.
 pub fn shell_run(
     addr: &str,
     cmd: &str,

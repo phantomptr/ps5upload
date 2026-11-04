@@ -2982,6 +2982,8 @@ void cheats_init(void) {
         pthread_attr_t attr;
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        /* Its deepest path stacks some 30 KiB of parse buffers, and reaches sqlite through game_versions. */
+        pthread_attr_setstacksize(&attr, 512u * 1024u);
         if (pthread_create(&thr, &attr, watcher_thread, NULL) == 0) {
             /* Thread started */
         } else {

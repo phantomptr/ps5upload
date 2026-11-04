@@ -3080,8 +3080,8 @@ export interface ShellRunResult {
   err?: string;
 }
 
-/** Run a shell command on the PS5. timeout_secs caps payload-side
- *  wait. stdout (with stderr merged) capped at 256 KB. */
+/** Run a shell command on the PS5. timeoutSecs bounds how long the engine waits for the answer;
+ *  the helper cannot stop a built-in that is running. stdout (with stderr merged) capped at 256 KB. */
 export async function shellRun(
   addr: string,
   cmd: string,

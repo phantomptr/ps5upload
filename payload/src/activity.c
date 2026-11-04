@@ -507,6 +507,7 @@ void activity_init(void) {
         pthread_attr_t attr;
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        pthread_attr_setstacksize(&attr, 512u * 1024u);
         if (pthread_create(&thr, &attr, watcher_thread, NULL) != 0) {
             atomic_store(&g_watcher_running, 0);
         }
