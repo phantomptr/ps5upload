@@ -1,5 +1,5 @@
-//! The rest of a console's files: `files_volumes`, `files_write`, `files_chmod`, `files_extract`,
-//! `files_mount`, `files_unmount`, `files_eject`.
+//! The rest of a console's files: `files_volumes`, `files_write`, `files_chmod`, `files_hash`,
+//! `files_extract`, `files_mount`, `files_unmount`, `files_eject`.
 
 use base64::Engine as _;
 use serde_json::json;
@@ -63,6 +63,26 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 path: "/api/ps5/fs/chmod",
                 done: "Changed the permissions.",
             ),
+        },
+        ToolDef {
+            name: "files_hash",
+            title: "Hash a console file",
+            description: "A file's checksum, worked out on the console: BLAKE3 by default, or \
+                          CRC32. A big file takes a while.",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "path": text("The file on the console."),
+                    "algo": {
+                        "type": "string",
+                        "enum": ["blake3", "crc32"],
+                        "description": "Which checksum. Default blake3.",
+                    },
+                }),
+                &["console", "path"],
+            ),
+            run: route!(method: "POST", path: "/api/ps5/fs/hash", done: "The file's checksum."),
         },
         ToolDef {
             name: "files_extract",

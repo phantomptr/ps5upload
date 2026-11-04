@@ -1,4 +1,4 @@
-//! Running and starting things on a console: `processes_list`, `processes_kill`,
+//! Running and starting things on a console: `processes_list`, `processes_kill`, `shell_run`,
 //! `games_installed`, `games_launch`, `games_stop`, `games_register`, `games_unregister`.
 
 use serde_json::{json, Value};
@@ -122,6 +122,25 @@ pub(super) fn tools() -> Vec<ToolDef> {
                 path: "/api/ps5/app/unregister",
                 done: "Asked the console to remove the title.",
             ),
+        },
+        ToolDef {
+            name: "shell_run",
+            title: "Run a console command",
+            description: "Runs a command in the PS5Upload helper's shell on a console. It can do \
+                          anything the helper can, including what cannot be undone: only what the \
+                          user asked for, and show them the command first.",
+            kind: Kind::Destructive { idempotent: false },
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "cmd": text("The command."),
+                    "cwd": text("The folder to run it in."),
+                    "session_id": text("Keeps `cd` and the environment across calls."),
+                    "timeout_s": whole("Longest to let it run, in seconds."),
+                }),
+                &["console", "cmd"],
+            ),
+            run: route!(method: "POST", path: "/api/ps5/shell/run", done: "Ran the command."),
         },
         ToolDef {
             name: "processes_kill",

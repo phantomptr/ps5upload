@@ -1,21 +1,22 @@
-//! Which consoles there are, and how they are: `consoles_list`, `consoles_status`,
-//! `consoles_readiness`.
+//! Which consoles there are, and how they are: `consoles_list`, `consoles_discover`,
+//! `consoles_status`, `consoles_readiness`.
 //!
-//! The engine has no one list of consoles: the desktop and mobile apps keep theirs themselves. So
-//! `consoles_list` adds up what the engine does know, and says where each entry came from.
+//! `consoles_list` adds up what the engine knows: the app's saved list (`GET /api/consoles`), and
+//! the consoles it has met without one, and says where each entry came from.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use axum::http::Method;
 use serde_json::{json, Value};
 
+use super::route::route;
 use super::{console_optional, object, Args, Kind, ToolCtx, ToolDef, ToolOutput, ToolResult};
-use crate::mcp::{Caller, McpState};
+use crate::mcp::{ApiReply, Caller, McpState};
 
 const LIST_DESCRIPTION: &str =
     "The consoles this engine knows, each with where that knowledge comes from, and the default a \
-     read falls back to when it names no console. The engine has no complete list (the desktop \
-     app keeps its own): when the one you need is not here, ask the user for its address.";
+     read falls back to when it names no console. When the one you need is not here, \
+     consoles_discover looks for it on the network, or ask the user for its address.";
 
 pub(super) fn tools() -> Vec<ToolDef> {
     vec![
@@ -26,6 +27,30 @@ pub(super) fn tools() -> Vec<ToolDef> {
             kind: Kind::Read,
             schema: object(json!({}), &[]),
             run: |ctx, args| Box::pin(list(ctx, args)),
+        },
+        ToolDef {
+            name: "consoles_discover",
+            title: "Find consoles on the network",
+            description: "Looks for PS5s on the network around the engine's computer, for a few \
+                          seconds. From a container without host networking it sees only the \
+                          `subnets` named here, and the answer says so.",
+            kind: Kind::Read,
+            schema: object(
+                json!({
+                    "timeout_ms": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "How long to look, in ms. Left out, the engine's default.",
+                    },
+                    "subnets": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "More /24 networks to sweep, like 192.168.1.0/24.",
+                    },
+                }),
+                &[],
+            ),
+            run: route!(method: "POST", path: "/api/discover", done: "Looked for consoles."),
         },
         ToolDef {
             name: "consoles_status",
@@ -104,6 +129,8 @@ struct Known {
     name: Option<String>,
     /// A wake credential is saved for it. The credential itself is never shown.
     can_wake: bool,
+    /// Remote Play keys are saved for it, so `rp_start` can start a stream. Never shown either.
+    can_stream: bool,
     sources: BTreeSet<&'static str>,
 }
 
@@ -111,7 +138,8 @@ struct Known {
 /// `ps5upload://consoles`. Never carries a saved Remote Play key or wake credential.
 pub(crate) async fn known(state: &McpState, caller: &Caller) -> Value {
     let mut consoles: BTreeMap<String, Known> = BTreeMap::new();
-    for profile in saved_profiles(state, caller).await {
+    let saved = saved_list(state, caller).await;
+    for profile in &saved.consoles {
         let Some(address) = profile.get("host").and_then(Value::as_str) else {
             continue;
         };
@@ -121,10 +149,17 @@ pub(crate) async fn known(state: &McpState, caller: &Caller) -> Value {
             .and_then(Value::as_str)
             .filter(|name| !name.is_empty())
             .map(str::to_string);
-        console.can_wake = profile
-            .get("wake_credential")
-            .and_then(Value::as_str)
-            .is_some_and(|credential| !credential.is_empty());
+        let says = |name: &str| profile.get(name).and_then(Value::as_bool) == Some(true);
+        console.can_wake = says("has_wake_credential")
+            || profile
+                .get("wake_credential")
+                .and_then(Value::as_str)
+                .is_some_and(|credential| !credential.is_empty());
+        console.can_stream = says("has_rp_credentials");
+    }
+    for address in &saved.paired_not_listed {
+        let console = note_source(&mut consoles, address, "paired");
+        console.can_stream = true;
     }
     for address in crate::helper_mirror::answered_consoles() {
         note_source(&mut consoles, &address, "answered_status");
@@ -157,6 +192,9 @@ pub(crate) async fn known(state: &McpState, caller: &Caller) -> Value {
             if console.can_wake {
                 out["can_wake"] = json!(true);
             }
+            if console.can_stream {
+                out["can_stream"] = json!(true);
+            }
             out
         })
         .collect();
@@ -165,7 +203,8 @@ pub(crate) async fn known(state: &McpState, caller: &Caller) -> Value {
         "default_console": default,
         "default_source": if configured { "PS5_ADDR" } else { "built_in" },
         "sources_explained": {
-            "saved_list": "the self-hosted web UI's saved console list",
+            "saved_list": "the app's saved console list",
+            "paired": "paired through this engine, though not on the saved list",
             "answered_status": "answered a status call since this engine started",
             "mesh": "this engine opened a session with it since it started",
             "saved_titles": "its installed titles were read at some point",
@@ -185,6 +224,39 @@ fn note_source<'a>(
         .or_default();
     console.sources.insert(source);
     console
+}
+
+/// The saved console list.
+#[derive(Default)]
+struct SavedList {
+    consoles: Vec<Value>,
+    paired_not_listed: Vec<String>,
+}
+
+/// The app's console list, with no key in it. An engine older than that route has only the web
+/// UI's document. Nothing saved is not an error.
+async fn saved_list(state: &McpState, caller: &Caller) -> SavedList {
+    let roster = state
+        .api_call(caller, Method::GET, "/api/consoles", &[], None)
+        .await
+        .ok()
+        .filter(ApiReply::is_success)
+        .and_then(|reply| reply.json());
+    let Some(roster) = roster else {
+        return SavedList {
+            consoles: saved_profiles(state, caller).await,
+            paired_not_listed: Vec::new(),
+        };
+    };
+    let list = |name: &str| roster.get(name).and_then(Value::as_array).cloned();
+    SavedList {
+        consoles: list("consoles").unwrap_or_default(),
+        paired_not_listed: list("paired_hosts_not_listed")
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|host| host.as_str().map(str::to_string))
+            .collect(),
+    }
 }
 
 /// The web UI's saved console list, which only that build fills. Nothing there is not an error.

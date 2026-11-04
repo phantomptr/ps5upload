@@ -2613,3 +2613,151 @@ async fn the_route_search_is_a_tool_too() {
         json!([{"method": "GET", "path": "/api/pkg/install/status"}])
     );
 }
+
+// ── Tools for the routes that start a stream, find consoles and send payloads ───────────────────
+
+#[tokio::test]
+async fn rp_start_names_the_console_as_the_route_does() {
+    let server = echo_server();
+    let asked = route_of(
+        &server,
+        "rp_start",
+        json!({"console": "Living room", "fps": 60, "wait_s": 10}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/rp/start");
+    assert_eq!(
+        asked["body"],
+        json!({"host": "Living room", "fps": 60, "wait_s": 10})
+    );
+}
+
+#[tokio::test]
+async fn the_stream_tools_name_the_session_they_mean() {
+    let server = echo_server();
+    for (tool, path, extra, field) in [
+        ("rp_stop", "/api/ps5/rp/stop", json!({}), None),
+        (
+            "rp_settings",
+            "/api/ps5/rp/settings",
+            json!({"keyframe": true}),
+            Some("keyframe"),
+        ),
+        (
+            "rp_passcode",
+            "/api/ps5/rp/passcode",
+            json!({"digits": "1234"}),
+            Some("digits"),
+        ),
+        (
+            "rp_keyboard",
+            "/api/ps5/rp/keyboard",
+            json!({"text": "hi"}),
+            Some("text"),
+        ),
+    ] {
+        let mut arguments = extra.clone();
+        arguments["console"] = json!("1.2.3.4");
+        arguments["session"] = json!(9);
+        let result = server.tool(tool, arguments).await;
+        assert_ne!(result["isError"], true, "{tool}: {}", text_of(&result));
+        let asked = &result["structuredContent"];
+        assert_eq!(asked["path"], path, "{tool}");
+        assert_eq!(asked["body"]["host"], "1.2.3.4", "{tool}");
+        assert_eq!(asked["body"]["session"], 9, "{tool}");
+        if let Some(field) = field {
+            assert_eq!(asked["body"][field], extra[field], "{tool}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_passcode_stays_out_of_the_words_of_the_answer() {
+    let result = echo_server()
+        .tool(
+            "rp_passcode",
+            json!({"console": "c", "session": 1, "digits": "1234"}),
+        )
+        .await;
+    assert!(!result["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("1234"));
+}
+
+#[tokio::test]
+async fn the_payload_and_console_tools_reach_their_routes() {
+    let server = echo_server();
+    let asked = route_of(&server, "consoles_discover", json!({"timeout_ms": 500})).await;
+    assert_eq!(asked["path"], "/api/discover");
+    assert_eq!(asked["method"], "POST");
+    let asked = route_of(&server, "payloads_catalog", json!({})).await;
+    assert_eq!(asked["path"], "/api/payloads");
+    let asked = route_of(&server, "payloads_download", json!({"id": "kstuff"})).await;
+    assert_eq!(asked["path"], "/api/payloads/kstuff/download");
+    let asked = route_of(
+        &server,
+        "payloads_send",
+        json!({"console": "c", "payload_id": "kstuff"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/payload/send");
+    assert_eq!(asked["body"], json!({"host": "c", "payload_id": "kstuff"}));
+    let asked = route_of(
+        &server,
+        "files_hash",
+        json!({"console": "c", "path": "/data/a", "algo": "crc32"}),
+    )
+    .await;
+    assert_eq!(asked["path"], "/api/ps5/fs/hash");
+    assert_eq!(asked["body"]["addr"], "c");
+    let asked = route_of(&server, "shell_run", json!({"console": "c", "cmd": "ls"})).await;
+    assert_eq!(asked["path"], "/api/ps5/shell/run");
+    assert_eq!(asked["body"], json!({"addr": "c", "cmd": "ls"}));
+    let asked = route_of(&server, "settings_get", json!({})).await;
+    assert_eq!(asked["path"], "/api/settings");
+    let asked = route_of(&server, "settings_set", json!({"settings": {"a": 1}})).await;
+    assert_eq!(asked["method"], "PATCH");
+    assert_eq!(asked["body"], json!({"settings": {"a": 1}}));
+}
+
+#[tokio::test]
+async fn the_console_list_prefers_the_apps_list_and_never_shows_a_key() {
+    let api = Router::new().route(
+        "/api/consoles",
+        get(|| async {
+            Json(json!({
+                "rev": 3,
+                "consoles": [{
+                    "id": "c1",
+                    "name": "Bedroom",
+                    "host": "192.168.1.50",
+                    "has_rp_credentials": true,
+                    "has_wake_credential": true,
+                }],
+                "paired_hosts_not_listed": ["192.168.1.51"],
+            }))
+        }),
+    );
+    let result = server_with(api, false)
+        .tool("consoles_list", json!({}))
+        .await;
+    let consoles = result["structuredContent"]["consoles"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let find = |address: &str| {
+        consoles
+            .iter()
+            .find(|console| console["address"] == address)
+            .unwrap_or_else(|| panic!("{address} is not listed"))
+            .clone()
+    };
+    let saved = find("192.168.1.50");
+    assert_eq!(saved["name"], "Bedroom");
+    assert_eq!(saved["can_wake"], true);
+    assert_eq!(saved["can_stream"], true);
+    let paired = find("192.168.1.51");
+    assert_eq!(paired["can_stream"], true);
+    assert_eq!(paired["sources"], json!(["paired"]));
+}

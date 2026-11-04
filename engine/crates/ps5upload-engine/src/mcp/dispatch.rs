@@ -64,10 +64,11 @@ fn instructions(read_only: bool) -> String {
          - Destructive tools (their annotations say which: deleting, overwriting, power, closing \
          a game, api_request) need the user's confirmation before you call them. Say what will \
          happen and on which console, and wait for a yes.\n\
-         - Remote Play: this server never starts a stream. The user starts it in the app (Play › \
-         Start). rp_frame needs the app's Play screen open and visible, because the picture comes \
-         from that page. A sent input only means it was sent: take a newer frame to see the \
-         result.\n\
+         - Remote Play: rp_session says what streams. A console has one Remote Play slot, so call \
+         rp_start only when the user asked for a stream (in the app it is Play › Start). rp_frame \
+         takes the picture from the app's Play screen when that is open and visible, otherwise \
+         from the stream with the ffmpeg Go live uses. A sent input only means it was sent: take a \
+         newer frame to see the result.\n\
          - Paths: a `src` or `local_path` is on the computer the engine runs on, which may not be \
          the one you run on; anything else is on the console.\n\
          - Slow work: uploads and downloads are jobs (jobs_wait follows one), installs have \

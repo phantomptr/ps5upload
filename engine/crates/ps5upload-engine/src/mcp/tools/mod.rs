@@ -24,6 +24,7 @@ mod power;
 pub(crate) mod route;
 mod rp;
 mod saves;
+mod settings;
 mod sources;
 mod transfer;
 
@@ -99,6 +100,7 @@ fn all() -> &'static [ToolDef] {
             payloads::tools(),
             disk::tools(),
             sources::tools(),
+            settings::tools(),
             mesh::tools(),
             rp::tools(),
             notifications::tools(),
@@ -503,13 +505,14 @@ fn hint_for(
     let exact = |code: &str| -> Option<&'static str> {
         Some(match code {
             "no_session" => {
-                "Nothing is streaming from that console. Ask the user to start Remote Play in the \
-                 app (Play › Start); this server never starts a stream."
+                "Nothing is streaming from that console. rp_start starts a stream if the user \
+                 asked for one; in the app it is Play › Start."
             }
             "stale_session" => "Another session runs now: call rp_session for its id.",
             "no_viewer" => {
-                "The stream runs, but no app page shows it. Ask the user to open the app's Play \
-                 screen and keep it visible."
+                "The stream runs, but no app page shows it and this engine has no ffmpeg to make \
+                 a picture. Ask the user to open the app's Play screen and keep it visible, or to \
+                 install ffmpeg from Go live."
             }
             "no_picture" => "The page has not shown a picture yet: try again in a moment.",
             "busy" | "rate_limited" => {
@@ -527,6 +530,23 @@ fn hint_for(
             "page_error" => {
                 "The page could not make the image. In HDR sessions it can come out blank: switch \
                  Video format to SDR for automation."
+            }
+            "no_credentials" => {
+                "This engine holds no Remote Play keys for that console. Ask the user to pair it \
+                 in the app (Connection screen): the console shows a code."
+            }
+            "busy_other" => {
+                "Another console's session runs, and there is one at a time: rp_session names it. \
+                 Stop it only if the user says so."
+            }
+            "restart_needed" => {
+                "That can only be set when a session starts: rp_stop, then rp_start with the new \
+                 value. Ask the user first, because it interrupts the stream."
+            }
+            "no_passcode_asked" => "The console is not asking for a passcode now.",
+            "start_failed" => {
+                "The stream did not start. Check that Remote Play is enabled on the console, then \
+                 try again after about 30 s: the console holds its slot for a while."
             }
             "local_only" | "host_not_local" => {
                 "This answers only to the engine's own computer, addressed as localhost, 127.0.0.1 \
@@ -669,7 +689,7 @@ mod tests {
     fn every_tool_has_a_name_clients_accept_and_says_what_it_can_do() {
         let tools = all();
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
-        assert!(names.len() >= 75, "{}", names.len());
+        assert!(names.len() >= 85, "{}", names.len());
         for tool in tools {
             assert!(
                 !tool.name.is_empty()
@@ -763,6 +783,19 @@ mod tests {
             "sources_fetch",
             "drive_sync",
             "notifications_clear",
+            "consoles_discover",
+            "rp_start",
+            "rp_stop",
+            "rp_settings",
+            "rp_passcode",
+            "rp_keyboard",
+            "payloads_catalog",
+            "payloads_download",
+            "payloads_send",
+            "files_hash",
+            "shell_run",
+            "settings_get",
+            "settings_set",
         ] {
             assert!(find(name).is_some(), "{name}");
         }
@@ -792,6 +825,9 @@ mod tests {
         assert_eq!(hints("cleanup_apply"), (false, true));
         assert_eq!(hints("saves_restore"), (false, true));
         assert_eq!(hints("games_unregister"), (false, true));
+        assert_eq!(hints("rp_stop"), (false, true));
+        assert_eq!(hints("shell_run"), (false, true));
+        assert_eq!(hints("consoles_discover"), (true, false));
         for tool in all() {
             assert_eq!(
                 tool.kind.annotations()["openWorldHint"],
@@ -812,8 +848,12 @@ mod tests {
                 .iter()
                 .any(|r| r == "console");
             let may_change = !matches!(tool.kind, Kind::Read);
-            // The two Remote Play tools below find the console from the running session.
-            if takes_console && may_change && tool.name != "rp_input_release" {
+            // These Remote Play tools find the console from the running session.
+            let finds_its_console = matches!(
+                tool.name,
+                "rp_input_release" | "rp_stop" | "rp_settings" | "rp_passcode" | "rp_keyboard"
+            );
+            if takes_console && may_change && !finds_its_console {
                 assert!(requires_console, "{}", tool.name);
             }
         }

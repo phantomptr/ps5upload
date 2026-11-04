@@ -125,9 +125,10 @@ pub(crate) fn get(params: &Value) -> Result<Value, RpcError> {
 fn play_session(console: &str, goal: &str) -> String {
     format!(
         "Play through the running Remote Play session on {console}. The goal: {goal}\n\n\
-         1. Call rp_session. If nothing streams, or `attached` is false, stop and ask me to start \
-         Remote Play in the PS5Upload app (Play › Start) and keep the Play screen open and \
-         visible. You cannot start a stream yourself.\n\
+         1. Call rp_session. If nothing streams, call rp_start for that console: asking you to \
+         play is asking for a stream. If it says `no_credentials`, ask me to pair the console in \
+         the PS5Upload app. If it says the console wants a passcode, ask me for it and send it \
+         with rp_passcode.\n\
          2. Call rp_frame to see the screen. If `frame_age_ms` is large, the stream stalled or the \
          app window is hidden: say so.\n\
          3. Decide one small step toward the goal and send it with rp_input, naming the `session` \
@@ -137,7 +138,7 @@ fn play_session(console: &str, goal: &str) -> String {
          5. If a call fails, look at a new frame before you send anything again. If the session \
          changes (`stale_session`), go back to step 1.\n\
          6. When the goal is reached or you are stuck, call rp_input_release and tell me where \
-         things stand.\n\n\
+         things stand. If you started the stream, ask me before you stop it.\n\n\
          Do not buy anything, delete saves, or change system settings on screen unless I say so."
     )
 }
@@ -278,6 +279,8 @@ mod tests {
                         "disk_",
                         "cleanup_",
                         "sources_",
+                        "payloads_",
+                        "settings_",
                     ]
                     .iter()
                     .any(|family| word.starts_with(family));

@@ -1,5 +1,6 @@
-//! Watching and playing a running Remote Play session: `rp_session`, `rp_frame`, `rp_input`,
-//! `rp_input_release`. The routes and what they promise are in `AUTOMATION.md`.
+//! Remote Play: `rp_session`, `rp_start`, `rp_stop`, `rp_settings`, `rp_passcode`, `rp_keyboard`,
+//! `rp_frame`, `rp_input`, `rp_input_release`. The routes and what they promise are in
+//! `AUTOMATION.md`.
 //!
 //! A session id guards every route: the routes refuse a session that is not the one running, so
 //! input can never reach a stream it was not meant for. `rp_input` therefore wants its session named,
@@ -8,6 +9,7 @@
 
 use serde_json::{json, Value};
 
+use super::route::{flag, route, text, whole};
 use super::{object, without_nulls, Args, Kind, ToolCtx, ToolDef, ToolOutput, ToolResult};
 
 /// A picture the size a model reads well and a client carries easily.
@@ -40,19 +42,132 @@ pub(super) fn tools() -> Vec<ToolDef> {
             title: "Remote Play session",
             description: "What Remote Play is streaming now: `host` and `session` (null when \
                           nothing streams), `playing`, and `attached`, whether an app page shows \
-                          it (rp_frame needs one). This server never starts a stream: the user \
-                          does, in the app (Play › Start).",
+                          it. rp_start starts a stream.",
             kind: Kind::Read,
             schema: object(json!({}), &[]),
             run: |ctx, args| Box::pin(session(ctx, args)),
         },
         ToolDef {
+            name: "rp_start",
+            title: "Start Remote Play",
+            description: "Starts a Remote Play stream from a paired console, or joins the one \
+                          running there. A console has one Remote Play slot, so only when the user \
+                          asked for it. With no app page showing it, it ends after `keep_alive_s` \
+                          without a call. `no_credentials` means the console is not paired yet.",
+            kind: Kind::Write { idempotent: true },
+            schema: object(
+                json!({
+                    "console": {
+                        "type": "string",
+                        "description": "The console: its address, id or name.",
+                    },
+                    "width": whole("Picture width. Left out, the engine's default."),
+                    "height": whole("Picture height. Left out, the engine's default."),
+                    "fps": whole("Frames a second. Left out, the engine's default."),
+                    "bitrate_kbps": whole("Bitrate in kbit/s. Left out, the engine's default."),
+                    "codec": text("The video codec. Left out, the engine's default."),
+                    "keep_alive_s": whole(
+                        "How long it stays with nobody using it, at most 600 s. Default 300.",
+                    ),
+                    "keyboard": flag(
+                        "Set it up so rp_keyboard can type into the console's on-screen keyboard.",
+                    ),
+                    "replay_s": whole("Keep this many seconds for instant replay: 15, 30 or 60."),
+                    "wait_s": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 60,
+                        "description": "Wait up to this long for the first picture, a passcode \
+                                        request or a failure. Left out, answers at once.",
+                    },
+                }),
+                &["console"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/ps5/rp/start",
+                console: "host",
+                done: "Asked for the stream. rp_session says how it stands.",
+            ),
+        },
+        ToolDef {
+            name: "rp_stop",
+            title: "Stop Remote Play",
+            description:
+                "Ends a Remote Play stream, for anyone watching it too. The console holds \
+                          its slot for 12 to 30 s after. Only when the user asked for it.",
+            kind: Kind::Destructive { idempotent: true },
+            schema: object(
+                json!({
+                    "console": console_of_session(),
+                    "session": session_of_console(),
+                }),
+                &[],
+            ),
+            run: |ctx, args| Box::pin(stop(ctx, args)),
+        },
+        ToolDef {
+            name: "rp_settings",
+            title: "Change a running stream",
+            description: "What can change while a stream runs: ask for a keyframe, or set instant \
+                          replay. Resolution, frame rate, bitrate and codec need rp_stop and \
+                          rp_start.",
+            kind: Kind::Write { idempotent: true },
+            schema: object(
+                json!({
+                    "console": console_of_session(),
+                    "session": session_of_console(),
+                    "keyframe": flag("Ask the console for a full picture now."),
+                    "replay_s": whole("Instant replay: 15, 30 or 60 seconds, or 0 for off."),
+                }),
+                &[],
+            ),
+            run: |ctx, args| Box::pin(settings(ctx, args)),
+        },
+        ToolDef {
+            name: "rp_passcode",
+            title: "Answer the console's passcode",
+            description:
+                "Sends the user's sign-in passcode when rp_session says `passcode: true`, \
+                          or `cancel` to end the start. Only a passcode the user gave you for \
+                          this. It is passed to the console and not kept.",
+            kind: Kind::Write { idempotent: false },
+            schema: object(
+                json!({
+                    "console": console_of_session(),
+                    "session": session_of_console(),
+                    "digits": text("The passcode."),
+                    "cancel": flag("The user would rather not enter it: the start ends."),
+                }),
+                &[],
+            ),
+            run: |ctx, args| Box::pin(passcode(ctx, args)),
+        },
+        ToolDef {
+            name: "rp_keyboard",
+            title: "Type on the console",
+            description: "Types into the console's on-screen keyboard while it is open, on a \
+                          stream started with `keyboard: true`.",
+            kind: Kind::Write { idempotent: false },
+            schema: object(
+                json!({
+                    "console": console_of_session(),
+                    "session": session_of_console(),
+                    "text": text("The text the field should hold."),
+                    "accept": flag("Confirm the keyboard, as pressing its Done does."),
+                }),
+                &[],
+            ),
+            run: |ctx, args| Box::pin(keyboard(ctx, args)),
+        },
+        ToolDef {
             name: "rp_frame",
             title: "See the game's picture",
-            description: "The picture the app shows right now, as an image, plus its details: \
-                          size, `frame_id`, and `frame_age_ms`, which grows when the stream stalls \
-                          or the app window is hidden. Needs the app's Play screen open and \
-                          visible. At most one at a time and five a second.",
+            description: "The stream's picture now, as an image, plus its details: size, \
+                          `frame_id`, and `frame_age_ms`, which grows when the stream stalls. It \
+                          comes from the app's Play screen when that is open and visible, \
+                          otherwise from the stream with the ffmpeg Go live uses, at most once a \
+                          second. At most one at a time and five a second.",
             kind: Kind::Read,
             schema: object(
                 json!({
@@ -161,7 +276,8 @@ fn trigger(which: &'static str) -> Value {
 async fn session(ctx: ToolCtx, _args: Args) -> ToolResult {
     let answer = ctx.get("/api/ps5/rp/session", &[]).await?;
     let summary = match answer.get("host").and_then(Value::as_str) {
-        None => "Nothing is streaming. The user starts Remote Play in the app (Play › Start)."
+        None => "Nothing is streaming. rp_start starts a stream if the user asked for one; in the \
+                 app it is Play › Start."
             .to_string(),
         Some(host) => {
             let session = answer.get("session").cloned().unwrap_or(Value::Null);
@@ -169,9 +285,9 @@ async fn session(ctx: ToolCtx, _args: Args) -> ToolResult {
             format!(
                 "Streaming from {host}, session {session}. {}",
                 if attached {
-                    "An app page shows it, so frames work."
+                    "An app page shows it."
                 } else {
-                    "No app page shows it: frames need the app's Play screen open."
+                    "No app page shows it: frames then come from the stream, with ffmpeg."
                 }
             )
         }
@@ -190,8 +306,8 @@ async fn target(ctx: &ToolCtx, args: &Args) -> Result<(String, Option<u64>), Too
     let running_host = running.get("host").and_then(Value::as_str);
     let Some(console) = console.or_else(|| running_host.map(str::to_string)) else {
         return Err(ToolOutput::error(
-            "Nothing is streaming, so there is no picture or controller to use. Ask the user to \
-             start Remote Play in the app (Play › Start); this server never starts a stream.",
+            "Nothing is streaming, so there is no picture or controller to use. rp_start starts a \
+             stream if the user asked for one; in the app it is Play › Start.",
         ));
     };
     // The running session's id says nothing about another console: the route answers for that.
@@ -203,6 +319,53 @@ async fn target(ctx: &ToolCtx, args: &Args) -> Result<(String, Option<u64>), Too
         .and_then(Value::as_u64)
         .filter(|_| same_console);
     Ok((console, session.or(running_session)))
+}
+
+/// Calls a route that names the console and session, found as [`target`] finds them, with the
+/// tool's other arguments as its fields.
+async fn session_call(
+    ctx: &ToolCtx,
+    args: &Args,
+    path: &str,
+    fields: &[&str],
+) -> Result<Value, ToolOutput> {
+    let (console, session) = target(ctx, args).await?;
+    let mut body = without_nulls(json!({ "host": console, "session": session }));
+    for field in fields {
+        if let Some(value) = args.value(field) {
+            body[*field] = value.clone();
+        }
+    }
+    ctx.post(path, &body).await
+}
+
+async fn stop(ctx: ToolCtx, args: Args) -> ToolResult {
+    let answer = session_call(&ctx, &args, "/api/ps5/rp/stop", &[]).await?;
+    Ok(ToolOutput::ok(
+        "Stopped the stream. The console holds its slot for 12 to 30 s.",
+        answer,
+    ))
+}
+
+async fn settings(ctx: ToolCtx, args: Args) -> ToolResult {
+    let fields = ["keyframe", "replay_s"];
+    let answer = session_call(&ctx, &args, "/api/ps5/rp/settings", &fields).await?;
+    Ok(ToolOutput::ok("Changed the stream.", answer))
+}
+
+async fn passcode(ctx: ToolCtx, args: Args) -> ToolResult {
+    let fields = ["digits", "cancel"];
+    let answer = session_call(&ctx, &args, "/api/ps5/rp/passcode", &fields).await?;
+    Ok(ToolOutput::ok(
+        "Passed that on. rp_session says how the start stands.",
+        answer,
+    ))
+}
+
+async fn keyboard(ctx: ToolCtx, args: Args) -> ToolResult {
+    let fields = ["text", "accept"];
+    let answer = session_call(&ctx, &args, "/api/ps5/rp/keyboard", &fields).await?;
+    Ok(ToolOutput::ok("Sent to the keyboard.", answer))
 }
 
 async fn frame(ctx: ToolCtx, args: Args) -> ToolResult {

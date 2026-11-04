@@ -1,13 +1,67 @@
-//! The console's Payload Manager: `payloads_list`, `payloads_launch`, `payloads_store`,
-//! `payloads_delete`, `payloads_autoload`.
+//! Payloads: the engine's library (`payloads_catalog`, `payloads_download`), sending one to a
+//! console (`payloads_send`), and the console's Payload Manager (`payloads_list`,
+//! `payloads_launch`, `payloads_store`, `payloads_delete`, `payloads_autoload`).
 
 use serde_json::json;
 
-use super::route::{flag, route, text};
+use super::route::{flag, route, text, whole};
 use super::{console_required, object, Kind, ToolDef};
 
 pub(super) fn tools() -> Vec<ToolDef> {
     vec![
+        ToolDef {
+            name: "payloads_catalog",
+            title: "The payload library",
+            description: "The payloads the engine's library knows, and which are downloaded on \
+                          its computer. Nothing here touches a console.",
+            kind: Kind::Read,
+            schema: object(json!({}), &[]),
+            run: route!(path: "/api/payloads", done: "The payload library."),
+        },
+        ToolDef {
+            name: "payloads_download",
+            title: "Download a library payload",
+            description: "Downloads a payload of the library to the engine's computer, so it can \
+                          be sent.",
+            kind: Kind::Write { idempotent: true },
+            schema: object(
+                json!({
+                    "id": text("The payload's id, from payloads_catalog."),
+                    "release": text("A release tag. Left out, the latest."),
+                }),
+                &["id"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/payloads/{id}/download",
+                done: "Downloaded the payload.",
+            ),
+        },
+        ToolDef {
+            name: "payloads_send",
+            title: "Send a payload to a console",
+            description: "Sends a payload to a console's loader, which runs it: a file on the \
+                          engine's computer (`path`) or one of the library (`payload_id`). A \
+                          payload is a program with full access to the console: only one the user \
+                          asked for.",
+            kind: Kind::Write { idempotent: false },
+            schema: object(
+                json!({
+                    "console": console_required(),
+                    "path": text("A file on the engine's computer: its full path."),
+                    "payload_id": text("A payload of the library, from payloads_catalog."),
+                    "release": text("With `payload_id`: this release tag."),
+                    "port": whole("The loader's port. Default 9021."),
+                }),
+                &["console"],
+            ),
+            run: route!(
+                method: "POST",
+                path: "/api/payload/send",
+                console: "host",
+                done: "Sent the payload.",
+            ),
+        },
         ToolDef {
             name: "payloads_list",
             title: "Payloads on a console",
