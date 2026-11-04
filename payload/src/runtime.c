@@ -4595,18 +4595,24 @@ static void resolve_sce_notification(void) {
  * repeating the same diagnostic cycle on the next FW that drops one. */
 typedef int (*sce_icc_bd_fn)(int state);
 typedef int (*sce_icc_usb_fn)(int port, int state);
+/* SceKernelModuleInfo: a versioned struct, `size` says which version the caller has. 0x160 bytes. An
+ * earlier declaration here was 296: base_addr and code_size read the middle of the segment table, and
+ * either the kernel refused the size (an empty list) or wrote 56 bytes past the struct. */
+typedef struct sce_module_segment {
+    void    *address;
+    uint32_t size;
+    int32_t  prot;
+} sce_module_segment_t;
 typedef struct sce_module_info {
-    size_t size;             /* sizeof(struct), Sony fills */
-    char   name[256];
-    int    type;             /* internal */
-    int    pad;
-    void  *base_addr;
-    size_t code_size;
-    void  *code_segment;
-    /* … more fields, but we only need name + base + size … */
+    size_t               size;
+    char                 name[256];
+    sce_module_segment_t segments[4];
+    uint32_t             segment_count;
+    uint8_t              fingerprint[20];
 } sce_module_info_t;
-typedef int (*sce_get_module_list_fn)(int *handle_list, int max_handles,
-                                       int *out_count);
+_Static_assert(sizeof(sce_module_info_t) == 0x160, "SceKernelModuleInfo is 0x160 bytes");
+typedef int (*sce_get_module_list_fn)(int *handle_list, size_t max_handles,
+                                      size_t *out_count);
 typedef int (*sce_get_module_info_fn)(int handle, sce_module_info_t *info);
 
 static sce_icc_bd_fn         p_sceKernelIccControlBDPowerState  = NULL;
@@ -8422,6 +8428,25 @@ static int handle_net_speed_test(runtime_state_t *state, const char *body,
 
 /* ── Module enumeration ──────────────────────────────────────────────── */
 
+/* hw_guard_call_out's shape, for the two getters. */
+typedef struct {
+    int *handles;
+    size_t max;
+    size_t *count;
+} module_list_call_t;
+static int module_list_call(void *p) {
+    module_list_call_t *c = p;
+    return p_sceKernelGetModuleList(c->handles, c->max, c->count);
+}
+typedef struct {
+    int handle;
+    sce_module_info_t *info;
+} module_info_call_t;
+static int module_info_call(void *p) {
+    module_info_call_t *c = p;
+    return p_sceKernelGetModuleInfo(c->handle, c->info);
+}
+
 static int handle_proc_modules(runtime_state_t *state, const char *body,
                                 uint64_t body_len) {
     if (!state) return -1;
@@ -8433,9 +8458,12 @@ static int handle_proc_modules(runtime_state_t *state, const char *body,
     (void)body_len;
     resolve_sce_kernel_extras();
     int handles[256];
-    int count = 0;
+    size_t count = 0;
+    /* Both getters under the hw guard (a fault there must not cost the helper), and the count is a
+     * size_t in the real signature: an int here took an 8-byte write in a 4-byte slot. */
+    module_list_call_t lc = {handles, 256, &count};
     int rc = p_sceKernelGetModuleList
-                ? p_sceKernelGetModuleList(handles, 256, &count) : -1;
+                ? hw_guard_call_out("sceKernelGetModuleList", module_list_call, &lc) : -1;
     if (rc != 0) count = 0;
     if (count > 256) count = 256;
     char *resp = malloc(64 * 1024);
@@ -8450,21 +8478,28 @@ static int handle_proc_modules(runtime_state_t *state, const char *body,
         if (w < 0 || w >= cap - n) { n = cap; } else { n += w; }
     }
     int wrote_one = 0;
-    for (int i = 0; i < count; i++) {
-        sce_module_info_t info;
-        memset(&info, 0, sizeof(info));
-        info.size = sizeof(info);
+    for (size_t i = 0; i < count; i++) {
+        /* Room to spare past the struct: whatever a firmware writes stays in here. */
+        _Alignas(16) unsigned char raw[512];
+        sce_module_info_t *info = (sce_module_info_t *)raw;
+        memset(raw, 0, sizeof(raw));
+        info->size = sizeof(*info);
         if (!p_sceKernelGetModuleInfo) continue;
-        if (p_sceKernelGetModuleInfo(handles[i], &info) != 0) continue;
+        module_info_call_t ic = {handles[i], info};
+        if (hw_guard_call_out("sceKernelGetModuleInfo", module_info_call, &ic) != 0) continue;
+        info->name[sizeof(info->name) - 1] = '\0';
         char esc_name[260];
-        json_escape_into(info.name, esc_name, sizeof(esc_name));
-        if (n >= cap - 200) break;
+        json_escape_into(info->name, esc_name, sizeof(esc_name));
+        /* The first segment is the module's code. */
+        const void *base = info->segment_count > 0 ? info->segments[0].address : NULL;
+        unsigned code_size = info->segment_count > 0 ? info->segments[0].size : 0;
+        if (n >= cap - 400) break;
         if (wrote_one) resp[n++] = ',';
         wrote_one = 1;
         int w = snprintf(resp + n, n < cap ? (size_t)(cap - n) : 0,
                        "{\"handle\":%d,\"name\":\"%s\","
-                       "\"base\":\"%p\",\"code_size\":%zu}",
-                       handles[i], esc_name, info.base_addr, info.code_size);
+                       "\"base\":\"%p\",\"code_size\":%u}",
+                       handles[i], esc_name, base, code_size);
         if (w < 0) break;
         if ((size_t)w >= (size_t)(cap - n)) { n = cap; break; }
         n += w;
