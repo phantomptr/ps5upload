@@ -159,8 +159,6 @@
   "howto.watch.title": "친구와 함께 보기",
   "js.copied": "복사했습니다",
   "js.copy_failed": "선택해서 복사하세요",
-  "js.docker_ip": "PS5의 IP",
-  "js.docker_lan": "내 LAN, 예: 192.168.1.0/24",
   "js.download_for": "{os}용 다운로드",
   "js.engine": "엔진",
   "js.full_notes": "다운로드와 전체 노트 →",

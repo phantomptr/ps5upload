@@ -159,8 +159,6 @@
   "howto.watch.title": "بگذارید دوستان تماشا کنند",
   "js.copied": "کپی شد",
   "js.copy_failed": "انتخاب و کپی کنید",
-  "js.docker_ip": "IP کنسول PS5 شما",
-  "js.docker_lan": "شبکهٔ محلی شما، مثلاً 192.168.1.0/24",
   "js.download_for": "دانلود برای {os}",
   "js.engine": "موتور",
   "js.full_notes": "دانلودها و یادداشت‌های کامل ←",

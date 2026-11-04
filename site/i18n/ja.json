@@ -159,8 +159,6 @@
   "howto.watch.title": "友達に観てもらう",
   "js.copied": "コピーしました",
   "js.copy_failed": "選択してコピーしてください",
-  "js.docker_ip": "PS5 の IP",
-  "js.docker_lan": "あなたの LAN（例：192.168.1.0/24）",
   "js.download_for": "{os} 版をダウンロード",
   "js.engine": "エンジン",
   "js.full_notes": "ダウンロードと詳しいノート →",

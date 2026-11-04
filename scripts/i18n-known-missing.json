@@ -3,6 +3,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
@@ -17,6 +18,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
@@ -34,6 +36,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_kind_backport_patch",
       "activity_kind_cheat_download",
       "activity_kind_payload_playlist",
@@ -42,6 +45,7 @@
       "br_payloads_placeholder",
       "br_where_discord",
       "captures",
+      "cheats_unnamed_mod",
       "console_tab_name",
       "cw_settings_app_name",
       "ffpkg_inspect_sce_sys",
@@ -58,6 +62,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_kind_backport_patch",
       "activity_kind_payload_playlist",
       "activity_others_short",
@@ -78,6 +83,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
@@ -92,6 +98,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_kind_app_dump",
       "activity_kind_payload_playlist",
       "activity_others_short",
@@ -112,6 +119,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
@@ -129,6 +137,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_kind_backport_patch",
       "activity_others_short",
       "br_issue_link_placeholder",
@@ -151,31 +160,37 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_kind_backport_patch",
       "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
+      "cheats_unnamed_mod",
       "cw_settings_app_name",
       "ffpkg_inspect_sce_sys",
-      "fs_item_one",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
+      "kernel_cat_shellui_crash",
       "processes_pid",
       "remote_play",
+      "search_saved_tooltip",
       "smp_meta_json",
-      "status_helper_version"
+      "status_helper_version",
+      "task_dump"
     ]
   },
   "it": {
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_kind_app_dump",
       "activity_kind_backport_patch",
       "activity_kind_backup_snapshot",
       "activity_kind_download",
       "activity_others_short",
+      "backup_task_snapshot",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
@@ -187,6 +202,7 @@
       "processes_pid",
       "remote_play",
       "rp_pip",
+      "search_saved_tooltip",
       "shortcuts_sec_filesystem",
       "smp_meta_json",
       "status_helper_version"
@@ -196,6 +212,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
@@ -212,6 +229,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
@@ -229,6 +247,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_kind_backport_patch",
       "activity_others_short",
       "br_issue_link_placeholder",
@@ -248,17 +267,18 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_kind_app_dump",
       "activity_kind_backport_patch",
       "activity_kind_backup_snapshot",
       "activity_kind_payload_playlist",
       "activity_others_short",
+      "backup_task_snapshot",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
       "br_where_discord",
       "cw_settings_app_name",
       "ffpkg_inspect_sce_sys",
-      "fs_item_one",
       "hardware_systime_via",
       "helper_copy_place_pldmgr",
       "power_wake_signin_rpkey",
@@ -271,6 +291,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
@@ -289,6 +310,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
@@ -306,6 +328,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
@@ -326,6 +349,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_kind_backport_patch",
       "activity_others_short",
       "br_issue_link_placeholder",
@@ -338,13 +362,15 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json"
+      "smp_meta_json",
+      "task_dump"
     ]
   },
   "zh-CN": {
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",
@@ -361,6 +387,7 @@
     "missing": [],
     "stale": [],
     "untranslated": [
+      "about_feat_minion_title",
       "activity_others_short",
       "br_issue_link_placeholder",
       "br_payloads_placeholder",

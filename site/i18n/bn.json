@@ -159,8 +159,6 @@
   "howto.watch.title": "বন্ধুদের দেখতে দিন",
   "js.copied": "কপি হয়েছে",
   "js.copy_failed": "সিলেক্ট করে কপি করুন",
-  "js.docker_ip": "আপনার PS5-এর IP",
-  "js.docker_lan": "আপনার LAN, যেমন 192.168.1.0/24",
   "js.download_for": "{os}-এর জন্য ডাউনলোড",
   "js.engine": "ইঞ্জিন",
   "js.full_notes": "ডাউনলোড আর পুরো নোট →",

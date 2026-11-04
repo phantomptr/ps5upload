@@ -159,8 +159,6 @@
   "howto.watch.title": "Дать друзьям посмотреть",
   "js.copied": "Скопировано",
   "js.copy_failed": "Выделите и скопируйте",
-  "js.docker_ip": "IP вашей PS5",
-  "js.docker_lan": "ваша локальная сеть, напр. 192.168.1.0/24",
   "js.download_for": "Скачать для {os}",
   "js.engine": "Движок",
   "js.full_notes": "Загрузки и полное описание →",

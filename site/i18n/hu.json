@@ -159,8 +159,6 @@
   "howto.watch.title": "Hadd nézzék a barátok",
   "js.copied": "Kimásolva",
   "js.copy_failed": "Jelöld ki és másold",
-  "js.docker_ip": "a PS5 IP-címe",
-  "js.docker_lan": "a helyi hálózatod, pl. 192.168.1.0/24",
   "js.download_for": "Letöltés: {os}",
   "js.engine": "Motor",
   "js.full_notes": "Letöltések és teljes leírás →",

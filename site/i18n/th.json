@@ -159,8 +159,6 @@
   "howto.watch.title": "ให้เพื่อนดูด้วย",
   "js.copied": "คัดลอกแล้ว",
   "js.copy_failed": "เลือกแล้วคัดลอก",
-  "js.docker_ip": "IP ของ PS5",
-  "js.docker_lan": "LAN ของคุณ เช่น 192.168.1.0/24",
   "js.download_for": "ดาวน์โหลดสำหรับ {os}",
   "js.engine": "เอนจิน",
   "js.full_notes": "ดาวน์โหลดและบันทึกฉบับเต็ม →",

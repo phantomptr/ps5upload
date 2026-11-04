@@ -56,10 +56,7 @@ const NON_EN: ReadonlyArray<readonly [string, Translations]> = [
  * invariant below. Keep this list SMALL and shrinking; if you add to it, you
  * probably meant to delete the dead key from the locale files instead.
  */
-const KNOWN_STALE = new Set<string>([
-  // Replaced by err_rar_phones (the old text named Android only).
-  "err_rar_unsupported",
-]);
+const KNOWN_STALE = new Set<string>([]);
 
 describe("i18n locale integrity", () => {
   it("English source catalog is a non-empty string map", () => {

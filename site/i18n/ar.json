@@ -159,8 +159,6 @@
   "howto.watch.title": "دع أصدقاءك يشاهدون",
   "js.copied": "تم النسخ",
   "js.copy_failed": "حدّد وانسخ",
-  "js.docker_ip": "عنوان IP لجهاز PS5",
-  "js.docker_lan": "شبكتك المحلية، مثل 192.168.1.0/24",
   "js.download_for": "تنزيل لـ {os}",
   "js.engine": "المحرّك",
   "js.full_notes": "التنزيلات والملاحظات كاملة ←",

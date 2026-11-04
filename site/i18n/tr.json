@@ -159,8 +159,6 @@
   "howto.watch.title": "Arkadaşlarınız izlesin",
   "js.copied": "Kopyalandı",
   "js.copy_failed": "Seçip kopyalayın",
-  "js.docker_ip": "PS5'inizin IP'si",
-  "js.docker_lan": "yerel ağınız, ör. 192.168.1.0/24",
   "js.download_for": "{os} için indir",
   "js.engine": "Motor",
   "js.full_notes": "İndirmeler ve tüm notlar →",
