@@ -2,10 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const calls: Array<{ cmd: string; args: Record<string, unknown> }> = [];
 let replies: Array<unknown> = [];
+let busyStarts = 0;
 vi.mock("../../lib/invokeLogged", () => ({
   invoke: vi.fn(async (cmd: string, args: Record<string, unknown>) => {
     calls.push({ cmd, args });
     if (cmd === "ps5_disk_usage_cancel") return {};
+    if (cmd === "ps5_disk_usage_start" && busyStarts > 0) {
+      busyStarts--;
+      throw new Error("engine HTTP 409 Conflict: disk_usage_busy");
+    }
     return replies.shift();
   }),
 }));
@@ -17,6 +22,7 @@ import {
   findSubtree,
   forgetWalks,
   rememberWalk,
+  isWalkBusy,
   runWalk,
   POLL_MS,
   type DuDir,
@@ -64,6 +70,7 @@ beforeEach(() => {
   clearWalkCache();
   calls.length = 0;
   replies = [];
+  busyStarts = 0;
 });
 
 describe("disk usage tree", () => {
@@ -141,6 +148,24 @@ describe("running a walk", () => {
       "ps5_disk_usage_status",
     ]);
     expect(calls[0].args).toEqual({ addr: "10.0.0.5:9", path: "/data" });
+  });
+
+  it("waits out the walk before it when another folder was picked", async () => {
+    busyStarts = 2;
+    replies = [status()];
+    const p = runWalk("a", "/data", () => {}, new AbortController().signal);
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+    expect((await p)?.state).toBe("done");
+    expect(calls.filter((c) => c.cmd === "ps5_disk_usage_start")).toHaveLength(3);
+  });
+
+  it("gives up when another folder keeps the console busy", async () => {
+    busyStarts = 100;
+    const p = runWalk("a", "/data", () => {}, new AbortController().signal);
+    const failed = expect(p).rejects.toThrow("disk_usage_busy");
+    await vi.advanceTimersByTimeAsync(POLL_MS * 20);
+    await failed;
+    expect(isWalkBusy("engine HTTP 409: disk_usage_busy")).toBe(true);
   });
 
   it("cancels the engine's walk when aborted", async () => {

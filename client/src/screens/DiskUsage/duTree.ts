@@ -147,13 +147,36 @@ const sleep = (ms: number, signal: AbortSignal) =>
  * Walks `path` on the console at `addr`, reporting each poll to `onProgress`, and resolves
  * with the final status. Aborting `signal` cancels the engine's walk and resolves null.
  */
+/** The engine's refusal while another folder on this console is being walked. */
+export function isWalkBusy(message: string): boolean {
+  return message.includes("disk_usage_busy");
+}
+
+/** How many times a start is retried while the walk before it stops. Picking another folder
+ *  cancels the old walk and starts the new one at once, and either can reach the engine first. */
+const START_TRIES = 8;
+
+async function startWalk(addr: string, path: string, signal: AbortSignal): Promise<DuStatus | null> {
+  for (let tries = 1; ; tries++) {
+    try {
+      return await invoke<DuStatus>("ps5_disk_usage_start", { addr, path });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (!isWalkBusy(message) || tries >= START_TRIES) throw e;
+    }
+    await sleep(POLL_MS, signal);
+    if (signal.aborted) return null;
+  }
+}
+
 export async function runWalk(
   addr: string,
   path: string,
   onProgress: (s: DuStatus) => void,
   signal: AbortSignal,
 ): Promise<DuStatus | null> {
-  let s = await invoke<DuStatus>("ps5_disk_usage_start", { addr, path });
+  let s = await startWalk(addr, path, signal);
+  if (!s) return null;
   const cancel = () => {
     void invoke("ps5_disk_usage_cancel", { id: s.id }).catch(() => {});
   };
