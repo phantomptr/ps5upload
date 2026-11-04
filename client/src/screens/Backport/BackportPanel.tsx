@@ -196,14 +196,12 @@ export function BackportPanel({
    * Auto stops its own test launches there and those hold nothing to lose. */
   const okToStopRunningGame = async (): Promise<boolean> => {
     if (!imageBacked) return true;
-    let running = false;
     try {
       const { processes } = await processList(mgmtAddr(host));
-      running = processes.some((p) => p.title_id === title.titleId);
+      if (!processes.some((p) => p.title_id === title.titleId)) return true;
     } catch {
       return true; // Can't tell: the operation itself will report the console's state.
     }
-    if (!running) return true;
     return confirmStopGame({
       title: tr("backport_close_game_title", { name: title.titleName }, "Close {name} first?"),
       message: tr(
@@ -231,7 +229,7 @@ export function BackportPanel({
       );
       if (running) {
         const stopped = await processKill(addr, running.pid);
-        if (!stopped.ok) throw new Error(stopped.err || `Could not stop ${title.titleName}`);
+        if (!stopped.ok) throw new Error(stopped.err || tr("backport_stop_failed", { name: title.titleName }, "Could not stop {name}"));
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
       await smpImageRwBegin(transferAddr(host), title.titleId);

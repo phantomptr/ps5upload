@@ -186,7 +186,7 @@ export default function SendPanel() {
         body: e instanceof Error ? e.message : String(e),
       });
     }
-  }, []);
+  }, [tr]);
 
   /** Keep elfPath (authoritative for the send call) in sync with the
    *  editable text field. Empty text clears the picked file so the
