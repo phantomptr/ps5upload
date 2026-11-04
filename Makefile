@@ -1225,19 +1225,25 @@ test-payload: payload
 		-o /tmp/ps5upload-mp1-clock-selftest \
 		$(PAYLOAD_DIR)/tests/mp1_clock_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-mp1-clock-selftest
-	@echo "✓ clock reads are bounded, cached for 2 s, stop for good after one refusal, and never change a clock"
+	@echo "✓ clock reads are bounded, cached for 2 s, stop for good after one refusal (not a busy moment), and never change a clock"
 	@echo "Running measured CPU clock self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-cpu-measure-selftest \
 		$(PAYLOAD_DIR)/tests/cpu_measure_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-cpu-measure-selftest
-	@echo "✓ each core measured once on a worker thread, best run wins, cached for 2 s, off for good when no CPU takes the pin"
+	@echo "✓ each core measured once on a worker thread, best run wins, cached for 2 s, tried again when no CPU takes the pin"
 	@echo "Running SIGPIPE guard self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-sigpipe-guard-selftest \
 		$(PAYLOAD_DIR)/tests/sigpipe_guard_selftest.c
 	@$(RUN_LIMITED) /tmp/ps5upload-sigpipe-guard-selftest
 	@echo "✓ with SIGPIPE at its default for one Sony call, a write to a closed peer on any other thread kills nothing"
+	@echo "Running basic sensor read self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-hw-temps-flight-selftest \
+		$(PAYLOAD_DIR)/tests/hw_temps_flight_selftest.c
+	@$(RUN_LIMITED) /tmp/ps5upload-hw-temps-flight-selftest
+	@echo "✓ one sensor read at a time, a stalled getter holds nobody up, a stale answer says so"
 	@echo "Running hw-guard fault-recovery self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-hw-guard-selftest \
 		$(PAYLOAD_DIR)/tests/hw_guard_selftest.c

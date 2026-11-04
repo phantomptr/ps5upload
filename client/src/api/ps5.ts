@@ -1771,9 +1771,9 @@ export interface HwTemps {
   fan_guard?: "off" | "ok" | "failing" | "";
   /** The fan controller's filtered temperature (°C, one decimal), null when unreadable. */
   fan_filtered_c?: number | null;
-  /** Where the clocks came from: "mp1" (read), "unsupported" (the console
-   *  refused the read; the helper doesn't try again until it restarts), ""
-   *  (not asked for, or an older helper/engine). */
+  /** Where the clocks came from: "mp1" (read; while the driver is busy, the last values
+   *  or zeros), "unsupported" (the console refused the read; the helper doesn't try again
+   *  until it restarts), "" (not asked for, or an older helper/engine). */
   gpu_clock_src?: "mp1" | "unsupported" | "";
   /** The eight CPU cores' clocks in MHz (the power controller's P-state
    *  figure); `0` = unknown. Empty unless read with `clocks`. */
@@ -1787,6 +1787,16 @@ export interface HwTemps {
   /** The clock each core really ran at while busy (MHz), indexed like cpu_core_mhz; 0 = not
    *  measured (the game cores are not open to the helper). */
   cpu_core_measured_mhz?: number[];
+  /** How the last CPU temperature read went: Sony's return code ("0x00000000" is success),
+   *  "fault", "missing", "range" or "none". Says why cpu_temp is 0. null from an older helper. */
+  cpu_temp_rc?: string | null;
+  /** The same for the SoC temperature. */
+  soc_temp_rc?: string | null;
+  /** How long the last read of the basic sensors took (ms); with `stale`, how long the read still
+   *  running has taken so far. null from an older helper. */
+  read_ms?: number | null;
+  /** Another request's read was still running, so these are the last values it had. */
+  stale?: boolean;
 }
 
 export interface HwPower {

@@ -40,6 +40,7 @@
 #include "kernel_rw_lock.h"
 #include "hw_info.h"
 #include "hw_guard.h"
+#include "hw_temps_flight.h"
 #include "fan_servo.h"
 #include "mp1_clock.h"
 #include "cpu_measure.h"
@@ -76,18 +77,26 @@ int hw_guard_try_recover(int sig) {
     return 1; /* unreachable — siglongjmp does not return */
 }
 
+void hw_guard_write_last_call(int fd) {
+    static const char pfx[] = "[fatal] last Sony getter on this thread: ";
+    if (!g_hwg_call || !g_hwg_call_len) return;
+    (void)write(fd, pfx, sizeof(pfx) - 1);
+    (void)write(fd, g_hwg_call, g_hwg_call_len);
+    (void)write(fd, "\n", 1);
+}
+
 /* Run `stmt` (a Sony hw getter call) under the fault guard. `label` MUST be a
- * string literal (used for both the breadcrumb and sizeof-length). Emits an
- * always-on breadcrumb BEFORE the call (so a hang — not just a fault — leaves
- * the last-attempted getter in the log), then arms the per-thread jump. On a
+ * string literal (used for both the breadcrumb and sizeof-length). Arms the
+ * per-thread jump and keeps the name where the fatal path can read it; nothing
+ * is written before the call. A line per call was about 3 MB of log a day of
+ * uptime, and fflush on a request thread each time, to name the getter in a hang;
+ * the stale answers name a stuck one instead (hw_temps_flight.h). On a
  * fault inside `stmt`, control resumes at the sigsetjmp with a non-zero
  * return and `stmt`'s effects are skipped — callers must have a safe default
  * already in place and should read results through a `volatile` so the value
  * is well-defined on the longjmp path. */
 #define HW_GUARD(label, stmt)                                              \
     do {                                                                   \
-        fprintf(stderr, "[hw_info] -> %s\n", (label));                     \
-        fflush(stderr);                                                    \
         g_hwg_call = (label);                                              \
         g_hwg_call_len = sizeof(label) - 1;                                \
         if (sigsetjmp(g_hwg_jmp, 1) == 0) {                                \
@@ -101,8 +110,6 @@ int hw_guard_try_recover(int sig) {
 
 int hw_guard_call_out(const char *label, int (*fn)(void *), void *out) {
     volatile int rc = -1;
-    fprintf(stderr, "[hw_info] -> %s\n", label);
-    fflush(stderr);
     g_hwg_call = label;
     g_hwg_call_len = strlen(label);
     if (sigsetjmp(g_hwg_jmp, 1) == 0) {
@@ -227,10 +234,17 @@ typedef union {
  * three are resolved lazily and called ONLY from the on-demand HW_TEMPS
  * path (never the always-on HW_INFO poll), so a wedge on an untested SKU
  * stays a recoverable, user-triggered event rather than dropping the
- * helper on tab-open. */
-typedef int     (*sceKernelGetBasicProductShape_fn)(int *out);
-typedef int     (*sceKernelGetCpuUsageAll_fn)(int *per_core_pct, int *count_out);
-typedef int     (*sceKernelGetCurrentFanDuty_fn)(uint16_t *out_duty, void *scratch);
+ * helper on tab-open. The real widths of their out-parameters are undocumented:
+ * each is handed HW_EXT_OUT_BYTES zeroed bytes and the low bytes are read back
+ * (little-endian, so that is the value whatever its width), under the guard. A
+ * getter writing more than declared would otherwise smash this frame and fault
+ * later, outside any guard (#417). */
+typedef int     (*sceKernelGetBasicProductShape_fn)(void *out);
+typedef int     (*sceKernelGetCpuUsageAll_fn)(int *per_core_pct, void *count_out);
+typedef int     (*sceKernelGetCurrentFanDuty_fn)(void *out_duty, void *scratch);
+
+#define HW_EXT_OUT_BYTES 256
+_Static_assert(sizeof(soc_power_sample_t) <= HW_EXT_OUT_BYTES, "the sample block fits the guarded buffer");
 
 typedef struct {
     int   resolved;
@@ -569,22 +583,11 @@ static const cpum_ops_t k_cpum_ops = {
     cpum_real_run, cpum_real_pin, cpum_real_core_now, cpum_real_chain_ns, mp1_real_now_ms, NULL,
 };
 
-/* Cache holds ONLY the basic, auto-poll-safe sensors (CPU/SoC temp +
- * CPU clock). The extended telemetry (power, CPU usage, fan duty, product
- * shape) is deliberately NOT cached: it's read fresh on the explicit
- * "Read sensors" request and must never be served to (or populated by) the
- * Dashboard's 5 s basic poll. See hw_temps_get_text_ex. */
-typedef struct {
-    time_t   last_read;
-    int      cpu_temp;
-    int      soc_temp;
-    int      m2_temp;
-    long     cpu_freq_mhz;
-    int      valid;
-} hw_temps_cache_t;
-
-static pthread_mutex_t g_temps_lock = PTHREAD_MUTEX_INITIALIZER;
-static hw_temps_cache_t g_temps_cache = {0};
+/* Holds ONLY the basic, auto-poll-safe sensors (CPU/SoC temp + CPU clock). The
+ * extended telemetry (power, CPU usage, fan duty, product shape) is deliberately NOT
+ * kept: it's read fresh on the explicit "Read sensors" request and must never be
+ * served to (or populated by) the Dashboard's 5 s basic poll. See hw_temps_get_text_ex. */
+static hw_temps_flight_t g_temps = HW_TEMPS_FLIGHT_INIT;
 
 /* ── Live-sensor read: DIRECT Sony APIs only, on the request thread ──
  *
@@ -622,8 +625,163 @@ static hw_temps_cache_t g_temps_cache = {0};
  *     FW 13.60 hardware, so the fresh-thread crash above did not
  *     reproduce there; keep these reads inline on the request thread.
  *
- * 1-second cache so a double-click / rapid re-read coalesces into one
- * round of syscalls. */
+ * One reader at a time and nobody waits for it, with a 1-second cache so a
+ * double-click / rapid re-read coalesces into one round of syscalls: see
+ * hw_temps_flight.h. */
+
+/* What a getter's call came to, for the cpu_temp_rc / soc_temp_rc lines. */
+static void temps_rc_text(char *out, size_t cap, int called, int rc, int in_range) {
+    if (!called) snprintf(out, cap, "fault");
+    else if (rc != 0) snprintf(out, cap, "0x%08x", (unsigned)rc);
+    else if (!in_range) snprintf(out, cap, "range");
+    else snprintf(out, cap, "0x%08x", 0u);
+}
+
+/* Reads the basic sensors into *s, with no lock held: the getters can stall. All three direct
+ * sensor getters are dlsym'd Sony calls — fault-guarded (see hw_guard.h) so a getter that faults
+ * under some loader context degrades to "unavailable" instead of dropping the helper. The results
+ * cross the guard through volatiles, so they are well-defined on the longjmp path; the out-param is
+ * only read when the call returned (so it need not be volatile). */
+static void temps_read_basic(hw_temps_sample_t *s) {
+    if (g_hw.cpu_temp) {
+        int t = 0;
+        volatile int called = 0, rc = -1;
+        hw_temps_flight_in_call(&g_temps, "sceKernelGetCpuTemperature");
+        HW_GUARD("sceKernelGetCpuTemperature", {
+            rc = g_hw.cpu_temp(&t);
+            called = 1;
+        });
+        int ok = called && rc == 0 && t >= HW_TEMP_MIN_C && t <= HW_TEMP_MAX_C;
+        if (ok) s->cpu_temp = t;
+        temps_rc_text(s->cpu_temp_rc, sizeof s->cpu_temp_rc, called, rc, ok);
+    } else {
+        snprintf(s->cpu_temp_rc, sizeof s->cpu_temp_rc, "missing");
+    }
+    /* SoC thermal sensors — channels 0 and 2 ONLY.
+     *
+     * Channel 0 is the SoC junction sensor (hardware-confirmed on the
+     * phat + Pro; it is the only channel drakmor/ps5-hwinfo and onionHEN
+     * ever read). Channel 2 is the M.2 slot sensor per elf-arsenal's
+     * sensors.c; an empty slot reads 0, so require >= 20 for "populated".
+     *
+     * This used to sweep channels 0-7 in case a Slim or another SoC
+     * revision surfaced its reading elsewhere. No reference implementation
+     * reads 1, 3, 4, 5, 6 or 7, and this runs on the ALWAYS-ON poll of
+     * the screen the app lands on — seconds after connecting, with no
+     * click. Probing channels nobody else probes, on firmware we have
+     * never tested, is exactly the kind of call that can fault or wedge a
+     * helper on one console and not another. A missing reading on an
+     * unusual SKU is a far better failure than a dropped connection.
+     *
+     * One HW_GUARD per call, and every value that crosses the guard is
+     * volatile: a value assigned between sigsetjmp and a fault-driven
+     * siglongjmp is indeterminate unless it is volatile, so the old
+     * sweep's plain `soc_temp`/`m2_temp` could come back as garbage after
+     * a recovered fault. */
+    if (g_hw.soc_temp) {
+        static const int k_soc_channels[] = { 0, 2 };
+        for (size_t i = 0; i < sizeof(k_soc_channels) / sizeof(k_soc_channels[0]); i++) {
+            const int ch = k_soc_channels[i];
+            int st = 0;
+            volatile int called = 0, rc = -1;
+            hw_temps_flight_in_call(&g_temps, "sceKernelGetSocSensorTemperature");
+            HW_GUARD("sceKernelGetSocSensorTemperature", {
+                rc = g_hw.soc_temp(ch, &st);
+                called = 1;
+            });
+            int ok = called && rc == 0 && st >= HW_TEMP_MIN_C && st <= HW_TEMP_MAX_C;
+            if (ch == 0) temps_rc_text(s->soc_temp_rc, sizeof s->soc_temp_rc, called, rc, ok);
+            if (!ok) continue;
+            if (ch == 0) s->soc_temp = st;
+            if (ch == 2 && st >= 20) s->m2_temp = st;
+        }
+    } else {
+        snprintf(s->soc_temp_rc, sizeof s->soc_temp_rc, "missing");
+    }
+    /* cpu_freq_mhz is a REFERENCE clock, not what the cores run at:
+     * sceKernelGetCpuFrequency() returns a fixed rate (800 MHz on every
+     * console measured, FW 5.10 to 13.60; the TSC-style counter rate), and
+     * machdep.tsc_freq is the same kind of figure. The cores' own clocks
+     * come from the SMU on request (HW_EXT_CLOCKS, mp1_clock.c). */
+    if (g_hw.cpu_freq) {
+        volatile long hz = 0;
+        volatile int  got = 0;
+        hw_temps_flight_in_call(&g_temps, "sceKernelGetCpuFrequency");
+        HW_GUARD("sceKernelGetCpuFrequency", { hz = g_hw.cpu_freq(); got = 1; });
+        if (got) {
+            long mhz = (hz > 0) ? hz / (1000L * 1000L) : 0;
+            /* Upper-bound the result: on FW where the direct call returns
+             * a garbage value (FW 5.10 phat returned ~5.2e13 MHz) an
+             * `hz > 0`-only guard would let it straight through. */
+            if (mhz > 0 && mhz <= HW_CPU_FREQ_MAX_MHZ) s->cpu_freq_mhz = mhz;
+        }
+    }
+    /* CPU frequency via kernel TSC — fallback when the direct call
+     * gave nothing sane. Pure sysctl, bounded the same way. */
+    if (s->cpu_freq_mhz <= 0) {
+        uint64_t tsc = 0;
+        hw_temps_flight_in_call(&g_temps, "machdep.tsc_freq");
+        if (sysctl_uint64("machdep.tsc_freq", &tsc) == 0 && tsc > 0) {
+            long mhz = (long)(tsc / 1000000ULL);
+            if (mhz > 0 && mhz <= HW_CPU_FREQ_MAX_MHZ) s->cpu_freq_mhz = mhz;
+        }
+    }
+}
+
+/* One line when something is off, and only when it changes (or, for a slow read, once a minute): a
+ * bug report must tell "the getter refused" from "the getter stalled" without the log filling up on
+ * every poll. Only the reader runs this, one at a time. */
+static void temps_log_abnormal(const hw_temps_sample_t *s, int64_t now_ms) {
+    static char said_cpu[HW_TEMPS_RC_MAX] = "0x00000000";
+    static char said_soc[HW_TEMPS_RC_MAX] = "0x00000000";
+    static int64_t said_slow_ms;
+    if (strcmp(said_cpu, s->cpu_temp_rc) != 0) {
+        fprintf(stderr, "[hw_info] sceKernelGetCpuTemperature: %s (was %s)\n", s->cpu_temp_rc, said_cpu);
+        snprintf(said_cpu, sizeof said_cpu, "%s", s->cpu_temp_rc);
+    }
+    if (strcmp(said_soc, s->soc_temp_rc) != 0) {
+        fprintf(stderr, "[hw_info] sceKernelGetSocSensorTemperature: %s (was %s)\n", s->soc_temp_rc, said_soc);
+        snprintf(said_soc, sizeof said_soc, "%s", s->soc_temp_rc);
+    }
+    if (s->read_ms >= HW_TEMPS_SLOW_MS && (said_slow_ms == 0 || now_ms - said_slow_ms >= 60000)) {
+        fprintf(stderr, "[hw_info] reading the basic sensors took %u ms\n", (unsigned)s->read_ms);
+        said_slow_ms = now_ms;
+    }
+}
+
+/* hw_fan_status_text's two /dev/icc_fan ioctls can stall like any device call. Everyone gets a fresh
+ * answer unless another caller is inside them; then the last answer, so a stuck ioctl holds one
+ * request and not one per poll. */
+static pthread_mutex_t g_fan_text_mu = PTHREAD_MUTEX_INITIALIZER;
+static int g_fan_text_busy;
+static char g_fan_text[512];
+static size_t g_fan_text_len;
+
+static int hw_fan_status_text_shared(char *out, size_t cap) {
+    char fresh[sizeof g_fan_text];
+    int n, busy;
+    size_t len;
+    pthread_mutex_lock(&g_fan_text_mu);
+    busy = g_fan_text_busy;
+    if (!busy) g_fan_text_busy = 1;
+    pthread_mutex_unlock(&g_fan_text_mu);
+    n = busy ? -1 : hw_fan_status_text(fresh, sizeof fresh);
+    pthread_mutex_lock(&g_fan_text_mu);
+    if (!busy) {
+        g_fan_text_busy = 0;
+        if (n > 0 && (size_t)n < sizeof fresh) {
+            memcpy(g_fan_text, fresh, (size_t)n);
+            g_fan_text_len = (size_t)n;
+        }
+    }
+    len = g_fan_text_len;
+    if (len < cap) memcpy(out, g_fan_text, len);
+    pthread_mutex_unlock(&g_fan_text_mu);
+    if (len >= cap) return -1;
+    out[len] = '\0';
+    return (int)len;
+}
+
 /* `extended` selects which sensors are read:
  *   0 = BASIC: CPU temp, SoC temp, CPU clock only. These are the calls
  *       proven safe on every console, and the only ones the Dashboard's
@@ -642,8 +800,6 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
     }
     hw_resolve_once();
 
-    int cpu_temp = 0, soc_temp = 0, m2_temp = 0;
-    long cpu_freq_mhz = 0;
     uint32_t power_mw = 0;
     int cpu_usage_pct = -1, fan_duty_pct = -1, product_shape = -1;
     /* The GPU (GFX) clock, reported as soc_clock_mhz; 0 = not read / unknown. */
@@ -654,97 +810,18 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
     memset(&cpum, 0, sizeof cpum);
     cpum.state = CPUM_UNSUPPORTED;
 
-    /* ── Basic sensors (1 s cache; auto-poll-safe) ── */
-    pthread_mutex_lock(&g_temps_lock);
-    time_t now = time(NULL);
-    if (g_temps_cache.valid && (now - g_temps_cache.last_read) < 1) {
-        cpu_temp     = g_temps_cache.cpu_temp;
-        soc_temp     = g_temps_cache.soc_temp;
-        m2_temp      = g_temps_cache.m2_temp;
-        cpu_freq_mhz = g_temps_cache.cpu_freq_mhz;
-    } else {
-        /* All three direct sensor getters are dlsym'd Sony calls — fault-
-         * guarded (see hw_guard.h) so a getter that faults under some loader
-         * context degrades to "unavailable" instead of dropping the helper.
-         * `got` is volatile so it's well-defined on the longjmp path; the
-         * out-param is only read when got==1 (so it need not be volatile). */
-        if (g_hw.cpu_temp) {
-            int t = 0;
-            volatile int got = 0;
-            HW_GUARD("sceKernelGetCpuTemperature", got = (g_hw.cpu_temp(&t) == 0));
-            if (got && t >= HW_TEMP_MIN_C && t <= HW_TEMP_MAX_C) {
-                cpu_temp = t;
-            }
-        }
-        /* SoC thermal sensors — channels 0 and 2 ONLY.
-         *
-         * Channel 0 is the SoC junction sensor (hardware-confirmed on the
-         * phat + Pro; it is the only channel drakmor/ps5-hwinfo and onionHEN
-         * ever read). Channel 2 is the M.2 slot sensor per elf-arsenal's
-         * sensors.c; an empty slot reads 0, so require >= 20 for "populated".
-         *
-         * This used to sweep channels 0-7 in case a Slim or another SoC
-         * revision surfaced its reading elsewhere. No reference implementation
-         * reads 1, 3, 4, 5, 6 or 7, and this runs on the ALWAYS-ON poll of
-         * the screen the app lands on — seconds after connecting, with no
-         * click. Probing channels nobody else probes, on firmware we have
-         * never tested, is exactly the kind of call that can fault or wedge a
-         * helper on one console and not another. A missing reading on an
-         * unusual SKU is a far better failure than a dropped connection.
-         *
-         * One HW_GUARD per call, and every value that crosses the guard is
-         * volatile: a value assigned between sigsetjmp and a fault-driven
-         * siglongjmp is indeterminate unless it is volatile, so the old
-         * sweep's plain `soc_temp`/`m2_temp` could come back as garbage after
-         * a recovered fault. */
-        if (g_hw.soc_temp) {
-            static const int k_soc_channels[] = { 0, 2 };
-            for (size_t i = 0; i < sizeof(k_soc_channels) / sizeof(k_soc_channels[0]); i++) {
-                const int ch = k_soc_channels[i];
-                int st = 0;
-                volatile int got = 0;
-                HW_GUARD("sceKernelGetSocSensorTemperature",
-                         got = (g_hw.soc_temp(ch, &st) == 0));
-                if (!got || st < HW_TEMP_MIN_C || st > HW_TEMP_MAX_C) continue;
-                if (ch == 0) soc_temp = st;
-                if (ch == 2 && st >= 20) m2_temp = st;
-            }
-        }
-        /* cpu_freq_mhz is a REFERENCE clock, not what the cores run at:
-         * sceKernelGetCpuFrequency() returns a fixed rate (800 MHz on every
-         * console measured, FW 5.10 to 13.60; the TSC-style counter rate), and
-         * machdep.tsc_freq is the same kind of figure. The cores' own clocks
-         * come from the SMU on request (HW_EXT_CLOCKS, mp1_clock.c). */
-        if (g_hw.cpu_freq) {
-            volatile long hz = 0;
-            volatile int  got = 0;
-            HW_GUARD("sceKernelGetCpuFrequency", { hz = g_hw.cpu_freq(); got = 1; });
-            if (got) {
-                long mhz = (hz > 0) ? hz / (1000L * 1000L) : 0;
-                /* Upper-bound the result: on FW where the direct call returns
-                 * a garbage value (FW 5.10 phat returned ~5.2e13 MHz) an
-                 * `hz > 0`-only guard would let it straight through. */
-                if (mhz > 0 && mhz <= HW_CPU_FREQ_MAX_MHZ) cpu_freq_mhz = mhz;
-            }
-        }
-        /* CPU frequency via kernel TSC — fallback when the direct call
-         * gave nothing sane. Pure sysctl, bounded the same way. */
-        if (cpu_freq_mhz <= 0) {
-            uint64_t tsc = 0;
-            if (sysctl_uint64("machdep.tsc_freq", &tsc) == 0 && tsc > 0) {
-                long mhz = (long)(tsc / 1000000ULL);
-                if (mhz > 0 && mhz <= HW_CPU_FREQ_MAX_MHZ) cpu_freq_mhz = mhz;
-            }
-        }
-
-        g_temps_cache.cpu_temp     = cpu_temp;
-        g_temps_cache.soc_temp     = soc_temp;
-        g_temps_cache.m2_temp      = m2_temp;
-        g_temps_cache.cpu_freq_mhz = cpu_freq_mhz;
-        g_temps_cache.last_read    = now;
-        g_temps_cache.valid        = 1;
+    /* ── Basic sensors (1 s cache; auto-poll-safe; no lock across the calls) ── */
+    hw_temps_sample_t temps;
+    int temps_from = hw_temps_flight_begin(&g_temps, mp1_real_now_ms(NULL), &temps);
+    if (temps_from == HW_TEMPS_READ_NOW) {
+        temps_read_basic(&temps);
+        int64_t done_ms = mp1_real_now_ms(NULL);
+        hw_temps_flight_end(&g_temps, done_ms, &temps);
+        temps_log_abnormal(&temps, done_ms);
+    } else if (temps_from == HW_TEMPS_STALE) {
+        const char *stuck = hw_temps_flight_stall_once(&g_temps, mp1_real_now_ms(NULL));
+        if (stuck) fprintf(stderr, "[hw_info] a sensor read has been inside %s for %u ms\n", stuck, (unsigned)temps.read_ms);
     }
-    pthread_mutex_unlock(&g_temps_lock);
 
     /* ── Extended sensors (on-demand only, read fresh, NEVER cached) ──
      * Reached only for an explicit "Read sensors" request (flags != 0);
@@ -762,36 +839,44 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
          * unit guessing — the old "is it W or mW?" heuristic existed only
          * because we were reading a rail's power packed against its voltage
          * and treating the pair as one scalar. */
-        soc_power_sample_t soc_pw;
-        memset(&soc_pw, 0, sizeof(soc_pw));
-        if ((flags & HW_EXT_POWER) && g_hw.soc_power &&
-            g_hw.soc_power(&soc_pw) == 0) {
-            /* Total SoC draw is the sum of the rails. Each rail's triplet is
-             * zero when that rail reports nothing, so summing skips them for
-             * free. Range-check per rail so one implausible entry cannot
-             * inflate the total. */
-            uint64_t total_mw = 0;
-            for (int rail = 0; rail < SOC_POWER_RAILS; ++rail) {
-                uint32_t rail_mw = soc_pw.u32[rail * SOC_POWER_FIELDS];
-                if (rail_mw <= HW_POWER_RAIL_MAX_MW) {
-                    total_mw += rail_mw;
+        if ((flags & HW_EXT_POWER) && g_hw.soc_power) {
+            _Alignas(16) unsigned char raw[HW_EXT_OUT_BYTES];
+            memset(raw, 0, sizeof raw);
+            if (hw_guard_call_out("sceKernelGetSocPowerConsumption", g_hw.soc_power, raw) == 0) {
+                soc_power_sample_t soc_pw;
+                memcpy(&soc_pw, raw, sizeof soc_pw);
+                /* Total SoC draw is the sum of the rails. Each rail's triplet is
+                 * zero when that rail reports nothing, so summing skips them for
+                 * free. Range-check per rail so one implausible entry cannot
+                 * inflate the total. */
+                uint64_t total_mw = 0;
+                for (int rail = 0; rail < SOC_POWER_RAILS; ++rail) {
+                    uint32_t rail_mw = soc_pw.u32[rail * SOC_POWER_FIELDS];
+                    if (rail_mw <= HW_POWER_RAIL_MAX_MW) {
+                        total_mw += rail_mw;
+                    }
                 }
+                if (total_mw > 0 && total_mw <= HW_POWER_TOTAL_MAX_MW) {
+                    power_mw = (uint32_t)total_mw;
+                }                                   /* else implausible -> 0 */
             }
-            if (total_mw > 0 && total_mw <= HW_POWER_TOTAL_MAX_MW) {
-                power_mw = (uint32_t)total_mw;
-            }                                   /* else implausible -> 0 */
         }
 
         /* CPU usage — average across the reported cores (0..100 %). The API
-         * fills a per-core array and writes the core count; we pass a
-         * 16-int buffer (PS5 has 8 cores; 16 is generous headroom) and
-         * average only the cores it says it filled. Each per-core value is
-         * range-checked so a stray entry can't skew the mean. */
+         * fills a per-core array and writes the core count; the array is far
+         * larger than the 8 cores it should need, and we average only the
+         * cores it says it filled. Each per-core value is range-checked so a
+         * stray entry can't skew the mean. */
         if ((flags & HW_EXT_USAGE) && g_hw.cpu_usage) {
-            int per_core[16] = {0};
+            int per_core[256];
+            _Alignas(16) unsigned char count_out[HW_EXT_OUT_BYTES];
             int core_count = 0;
-            if (g_hw.cpu_usage(per_core, &core_count) == 0 &&
-                core_count > 0 && core_count <= 16) {
+            volatile int rc = -1;
+            memset(per_core, 0, sizeof per_core);
+            memset(count_out, 0, sizeof count_out);
+            HW_GUARD("sceKernelGetCpuUsageAll", rc = g_hw.cpu_usage(per_core, count_out));
+            memcpy(&core_count, count_out, sizeof core_count);
+            if (rc == 0 && core_count > 0 && core_count <= 16) {
                 long sum = 0;
                 int counted = 0;
                 for (int i = 0; i < core_count; i++) {
@@ -814,9 +899,15 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
         if (flags & HW_EXT_FAN) {
             int q10 = hw_fan_read_duty_q10();
             if (q10 < 0 && g_hw.fan_duty) {
+                _Alignas(16) unsigned char duty_out[HW_EXT_OUT_BYTES];
+                _Alignas(16) unsigned char scratch[HW_EXT_OUT_BYTES];
                 uint16_t duty = 0;
-                unsigned char scratch[256] = {0};
-                if (g_hw.fan_duty(&duty, scratch) == 0 && duty <= 1024u) q10 = duty;
+                volatile int rc = -1;
+                memset(duty_out, 0, sizeof duty_out);
+                memset(scratch, 0, sizeof scratch);
+                HW_GUARD("sceKernelGetCurrentFanDuty", rc = g_hw.fan_duty(duty_out, scratch));
+                memcpy(&duty, duty_out, sizeof duty);
+                if (rc == 0 && duty <= 1024u) q10 = duty;
             }
             if (q10 >= 0) fan_duty_pct = fan_duty_q10_pct((unsigned)q10);
         }
@@ -836,8 +927,10 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
          * number. The model string (sceKernelGetHwModelName, CFI-xxxx) is
          * still the primary identifier; this is a cross-check. */
         if ((flags & HW_EXT_SHAPE) && g_hw.product_shape) {
-            int ps = 0;
-            if (g_hw.product_shape(&ps) == 0) product_shape = ps;
+            _Alignas(16) unsigned char raw[HW_EXT_OUT_BYTES];
+            memset(raw, 0, sizeof raw);
+            if (hw_guard_call_out("sceKernelGetBasicProductShape", g_hw.product_shape, raw) == 0)
+                memcpy(&product_shape, raw, sizeof product_shape);
         }
     }
 
@@ -850,9 +943,14 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
         "soc_power_mw=%u\n"
         "cpu_usage_pct=%d\n"
         "fan_duty_pct=%d\n"
-        "product_shape=%d\n",
-        cpu_temp, soc_temp, m2_temp, cpu_freq_mhz, (unsigned)gpu_clock_mhz, power_mw,
-        cpu_usage_pct, fan_duty_pct, product_shape);
+        "product_shape=%d\n"
+        "cpu_temp_rc=%s\n"
+        "soc_temp_rc=%s\n"
+        "read_ms=%u\n"
+        "stale=%d\n",
+        temps.cpu_temp, temps.soc_temp, temps.m2_temp, temps.cpu_freq_mhz, (unsigned)gpu_clock_mhz, power_mw,
+        cpu_usage_pct, fan_duty_pct, product_shape,
+        temps.cpu_temp_rc, temps.soc_temp_rc, (unsigned)temps.read_ms, temps_from == HW_TEMPS_STALE ? 1 : 0);
     if (n < 0 || (size_t)n >= out_cap) {
         if (err_reason_out) *err_reason_out = "hw_temps_format_failed";
         return -1;
@@ -873,7 +971,7 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
         n += c;
     }
     /* The fan's state: the target held now, the console's own, the guard, the 28-byte profile. */
-    int f = hw_fan_status_text(out + n, out_cap - (size_t)n);
+    int f = hw_fan_status_text_shared(out + n, out_cap - (size_t)n);
     if (f < 0 || (size_t)f >= out_cap - (size_t)n) {
         if (err_reason_out) *err_reason_out = "hw_temps_format_failed";
         return -1;

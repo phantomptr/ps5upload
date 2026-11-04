@@ -249,6 +249,7 @@ static void handle_fatal(int sig) {
      * /data/ps5upload/stderr.log (redirect_stdio_to_file), unbuffered, so
      * this survives the process and lands in the next bug report. */
     write_fatal_breadcrumb(sig, g_inflight_frame_type);
+    hw_guard_write_last_call(STDERR_FILENO);
 
     /* If we crashed mid-RPC, we may be holding a ptrace attach to
      * SceShellUI. Without a detach the kernel keeps ShellUI in

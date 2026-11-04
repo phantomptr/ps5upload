@@ -23,9 +23,12 @@
  * fails the build if their numbers or names appear anywhere in payload/.
  *
  * Safety: one mutex around every /dev/mp1 access, a 2 s cache of the last result, and a latch:
- * the first open or ioctl failure marks the driver unsupported for the rest of the helper's life
- * (never retried). Values outside a plausible range read as 0 = unknown. The SMU can take a
- * while to answer, so this runs only for an explicit "Read sensors" request, never a timer. */
+ * the first time the driver refuses (no such device or request, not permitted, a wrong size) it is
+ * marked unsupported for the rest of the helper's life and never asked again. "Not now" is not a
+ * refusal (mp1_errno_transient): the SMU busy while a game runs must not turn the clocks off for the
+ * session, so that keeps the last values and the next read tries again. Values outside a plausible
+ * range read as 0 = unknown. The SMU can take a while to answer, so this runs only for an explicit
+ * "Read sensors" request, never a timer. */
 
 #define MP1_GFX_IOCTL_GET   0x406CAE01UL
 #define MP1_CORE_IOCTL_GET  0xC00CAE1EUL
@@ -66,8 +69,12 @@ typedef struct {
 } mp1_clocks_t;
 
 /* Fill *out (zeroed first): from the 2 s cache, else one GFX read and eight core reads on one fd
- * under the lock. MP1_OK, or MP1_UNSUPPORTED (all zero) once any open/ioctl has failed. */
+ * under the lock. MP1_OK, also with the last values (or zeros) when the driver said "not now", or
+ * MP1_UNSUPPORTED (all zero) once an open/ioctl has been refused. */
 int mp1_clocks_read(const mp1_ops_t *ops, mp1_clocks_t *out);
+
+/* Whether a failed open or ioctl's errno means "not now" rather than a refusal. */
+int mp1_errno_transient(int err);
 
 /* Word 21 of a GFX table when it is in MP1_GPU_MIN_MHZ..MP1_GPU_MAX_MHZ, else 0. */
 uint32_t mp1_gpu_mhz_from_table(const uint32_t words[MP1_GFX_WORDS]);

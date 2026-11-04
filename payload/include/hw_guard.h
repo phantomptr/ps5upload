@@ -44,4 +44,11 @@ int hw_guard_try_recover(int sig);
  */
 int hw_guard_call_out(const char *label, int (*fn)(void *), void *out);
 
+/*
+ * For the fatal path, async-signal-safe: names the last guarded getter this
+ * thread called, if any. A getter that wrote past what it was given faults only
+ * later, outside the guard, and this is what still points at it.
+ */
+void hw_guard_write_last_call(int fd);
+
 #endif /* HW_GUARD_H */
