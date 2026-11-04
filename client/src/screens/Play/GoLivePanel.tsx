@@ -591,18 +591,18 @@ function GoLiveTab({ status }: { status: StreamStatus }) {
               ? tr(
                   "golive_fix_both2",
                   { mbps: String(fix.bitrateKbps / 1000) },
-                  `Restart Remote Play in H.264 at ${fix.bitrateKbps / 1000} Mbps? The game keeps running; the picture comes back in about 15 s. Play keeps these settings until you change them in Settings › Picture.`,
+                  `Restart Remote Play in H.264 at ${fix.bitrateKbps / 1000} Mbps? The game keeps running; the picture comes back in about 15 s. This lasts for this session only: your Picture settings stay as they are, and this asks again next time.`,
                 )
               : fix.codec
                 ? tr(
                     "golive_fix_codec2",
                     undefined,
-                    "Restart Remote Play in H.264? The game keeps running; the picture comes back in about 15 s. Play keeps this setting until you change it in Settings › Picture.",
+                    "Restart Remote Play in H.264? The game keeps running; the picture comes back in about 15 s. This lasts for this session only: your Picture settings stay as they are, and this asks again next time.",
                   )
                 : tr(
                     "golive_fix_bitrate2",
                     { mbps: String((fix.bitrateKbps ?? 0) / 1000) },
-                    `Restart Remote Play at ${(fix.bitrateKbps ?? 0) / 1000} Mbps? The game keeps running; the picture comes back in about 15 s. Play keeps this setting until you change it in Settings › Picture.`,
+                    `Restart Remote Play at ${(fix.bitrateKbps ?? 0) / 1000} Mbps? The game keeps running; the picture comes back in about 15 s. This lasts for this session only: your Picture settings stay as they are, and this asks again next time.`,
                   )}
           </p>
           <Button

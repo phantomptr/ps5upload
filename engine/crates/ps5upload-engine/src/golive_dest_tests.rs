@@ -41,6 +41,18 @@ fn every_preset_has_sane_limits() {
 }
 
 #[test]
+fn the_restart_play_offers_passes_the_check_it_answers() {
+    for id in ["twitch", "kick", "facebook"] {
+        let p = preset(id).unwrap();
+        let fixed = session("h264", 1080, 60, p.max_kbps);
+        assert!(check(p, &fixed).is_empty(), "{id}");
+        // A later session back in HEVC is refused again, so the offer comes back with it.
+        let later = session("h265", 1080, 60, p.max_kbps);
+        assert!(check(p, &later).iter().any(|c| c.blocking), "{id}");
+    }
+}
+
+#[test]
 fn hevc_is_refused_where_only_h264_goes() {
     let s = session("h265", 1080, 60, 15000);
     for id in ["twitch", "kick", "facebook"] {

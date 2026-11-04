@@ -382,8 +382,10 @@ fn reason_text(code: &str) -> &'static str {
         // left is on the console.
         "80108b03" => {
             "Remote Play isn't ready on the PS5. Open Settings › System › Remote Play on the \
-             console and turn on Enable Remote Play. If it's greyed out or won't stay on, run the \
-             offline sign-in in Play › Set up and restart the PS5. Then press Pair again"
+             console and turn on Enable Remote Play. If it's greyed out, this PS5 user's account \
+             usually isn't activated: activate it in Accounts › Users. If it still won't turn on \
+             or stay on, run the offline sign-in in Play › Set up and restart the PS5. Then press \
+             Pair again"
         }
         "80108b02" => "the console rejected the PSN account",
         "80108b10" => "Remote Play is already in use",
@@ -714,6 +716,7 @@ mod tests {
         let t = reason_text("80108b03");
         assert!(t.contains("Enable Remote Play"), "{t}");
         assert!(t.contains("Pair again"), "{t}");
+        assert!(t.contains("Accounts › Users"), "{t}");
         assert_eq!(reason_text("80108B03"), reason_text("80108b03"));
     }
 

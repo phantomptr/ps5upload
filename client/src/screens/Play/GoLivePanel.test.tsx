@@ -6,7 +6,7 @@ vi.mock("../../state/remotePlay", async () => {
   return { useRemotePlayStore: create(() => ({ stream: null, target: null, prefs: {} })) };
 });
 
-import type { LiveRun, StreamStatus } from "../../lib/goLive";
+import type { LiveCheck, LiveRun, StreamStatus } from "../../lib/goLive";
 import { useGoLiveStore } from "../../state/goLive";
 import { GoLiveChip, GoLivePanel, goLiveAvailable, obsFeedAvailable, ObsFeedView, problemText } from "./GoLivePanel";
 
@@ -203,6 +203,48 @@ describe("The Stream panel", () => {
     expect(out).toContain("Kick takes H.264 only, and Remote Play is sending HEVC.");
     expect(out).toContain("Restart Remote Play in H.264?");
     expect(out).toMatch(/<button[^>]*disabled[^>]*data-testid="golive-start"|<button[^>]*data-testid="golive-start"[^>]*disabled/);
+  });
+
+  it("offers the restart for this session only, and again for a later session in HEVC", () => {
+    const withKick = (session: StreamStatus["session"], checks: LiveCheck[]) =>
+      status({
+        session,
+        destinations: [
+          {
+            id: "kick-1",
+            preset: "kick",
+            label: "Kick",
+            server: "rtmps://k/app",
+            bandwidth_test: false,
+            enabled: true,
+            key_hint: "…abcd",
+            name: "Kick",
+            checks,
+          },
+        ],
+      });
+    const hevc: NonNullable<StreamStatus["session"]> = { host: "h", codec: "h265", width: 1920, height: 1080, fps: 60, bitrate_kbps: 6000 };
+    const refused: LiveCheck[] = [{ code: "codec", blocking: true, have: "h265", limit: ["h264"], message: "" }];
+    const blockedStart = /<button[^>]* disabled=""[^>]*data-testid="golive-start"|<button[^>]*data-testid="golive-start"[^>]* disabled=""/;
+
+    set({ status: withKick(hevc, refused) });
+    const first = html(<GoLivePanel onClose={() => {}} />);
+    expect(first).toContain("This lasts for this session only");
+    expect(first).not.toContain("until you change");
+    expect(first).toContain("golive-fix-restart");
+    expect(first).toMatch(blockedStart);
+
+    // Restarted in H.264: the engine's check passes, so nothing asks and Go live is on.
+    set({ status: withKick({ ...hevc, codec: "h264" }, []) });
+    const restarted = html(<GoLivePanel onClose={() => {}} />);
+    expect(restarted).not.toContain("golive-fix-restart");
+    expect(restarted).not.toMatch(blockedStart);
+
+    // The next session is back on the Picture settings: it asks again instead of failing at the site.
+    set({ status: withKick(hevc, refused) });
+    const later = html(<GoLivePanel onClose={() => {}} />);
+    expect(later).toContain("golive-fix-restart");
+    expect(later).toMatch(blockedStart);
   });
 
   it("shows the live run per site, and Stop", () => {

@@ -358,6 +358,8 @@ What's new in ps5upload, written for humans.
 - Translations: fixed garbled text in Indonesian (SMP status), Arabic (Upload), Hindi (stopping a bulk action) and Japanese (a new playlist's name).
 - Translations: Remote Play now has its proper name in Russian, and the website no longer shows English words like "sideload" and "Pre-release" in other languages.
 - Website: download sizes follow the page's language, such as 1,2 Go in French.
+- Remote Play pairing error 80108b03: a greyed-out Enable Remote Play on the console usually means that PS5 user's account isn't activated, and the message now says so and points to Accounts › Users.
+- Docker, going back to 11.0.8: that version reads the console list without its keys, so each browser's Play and Wake need pairing again. Upgrading again brings the keys back, or pair again.
 
 ## 11.0.8
 

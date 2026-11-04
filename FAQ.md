@@ -2850,7 +2850,8 @@ can (see "How do I set Play up?"):
    PIN shown on the PS5** pairs the way PS Remote Play does: on the PS5 open Settings › System ›
    Remote Play › Link Device and type the 8-digit number it shows. That needs no helper, so it
    works on any firmware. If it says 80108b03, the step is on the console: open Settings › System ›
-   Remote Play and turn on Enable Remote Play (greyed out or won't stay on: run the offline sign-in
+   Remote Play and turn on Enable Remote Play (greyed out: this PS5 user's account usually isn't
+   activated, so activate it in Accounts › Users; still off, or won't stay on: run the offline sign-in
    in Play › Set up and restart the PS5), then press Pair again; unpairing doesn't change it. Some
    consoles drop the first try (one on FW 11.60 also showed
    CE-110024-8 "Something went wrong"): the app tries again by itself, and if it still fails,

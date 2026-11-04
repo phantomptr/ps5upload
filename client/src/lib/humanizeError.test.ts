@@ -23,6 +23,7 @@ describe("humanizePs5Error", () => {
     expect(m).toBe(en.err_pair_pending);
     expect(m).toContain("Enable Remote Play");
     expect(m).toContain("Pair again");
+    expect(m).toContain("Accounts › Users");
   });
 
   it("returns empty input unchanged", () => {
