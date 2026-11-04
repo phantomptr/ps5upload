@@ -537,6 +537,7 @@ pub(crate) async fn fpkg_build_handler(
                         error_reason: None,
                         error_detail: None,
                         error_console: None,
+                        error_space: None,
                     },
                 );
             }
@@ -811,6 +812,7 @@ pub(crate) async fn ffpfsc_compress_handler(
                         error_reason: None,
                         error_detail: None,
                         error_console: None,
+                        error_space: None,
                     },
                 );
             }
@@ -1395,6 +1397,7 @@ pub(crate) async fn exfat_build_handler(
                         error_reason: None,
                         error_detail: None,
                         error_console: None,
+                        error_space: None,
                     },
                 );
             }
@@ -1773,6 +1776,7 @@ pub(crate) async fn folder_build_handler(
                         error_reason: None,
                         error_detail: None,
                         error_console: None,
+                        error_space: None,
                     },
                 );
             }
@@ -2186,6 +2190,7 @@ pub(crate) async fn fpkg_extract_handler(
                         error_reason: None,
                         error_detail: None,
                         error_console: None,
+                        error_space: None,
                     },
                 );
             }

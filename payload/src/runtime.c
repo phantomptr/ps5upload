@@ -1954,6 +1954,16 @@ static uint64_t capacity_reserve_for_mount(const char *mnt_on,
                : PS5UPLOAD2_EXTERNAL_SPACE_RESERVE;
 }
 
+/* fs.freespace's policy (mgmt_fs_policy_t): the mount holding `path` is an attached disk image. Its
+ * source is an LVD/MD device, or for a nullfs of one (a title's /system_ex/app link) its mount point. */
+static int mount_is_disk_image(const char *path) {
+    struct statfs s;
+    if (statfs(path, &s) != 0) return 0;
+    return strncmp(s.f_mntfromname, "/dev/lvd", 8) == 0 || strncmp(s.f_mntfromname, "/dev/md", 7) == 0 ||
+           strncmp(s.f_mntfromname, "/mnt/shadowmnt/", 15) == 0 ||
+           strncmp(s.f_mntfromname, "/mnt/ps5upload/", 15) == 0;
+}
+
 static int handle_fs_list_volumes(runtime_state_t *state) {
     const size_t RESP_CAP = 64u * 1024u; /* heap; ~330 B per mount, was 16 KiB */
     char *resp = NULL;

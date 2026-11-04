@@ -412,6 +412,10 @@ pub(crate) enum JobState {
         /// happens to be watching the job against.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_console: Option<String>,
+        /// The figures behind a refusal for lack of room, which the client words in the user's
+        /// language (`error` and `error_detail` hold the English, for logs and scripts).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_space: Option<ps5upload_ava1::space::SpaceRefusal>,
     },
 }
 
@@ -444,6 +448,7 @@ fn job_failed_from_err(started_at_ms: u64, completed_at_ms: u64, err: &anyhow::E
             error_reason: Some(pce.kind.as_str().into()),
             error_detail: Some(pce.detail.clone()), // the console's message
             error_console: None,
+            error_space: None,
         };
     }
     if let Some(cf) = err.downcast_ref::<ps5upload_ava1::upload::ConsoleFailure>() {
@@ -471,6 +476,9 @@ fn job_failed_from_err(started_at_ms: u64, completed_at_ms: u64, err: &anyhow::E
             error_reason: Some(failure.reason.clone()),
             error_detail: Some(failure.detail.clone()),
             error_console: None,
+            error_space: err
+                .downcast_ref::<ps5upload_ava1::space::SpaceRefusal>()
+                .cloned(),
         };
     }
     let (reason, detail) = extract_payload_error(err);
@@ -500,6 +508,7 @@ fn job_failed_from_err(started_at_ms: u64, completed_at_ms: u64, err: &anyhow::E
         error_reason: reason,
         error_detail: detail,
         error_console: None,
+        error_space: None,
     }
 }
 
@@ -1421,6 +1430,7 @@ impl Drop for JobFailOnDropGuard {
                 error_reason: None,
                 error_detail: None,
                 error_console: None,
+                error_space: None,
             },
         );
     }
@@ -12785,6 +12795,7 @@ mod helpers_tests {
                     error_reason: None,
                     error_detail: None,
                     error_console: None,
+                    error_space: None,
                 },
             );
             tokio::time::sleep(Duration::from_millis(450)).await;

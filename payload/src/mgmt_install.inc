@@ -103,6 +103,7 @@ int runtime_mgmt_install(runtime_state_t *state) {
     pol.count = mgmt_fs_count;
     pol.dev_of = NULL;     /* stat(2) */
     pol.src_dev_of = NULL; /* lstat(2) */
+    pol.is_image_mount = mount_is_disk_image;
     g_mgmt_fs_state = state;
     mgmt_fs_set_policy(&pol);
     rc = mgmt_rpc_install(k_mgmt_table, sizeof k_mgmt_table / sizeof k_mgmt_table[0], state, mgmt_env_enter,
