@@ -88,7 +88,15 @@ pub struct Journal {
     /// turn would otherwise never fold).
     pending: Vec<Event>,
     dropped: u64,
+    /// When old files were last looked for. Listing the folder every second, on a phone too, was
+    /// 86,400 wakeups a day to delete a file once a day.
+    last_prune_ms: u64,
+    /// Today's file, kept open, and its name. One write per event, not an open and a close.
+    open_file: Option<(String, fs::File)>,
 }
+
+/// Old files are looked for this often, and when the day changes. (A flush at exit always does.)
+const PRUNE_EVERY_MS: u64 = 10 * 60 * 1000;
 
 /// More open entries than this and the oldest is written out.
 const MAX_PENDING: usize = 64;
@@ -102,6 +110,8 @@ impl Journal {
             max_age_ms,
             pending: Vec::new(),
             dropped: 0,
+            last_prune_ms: 0,
+            open_file: None,
         }
     }
 
@@ -150,7 +160,11 @@ impl Journal {
         for p in due {
             self.write(&p);
         }
-        self.prune();
+        let day_changed = day_file_name(now) != day_file_name(self.last_prune_ms);
+        if force || day_changed || now.saturating_sub(self.last_prune_ms) >= PRUNE_EVERY_MS {
+            self.last_prune_ms = now;
+            self.prune();
+        }
     }
 
     pub fn flush(&mut self) {
@@ -162,14 +176,27 @@ impl Journal {
             self.dropped += 1;
             return;
         };
-        let path = self.dir.join(day_file_name(e.ts));
-        let ok = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .and_then(|mut f| writeln!(f, "{line}"))
-            .is_ok();
+        let name = day_file_name(e.ts);
+        if self.open_file.as_ref().map(|(n, _)| n) != Some(&name) {
+            let opened = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(self.dir.join(&name));
+            match opened {
+                Ok(f) => self.open_file = Some((name, f)),
+                Err(_) => {
+                    self.dropped += 1;
+                    return;
+                }
+            }
+        }
+        // One write for the whole line (not writeln!'s several), so a reader never sees half.
+        let ok = self
+            .open_file
+            .as_mut()
+            .is_some_and(|(_, f)| f.write_all(format!("{line}\n").as_bytes()).is_ok());
         if !ok {
+            self.open_file = None;
             self.dropped += 1;
         }
     }
@@ -201,6 +228,7 @@ impl Journal {
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
             if name < oldest_keep {
+                self.close_if_open(&name);
                 let _ = fs::remove_file(&p);
             } else {
                 kept.push((p, n, name));
@@ -212,19 +240,66 @@ impl Journal {
             if total <= self.max_total || name == today {
                 break;
             }
+            self.close_if_open(&name);
             let _ = fs::remove_file(&p);
             total -= n;
         }
     }
 
-    pub fn read_range(&self, since: u64, until: u64, cats: Option<&[Cat]>) -> Vec<Event> {
-        let keep = |e: &Event| {
-            let end = e.last_ts.unwrap_or(e.ts);
-            end >= since && e.ts <= until && cats.map(|c| c.contains(&e.cat)).unwrap_or(true)
+    /// A late event may still be written to a file that goes: not into one that is gone.
+    fn close_if_open(&mut self, name: &str) {
+        if self.open_file.as_ref().is_some_and(|(n, _)| n == name) {
+            self.open_file = None;
+        }
+    }
+
+    /// What a read needs from under the lock: the writer thread needs that lock for every event,
+    /// and the reading itself may take a while (a week of files for a bug report).
+    pub fn read_plan(&self, since: u64, until: u64, cats: Option<&[Cat]>) -> ReadPlan {
+        // An entry lives in the file of its first time and can have collected repeats since: one
+        // day of slack before `since`.
+        let first = day_file_name(since.saturating_sub(24 * 60 * 60 * 1000));
+        let last = day_file_name(until);
+        let in_range = |p: &PathBuf| {
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string());
+            name.is_some_and(|n| n >= first && n <= last)
         };
+        let keep = keeper(since, until, cats);
+        ReadPlan {
+            files: self
+                .files_oldest_first()
+                .into_iter()
+                .map(|(p, _)| p)
+                .filter(in_range)
+                .collect(),
+            pending: self.pending.iter().filter(|p| keep(p)).cloned().collect(),
+            since,
+            until,
+            cats: cats.map(<[Cat]>::to_vec),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn read_range(&self, since: u64, until: u64, cats: Option<&[Cat]>) -> Vec<Event> {
+        self.read_plan(since, until, cats).read()
+    }
+}
+
+/// See [`Journal::read_plan`].
+pub struct ReadPlan {
+    files: Vec<PathBuf>,
+    pending: Vec<Event>,
+    since: u64,
+    until: u64,
+    cats: Option<Vec<Cat>>,
+}
+
+impl ReadPlan {
+    pub fn read(self) -> Vec<Event> {
+        let keep = keeper(self.since, self.until, self.cats.as_deref());
         let mut out = Vec::new();
-        for (p, _) in self.files_oldest_first() {
-            let Ok(text) = fs::read_to_string(&p) else {
+        for p in &self.files {
+            let Ok(text) = fs::read_to_string(p) else {
                 continue;
             };
             out.extend(
@@ -233,9 +308,17 @@ impl Journal {
                     .filter(|e| keep(e)),
             );
         }
-        out.extend(self.pending.iter().filter(|p| keep(p)).cloned());
+        out.extend(self.pending);
         out.sort_by_key(|e| e.ts); // stable: equal ts keep file order
         out
+    }
+}
+
+/// Whether an event is in the time range and categories asked for.
+fn keeper(since: u64, until: u64, cats: Option<&[Cat]>) -> impl Fn(&Event) -> bool + '_ {
+    move |e: &Event| {
+        let end = e.last_ts.unwrap_or(e.ts);
+        end >= since && e.ts <= until && cats.map(|c| c.contains(&e.cat)).unwrap_or(true)
     }
 }
 
@@ -334,8 +417,11 @@ pub async fn events_handler(Query(q): Query<EventsQuery>) -> Response {
     let until = q.until.unwrap_or(u64::MAX);
     let since = q.since;
     let (events, dropped) = tokio::task::spawn_blocking(move || {
-        let g = j.lock().unwrap_or_else(|e| e.into_inner());
-        (g.read_range(since, until, cats.as_deref()), g.dropped())
+        let (plan, dropped) = {
+            let g = j.lock().unwrap_or_else(|e| e.into_inner());
+            (g.read_plan(since, until, cats.as_deref()), g.dropped())
+        };
+        (plan.read(), dropped)
     })
     .await
     .unwrap_or_default();

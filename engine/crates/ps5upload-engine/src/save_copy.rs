@@ -668,7 +668,22 @@ pub fn import(
     backup: Option<&Path>,
     compat: Option<&str>,
 ) -> Result<Vec<String>, Failed> {
-    import_as(c, folder, user_id, "this user", zip_bytes, backup, compat)
+    import_as(
+        c,
+        folder,
+        user_id,
+        "this user",
+        SharedZip::Bytes(zip_bytes),
+        backup,
+        compat,
+    )
+}
+
+/// A shared save's zip: in memory, or already in a file (which is not copied again).
+#[derive(Clone, Copy)]
+enum SharedZip<'a> {
+    Bytes(&'a [u8]),
+    File(&'a Path),
 }
 
 /// `import`, `who` naming the user the folder belongs to in a refusal.
@@ -677,7 +692,7 @@ fn import_as(
     folder: &str,
     user_id: u32,
     who: &str,
-    zip_bytes: &[u8],
+    shared: SharedZip<'_>,
     backup: Option<&Path>,
     compat: Option<&str>,
 ) -> Result<Vec<String>, Failed> {
@@ -689,8 +704,14 @@ fn import_as(
     let tmp = make_temp_dir(&title_id)?;
     let tmp_s = tmp.to_string_lossy().into_owned();
     let result = (|| {
-        let zip = tmp.join("shared.zip");
-        std::fs::write(&zip, zip_bytes).map_err(|e| format!("save the file: {e}"))?;
+        let zip = match shared {
+            SharedZip::File(path) => path.to_path_buf(),
+            SharedZip::Bytes(bytes) => {
+                let zip = tmp.join("shared.zip");
+                std::fs::write(&zip, bytes).map_err(|e| format!("save the file: {e}"))?;
+                zip
+            }
+        };
         let unpacked = tmp.join("x");
         std::fs::create_dir_all(&unpacked).map_err(|e| format!("unpack: {e}"))?;
         let base = unpack_shared(&zip, &unpacked, &title_id)?;
@@ -838,7 +859,15 @@ pub fn copy_to_user(c: &dyn Console, b: &CopyBody) -> Result<Done, Failed> {
         return Err(missing_error(&title_id, "the other user", missing));
     }
     let (_, zip) = share(c, &from.path)?;
-    let parts = import_as(c, &to.path, b.to_user, "the other user", &zip, None, None)?;
+    let parts = import_as(
+        c,
+        &to.path,
+        b.to_user,
+        "the other user",
+        SharedZip::Bytes(&zip),
+        None,
+        None,
+    )?;
     Ok(Done {
         from: from.path.clone(),
         to: to.path.clone(),
@@ -914,7 +943,7 @@ pub fn restore_to_user(
                 &to.path,
                 to_user,
                 "the other user",
-                &zip,
+                SharedZip::Bytes(&zip),
                 Some(&theirs),
                 None,
             ),
@@ -1181,8 +1210,15 @@ pub struct UseSharedQuery {
 }
 
 /// `POST /api/save-backup/use-shared?addr=&folder=&user_id=` with the shared zip as the body.
-pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::Bytes) -> Response {
-    blocking(
+pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::Body) -> Response {
+    // To a file on its way in, not into memory: on a phone this is the app's own heap, and a large
+    // save could get the whole app killed along with whatever else it was doing.
+    let (dir, zip) = match spool_shared_zip(body).await {
+        Ok(spooled) => spooled,
+        Err((status, msg)) => return crate::json_err(status, msg).into_response(),
+    };
+    let spool_dir = dir.clone();
+    let response = blocking(
         move || {
             let folder = folder_asked(q.folder.as_deref(), q.image.as_deref())?;
             let compat = q
@@ -1192,18 +1228,67 @@ pub async fn post_use_shared(Query(q): Query<UseSharedQuery>, body: axum::body::
                 .map(String::from);
             let user_id = user_of_folder(&folder, q.user_id)?;
             let host = q.addr.trim().to_string();
-            import(
+            import_as(
                 &Live::new(&host),
                 &folder,
                 user_id,
-                &body,
+                "this user",
+                SharedZip::File(&zip),
                 None,
                 compat.as_deref(),
             )
         },
         |parts| Json(json!({ "ok": true, "parts": parts })).into_response(),
     )
-    .await
+    .await;
+    let _ =
+        tokio::task::spawn_blocking(move || cleanup_temp_dir(&spool_dir.to_string_lossy())).await;
+    response
+}
+
+/// The most a shared save may be: saves run from a few KB to a few hundred MB.
+const SHARED_ZIP_MAX: u64 = 1024 * 1024 * 1024;
+
+/// Writes a request body to a new temporary folder, refusing one over [`SHARED_ZIP_MAX`]. The folder
+/// and the file in it.
+async fn spool_shared_zip(
+    body: axum::body::Body,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), (StatusCode, String)> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    let internal = |e: String| (StatusCode::INTERNAL_SERVER_ERROR, e);
+    let dir = tokio::task::spawn_blocking(|| make_temp_dir("shared"))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(internal)?;
+    let zip = dir.join("shared.zip");
+    let written = async {
+        let save_failed = |e: std::io::Error| internal(format!("save the file: {e}"));
+        let mut file = tokio::fs::File::create(&zip).await.map_err(save_failed)?;
+        let mut stream = body.into_data_stream();
+        let mut total: u64 = 0;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+            total += chunk.len() as u64;
+            if total > SHARED_ZIP_MAX {
+                return Err((
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "this file is larger than a shared save can be".to_string(),
+                ));
+            }
+            file.write_all(&chunk).await.map_err(save_failed)?;
+        }
+        file.flush().await.map_err(save_failed)
+    }
+    .await;
+    match written {
+        Ok(()) => Ok((dir, zip)),
+        Err(refusal) => {
+            let path = dir.to_string_lossy().into_owned();
+            let _ = tokio::task::spawn_blocking(move || cleanup_temp_dir(&path)).await;
+            Err(refusal)
+        }
+    }
 }
 
 /// `POST /api/save-backup/copy` `{addr, title_id, from_user, to_user}`: one user's PS5 save into

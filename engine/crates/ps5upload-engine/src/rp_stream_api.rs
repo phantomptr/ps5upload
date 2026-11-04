@@ -231,6 +231,9 @@ fn bin_timed(t_us: u64, au: &[u8]) -> Message {
     Message::Binary(Bytes::from(v))
 }
 
+/// A replay's video header, audio header and frames, ready to encode.
+type ReplayParts = (Vec<u8>, Option<Vec<u8>>, Vec<crate::rp_replay::Frame>);
+
 /// The page showing the stream: its two queues, and whether it takes timed video (kind 7).
 struct Viewer {
     id: u64,
@@ -494,11 +497,17 @@ fn text(v: serde_json::Value) -> Message {
     Message::Text(v.to_string().into())
 }
 
-fn bin(kind: u8, payload: &[u8]) -> Message {
+/// `[kind][payload]`, the form every socket takes. One copy per frame: each sink clones the handle,
+/// and the replay keeps `slice(1..)`.
+fn tagged(kind: u8, payload: &[u8]) -> Bytes {
     let mut v = Vec::with_capacity(1 + payload.len());
     v.push(kind);
     v.extend_from_slice(payload);
-    Message::Binary(Bytes::from(v))
+    Bytes::from(v)
+}
+
+fn bin(kind: u8, payload: &[u8]) -> Message {
+    Message::Binary(tagged(kind, payload))
 }
 
 /// True when an Annex-B access unit starts a picture a decoder can begin at.
@@ -552,7 +561,14 @@ impl Live {
 
     /// Every watcher gets `kind`'s message; a video access unit only from a keyframe on, and a
     /// watcher that fell behind skips to the next keyframe (it never slows the session).
+    #[cfg(test)]
     fn to_spectators(&self, kind: u8, data: &[u8], key: bool) {
+        self.to_spectators_tagged(kind, &tagged(kind, data), key);
+    }
+
+    /// `to_spectators` with the frame in its `[kind][payload]` form.
+    fn to_spectators_tagged(&self, kind: u8, msg: &Bytes, key: bool) {
+        let data = &msg[1..];
         let Ok(mut g) = self.spectators.lock() else {
             return;
         };
@@ -564,7 +580,7 @@ impl Live {
             if let Some(v) = sp.video.as_ref().filter(|_| kind <= 1) {
                 // A player: header and pictures on the shallow queue.
                 if kind == 0 {
-                    if v.try_send(bin(0, data)).is_err() {
+                    if v.try_send(Message::Binary(msg.clone())).is_err() {
                         sp.need_header = true;
                         sp.need_key = true;
                     }
@@ -584,7 +600,9 @@ impl Live {
                     }
                 }
                 sp.need_key = false;
-                if let Err(mpsc::error::TrySendError::Full(_)) = v.try_send(bin(1, data)) {
+                if let Err(mpsc::error::TrySendError::Full(_)) =
+                    v.try_send(Message::Binary(msg.clone()))
+                {
                     sp.need_key = true;
                     lagging = true;
                     if let Some(c) = &sp.skipped {
@@ -599,7 +617,9 @@ impl Live {
                 }
                 sp.need_key = false;
             }
-            if let Err(mpsc::error::TrySendError::Full(_)) = sp.tx.try_send(bin(kind, data)) {
+            if let Err(mpsc::error::TrySendError::Full(_)) =
+                sp.tx.try_send(Message::Binary(msg.clone()))
+            {
                 if kind == 1 {
                     sp.need_key = true;
                     lagging = true;
@@ -621,7 +641,7 @@ impl Live {
         }
     }
 
-    fn record(&self, kind: u8, t_us: u64, key: bool, data: &[u8]) {
+    fn record(&self, kind: u8, t_us: u64, key: bool, data: Bytes) {
         if let Ok(mut g) = self.replay.lock() {
             if let Some(r) = g.as_mut() {
                 r.push(kind, t_us, key, data);
@@ -629,14 +649,15 @@ impl Live {
         }
     }
 
-    /// The replay as the page reads it, or None when it is off or holds nothing yet.
-    fn replay_snapshot(&self) -> Option<Vec<u8>> {
+    /// What the replay needs to be saved: both headers and the frames (handles, so this lock, which
+    /// the stream thread needs for every frame, is held only for the list). None when it is off or
+    /// holds nothing yet.
+    fn replay_parts(&self) -> Option<ReplayParts> {
         let vh = self.video_header.lock().ok()?.clone()?;
         let ah = self.audio_header.lock().ok().and_then(|g| g.clone());
         let g = self.replay.lock().ok()?;
-        let r = g.as_ref()?;
-        r.frames().next()?;
-        Some(crate::rp_replay::encode(&vh, ah.as_deref(), r))
+        let frames: Vec<crate::rp_replay::Frame> = g.as_ref()?.frames().cloned().collect();
+        (!frames.is_empty()).then_some((vh, ah, frames))
     }
 
     fn new(host: String, hevc: bool, keep_alive: Duration) -> Self {
@@ -888,6 +909,57 @@ struct Sink {
     t0: Instant,
 }
 
+impl Sink {
+    /// A video frame to every sink. `key_known`: what the caller already found out about it (the
+    /// scan is not free, and there is one per frame).
+    fn video_known(&mut self, au: &[u8], header: bool, key_known: Option<bool>) -> bool {
+        let live = &self.live;
+        if header {
+            // Kept for pages that attach later; sent ahead of the frames.
+            if let Ok(mut h) = live.video_header.lock() {
+                *h = Some(au.to_vec());
+            }
+            live.feed.video_header(au);
+            live.send_ctl(bin(0, au));
+            live.to_spectators_tagged(0, &tagged(0, au), false);
+            return true;
+        }
+        // When the engine had the frame whole, before any queue: the page's "net" stage.
+        let t_us = engine_us();
+        let key = key_known.unwrap_or_else(|| is_keyframe(au, live.hevc));
+        let msg = tagged(1, au);
+        live.record(
+            crate::rp_replay::KIND_VIDEO,
+            self.t0.elapsed().as_micros() as u64,
+            key,
+            msg.slice(1..),
+        );
+        live.to_spectators_tagged(1, &msg, key);
+        let Some((tx, timing)) = live.video_tx() else {
+            return true; // nobody watching: the session waits for a page
+        };
+        if live.need_key.load(Ordering::Relaxed) {
+            if !key {
+                live.want_key.store(true, Ordering::Relaxed);
+                return true;
+            }
+            live.need_key.store(false, Ordering::Relaxed);
+        }
+        let m = if timing {
+            bin_timed(t_us, au)
+        } else {
+            Message::Binary(msg)
+        };
+        if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(m) {
+            // The page is behind: skip to the next keyframe rather than queue.
+            live.dropped.fetch_add(1, Ordering::Relaxed);
+            live.need_key.store(true, Ordering::Relaxed);
+            live.want_key.store(true, Ordering::Relaxed);
+        }
+        true
+    }
+}
+
 impl StreamSink for Sink {
     fn progress(&mut self, p: Progress) {
         let ms = self.t0.elapsed().as_millis() as u64;
@@ -920,56 +992,13 @@ impl StreamSink for Sink {
         self.live.send_ctl(text(v));
     }
     fn video(&mut self, au: &[u8], header: bool) -> bool {
-        let live = &self.live;
-        if header {
-            // Kept for pages that attach later; sent ahead of the frames.
-            if let Ok(mut h) = live.video_header.lock() {
-                *h = Some(au.to_vec());
-            }
-            live.feed.video_header(au);
-            live.send_ctl(bin(0, au));
-            live.to_spectators(0, au, false);
-            return true;
-        }
-        // When the engine had the frame whole, before any queue: the page's "net" stage.
-        let t_us = engine_us();
-        let key = is_keyframe(au, live.hevc);
-        live.record(
-            crate::rp_replay::KIND_VIDEO,
-            self.t0.elapsed().as_micros() as u64,
-            key,
-            au,
-        );
-        live.to_spectators(1, au, key);
-        let Some((tx, timing)) = live.video_tx() else {
-            return true; // nobody watching: the session waits for a page
-        };
-        if live.need_key.load(Ordering::Relaxed) {
-            if !is_keyframe(au, live.hevc) {
-                live.want_key.store(true, Ordering::Relaxed);
-                return true;
-            }
-            live.need_key.store(false, Ordering::Relaxed);
-        }
-        let m = if timing {
-            bin_timed(t_us, au)
-        } else {
-            bin(1, au)
-        };
-        if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(m) {
-            // The page is behind: skip to the next keyframe rather than queue.
-            live.dropped.fetch_add(1, Ordering::Relaxed);
-            live.need_key.store(true, Ordering::Relaxed);
-            live.want_key.store(true, Ordering::Relaxed);
-        }
-        true
+        self.video_known(au, header, None)
     }
     fn video_frame(&mut self, au: &[u8], index: u16) -> bool {
         // The live feed (OBS) first: it needs the frame index, the rest of the fan-out does not.
-        self.live
-            .feed
-            .video(au, index, is_keyframe(au, self.live.hevc), Instant::now());
-        self.video(au, false)
+        let key = is_keyframe(au, self.live.hevc);
+        self.live.feed.video(au, index, key, Instant::now());
+        self.video_known(au, false, Some(key))
     }
     fn video_lost(&mut self, _from: u16, _to: u16) {
         self.live.feed.lost();
@@ -982,16 +1011,19 @@ impl StreamSink for Sink {
             self.live.feed.audio_header(frame);
         } else {
             self.live.feed.audio(frame, Instant::now());
+        }
+        let kind = if header { 3 } else { 4 };
+        let msg = tagged(kind, frame);
+        if !header {
             self.live.record(
                 crate::rp_replay::KIND_AUDIO,
                 self.t0.elapsed().as_micros() as u64,
                 false,
-                frame,
+                msg.slice(1..),
             );
         }
-        self.live.send_ctl(bin(if header { 3 } else { 4 }, frame));
-        self.live
-            .to_spectators(if header { 3 } else { 4 }, frame, false);
+        self.live.send_ctl(Message::Binary(msg.clone()));
+        self.live.to_spectators_tagged(kind, &msg, false);
         true
     }
     fn rumble(&mut self, left: u8, right: u8) {
@@ -1131,7 +1163,15 @@ fn current_for(snapshot: Option<serde_json::Value>, local: bool) -> serde_json::
 /// `GET /api/ps5/rp/replay`: the instant replay's frames (rp_replay.rs), for the page to save as
 /// a clip. 404 when no session runs, replay is off, or nothing is held yet.
 pub async fn replay() -> Response {
-    let snap = live().and_then(|l| l.replay_snapshot());
+    let snap = match live().and_then(|l| l.replay_parts()) {
+        // Up to 256 MiB of copying: not on a reactor thread.
+        Some((vh, ah, frames)) => tokio::task::spawn_blocking(move || {
+            crate::rp_replay::encode(&vh, ah.as_deref(), &frames)
+        })
+        .await
+        .ok(),
+        None => None,
+    };
     match snap {
         Some(b) => (
             [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
