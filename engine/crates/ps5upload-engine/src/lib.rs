@@ -6365,8 +6365,11 @@ async fn transfer_file_handler(
         match remote::source_fs::RemoteSourceFs::for_path(&req.src).await {
             Ok((fs, p)) => (Some(fs), p),
             Err(e) => {
-                return json_err(StatusCode::BAD_REQUEST, format!("cannot read source: {e}"))
-                    .into_response()
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    format!("cannot read source: {}", remote::api::error_with_hint(&e)),
+                )
+                .into_response()
             }
         }
     } else {
@@ -6681,7 +6684,10 @@ async fn transfer_dir_handler(
                         job_failed_from_err(
                             started_at_ms,
                             completed_at_ms,
-                            &anyhow::anyhow!("cannot read source: {e}"),
+                            &anyhow::anyhow!(
+                                "cannot read source: {}",
+                                remote::api::error_with_hint(&e)
+                            ),
                         ),
                     );
                     fail_guard.mark_succeeded();

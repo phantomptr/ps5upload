@@ -27,6 +27,8 @@ const READ_SESSIONS: usize = 4;
 /// Longest wait for any one server step (connect, sign-in, a listing, a read). A server that
 /// goes quiet must fail the job, not freeze it.
 const STEP: std::time::Duration = std::time::Duration::from_secs(30);
+/// Longest wait for a server to confirm a file once all of it was sent.
+const PUT_COMMIT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 /// `fut`, or an error once the server has been silent for [`STEP`].
 async fn timed<T>(
@@ -639,10 +641,18 @@ impl RemoteFs for FtpFs {
         }))
     }
 
-    async fn walk(&self, path: &str, limit: usize) -> Result<Vec<(String, Entry)>, RemoteError> {
+    async fn walk_until(
+        &self,
+        path: &str,
+        limit: usize,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<(String, Entry)>, RemoteError> {
         let mut out = Vec::new();
         let mut stack = vec![String::new()];
         while let Some(rel) = stack.pop() {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(super::walk_cancelled());
+            }
             let dir = if rel.is_empty() {
                 path.to_string()
             } else {
@@ -719,8 +729,9 @@ impl RemoteFs for FtpFs {
         .await
     }
 
-    /// STOR in binary mode on the shared session: no timeout of its own (a game file takes
-    /// minutes), the reader stops it when cancelled.
+    /// STOR in binary mode on the shared session: no limit on the whole file (a game file takes
+    /// minutes), only on a server that stops taking bytes. A failed or cancelled write drops the
+    /// data connection, which the session remembers: its next command reads the reply first.
     async fn put_file(
         &self,
         path: &str,
@@ -729,14 +740,25 @@ impl RemoteFs for FtpFs {
     ) -> Result<(), RemoteError> {
         let full = under(&self.home, path);
         let file = tokio::fs::File::open(src).await.map_err(super::local_io)?;
-        let mut reader = super::AsyncCountingReader { file, progress };
         let mut s = self.session.lock().await;
         let host = self.host.as_str();
-        s.transfer_type(FileType::Binary)
+        timed(host, "starting an upload", async {
+            s.transfer_type(FileType::Binary)
+                .await
+                .map_err(|e| map_err(host, e))
+        })
+        .await?;
+        let mut stream = timed(host, "starting an upload", async {
+            s.put_with_stream(full.as_str())
+                .await
+                .map_err(|e| map_err(host, e))
+        })
+        .await?;
+        super::send_to_server(file, &mut stream, progress, STEP, host, path).await?;
+        // The server answers once the file is on its disk, which a slow NAS takes a while over.
+        tokio::time::timeout(PUT_COMMIT, stream.finish())
             .await
-            .map_err(|e| map_err(host, e))?;
-        s.put_file(full.as_str(), &mut reader)
-            .await
+            .map_err(|_| RemoteError::Io(format!("{host}: no answer after writing {path}")))?
             .map_err(|e| map_err(host, e))?;
         Ok(())
     }

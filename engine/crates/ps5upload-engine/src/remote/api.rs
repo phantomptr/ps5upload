@@ -77,16 +77,35 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
     } else {
         (c.host.trim().to_string(), c.share.clone())
     };
+    // WebDAV: a pasted address keeps only the server there; its port, folder and scheme go where
+    // they belong. `nas:5006` was dialled as the IPv6 address `[nas:5006]`.
+    let (host, typed_port, typed_path, protocol) =
+        if matches!(c.protocol, Protocol::Webdav | Protocol::Webdavs) {
+            let t = super::webdav_fs::parse_host(&host);
+            let protocol = match t.https {
+                Some(true) => Protocol::Webdavs,
+                Some(false) => Protocol::Webdav,
+                None => c.protocol.clone(),
+            };
+            (t.host, t.port, t.path, protocol)
+        } else {
+            (host, None, String::new(), c.protocol.clone())
+        };
+    if host.is_empty() {
+        return Err(Box::new(err(
+            StatusCode::BAD_REQUEST,
+            "A name and a server address are required.",
+        )));
+    }
     if c.protocol == Protocol::Smb && share_raw.trim_matches(['/', '\\', ' ']).is_empty() {
         return Err(Box::new(err(
             StatusCode::BAD_REQUEST,
             "An SMB connection needs a share.",
         )));
     }
-    let port = c
-        .port
-        .filter(|p| *p != 0)
-        .unwrap_or_else(|| default_port(&c.protocol));
+    let port = typed_port
+        .or(c.port.filter(|p| *p != 0))
+        .unwrap_or_else(|| default_port(&protocol));
     let user = c.user.trim().to_string();
     let secret = if user.is_empty() {
         Some(Secret::None)
@@ -100,13 +119,13 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
             .filter(|p| !p.is_empty())
             .map(|password| Secret::Password { password })
     };
-    let insecure_tls = c.protocol == Protocol::Webdavs && c.insecure_tls;
+    let insecure_tls = protocol == Protocol::Webdavs && c.insecure_tls;
     let (share, start_path) = if c.protocol == Protocol::Smb {
         split_share(&share_raw, c.start_path.trim())
     } else {
         (
             share_raw.trim().trim_matches(['/', '\\']).to_string(),
-            c.start_path.trim().to_string(),
+            join_typed_path(&typed_path, c.start_path.trim()),
         )
     };
     let from_root =
@@ -115,7 +134,7 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
         Connection {
             id: String::new(),
             name: c.name.trim().to_string(),
-            protocol: c.protocol,
+            protocol,
             host,
             port,
             share,
@@ -127,6 +146,18 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
         },
         secret,
     ))
+}
+
+/// A folder that came with a pasted server address, in front of the start folder (unless the start
+/// folder already says it).
+fn join_typed_path(typed: &str, start: &str) -> String {
+    if typed.is_empty() || start.starts_with(typed) {
+        start.to_string()
+    } else if start.is_empty() {
+        typed.to_string()
+    } else {
+        format!("{typed}/{}", start.trim_start_matches('/'))
+    }
 }
 
 /// An SMB share typed with folders after it (`Media/Games/PS5`, or a pasted
@@ -207,6 +238,28 @@ pub(crate) fn remote_err(e: &RemoteError) -> Response {
         Json(json!({ "error": msg, "hint": hint_for(&msg), "host_key": host_key_of(e) })),
     )
         .into_response()
+}
+
+/// `{ ok: false, error, hint?, host_key? }`: a failure answered with a 200, for the routes whose
+/// callers read `ok`.
+pub(crate) fn failure_body(e: &RemoteError) -> serde_json::Value {
+    let msg = e.to_string();
+    json!({
+        "ok": false,
+        "error": msg,
+        "hint": hint_for(&msg),
+        "host_key": host_key_of(e),
+    })
+}
+
+/// The error's text with its plain-language hint after it, for a job's error or a transfer's
+/// refusal, which have one line to say it in.
+pub(crate) fn error_with_hint(e: &RemoteError) -> String {
+    let msg = e.to_string();
+    match hint_for(&msg) {
+        Some(hint) => format!("{}. {hint}", msg.trim_end_matches('.')),
+        None => msg,
+    }
 }
 
 /// The fingerprint to offer for acceptance when the server's identity is unknown or changed.
@@ -294,16 +347,7 @@ async fn try_connection(r: &Remote, conn: &Connection, secret: &Secret) -> Respo
     .map_err(|e| super::pool::scrub(e, secret));
     match result {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
-        Err(e) => {
-            let msg = e.to_string();
-            Json(json!({
-                "ok": false,
-                "error": msg,
-                "hint": hint_for(&msg),
-                "host_key": host_key_of(&e),
-            }))
-            .into_response()
-        }
+        Err(e) => Json(failure_body(&e)).into_response(),
     }
 }
 
@@ -372,9 +416,7 @@ fn form_secret(r: &Remote, id: Option<&str>, conn: &Connection, secret: Option<S
         return s;
     }
     id.and_then(|id| r.store.get(id))
-        .filter(|(saved, _)| {
-            saved.host == conn.host && saved.port == conn.port && saved.protocol == conn.protocol
-        })
+        .filter(|(saved, _)| super::store::same_machine(saved, conn))
         .map(|(_, s)| s)
         .unwrap_or(Secret::None)
 }
@@ -570,6 +612,59 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    fn webdav_form(host: &str, port: Option<u16>, start: &str) -> ConnectionBody {
+        let mut body = smb_form(host, "", start);
+        body.connection.protocol = Protocol::Webdavs;
+        body.connection.port = port;
+        body
+    }
+
+    #[test]
+    fn a_webdav_form_takes_port_scheme_and_folder_from_a_pasted_address() {
+        let parsed = |host: &str, port: Option<u16>, start: &str| {
+            parse_body(webdav_form(host, port, start))
+                .map_err(|_| "refused")
+                .unwrap()
+                .0
+        };
+        // A Synology port typed in Server, over the form's default.
+        let c = parsed("nas:5006", Some(443), "");
+        assert_eq!((c.host.as_str(), c.port), ("nas", 5006));
+        // A whole address: the scheme picks the protocol, the path the start folder.
+        let c = parsed("http://nas:8080/remote.php/dav/", None, "");
+        assert_eq!((c.host.as_str(), c.port), ("nas", 8080));
+        assert_eq!(c.protocol, Protocol::Webdav);
+        assert_eq!(c.start_path, "/remote.php/dav");
+        // No port anywhere: the protocol's own.
+        let c = parsed("https://nas/dav", None, "/dav/files");
+        assert_eq!((c.host.as_str(), c.port), ("nas", 443));
+        assert_eq!(c.protocol, Protocol::Webdavs);
+        assert_eq!(c.start_path, "/dav/files");
+        let c = parsed("https://nas/dav", None, "games");
+        assert_eq!(c.start_path, "/dav/games");
+        // An IPv6 address is still one.
+        let c = parsed("fe80::1", Some(5006), "");
+        assert_eq!((c.host.as_str(), c.port), ("fe80::1", 5006));
+        // Only an address's scheme is no address.
+        assert!(parse_body(webdav_form("https://", None, "")).is_err());
+    }
+
+    #[test]
+    fn a_failure_says_what_to_do_on_paths_with_one_line() {
+        let e = RemoteError::Io("STATUS_BAD_NETWORK_NAME during tree connect".into());
+        let text = error_with_hint(&e);
+        assert!(
+            text.starts_with("STATUS_BAD_NETWORK_NAME during tree connect. "),
+            "{text}"
+        );
+        assert!(text.contains("first folder name"), "{text}");
+        let plain = RemoteError::Io("something else.".into());
+        assert_eq!(error_with_hint(&plain), "something else.");
+        let body = failure_body(&e);
+        assert_eq!(body["ok"], false);
+        assert!(body["hint"].as_str().unwrap().contains("first folder name"));
     }
 
     #[test]

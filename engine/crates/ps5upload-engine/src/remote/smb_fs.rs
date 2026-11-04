@@ -330,10 +330,18 @@ impl RemoteFs for SmbFs {
         }))
     }
 
-    async fn walk(&self, path: &str, limit: usize) -> Result<Vec<(String, Entry)>, RemoteError> {
+    async fn walk_until(
+        &self,
+        path: &str,
+        limit: usize,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<(String, Entry)>, RemoteError> {
         let mut out = Vec::new();
         let mut stack = vec![String::new()];
         while let Some(rel) = stack.pop() {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(super::walk_cancelled());
+            }
             let dir = if rel.is_empty() {
                 path.to_string()
             } else {

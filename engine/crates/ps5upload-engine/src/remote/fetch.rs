@@ -25,15 +25,6 @@ const MAX_FILES: usize = 200_000;
 /// Space left free after a copy, so it never fills the disk to the last byte.
 const HEADROOM: u64 = 1024 * 1024 * 1024;
 
-/// The server, every file to copy (relative path, entry), and whether the pick was a folder.
-/// The copy's files, whether it is a folder, and a RAR set's other volumes (server path, entry).
-type Listed = (
-    Arc<dyn RemoteFs>,
-    Vec<(String, Entry)>,
-    bool,
-    Vec<(String, Entry)>,
-);
-
 pub type Jobs = Arc<Mutex<HashMap<Uuid, JobState>>>;
 
 /// What a fetch needs from the engine; tests pass their own.
@@ -123,74 +114,225 @@ fn running(started_at_ms: u64, bytes_sent: u64, total_bytes: u64) -> JobState {
     }
 }
 
+/// The job while it is still finding out what to copy.
+fn listing(started_at_ms: u64) -> JobState {
+    let mut state = running(started_at_ms, 0, 0);
+    if let JobState::Running { stage, .. } = &mut state {
+        *stage = Some(crate::JobStage {
+            id: "listing".to_string(),
+            index: 0,
+            count: 2,
+            done: 0,
+            total: 0,
+        });
+    }
+    state
+}
+
+fn failed(started_at_ms: u64, error: String) -> JobState {
+    let completed_at_ms = crate::now_ms();
+    JobState::Failed {
+        started_at_ms,
+        completed_at_ms,
+        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+        error,
+        error_reason: None,
+        error_detail: None,
+        error_console: None,
+    }
+}
+
 /// `POST /api/remote/fetch` — copy `path` into `dest_dir` (a new temp folder by default) as a job.
+///
+/// A folder gets its job id at once and is walked inside the job: one listing per folder, up to
+/// [`MAX_FILES`] files, used to hold the request open with nothing to poll or cancel. So what a
+/// walk can only tell afterwards (too many files, too big for the disk) ends the job with that
+/// error. A single file is looked at first and is refused with a status.
 pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody) -> Response {
     let p = match super::path::parse(&body.path) {
         Ok(p) => p,
         Err(e) => return super::api::remote_err(&e),
     };
-    let listed: Result<Listed, RemoteError> = async {
-        r.pool
-            .with_fs(&r.store, &p.connection_id, |fs| {
-                let path = p.path.clone();
-                async move {
-                    let top = fs.stat(&path).await?;
-                    if top.is_dir {
-                        let files = fs.walk(&path, MAX_FILES).await?;
-                        Ok((fs, files, true, Vec::new()))
-                    } else {
-                        // A RAR set's first volume brings the rest of the set with it.
-                        let name = path.rsplit('/').next().unwrap_or("").to_string();
-                        let mut siblings = Vec::new();
-                        if name.to_ascii_lowercase().ends_with(".rar") {
-                            let dir = match path.rfind('/') {
-                                Some(0) | None => "/".to_string(),
-                                Some(i) => path[..i].to_string(),
-                            };
-                            let mut entries = Vec::new();
-                            let mut cursor = None;
-                            loop {
-                                let page = fs.list(&dir, cursor).await?;
-                                entries.extend(page.entries);
-                                match page.next_cursor {
-                                    Some(c) => cursor = Some(c),
-                                    None => break,
-                                }
-                            }
-                            let names: Vec<String> = entries
-                                .iter()
-                                .filter(|e| !e.is_dir)
-                                .map(|e| e.name.clone())
-                                .collect();
-                            for sib in rar_set_siblings(&name, &names) {
-                                if let Some(e) = entries.iter().find(|e| e.name == sib) {
-                                    siblings.push((super::path::join(&dir, &sib)?, e.clone()));
-                                }
-                            }
-                        }
-                        Ok((fs, vec![(String::new(), top)], false, siblings))
-                    }
-                }
-            })
-            .await
-    }
-    .await;
-    let (fs, files, is_dir, siblings) = match listed {
+    let looked = r
+        .pool
+        .with_fs(&r.store, &p.connection_id, |fs| {
+            let path = p.path.clone();
+            async move {
+                let top = fs.stat(&path).await?;
+                let siblings = if top.is_dir {
+                    Vec::new()
+                } else {
+                    rar_siblings_of(fs.as_ref(), &path).await?
+                };
+                Ok((fs, top, siblings))
+            }
+        })
+        .await;
+    let (fs, top, siblings) = match looked {
         Ok(v) => v,
         Err(e) => return super::api::remote_err(&e),
     };
+
+    if !top.is_dir {
+        let files = vec![(String::new(), top)];
+        let plan = match plan_copy(&deps, &body, &p.path, &files, &siblings) {
+            Ok(plan) => plan,
+            Err((code, msg)) => return err(code, msg),
+        };
+        let job_id = Uuid::new_v4();
+        let cancel = crate::register_transfer_cancel(job_id);
+        let started_at_ms = crate::now_ms();
+        crate::set_job(
+            &deps.jobs,
+            &deps.events_tx,
+            job_id,
+            running(started_at_ms, 0, plan.total),
+        );
+        tokio::spawn(run_copy(RunCopy {
+            r,
+            deps,
+            job_id,
+            started_at_ms,
+            cancel,
+            fs,
+            connection_id: p.connection_id,
+            base: p.path,
+            is_dir: false,
+            files,
+            siblings,
+            plan,
+        }));
+        return accepted(job_id);
+    }
+
+    let job_id = Uuid::new_v4();
+    let cancel = crate::register_transfer_cancel(job_id);
+    let started_at_ms = crate::now_ms();
+    crate::set_job(&deps.jobs, &deps.events_tx, job_id, listing(started_at_ms));
+    tokio::spawn(async move {
+        let walked = {
+            let stop = Arc::clone(&cancel);
+            r.pool
+                .with_fs(&r.store, &p.connection_id, |fs| {
+                    let (path, stop) = (p.path.clone(), Arc::clone(&stop));
+                    async move { fs.walk_until(&path, MAX_FILES, &stop).await }
+                })
+                .await
+        };
+        let files = match walked {
+            Ok(files) => files,
+            Err(e) => {
+                let state = failed(started_at_ms, super::api::error_with_hint(&e));
+                crate::set_job(&deps.jobs, &deps.events_tx, job_id, state);
+                return;
+            }
+        };
+        let plan = match plan_copy(&deps, &body, &p.path, &files, &[]) {
+            Ok(plan) => plan,
+            Err((_, msg)) => {
+                let state = failed(started_at_ms, msg);
+                crate::set_job(&deps.jobs, &deps.events_tx, job_id, state);
+                return;
+            }
+        };
+        crate::set_job(
+            &deps.jobs,
+            &deps.events_tx,
+            job_id,
+            running(started_at_ms, 0, plan.total),
+        );
+        run_copy(RunCopy {
+            r,
+            deps,
+            job_id,
+            started_at_ms,
+            cancel,
+            fs,
+            connection_id: p.connection_id,
+            base: p.path,
+            is_dir: true,
+            files,
+            siblings: Vec::new(),
+            plan,
+        })
+        .await;
+    });
+    accepted(job_id)
+}
+
+fn accepted(job_id: Uuid) -> Response {
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({ "job_id": job_id.to_string() })),
+    )
+        .into_response()
+}
+
+/// A RAR set's first volume brings the rest of the set with it: (server path, entry) of each.
+async fn rar_siblings_of(
+    fs: &dyn RemoteFs,
+    path: &str,
+) -> Result<Vec<(String, Entry)>, RemoteError> {
+    let name = path.rsplit('/').next().unwrap_or("").to_string();
+    let mut siblings = Vec::new();
+    if !name.to_ascii_lowercase().ends_with(".rar") {
+        return Ok(siblings);
+    }
+    let dir = match path.rfind('/') {
+        Some(0) | None => "/".to_string(),
+        Some(i) => path[..i].to_string(),
+    };
+    let mut entries = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = fs.list(&dir, cursor).await?;
+        entries.extend(page.entries);
+        match page.next_cursor {
+            Some(c) => cursor = Some(c),
+            None => break,
+        }
+    }
+    let names: Vec<String> = entries
+        .iter()
+        .filter(|e| !e.is_dir)
+        .map(|e| e.name.clone())
+        .collect();
+    for sib in rar_set_siblings(&name, &names) {
+        if let Some(e) = entries.iter().find(|e| e.name == sib) {
+            siblings.push((super::path::join(&dir, &sib)?, e.clone()));
+        }
+    }
+    Ok(siblings)
+}
+
+/// Where a copy goes, once it is known that it can.
+struct CopyPlan {
+    total: u64,
+    dest_dir: PathBuf,
+    dest: PathBuf,
+    made_dir: bool,
+}
+
+/// The refusals: too many files, sizes that do not add up, no room, a name already taken.
+fn plan_copy(
+    deps: &FetchDeps,
+    body: &FetchBody,
+    server_path: &str,
+    files: &[(String, Entry)],
+    siblings: &[(String, Entry)],
+) -> Result<CopyPlan, (StatusCode, String)> {
     if files.len() >= MAX_FILES {
-        return err(
+        return Err((
             StatusCode::BAD_REQUEST,
             format!("That folder has more than {MAX_FILES} files."),
-        );
+        ));
     }
     // The sizes come from the server: a sum that overflows is refused, not wrapped.
     let Some(total) = total_size(files.iter().chain(siblings.iter()).map(|(_, e)| e.size)) else {
-        return err(
+        return Err((
             StatusCode::BAD_REQUEST,
-            "The server reports sizes too large to add up.",
-        );
+            "The server reports sizes too large to add up.".to_string(),
+        ));
     };
 
     let (dest_dir, made_dir) = match body.dest_dir.as_deref().filter(|d| !d.trim().is_empty()) {
@@ -198,28 +340,27 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
         None => (default_copy_root().join(Uuid::new_v4().to_string()), true),
     };
     if let Err(e) = std::fs::create_dir_all(&dest_dir) {
-        return err(
+        return Err((
             StatusCode::BAD_REQUEST,
             format!("{}: {e}", dest_dir.display()),
-        );
+        ));
     }
     if let Some(free) = (deps.free_bytes)(&dest_dir) {
         if free < total.saturating_add(HEADROOM) {
             if made_dir {
                 let _ = std::fs::remove_dir_all(&dest_dir);
             }
-            return err(
+            return Err((
                 StatusCode::INSUFFICIENT_STORAGE,
                 format!(
                     "Not enough space: needs {}, {} free.",
                     ps5upload_core::units::iec_bytes(total.saturating_add(HEADROOM)),
                     ps5upload_core::units::iec_bytes(free)
                 ),
-            );
+            ));
         }
     }
-    let name = p
-        .path
+    let name = server_path
         .rsplit('/')
         .find(|s| !s.is_empty())
         .unwrap_or("server")
@@ -231,22 +372,56 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
         .chain(siblings.iter().map(|(_, e)| dest_dir.join(&e.name)))
         .find(|p| p.exists())
     {
-        return err(
+        return Err((
             StatusCode::CONFLICT,
             format!("{} already exists", taken.display()),
-        );
+        ));
     }
+    Ok(CopyPlan {
+        total,
+        dest_dir,
+        dest,
+        made_dir,
+    })
+}
 
-    let job_id = Uuid::new_v4();
-    let cancel = crate::register_transfer_cancel(job_id);
-    let started_at_ms = crate::now_ms();
-    crate::set_job(
-        &deps.jobs,
-        &deps.events_tx,
+struct RunCopy {
+    r: Arc<Remote>,
+    deps: FetchDeps,
+    job_id: Uuid,
+    started_at_ms: u64,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    fs: Arc<dyn RemoteFs>,
+    connection_id: String,
+    base: String,
+    is_dir: bool,
+    files: Vec<(String, Entry)>,
+    siblings: Vec<(String, Entry)>,
+    plan: CopyPlan,
+}
+
+/// The copy, to the job's end.
+async fn run_copy(run: RunCopy) {
+    let RunCopy {
+        r,
+        deps,
         job_id,
-        running(started_at_ms, 0, total),
-    );
-
+        started_at_ms,
+        cancel,
+        fs,
+        connection_id,
+        base,
+        is_dir,
+        files,
+        siblings,
+        plan,
+    } = run;
+    let CopyPlan {
+        total,
+        dest_dir,
+        dest,
+        made_dir,
+    } = plan;
     // A RAR set's other volumes land beside the first.
     let sibling_copies: Vec<(String, Entry, PathBuf)> = siblings
         .into_iter()
@@ -262,86 +437,67 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
             .chain(sibling_copies.iter().map(|(_, _, l)| l.clone()))
             .collect()
     };
-    let pool = Arc::clone(&r.pool);
-    let store = Arc::clone(&r.store);
-    let id = p.connection_id.clone();
-    let base = p.path.clone();
-    tokio::spawn(async move {
-        let result = copy_all(CopyJob {
-            _fs: fs,
-            pool,
-            store,
-            id,
-            base,
-            is_dir,
-            files,
-            siblings: sibling_copies,
-            dest: dest.clone(),
-            cancel,
-            backoff: deps.backoff,
-            report: &|done| {
-                crate::set_job(
-                    &deps.jobs,
-                    &deps.events_tx,
-                    job_id,
-                    running(started_at_ms, done, total),
-                )
-            },
-        })
-        .await;
-        let completed_at_ms = crate::now_ms();
-        match result {
-            Ok(file_count) => {
-                fetched()
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(dest.clone(), remove_roots);
-                crate::set_job(
-                    &deps.jobs,
-                    &deps.events_tx,
-                    job_id,
-                    JobState::Done {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        tx_id_hex: String::new(),
-                        bytes_sent: total,
-                        dest: dest.display().to_string(),
-                        files_sent: file_count,
-                        skipped_files: 0,
-                        skipped_bytes: 0,
-                        commit_ack: None,
-                    },
-                );
-            }
-            Err(e) => {
-                // A single file dies as `<name>.partial`; a folder takes its partials with it.
-                // Every handle `copy_all` opened is closed by now; the removal still retries,
-                // since Windows can keep a just-closed file locked for a moment.
-                let roots = remove_roots.clone();
-                let _ = tokio::task::spawn_blocking(move || remove_copies(&roots)).await;
-                crate::set_job(
-                    &deps.jobs,
-                    &deps.events_tx,
-                    job_id,
-                    JobState::Failed {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        error: e,
-                        error_reason: None,
-                        error_detail: None,
-                        error_console: None,
-                    },
-                );
-            }
+    let result = copy_all(CopyJob {
+        _fs: fs,
+        pool: Arc::clone(&r.pool),
+        store: Arc::clone(&r.store),
+        id: connection_id,
+        base,
+        is_dir,
+        files,
+        siblings: sibling_copies,
+        dest: dest.clone(),
+        cancel,
+        backoff: deps.backoff.clone(),
+        report: &|done| {
+            crate::set_job(
+                &deps.jobs,
+                &deps.events_tx,
+                job_id,
+                running(started_at_ms, done, total),
+            )
+        },
+    })
+    .await;
+    let completed_at_ms = crate::now_ms();
+    match result {
+        Ok(file_count) => {
+            fetched()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(dest.clone(), remove_roots);
+            crate::set_job(
+                &deps.jobs,
+                &deps.events_tx,
+                job_id,
+                JobState::Done {
+                    started_at_ms,
+                    completed_at_ms,
+                    elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                    tx_id_hex: String::new(),
+                    bytes_sent: total,
+                    dest: dest.display().to_string(),
+                    files_sent: file_count,
+                    skipped_files: 0,
+                    skipped_bytes: 0,
+                    commit_ack: None,
+                },
+            );
         }
-    });
-    (
-        StatusCode::ACCEPTED,
-        Json(json!({ "job_id": job_id.to_string() })),
-    )
-        .into_response()
+        Err(e) => {
+            // A single file dies as `<name>.partial`; a folder takes its partials with it.
+            // Every handle `copy_all` opened is closed by now; the removal still retries,
+            // since Windows can keep a just-closed file locked for a moment.
+            let roots = remove_roots.clone();
+            let _ = tokio::task::spawn_blocking(move || remove_copies(&roots)).await;
+            crate::set_job(
+                &deps.jobs,
+                &deps.events_tx,
+                job_id,
+                failed(started_at_ms, e),
+            );
+        }
+    }
 }
 
 struct CopyJob<'a> {
@@ -406,7 +562,7 @@ async fn copy_all(job: CopyJob<'_>) -> Result<u64, String> {
                 async move { fs.open(&remote).await }
             })
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| super::api::error_with_hint(&e))?;
         let file = super::pool::retrying(
             Arc::clone(&job.pool),
             Arc::clone(&job.store),
@@ -547,6 +703,13 @@ const STALE_COPY_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 
 /// another engine's copy in progress is safe.
 pub fn sweep_stale_copies() {
     sweep_stale_copies_in(&default_copy_root(), STALE_COPY_AGE);
+    sweep_stale_copies_in(&inspect_root(), STALE_COPY_AGE);
+}
+
+/// Where a server folder's metadata files are mirrored for a look at it. The answer points at the
+/// mirror's icon, so a mirror outlives the request; it goes once it is an hour old.
+fn inspect_root() -> PathBuf {
+    std::env::temp_dir().join("ps5upload-inspect")
 }
 
 fn sweep_stale_copies_in(root: &Path, max_age: std::time::Duration) {
@@ -571,22 +734,27 @@ fn sweep_stale_copies_in(root: &Path, max_age: std::time::Duration) {
 /// server: only its metadata files are copied (into a local mirror), and the size and file count
 /// come from the server's own listing.
 pub(crate) async fn inspect_folder(r: &Remote, remote: &str) -> Response {
+    let p = match super::path::parse(remote) {
+        Ok(p) => p,
+        Err(e) => return Json(super::api::failure_body(&e)).into_response(),
+    };
+    let fs = match r.pool.fs(&r.store, &p.connection_id).await {
+        Ok(fs) => fs,
+        Err(e) => return Json(super::api::failure_body(&e)).into_response(),
+    };
     let result: Result<serde_json::Value, String> = async {
-        let p = super::path::parse(remote).map_err(|e| e.to_string())?;
-        let fs = r
-            .pool
-            .fs(&r.store, &p.connection_id)
-            .await
-            .map_err(|e| e.to_string())?;
         let name = p
             .path
             .rsplit('/')
             .find(|s| !s.is_empty())
             .unwrap_or("game")
             .to_string();
-        let mirror_root = std::env::temp_dir()
-            .join("ps5upload-inspect")
-            .join(&blake3::hash(remote.as_bytes()).to_hex().as_str()[..16]);
+        // Every other folder looked at since the engine started stays until this runs.
+        let _ =
+            tokio::task::spawn_blocking(|| sweep_stale_copies_in(&inspect_root(), STALE_COPY_AGE))
+                .await;
+        let mirror_root =
+            inspect_root().join(&blake3::hash(remote.as_bytes()).to_hex().as_str()[..16]);
         let mirror = mirror_root.join(&name);
         let _ = std::fs::remove_dir_all(&mirror);
         std::fs::create_dir_all(mirror.join("sce_sys")).map_err(|e| e.to_string())?;
@@ -620,7 +788,12 @@ pub(crate) async fn inspect_folder(r: &Remote, remote: &str) -> Response {
     .await;
     match result {
         Ok(v) => Json(v).into_response(),
-        Err(e) => Json(json!({ "ok": false, "error": e })).into_response(),
+        Err(e) => Json(json!({
+            "ok": false,
+            "hint": super::hints::hint_for(&e),
+            "error": e,
+        }))
+        .into_response(),
     }
 }
 
