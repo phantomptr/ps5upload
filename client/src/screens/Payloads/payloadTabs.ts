@@ -3,16 +3,16 @@ export type PayloadTabId = "catalog" | "send" | "ps5" | "running";
 /** Payloads first, then what is running on the console: its processes and the ports in use. */
 const ALL_TABS: readonly PayloadTabId[] = ["catalog", "send", "ps5", "running"];
 
-/** Catalog downloads use the native shell; browser Send forwards selected ELF bytes through the engine. */
-export function payloadTabsFor(native: boolean): readonly PayloadTabId[] {
-  return native ? ALL_TABS : ALL_TABS.filter((t) => t !== "catalog");
+/** Every build has every tab: the catalogue runs on the engine in a browser (`/api/payloads`), and
+ *  browser Send forwards selected ELF bytes through it. */
+export function payloadTabs(): readonly PayloadTabId[] {
+  return ALL_TABS;
 }
 
 /** The tab a bare /payloads opens on: what is on the console once one is connected,
  *  the catalogue before that. */
-export function defaultPayloadTab(native: boolean, connected: boolean): PayloadTabId {
-  if (!native || connected) return "ps5";
-  return "catalog";
+export function defaultPayloadTab(connected: boolean): PayloadTabId {
+  return connected ? "ps5" : "catalog";
 }
 
 /** The card id each retired per-integration tab now opens on "On your PS5". */

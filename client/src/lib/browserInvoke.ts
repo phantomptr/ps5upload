@@ -16,6 +16,7 @@
 
 import { getEngineUrl } from "../state/engine";
 import { consoleAddr } from "./addr";
+import { WORDED_ERROR_CODES } from "./payloadErrors";
 
 // ── Error types ──────────────────────────────────────────────────────────────
 
@@ -133,7 +134,13 @@ const TIMEOUT_LONG = 3_600_000; // 1 h  — matches Rust http_client_long
 async function extractEngineError(r: Response): Promise<string> {
   try {
     const j = (await r.json()) as Record<string, unknown>;
-    if (j && typeof j["error"] === "string") return j["error"] as string;
+    if (j && typeof j["error"] === "string") {
+      // A code the app words itself goes in front, as it does through a desktop command.
+      const code = j["code"];
+      return typeof code === "string" && WORDED_ERROR_CODES.has(code)
+        ? `${code}: ${j["error"] as string}`
+        : (j["error"] as string);
+    }
   } catch {
     /* fall through */
   }
@@ -1656,6 +1663,141 @@ export async function browserInvoke<T>(
       // engine's, which is on the console's LAN even when the browser is not.
       return getJson<T>(
         qs("/api/ps5/port-check", { ip: args["ip"], port: args["port"] }),
+      );
+
+    // ── Payload Library ──────────────────────────────────────────────────────
+    // The catalogue, its cache and sends run on the engine here, over the engine's own folder,
+    // so an inventory `path` is one the engine can read.
+
+    case "payloads_catalog":
+      return (await getJson<{ payloads: T }>("/api/payloads")).payloads;
+
+    case "payloads_local_inventory":
+      return (await getJson<{ local: T }>("/api/payloads")).local;
+
+    case "payloads_local_path": {
+      const { local } = await getJson<{
+        local: Array<{ payload_id: string; path: string }>;
+      }>("/api/payloads");
+      return (local.find((e) => e.payload_id === args["id"])?.path ?? null) as T;
+    }
+
+    case "payloads_release":
+      return getJson<T>(
+        qs(`/api/payloads/${uenc(args["id"] as string)}/releases/latest`, {
+          force: args["forceRefresh"] ? 1 : undefined,
+        }),
+      );
+
+    case "payloads_releases":
+      return getJson<T>(
+        qs(`/api/payloads/${uenc(args["id"] as string)}/releases`, {
+          force: args["forceRefresh"] ? 1 : undefined,
+        }),
+      );
+
+    case "payloads_download":
+      return postJson<T>(
+        `/api/payloads/${uenc(args["id"] as string)}/download`,
+        { asset_url: args["assetUrl"], version: args["version"] },
+        /*long=*/ true,
+      );
+
+    case "payloads_download_cancel":
+      return (
+        await postJson<{ cancelled: T }>(
+          `/api/payloads/${uenc(args["id"] as string)}/download/cancel`,
+          {},
+        )
+      ).cancelled;
+
+    case "payloads_add_custom_repo":
+      return postJson<T>("/api/payloads/repos", {
+        host: args["host"],
+        owner: args["owner"],
+        name: args["name"],
+        display_name: args["displayName"],
+        asset_hint: args["assetHint"],
+        checksum_file: args["checksumFile"],
+      });
+
+    case "payloads_remove_custom_repo": {
+      const r = await fetch(
+        `${getEngineUrl()}/api/payloads/repos/${uenc(args["id"] as string)}`,
+        { method: "DELETE", signal: AbortSignal.timeout(TIMEOUT_STANDARD) },
+      );
+      if (!r.ok) throw new Error(await extractEngineError(r));
+      return ((await r.json()) as { removed: T }).removed;
+    }
+
+    case "payload_send":
+      return postJson<T>(
+        "/api/payload/send",
+        { host: args["ip"], path: args["path"], port: args["port"] ?? undefined },
+        /*long=*/ true,
+      );
+
+    case "companion_probe":
+      return getJson<T>(qs("/api/ps5/companions", { addr: args["host"] as string }));
+
+    case "discover_ps5":
+      return postJson<T>(
+        "/api/discover",
+        {
+          timeout_ms:
+            args["timeoutSecs"] == null ? undefined : (args["timeoutSecs"] as number) * 1000,
+        },
+        /*long=*/ true,
+      );
+
+    // ── Console diagnostics ──────────────────────────────────────────────────
+
+    case "shell_run_cmd":
+      return postJson<T>(
+        "/api/ps5/shell/run",
+        {
+          addr: args["addr"],
+          cmd: args["cmd"],
+          session_id: args["sessionId"],
+          cwd: args["cwd"],
+          timeout_s: args["timeoutSecs"],
+        },
+        /*long=*/ true,
+      );
+
+    case "appdb_query_get":
+      return getJson<T>(qs("/api/ps5/appdb", { addr: args["addr"] as string }));
+
+    case "proc_modules_get":
+      return getJson<T>(
+        qs(`/api/ps5/process/${Number(args["pid"] ?? 0)}/modules`, {
+          addr: args["addr"] as string,
+        }),
+      );
+
+    case "fs_blake3_hash":
+      return postJson<T>(
+        "/api/ps5/fs/hash",
+        { addr: args["addr"], path: args["path"], algo: "blake3" },
+        /*long=*/ true,
+      );
+
+    case "crc32_file_get":
+      return postJson<T>(
+        "/api/ps5/fs/hash",
+        { addr: args["addr"], path: args["path"], algo: "crc32" },
+        /*long=*/ true,
+      );
+
+    case "heal_appmeta":
+      return postJson<T>(
+        "/api/ps5/appmeta/heal",
+        {
+          addr: args["addr"],
+          title_id: args["titleId"],
+          source_path: args["sourcePath"],
+        },
+        /*long=*/ true,
       );
 
     // ── Native-only / unsupported ────────────────────────────────────────────

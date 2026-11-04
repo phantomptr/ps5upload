@@ -16,7 +16,7 @@ import { isTauriEnv } from "../../lib/tauriEnv";
 import {
   defaultPayloadTab,
   legacyPayloadsTarget,
-  payloadTabsFor,
+  payloadTabs,
   type PayloadTabId,
 } from "./payloadTabs";
 
@@ -53,7 +53,7 @@ export default function PayloadsScreen() {
   const legacy = legacyPayloadsTarget(params.get("tab"));
   if (legacy) return <Navigate to={legacy} replace />;
 
-  const available = payloadTabsFor(native);
+  const available = payloadTabs();
   const allTabs: ReadonlyArray<TabbedShellTab<TabId>> = [
     {
       id: "catalog",
@@ -131,7 +131,7 @@ export default function PayloadsScreen() {
       titleFallback="Payloads"
       count={params.get("tab") === "running" ? processCount : undefined}
       tabs={tabs}
-      defaultTab={defaultPayloadTab(native, connected)}
+      defaultTab={defaultPayloadTab(connected)}
       renderPanel={renderPanel}
     />
   );

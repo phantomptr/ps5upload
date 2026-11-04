@@ -14,6 +14,7 @@ import {
 } from "../../api/ps5";
 import { Button, ErrorCard, Modal, Spinner, Toggle } from "../../components";
 import { useTr } from "../../state/lang";
+import { payloadErrorText, usbSkippedText } from "../../lib/payloadErrors";
 import { formatBytes } from "../../lib/format";
 import { isMobile } from "../../lib/platform";
 
@@ -98,7 +99,7 @@ export default function UsbAutoloaderModal({
       });
       setResult(r);
     } catch (e) {
-      setInstallError(String(e));
+      setInstallError(payloadErrorText(tr, e));
     } finally {
       setInstalling(false);
     }
@@ -342,7 +343,7 @@ export default function UsbAutoloaderModal({
                         </div>
                         <ul className="mt-1 list-disc pl-4 text-[var(--color-muted)]">
                           {result.skipped.map((s) => (
-                            <li key={s}>{s}</li>
+                            <li key={s}>{usbSkippedText(tr, s)}</li>
                           ))}
                         </ul>
                       </div>

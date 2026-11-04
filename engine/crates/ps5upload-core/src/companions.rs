@@ -104,11 +104,11 @@ pub fn probe_companions(host: &str) -> Vec<CompanionStatus> {
     }
     let (tx, rx) = mpsc::channel();
     for (i, c) in COMPANIONS.iter().enumerate() {
-        let (tx, host, port) = (tx.clone(), host.to_string(), c.port);
+        let (row_tx, host, port) = (tx.clone(), host.to_string(), c.port);
         let spawned = std::thread::Builder::new()
             .name("companion-probe".into())
             .spawn(move || {
-                let _ = tx.send((i, probe_port(&host, port, PROBE_TIMEOUT)));
+                let _ = row_tx.send((i, probe_port(&host, port, PROBE_TIMEOUT)));
             });
         if let Err(e) = spawned {
             let _ = tx.send((i, Err(format!("probe thread: {e}"))));

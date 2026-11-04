@@ -485,7 +485,7 @@ fn write_autoloader_folder(
         tmps.0.push(tmp.clone());
         std::fs::copy(&f.src, &tmp).map_err(|e| {
             format!(
-                "copy {} -> {}: {e}. Nothing on the drive was changed.",
+                "usb_write_failed: copy {} -> {}: {e}",
                 f.src.display(),
                 tmp.display()
             )
@@ -494,7 +494,7 @@ fn write_autoloader_folder(
     let autoload_tmp = folder.join("autoload.txt.tmp");
     tmps.0.push(autoload_tmp.clone());
     std::fs::write(&autoload_tmp, autoload_txt.as_bytes())
-        .map_err(|e| format!("write autoload.txt: {e}. Nothing on the drive was changed."))?;
+        .map_err(|e| format!("usb_write_failed: write autoload.txt: {e}"))?;
 
     let mut written = Vec::with_capacity(files.len() + 1);
     for f in files {
@@ -566,7 +566,7 @@ pub async fn usb_autoloader_install(
     let (ordered, unknown) = ordered_payloads(&lib, &req.payload_ids, req.include_ps5upload);
     let mut skipped: Vec<String> = unknown
         .iter()
-        .map(|id| format!("{id}: not in the payload list any more"))
+        .map(|id| format!("{id}: unknown_payload"))
         .collect();
     let mut files: Vec<StickFile> = Vec::with_capacity(ordered.len());
     for (id, _prio, delay_ms) in &ordered {
@@ -603,7 +603,7 @@ pub async fn usb_autoloader_install(
     let needed = total_size(&files)?;
     if free_bytes > 0 && needed > free_bytes {
         return Err(format!(
-            "usb_not_enough_space: The payloads need {needed} bytes and the drive has {free_bytes} free. Nothing on the drive was changed."
+            "usb_not_enough_space: The payloads need {needed} bytes and the drive has {free_bytes} free."
         ));
     }
 
@@ -806,7 +806,7 @@ mod tests {
             stick_file(t.0.join("src").join("missing.elf"), "shadowmountplus.elf"),
         ];
         let e = write_autoloader_folder(&folder, &files, "new list\n", &lib).unwrap_err();
-        assert!(e.contains("Nothing on the drive was changed"), "{e}");
+        assert!(e.starts_with("usb_write_failed: "), "{e}");
         assert_eq!(
             files_in(&folder),
             ["autoload.txt", "kstuff-echostretch.elf"]

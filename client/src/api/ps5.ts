@@ -2066,6 +2066,8 @@ export async function payloadsAddCustomRepo(args: {
   name: string;
   displayName?: string;
   assetHint?: string;
+  /** A `sha256sum`-style list the repo's releases publish. A download that doesn't match is refused. */
+  checksumFile?: string;
 }): Promise<PayloadInfo> {
   return invoke<PayloadInfo>("payloads_add_custom_repo", {
     host: args.host,
@@ -2073,6 +2075,7 @@ export async function payloadsAddCustomRepo(args: {
     name: args.name,
     displayName: args.displayName ?? null,
     assetHint: args.assetHint ?? null,
+    checksumFile: args.checksumFile ?? null,
   });
 }
 
@@ -2096,6 +2099,12 @@ export async function payloadsDownload(
     assetUrl,
     version,
   });
+}
+
+/** Stop a running download of this payload. Its `payloadsDownload` then rejects with
+ *  `download_cancelled` (`isDownloadCancelled`). False when none was running. */
+export async function payloadsDownloadCancel(id: string): Promise<boolean> {
+  return invoke<boolean>("payloads_download_cancel", { id });
 }
 
 // ─── ShadowMount+ awareness (read-only) ───────────────────────────────

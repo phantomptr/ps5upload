@@ -24,6 +24,7 @@ import {
   payloadsReleases,
   payloadsLocalInventory,
   payloadsDownload,
+  payloadsDownloadCancel,
   payloadsAddCustomRepo,
   payloadsRemoveCustomRepo,
   sendPayload,
@@ -41,6 +42,8 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { pmOverview, pmStore } from "../../api/payloadManager";
 import { recordPmStore } from "../../lib/pmUpdates";
 import { hostOf } from "../../lib/addr";
+import { isDownloadCancelled, payloadErrorText } from "../../lib/payloadErrors";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import { useLangStore, useTr } from "../../state/lang";
 import UsbAutoloaderModal from "./UsbAutoloaderModal";
 import { payloadCardLink } from "./payloadTabs";
@@ -78,6 +81,7 @@ export default function CatalogPanel() {
   >({});
   const [selectedTag, setSelectedTag] = useState<Record<string, string>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [usbWizardOpen, setUsbWizardOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -148,6 +152,7 @@ export default function CatalogPanel() {
   const [addHost, setAddHost] = useState("github.com");
   const [addBusy, setAddBusy] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const [addChecksum, setAddChecksum] = useState("");
 
   /** Parse "owner/name", "github.com/owner/name", or a full repo URL into
    *  { host, owner, name }. Returns null if it doesn't look like a repo ref. */
@@ -189,10 +194,12 @@ export default function CatalogPanel() {
         host: ref.host,
         owner: ref.owner,
         name: ref.name,
+        checksumFile: addChecksum.trim() || undefined,
       });
       await reloadCatalog();
       await refreshInventory();
       setAddRepo("");
+      setAddChecksum("");
       setAddOpen(false);
       pushNotification(
         "success",
@@ -200,7 +207,7 @@ export default function CatalogPanel() {
         { body: tr("payloads_custom_added_body", undefined, "Check its releases and send it like any other payload.") },
       );
     } catch (e) {
-      setAddError(e instanceof Error ? e.message : String(e));
+      setAddError(payloadErrorText(tr, e));
     } finally {
       setAddBusy(false);
     }
@@ -216,7 +223,7 @@ export default function CatalogPanel() {
         tr("payloads_custom_removed", { name }, `Removed ${name}`),
       );
     } catch (e) {
-      setErrors((prev) => ({ ...prev, [id]: String(e) }));
+      setErrors((prev) => ({ ...prev, [id]: payloadErrorText(tr, e) }));
     }
   }
 
@@ -230,6 +237,15 @@ export default function CatalogPanel() {
     setBusyIds((prev) => {
       const next = new Set(prev);
       if (busy) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const setDownloading = (id: string, on: boolean) => {
+    setDownloadingIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
       else next.delete(id);
       return next;
     });
@@ -254,7 +270,7 @@ export default function CatalogPanel() {
       const sel = list.find((r) => r.tag === tag) ?? list[0];
       if (sel) setReleases((prev) => ({ ...prev, [id]: sel }));
     } catch (e) {
-      setErrors((prev) => ({ ...prev, [id]: String(e) }));
+      setErrors((prev) => ({ ...prev, [id]: payloadErrorText(tr, e) }));
     } finally {
       setBusy(id, false);
     }
@@ -272,6 +288,7 @@ export default function CatalogPanel() {
     const release = releases[id];
     if (!release || !release.picked_asset_url) return;
     setBusy(id, true);
+    setDownloading(id, true);
     try {
       const local = await payloadsDownload(
         id,
@@ -289,14 +306,28 @@ export default function CatalogPanel() {
         },
       );
     } catch (e) {
-      setErrors((prev) => ({ ...prev, [id]: String(e) }));
-      pushNotification("error", tr("payloads_download_failed", { id }, `Download failed: ${id}`), {
-        body: String(e),
-        link: "/payloads",
-      });
+      // The user's own Cancel: nothing to report.
+      if (!isDownloadCancelled(e)) {
+        const text = payloadErrorText(tr, e);
+        setErrors((prev) => ({ ...prev, [id]: text }));
+        pushNotification("error", tr("payloads_download_failed", { id }, `Download failed: ${id}`), {
+          body: text,
+          link: "/payloads",
+        });
+      }
     } finally {
       setBusy(id, false);
+      setDownloading(id, false);
     }
+  }
+
+  /** Stop a running download. On a stalled connection the request ends when its read times
+   *  out, so the button goes straight away and the card is free again then. */
+  function handleCancelDownload(id: string) {
+    setDownloading(id, false);
+    void payloadsDownloadCancel(id).catch((e) => {
+      setErrors((prev) => ({ ...prev, [id]: payloadErrorText(tr, e) }));
+    });
   }
 
   /** Keep a cached payload on the console, in Payload Manager's own storage, under the
@@ -516,18 +547,21 @@ export default function CatalogPanel() {
             >
               {tr("payloads_add_repo", undefined, "Add repo")}
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<HardDrive size={12} />}
-              onClick={() => setUsbWizardOpen(true)}
-            >
-              {tr(
-                "payloads_open_usb_wizard_v2",
-                undefined,
-                "Make a USB payload stick",
-              )}
-            </Button>
+            {/* It writes to a stick plugged into this computer: not something a browser can do. */}
+            {isTauriEnv() && (
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<HardDrive size={12} />}
+                onClick={() => setUsbWizardOpen(true)}
+              >
+                {tr(
+                  "payloads_open_usb_wizard_v2",
+                  undefined,
+                  "Make a USB payload stick",
+                )}
+              </Button>
+            )}
           </div>
         </div>
         {addOpen && (
@@ -582,6 +616,22 @@ export default function CatalogPanel() {
                     "Used only when you enter a bare owner/name. GitHub or a Gitea/Forgejo host.",
                   )}
                   className="w-36 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1.5 text-xs outline-none focus:border-[var(--color-accent)]"
+                />
+              </label>
+              <label className="flex items-center gap-1 text-xs text-[var(--color-muted)]">
+                {tr("payloads_add_repo_checksum", undefined, "Checksum list")}
+                <input
+                  type="text"
+                  value={addChecksum}
+                  onChange={(e) => setAddChecksum(e.target.value)}
+                  spellCheck={false}
+                  placeholder="SHA256SUMS"
+                  title={tr(
+                    "payloads_add_repo_checksum_hint",
+                    undefined,
+                    "Optional. The name of a checksum file in each release of this repo. A download that doesn't match it is refused.",
+                  )}
+                  className="w-32 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2 py-1.5 text-xs outline-none focus:border-[var(--color-accent)]"
                 />
               </label>
               <Button
@@ -643,6 +693,8 @@ export default function CatalogPanel() {
             onSelectTag={(tag) => handleSelectTag(p.id, tag)}
             local={inventoryById[p.id]}
             busy={busyIds.has(p.id)}
+            downloading={downloadingIds.has(p.id)}
+            onCancelDownload={() => handleCancelDownload(p.id)}
             error={errors[p.id]}
             onCheck={(force) => handleCheck(p.id, force)}
             onDownload={() => handleDownload(p.id)}
@@ -679,6 +731,8 @@ function PayloadCard({
   onSelectTag,
   local,
   busy,
+  downloading,
+  onCancelDownload,
   error,
   onCheck,
   onDownload,
@@ -694,6 +748,8 @@ function PayloadCard({
   onSelectTag: (tag: string) => void;
   local: PayloadLocalEntry | undefined;
   busy: boolean;
+  downloading: boolean;
+  onCancelDownload: () => void;
   error: string | undefined;
   onCheck: (force: boolean) => void;
   onDownload: () => void;
@@ -867,6 +923,11 @@ function PayloadCard({
                         { version: release.tag },
                         `Download ${release.tag}`,
                       )}
+              </Button>
+            )}
+            {downloading && (
+              <Button variant="ghost" size="sm" onClick={onCancelDownload}>
+                {tr("cancel", undefined, "Cancel")}
               </Button>
             )}
             {local && (
