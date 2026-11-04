@@ -21,6 +21,13 @@ describe("job live notes", () => {
     expect(jobLiveFromSnapshot({ phase: "sending", settling: false })).toBeUndefined();
   });
 
+  it("reads the measuring phase of a RAR with entries of unknown size", () => {
+    expect(
+      jobLiveFromSnapshot({ phase: "measuring", measure_done_bytes: 5000 })?.measuringBytes,
+    ).toBe(5000);
+    expect(jobLiveFromSnapshot({ settling: true })?.measuringBytes).toBeUndefined();
+  });
+
   it("reads the skipping phase with its byte counts", () => {
     expect(
       jobLiveFromSnapshot({

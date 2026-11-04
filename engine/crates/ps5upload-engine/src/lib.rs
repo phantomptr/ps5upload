@@ -1518,6 +1518,13 @@ pub(crate) fn merge_live_notes(
             n.skip_total_bytes.load(Relaxed).into(),
         );
     }
+    if n.phase.load(Relaxed) == ps5upload_core::transfer::LIVE_PHASE_MEASURING {
+        o.insert("phase".into(), "measuring".into());
+        o.insert(
+            "measure_done_bytes".into(),
+            n.skip_done_bytes.load(Relaxed).into(),
+        );
+    }
     // What the console already held when the job first opened (a resume). `bytes_sent`
     // counts it, so a client takes it off for this run's speed and time left.
     let resumed = n.resumed_bytes.load(std::sync::atomic::Ordering::Acquire);
@@ -8969,10 +8976,13 @@ async fn transfer_rar_handler(
     let progress_files = Arc::new(AtomicU64::new(0));
     let progress_files_finalized = Arc::new(AtomicU64::new(0));
     let progress_bytes_finalized = Arc::new(AtomicU64::new(0));
+    // The plan leaves out entries whose headers give no size; the transfer stores the measured
+    // total here once it has decoded them.
+    let measured_total = Arc::new(AtomicU64::new(total_bytes));
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
-        dynamic_total_bytes: None,
+        dynamic_total_bytes: Some(Arc::clone(&measured_total)),
         skipped_files: 0,
         skipped_bytes: 0,
     };
@@ -9024,6 +9034,7 @@ async fn transfer_rar_handler(
         // The flag registered before the task: the core checks it at every shard boundary.
         cfg.cancel = Some(cancel);
         cfg.excludes = req.excludes;
+        cfg.progress_total = Some(measured_total);
         cfg.progress_bytes = Some(Arc::clone(&progress));
         cfg.progress_files = Some(Arc::clone(&progress_files));
         cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));

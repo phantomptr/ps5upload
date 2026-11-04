@@ -205,8 +205,14 @@ pub fn upload_rar_in(
     password: Option<&str>,
 ) -> Result<TransferResult> {
     use crate::rar_source::{rar_failure, RarOpenError, RarSource};
-    let (manifest, source) = match RarSource::open(archive, password, &cfg.excludes) {
+    let watch = ps5upload_core::transfer::RarLayoutWatch {
+        cancel: cfg.cancel.as_deref(),
+        live: cfg.progress_live.as_deref(),
+    };
+    let (manifest, source) = match RarSource::open_watched(archive, password, &cfg.excludes, watch)
+    {
         Ok(v) => v,
+        Err(RarOpenError::Cancelled) => return Err(anyhow!("transfer_cancelled")),
         Err(RarOpenError::Plan(f)) => return Err(rar_upload_failure(f.reason, f.message).into()),
         // A duplicate, a case clash, a file/dir clash or an unsafe path: terminal.
         Err(RarOpenError::Unsupported(m)) => {
@@ -217,6 +223,16 @@ pub fn upload_rar_in(
             .into())
         }
     };
+    // The headers do not give an unknown size, so the job's plan left those entries out: now
+    // that they are measured, the bar counts them.
+    if let Some(total) = &cfg.progress_total {
+        let measured = manifest
+            .entries
+            .iter()
+            .filter(|e| e.kind == gen::ENTRY_FILE)
+            .fold(0u64, |sum, e| sum.saturating_add(e.size));
+        total.store(measured, Ordering::Release);
+    }
     let source = Arc::new(source);
     let mut opts = SendOptions::upload(dest_root);
     opts.seq = Some(source.clone());
