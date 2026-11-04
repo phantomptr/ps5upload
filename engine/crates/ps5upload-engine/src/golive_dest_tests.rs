@@ -284,8 +284,8 @@ fn a_change_names_only_what_changes() {
     let v2 = st.update(&v.dest.id, &inp).unwrap();
     assert!(!v2.dest.enabled);
     assert_eq!(v2.dest.preset, "twitch");
-    assert_eq!(st.get(&v.dest.id).unwrap().1.key, "live_987654321_key");
-    // An add still has to say which site.
+    assert_eq!(st.get(&v.dest.id).unwrap().1.key, "live_987654321_key"); // gitleaks:allow (a made-up key)
+                                                                         // An add still has to say which site.
     let add: DestinationInput = serde_json::from_str(r#"{"key":"abcd1234"}"#).unwrap();
     assert_eq!(st.add(&add).unwrap_err().0, "preset_unknown");
     let _ = std::fs::remove_dir_all(&dir);

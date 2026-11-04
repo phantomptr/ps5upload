@@ -459,7 +459,7 @@ async fn changing_a_saved_site_over_http_names_only_what_changes() {
     let (st, v) = call(
         "POST",
         d.clone(),
-        Some(r#"{"preset":"twitch","key":"live_12345678_abcd","bandwidth_test":true}"#),
+        Some(r#"{"preset":"twitch","key":"live_12345678_abcd","bandwidth_test":true}"#), // gitleaks:allow (a made-up key)
     )
     .await;
     assert_eq!(st, 200, "{v}");
