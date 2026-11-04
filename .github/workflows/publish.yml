@@ -41,8 +41,10 @@ on:
         description: "Release tag to build & publish (e.g. v2.17.0). The tag must already exist."
         required: true
 
+# Only create-release writes (its own grant below): the build jobs run npm ci, Gradle, CocoaPods
+# and downloaded tooling, which have no use for a token that can change the repository.
 permissions:
-  contents: write
+  contents: read
   # scripts/release/wait-for-artifact.mjs reads this run's artifacts and jobs.
   actions: read
 
@@ -93,6 +95,19 @@ jobs:
           fi
           echo "tag $raw_tag matches VERSION $expected"
 
+      # The release step below always says pre-release, and updating an existing release takes
+      # those flags: a re-dispatch would pull a promoted release from the stable update channel
+      # and swap its files under the people already on it.
+      - name: Refuse to rebuild a promoted release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if [ "$(gh release view "$INPUT_TAG" --json isPrerelease --jq .isPrerelease 2>/dev/null)" = false ]; then
+            echo "::error::$INPUT_TAG is already promoted. Cut the next version, or first make it a pre-release again: gh release edit $INPUT_TAG --prerelease"
+            exit 1
+          fi
+
       - name: Sync version from VERSION
         run: node scripts/update-version.js
 
@@ -119,7 +134,8 @@ jobs:
           }
           apt_retry update
           # Add LLVM apt repo for llvm-22 (not in Ubuntu 24.04 default repos)
-          curl -fsSL --retry 3 --retry-delay 5 https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
+          sudo bash scripts/install-llvm-apt.sh 22
+          apt_retry update
           apt_retry install -y clang-22 llvm-22-dev lld-22 unzip python3
 
       - name: Install pinned PS5 Payload SDK
@@ -1106,13 +1122,6 @@ jobs:
           cat "$shares"/*.log
           exit "$rc"
 
-      # A signed record that each file was built by this workflow from this tag, so anyone can
-      # check a download is ours and untouched: gh attestation verify <file> -R phantomptr/ps5upload
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
-        with:
-          subject-path: release/*
-
       # The release body is the CHANGELOG section for this version. The old
       # "See CHANGELOG.md" placeholder shipped whenever the entry was missing
       # (scripts/release.sh tags before the changelog is written if you forget
@@ -1167,6 +1176,15 @@ jobs:
 
       - name: Move release notes out of assets dir
         run: mv release/RELEASE_NOTES.md "$RUNNER_TEMP/RELEASE_NOTES.md"
+
+      # After the manifests (the updater reads latest.json) and with the notes out, so the
+      # attested files are exactly the ones the next step uploads.
+      # A signed record that each file was built by this workflow from this tag, so anyone can
+      # check a download is ours and untouched: gh attestation verify <file> -R phantomptr/ps5upload
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: release/*
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
