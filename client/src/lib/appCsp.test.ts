@@ -1,9 +1,8 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const conf = JSON.parse(
-  readFileSync(new URL("../../src-tauri/tauri.conf.json", import.meta.url), "utf-8"),
-) as { app: { security: { csp: string; devCsp: string } } };
+import confText from "../../src-tauri/tauri.conf.json?raw";
+
+const conf = JSON.parse(confText) as { app: { security: { csp: string; devCsp: string } } };
 
 function directive(csp: string, name: string): string[] {
   const found = csp.split(";").map((d) => d.trim().split(/\s+/)).find(([n]) => n === name);
