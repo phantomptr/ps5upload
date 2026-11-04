@@ -64,6 +64,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                     "description": "Query parameters: a name and a string, number or boolean each.",
                 },
                 "body": {
+                    "type": "object",
                     "description": "The JSON body. Routes that read one need it, even if only {}.",
                 },
             }),
