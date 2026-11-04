@@ -393,6 +393,11 @@ pub fn scan(
             }
         };
         let items = discover(&fs, root, cancel);
+        // A cancel during the walk cut it short: what it found so far is not the library, and
+        // saving it would drop every game and cached identity it did not reach.
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
         progress
             .found
             .fetch_add(items.len() as u64, Ordering::Relaxed);
@@ -614,6 +619,33 @@ mod tests {
             3,
             "dot-files and other files are not items: {kinds:?}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Cancel while the first folders are being listed: nothing was found at root level (the
+    /// organizer's own layout), so nothing in the reading loop ever saw the cancel and an empty
+    /// library replaced the whole index.
+    #[test]
+    fn a_scan_cancelled_while_walking_is_a_cancelled_scan_not_an_empty_library() {
+        let root = tmp("cancel-walk");
+        app(
+            &root.join("PS5/PPSA01234 - Game/PPSA01234-app"),
+            "PPSA01234",
+            "Game",
+            "01.000.000",
+        );
+        let cancel = AtomicBool::new(true);
+        let r = scan(
+            &[s(&root)],
+            None,
+            false,
+            None,
+            false,
+            &cancel,
+            &Progress::default(),
+            None,
+        );
+        assert_eq!(r, Err("cancelled".to_string()));
         let _ = std::fs::remove_dir_all(&root);
     }
 
