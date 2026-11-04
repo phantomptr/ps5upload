@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { routeEngine } from "./fixtures/engine";
 
 // Remote Play's settings (10.3.0): one drawer over the stream from every Settings button. At the
 // right edge on a computer, a sheet from the bottom on a phone; in full screen it opens inside
@@ -43,16 +44,12 @@ async function mockConsole(page: Page, opts: { pad?: boolean } = {}): Promise<En
         },
       ] as unknown as (Gamepad | null)[];
   }, !!opts.pad);
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "10.2.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "10.2.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
+  });
   const engine: Engine = { starts: 0, stops: 0, pads: [] };
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {

@@ -540,3 +540,52 @@ pub(crate) const PS5_AUTH_SEED_KEY: [u8; 3584] = [
     0x0a, 0x23, 0x6b, 0xe4, 0xdc, 0x69, 0x27, 0xc4, 0x20, 0x98, 0xfd, 0x34, 0xca, 0x7a, 0x66, 0x20,
     0x58, 0xd2, 0x36, 0x7f, 0x2b, 0xa7, 0xd1, 0xde, 0x6f, 0x36, 0xb4, 0xf2, 0x3b, 0x20, 0x5d, 0x02,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    fn digest(table: &[u8]) -> String {
+        Sha256::digest(table)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    /// These are data nobody can check by eye, and one wrong byte only shows on a console, as a
+    /// registration or session it refuses. The digests were compared with playactor's PS5 tables
+    /// (src/remoteplay/crypto/keys.ts) when this test was written.
+    #[test]
+    fn the_tables_are_byte_for_byte_playactors() {
+        assert_eq!(
+            digest(&PS5_INIT_KEY),
+            "53b11608360076562655967ca89d6bd5e9b8c05220644075bb49876c95cd3965"
+        );
+        assert_eq!(
+            digest(&PS5_AERO_KEY),
+            "3299d292a30e9be23c16a79bdd1a7cf8862a973ead751fd20d6d7c48154edeb0"
+        );
+        assert_eq!(
+            digest(&PS5_AUTH_NONCE_KEY),
+            "1db53dc52e9259b87d3b4e6c93ed008eb3aeed3a05d8dbeb27ce12c92511beb9"
+        );
+        assert_eq!(
+            digest(&PS5_AUTH_SEED_KEY),
+            "22f6776ae81cc9bf2e562abee4618e3a32557875af5cd346145a5f2a5d81009b"
+        );
+    }
+
+    /// The callers index these by a byte from the console's padding or nonce (`byte >> 3`, so
+    /// 0..=31) without a bounds check: a shorter table would panic on some answers only.
+    #[test]
+    fn every_offset_the_callers_can_compute_is_in_the_table() {
+        const LAST_BYTE: usize = 15; // 16-byte nonces and keys
+        const LAST_OFFSET: usize = 31;
+        // rp_regist.rs: generate_aeropause; generate_seed wraps around its table instead.
+        assert!(LAST_BYTE * 0x20 + LAST_OFFSET < PS5_AERO_KEY.len());
+        // rp_session.rs: ambassador and bright.
+        assert!(LAST_OFFSET * 0x70 + LAST_BYTE < PS5_AUTH_NONCE_KEY.len());
+        assert!(LAST_OFFSET * 0x70 + LAST_BYTE < PS5_AUTH_SEED_KEY.len());
+    }
+}

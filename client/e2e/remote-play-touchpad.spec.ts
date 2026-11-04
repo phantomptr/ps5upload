@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { routeEngine } from "./fixtures/engine";
 
 // The on-screen controller's touchpad is pressed as well as touched: a finger held on it is the
 // DualSense's touchpad button (L1 + R1 + touchpad and other combos read it), a finger that
@@ -28,16 +29,12 @@ async function sideways(page: Page) {
       }),
     );
   });
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "9.7.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "9.7.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
+  });
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
       const msg = JSON.parse(String(m)) as { host?: string; pad?: { buttons: number; touch: unknown } };

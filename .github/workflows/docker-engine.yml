@@ -242,7 +242,8 @@ jobs:
           }
           apt_retry update
           # llvm-22 is not in Ubuntu 24.04's default repos.
-          curl -fsSL --retry 3 --retry-delay 5 https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
+          sudo bash scripts/install-llvm-apt.sh 22
+          apt_retry update
           apt_retry install -y clang-22 llvm-22-dev lld-22 unzip python3
 
       - name: Install pinned PS5 Payload SDK

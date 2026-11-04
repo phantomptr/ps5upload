@@ -11,6 +11,7 @@ import {
   findTitleId,
   writeTitleCache,
 } from "./titleDetails";
+import { installWindowStub } from "../test-utils/storage";
 
 // Stub the Tauri `invoke` channel. The title-meta code path goes:
 // titleDetails.ts -> invoke("title_meta_fetch", {url}) -> Rust. The
@@ -28,27 +29,6 @@ vi.mock("./tauriEnv", () => ({ isTauriEnv: () => true }));
 
 function installInvokeStub(impl: typeof invokeImpl) {
   invokeImpl = impl;
-}
-
-function installLocalStorageStub() {
-  const store = new globalThis.Map<string, string>();
-  vi.stubGlobal("window", {
-    localStorage: {
-      getItem: (k: string) => (store.has(k) ? (store.get(k) as string) : null),
-      setItem: (k: string, v: string) => {
-        store.set(k, v);
-      },
-      removeItem: (k: string) => {
-        store.delete(k);
-      },
-      clear: () => store.clear(),
-      key: (i: number) => Array.from(store.keys())[i] ?? null,
-      get length() {
-        return store.size;
-      },
-    },
-  });
-  return store;
 }
 
 /** Skeleton of what the patches sites return for a known title —
@@ -118,7 +98,7 @@ describe("platformForTitleId", () => {
 
 describe("title cache", () => {
   beforeEach(() => {
-    installLocalStorageStub();
+    installWindowStub();
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -220,7 +200,7 @@ describe("parsePatchesHtml", () => {
 
 describe("fetchTitleInfo", () => {
   beforeEach(() => {
-    installLocalStorageStub();
+    installWindowStub();
   });
   afterEach(() => {
     vi.unstubAllGlobals();

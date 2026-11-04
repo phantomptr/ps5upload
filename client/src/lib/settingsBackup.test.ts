@@ -10,26 +10,10 @@ import {
   trimBundle,
   type Bundle,
 } from "./settingsBackup";
-
-// The node test environment has no window: a small in-memory localStorage (as fsLastPath.test).
-function installLocalStorageStub() {
-  const store = new globalThis.Map<string, string>();
-  vi.stubGlobal("window", {
-    localStorage: {
-      getItem: (k: string) => store.get(k) ?? null,
-      setItem: (k: string, v: string) => void store.set(k, v),
-      removeItem: (k: string) => void store.delete(k),
-      clear: () => store.clear(),
-      key: (i: number) => Array.from(store.keys())[i] ?? null,
-      get length() {
-        return store.size;
-      },
-    },
-  });
-}
+import { installWindowStub } from "../test-utils/storage";
 
 describe("settings bundles", () => {
-  beforeEach(installLocalStorageStub);
+  beforeEach(installWindowStub);
   afterEach(() => vi.unstubAllGlobals());
 
   it("take only the app's keys, and never their own bookkeeping", () => {

@@ -10,10 +10,24 @@
 # docker-engine.yml for the GHCR images, exactly what a tag pushed from a clone
 # would have started. The tag is VERSION's; a run whose VERSION already has a
 # tag stops.
+#
+# A tag cannot be moved and its build takes ~40 minutes, so everything that can
+# refuse it runs first: the version files, the CHANGELOG section (publish.yml
+# would only find it missing after the whole build), and `ci` for this commit.
+# The run waits for `ci`, ~20 minutes when dispatched right after the merge.
+# When it failed on a flake: `gh run rerun <id> --failed`, then dispatch again.
+# Emergencies only, skipping that wait:
+#
+#   gh workflow run release-tag.yml --ref main -f force=true
 name: release-tag
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Emergency only: tag even though ci has not passed on this commit"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -38,8 +52,8 @@ jobs:
       - name: Check every version file matches VERSION
         run: node scripts/update-version.js --check
 
-      - name: Create and push the tag
-        id: tag
+      - name: Check the tag is new and CHANGELOG has its section
+        id: version
         run: |
           version="$(tr -d '[:space:]' < VERSION)"
           if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -51,12 +65,71 @@ jobs:
             echo "::error::$tag already exists"
             exit 1
           fi
+          # The same section publish.yml takes the release notes from, after the build.
+          notes="$(awk -v ver="$version" '
+            $0 == "## " ver { found=1; next }
+            found && $0 ~ "^## " { exit }
+            found && $0 ~ "^---$" { exit }
+            found { print }
+          ' CHANGELOG.md)"
+          if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
+            echo "::error::CHANGELOG.md has no '## $version' section (or it is empty). Merge the entry, then dispatch again; nothing was tagged."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # A success on any run of this commit counts (a re-run keeps its run id). A failure is not
+      # final at once: ci-runner-retry may still re-run the jobs GitHub never gave a runner.
+      - name: Wait for ci to pass on this commit
+        if: ${{ !inputs.force }}
+        timeout-minutes: 90
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          absent=0
+          failed=0
+          while :; do
+            # A passing API hiccup is not a verdict: ask again (the step's limit still holds).
+            runs="$(gh run list --commit "$GITHUB_SHA" --workflow ci --limit 20 \
+              --json databaseId,status,conclusion,url)" || { sleep 30; continue; }
+            if [ "$(jq '[.[] | select(.conclusion == "success")] | length' <<< "$runs")" -gt 0 ]; then
+              echo "ci passed on $GITHUB_SHA"
+              exit 0
+            fi
+            total="$(jq 'length' <<< "$runs")"
+            active="$(jq '[.[] | select(.status != "completed")] | length' <<< "$runs")"
+            if [ "$total" = 0 ]; then
+              absent=$((absent + 1))
+              if [ "$absent" -ge 10 ]; then
+                echo "::error::no ci run for $GITHUB_SHA after 5 minutes. Run it (gh workflow run ci), then dispatch again, or dispatch with force=true in an emergency. Nothing was tagged."
+                exit 1
+              fi
+            elif [ "$active" = 0 ]; then
+              failed=$((failed + 1))
+              if [ "$failed" -ge 10 ]; then
+                jq -r '.[] | "\(.conclusion)  \(.url)"' <<< "$runs"
+                echo "::error::ci did not pass on $GITHUB_SHA (above). Fix it, or re-run a flake (gh run rerun <id> --failed), then dispatch again, or dispatch with force=true in an emergency. Nothing was tagged."
+                exit 1
+              fi
+            else
+              failed=0
+              echo "ci is still running on $GITHUB_SHA ($active of $total runs)"
+            fi
+            sleep 30
+          done
+
+      - name: Create and push the tag
+        id: tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$tag" -m "$tag" "$GITHUB_SHA"
-          git push origin "refs/tags/$tag"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Tagged $GITHUB_SHA as $tag"
+          git tag -a "$TAG" -m "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Tagged $GITHUB_SHA as $TAG"
 
       - name: Dispatch publish and docker-engine
         env:

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedConsole } from "./fixtures/engine";
 
 // Wake & sign in when the PS5 user has a login passcode (#608): the engine holds the sign-in and
 // answers {"state":"passcode","id"}; the app shows the passcode box over everything and continues
@@ -8,24 +9,7 @@ import { expect, test, type Page } from "@playwright/test";
 type Engine = { wake: Record<string, unknown> | null; answers: Record<string, unknown>[] };
 
 async function sleepingConsole(page: Page, onAnswer: (n: number, a: Record<string, unknown>) => unknown) {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("ps5upload.host", "192.168.1.100");
-    window.localStorage.setItem(
-      "ps5upload.roster.v1",
-      JSON.stringify({
-        active_id: "p1",
-        profiles: [
-          {
-            id: "p1",
-            name: "Living room",
-            host: "192.168.1.100",
-            wake_regist_key: "00112233",
-            wake_rp_key: "0f".repeat(16), // made up (built here so it reads as no secret)
-          },
-        ],
-      }),
-    );
-  });
+  await seedConsole(page);
   const engine: Engine = { wake: null, answers: [] };
   await page.route(
     (url) => url.pathname.startsWith("/api/"),

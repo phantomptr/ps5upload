@@ -1,28 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
+import { routeEngine, seedConsole } from "./fixtures/engine";
 
 // Controllers in Remote Play (9.5.0): mapping a controller the browser does not recognize (phone
 // controllers like a GameSir G8 often are), a computer taking a phone as a controller, and a phone
 // being one.
 
 async function consoleSetUp(page: Page) {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("ps5upload.host", "192.168.1.100");
-    window.localStorage.setItem(
-      "ps5upload.roster.v1",
-      JSON.stringify({
-        active_id: "p1",
-        profiles: [
-          {
-            id: "p1",
-            name: "Living room",
-            host: "192.168.1.100",
-            wake_regist_key: "00112233",
-            wake_rp_key: "00112233445566778899aabbccddeeff",
-          },
-        ],
-      }),
-    );
-  });
+  await seedConsole(page);
 }
 
 /** A controller the test presses: window.__pad.buttons[i] = 1. Reported with no standard mapping. */
@@ -53,16 +37,12 @@ test("a controller the browser does not recognize is mapped by pressing its butt
   await consoleSetUp(page);
   await fakeController(page);
   const pads: number[] = [];
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "9.5.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "9.5.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    return body;
+  });
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
       const msg = JSON.parse(String(m)) as { host?: string; pad?: { buttons: number } };
@@ -105,35 +85,30 @@ test("the computer shows a QR code for a phone, and lets a phone that asks in", 
   await consoleSetUp(page);
   const decided: unknown[] = [];
   let pending = [{ id: 7, name: "Pixel 8" }];
-  await page.route(
-    (url) => url.pathname.startsWith("/api/"),
-    async (route) => {
-      const req = route.request();
-      const path = new URL(req.url()).pathname;
-      let body: unknown = {};
-      if (path === "/api/version") body = { version: "9.5.0", caps: {} };
-      if (path === "/api/ps5/rp/session") body = { host: null };
-      if (path === "/api/ps5/rp/pad-link/decide") {
-        decided.push(req.postDataJSON());
-        pending = [];
-        body = { ok: true };
-      } else if (path === "/api/ps5/rp/pad-link") {
-        body = {
-          open: true,
-          url: "http://192.168.1.9:19113/pad#t=0123456789abcdef0123456789abcdef",
-          // On two networks: the PS5's, and the default route's (the phone's Wi-Fi).
-          urls: [
-            "http://192.168.1.9:19113/pad#t=0123456789abcdef0123456789abcdef",
-            "http://192.168.0.34:19113/pad#t=0123456789abcdef0123456789abcdef",
-          ],
-          pad_ws: "ws://192.168.1.9:19113/api/pad/ws",
-          pads: pending.length ? [] : [{ id: 7, name: "Pixel 8" }],
-          pending,
-        };
-      }
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
-    },
-  );
+  await routeEngine(page, (path, req) => {
+    let body: unknown = {};
+    if (path === "/api/version") body = { version: "9.5.0", caps: {} };
+    if (path === "/api/ps5/rp/session") body = { host: null };
+    if (path === "/api/ps5/rp/pad-link/decide") {
+      decided.push(req.postDataJSON());
+      pending = [];
+      body = { ok: true };
+    } else if (path === "/api/ps5/rp/pad-link") {
+      body = {
+        open: true,
+        url: "http://192.168.1.9:19113/pad#t=0123456789abcdef0123456789abcdef",
+        // On two networks: the PS5's, and the default route's (the phone's Wi-Fi).
+        urls: [
+          "http://192.168.1.9:19113/pad#t=0123456789abcdef0123456789abcdef",
+          "http://192.168.0.34:19113/pad#t=0123456789abcdef0123456789abcdef",
+        ],
+        pad_ws: "ws://192.168.1.9:19113/api/pad/ws",
+        pads: pending.length ? [] : [{ id: 7, name: "Pixel 8" }],
+        pending,
+      };
+    }
+    return body;
+  });
   await page.routeWebSocket(/\/api\/ps5\/rp\/ws/, (ws) => {
     ws.onMessage((m) => {
       if ((JSON.parse(String(m)) as { host?: string }).host) ws.send(JSON.stringify({ stage: "first_frame" }));

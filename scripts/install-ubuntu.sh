@@ -77,10 +77,10 @@ fi
 
 # ─── 1. apt deps ───────────────────────────────────────────────────────────────
 # Add the LLVM apt repo (Ubuntu 24.04 doesn't ship llvm-22 natively).
-# The automatic installer script from apt.llvm.org handles GPG key + sources.list.
 log "Adding LLVM apt repository for llvm-22"
 if ! apt-cache show clang-22 >/dev/null 2>&1; then
-  curl -fsSL https://apt.llvm.org/llvm.sh | $SUDO bash -s -- 22
+  require gpg || { $SUDO apt-get update && $SUDO apt-get install -y gnupg; }
+  $SUDO bash "$REPO_ROOT/scripts/install-llvm-apt.sh" 22
 else
   ok "llvm-22 already available in apt"
 fi

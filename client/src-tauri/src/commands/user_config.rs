@@ -23,6 +23,10 @@ use tauri::{AppHandle, Manager};
 
 type JsonValue = serde_json::Value;
 
+#[cfg(test)]
+#[path = "user_config_tests.rs"]
+mod tests;
+
 /// Monotonic counter for unique tmp-file suffixes. The renderer can fire
 /// `user_config_save` concurrently — one from the debounced subscriber
 /// flushing a user toggle, one from `persistNow` on first-launch
@@ -78,8 +82,13 @@ fn ensure_parent(path: &Path) -> Result<(), String> {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn load_engine_url(app: &AppHandle) -> Option<String> {
     let path = user_config_path(app).ok()?;
-    let bytes = std::fs::read(&path).ok()?;
-    let json: JsonValue = serde_json::from_slice(&bytes).ok()?;
+    engine_url_in(&std::fs::read(&path).ok()?)
+}
+
+/// The `engine_url` of a settings file's bytes; a damaged file has none.
+#[cfg(any(not(any(target_os = "android", target_os = "ios")), test))]
+fn engine_url_in(bytes: &[u8]) -> Option<String> {
+    let json: JsonValue = serde_json::from_slice(bytes).ok()?;
     let url = json.get("engine_url")?.as_str()?.trim();
     (!url.is_empty()).then(|| url.to_string())
 }
@@ -96,8 +105,11 @@ pub async fn user_config_path_resolved(app: AppHandle) -> Result<String, String>
 /// "missing" and "empty" identically without an error-handling branch.
 #[tauri::command]
 pub async fn user_config_load(app: AppHandle) -> Result<JsonValue, String> {
-    let path = user_config_path(&app)?;
-    match std::fs::read(&path) {
+    load_from(&user_config_path(&app)?)
+}
+
+fn load_from(path: &Path) -> Result<JsonValue, String> {
+    match std::fs::read(path) {
         Ok(bytes) => {
             if bytes.is_empty() {
                 return Ok(JsonValue::Null);
@@ -115,11 +127,14 @@ pub async fn user_config_load(app: AppHandle) -> Result<JsonValue, String> {
 /// saves from the renderer don't race on a shared tmp path.
 #[tauri::command]
 pub async fn user_config_save(app: AppHandle, config: JsonValue) -> Result<(), String> {
-    let path = user_config_path(&app)?;
-    ensure_parent(&path)?;
+    save_to(&user_config_path(&app)?, &config)
+}
+
+fn save_to(path: &Path, config: &JsonValue) -> Result<(), String> {
+    ensure_parent(path)?;
     let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_extension(format!("json.tmp.{seq}"));
-    let bytes = serde_json::to_vec_pretty(&config).map_err(|e| format!("serialize: {e}"))?;
+    let bytes = serde_json::to_vec_pretty(config).map_err(|e| format!("serialize: {e}"))?;
     // Write + fsync before rename: on Linux ext4 the rename can land
     // on disk before the data write, leaving a zero-byte
     // settings.json after a crash. Matches the same pattern in
@@ -146,7 +161,7 @@ pub async fn user_config_save(app: AppHandle, config: JsonValue) -> Result<(), S
             return Err(format!("fsync {tmp:?}: {e}"));
         }
     }
-    if let Err(e) = super::replace_file(&tmp, &path) {
+    if let Err(e) = super::replace_file(&tmp, path) {
         // Best-effort cleanup: if rename failed the tmp is still on
         // disk. Leaving it would accumulate `settings.json.tmp.N` files
         // over time across retries.

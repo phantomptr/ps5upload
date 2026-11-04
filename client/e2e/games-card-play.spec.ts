@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { routeEngine } from "./fixtures/engine";
 
 // An installed game's card on the Games grid has Play, always shown (a phone has no hover):
 // pressing it launches the game without opening its page, and once the game runs the same
@@ -22,49 +23,42 @@ for (const width of [1280, 390]) {
       window.localStorage.setItem("ps5upload.host", "192.168.1.100"),
     );
     const launched: string[] = [];
-    await page.route(
-      (url) => url.pathname.startsWith("/api/"),
-      async (route) => {
-        const path = new URL(route.request().url()).pathname;
-        let body: unknown = {};
-        if (path === "/api/version") body = { version: "9.1.0", caps: {} };
-        if (path === "/api/ps5/status") body = status;
-        if (path === "/api/ps5/apps/installed")
-          body = {
-            titles: [
-              { title_id: "PPSA01234", title_name: "Astro Bot", origin: "pkg" },
-            ],
-          };
-        if (path === "/api/ps5/process/list")
-          body = {
-            truncated: false,
-            processes: launched.length
-              ? [
-                  {
-                    pid: 77,
-                    name: "eboot",
-                    comm: "eboot.bin",
-                    title_id: "PPSA01234",
-                    app_id: 5,
-                    memory_mib: 1,
-                    threads: 1,
-                    kind: "app",
-                  },
-                ]
-              : [],
-          };
-        if (path === "/api/ps5/app/launch") {
-          launched.push(
-            (route.request().postDataJSON() as { title_id: string }).title_id,
-          );
-          body = { ok: true };
-        }
-        await route.fulfill({
-          contentType: "application/json",
-          body: JSON.stringify(body),
-        });
-      },
-    );
+    await routeEngine(page, (path, req) => {
+      let body: unknown = {};
+      if (path === "/api/version") body = { version: "9.1.0", caps: {} };
+      if (path === "/api/ps5/status") body = status;
+      if (path === "/api/ps5/apps/installed")
+        body = {
+          titles: [
+            { title_id: "PPSA01234", title_name: "Astro Bot", origin: "pkg" },
+          ],
+        };
+      if (path === "/api/ps5/process/list")
+        body = {
+          truncated: false,
+          processes: launched.length
+            ? [
+                {
+                  pid: 77,
+                  name: "eboot",
+                  comm: "eboot.bin",
+                  title_id: "PPSA01234",
+                  app_id: 5,
+                  memory_mib: 1,
+                  threads: 1,
+                  kind: "app",
+                },
+              ]
+            : [],
+        };
+      if (path === "/api/ps5/app/launch") {
+        launched.push(
+          (req.postDataJSON() as { title_id: string }).title_id,
+        );
+        body = { ok: true };
+      }
+      return body;
+    });
     await page.goto("/games", { waitUntil: "domcontentloaded" });
     const card = page
       .getByTestId("collection-card")

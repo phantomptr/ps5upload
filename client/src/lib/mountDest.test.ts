@@ -8,32 +8,13 @@ import {
   resolveMountPath,
   saveMountDest,
 } from "./mountDest";
+import { installWindowStub } from "../test-utils/storage";
 
 const KEY = "ps5upload.mount.lastDest";
 
-function installLocalStorageStub() {
-  const store = new globalThis.Map<string, string>();
-  const stub = {
-    getItem: (k: string) => (store.has(k) ? (store.get(k) as string) : null),
-    setItem: (k: string, v: string) => {
-      store.set(k, v);
-    },
-    removeItem: (k: string) => {
-      store.delete(k);
-    },
-    clear: () => store.clear(),
-    key: (i: number) => Array.from(store.keys())[i] ?? null,
-    get length() {
-      return store.size;
-    },
-  };
-  vi.stubGlobal("window", { localStorage: stub });
-  return stub;
-}
-
 describe("mountDest persistence", () => {
   beforeEach(() => {
-    installLocalStorageStub();
+    installWindowStub();
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -71,13 +52,13 @@ describe("mountDest persistence", () => {
   });
 
   it("survives malformed JSON", () => {
-    const stub = installLocalStorageStub();
+    const stub = installWindowStub();
     stub.setItem(KEY, "not-json");
     expect(loadMountDest("192.168.1.50")).toBeNull();
   });
 
   it("filters wrong-shape entries from a partially-corrupted map", () => {
-    const stub = installLocalStorageStub();
+    const stub = installWindowStub();
     stub.setItem(
       KEY,
       JSON.stringify({

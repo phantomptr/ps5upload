@@ -47,7 +47,7 @@
 # to the LAN interface (e.g. `-p 192.168.1.10:19113:19113`), not 0.0.0.0 on a
 # public host.
 
-FROM rust:alpine AS builder
+FROM rust:1.99.1-alpine3.24 AS builder
 
 # g++ compiles unrar's bundled C++ (for the ps5upload-unrar helper) against
 # musl; musl target links static.
