@@ -325,6 +325,10 @@ const SPECTATOR_QUEUE: usize = 120;
 /// The console serves one Remote Play session at a time; so do we.
 static LIVE: Mutex<Option<Arc<Live>>> = Mutex::new(None);
 
+/// Tests that put a session in [`LIVE`] (phones, Go live) take turns.
+#[cfg(test)]
+pub(crate) static LIVE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// The last session's start: what was asked, each handshake stage with its time, and how it
 /// ended. For a bug report (`/api/diag/features`): a refusal like 80108b26 is gone from the page
 /// once it is closed. No key, no address (the console is named by the report's own fields).

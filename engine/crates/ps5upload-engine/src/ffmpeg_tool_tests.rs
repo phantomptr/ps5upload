@@ -265,6 +265,59 @@ fn install_verifies_before_unpacking_and_find_checks_the_binary() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The Linux builds start through glibc's loader: a `FROM scratch` Docker image has none, so the
+/// download could only ever fail with "No such file or directory" there.
+#[test]
+fn a_build_that_cannot_start_here_is_not_offered() {
+    let linux = pin_for("linux", "x86_64").unwrap();
+    assert!(!runs_with(linux, |_| false), "no loader: can't run");
+    assert!(runs_with(linux, |p| {
+        p == Path::new("/lib64/ld-linux-x86-64.so.2")
+    }));
+    let arm = pin_for("linux", "aarch64").unwrap();
+    assert!(runs_with(arm, |p| p == Path::new("/lib/ld-linux-aarch64.so.1")));
+    assert!(!runs_with(arm, |p| {
+        p == Path::new("/lib64/ld-linux-x86-64.so.2")
+    }));
+    // Nothing of the sort on the others.
+    for (os, arch) in [
+        ("macos", "aarch64"),
+        ("macos", "x86_64"),
+        ("windows", "x86_64"),
+        ("windows", "aarch64"),
+    ] {
+        assert!(runs_with(pin_for(os, arch).unwrap(), |_| false), "{os}");
+    }
+}
+
+#[test]
+fn a_new_version_removes_the_old_ones() {
+    let tools = tmp();
+    let keep = tools.join("ffmpeg-9.0.2");
+    let dirs = [
+        "ffmpeg-9.0.2",
+        "ffmpeg-8.0.1",
+        "ffmpeg-7.1",
+        "ffmpeg-mine",
+        "other",
+    ];
+    for d in dirs {
+        std::fs::create_dir_all(tools.join(d).join("bin")).unwrap();
+        std::fs::write(tools.join(d).join("bin").join("ffmpeg"), b"x").unwrap();
+    }
+    std::fs::write(tools.join("ffmpeg-notes.txt"), b"a file").unwrap();
+    // PS5UPLOAD_FFMPEG runs from this one: the person's choice.
+    let own = tools.join("ffmpeg-mine").join("bin").join("ffmpeg");
+    remove_old_versions(&tools, &keep, Some(&own));
+    assert!(keep.join("bin/ffmpeg").exists());
+    assert!(own.exists());
+    assert!(tools.join("other/bin/ffmpeg").exists(), "not ours");
+    assert!(tools.join("ffmpeg-notes.txt").exists(), "not a folder");
+    assert!(!tools.join("ffmpeg-8.0.1").exists());
+    assert!(!tools.join("ffmpeg-7.1").exists());
+    let _ = std::fs::remove_dir_all(&tools);
+}
+
 /// The real thing: this computer's pinned build, downloaded, verified, unpacked and run.
 #[test]
 #[ignore = "downloads ffmpeg (30-90 MB) from the pinned URL"]

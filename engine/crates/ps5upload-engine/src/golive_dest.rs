@@ -14,8 +14,9 @@
 //! scrubbed of them (rp_golive.rs `redact`).
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::rp_stream_api::live_feed::SessionInfo;
@@ -227,6 +228,11 @@ pub(crate) struct Secret {
     /// Custom: the full URL as entered.
     #[serde(default)]
     pub url: String,
+    /// What the file holds when it can't be read (the key file was replaced or damaged). It is
+    /// saved back as it is, never re-encrypted empty: with the right key file back, the stream
+    /// key comes back too.
+    #[serde(skip)]
+    pub sealed: Option<String>,
 }
 
 impl Secret {
@@ -262,12 +268,16 @@ pub(crate) struct DestinationView {
     pub dest: Destination,
     /// "…abcd": the key's last four characters.
     pub key_hint: String,
+    /// The saved key can't be read any more: the site has to be added again.
+    pub key_lost: bool,
     pub name: &'static str,
 }
 
 /// What an add or change asks for.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub(crate) struct DestinationInput {
+    /// Absent on a change: the saved one (the client sends only what changes: `{"enabled":false}`).
+    #[serde(default)]
     pub preset: String,
     #[serde(default)]
     pub label: Option<String>,
@@ -352,10 +362,28 @@ pub(crate) fn origin_of(url: &str) -> String {
     }
 }
 
+/// `key` as the last part of the server's path: `rtmp://host/app?auth=x` + `s1` is
+/// `rtmp://host/app/s1?auth=x`, not a query that ends in the key.
+fn join_key(server: &str, key: &str) -> String {
+    let (path, query) = match server.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
+        None => (server, None),
+    };
+    let mut u = format!("{}/{}", path.trim_end_matches('/'), key);
+    if let Some(q) = query {
+        // Facebook's keys bring a query of their own.
+        u.push(if key.contains('?') { '&' } else { '?' });
+        u.push_str(q);
+    }
+    u
+}
+
 /// The URL ffmpeg publishes to, and its muxer ("flv" or "mpegts").
 pub(crate) fn publish_url(d: &Destination, s: &Secret) -> Option<(String, &'static str)> {
     let p = preset(&d.preset)?;
-    let join = |server: &str, key: &str| format!("{}/{}", server.trim_end_matches('/'), key);
+    if s.sealed.is_some() {
+        return None;
+    }
     let url = match p.id {
         "custom" => {
             let base = if s.url.is_empty() { &d.server } else { &s.url };
@@ -373,7 +401,7 @@ pub(crate) fn publish_url(d: &Destination, s: &Secret) -> Option<(String, &'stat
             if s.key.is_empty() {
                 base.clone()
             } else {
-                join(base, &s.key)
+                join_key(base, &s.key)
             }
         }
         _ => {
@@ -381,7 +409,7 @@ pub(crate) fn publish_url(d: &Destination, s: &Secret) -> Option<(String, &'stat
             if server.is_empty() || s.key.is_empty() {
                 return None;
             }
-            let mut u = join(&server, &s.key);
+            let mut u = join_key(&server, &s.key);
             if p.bandwidth_test && d.bandwidth_test {
                 u.push_str(if u.contains('?') { "&" } else { "?" });
                 u.push_str("bandwidthtest=true");
@@ -404,12 +432,16 @@ pub(crate) fn from_input(
         )
     })?;
     let mut secret = old.map(|o| o.1.clone()).unwrap_or_default();
+    // A change that leaves the site's secret alone works even when that secret can't be read:
+    // ticking a site off must not ask for its key.
+    let unchanged = old.is_some_and(|o| o.0.preset == p.id);
     if let Some(k) = inp.key.as_deref() {
         secret.key = if p.id == "custom" && k.trim().is_empty() {
             String::new()
         } else {
             validate_key(k)?
         };
+        secret.sealed = None;
     }
     let mut server = old.map(|o| o.0.server.clone()).unwrap_or_default();
     if p.id == "custom" {
@@ -417,8 +449,9 @@ pub(crate) fn from_input(
             let u = validate_url(u, true, false)?;
             server = origin_of(&u);
             secret.url = u;
+            secret.sealed = None;
         }
-        if secret.url.is_empty() {
+        if secret.url.is_empty() && secret.sealed.is_none() {
             return Err(Invalid(
                 "url_invalid",
                 "Enter the server address starting with rtmp://, rtmps:// or srt://.".into(),
@@ -437,7 +470,7 @@ pub(crate) fn from_input(
     } else {
         server.clear();
     }
-    if secret.key.is_empty() && p.id != "custom" {
+    if secret.key.is_empty() && p.id != "custom" && !unchanged {
         return Err(Invalid(
             "key_missing",
             "Paste the stream key from the site.".into(),
@@ -483,6 +516,7 @@ pub(crate) fn view(d: &Destination, s: &Secret) -> DestinationView {
     DestinationView {
         dest: d.clone(),
         key_hint: key_hint(s),
+        key_lost: s.sealed.is_some(),
         name: preset(&d.preset).map_or("Custom", |p| p.name),
     }
 }
@@ -514,19 +548,31 @@ const KEY_FILE: &str = "stream-destinations.key";
 
 impl Store {
     pub(crate) fn open(dir: &Path) -> anyhow::Result<Self> {
-        std::fs::create_dir_all(dir)?;
+        let in_dir = || format!("using {}", dir.display());
+        std::fs::create_dir_all(dir).with_context(in_dir)?;
         let key = load_or_create_key(&dir.join(KEY_FILE))?;
         let mut state = Vec::new();
         let path = dir.join(FILE);
         if path.exists() {
-            let shape: FileShape = serde_json::from_slice(&std::fs::read(&path)?)?;
+            let reading = || format!("reading {}", path.display());
+            let bytes = std::fs::read(&path).with_context(reading)?;
+            let shape: FileShape = serde_json::from_slice(&bytes).with_context(reading)?;
             for st in shape.destinations {
-                // A key that no longer decrypts (key file replaced) is dropped: re-entered.
-                let secret = st
-                    .secret
-                    .as_deref()
-                    .and_then(|b| decrypt(&key, b))
-                    .unwrap_or_default();
+                let secret = match st.secret {
+                    None => Secret::default(),
+                    Some(blob) => decrypt(&key, &blob).unwrap_or_else(|| {
+                        // Not this key's (the key file was replaced): the user adds the site
+                        // again, or puts the old key file back. Never the key itself in a log.
+                        crate::log_warn!(
+                            "golive: the saved stream key of {} can't be read; add the site again",
+                            st.dest.id
+                        );
+                        Secret {
+                            sealed: Some(blob),
+                            ..Default::default()
+                        }
+                    }),
+                };
                 state.push((st.dest, secret));
             }
         }
@@ -604,7 +650,10 @@ impl Store {
                 .map(|(d, s)| {
                     Ok(Stored {
                         dest: d.clone(),
-                        secret: Some(encrypt(&self.key, s)?),
+                        secret: Some(match &s.sealed {
+                            Some(blob) => blob.clone(),
+                            None => encrypt(&self.key, s)?,
+                        }),
                     })
                 })
                 .collect::<anyhow::Result<_>>()?,
@@ -617,20 +666,54 @@ impl Store {
     }
 }
 
-static STORE: std::sync::OnceLock<Result<std::sync::Arc<Store>, String>> =
-    std::sync::OnceLock::new();
+static STORE: Mutex<Option<Arc<Store>>> = Mutex::new(None);
+/// The last open's failure, so a status poll a second logs it once.
+static STORE_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+/// The folder they live in. Tests keep to one of their own.
+fn store_dir() -> Option<PathBuf> {
+    if cfg!(test) {
+        return Some(
+            std::env::temp_dir().join(format!("ps5upload-golive-store-{}", std::process::id())),
+        );
+    }
+    crate::remote::store::data_dir()
+}
 
 /// The saved destinations (in the engine's data folder).
-pub(crate) fn store() -> Result<std::sync::Arc<Store>, String> {
-    STORE
-        .get_or_init(|| {
-            let dir = crate::remote::store::data_dir()
-                .ok_or("no home folder to keep stream keys in; set PS5UPLOAD_DATA_DIR")?;
-            Store::open(&dir)
-                .map(std::sync::Arc::new)
-                .map_err(|e| e.to_string())
-        })
-        .clone()
+pub(crate) fn store() -> Result<Arc<Store>, String> {
+    store_from(&STORE, store_dir())
+}
+
+/// A failure is not kept: a file that was locked or damaged is read again on the next call, so
+/// fixing it needs no restart.
+fn store_from(
+    slot: &Mutex<Option<Arc<Store>>>,
+    dir: Option<PathBuf>,
+) -> Result<Arc<Store>, String> {
+    let mut g = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(s) = g.as_ref() {
+        return Ok(s.clone());
+    }
+    let opened = dir
+        .ok_or_else(|| "no home folder to keep stream keys in; set PS5UPLOAD_DATA_DIR".to_string())
+        .and_then(|dir| Store::open(&dir).map_err(|e| format!("{e:#}")));
+    let mut last = STORE_ERROR.lock().unwrap_or_else(|e| e.into_inner());
+    match opened {
+        Ok(s) => {
+            let s = Arc::new(s);
+            *g = Some(s.clone());
+            *last = None;
+            Ok(s)
+        }
+        Err(e) => {
+            if last.as_deref() != Some(e.as_str()) {
+                crate::log_warn!("golive: the saved destinations can't be read: {e}");
+                *last = Some(e.clone());
+            }
+            Err(e)
+        }
+    }
 }
 
 fn new_id(preset: &str, taken: &[(Destination, Secret)]) -> String {
@@ -660,7 +743,11 @@ fn load_or_create_key(path: &Path) -> anyhow::Result<[u8; 32]> {
     }
     let mut key = [0u8; 32];
     getrandom::fill(&mut key).map_err(|e| anyhow::anyhow!("reading OS randomness: {e}"))?;
-    write_private(path, &key)?;
+    // Whole or not at all: a crash between creating the file and writing it left an empty "key"
+    // that the next start set aside, and every saved stream key went with it.
+    let tmp = path.with_extension("key.tmp");
+    write_private(&tmp, &key)?;
+    std::fs::rename(&tmp, path)?;
     Ok(key)
 }
 

@@ -105,6 +105,27 @@ pub(crate) fn this_pin() -> Option<&'static Pin> {
     pin_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
+/// The loader a pinned build starts through, where it needs one: the Linux builds link glibc
+/// dynamically. Without it the file unpacks and hashes fine, and then "No such file or directory"
+/// when run: the `FROM scratch` Docker images (they have no libc at all), Alpine.
+fn loader_of(pin: &Pin) -> Option<&'static str> {
+    match (pin.os, pin.arch) {
+        ("linux", "x86_64") => Some("/lib64/ld-linux-x86-64.so.2"),
+        ("linux", "aarch64") => Some("/lib/ld-linux-aarch64.so.1"),
+        _ => None,
+    }
+}
+
+/// The pinned build can run on a system where `exists` says which files there are.
+pub(crate) fn runs_with(pin: &Pin, exists: impl Fn(&Path) -> bool) -> bool {
+    loader_of(pin).is_none_or(|l| exists(Path::new(l)))
+}
+
+/// The build to download for this computer: one is pinned, and it can run here.
+fn usable_pin() -> Option<&'static Pin> {
+    this_pin().filter(|p| runs_with(p, Path::exists))
+}
+
 fn exe_name() -> &'static str {
     if cfg!(windows) {
         "ffmpeg.exe"
@@ -200,6 +221,8 @@ pub(crate) fn find() -> Option<FfmpegCmd> {
             lib_dir: None,
         });
     }
+    // A copy from before the image said it can't run here (kept in a Docker volume) can't run now.
+    usable_pin()?;
     find_in(&install_dir()?)
 }
 
@@ -302,7 +325,10 @@ pub(crate) fn status_json() -> serde_json::Value {
     serde_json::json!({
         "installed": found.is_some(),
         "version": FFMPEG_VERSION,
-        "supported": pin.is_some(),
+        "supported": usable_pin().is_some(),
+        // There is a download for this OS and CPU, but this system can't run it (a Docker image):
+        // it takes an ffmpeg of its own (`PS5UPLOAD_FFMPEG`).
+        "needs_own": pin.is_some() && usable_pin().is_none(),
         "download_bytes": pin.map(|p| p.bytes),
         "source": pin.map(|p| p.url),
         "install": install_state(),
@@ -324,6 +350,14 @@ pub(crate) fn start_install() -> Result<bool, (&'static str, String)> {
             ),
         ));
     };
+    if !runs_with(pin, Path::exists) {
+        return Err((
+            "unsupported",
+            "The ffmpeg download can't run on this system (a Docker image, for example): set \
+             PS5UPLOAD_FFMPEG to an ffmpeg that can."
+                .to_string(),
+        ));
+    }
     let Some(dir) = install_dir() else {
         return Err((
             "disk",
@@ -478,7 +512,30 @@ pub(crate) fn install(pin: &Pin, dir: &Path, fetch: &Fetch) -> Result<(), (&'sta
         let _ = std::fs::remove_dir_all(dir);
     }
     std::fs::rename(&staged, dir).map_err(|e| ("disk", e.to_string()))?;
+    let own = std::env::var_os("PS5UPLOAD_FFMPEG").map(PathBuf::from);
+    remove_old_versions(parent, dir, own.as_deref());
     Ok(())
+}
+
+/// Every other `ffmpeg-*` folder in `tools` goes: each new pinned version would otherwise leave
+/// 60 to 200 MB behind for good. Not `keep`, and not the one `own` (`PS5UPLOAD_FFMPEG`) runs from.
+pub(crate) fn remove_old_versions(tools: &Path, keep: &Path, own: Option<&Path>) {
+    let Ok(entries) = std::fs::read_dir(tools) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        let is_ours = e.file_name().to_string_lossy().starts_with("ffmpeg-");
+        // Not through a link: only real folders of ours.
+        let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
+        if !is_ours || !is_dir || path == keep || own.is_some_and(|o| o.starts_with(&path)) {
+            continue;
+        }
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => crate::log_info!("ffmpeg_tool: removed the old {}", path.display()),
+            Err(e) => crate::log_warn!("ffmpeg_tool: could not remove {}: {e}", path.display()),
+        }
+    }
 }
 
 fn host_of(url: &str) -> &str {

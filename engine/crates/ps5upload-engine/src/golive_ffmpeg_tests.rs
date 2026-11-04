@@ -152,6 +152,38 @@ fn log_lines_are_classified() {
     assert_eq!(c("[aac @ 0x1] Qavg: 1234.5"), None);
 }
 
+/// No trusted roots for ffmpeg's TLS (a system without a bundle): not the internet's fault.
+#[test]
+fn a_certificate_failure_is_said_as_one() {
+    for line in [
+        "[tls @ 0x1] error:0A000086:SSL routines::certificate verify failed",
+        "[tls @ 0x1] The certificate is NOT trusted.",
+        "[tls @ 0x1] TLS handshake failed: unknown error",
+    ] {
+        assert_eq!(classify(line), Some(Failure::Tls), "{line}");
+    }
+    let m = Failure::Tls.message("YouTube");
+    assert!(m.contains("YouTube") && m.contains("SSL_CERT_FILE"), "{m}");
+    assert!(!m.contains("internet"), "{m}");
+}
+
+/// Several sites at once: plain English, not "the streaming sites's server".
+#[test]
+fn messages_for_several_sites_read_right() {
+    for f in [
+        Failure::Unreachable,
+        Failure::Tls,
+        Failure::Rejected,
+        Failure::Codec,
+        Failure::Dropped,
+        Failure::Other,
+    ] {
+        let m = f.message_many();
+        assert!(!m.contains("sites's") && !m.contains("doesn't"), "{m}");
+        assert!(m.starts_with(|c: char| c.is_uppercase()), "{m}");
+    }
+}
+
 #[test]
 fn tee_lines_name_the_output() {
     assert_eq!(
