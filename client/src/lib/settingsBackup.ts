@@ -33,8 +33,68 @@ const BEFORE_SYNC_EVERY_MS = 60 * 60 * 1000;
 const CONSOLE_BUDGET = 140 * 1024;
 
 export interface Bundle {
-  meta: { generated_at_ms: number; schema: 1; reason?: string; device?: string; dropped?: string[] };
+  meta: {
+    generated_at_ms: number;
+    schema: 1;
+    reason?: string;
+    device?: string;
+    dropped?: string[];
+    /** The engine kept the console keys back: this caller is not on the engine's computer. */
+    secrets_withheld?: boolean;
+  };
   local_storage: Record<string, string | null>;
+}
+
+const ROSTER_KEY = "ps5upload.roster.v1";
+/** What wakes a console and signs in to it (`PS5Profile`): the engine keeps these encrypted, and
+ *  hands them back only to its own computer. */
+const WAKE_FIELDS = ["wake_credential", "wake_regist_key", "wake_rp_key"] as const;
+
+type RosterProfile = Record<string, unknown> & { id?: unknown; host?: unknown };
+
+function parseProfiles(text: string | null | undefined): { doc: Record<string, unknown>; profiles: RosterProfile[] } | null {
+  if (!text) return null;
+  try {
+    const doc = JSON.parse(text) as Record<string, unknown> | null;
+    if (!doc || !Array.isArray(doc.profiles)) return null;
+    return { doc, profiles: doc.profiles as RosterProfile[] };
+  } catch {
+    return null;
+  }
+}
+
+/** The restored roster, with the wake keys this device already holds for any console the backup
+ *  has none for (one the engine kept them back from, or a console's own copy). A restore must not
+ *  cost the ability to wake a console. */
+export function keepLiveWakeKeys(restored: string, live: string | null): string {
+  const from = parseProfiles(live);
+  const to = parseProfiles(restored);
+  if (!from || !to) return restored;
+  for (const p of to.profiles) {
+    const mine = from.profiles.find((l) => l.id === p.id) ?? from.profiles.find((l) => l.host === p.host);
+    if (!mine) continue;
+    for (const f of WAKE_FIELDS) if (!p[f] && mine[f]) p[f] = mine[f];
+  }
+  return JSON.stringify(to.doc);
+}
+
+/** The bundle for a console's own copy: only that console's keys. Who can read its documents
+ *  already controls that console, but not the others on the roster. */
+export function forConsole(b: Bundle, host: string): Bundle {
+  const text = b.local_storage[ROSTER_KEY];
+  if (typeof text !== "string") return b;
+  const roster = parseProfiles(text);
+  const local_storage = { ...b.local_storage };
+  if (!roster) {
+    delete local_storage[ROSTER_KEY];
+    return { ...b, local_storage };
+  }
+  const same = (h: unknown) => typeof h === "string" && h.trim().toLowerCase() === host.trim().toLowerCase();
+  for (const p of roster.profiles) {
+    if (!same(p.host)) for (const f of WAKE_FIELDS) delete p[f];
+  }
+  local_storage[ROSTER_KEY] = JSON.stringify(roster.doc);
+  return { ...b, local_storage };
 }
 
 export function buildBundle(reason = "manual", device = ""): Bundle {
@@ -65,7 +125,9 @@ export function applyBundle(parsed: unknown): number {
     // Only our own namespace: a hand-edited bundle can't write arbitrary keys.
     if (!k.startsWith(NS_PREFIX) || OWN_KEYS.has(k)) continue;
     const v = ls[k];
-    if (typeof v === "string") actions.push({ key: k, value: v });
+    if (k === ROSTER_KEY && typeof v === "string") {
+      actions.push({ key: k, value: keepLiveWakeKeys(v, safeGetItem(ROSTER_KEY)) });
+    } else if (typeof v === "string") actions.push({ key: k, value: v });
     else if (v === null) actions.push({ key: k, value: null });
     else if (v !== undefined) throw new Error(`invalid value for ${k}`);
   }
@@ -174,7 +236,7 @@ export function pickSlot(list: readonly IndexEntry[], app: string): number {
 
 /** Writes this app's copy to the console. False when the console keeps no documents. */
 export async function saveConsoleBackup(host: string, app: string, name: string, bundle: Bundle): Promise<boolean> {
-  const doc = trimBundle(bundle);
+  const doc = trimBundle(forConsole(bundle, host));
   // Claim the slot first (the index's revision makes two apps' claims one after the other), then
   // fill it.
   let slot = 0;
