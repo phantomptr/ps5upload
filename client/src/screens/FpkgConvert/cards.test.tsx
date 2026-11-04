@@ -520,6 +520,15 @@ describe("a waiting game's own options (#669)", () => {
     );
   };
 
+  it("an image being uploaded shows where it goes, and one kept or a package does not (#673)", async () => {
+    const image: ConvertBuild = { kind: "image", format: "exfat", compress: true };
+    const up = await options(waitingItem({ build: image, then: "upload", host: "10.0.0.2", imageDest: { volume: "/data", subpath: "games" } }));
+    expect(up).toContain('data-testid="image-dest-drive"');
+    expect(up).toContain("Goes to /data/games/…");
+    expect(await options(waitingItem({ build: image, then: "keep" }))).not.toContain("image-dest");
+    expect(await options(waitingItem({ build: { kind: "pkg" }, then: "upload", host: "10.0.0.2" }))).not.toContain("image-dest");
+  });
+
   it("a package has its output folder, compression, language, verification and what comes after", async () => {
     const html = await options(waitingItem({ build: { kind: "pkg" }, outputDir: "F:\\out" }));
     expect(html).toContain("Output folder");

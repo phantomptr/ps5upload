@@ -50,6 +50,7 @@ vi.mock("../api/ps5", () => ({
   jobCancel: (...a: unknown[]) => jobCancel(...a),
   jobPause: (...a: unknown[]) => jobPause(...a),
   jobResume: (...a: unknown[]) => jobResume(...a),
+  fetchVolumes: async () => [],
 }));
 vi.mock("./pkgLibrary", () => ({
   pkgLibraryStore: () => ({
@@ -477,6 +478,7 @@ describe("fpkg pipeline", () => {
     });
     jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/W-app.ffpfsc", bytes_sent: 9 });
     await tick();
+    await tick(); // Its drive is decided with the console's drive list (#673).
     expect(added).toEqual([
       expect.objectContaining({
         sourceKind: "image",

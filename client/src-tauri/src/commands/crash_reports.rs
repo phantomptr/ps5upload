@@ -38,18 +38,30 @@ pub(crate) fn reports_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// All `*.json` report files in `dir`, sorted oldest-first (the timestamped
-/// filenames sort chronologically, so a lexical sort is chronological).
+/// All report files in `dir`: the renderer's `*.json` and the panic hook's `*.txt` (crash_hook.rs),
+/// sorted oldest-first (the timestamped filenames sort chronologically, so a lexical sort is
+/// chronological).
 pub(crate) fn list_report_files(dir: &Path) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|rd| {
             rd.filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.extension().map(|x| x == "json").unwrap_or(false))
+                .filter(|p| p.extension().is_some_and(|x| x == "json" || x == "txt"))
                 .collect()
         })
         .unwrap_or_default();
     v.sort();
     v
+}
+
+/// Drops the oldest reports so that, after adding one, `dir` holds at most `MAX_REPORTS`.
+pub(crate) fn prune(dir: &Path) {
+    let existing = list_report_files(dir);
+    if existing.len() >= MAX_REPORTS {
+        let remove = existing.len() + 1 - MAX_REPORTS;
+        for old in existing.iter().take(remove) {
+            let _ = std::fs::remove_file(old);
+        }
+    }
 }
 
 /// Persist one report. `contents` is the JSON the renderer already built.
@@ -59,14 +71,7 @@ pub async fn crash_report_save(app: AppHandle, contents: String) -> Result<Strin
     tokio::task::spawn_blocking(move || {
         let dir = reports_dir(&app)?;
 
-        // Prune oldest so that, after adding one, we're at MAX_REPORTS.
-        let existing = list_report_files(&dir);
-        if existing.len() >= MAX_REPORTS {
-            let remove = existing.len() + 1 - MAX_REPORTS;
-            for old in existing.iter().take(remove) {
-                let _ = std::fs::remove_file(old);
-            }
-        }
+        prune(&dir);
 
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -114,7 +119,7 @@ fn zip_reports(files: &[PathBuf], dest: &Path) -> Result<usize, String> {
         let name = p
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| format!("report-{n}.json"));
+            .unwrap_or_else(|| format!("report-{n}.txt"));
         let data = std::fs::read(p).map_err(|e| format!("read {p:?}: {e}"))?;
         zw.start_file(name, opts)
             .map_err(|e| format!("zip start_file: {e}"))?;
@@ -152,6 +157,25 @@ mod tests {
         assert!(err.contains("missing.json"), "{err}");
         assert_eq!(std::fs::read(&dest).unwrap(), b"an earlier zip");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "nothing added");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn panic_reports_are_listed_with_the_others_and_pruned_oldest_first() {
+        let dir = scratch("list");
+        std::fs::write(dir.join("ps5upload-report-1-1.json"), b"{}").unwrap();
+        std::fs::write(dir.join("ps5upload-report-2-1-0.txt"), b"x").unwrap();
+        std::fs::write(dir.join("notes.bin"), b"x").unwrap();
+        assert_eq!(list_report_files(&dir).len(), 2);
+        for i in 0..MAX_REPORTS {
+            std::fs::write(dir.join(format!("ps5upload-report-3{i:03}-1-0.txt")), b"x").unwrap();
+        }
+        prune(&dir);
+        let left = list_report_files(&dir);
+        assert_eq!(left.len(), MAX_REPORTS - 1);
+        assert!(!left
+            .iter()
+            .any(|p| p.ends_with("ps5upload-report-1-1.json")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

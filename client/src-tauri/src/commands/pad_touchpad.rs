@@ -328,7 +328,8 @@ pub(crate) mod reader {
         use std::sync::mpsc;
         use std::sync::{Mutex, OnceLock};
 
-        type Job = Box<dyn FnOnce(Option<&mut hidapi::HidApi>) + Send>;
+        type JobOn<T> = Box<dyn FnOnce(Option<&mut T>) + Send>;
+        type Job = JobOn<hidapi::HidApi>;
 
         fn sender() -> Option<&'static Mutex<mpsc::Sender<Job>>> {
             static TX: OnceLock<Option<Mutex<mpsc::Sender<Job>>>> = OnceLock::new();
@@ -336,23 +337,35 @@ pub(crate) mod reader {
                 let (tx, rx) = mpsc::channel::<Job>();
                 std::thread::Builder::new()
                     .name("hid-host".into())
-                    .spawn(move || {
-                        let mut api = match hidapi::HidApi::new() {
-                            Ok(a) => Some(a),
-                            Err(e) => {
-                                eprintln!("[pad-touchpad] no HID access: {e}");
-                                None
-                            }
-                        };
-                        // Never returns while the app runs: its run loop is the HID manager's.
-                        for job in rx {
-                            job(api.as_mut());
-                        }
-                    })
+                    .spawn(move || serve(open_guarded(hidapi::HidApi::new), rx))
                     .ok()
                     .map(|_| Mutex::new(tx))
             })
             .as_ref()
+        }
+
+        /// The HID library, once. `HidApi::new` reads every HID device on the machine, and hidapi's
+        /// Windows code panics on what some of them report (properties that are not terminated
+        /// or of odd length, a name that fills its buffer, a path that is not UTF-16). The app
+        /// asks for it on every launch on Windows, so one such device must cost the app the
+        /// controllers read this way, and nothing else (#672). Not tried again: its lock stays
+        /// poisoned, and the crash report need not be written every 2 s.
+        fn open_guarded<T, E: std::fmt::Display>(open: impl FnOnce() -> Result<T, E>) -> Option<T> {
+            match crate::crash_hook::optional("the HID device list", open)? {
+                Ok(a) => Some(a),
+                Err(e) => {
+                    eprintln!("[pad-touchpad] no HID access: {e}");
+                    None
+                }
+            }
+        }
+
+        /// Runs the jobs. Never returns while the app runs: its run loop is the HID manager's.
+        /// A job that panics answers None (its sender goes with it) and the next one still runs.
+        fn serve<T>(mut api: Option<T>, jobs: mpsc::Receiver<JobOn<T>>) {
+            for job in jobs {
+                let _ = crate::crash_hook::optional("a HID call", || job(api.as_mut()));
+            }
         }
 
         /// Run `f` on the HID thread and wait for its answer; None without HID access.
@@ -365,6 +378,43 @@ pub(crate) mod reader {
             });
             sender()?.lock().ok()?.send(job).ok()?;
             rx.recv().ok().flatten()
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+
+            #[test]
+            fn a_device_list_that_panics_means_no_hid_and_nothing_worse() {
+                let none: Option<u8> = open_guarded(|| -> Result<u8, String> {
+                    panic!("Slice is not null terminated")
+                });
+                assert_eq!(none, None);
+                let failed: Option<u8> = open_guarded(|| Err("no access".to_string()));
+                assert_eq!(failed, None);
+                assert_eq!(open_guarded(|| Ok::<u8, String>(5)), Some(5));
+            }
+
+            #[test]
+            fn a_job_that_panics_answers_nothing_and_the_next_one_runs() {
+                let (tx, rx) = mpsc::channel::<JobOn<u8>>();
+                let server = std::thread::spawn(move || serve(Some(9u8), rx));
+                let (a_tx, a_rx) = mpsc::sync_channel::<u8>(1);
+                tx.send(Box::new(move |_| {
+                    let _hold = a_tx;
+                    panic!("Invalid UTF-16");
+                }))
+                .unwrap();
+                assert!(a_rx.recv().is_err(), "its answer channel closes");
+                let (b_tx, b_rx) = mpsc::sync_channel::<u8>(1);
+                tx.send(Box::new(move |api| {
+                    b_tx.send(*api.unwrap()).unwrap();
+                }))
+                .unwrap();
+                assert_eq!(b_rx.recv().unwrap(), 9);
+                drop(tx);
+                server.join().unwrap();
+            }
         }
     }
 

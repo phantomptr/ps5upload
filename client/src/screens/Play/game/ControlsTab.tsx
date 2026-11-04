@@ -95,6 +95,9 @@ export function ControlsTab({ name }: { name: (id: string) => string }) {
             aria-label={tr("rp_controls_rate_label", undefined, "Turbo speed")}
           />
         </label>
+        <p className="text-xs text-white/60" data-testid="rp-controls-rate-hint">
+          {tr("rp_controls_rate_hint", undefined, "Above 10 a second, only games running fast see every press.")}
+        </p>
       </section>
 
       <section className="space-y-2">

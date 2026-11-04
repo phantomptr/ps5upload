@@ -2701,6 +2701,22 @@ game runs. Turbo repeats chosen buttons while you hold them; Mouse aim moves the
 the mouse once you click the picture (Esc lets the pointer go); a macro plays a few presses from
 one key. Each game keeps its own, on this device. The PS5 sees an ordinary controller.
 
+Turbo goes up to 30 presses a second, for quick-time events. Up to 10 a second any game sees every
+press. Above that each press and release lasts about one frame, so only a game running at 60 fps
+sees them all; if a game misses presses, turn it down.
+
+**Q: My PC goes silent when I connect the DualSense (Windows). What do I do?**
+Windows usually makes a USB DualSense its default sound output, because the controller has a
+speaker, so the sound goes to the controller; unplug it and the sound comes back. PS5Upload does
+not change your sound device. To fix it:
+
+1. Open Windows **Settings › System › Sound** and under **Output** pick your speakers or headphones.
+2. If only PS5Upload is silent, open **Settings › System › Sound › Volume mixer**, find **PS5Upload**
+   under Apps and set its output device to your speakers or headphones (it needs to be running).
+
+Over Bluetooth the controller has no sound device, so this does not come up, but its haptics turn
+into plain rumble.
+
 **Q: Can the PS5 get my computer's keyboard and mouse as a real keyboard and mouse?**
 Yes, from 10.4.0, on every firmware since 10.4.1 (tested on 13.60). **Play › Settings › Controls** has
 three modes, kept per game: **Controller** (keys and mouse act as a controller, the default),

@@ -35,7 +35,7 @@ export function pkgDirOnVolume(volume: string | null): string {
 
 /** A real storage drive packages can live on: writable, not a placeholder,
  *  and not one of our own disk-image mounts. */
-function isPackageDrive(v: Volume): boolean {
+export function isPackageDrive(v: Volume): boolean {
   return (
     v.writable &&
     !v.is_placeholder &&
