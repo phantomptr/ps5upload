@@ -144,7 +144,8 @@ pub fn installed_games(
         .collect()
 }
 
-/// `GET /api/games/installed` — what every saved console was last read to have installed.
+/// `GET /api/games/installed` — what every saved console was last read to have installed, without
+/// asking any of them (`/api/ps5/apps/installed?addr=` reads one console now).
 pub async fn list_installed() -> Response {
     let library = crate::collection_api::library();
     let list = installed_games(&console_snapshot::snapshot(), |id| {

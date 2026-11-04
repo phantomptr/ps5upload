@@ -1631,16 +1631,18 @@ export default function AppShell() {
     // Migrate single-host users into the multi-PS5 roster on first
     // start. Idempotent — no-op when the roster is already populated.
     ensureRosterMigrated();
-    // The self-hosted web UI keeps the console list in the engine, so every browser sees the
-    // same consoles. No-op in the desktop and mobile apps.
+    // The console list is kept in the engine too: every browser of the self-hosted web UI sees the
+    // same consoles, and an app's list reaches /api/consoles.
     const stopRosterShare = startRosterShare();
     // Copies staged from this browser go when the upload they were for has.
     const stopStagedRelease = isTauriEnv() ? () => {} : startStagedRelease();
-    // ...and the settings every browser shares (lib/sharedPrefs). The sidebar follows another
-    // browser's change at once; the rest at the next page load.
-    const stopSharedPrefs = isTauriEnv()
-      ? () => {}
-      : startSharedPrefs(() => useNavSidebarStore.setState(navListsFromStorage()));
+    // ...and the settings (lib/sharedPrefs, /api/settings). The sidebar follows a change made
+    // elsewhere at once; every store re-reads the rest.
+    const stopSharedPrefs = startSharedPrefs(
+      () => useNavSidebarStore.setState(navListsFromStorage()),
+      undefined,
+      isTauriEnv(),
+    );
     // 8.0.0: every device that uses a console shares the console list and set-up through it.
     // A change from another device applies at once (lib/liveSettings): no reload prompt.
     const stopMeshShare = startMeshShare(() => useNavSidebarStore.setState(navListsFromStorage()));

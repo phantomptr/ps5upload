@@ -1,12 +1,13 @@
 # Remote Play automation (local scripts and agents)
 
-A script or AI agent on the same computer as the PS5Upload engine can watch and play a running
-Remote Play session while you keep watching it in the app:
+A script or AI agent on the same computer as the PS5Upload engine can start, watch and play a
+Remote Play session, with or without the app showing it:
 
-1. **status**: which console is streaming, and its session id;
-2. **frame**: the picture the app shows right now, as a PNG or JPEG;
-3. **input**: hold a controller state (buttons, sticks, triggers) for a short time, then let go;
-4. **frame** again, to see what happened.
+1. **start** (or use the session the app already runs);
+2. **status**: which console is streaming, and its session id;
+3. **frame**: the picture right now, as a PNG or JPEG;
+4. **input**: hold a controller state (buttons, sticks, triggers) for a short time, then let go;
+5. **frame** again, to see what happened.
 
 Added in 10.6.0 for [#615](https://github.com/phantomptr/ps5upload/issues/615).
 
@@ -17,17 +18,20 @@ Added in 10.6.0 for [#615](https://github.com/phantomptr/ps5upload/issues/615).
 ## What it does, and what it never does
 
 - **This computer only.** The frame and input endpoints and the live feed answer only to the
-  engine's own computer (a loopback address: `127.0.0.1` or `::1`). `PS5UPLOAD_ALLOW_IP` does
+  engine's own computer (a loopback address: `127.0.0.1` or `::1`). `PS5UPLOAD_ALLOW_IP` alone does
   **not** open them to other machines: a listed machine gets `403 {"error": "local_only"}`, and any
   other machine is refused by the engine's guard with a `403` before that. The status endpoint is
   also open to listed machines, without the session id (see below).
 - **Address it as localhost.** Requests must use `localhost`, `127.0.0.1` or `[::1]` as the host
   name (any port); any other name answers `403 {"error": "host_not_local"}`.
-- **It never starts a stream.** Start Remote Play in the app first (Play › Start). The session is
-  the one the app runs.
-- **It never takes the picture over.** The engine does not decode video. A frame request asks the
-  app page that shows the stream for the picture already on its screen; nothing on screen
-  changes, no second stream or decoder runs. Watch-party viewers and phones are never asked.
+- **A self-hosted engine can open it.** Set `PS5UPLOAD_ALLOW_AUTOMATION=1` to let the addresses in
+  `PS5UPLOAD_ALLOW_IP` use everything on this page. They may then name the engine by an IP address,
+  or by a name listed in `PS5UPLOAD_ALLOW_HOST`. There is no password: only do this on a network
+  you trust, since it lets those computers play on your console.
+- **It never takes the picture over.** When an app page shows the stream, a frame request asks it
+  for the picture already on its screen; nothing on screen changes, no second stream runs.
+  Watch-party viewers and phones are never asked. With no page, the picture is decoded from the
+  stream with the ffmpeg that Go live uses.
 - **It is one more controller.** Input is merged with yours, like a phone joining as a
   controller: you can still play, and letting go of the script's buttons never lets go of yours.
 - **It never sends anything twice.** A refused or failed request is not retried by the engine.
@@ -44,9 +48,83 @@ picks another and its log says which. A standalone engine takes the port from
 {"host": "192.168.1.100", "session": 3, "playing": true, "attached": true, "passcode": false}
 ```
 
-`host: null` (and `session: null`) means nothing is streaming. `attached` is whether an app page
-shows the stream now (a frame needs one). `session` changes every time a new stream starts; pass
-it to the other endpoints so a script never drives a session it did not mean to.
+`host: null` (and `session: null`) means nothing is streaming; `last_end` then says how the last
+session ended (its `code` can be `busy`, `asleep`, `keys`, `rp_off`, and so on). `attached` is whether
+an app page shows the stream now. `session` changes every time a new stream starts; pass it to the
+other endpoints so a script never drives a session it did not mean to.
+
+The answer also has `stage` (how far the start got), `started_by` (`api` or `page`),
+`passcode_retry`, `mic_enabled`, `mic_on`, `keyboard_enabled`, `keyboard` (`{open, text}`),
+`keep_alive_s`, `alone_s` and `video` (codec, size, frame rate, bitrate).
+
+### `POST /api/ps5/rp/start`: start a stream
+
+```json
+{"host": "192.168.1.100", "width": 1280, "height": 720, "fps": 60, "wait_s": 20}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `host` | The console: its address, or its id or name on the list (`GET /api/consoles`). |
+| `width`, `height`, `fps`, `bitrate_kbps` | As in the app. Anything above 1080p is asked for as 1080p. |
+| `codec` | `h264`, `h265` or `h265_hdr`. |
+| `keep_alive_s` | With no page attached, how long it runs after the last call here (default 300, at most 600). A reader of the live feed or Go live counts as use. |
+| `mic`, `keyboard`, `dualsense` | Set the session up for those. |
+| `replay_s` | Keep this many seconds for Instant Replay. |
+| `wait_s` | Answer once the first picture came, the console asks for the passcode, or the start failed (at most 60). Without it the answer comes at once. |
+| `regist_key`, `rp_key` | The keys, if the engine does not have them. |
+
+The keys come from pairing: `POST /api/ps5/power/pair` stores them, and so does the app when you
+pair there. Without keys the answer is `409 no_credentials`. A session for the same console is
+joined rather than started (`"started": false`); a session for another console answers
+`409 busy_other`.
+
+```json
+{"ok": true, "started": true, "host": "192.168.1.100", "session": 4, "keep_alive_s": 300,
+ "playing": true, "passcode": false}
+```
+
+### `POST /api/ps5/rp/stop`: end it
+
+`{"host": "192.168.1.100", "session": 4}`. The console holds its Remote Play slot for 12 to 30 s
+after a session ends; a start in that time fails with `last_end.code` `busy` and `retry_s`.
+
+### `POST /api/ps5/rp/settings`: change it while it runs
+
+`{"host", "session", "keyframe": true, "replay_s": 30}`. `keyframe` asks the console for one;
+`replay_s` turns Instant Replay on (0 turns it off). Size, frame rate, bitrate and codec can only be
+set when a session starts: asking for one answers `409 restart_needed` with `fields`.
+
+### `POST /api/ps5/rp/passcode`: the sign-in passcode
+
+When the status says `"passcode": true`: `{"host", "session", "digits": "1234"}`, or
+`{"host", "session", "cancel": true}`. It goes to the console and is never kept or logged.
+
+### `POST /api/ps5/rp/keyboard`: the console's on-screen keyboard
+
+For a session started with `"keyboard": true`, while the keyboard is open (see the status):
+`{"host", "session", "text": "the whole text"}`, `{"accept": true}` or `{"reject": true}` along
+with `host` and `session`.
+
+### `POST /api/ps5/rp/mic`: the microphone
+
+For a session started with `"mic": true`: `{"host", "session", "on": true}`. With no page attached,
+`"opus_b64": ["...", ...]` sends Opus packets (48 kHz stereo, 10 ms each).
+
+### `PUT /api/ps5/vinput`: the console's keyboard and mouse, without a stream
+
+`{"host", "on": true, "mouse": true, "keyboard": true, "lease_s": 30}` makes the console see a
+keyboard and mouse. The answer says what it sees (`mouse`, `keyboard`) and why not (`err`). It lasts
+`lease_s` (at most 300) from the last call; `{"host", "on": false}` ends it, and a Remote Play page
+showing that console takes over (`409 rp_session_owns_input`). `GET /api/ps5/vinput?host=` says where
+it stands.
+
+### `POST /api/ps5/vinput/report`: press, release, move
+
+`{"host", "report_hex": "<32 hex characters>"}` or `"reports_hex": [...]` (at most 256). A report
+is the whole state at that moment, 16 bytes: mouse buttons (1 left, 2 right, 4 middle), the HID
+modifier byte, mouse motion x and y (each a little-endian i16), wheel, horizontal wheel, then up to
+8 HID usage IDs held. Send an all-zero report to let go. Without `PUT` first: `409 not_on`.
 
 There is no error for a request that isn't local here: `session` is simply left out when the request
 does not use a localhost name, or comes from another machine. If `host` is set and `session` is
@@ -85,6 +163,13 @@ With `json=1`:
 ```
 
 At most one frame request runs at a time, and at most five a second.
+
+With no app page attached, or a page that gives no picture (a hidden window), the picture is the
+stream's next keyframe, decoded with the ffmpeg Go live uses: at most one a second, since each makes
+the console send a keyframe, and its `frame_id` starts with `0.`. It waits about a second for the
+keyframe. HDR is not tone mapped, so use `h264` or `h265` for this. Without ffmpeg the answer is
+`409 no_viewer` with a `message`; install it with `POST /api/stream/tools/ffmpeg/install`, or in the
+app under Go live.
 
 ### `POST /api/ps5/rp/input`: hold a controller state
 
@@ -130,7 +215,17 @@ Every error is JSON. The endpoints' own refusals are `{"error": "<code>"}`:
 | 403 | `host_not_local` | The request used a name other than `localhost`, `127.0.0.1` or `[::1]`. |
 | 404 | `no_session` | Nothing is streaming from that console. |
 | 409 | `stale_session` | Another session runs now (`session` gives its id). |
-| 409 | `no_viewer` | The stream runs but no app page shows it (left the Play screen), or the page left while answering. |
+| 409 | `no_viewer` | The stream runs, no app page shows it, and ffmpeg is not installed (`message` says what to do), or the page left while answering. |
+| 409 | `no_credentials` | Start: the engine has no keys for this console. Pair it first. |
+| 409 | `busy_other` | Start: another console is streaming (`host` says which). |
+| 409 | `restart_needed` | Settings: `fields` can only be set when a session starts. |
+| 409 | `no_passcode_asked` | The console is not asking for a passcode. |
+| 409 | `keyboard_not_enabled` / `keyboard_closed` | Keyboard: not set up for this session / not open. |
+| 409 | `mic_not_enabled` | Mic: not set up for this session. |
+| 409 | `not_on` | Report: turn input on first. |
+| 409 | `rp_session_owns_input` | A Remote Play page owns this console's keyboard and mouse. |
+| 502 | `start_failed` | Start with `wait_s`: the session ended first (`end` says how). |
+| 502 | `decode_failed` | ffmpeg could not make the picture (`detail`). |
 | 429 | `busy` / `rate_limited` | A frame request is already running / too soon (`retry_ms`). |
 | 503 | `no_picture` | The page has not shown a picture yet. |
 | 503 | `viewer_busy` | The page's connection is full; try again shortly. |
@@ -177,8 +272,8 @@ def call(path, body=None):
         raise RuntimeError(json.load(e))
 
 s = call("/api/ps5/rp/session")
-if not s["host"] or not s["attached"]:
-    raise SystemExit("start Remote Play in the app first")
+if not s["host"]:
+    s = call("/api/ps5/rp/start", {"host": "192.168.1.100", "wait_s": 30})
 host, session = s["host"], s["session"]
 
 def frame(after=None):
@@ -208,10 +303,61 @@ blindly: take a frame first and decide from what the screen shows.
   stream's size (1080p at most), or larger with upscaling on. Use `max_width` to keep it small. In HDR sessions the image may come out blank on
   some systems; switch Video format to SDR for automation.
 - If the app window is minimised or hidden, the browser may stop drawing: `frame_age_ms` grows.
-  Keep the Play screen visible.
+  Keep the Play screen visible, or close it so frames come from ffmpeg.
 - One automation controller per session: two scripts at once share it (the latest input wins).
-- The engine's own access rules are unchanged: only the status endpoint can be reached from the
+- Unless `PS5UPLOAD_ALLOW_AUTOMATION` is set, only the status endpoint can be reached from the
   network, by a machine you listed in `PS5UPLOAD_ALLOW_IP`, and without the session id.
+
+## The console list and settings
+
+These work on every platform, whichever app is in use. The desktop and mobile apps mirror their
+list and settings to their own engine, and pick up a change made here within a minute (at once
+when the window gets focus).
+
+### `GET /api/consoles`, `PUT /api/consoles`
+
+```json
+{"rev": 7, "consoles": [{"id": "e1f0…", "name": "Living room", "host": "192.168.1.100",
+  "notes": null, "has_rp_credentials": true, "has_wake_credential": true}],
+ "paired_hosts_not_listed": []}
+```
+
+`PUT` takes the whole list in order: `{"base_rev": 7, "consoles": [{"id", "name", "host", "notes"}]}`.
+`base_rev` is optional; when it is stale the answer is `409` with the current list. A console without
+`id` keeps the id of the entry with its address, or gets a new one. Keys can be set
+(`regist_key`, `rp_key`, `wake_credential`) but are never shown: leaving them out keeps them, an
+empty string clears them, and a console taken off the list loses them. They are stored encrypted.
+
+Wherever a route takes `addr` or `host` for a console, it also takes a console's id or name from
+this list. `POST /api/ps5/power/wake` and `/wake-login` use the stored keys when none are sent.
+
+`GET /api/shared/consoles/schema` and `GET /api/shared/prefs/schema` describe the two documents
+underneath, as JSON Schema.
+
+### `GET /api/settings`, `PATCH /api/settings`
+
+`GET` answers `{"rev", "settings": {"bandwidth_cap_mbps": 0, ...}, "set": [...], "schema": {...}}`:
+every setting with its type, range and default. `PATCH` takes
+`{"settings": {"bandwidth_cap_mbps": 50, "auto_resume": false}}`, all of it or nothing (`400` lists
+what is wrong); `null` goes back to the default. These settings drive what the app's queue does.
+
+### What stays in the app
+
+Some things are kept by each app or browser on its own and have no route:
+
+- **Schedules** run only while a window is open. For a schedule without one, use your system's
+  scheduler with `curl`.
+- **Play time** is worked out from what each app sees running, per browser or app.
+- **Notifications** are per browser or app. `GET /api/event-journal` has the engine's own events.
+- **The upload queue** runs in the app. Scripts use `/api/transfer/*` and `/api/pkg/install` directly.
+
+### Which list is which
+
+- `GET /api/ps5/apps/installed?addr=`: what is on the console now, read from it.
+- `GET /api/pkg/installed?addr=&title_id=`: the package files one title has on the console.
+- `GET /api/games/installed`: what every saved console had when it was last read, without asking it.
+- `GET /api/ps5/process/list?addr=`: running processes with title ids, memory and kill support.
+- `GET /api/ps5/proc/list?addr=`: a lighter list from the kernel's process table.
 
 ## The live feed (OBS, ffmpeg)
 

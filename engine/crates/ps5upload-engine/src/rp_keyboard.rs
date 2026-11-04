@@ -30,6 +30,17 @@ pub(crate) struct PageKeyboard {
     keyboard_reject: bool,
 }
 
+impl PageKeyboard {
+    /// The same thing from `POST /api/ps5/rp/keyboard` (rp_control.rs).
+    pub(crate) fn new(text: Option<String>, accept: bool, reject: bool) -> Self {
+        PageKeyboard {
+            keyboard_text: text,
+            keyboard_accept: accept,
+            keyboard_reject: reject,
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct KeyboardLink {
     /// The session was set up for the keyboard; if not, the page's typing is ignored.

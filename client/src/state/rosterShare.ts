@@ -13,13 +13,16 @@
  * edits since the last common copy) before saving again, so two people editing at once both keep
  * their change.
  *
- * Desktop and mobile apps keep their consoles themselves, whichever engine they use.
+ * Desktop and mobile apps keep their list on the device, and mirror it the same way to their own
+ * engine, so `GET|PUT /api/consoles` (engine consoles_api.rs) sees and changes the list they show. On
+ * first contact the two lists are merged rather than one replacing the other. An app pointed at
+ * another computer's engine (Settings) does not mirror: that engine's list is someone else's.
  */
 import { backupBeforeChange } from "../lib/settingsBackup";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "../lib/safeStorage";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { trStatic } from "../lib/trStatic";
-import { getEngineUrl } from "./engine";
+import { getEngineUrl, isLoopbackUrl } from "./engine";
 import { useRosterStore, type PS5Profile } from "./roster";
 import { useToastStore } from "./toasts";
 
@@ -36,7 +39,23 @@ export function sharedForm(profiles: readonly PS5Profile[]): SharedProfile[] {
   });
 }
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+/** Key order and an empty field say nothing: the engine sends a profile's keys in its own order,
+ *  and a cleared key comes back absent rather than null. */
+function canonical(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(canonical);
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(o)
+        .filter((k) => o[k] !== null && o[k] !== undefined)
+        .sort()
+        .map((k) => [k, canonical(o[k])]),
+    );
+  }
+  return v;
+}
+
+const same = (a: unknown, b: unknown) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 
 /**
  * Three-way merge of console lists by id. `base` is the last copy both sides had, `mine` this
@@ -85,7 +104,14 @@ export interface ShareApi {
   put(baseRev: number, profiles: SharedProfile[]): Promise<{ rev: number } | { conflict: Doc }>;
 }
 
-const URL_PATH = "/api/shared/consoles";
+/** The app's own form of the list, with its keys (engine consoles_api.rs). */
+const URL_PATH = "/api/consoles/document";
+
+function shareBase(): string {
+  const url = getEngineUrl();
+  if (isTauriEnv() && !isLoopbackUrl(url)) throw new Error("the app is using another computer's engine");
+  return url;
+}
 
 /**
  * The engine's answer, checked. Anything else (an older engine without the route answering some
@@ -105,12 +131,12 @@ export function asDoc(v: unknown): Doc {
 
 export const engineShareApi: ShareApi = {
   async get() {
-    const r = await fetch(`${getEngineUrl()}${URL_PATH}`);
+    const r = await fetch(`${shareBase()}${URL_PATH}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return asDoc(await r.json());
   },
   async put(baseRev, profiles) {
-    const r = await fetch(`${getEngineUrl()}${URL_PATH}`, {
+    const r = await fetch(`${shareBase()}${URL_PATH}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ base_rev: baseRev, value: { profiles } }),
@@ -304,7 +330,6 @@ export class RosterShare {
 /** How often an open page looks for changes made in another browser (also on focus). */
 export const PULL_MS = 30_000;
 
-/** Starts sharing the console list with the engine. The browser build only; returns a stop. */
 /**
  * A first browser on a brand new engine: the console the setup named (`PS5_ADDR`) goes on the list,
  * so it is not typed in again. Only when both lists are empty, so a console someone removed does
@@ -326,9 +351,9 @@ export async function seedDefaultConsole(
   roster.setActive(roster.add({ name: `PS5 (${host})`, host }));
 }
 
+/** Starts sharing the console list with the engine; returns a stop. */
 export function startRosterShare(api: ShareApi = engineShareApi): () => void {
-  if (isTauriEnv()) return () => {};
-  const share = new RosterShare(api);
+  const share = new RosterShare(api, useRosterStore, isTauriEnv() ? "union" : "replace");
   let failures = 0;
   const warn = (e: unknown) => {
     console.warn("[roster-share]", e instanceof Error ? e.message : String(e));

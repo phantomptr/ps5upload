@@ -227,6 +227,13 @@ impl LiveFeed {
         }
     }
 
+    /// A reader that took one frame and left (a frame request): nothing for the log.
+    pub(crate) fn remove_quiet(&self, id: u64) {
+        if let Ok(mut g) = self.readers.lock() {
+            g.retain(|r| r.id != id);
+        }
+    }
+
     /// The session ended: every reader's queue closes, and its stream with it.
     pub(crate) fn close(&self) {
         let all = self

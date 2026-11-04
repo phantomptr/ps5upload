@@ -60,10 +60,13 @@
 //!
 //! Automation (rp_automation.rs, #615): a local script or agent can ask for the picture the page
 //! shows (`GET /api/ps5/rp/frame`) and hold controller input as one more controller
-//! (`POST /api/ps5/rp/input`), without taking the stream over. The engine never decodes video:
+//! (`POST /api/ps5/rp/input`), without taking the stream over. The engine decodes no video itself:
 //! the attached page is sent `{"snapshot": {"id", "format", "max_width", "after_seq"?}}` and
 //! answers with binary `[9][u32 BE meta length][meta JSON][image]` (see
 //! `rp_automation::KIND_SNAPSHOT`). Watchers and phones are never asked.
+//!
+//! A session can also start with no page at all (rp_control.rs, `POST /api/ps5/rp/start`), and the
+//! frame request then gets its picture from the live feed through ffmpeg.
 //!
 //! Latency: video goes through a queue a few frames deep (two for a page that
 //! asked for `low_latency`); a page that falls behind loses frames (and the
@@ -112,6 +115,8 @@ const MIC_QUEUE: usize = 50;
 
 #[path = "rp_automation.rs"]
 pub(crate) mod automation;
+#[path = "rp_control.rs"]
+pub(crate) mod control;
 #[path = "rp_live.rs"]
 pub(crate) mod live_feed;
 
@@ -1257,10 +1262,12 @@ pub async fn ws(upgrade: WebSocketUpgrade) -> Response {
 /// What is streaming now, for a page that wants to show or rejoin it.
 pub async fn current(headers: axum::http::HeaderMap) -> Json<serde_json::Value> {
     let live = LIVE.lock().ok().and_then(|g| g.clone());
-    Json(current_for(
-        live.map(|l| l.snapshot()),
-        crate::vinput_api::host_is_local(&headers),
-    ))
+    let local = crate::vinput_api::host_is_local(&headers);
+    let mut v = current_for(live.as_ref().map(|l| l.snapshot()), local);
+    if local {
+        control::add_details(&mut v, live.as_deref());
+    }
+    Json(v)
 }
 
 /// The session's state for `current`. Its id is only for a local script driving it (#615,
