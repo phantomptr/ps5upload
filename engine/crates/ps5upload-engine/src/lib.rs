@@ -87,6 +87,7 @@ mod pkg_sidecar;
 mod pldmgr_api;
 mod profile_image;
 mod ps2_saves;
+mod queue_api;
 mod remote;
 mod remote_download;
 mod remote_pkg;
@@ -117,6 +118,8 @@ mod api_surface_tests;
 mod ava1_only_tests;
 #[cfg(test)]
 mod event_hooks_tests;
+#[cfg(test)]
+mod queue_api_tests;
 
 use axum::http::HeaderMap;
 use axum::{
@@ -11506,7 +11509,13 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     }
 
     let state_jobs_for_presence = state.jobs.clone();
-    let (app, mcp_state) = build_app_and_mcp(state, pkg_state, guard_cfg, host_guard::base_path());
+    let (app, mcp_state) = build_app_and_mcp(
+        state,
+        pkg_state,
+        guard_cfg,
+        host_guard::base_path(),
+        queue_api::QueueState::from_env(),
+    );
     // Mirror to stdout (terminal users) AND the engine.log ring
     // (post-mortem diagnosis from the desktop shell once the
     // terminal is closed). Printed only once the bind has succeeded:
@@ -11589,7 +11598,14 @@ fn build_app(
     guard_cfg: LoopbackGuardConfig,
     base: &str,
 ) -> Router {
-    build_app_and_mcp(state, pkg_state, guard_cfg, base).0
+    build_app_and_mcp(
+        state,
+        pkg_state,
+        guard_cfg,
+        base,
+        queue_api::QueueState::from_env(),
+    )
+    .0
 }
 
 /// [`build_app`], and the MCP server in it: an open subscription must be told when the engine stops.
@@ -11598,6 +11614,7 @@ fn build_app_and_mcp(
     pkg_state: pkg_install::PkgInstallStateHandle,
     guard_cfg: LoopbackGuardConfig,
     base: &str,
+    queue: queue_api::QueueState,
 ) -> (Router, mcp::McpState) {
     let mcp_events = state.events_tx.clone();
     let ps5_addr = state.default_ps5_addr.clone();
@@ -12388,7 +12405,15 @@ fn build_app_and_mcp(
         .merge(remote_download::router(std::sync::Arc::new(
             remote_download::DownloadRegistry::default(),
         )))
+        .merge(queue_api::router(queue.clone()))
         .merge(ops_router);
+
+    // Queue items call this same API in-process, as the MCP server does.
+    queue.attach(
+        app.clone()
+            .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024)),
+        pkg_state.clone(),
+    );
 
     // The MCP server drives this same API in-process: it holds a clone of the router as it stands
     // here, without /mcp itself or the reverse-proxy prefix. The body limit and the request log are

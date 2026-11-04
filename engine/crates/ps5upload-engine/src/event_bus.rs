@@ -1,7 +1,7 @@
 //! The engine's one event feed: what `GET /api/events` serves. Every event gets a sequence number
 //! (the SSE `id:`) and stays in a ring, so a client that reconnects with `Last-Event-ID` gets what
 //! it missed. Transfer jobs keep the default event name (the shape existing consumers read);
-//! newer kinds are named: `journal`, `install`, `op`. A client that fell too far behind gets a
+//! newer kinds are named: `journal`, `install`, `op`, `queue`. A client that fell too far behind gets a
 //! `resync` event and refetches `/api/jobs`.
 //!
 //! Job snapshots still go out on `AppState::events_tx`, sent under the job map's lock so their
