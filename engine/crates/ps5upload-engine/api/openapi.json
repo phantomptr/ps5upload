@@ -251,6 +251,48 @@
         ],
         "type": "object"
       },
+      "AddBody": {
+        "properties": {
+          "console": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "addr",
+              "host"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "description": "Among the console's waiting items, from 0. Left out, the end of the line.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "request": {
+            "description": "The body of the kind's route. Its console is this item's."
+          },
+          "stop_on_failure": {
+            "description": "If this item fails, the ones after it are paused for someone to look at.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
       "AddrQuery": {
         "properties": {
           "addr": {
@@ -4911,6 +4953,34 @@
         ],
         "type": "object"
       },
+      "HoldBody": {
+        "properties": {
+          "console": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "addr",
+              "host"
+            ]
+          },
+          "holder": {
+            "type": "string"
+          },
+          "ttl_s": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "holder"
+        ],
+        "type": "object"
+      },
       "HostKeyBody": {
         "properties": {
           "fingerprint": {
@@ -7560,6 +7630,19 @@
         ],
         "type": "object"
       },
+      "MoveBody": {
+        "properties": {
+          "position": {
+            "description": "Among the console's waiting items, from 0. Past the end means the end.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "position"
+        ],
+        "type": "object"
+      },
       "NetInterface": {
         "properties": {
           "flags": {
@@ -8371,6 +8454,27 @@
         },
         "required": [
           "action"
+        ],
+        "type": "object"
+      },
+      "PictureReq": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "on": {
+            "type": "boolean"
+          },
+          "session": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "on"
         ],
         "type": "object"
       },
@@ -10112,6 +10216,27 @@
           "title_id",
           "title_name",
           "used_nullfs"
+        ],
+        "type": "object"
+      },
+      "ReleaseBody": {
+        "properties": {
+          "console": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-aliases": [
+              "addr",
+              "host"
+            ]
+          },
+          "holder": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "holder"
         ],
         "type": "object"
       },
@@ -13902,6 +14027,13 @@
           },
           "keyframe": {
             "type": "boolean"
+          },
+          "picture": {
+            "description": "The picture on the attached page on or off (see rp_stream_api's module note).",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "replay_s": {
             "minimum": 0,
@@ -34986,6 +35118,102 @@
         }
       }
     },
+    "/api/ps5/rp/picture": {
+      "post": {
+        "description": "`POST /api/ps5/rp/picture {host, session?, on}`: the picture, sound and controller on this\ndevice off, or back on, for the running session (#670, #649). Guests and Go live are untouched.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PictureReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "picture": {},
+                    "session": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "session": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The picture, sound and controller on this device off, or back on, for the running session (#670, #649)",
+        "tags": [
+          "remote-play",
+          "strict-local"
+        ],
+        "x-ps5upload": {
+          "access": "strict-local",
+          "response_schema": "literal"
+        }
+      }
+    },
     "/api/ps5/rp/replay": {
       "get": {
         "description": "`GET /api/ps5/rp/replay`: the instant replay's frames (rp_replay.rs), for the page to save as\na clip. 404 when no session runs, replay is off, or nothing is held yet.",
@@ -35095,6 +35323,7 @@
                     "ok": {
                       "type": "boolean"
                     },
+                    "picture": {},
                     "replay_on": {
                       "type": "boolean"
                     },
@@ -37765,6 +37994,584 @@
             "required": false
           },
           "response_schema": "struct"
+        }
+      }
+    },
+    "/api/queue": {
+      "get": {
+        "description": "GET /api/queue?console= — one console's line, or every console's.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "console",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x-aliases": [
+              "addr",
+              "host"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "consoles": {
+                      "items": {},
+                      "type": "array"
+                    },
+                    "items": {
+                      "items": {},
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "One console's line, or every console's",
+        "tags": [
+          "queue"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "addr",
+              "host"
+            ],
+            "in": "query",
+            "name": "console",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      },
+      "post": {
+        "description": "POST /api/queue — adds an item. 201 with the item.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "201": {
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error",
+            "description": "Too large"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Adds an item",
+        "tags": [
+          "queue"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "addr",
+              "host"
+            ],
+            "in": "body",
+            "name": "console",
+            "required": true
+          },
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/queue/hold": {
+      "post": {
+        "description": "POST /api/queue/hold {console, holder, ttl_s?} — a client runs work of its own on this console:\nthe queue starts nothing there until the hold lapses or is released. Refused with 409\n`queue_running` while a queue item runs there; the client waits and asks again. Asking again\nalso keeps a hold going.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HoldBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "console": {},
+                    "held": {
+                      "type": "boolean"
+                    },
+                    "holders": {},
+                    "ttl_s": {}
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "error": {
+                          "type": "string"
+                        },
+                        "item": {}
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "A client runs work of its own on this console: the queue starts nothing there until the hold lapses or is released",
+        "tags": [
+          "queue"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "addr",
+              "host"
+            ],
+            "in": "body",
+            "name": "console",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/queue/release": {
+      "post": {
+        "description": "POST /api/queue/release {console, holder} — the hold ends now.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "console": {},
+                    "released": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "The hold ends now",
+        "tags": [
+          "queue"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "console": {
+            "aliases": [
+              "addr",
+              "host"
+            ],
+            "in": "body",
+            "name": "console",
+            "required": false
+          },
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/queue/{id}": {
+      "get": {
+        "description": "GET /api/queue/{id}",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "One item of the queue",
+        "tags": [
+          "queue"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/queue/{id}/move": {
+      "post": {
+        "description": "POST /api/queue/{id}/move {position} — a new place among the waiting items.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "A new place among the waiting items",
+        "tags": [
+          "queue"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/queue/{id}/pause": {
+      "post": {
+        "description": "POST /api/queue/{id}/pause — a waiting item is skipped until resumed. A running upload stops\nthe way a cancel does, what landed stays, and `resume` picks up from it. An install or a\ndownload cannot pause once running.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "A waiting item is skipped until resumed",
+        "tags": [
+          "queue"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
+        }
+      }
+    },
+    "/api/queue/{id}/remove": {
+      "post": {
+        "description": "POST /api/queue/{id}/remove — drops an item that is not running. A running upload or download\nneeds `cancel: true`: it stops and goes (202). A running install is never removed: the console\ngoes on with it whatever the queue says.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "contentEncoding": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "id": {},
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "item": {},
+                    "removing": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "Bad request"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "Drops an item that is not running",
+        "tags": [
+          "queue"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "literal"
+        }
+      }
+    },
+    "/api/queue/{id}/resume": {
+      "post": {
+        "description": "POST /api/queue/{id}/resume — a paused item waits for its turn again. So does a failed,\ncancelled or interrupted one: this is the only way an item runs a second time.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error",
+            "description": "Any other failure, in the same shape."
+          }
+        },
+        "summary": "A paused item waits for its turn again",
+        "tags": [
+          "queue"
+        ],
+        "x-ps5upload": {
+          "access": "loopback",
+          "response_schema": "json-unknown"
         }
       }
     },
@@ -42426,6 +43233,10 @@
     {
       "description": "Rest, reboot, wake.",
       "name": "power"
+    },
+    {
+      "description": "The engine's own queue: uploads, downloads and installs, in order, one at a time per console.",
+      "name": "queue"
     },
     {
       "description": "Remote Play sessions, frames, input and the phone controller link.",
