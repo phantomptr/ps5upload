@@ -35,7 +35,7 @@ the app over **AVA1**, one encrypted connection on port 9120.
 - **Upload** files, folders, disk images and `.zip` / `.7z` / `.rar` archives, verified end to
   end. Uploads resume after a dropped connection or a helper restart, and can be paused, resumed
   or overtaken with **Send now**. RAR handles multi-part and password-protected archives
-  (desktop only).
+  (not on phones).
 - **Install packages**: PS4 `.pkg` and PS5 fake packages (base, update, DLC) through ps5upload's
   own on-console installer, from your computer (**Stream & install** or **Upload & install**),
   a NAS, a USB drive or a link.
@@ -82,8 +82,8 @@ Send **elfldr** first (if your setup uses it), then **kstuff**, then
 **ShadowMount+**, then **ps5upload**. The **Set up your PS5** wizard does the
 last three in this order for you, with the delays the Payloads catalogue
 recommends. Send them one at a time; the loader takes one file per
-connection. After a reboot or rest mode the payloads are gone, so load them
-again.
+connection. After a reboot the payloads are gone, so load them again. Rest mode
+can stop them too; the PS5Upload helper usually keeps running through it.
 
 **Q: Which payloads must be running before I install a package?**
 In this order: **kstuff** (the build with PS5 fake-package support), **a53_ppr_install_fast.elf**
@@ -129,8 +129,9 @@ Three ways, easiest first:
   `ps5upload-engine-webui` Docker image on a computer or NAS and open `http://<its IP>:19113/` on
   the same Wi-Fi ("How do I use PS5Upload from my phone or another computer?" walks through it).
   The desktop app can't be used this way: its engine refuses other devices. Play in a browser
-  needs a secure page (`https://`, or the computer itself): over plain `http://<IP>:19113/` a
-  phone's browser says it cannot play a stream, so play with the app.
+  needs a secure page (`https://`, or the computer running the engine): over plain
+  `http://<IP>:19113/` every browser on another device says it cannot play a stream, so play with
+  the app, or put the engine behind an https proxy ([REVERSE_PROXY.md](REVERSE_PROXY.md)).
 - **The console's own page (PS5Upload Minion).** No computer needed: with the helper running,
   turn on **Settings → Allow other devices on the network** on the console's page, then open
   `http://<PS5's IP>:9180/` on the phone. It has no password while that is on, so turn it off
@@ -325,7 +326,7 @@ Things to know:
 Yes. The PS5 has to be running `ps5upload.elf` before the app can do anything beyond the
 Connection tab. The app walks you through sending it on first run.
 
-**Q: How do I send the payload?**
+**Q: How do I send the helper?**
 Open ps5upload → **Connection** tab → enter your PS5's IP → click
 **Check**, then **Send helper**. The app waits up to 20 seconds
 for the payload to come up, then unlocks the rest of the tabs.
@@ -336,7 +337,7 @@ sends the helper and runs your auto-loader playlist in one click, once your play
 Its **Bring up automatically** switch (also in **Settings → Connecting**) does that with no
 clicks: when a saved PS5's loader (elfldr, port 9021) is up and the helper isn't running, the
 app waits about 90 seconds so the console's own autoloader can finish, then brings it up. Once
-each time the console starts; after rest mode only the helper is sent again. Off by default.
+each time the console starts; after rest mode only the helper is sent again, if it stopped. Off by default.
 
 **Q: How do I send a different payload (kstuff, kernel patches,
 plugin scripts, etc)?**
@@ -351,8 +352,8 @@ the file, shows you whether it looks like a ps5upload payload or
 something else, and records the send in a history panel so you
 can replay it without re-picking the file.
 
-**Q: The Send button says "Waiting for payload…" for a long time.**
-That is the normal probe window, up to 20 seconds. If it times out, the payload likely crashed on
+**Q: The Send button says "Waiting for the helper to start…" for a long time.**
+That is the normal probe window, up to 20 seconds. If it times out, the helper likely crashed on
 load; send it again.
 
 **Q: Can I use a helper that is already running (loaded by another tool)?**
@@ -361,7 +362,7 @@ helper is older than this app, a banner says so: its **Send helper** sends this 
 right there and waits until the new version answers.
 
 **Q: Can multiple computers connect to the same PS5 at the same time?**
-Yes: computers, phones and Docker, up to 16 at once, with no pairing code (8.0.0). **Devices**
+Yes: computers, phones and Docker, up to 16 at once, with no pairing code. **Devices**
 lists them and what each is doing; installs take turns, and an upload into a folder another
 device is writing into says so. See "Several devices and Mesh Drive".
 
@@ -390,14 +391,13 @@ Devices**. If a different PS5 answers at an address you reuse, forget the old on
 again.
 
 **Q: The web UI says it isn't paired, and no code shows on the console.**
-With an 8.0.0 helper this only happens when **Ask before a new device can connect** is on, or the
-device is blocked (Devices). Let it in from a connected device (**Connection → Let another device
-pair**), or press **Send helper** in the web UI: the helper it sends lets it in. A helper older
-than 8.0.0 still asks for pairing; sending the 8.0.0 helper ends that.
+This only happens when **Ask before a new device can connect** is on, or the device is blocked
+(Devices). Let it in from a connected device (**Connection → Let another device pair**), or press
+**Send helper** in the web UI: the helper it sends lets it in.
 
-**Q: I updated to 6.0 and the app says the helper is old.**
-6.0 and v5.x cannot talk to each other. Press **Send helper** in the banner that says the helper
-is older (or on the Connection screen) and the app replaces it, waiting until the new version
+**Q: I updated and the app says the helper is old.**
+Press **Send helper** in the banner that says the helper is older (or on the Connection screen)
+and the app replaces it, waiting until the new version
 answers. If the old helper will not exit, restart the
 console and try again.
 
@@ -452,7 +452,7 @@ list lived in each browser only. Anyone who can open the web UI can see the Wake
 `PS5UPLOAD_ALLOW_IP` to your own devices.
 
 **Q: How do automatic save backups work, and how do I restore one?**
-Saves → Automatic backups: choose a folder and how many versions to keep, then turn it on. Every
+Save Data → Automatic backups: choose a folder and how many versions to keep, then turn it on. Every
 ten minutes the engine copies each console's saves that changed since their last backup (a save
 written in the last few minutes waits for the next round). In the desktop app this runs while the
 app runs; in Docker it runs all the time, with no browser open. Use a folder the container keeps,
@@ -503,7 +503,7 @@ copy of. It never deletes a game you have no copy of and never moves games to th
 shows unknown.
 
 **Q: My uploads to the PS5 are slow. How do I find out why?**
-Open Health and press Diagnose under "Diagnose slow transfers". It checks how the PS5 and this
+Open Health Check and press Diagnose under "Diagnose slow transfers". It checks how the PS5 and this
 computer are connected (cable, Wi-Fi or VPN), the cable speed, whether replies slow down while
 sending and the packet size, and runs a speed test unless one ran in the last 10 minutes. The most
 common causes are the PS5 on Wi-Fi (about 30 MiB/s; a cable gets about 105) and a cable or switch
@@ -539,9 +539,10 @@ phone or another computer?" below walks through it from start to finish.
 - **Payloads → Send payload** accepts an ELF from your browser machine and forwards it through
   the engine to the selected console's loader (9021 by default). Sending bytes does not confirm
   execution. Catalog downloads and the other payload formats still use the native app.
-- Desktop-only and hidden in the browser: archive uploads, saving a save backup or downloading files to your
-  computer, and attaching files to a bug
-  report. Everything that works on the PS5 itself is the same as on desktop.
+- Archives: a `.zip`, `.7z` or `.rar` on the engine's disk uploads like on desktop. An archive on
+  the device your browser runs on can't be read as an archive; unpack it first.
+- Hidden in the browser: saving a save backup or downloading files to your computer, and attaching
+  files to a bug report. Everything that works on the PS5 itself is the same as on desktop.
 - The docker image can be built using `PS5UPLOAD_BASE_URL` to change the root path of the app.
 
 **Q: How do I use PS5Upload from my phone or another computer?**
@@ -625,11 +626,11 @@ external display is attached, so leave the lid open. In Docker Desktop's setting
 install, delete and read files on your PS5. `PS5UPLOAD_ALLOW_IP` limits who that is; keep it to
 your own network, and never forward port 19113 on your router or open it to the internet.
 
-**Q: What is "Stream install"?**
+**Q: What is "Stream & install"?**
 It installs a `.pkg` **straight from your computer**: the PS5 pulls the bytes over your network, so
 nothing is copied to the console first (no package plus installed game taking room). Keep the
 computer on and connected until it finishes. The PS5 must be able to reach your computer; if it
-cannot, see "Stream install fails before the PS5 downloads anything", or use **Upload & install**.
+cannot, see "Stream & install fails before the PS5 downloads anything", or use **Upload & install**.
 
 **Q: Can I manage several PS5s at the same time?**
 Yes. Add each console from **Connection** or the **+** on the console tab strip. Each console has
@@ -655,9 +656,10 @@ reorder. Up to 12. Nothing changes until you pin something.
 - **Windows** — x64 and ARM64, shipped as a `-setup.exe` installer
   **or** a `.zip` containing a portable `PS5Upload.exe` (no installer,
   no admin prompt — unzip and run).
-- **Linux** — x64 and arm64, shipped as `.deb`, `.rpm`, and a `.zip`
-  containing `PS5Upload.AppImage`. Install the package for your distro,
-  or use the AppImage anywhere — `chmod +x` and double-click. If you
+- **Linux** — x64 and arm64, shipped as `.deb`, `.rpm`, a bare `.AppImage`,
+  and a `.zip` containing `PS5Upload.AppImage` and its `PS5Upload.sh` launcher.
+  Install the package for your distro, or use the AppImage anywhere —
+  `chmod +x` and double-click. If you
   installed the `.deb` or `.rpm`, the built-in updater detects that and
   offers the same package type rather than the AppImage.
 - **Android** — `.apk` (sideload), built for **ARM only** (`arm64-v8a`
@@ -676,7 +678,7 @@ There is no 32-bit x86 (i386 / i686) build for any desktop OS.
 The helper is built against PS5 Payload SDK v0.45 and the same binary runs on **1.00 to 14.10**.
 Tested on 5.10, 9.60 and 13.60 (and confirmed by users on 12.20); 14.00 and 14.10 are new in
 SDK v0.45 and not tested yet. In practice the limit is the
-**ELF loader** on port 9021, a third-party component; loader coverage is roughly 4.x to 12.x.
+**ELF loader** on port 9021, a third-party component, which depends on your jailbreak.
 
 `.pkg` install also needs live kernel patches (kstuff / fpkg-enable). Where they are not active,
 the installer says so instead of reporting a false success.
@@ -748,7 +750,7 @@ sudo apt-get install -y \
   libwebkit2gtk-4.1-0 \
   libsoup-3.0-0 \
   libjavascriptcoregtk-4.1-0 \
-  libappindicator3-1 \
+  libayatana-appindicator3-1 \
   librsvg2-2
 ```
 
@@ -773,11 +775,10 @@ sudo dnf install -y \
   librsvg2
 ```
 
-- On RHEL / Rocky / Alma 9: enable EPEL first
+- On RHEL / Rocky / Alma: enable EPEL first
   (`sudo dnf install -y epel-release`).
-- RHEL / CentOS / Rocky / Alma **8** ship webkit2gtk3 (the 4.0
-  series). ps5upload targets 4.1 and won't run on 8.x without a
-  manual webkit2gtk4.1 backport — 9.x is the minimum.
+- RHEL / CentOS / Rocky / Alma **10** is the minimum. 8 and 9 have a glibc
+  older than the app needs (see "Minimum distro version?").
 
 ### Linux — Arch, Manjaro, EndeavourOS
 
@@ -850,11 +851,9 @@ the DMABUF renderer on your GPU/compositor — common on gaming distros
    startup (`[linux] graphics: …` in the terminal output).
 
    This works for a plain double-click of `PS5Upload.AppImage`, the
-   `.deb` / `.rpm` / folder build, and the `PS5Upload.sh` wrapper — with
-   one exception: the `libwayland-client` preload is only applied by
-   `PS5Upload.sh`, because `LD_PRELOAD` has to be set before the process
-   starts. **On NVIDIA + Wayland, launch via `./PS5Upload.sh` rather
-   than the bare AppImage.**
+   `.deb` / `.rpm` / folder build, and the `PS5Upload.sh` wrapper. On
+   NVIDIA + Wayland the AppImage restarts itself once with the system
+   `libwayland-client`, which is what `PS5Upload.sh` does too.
 
    Why it is not simply all of them, everywhere: disabling accelerated
    compositing makes WebKitGTK render the whole page in software, which
@@ -937,7 +936,7 @@ sudo chown -R "$USER:$USER" ~/.ps5upload
 
 **Q: Pressing Play crashes the whole app on Linux (#610).**
 
-A: Fixed in 10.5.1. On WebKitGTK 2.54 (Fedora 44 and other current
+Fixed in 10.5.1. On WebKitGTK 2.54 (Fedora 44 and other current
 distros) the app's window died the moment Play checked which video
 formats it can decode, whenever WebKit's DMA-BUF renderer was off — which
 the app does on most AMD and Intel machines, and `PS5Upload.sh` does for
@@ -1002,8 +1001,8 @@ Your phone's Display size or Font size setting scales the whole app. Open **Sett
 size** in ps5upload and pick a smaller percentage.
 
 **Q: I picked a folder, `.zip` or `.pkg` on Android but it fails ("could not read", "No such file").**
-Android needs **All files access** before the app can read your files. Tap **Choose folder**,
-**Choose file** or **Add .pkg**, tap **Open settings**, turn on **Allow access to manage all
+Android needs **All files access** before the app can read your files. Tap **Choose folder**
+or **Choose file**, tap **Open settings**, turn on **Allow access to manage all
 files** for PS5Upload, come back and tap **Retry**. You can also grant it in **Android Settings
 → Apps → PS5Upload → Permissions → All files access**.
 
@@ -1061,12 +1060,32 @@ lapse, the app will not open until you refresh it; your settings stay.
 **Q: Can AltStore, SideStore or Feather update the app for me?**
 Yes. Add this source once, and the app shows up there with its updates:
 
-`https://github.com/phantomptr/ps5upload/releases/latest/download/altstore.json`
+`https://ps5upload.phantomptr.com/altstore.json`
 
-In AltStore or SideStore: **Browse → Sources → +** and paste it. In Feather: **Sources → +**. The
-source always lists the newest full release (not pre-releases); installing from it is the same as
-installing the `.ipa` by hand. Sideloadly has no sources: download the new `.ipa` and drag it in
-again.
+`https://github.com/phantomptr/ps5upload/releases/latest/download/altstore.json` is the same file,
+straight from the newest full release. The source lists full releases, not pre-releases.
+
+In AltStore or SideStore: open the **Sources** tab, press **+** and paste it. Feather has its own
+steps: see "Feather: how do I add the source? The link fails, or Import does nothing." Installing
+from a source gives the same app as installing the `.ipa` by hand. Sideloadly has no sources:
+download the new `.ipa` and drag it in again.
+
+**Q: Feather: how do I add the source? The link fails, or Import does nothing.**
+1. Open **Sources** in Feather and press **+**.
+2. Paste `https://ps5upload.phantomptr.com/altstore.json` into **Source URL**. The stable release
+   address also works: `https://github.com/phantomptr/ps5upload/releases/latest/download/altstore.json`.
+3. Press **Save**, not **Import**.
+
+A raw GitHub link doesn't work (`raw.githubusercontent.com/…`, or a `/raw/` or `/blob/` link). The
+file isn't in the repository, only in each release, so the link answers "not found" and Feather
+reports that it can't read it.
+
+**Import** doesn't open a file. It only reads the clipboard, for source lists copied from other
+apps, and with nothing usable there it seems to do nothing. If the sheet then stays on a spinner,
+close it and start again.
+
+Feather signs the app with your own certificate, which you add to Feather first. If you only have
+a free Apple ID, use AltStore, SideStore or Sideloadly.
 
 **Q: How do I install it with Sideloadly? (quickest one-off install)**
 1. Install **Sideloadly** from sideloadly.io on your computer and open it.
@@ -1282,7 +1301,7 @@ and every transfer afterwards goes over the direct cable.
   internet. While the PS5 is on the direct cable, those won't work.
   Switch the PS5's network back to WiFi (or your router) when you
   want them; ps5upload remembers the last-used IP so re-pointing it
-  at the WiFi IP afterwards is a one-line change in Settings.
+  at the WiFi IP afterwards only takes changing the address on **Connection**.
 - **PS5 Ethernet port is gigabit** — practical sustained ceiling is
   around 110–118 MiB/s for huge files.
 - **2.5 GbE / 10 GbE adapters on the computer** are fine and still
@@ -1321,7 +1340,7 @@ you can drop files (not folders) onto Files; they go to the server first, then t
 Android and iPhone apps have no drag and drop.
 
 **Q: Can I copy files off a disc in the PS5's drive?**
-Yes. A data DVD or Blu-ray in the drive shows up in **File System** at `/mnt/disc`; browse it
+Yes. A data DVD or Blu-ray in the drive shows up in **Files** at `/mnt/disc`; browse it
 and download or copy files from it like any other drive. The disc stays read-only.
 
 **Q: I cancelled a download on the PS5, but the app still shows the install running.**
@@ -1335,9 +1354,9 @@ Open the game and press **Send to PS5** on its page. Pick the copy, how to send 
 and folder, then **Send**. It starts right away; other uploads waiting in the queue keep waiting.
 
 **Q: How do I stop my PS5 from going into rest mode?**
-**Settings → Upload → Keep the PS5 awake** has three modes: **Off**; **During uploads and
+**Settings → Console → Rest mode → Keep the PS5 awake** has three modes: **Off**; **During uploads and
 installs** (default), which keeps resetting the console's auto-standby timer while any upload or
-install runs, a Stream install included; and
+install runs, a Stream & install included; and
 **Always while connected**, which keeps every console with a running helper out of auto-rest while
 the app is open (a ⚡ indicator shows). Resting the console by hand always works, and closing the
 app returns the console to its normal schedule.
@@ -1474,8 +1493,9 @@ the part not sent yet; meanwhile the progress reads "Skipping data the console a
   (`name.part1.rar`, or the plain `.rar` for `.r00` sets) and keep every part in one folder. A RAR
   holding several packages is unpacked straight to the console and each package installed in turn
   (base, then patch, then DLC).
-- **`.rar` needs the desktop app.** The Android build and the web UI say so. `.zip` and `.7z` work
-  on Android; no archive format works in the browser.
+- **`.rar` doesn't open on a phone.** The Android and iPhone apps say so; `.zip` and `.7z` work
+  there. In the web UI every format works for files on the engine's disk (the Docker image has the
+  RAR helper). None does for a file on the device your browser runs on.
 
 **Q: I want the `.zip` itself on the PS5, not unpacked (a jailbreak or payload update).**
 Upload asks what to do with each archive: **unpack it** (into a new folder, or straight into the
@@ -1518,11 +1538,11 @@ restart the app. A waiting item has **Send now**: the upload running on that con
 one goes, and the paused upload carries on by itself when it is done (or fails). An upload you
 paused yourself is never resumed for you. It is still one transfer at a time per console.
 
-**Q: How do I jump between volumes in the File System screen?**
+**Q: How do I jump between volumes in the Files screen?**
 The **Volume** dropdown above the breadcrumb lists every writable volume with its free space.
 Pick one to jump to its root.
 
-**Q: Does the File System screen remember where I was last?**
+**Q: Does the Files screen remember where I was last?**
 Yes, per console. The PS5 IP is remembered too.
 
 **Q: Where can I see what is running across screens?**
@@ -1551,11 +1571,11 @@ upload again.
 
 To avoid interruptions on long transfers:
 - **Your computer** is kept awake automatically while any upload or install runs, including a
-  Stream install (the console fetches the package from this computer, so it must not sleep).
+  Stream & install (the console fetches the package from this computer, so it must not sleep).
   **Settings → Keep Awake** also keeps it awake while the app is idle; greyed out on non-systemd
   Linux.
 - **The PS5** has its own rest timer: raise it under **Settings → System → Power Saving → Set Time
-  Until PS5 Turns Off**, or use **Settings → Upload → Keep the PS5 awake** in the app.
+  Until PS5 Turns Off**, or use **Settings → Console → Rest mode → Keep the PS5 awake** in the app.
 - **Flaky Wi-Fi?** A direct Ethernet cable is the most stable and fastest path (see the direct
   Ethernet section above).
 
@@ -1603,7 +1623,7 @@ No. Unmount unregisters every title inside the image first, then unmounts.
 
 **Q: Can I edit what's inside a mounted image — replace files, add DLC,
 or apply a backport patch?**
-Yes. Mount the image **read-write**, then edit it in the **File System**
+Yes. Mount the image **read-write**, then edit it in the **Files**
 tab like any other folder on the console.
 
 - Open the game in **Games**, press **Mount** on the image under **On the PS5's drives**, and
@@ -1679,8 +1699,7 @@ and the stage shown when it slows (transfer, compression or verification). Expor
 while it is happening. Small-file work and verification can behave very differently from large
 sequential copies; a percentage alone cannot identify the bottleneck. Conversion logs now
 record planning, writing and verification times, sizes, and compression settings. Comparisons
-need the same source, settings and storage. The current small-file and compression reports
-remain investigations; no throughput improvement is claimed for this release.
+need the same source, settings and storage.
 
 **Q: ShadowMount+ mounts my game read-only — how do I edit it?**
 Open the game in **Games** and press **Edit files** on an uncompressed image under **On the
@@ -1812,8 +1831,7 @@ drives. Add the folder (or folders) that holds your games under **Games → Fold
 inside, up to six folders deep, is found by what it is (packages, game folders, `.exfat` /
 `.ffpkg` / `.ffpfs` / `.ffpfsc` images, `.zip` / `.7z` / `.rar` archives), however the folders
 are named. Each item is read from the file itself, so nothing needs renaming first. A drive, an
-external disk or a mounted network share all work. It is PS Game Library, built into ps5upload:
-if you used it, **Import from PS Game Library** in the **⋯** menu brings its index over.
+external disk or a mounted network share all work. It is PS Game Library, built into ps5upload.
 
 **Q: Can the Collection read my NAS without mounting it?**
 Yes. Save the server under **Shared Folders** (SMB, FTP, FTPS, SFTP or WebDAV), then in **Games →
@@ -1956,7 +1974,7 @@ PS5**) are in the small "Or install a package" row under the drop zone.
 
 **Q: Stream & install or Upload & install: which one?**
 Use **Stream & install** unless you have a reason not to. Use **Upload & install** when the PS5
-cannot reach this computer (Stream fails with a network error: see the next question), when you
+cannot reach this computer (Stream fails with a network error: see "Stream & install fails before the PS5 downloads anything"), when you
 install from a phone, or when you want to keep packages on the PS5 to reinstall later without the
 computer. Upload needs free space on the PS5 for the copy as well as for the installed game.
 
@@ -2012,7 +2030,7 @@ when it is not already running, alongside the helper, so the connection does not
 is reported done only once the console has pulled the whole package and the result checks out.
 A link that serves a `.pkg` installs even without ".pkg" in the URL.
 
-**Q: Stream install fails before the PS5 downloads anything?**
+**Q: Stream & install fails before the PS5 downloads anything?**
 Also asked as: **Stream & install doesn't work for a PS4 package, but file transfer works.**
 Uploads and file transfers are connections from this computer to the PS5. **Stream & install**
 is the other way round: the PS5 connects back to this computer and downloads the package from
@@ -2041,7 +2059,7 @@ Install**). Workshop is one column, top to bottom: **① Game** (the only place 
 **② What to make**, **③ Options**, **④ Build & install** and **⑤ Queue**. Pick a decrypted game
 folder or an `.exfat` / `.ffpkg` image under ①. The app checks it has what a launchable package
 needs and builds a fake package on your computer, compressed the way Sony's packages are. It
-reads games from the console through the helper, so ftpsrv is not needed. Then choose **Stream
+reads games from the console through the helper, so ftpsrv is not needed. Then choose **Stream &
 install** or **Upload & install**, or keep the package. Several games, or a folder of games, go
 into the queue and are made one after another; a game set to install or upload goes on to
 **Upload & Install**'s queue once it is made.
@@ -2099,7 +2117,7 @@ Yes, both. While a game is being made (or an archive unpacked) in Workshop, ④ 
 **Cancel**. Paused, the work stops where it is and uses no processor or disk until you press
 **Resume**; the games waiting in ⑤ wait for it, and **Cancel** still works while paused.
 To keep your computer quick while converting, turn on **Use less of this computer** (under ④, or
-Settings › Workshop). Converting then uses about half your processor and lets other apps go first,
+Settings › Uploads › This computer). Converting then uses about half your processor and lets other apps go first,
 for the processor and the disk. It takes longer. You can switch it on or off while a conversion runs.
 There is no "use 60% of my CPU" slider on purpose: Windows, macOS and Linux don't keep to a
 percentage the same way, while fewer cores at background priority gives the computer back at once
@@ -2133,7 +2151,7 @@ Yes. Plug the drive into the PS5; packages on it show in **Upload & Install → 
 actual header instead of trusting the suffix: PS4-style packages use a CNT
 container, while a finalized PS5 package uses an FIH envelope with an embedded
 CNT. `.ffpkg` and `.ffpfs` are UFS filesystem images and remain in the mount /
-File System workflow; they are not sent to Sony's package installer.
+Files workflow; they are not sent to Sony's package installer.
 
 For a PS5 FIH package the app also reports **fake/debug** versus **retail** from
 the envelope. Installing a retail package can be useful for reinstalling owned
@@ -2167,11 +2185,11 @@ Settings → Game → Package Installer).
 ps5upload. In order:
 
 1. **Is 9021 your loader's port?** `elfldr` uses 9021; some bundles use another port or have no
-   loader. If yours differs, change the port in Settings.
+   loader. If yours differs, set it in **Payloads → Send payload**.
 2. **Did it start?** Autoloaders silently skip failed payloads. Re-run the jailbreak and watch for
    the loader's notification.
-3. **Did the console sleep or reboot?** Everything jailbreak-side is lost on reboot and usually on
-   rest mode.
+3. **Did the console sleep or reboot?** Everything jailbreak-side is lost on reboot, and rest mode can
+   stop it too.
 4. **Right IP?** Check Settings → Network → Connection Status; a stale DHCP lease is common.
 5. **Can your computer reach it?** "AP / client isolation" on the router blocks device-to-device
    traffic; wired Ethernet avoids it.
@@ -2199,7 +2217,7 @@ backup. Keep the file private. It has no passwords or Remote Play keys. Make one
 you add a user or change an account.
 
 **Q: Can I move my saves from a PS4 to my PS5?**
-Experimental, from 9.9.0: Saves › **Move saves from a PS4**. Turn on the jailbroken PS4's FTP
+Experimental: Save Data › **Move saves from a PS4**. Turn on the jailbroken PS4's FTP
 server (GoldHEN's, usually port 2121), enter its address, pick its user and games, and copy them
 to this computer (your save-backups folder; set one in Automatic backups first). Then pick the
 PS5 user: it must have the PS4 account's ID (Accounts sets it; a save follows the account ID),
@@ -2209,7 +2227,7 @@ The PS4 is never written to, and no users, system files or trophies are changed.
 on a PS5 have mixed reports: try one game first. Moving trophies is not offered: it needs
 renaming system folders and rebuilding the database, which can leave a user unusable.
 
-**Q: Saves: what can I do in Save Data?**
+**Q: What can I do in Save Data?**
 Save Data shows one row per game and user, with a line saying when it was last backed up. What
 people do there, most common first:
 
@@ -2256,22 +2274,29 @@ the app saves every part of the save, decrypted, as one `.zip` without the owner
 details. On your PS5, start the game once and save so you have a save of your own, close it, then
 pick **Copy to… › Load a save file** on that game and choose the `.zip`. Each part goes into your
 save's part of the same name, and the PS5 encrypts it again as yours: no account ID change needed.
-Your save is backed up first (set a folder in Saves › Automatic backups) and put back if anything
+Your save is backed up first (set a folder in Save Data › Automatic backups) and put back if anything
 fails. Both consoles need PS5Upload, and the game must be the same title ID (same region). Some
 games check more inside the save itself; if one won't load it, restore your backup with
 **Restore…**. A file saved by 10.6.0 or later needs 10.6.0 or later to load; files from earlier
 versions still load.
 
+**Q: Can saves back up to my NAS?**
+Yes. **Save Data → Backups to a network share**: pick a folder on a saved server (SMB, or any server
+under **Shared Folders**), then back up every few hours or each time you close a game, for the
+consoles and users you choose. Each copy is read back from the share and checked before it counts,
+and a bad one is deleted. Restore any version from the game's page; the current save is backed up
+first.
+
 **Q: Can I move a save between consoles, profiles or game regions?**
 
-Saves backup and restore copies the existing encrypted save files (to give a save to another
-account, see **Copy to…** above). It does **not**
-re-sign saves, change their owning account, or convert title IDs/regions. A backup
-must match the target title and account. Renaming a GTA V (or other game's) title folder does not
-convert it. A PS5 save's encryption key is sealed for the console that made it, so an encrypted
-backup only opens on that PS5. From 10.6.0 a backup notes the PS5 it was made on (when Remote Play
-is on), and restoring one made on another PS5 is refused before anything changes; to take a save
-to another PS5, use **Copy to… › Save as a file for a friend or another PS5** on the PS5 that has it.
+- **To another user on this PS5:** yes. **Copy to…** on the save, or **Restore to another user…** on
+  a backup (that account must have a save of the game).
+- **To another PS5:** yes, with **Copy to… › Save as a file for a friend or another PS5**, on the PS5
+  that has it. A plain backup won't do: a PS5 save's encryption key is sealed for the console that
+  made it, so an encrypted backup only opens on that PS5. A backup notes the PS5 it was made on (when
+  Remote Play is on), and restoring one made on another PS5 is refused before anything changes.
+- **To another game region:** no. It does not convert title IDs or regions, and renaming a GTA V (or
+  other game's) title folder does not convert it.
 
 Download a backup of the target save before trying a restore. The target must
 already list a save for that title: launch the game once to create it. From 10.6.0 a restore
@@ -2295,7 +2320,7 @@ Not through Upload & Install: it installs a single package file. Pick the single
 **Q: Where do uploaded packages live, and are they cleaned up?**
 At `/user/data/ps5upload/pkg_library/<ContentID>.pkg`, and they stay so you can reinstall. Remove
 one with **Delete** on its row, or turn on **Auto-delete each package from the PS5 after it
-installs**. A **Stream install** never leaves a copy on the PS5.
+installs**. A **Stream & install** never leaves a copy on the PS5.
 
 To keep the copies on another drive (an M.2 or USB drive), open **Volumes** and press **Store
 package copies here** on that drive. This only moves where the copies are kept. It does not
@@ -2351,7 +2376,7 @@ Firmware notes:
 - **Upload & install (`0x80B2116F`):** fixed in 6.3.1. It was our bug, not a limit of the PS5:
   the install request we handed Sony was a few bytes short, so Sony read leftover memory and
   sometimes took the package for a patch. That refused every Upload & install, and made some
-  Stream installs fail at random until the helper was sent again. Measured on FW 13.60 (two
+  Stream & installs fail at random until the helper was sent again. Measured on FW 13.60 (two
   consoles): refused every time before, accepted every time after. FW 9.60, 11.20 and 5.10
   (`0x80B2150F` there) showed the same refusal and should be fixed by the same change, but we
   have not been able to test them since. If you still see it, the app serves the package from
@@ -2396,18 +2421,17 @@ Firmware notes:
   console (PS4 vs PS5), and send a bug report from the app if it persists.
 - **`CE-108255-1`.** Another code the PS5 shows itself, usually when a game or
   app fails to start rather than when an install fails. See "My uploaded game
-  won't launch" below; if it appears right after an install, the checks there
+  won't launch"; if it appears right after an install, the checks there
   apply.
 - **"View product" instead of Play, or "missing base entitlement".** The
   console treats the title as one you have not bought. An update or DLC
   installed without its base game, or a package whose entitlement is not
-  present, shows this. Install the base game first, or use a method that
-  doesn't rely on an entitlement (see below).
+  present, shows this. Install the base game first.
 - **"This PS4 game isn't playable on PS5".** The console's own message for a
   PS4 title it will not run. It has been seen with an update installed without
   its base and with fake-package support not loaded. Install the complete
   package (base first) with kstuff running, and see "My uploaded game won't
-  launch" below.
+  launch".
 
 # Console and tools
 
@@ -2432,10 +2456,10 @@ process list, so it has no idea *how* a game was started.
 
 Two things to know before you trust the numbers:
 
-* It only counts time **while the payload is loaded**. Reboot or rest
-  mode stops the payload, and play time during that window is never seen.
+* It only counts time **while the helper is loaded and the console is awake**.
+  Play time during a reboot or rest mode is never seen.
 * It polls every 30 seconds, so a very short session can be missed
-  entirely. Your history survives re-sending the payload.
+  entirely. Your history survives sending the helper again.
 
 The **Recently Played** list is separate — it reads the console's own app
 database, so it shows titles regardless of whether the tracker was
@@ -2508,10 +2532,37 @@ full screen or stop the stream. Back leaves full screen and keeps playing; **Sto
 menu. The screen stays awake while you play, and Settings has the controller's size and opacity.
 In the Android app, full screen hides the status and navigation bars (swipe from an edge to see them) and holds the phone in landscape.
 
-**Q: A game says Remote Play isn't available, or the picture goes black.**
-Some games and apps forbid Remote Play: the stream is refused when they start, a "can't be streamed" notice appears during the stream, or the picture turns black. That is the game's own setting, not a fault in the app. **Remote Play Unlock** (by earthonion) patches the PS5's Remote Play service so those games stream: open **Payloads**, find Remote Play Unlock and load it; the PS5 shows "Remote Play prohibition patch applied". It works on firmware 3.20, 10.01, 12.00, 12.70 and 13.60 and refuses others by itself. The patch lives in memory only, so load it again after every reboot (it is not needed per game); to have it loaded each boot, add it to your autoloader (in Payload Manager, **Load at boot**). It runs once and exits, so it never shows as running. A black picture with every game is something else: see Hush, which turns off the encoder Remote Play needs.
+**Q: What is Hush, and why does Play ask to pause it?**
+Hush is a third-party payload that stops the console recording gameplay. It also turns off the
+encoder Remote Play needs, so with Hush on a stream has no picture. When you start Play, the app
+asks to pause Hush (about 20 seconds) and turns it back on when the stream ends. **Always pause Hush
+for Remote Play** in Play's settings skips the question. If the app closes during a stream, Hush's
+card under **Payloads → On your PS5** offers to turn it back on. **Play › Set up** has a step for it,
+which ticks itself when Hush is off or not loaded.
 
-**Q: Part of the Remote Play picture is cut off, or it looks stretched.**
+**Q: Do a DualSense's adaptive triggers, haptics and motion work in Play?**
+Yes, in the desktop app, with the DualSense connected to the computer. Turn on **Play › Settings ›
+Controls › DualSense effects**; it applies from the next start. Games then set the triggers'
+resistance as on the PS5, and the gyro and accelerometer reach the console. Haptics play on a
+controller plugged in with a USB cable; over Bluetooth they become rumble. On a Mac, set the
+controller to 4 channels in Audio MIDI Setup for haptics. The touchpad works too, finger and click.
+
+**Q: Can Play show HDR?**
+Yes, as an experiment: **Play › Settings › Picture › Video format › HDR**. It is offered only where
+it can work: an HDR screen, a device that decodes HEVC Main10, and a browser that draws HDR (WebGPU,
+as in Chrome or Edge). If it doesn't work, the app says so and goes back to Auto. Sharpening,
+upscaling and colour stay off in HDR.
+
+**Q: How do I type into the PS5's on-screen keyboard in Play?**
+When a game or the PS5 opens its keyboard, a text box shows over the stream with the console's text
+in it, and a phone opens its own keyboard. What you type reaches the PS5 as you go. Enter or Done
+keeps it, Esc or Cancel drops it, and the box closes when the PS5 closes its keyboard. The game gets
+no keys or controller presses while you type. It is experimental.
+
+**Q: A game says Remote Play isn't available, or the picture goes black.**
+Some games and apps forbid Remote Play: the stream is refused when they start, a "can't be streamed" notice appears during the stream, or the picture turns black. That is the game's own setting, not a fault in the app. **Remote Play Unlock** (by earthonion) patches the PS5's Remote Play service so those games stream: open **Payloads**, find Remote Play Unlock and load it; the PS5 shows "Remote Play prohibition patch applied". It works on firmware 3.20, 10.01, 12.00, 12.70 and 13.60 and refuses others by itself. The patch lives in memory only, so load it again after every reboot (it is not needed per game); to have it loaded each boot, add it to your autoloader (in Payload Manager, **Load at boot**). It runs once and exits, so it never shows as running. A black picture with every game is something else: see "What is Hush, and why does Play ask to pause it?"
+
+**Q: Part of the Play picture is cut off, or it looks stretched.**
 **Picture size** decides how the picture fits the screen: **Fit** shows the whole picture with black bars where the shapes differ (the default), **Fill** fills the screen and crops the edges, **Stretch** stretches the picture to the whole screen. It shows in full screen: on the page the picture's box is the picture's own shape, so all three look the same there. **Fit** never cuts anything off: like a video player, the whole picture always shows, with black bars at the sides or top and bottom when the shapes differ. On a 16:9 screen (the picture's own shape) all three look the same. Change it in full screen without leaving it: the **Picture size** menu on the bar (desktop), or the Fit / Fill / Stretch row in the **⋯** menu (phones). It's also in Play › Settings, and it applies at once. Before 9.2.0, the Windows app could show the picture enlarged with its right and bottom cut off (#538); update to fix it.
 
 **Q: On Windows the Play picture is enlarged and cut off on the right and bottom, whatever the picture size.**
@@ -2522,36 +2573,36 @@ draws all of it, switching to software decoding by itself where that can't be pu
 still looks wrong, set Play › Settings › **Video decoding** to **Software** or **Video format** to
 **H.264** (they apply the next time you start), and send a bug report.
 
-**Q: Does my phone controller (Backbone, Razer Kishi, GameSir, Scuf Nomad...) work with Remote Play?**
-Yes. Phone controllers, USB-C or Bluetooth, are game controllers to the phone, so Remote Play reads them like any other: connect it, press a button, and it plays (the on-screen controller hides). If the browser doesn't recognise one, it still plays in the usual layout; if a button is wrong, open Play › Settings › Controllers › **Map buttons** and press each button as asked (any step can be skipped). **Set an extra button** gives a back button or paddle any PS5 button. Mappings are saved per controller. In the Android app the app also hands controllers to the page itself, for phones whose system browser misses them; on iPhone the app makes sure the page has the focus controllers need.
+**Q: Does my phone controller (Backbone, Razer Kishi, GameSir, Scuf Nomad...) work with Play?**
+Yes. Phone controllers, USB-C or Bluetooth, are game controllers to the phone, so Play reads them like any other: connect it, press a button, and it plays (the on-screen controller hides). If the browser doesn't recognise one, it still plays in the usual layout; if a button is wrong, open Play › Settings › Controls › Controllers › **Map buttons** and press each button as asked (any step can be skipped). **Set an extra button** gives a back button or paddle any PS5 button. Mappings are saved per controller. In the Android app the app also hands controllers to the page itself, for phones whose system browser misses them; on iPhone the app makes sure the page has the focus controllers need.
 
 **Q: Windows: my DualSense works in Windows but Play says "No controller seen yet".**
 Some Windows setups never hand a DualSense (often over Bluetooth) to the app's web view. The
 Windows app now reads a DualSense itself whenever the web view sees no controller, over USB or
-Bluetooth, and lists it under Play › Settings › Controllers with "(app)" after its name. Close
+Bluetooth, and lists it under Play › Settings › Controls › Controllers with "(app)" after its name. Close
 DSX, DS4Windows or Steam Input if one of them hides the pad. Other controllers still come
 through the web view as before.
 
-**Q: What is the Game panel in Remote Play?**
+**Q: What is the Game panel in Play?**
 The **Game** button on the stream bar (or **Game** in the phone's **⋯** menu) opens a panel over
 the picture; the game keeps playing. **Game** shows what is running and has **Snapshot save now**
 (a backup of its save taken while you play, kept with the game's save backups as "Taken while
-playing"; set a folder in Saves › Automatic backups first). **Cheats** switches the running game's
+playing"; set a folder in Save Data › Automatic backups first). **Cheats** switches the running game's
 cheats. **Console** shows temperatures and has **Fan boost**: 30 minutes at a 55 °C fan target,
 undone by itself when you turn it off, when the stream ends, or after 30 minutes, even if the app
 closed in between. The panel reads the console only while it is open. Restoring a save is refused
 while its game runs: close the game first.
 
-**Q: Can I start a game straight onto Remote Play?**
-Yes, from 9.7.0. On a game's page, **Play on Remote Play** (next to Play, for the connected
-console once it is set up for Remote Play) starts the stream, waking the console if it sleeps,
+**Q: Can I start a game straight onto Play?**
+Yes. On a game's page, **Play** (next to **Launch on PS5**, for the connected console once it is
+set up for Play) starts the stream, waking the console if it sleeps,
 waits for PS5Upload's helper, then starts the game on the stream. While you play, the Game
 panel's **Play something else** starts another of the console's games (the running one is closed
 first, after you say so). If the helper does not come back after a wake, send it from
 Connection and press Play again.
 
-**Q: Can a script or AI agent see and control Remote Play?**
-Yes, from 10.6.0, on the computer the engine runs on. While Remote Play plays in the app, a local
+**Q: Can a script or AI agent see and control Play?**
+Yes, from 10.6.0, on the computer the engine runs on. While Play runs in the app, a local
 script can ask for the picture the app shows (PNG or JPEG), hold controller buttons, sticks and
 triggers for a moment, and ask for a newer picture to see what happened. You keep watching and
 playing: nothing on screen changes and the script is one more controller next to yours. It never
@@ -2560,7 +2611,7 @@ Python examples, are in [Remote Play automation](https://github.com/phantomptr/p
 They are not a stable API yet and can change between versions.
 
 **Q: Can I install a package while I play?**
-Drop the .pkg or .fpkg on the Remote Play picture. By default it installs when you stop playing,
+Drop the .pkg or .fpkg on the Play picture. By default it installs when you stop playing,
 because an install shares the network with the stream and can make it stutter; **Install now**
 starts it at once. Progress shows in Activity like any install.
 
@@ -2570,55 +2621,55 @@ Yes, from 9.11.0. While the computer plays, open the phone panel on the stream's
 **Q: The phone link doesn't open, or the watch page says "The picture could not be played here."**
 On Android 17 or later, a browser can't reach devices on your own network until it has the **Nearby devices** permission: Settings › Apps › Chrome (or your browser) › Permissions › Nearby devices › Allow. Without it the page never loads, even with every firewall off. Before 10.0.2 the watch page could only show the picture on the computer itself: a phone opens the link as plain `http://`, where browsers turn off the video decoder it used, so H.264 and HEVC both failed. From 10.0.2 a phone plays it through the browser's own video player instead.
 
-**Q: Can I use my phone as the controller for Remote Play on my computer?**
+**Q: Can I use my phone as the controller for Play on my computer?**
 Yes, from 9.5.0. While the computer plays, press the phone button on the stream's bar (**Use a phone as a controller**) and scan the QR code with the phone's camera: the phone opens a controller, full screen and sideways, that plays along with the computer's own controls (up to four phones). Or, in the PS5Upload app on the phone, Remote Play shows that the computer is playing: tap **Use this device as its controller** and allow it on the computer. A controller attached to the phone works through it too. Only the controller page and its connection are open to your network, and they need the QR code's key or your OK on the computer; **Close the link** lets every phone go. Rumble vibrates an Android phone.
 
 **Q: Motion controls?**
 Play › Settings › **Motion controls (experimental)** (phones) sends the phone's gyro and tilt as the controller's motion sensors, for games with gyro aiming; the phone controller page has a **Motion** button too. Browsers give motion only to secure pages, so it works in the apps but not on the QR code's page in a phone browser.
 
-**Q: Can Remote Play save what just happened (instant replay)?**
+**Q: Can Play save what just happened (instant replay)?**
 Yes, from 9.8.0. Play › Settings › **Instant replay**: choose how much to keep (15, 30 or
 60 seconds). While you play, PS5Upload keeps those last seconds on this computer as the PS5 sent
 them; **Save replay** (the clock-with-arrow button on the bar, or in the phone's menu) saves them
 as an MP4 with sound, where your screenshots and clips go. Nothing is saved until you press it,
 and turning the setting off drops what was kept.
 
-**Q: Can I use turbo, macros or a mouse in Remote Play?**
+**Q: Can I use turbo, macros or a mouse in Play?**
 Yes, from 9.11.0, per game: open the **Game** panel on the stream bar › **Controls** while the
 game runs. Turbo repeats chosen buttons while you hold them; Mouse aim moves the right stick with
 the mouse once you click the picture (Esc lets the pointer go); a macro plays a few presses from
 one key. Each game keeps its own, on this device. The PS5 sees an ordinary controller.
 
 **Q: Can the PS5 get my computer's keyboard and mouse as a real keyboard and mouse?**
-Yes, from 10.4.0, on every firmware since 10.4.1 (tested on 13.60). **Settings › Controls** has
+Yes, from 10.4.0, on every firmware since 10.4.1 (tested on 13.60). **Play › Settings › Controls** has
 three modes, kept per game: **Controller** (keys and mouse act as a controller, the default),
 **Keyboard & mouse** (the PS5 gets a real keyboard and mouse, for games and apps that support
 them) and **Mixed** (a real mouse; the keys act as a controller). The button on the stream bar, or
 Ctrl+Option+M (Ctrl+Alt+M on Windows and Linux), switches it. Click the picture to give the PS5
 your keyboard and mouse; press and let go of Ctrl+Option (Ctrl+Alt) to get them back. Both
-shortcuts can be changed in Settings › Controls › Shortcuts. If your console can't do it, the app
+shortcuts can be changed in Play › Settings › Controls › Shortcuts. If your console can't do it, the app
 says it isn't available and keeps Controller; turn the mode on again to retry, and tell us your
 firmware. On a phone or tablet, the **Controller / Touchpad** switch over the picture makes it the
 PS5's touchpad, and ⌨ types on the PS5.
 
-**Q: Can I sharpen the Remote Play picture or crop an ultrawide game?**
+**Q: Can I sharpen the Play picture or crop an ultrawide game?**
 Play › Settings › **Picture**: Sharpen, Brightness, Contrast, Colour, Crop to 21:9 and
 Sharp pixels, applied at once. If the device cannot keep up (or has no WebGL 2) they turn off by
 themselves and say so.
 
-**Q: Can Remote Play upscale the picture to my screen?**
+**Q: Can Play upscale the picture to my screen?**
 Yes, from 9.11.0 (experimental): Play › Settings › Picture › **Upscale to the screen (FSR 1)**. The PS5 streams at most 1080p; on a bigger or 4K screen the picture is normally scaled up by plain smoothing, which looks soft. With this on, each frame is upscaled on the graphics card to the picture's own size on your screen with AMD FidelityFX Super Resolution 1 (edge-aware upscaling, then sharpening). It is plain shader code, so it works the same on AMD, NVIDIA, Intel and Apple GPUs, and phones. **Sharpen** sets how crisp it is. It does nothing when the picture is not shown bigger than the stream, and it turns itself off with a notice if the device can't keep up. Screenshots and clips are saved at the upscaled size. NVIDIA's RTX Video Super Resolution and Apple's MetalFX can't be used here: they only work on video players or native apps, not on the app's stream picture.
 
-**Q: How do I take a screenshot or record a clip in Remote Play?**
+**Q: How do I take a screenshot or record a clip in Play?**
 Use the **camera** (Screenshot) and **video** (Record a clip) buttons on the picture's bar (desktop, also in full screen), or in the **⋯** menu on a phone. A screenshot is a PNG at the stream's own size (1920×1080 or 1280×720), whatever size the picture is shown at. A clip records the picture and the game's sound (also while the player is muted); a red **Recording** light with the time shows on the picture, and pressing it (or the button again) stops and saves the clip. Clips are MP4 where the device records MP4, else WebM, and stop by themselves after 10 minutes (they are held in memory until saved). Files are named like `PS5 Living room 2026-10-30 21-14-05.png`. On a phone they go to the photo library (**Play › Settings › Save screenshots and clips to Photos**, on by default): the iPhone and iPad app adds them to **Photos** (it asks once, for adding only; it never reads your photos), the Android app to the gallery's **PS5Upload** album (Pictures/PS5Upload and Movies/PS5Upload, Android 10 and later), and a phone's browser shows **Save to Photos**, which opens the share sheet where **Save Image** or **Save Video** puts it there. With that off, if Photos access was refused, or on older Android, the apps save into **Downloads** (the iPhone app into its folder in the Files app). The desktop app saves straight into **Downloads**, and the web UI on a computer downloads them through the browser. Recording needs a device that can record video from a web page; where it can't, only Screenshot shows.
 
-**Q: How much delay does Remote Play have, and what does Low latency do?**
+**Q: How much delay does Play have, and what does Low latency do?**
 With **Stats** on, the picture shows a **Latency** line, for example `Latency ≈ 9 ms engine + 4 ms decode`: the round trip between this device and the engine (measured once a second; near zero in the desktop app, a network hop in the web UI or on a phone) and how long a frame takes from arriving to being drawn. The leg from the PS5 to the engine isn't included: the two have no shared clock, so it can't be measured honestly. **Play › Settings › Low latency** (off by default) uses the smallest sound buffer, keeps the engine's picture queue for this device at 2 frames instead of 6, and skips to the next whole picture sooner when decoding falls behind. Frames are drawn as soon as they're decoded either way. The trade: on a busy network more frames are dropped and the sound can crackle. The sound part applies at once; the picture part at the next start.
 
-**Q: Remote Play says "The network is dropping frames". What should I do?**
+**Q: Play says "The network is dropping frames". What should I do?**
 With **Lower quality on a busy network** on (the default), when a 1080p stream keeps losing frames for about 10 seconds the picture offers **Switch to 720p** once per session. 720p needs about two-thirds the bandwidth. Switching restarts the stream, because the resolution is fixed for a session, and the PS5 holds its last session for about 12 seconds after it ends, so expect roughly 15 seconds of waiting; the app waits that out and starts again by itself (**Cancel** stops it). It's offered rather than done for you because that pause can come at a bad moment in a game. The choice is kept (Picture becomes 720p in Settings); switch back there. It never steps down twice or back up by itself. Turn the setting off in Play › Settings to never be asked. A wired connection for the PS5 (and 5 GHz Wi-Fi for this device) helps most.
 
-**Q: Can I use voice chat (a microphone) in Remote Play?**
+**Q: Can I use voice chat (a microphone) in Play?**
 Experimental, from 9.5.0. First turn on **Microphone (experimental)** in Play › Settings
 (off by default; it applies from the next start). Without it, a session starts exactly as before.
 Then press the **Microphone** button on the picture's bar (desktop and full screen), or **Mic** in
@@ -2637,10 +2688,10 @@ mic is on, turn it off and tell us in a GitHub issue. The desktop apps ask the s
 macOS: System Settings › Privacy & Security › Microphone; on Android and iPhone, the usual
 permission prompt). If you said no once, allow it there and press the button again.
 
-**Q: Which browser should I use for Remote Play in the web UI?**
-Chrome or Edge (on Android, Chrome). Remote Play is made and tested for them. In Firefox and Safari, Esc always leaves full screen, so it can't be the controller's ○ there; Firefox has no picture in picture, and Safari's shows the picture only. The web UI says so on the Remote Play page in those browsers. On iPhone and iPad every browser is Safari underneath, and Remote Play works there on a secure page (`https://`, or the computer itself): browsers keep the video decoder Play uses for secure pages, so over a plain `http://<IP>:19113/` address a phone's browser says it cannot play a stream; use the Android or iPhone app to play on a phone. The desktop and Android apps don't depend on your browser.
+**Q: Which browser should I use for Play in the web UI?**
+Chrome or Edge (on Android, Chrome). Play is made and tested for them. In Firefox and Safari, Esc always leaves full screen, so it can't be the controller's ○ there; Firefox has no picture in picture, and Safari's shows the picture only. The web UI says so on the Play page in those browsers. On iPhone and iPad every browser is Safari underneath, and Play works there on a secure page (`https://`, or the computer itself): browsers keep the video decoder Play uses for secure pages, so over a plain `http://<IP>:19113/` address a phone's browser says it cannot play a stream; use the Android or iPhone app to play on a phone. The desktop and Android apps don't depend on your browser.
 
-**Q: Does Remote Play turn on Game Mode?**
+**Q: Does Play turn on Game Mode?**
 Where the system lets an app ask for it, yes, and only while the picture plays:
 - **Mac** (macOS 14 and later): the app counts as a game, so full screen turns on Game Mode (the Mac shows it in the menu bar) and leaving full screen turns it off. The computer and screen also stay awake while you play.
 - **iPhone and iPad** (iOS and iPadOS 18 and later): Game Mode turns on while the app fills the screen, whether or not a stream plays.
@@ -2649,7 +2700,7 @@ Where the system lets an app ask for it, yes, and only while the picture plays:
 - **Android**: the screen stays on, the device keeps a steady speed instead of bursts that slow down when it gets warm (on devices that support it), and a TV or monitor on HDMI is asked for its game mode (Android 11 and later). The app doesn't call itself a game on Android: there that only gives the system's game tools a say over the app.
 - **Web UI**: a browser tab can't ask for any of this.
 
-**Q: Remote Play on Linux says there is no H.264 decoder ("No decoder found for codec avc1…").**
+**Q: Play on Linux says there is no H.264 decoder ("No decoder found for codec avc1…").**
 On Linux the app's window plays video through the system's GStreamer, and some distributions
 (Arch, CachyOS and others) don't install its H.264 decoder by default (#548). From 9.4.1 the `.zip`
 (AppImage) carries its own GStreamer and decoder, so it plays wherever it runs. With the `.deb` or
@@ -2658,11 +2709,11 @@ On Linux the app's window plays video through the system's GStreamer, and some d
 - Debian, Ubuntu, Mint: `sudo apt install gstreamer1.0-libav` (the 9.4.1 `.deb` recommends it, so a normal install brings it)
 - Fedora: `sudo dnf install gstreamer1-plugin-openh264` (the 9.4.1 `.rpm` recommends it)
 
-Chrome and Chromium carry their own decoder, so Remote Play also works from them through the web UI.
+Chrome and Chromium carry their own decoder, so Play also works from them through the web UI.
 The app now checks for a decoder before it wakes the console and, without one, says what to install.
 
 **Q: What does Play (Remote Play) do, step by step?**
-Remote Play streams a PS5 into the app (desktop, web UI, Android and iPhone) and lets you play it with a
+Play streams a PS5 into the app (desktop, web UI, Android and iPhone) and lets you play it with a
 controller connected to the computer, the keyboard, or touch. It wakes a console in rest mode and
 signs your user in on its own, and keeps playing while you use other screens. One console streams
 at a time. **Play › Set up** has the same steps as a checklist that ticks itself and does what it
@@ -2673,7 +2724,7 @@ can (see "How do I set Play up?"):
 2. **Give that user an account ID.** A PSN-linked user has one; an offline user gets one in
    Accounts › Users (write it down: saves made afterwards are tied to it).
 3. **Sign the account in to PlayStation Network (offline)** if the console's own Remote Play
-   setting is greyed out (see the next question), then restart the PS5.
+   setting is greyed out (see "The PS5 won't let me turn on its own Remote Play setting"), then restart the PS5.
 4. **Turn Remote Play on**: Settings › System › Remote Play. The app can switch it on, and on
    firmware 10.00 and later allow it for the user.
 5. **Let the PS5 be woken**: Settings › System › Power Saving › Features Available in Rest Mode ›
@@ -2692,15 +2743,15 @@ can (see "How do I set Play up?"):
 If the picture stays black or stutters, use a wired connection or 5 GHz Wi-Fi, try 720p or 30 fps,
 and let the app through this computer's firewall on the local network (TCP and UDP 9295–9304). A
 browser needs WebCodecs (a current Chrome, Edge or Safari). To use Sony's PS Remote Play app or
-chiaki-ng instead, **Request PIN** on the same page registers a device without the PS5's menus.
-The same page lists what to check if it still does not work.
+chiaki-ng instead, **Generate PIN** under **Accounts** registers a device without the PS5's menus.
+Play › Set up lists what to check if it still does not work.
 
-Remote Play shows the console selected in the app. If another console is streaming, it keeps
+Play shows the console selected in the app. If another console is streaming, it keeps
 playing and the page offers it (**Show it**); **Start** on this one stops that stream first. The
 toolbar on the picture has mute and a volume slider.
 
-A PS5 plays Remote Play with one device at a time. When another device with ps5upload (a phone,
-another computer) is playing the selected console, the Remote Play page says so before you
+A PS5 streams to one device at a time. When another device with ps5upload (a phone,
+another computer) is playing the selected console, the Play page says so before you
 start, every device gets a short note when someone starts, and **Connection › Devices** lists it
 as that device's activity. Starting on a second device ends the first one's session.
 
@@ -2708,7 +2759,7 @@ On the keyboard, **Esc** is Circle. In full screen a quick press is still Circle
 leaves full screen (so backing out of a game menu never drops you out of full screen). In Safari
 and Firefox the browser itself leaves full screen on any Esc; use Backspace for Circle there.
 
-On a phone or tablet the Remote Play page is view only: the picture shows, but taps never reach
+On a phone or tablet the Play page is view only: the picture shows, but taps never reach
 the console. **Full screen** is where the on-screen controller is (and the Controller / Touchpad
 switch). A controller or keyboard connected to the phone or tablet plays on the page too.
 
@@ -2766,7 +2817,7 @@ The PS5 has one fan setting: the temperature its fan control works to hold (lowe
 The curve sets it to the lowest temperature at which you ask for 100%, up to 80 °C, and keeps it
 there across game launches and helper restarts. A curve that never asks for 100% at 80 °C or
 below (the default one) leaves the fan to the console's own setting (91 °C on firmware 13.60).
-**Restore default** does that. ShadowMount+ 1.7 can set the same value (`fan_target_temperature`
+**Use the console's own setting** does that. ShadowMount+ 1.7 can set the same value (`fan_target_temperature`
 in its `config.ini`); use one or the other, or each overwrites the other.
 
 **Q: What do the GPU clock and CPU clocks on the Hardware screen mean?**
@@ -2844,11 +2895,10 @@ The PS5Upload helper serves it on port 9180. It has seven sections, on the left:
 **Q: How do I open it?**
 Pick the **PS5Upload Minion** tile on the PS5 home screen. You can also open
 `http://127.0.0.1:9180/` in the PS5's web browser. Either way the PS5Upload helper must be
-loaded (send it from the app, or from your payload loader), and it must be the 7.1.0 helper or
-newer.
+loaded (send it from the app, or from your payload loader).
 
 **Q: The tile shows "PS5Upload Minion isn't running".**
-The helper isn't loaded, for example after a reboot or rest mode. Load the PS5Upload helper from
+The helper isn't loaded, for example after a reboot. Load the PS5Upload helper from
 the app on your PC or from your payload loader; the page notices and opens by itself (or press
 **Try again**). It is the browser's saved copy of the page saying the helper didn't answer;
 nothing is wrong with your files. If you see the browser's own error page instead, the browser
@@ -2910,7 +2960,7 @@ On the PS5, renaming a file from one drive to another (say a USB drive to
 internal storage) doesn't fail cleanly the way it does on a PC — it panics
 the kernel and locks the console up hard.
 
-So ps5upload never does it. **Move to…** in File System and the game
+So ps5upload never does it. **Move to…** in Files and the game
 screens copies the file to the other drive, checks the copy is whole, then
 deletes the original; `mv` in the Shell screen refuses a cross-drive rename.
 Renaming *within* one drive works normally.
@@ -2950,8 +3000,7 @@ title will boot on an older console.
 ## Several devices and Mesh Drive
 
 **Q: Can my computer, phone and Docker setup all use the PS5 at the same time?**
-Yes, from 8.0.0. Send the helper from an 8.0.0 app once; after that, any device on your network
-that runs PS5Upload connects without a code. **Devices** lists them all, with what each one is
+Yes. Any device on your network that runs PS5Upload connects without a code. **Devices** lists them all, with what each one is
 doing. The footer shows how many others are connected.
 
 **Q: Do I still need to pair?**
@@ -3060,7 +3109,7 @@ nothing is copied to or deleted from it until it is back.
 **Q: What happens when the console goes to rest mode, or is turned off?**
 Nothing is lost (8.2.0). Your devices keep their folders; changes made on them wait and go up
 when the console is back. Mesh Drive says what is going on: **Console asleep** (rest mode),
-**Helper not running** (the console woke up, but the helper does not survive rest mode), or
+**Helper not running** (the console woke up, but the helper isn't answering: send it again), or
 **Console away** (off, or on another network), with how long it has been away.
 
 - A sync that is running when the console goes to sleep stops by itself within about a
@@ -3114,17 +3163,19 @@ starts the container with a new identity. The Devices screen warns when this is 
 **Q: Can I run the engine standalone (without the desktop app)?**
 Yes — `ps5upload-engine` is a self-contained HTTP server on port 19113. It binds every
 interface (`0.0.0.0:19113`, so the PS5 can fetch packages from `/pkg-host/` during a Stream
-install), but everything else answers only loopback callers and the addresses in
-`PS5UPLOAD_ALLOW_IP`; any other source gets a `403`. The desktop app uses it under the hood;
-CLI users can hit the `/api/*` endpoints directly.
+install). Apart from that, a phone controller's and a Play Together friend's pages (`/pad`, `/join`
+and their sockets, which check their own code or invite), it answers only loopback callers and the
+addresses in `PS5UPLOAD_ALLOW_IP`; any other source gets a `403`. The desktop app uses it under the
+hood; CLI users can hit the `/api/*` endpoints directly.
 
 **Q: Can I write my own client against the payload?**
 Yes. The protocol, AVA1, is its own open-source project:
 [github.com/phantomptr/ava1](https://github.com/phantomptr/ava1) (MIT or Apache-2.0). It has the
 specification, the schema every message is defined in, byte-exact test vectors, and a Rust crate
 (`ava1` on crates.io) you can build a client with. The helper's own methods (files, apps, saves and
-so on) are in `protocol/ps5upload-ava1/` in this repository. You must pair with the console: it
-shows a six-digit code your client must display too.
+so on) are in `protocol/ps5upload-ava1/` in this repository. The console lets a new client in on
+first connect. Only when **Ask before a new device can connect** is on does it show a six-digit
+code, and your client must display the same code.
 
 **Q: How do I contribute a translation?**
 Edit `client/src/i18n/locales/` (English, `en.ts`, is the source of truth) or use
@@ -3148,17 +3199,29 @@ check a download yourself:
 single vendor's flag is a false positive; please report it to that vendor (and tell us which).
 
 **Q: How do updates work?**
-The app checks GitHub once per launch and shows a dot on the Settings entry when a newer version
-exists. Where the app can replace itself (Windows, macOS when the app's folder is writable, a
-Linux AppImage) **Settings → Updates** offers **Install and restart**: the app downloads the
-update into its own folder (not Downloads), quits, the new version takes its place and opens, and
-the download is deleted once it starts. On Windows the installed app runs the setup itself (9.1.0):
-it shows a progress bar, closes the app, installs over it and starts the new version. The Windows
-`.zip` copy puts the new PS5Upload.exe in place itself before it closes (10.5.1). If anything
-goes wrong the app stays on the old version and says why; a failed update is said once at the
-next launch, with **Try again** and **Download page**, and is not retried in a loop. Elsewhere
-**Download** saves it to your Downloads folder, and a `.deb` / `.rpm` shows the command to run.
-Then press **Send helper** in the banner if the app says the helper is older.
+With **Check for updates automatically** on (it is, unless you turned it off) the app checks GitHub
+when it starts and downloads a new release in the background, never while something is
+transferring. The download is checked against the release's checksum. What happens next depends on
+how you installed it:
+
+| Installed as | What happens |
+|---|---|
+| Windows installer or `.zip`, macOS, Linux AppImage | Installed as you quit, or press **Restart now** in the update bar to do it at once |
+| Linux `.deb` or `.rpm` | **Install and restart** in **Settings → Updates** asks for your password, then installs it |
+| Bazzite, Silverblue (rpm-ostree) | **Settings → Updates** shows the command to run; it applies after a reboot |
+| Android | **Settings → Updates** downloads it and Android asks you to confirm |
+| iPhone | Through a source: see "Can AltStore, SideStore or Feather update the app for me?" |
+
+**Settings → Updates** has the switches: **Check for updates automatically**, **Install updates when
+I quit**, **Install updates automatically** (the app restarts by itself once nothing is transferring)
+and **Get pre-release versions** (new builds still being checked on real hardware; off by default).
+**Skip this version** ignores one release until a newer one comes out.
+
+If an install fails the app stays on the old version and says why, once at the next launch, with
+**Try again** and **Download page**; it does not retry in a loop. **Download page** is also the way
+to update by hand.
+
+After an update, press **Send helper** in the banner if the app says the helper is older.
 
 **Q: On Windows (the .zip copy), "Install and restart" closed the app and nothing was installed (#611).**
 Fixed in 10.5.1. The update ran in a hidden PowerShell script after the app had quit, which
@@ -3241,15 +3304,16 @@ between the computer and the PS5, not your internet.
 - **Anything in between, or lower**: usually Wi-Fi on either side, a VPN, or other traffic. A
   network cable to the PS5 is the fix.
 
-**Q: The payload isn't responding; ports appear open but connections
+**Q: The helper isn't responding; ports appear open but connections
 get reset.**
-The payload may have wedged on a Sony API call. Recovery:
+The helper may have wedged on a Sony API call. Recovery:
 1. PS5 Settings → Network → disable / re-enable Wi-Fi or Ethernet.
 2. If that doesn't clear it, reboot the PS5.
-3. Re-send the payload.
+3. Send the helper again.
 
 **Q: Can't connect, or it connects and then drops within seconds.**
-- Did you load the helper? It is gone after a reboot or rest mode. Send it again from **Connection**.
+- Did you load the helper? It is gone after a reboot. It usually keeps running through rest mode;
+  if the dot stays red after a wake, send it again from **Connection**.
 - Is your firewall blocking ports **9120** and **9021** to the PS5?
 - If you load ps5upload with an autoloader or PLDMGR, put **elfldr first** in the list, before
   `ps5upload.elf`; otherwise it connects and drops after a few seconds.
@@ -3266,11 +3330,14 @@ detail. Click **Copy** or **Download** to grab a plain-text dump
 for a bug report.
 
 **Q: Where are app settings saved?**
-- **macOS**: `~/Library/Application Support/com.phantomptr.ps5upload/`
-- **Windows**: `%APPDATA%\com.phantomptr.ps5upload\`
-- **Linux**: `~/.local/share/com.phantomptr.ps5upload/`
+In two places on desktop:
 
-The path is shown in Settings → Storage.
+- `~/.ps5upload/` (on Windows, `%USERPROFILE%\.ps5upload\`): `settings.json`, which **Settings →
+  Storage** shows, and the logs.
+- The app's own data folder, which holds what the window remembers:
+  - **macOS**: `~/Library/Application Support/com.phantomptr.ps5upload/`
+  - **Windows**: `%APPDATA%\com.phantomptr.ps5upload\`
+  - **Linux**: `~/.local/share/com.phantomptr.ps5upload/`
 
 **Q: Where does the send-payload history go?**
 Same folder as above, in `send_payload_history.json`. Cleared via
