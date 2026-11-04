@@ -54,6 +54,12 @@ int webui_smb_pc_list(char *out, size_t cap);
 int webui_smb_pc_save(const char *b, size_t n, char *out, size_t cap);
 int webui_smb_pc_remove(const char *b, size_t n, char *out, size_t cap);
 
+/* The same for console.tasks and console.task_cancel: the daemon's job list as JSON text (malloc'd,
+ * the caller frees it; NULL when there is no daemon or it does not answer soon; never starts one),
+ * and stopping job `id` (32 lowercase hex). 0, or -1 with a token in err. */
+char *webui_smb_pc_jobs(void);
+int webui_smb_pc_cancel(const char *id, char *err, size_t err_cap);
+
 /* The HTTP status for a daemon / route error token (pure, host-tested). */
 int webui_smb_http_status(const char *token);
 

@@ -1105,6 +1105,13 @@ test-payload: payload
 		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
 	@$(RUN_LIMITED) /tmp/ps5upload-mesh-selftest
 	@echo "✓ devices connect, are listed, renamed, blocked and pruned; locks lapse; shared documents keep their revision"
+	@echo "Running console page tasks self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
+		-o /tmp/ps5upload-console-tasks-selftest \
+		$(PAYLOAD_DIR)/tests/console_tasks_selftest.c $(PAYLOAD_DIR)/src/console_tasks.c $(PAYLOAD_DIR)/src/webui_codec.c \
+		$(AVA1_C)/gen/ava1_gen.c $(PAYLOAD_DIR)/gen/ava1_app_gen.c $(AVA1_C)/ava1_wire.c
+	@$(RUN_LIMITED) /tmp/ps5upload-console-tasks-selftest
+	@echo "✓ the apps see what the page started, how it ended and that it was cancelled, and nothing a PC started"
 	@echo "Running Show on TV / Show on PC handoff self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include -I$(AVA1_C) -I$(AVA1_C)/gen -I$(PAYLOAD_DIR)/gen \
 		-o /tmp/ps5upload-files-handoff-selftest \
