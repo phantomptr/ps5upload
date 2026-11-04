@@ -18,13 +18,14 @@ npm run validate      # or: make quality
 ```
 
 Runs, and fails on any of: version drift against `VERSION`; script syntax
-(Node, Bash, Python, and PowerShell when `pwsh` is present); the script
-inventory audit; `git whitespace` (`git diff --check`); **engine fmt**,
-**engine clippy** (`-D warnings`) and **engine tests**; **desktop clippy**
-(`--all-targets`, which type-checks everything a `cargo check` would) and
-**desktop tests**; **client typecheck**,
-**client lint**, **client tests** and **client vite build**; and **i18n
-coverage**.
+(Node, Bash, Python, and PowerShell when `pwsh` is present); the Linux launcher,
+Sony API lock and per-console isolation checks (skipped on Windows); the script
+inventory audit (`--strict`, as CI); `git whitespace` (`git diff --check`);
+**engine fmt**, **engine clippy** (`--locked -D warnings`) and **engine tests**;
+**desktop fmt**, **desktop clippy** (`--all-targets --locked`, which type-checks
+everything a `cargo check` would) and **desktop tests**; **client typecheck**,
+**client lint**, **client tests**, **client vite build** and the **embedded guest
+and pad pages** (rebuilt and compared with the committed files); and **i18n coverage**.
 
 Two of these catch things the others structurally cannot, and both have
 caught real regressions:
@@ -41,7 +42,6 @@ common way to burn a cycle here.
 `npm run validate` is not the whole gate. Before a PR also run:
 
 ```sh
-( cd client/src-tauri && cargo fmt --all -- --check )   # validate only checks fmt in engine/
 ( cd engine && cargo test -p ps5upload-ctest -- --test-threads=1 )
 make test-payload                                       # needs PS5_PAYLOAD_SDK
 make check-no-ftx2                                      # the retired protocol must stay gone
