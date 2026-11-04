@@ -1872,6 +1872,15 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
               // console a moment to come back before runOne returns to the drain
               // loop. Gated to FW >= 12 where the blip is observed.
               await fw12InstallSettle(hostOf(item.addr));
+            } else if (r.unverified) {
+              // Not a failure, not confirmed either: the row finishes with a note and the staged
+              // pkg stays, since only a CONFIRMED install may delete it.
+              installPhase = "warn";
+              mountWarnings.push(r.errMessage);
+              log.info(
+                "install",
+                `pkg "${item.displayName}" install not confirmed yet — staged pkg KEPT: ${finalDest}`,
+              );
             } else {
               // The bytes landed but the install — the point of a pkg — did not
               // COMPLETE (the engine's verdict was `failed`). The staged pkg was

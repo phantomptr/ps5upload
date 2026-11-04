@@ -332,6 +332,7 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
                         error_reason: None,
                         error_detail: None,
                         error_console: None,
+                        error_space: None,
                     },
                 );
             }

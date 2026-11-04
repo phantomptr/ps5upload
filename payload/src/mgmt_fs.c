@@ -222,7 +222,9 @@ int mgmt_run_fs_stat(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
 /* The working margin kept back from a write on a drive: 1/64th of it, at most 1 GiB. The same rule as
  * runtime.c's capacity_reserve_for_mount (the console's own capacity gate) and the engine's
  * Volume::safety_reserve_bytes: small enough never to block an upload that fits, and nothing speculative
- * (the console's hidden allocator pool is not modelled; the memory admit budget is not disk). */
+ * (the console's hidden allocator pool is not modelled; the memory admit budget is not disk).
+ * An attached disk image keeps none (is_image_mount): nothing else writes into it, and an image is built
+ * with less spare room than this margin, so every write into it would be refused. */
 #define FS_RESERVE_CAP (1024ull * 1024ull * 1024ull)
 
 uint64_t mgmt_fs_reserve_for(uint64_t total_bytes) {
@@ -260,7 +262,7 @@ int mgmt_run_fs_freespace(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
     memset(&r, 0, sizeof r);
     r.total = (uint64_t)vfs.f_blocks * bs;
     r.free = free_bytes;
-    r.reserve = mgmt_fs_reserve_for(r.total);
+    r.reserve = (P.is_image_mount && P.is_image_mount(path)) ? 0 : mgmt_fs_reserve_for(r.total);
     r.usable = free_bytes > r.reserve ? free_bytes - r.reserve : 0;
     r.dev = (uint64_t)st.st_dev;
     ava1_w_init(&out, cx->out, cx->cap);

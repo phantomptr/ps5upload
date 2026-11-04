@@ -34,8 +34,10 @@ services:
       # engine's home directory (/data), not at your packages below.
       # Comma-separate the value to offer more than one root.
       PS5UPLOAD_BROWSE_ROOTS: "/pkgs"
-      # Only needed without host networking: this server's LAN IP.
+      # Only needed without host networking: this server's LAN IP, and the port
+      # you publish if it is not 19113 (`ports: ["8080:19113"]`).
       # PS5UPLOAD_PKG_HOST_IP: "192.168.1.10"
+      # PS5UPLOAD_PKG_HOST_PORT: "8080"
 
     # Synology and other NAS boxes: the container runs as UID 65532 unless told
     # otherwise, and your bind mount is owned by someone else. Pick ONE:

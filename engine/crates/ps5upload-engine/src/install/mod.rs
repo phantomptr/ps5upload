@@ -29,8 +29,10 @@ pub struct JobStore {
     jobs: Mutex<HashMap<String, InstallStatus>>,
     active: Mutex<HashMap<String, String>>, // console_id -> job_id
     seq: Mutex<u64>,
-    /// Jobs the user asked to stop; the delivery wait checks this each round.
+    /// Jobs the user asked to stop.
     cancelled: Mutex<std::collections::HashSet<String>>,
+    /// Wakes what a job is waiting for when someone asks a job to stop (see `stop_requested`).
+    stop_signal: tokio::sync::Notify,
 }
 
 /// Finished statuses kept for `/api/pkg/install/status` (the client reads a job's result
@@ -54,6 +56,7 @@ impl JobStore {
             active: Mutex::new(HashMap::new()),
             seq: Mutex::new(0),
             cancelled: Mutex::new(std::collections::HashSet::new()),
+            stop_signal: tokio::sync::Notify::new(),
         }
     }
 
@@ -145,12 +148,27 @@ impl JobStore {
             .is_some_and(|st| !matches!(st.phase, Phase::Done | Phase::Failed));
         if running {
             lock(&self.cancelled).insert(job.to_string());
+            self.stop_signal.notify_waiters();
         }
         running
     }
 
     pub fn is_cancelled(&self, job: &str) -> bool {
         lock(&self.cancelled).contains(job)
+    }
+
+    /// Resolves once `job` has been asked to stop.
+    pub async fn stop_requested(&self, job: &str) {
+        loop {
+            let woken = self.stop_signal.notified();
+            tokio::pin!(woken);
+            // Armed before the flag is read: a request in between still wakes this.
+            woken.as_mut().enable();
+            if self.is_cancelled(job) {
+                return;
+            }
+            woken.await;
+        }
     }
 
     pub fn get(&self, job: &str) -> Option<InstallStatus> {
@@ -340,6 +358,22 @@ pub fn verdict_no_identity(accepted: bool) -> Verdict {
     }
 }
 
+/// What a finished version check means for the install. A wait that ran out says nothing about
+/// the install, unless the console is known to hold the whole package and the title has gone below
+/// where it started: only then is it a failure. And of a link the console fetches by itself, only
+/// a version that moved says anything: it may not have got that far.
+pub fn verdict_after_wait(
+    pv: ps5upload_core::patch_verify::PatchVerdict,
+    timed_out: bool,
+    delivered: bool,
+) -> Verdict {
+    use ps5upload_core::patch_verify::PatchVerdict::*;
+    if (timed_out || !delivered) && !matches!((pv, delivered), (Applied, _) | (Regressed, true)) {
+        return Verdict::Unverified;
+    }
+    verdict_from_verify(pv, !matches!(pv, DidNotApply | Regressed))
+}
+
 /// Fill identity fields the caller left empty from the package header.
 /// Anything the caller sent wins; an empty header field fills nothing.
 pub fn fill_from_header(
@@ -469,13 +503,23 @@ pub fn stream_unreachable_hint(
     code: u32,
     diag: Option<&crate::win_net::NetDiag>,
 ) -> String {
-    stream_unreachable_hint_for(
+    let mut hint = stream_unreachable_hint_for(
         served_from,
         code,
         crate::pkg_install::bridged_container_without_pkg_host_ip(),
         diag,
-    )
+    );
+    // Publishing the container on another host port looks exactly like a firewall from here.
+    if crate::pkg_install::in_container() {
+        hint.push(' ');
+        hint.push_str(HOST_PORT_ADVICE);
+    }
+    hint
 }
+
+/// The remedy for a container published on another host port (`-p 8080:19113`): the engine told
+/// the console the port it listens on inside.
+const HOST_PORT_ADVICE: &str = "If the container is published on a different port from the one shown, set PS5UPLOAD_PKG_HOST_PORT to that port.";
 
 /// `stream_unreachable_hint` with the container check passed in, so both
 /// wordings are testable. In a bridged container the firewall advice is
@@ -675,6 +719,10 @@ pub struct InstallRequest {
 /// Where the install history log lives: `<data>/install-history/`
 /// (`PS5UPLOAD_DATA_DIR`, else `~/.ps5upload`, else a relative dir).
 fn history_dir() -> std::path::PathBuf {
+    // A test that ends a job must not write to the user's own history.
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("ps5u-install-history-{}", std::process::id()));
+    }
     crate::remote::store::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from(".ps5upload"))
         .join("install-history")
@@ -763,8 +811,9 @@ pub struct JobQuery {
     pub job: String,
 }
 
-/// `POST /api/pkg/install/stop {job}`: stop a running install. The delivery wait notices
-/// within about 2 s and ends the job as `cancelled`.
+/// `POST /api/pkg/install/stop {job}`: stop a running install. The job ends as `cancelled` at
+/// once, whatever it was waiting for. The console cannot be interrupted: a call it is still
+/// answering finishes by itself and its answer is dropped.
 pub async fn install_stop_handler(
     State(state): State<PkgInstallStateHandle>,
     Json(q): Json<JobQuery>,
@@ -804,8 +853,64 @@ pub async fn install_history_handler(Query(q): Query<AddrQuery>) -> Response {
     Json(entries).into_response()
 }
 
+/// What a stopped job tells the user. The console may already have it.
+const STOPPED_HINT: &str = "stopped; if the PS5 still lists the download, delete it there";
+
+/// `fut`'s answer, or `None` as soon as the user stops `job`. A blocking call behind it cannot be
+/// interrupted: it finishes on its own thread and the answer goes nowhere.
+async fn unless_stopped<T>(
+    state: &PkgInstallStateHandle,
+    job: &str,
+    fut: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        _ = state.jobs.stop_requested(job) => None,
+        out = fut => Some(out),
+    }
+}
+
+/// One call to the installer daemon, which may take as long as its 15-minute timeout to answer.
+/// The user stopping the job answers it with an error at once; `ended_by_stop` then ends the job.
+async fn install_call(
+    state: &PkgInstallStateHandle,
+    job: &str,
+    call: impl FnOnce() -> Result<ic::InstallReply, String> + Send + 'static,
+) -> Result<ic::InstallReply, String> {
+    match unless_stopped(state, job, tokio::task::spawn_blocking(call)).await {
+        Some(r) => r.unwrap_or_else(|e| Err(format!("install task failed: {e}"))),
+        None => Err("stopped by the user".into()),
+    }
+}
+
+/// Ends the job if the user asked it to stop, and says so. `session`: a pkg-host session to release.
+async fn ended_by_stop(
+    state: &PkgInstallStateHandle,
+    job: &str,
+    req: &InstallRequest,
+    started: std::time::Instant,
+    session: Option<&str>,
+) -> bool {
+    if !state.jobs.is_cancelled(job) {
+        return false;
+    }
+    crate::log_info!("{}: stopped by the user", correlation_tag(job));
+    if let Some(sid) = session {
+        crate::pkg_install::release_serve_session(&state.sessions, sid);
+    }
+    state.jobs.update(job, |s| {
+        s.phase = Phase::Failed;
+        s.verdict = Some(Verdict::Failed);
+        s.reason = Some(FailReason::Cancelled);
+        s.hint = Some(STOPPED_HINT.into());
+    });
+    finalize(state, job, req, started).await;
+    true
+}
+
 /// The async state machine: resolve → deliver → install → verify → done/failed.
-/// Always clears the active-job guard and records history at the end.
+/// Always clears the active-job guard and records history at the end. A stop ends it wherever it
+/// is: every wait goes through `unless_stopped` or checks the flag, and `ended_by_stop` follows.
 async fn run_install(state: PkgInstallStateHandle, job: String, mut req: InstallRequest) {
     let started = std::time::Instant::now();
     let tag = correlation_tag(&job);
@@ -817,13 +922,17 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     if let Source::ConsolePath(path) = &req.source {
         if req.category.is_none() || req.package_app_ver.is_none() || req.title_id.is_none() {
             let (m, p) = (mgmt.clone(), path.clone());
-            let meta = tokio::task::spawn_blocking(move || {
-                ps5upload_pkg::metadata_from_reader(|off, len| {
-                    ps5upload_core::fs_ops::fs_read(&m, &p, off, len).ok()
-                })
-            })
+            let meta = unless_stopped(
+                &state,
+                &job,
+                tokio::task::spawn_blocking(move || {
+                    ps5upload_pkg::metadata_from_reader(|off, len| {
+                        ps5upload_core::fs_ops::fs_read(&m, &p, off, len).ok()
+                    })
+                }),
+            )
             .await
-            .ok()
+            .and_then(Result::ok)
             .flatten();
             if let Some(h) = meta {
                 fill_from_header(
@@ -869,14 +978,22 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     let already_installed = match &title_id {
         Some(t) => {
             let (m, t) = (mgmt.clone(), t.clone());
-            tokio::task::spawn_blocking(move || {
-                crate::pkg_install::read_installed_app_ver(&m, &t).is_some()
-            })
+            unless_stopped(
+                &state,
+                &job,
+                tokio::task::spawn_blocking(move || {
+                    crate::pkg_install::read_installed_app_ver(&m, &t).is_some()
+                }),
+            )
             .await
+            .and_then(Result::ok)
             .unwrap_or(false)
         }
         None => false,
     };
+    if ended_by_stop(&state, &job, &req, started, None).await {
+        return;
+    }
     if let GuardDecision::Refuse = guard_decision(
         &category,
         already_installed,
@@ -900,10 +1017,16 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     let app_ver_before = match (&title_id, &patch_ver) {
         (Some(t), Some(_)) => {
             let (m, t) = (mgmt.clone(), t.clone());
-            tokio::task::spawn_blocking(move || crate::pkg_install::read_installed_app_ver(&m, &t))
-                .await
-                .ok()
-                .flatten()
+            unless_stopped(
+                &state,
+                &job,
+                tokio::task::spawn_blocking(move || {
+                    crate::pkg_install::read_installed_app_ver(&m, &t)
+                }),
+            )
+            .await
+            .and_then(Result::ok)
+            .flatten()
         }
         _ => None,
     };
@@ -917,14 +1040,21 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     // the helper and never displaces it.
     let elf = crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Installer).ok();
     let ip_for_ensure = ip.clone();
-    let ens = tokio::task::spawn_blocking(move || {
-        // Wait out an elfldr swap in progress rather than send into its gap.
-        let lock = crate::elfldr_guard::loader_lock(&ip_for_ensure);
-        let _loader = lock.lock().unwrap_or_else(|e| e.into_inner());
-        ic::ensure(&ip_for_ensure, elf.as_deref(), false)
-    })
-    .await
-    .unwrap_or(ic::Ensure {
+    let ens = unless_stopped(
+        &state,
+        &job,
+        tokio::task::spawn_blocking(move || {
+            // Wait out an elfldr swap in progress rather than send into its gap.
+            let lock = crate::elfldr_guard::loader_lock(&ip_for_ensure);
+            let _loader = lock.lock().unwrap_or_else(|e| e.into_inner());
+            ic::ensure(&ip_for_ensure, elf.as_deref(), false)
+        }),
+    )
+    .await;
+    if ended_by_stop(&state, &job, &req, started, None).await {
+        return;
+    }
+    let ens = ens.and_then(Result::ok).unwrap_or(ic::Ensure {
         listening: false,
         sent: false,
         state: None,
@@ -960,9 +1090,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                         hint: None,
                     })
                 } else {
-                    tokio::task::spawn_blocking(move || ic::install_path(&i, &p, &h))
-                        .await
-                        .unwrap_or_else(|e| Err(format!("install task failed: {e}")))
+                    install_call(&state, &job, move || ic::install_path(&i, &p, &h)).await
                 };
                 // The console refused its own copy (see STAGED_ROUTE_REFUSALS;
                 // not expected on FW 13.60 since daemon 1.3.9). Try once more
@@ -976,17 +1104,15 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                             "{tag}: the console refused its own copy (0x{code:08X}); serving it from this engine instead"
                         );
                         let console_url = format!("ps5://{ip}{path}");
-                        match create_serve_session_for(&state, &req, &console_url).await {
+                        match serve_session_unless_stopped(&state, &job, &req, &console_url).await {
                             Ok((sid, url)) => {
                                 served_from = origin_of(&url);
                                 route = Route::Stream;
                                 state.jobs.update(&job, |s| s.route = Some(Route::Stream));
                                 let (i, u, h) = (ip.clone(), url, hint_name.clone());
-                                let r2 = tokio::task::spawn_blocking(move || {
-                                    ic::install_url(&i, &u, &h)
-                                })
-                                .await
-                                .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                                let r2 =
+                                    install_call(&state, &job, move || ic::install_url(&i, &u, &h))
+                                        .await;
                                 (r2, Some(sid), false)
                             }
                             Err(e) => {
@@ -1024,9 +1150,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                         hint: None,
                     })
                 } else {
-                    tokio::task::spawn_blocking(move || ic::install_url(&i, &final_url, &h))
-                        .await
-                        .unwrap_or_else(|e| Err(format!("install task failed: {e}")))
+                    install_call(&state, &job, move || ic::install_url(&i, &final_url, &h)).await
                 };
                 // The console refused the link as its own server serves it
                 // (once put down to a missing Last-Modified; on FW 13.60 the
@@ -1043,17 +1167,15 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                                 "{tag}: the console refused the link (0x{code:08X}); proxying it through this engine instead"
                             );
                         }
-                        match create_serve_session_for(&state, &req, url).await {
+                        match serve_session_unless_stopped(&state, &job, &req, url).await {
                             Ok((sid, purl)) => {
                                 served_from = origin_of(&purl);
                                 route = Route::Stream;
                                 state.jobs.update(&job, |s| s.route = Some(Route::Stream));
                                 let (i, u, h) = (ip.clone(), purl, hint_name.clone());
-                                let r2 = tokio::task::spawn_blocking(move || {
-                                    ic::install_url(&i, &u, &h)
-                                })
-                                .await
-                                .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                                let r2 =
+                                    install_call(&state, &job, move || ic::install_url(&i, &u, &h))
+                                        .await;
                                 (r2, Some(sid), false)
                             }
                             Err(e) => {
@@ -1068,21 +1190,23 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 }
             }
             Source::HostFile(_) | Source::Remote { .. } => {
-                match create_serve_session(&state, &req).await {
+                match create_serve_session(&state, &job, &req).await {
                     Ok((sid, url)) => {
                         served_from = origin_of(&url);
                         // No reach pre-check: hand the URL to the console and let it try. If it
                         // never fetches, the failure below explains why (firewall, host IP).
                         let (i, u, h) = (ip.clone(), url, hint_name.clone());
-                        let r = tokio::task::spawn_blocking(move || ic::install_url(&i, &u, &h))
-                            .await
-                            .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                        let r =
+                            install_call(&state, &job, move || ic::install_url(&i, &u, &h)).await;
                         (r, Some(sid), false)
                     }
                     Err(e) => (Err(e), None, false),
                 }
             }
         };
+    if ended_by_stop(&state, &job, &req, started, session_id.as_deref()).await {
+        return;
+    }
     // The guarded last resort (see `path_fallback_allowed`): the console refused its own
     // copy and cannot fetch it from this engine, so offer Sony the plain file path.
     let (mut reply, mut session_id) = (reply, session_id);
@@ -1117,9 +1241,10 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 crate::pkg_install::release_serve_session(&state.sessions, &sid);
             }
             let (i, p, h) = (ip.clone(), path.clone(), hint_name.clone());
-            reply = tokio::task::spawn_blocking(move || ic::install_path_plain(&i, &p, &h))
-                .await
-                .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+            reply = install_call(&state, &job, move || ic::install_path_plain(&i, &p, &h)).await;
+            if ended_by_stop(&state, &job, &req, started, None).await {
+                return;
+            }
             route = Route::Path;
             via_plain_path = true;
             state.jobs.update(&job, |s| s.route = Some(Route::Path));
@@ -1299,7 +1424,8 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             if state.jobs.is_cancelled(&job) {
                 break DeliveryProgress::Cancelled;
             }
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let round = tokio::time::sleep(std::time::Duration::from_secs(2));
+            let _ = unless_stopped(&state, &job, round).await;
         }
     };
     // The console has finished with the stream source (pulled it all, or
@@ -1322,7 +1448,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             s.phase = Phase::Failed;
             s.verdict = Some(Verdict::Failed);
             s.reason = Some(FailReason::Cancelled);
-            s.hint = Some("stopped; if the PS5 still lists the download, delete it there".into());
+            s.hint = Some(STOPPED_HINT.into());
             s.shortened = shortened;
             s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
         });
@@ -1362,9 +1488,11 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                     "{tag}: the console never fetched from this engine; last resort: installing its own copy by file path"
                 );
                 let (i, p, h) = (ip.clone(), path.clone(), hint_name.clone());
-                let r = tokio::task::spawn_blocking(move || ic::install_path_plain(&i, &p, &h))
-                    .await
-                    .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                let r =
+                    install_call(&state, &job, move || ic::install_path_plain(&i, &p, &h)).await;
+                if ended_by_stop(&state, &job, &req, started, None).await {
+                    return;
+                }
                 via_plain_path = true;
                 match r {
                     Ok(ic::InstallReply::Accepted { .. }) => {
@@ -1411,30 +1539,45 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     // verify.
     state.jobs.update(&job, |s| s.phase = Phase::Verify);
     let verify_started = std::time::Instant::now();
+    // Whether the console is known to hold the whole package now. A bare link is fetched by the
+    // console itself, so nothing here saw any of it.
+    let delivered = observable && delivery == DeliveryProgress::Complete;
     let (verdict, patch_verdict, app_ver_after) = match (&title_id, &patch_ver) {
         (Some(t), Some(pv)) => {
             let (m, t, pv, before) = (mgmt.clone(), t.clone(), pv.clone(), app_ver_before.clone());
-            let (cv, after) = tokio::task::spawn_blocking(move || {
-                crate::pkg_install::verify_patch_after_install(&m, &t, before.as_deref(), &pv)
+            let total = state.jobs.get(&job).map_or(0, |s| s.metrics.total_bytes);
+            let budget = crate::pkg_install::patch_verify_budget(total);
+            let (st, jb) = (state.clone(), job.clone());
+            let check = tokio::task::spawn_blocking(move || {
+                crate::pkg_install::verify_patch_after_install(
+                    &m,
+                    &t,
+                    before.as_deref(),
+                    &pv,
+                    budget,
+                    &|| st.jobs.is_cancelled(&jb),
+                )
             })
             .await
-            .unwrap_or((
-                ps5upload_core::patch_verify::PatchVerdict::Inconclusive,
-                None,
-            ));
-            let launchable = !matches!(
-                cv,
-                ps5upload_core::patch_verify::PatchVerdict::DidNotApply
-                    | ps5upload_core::patch_verify::PatchVerdict::Regressed
-            );
+            .unwrap_or(crate::pkg_install::PatchCheck {
+                verdict: ps5upload_core::patch_verify::PatchVerdict::Inconclusive,
+                after: None,
+                timed_out: false,
+            });
             (
-                verdict_from_verify(cv, launchable),
-                Some(status::PatchVerdict::from(cv)),
-                after,
+                verdict_after_wait(check.verdict, check.timed_out, delivered),
+                Some(status::PatchVerdict::from(check.verdict)),
+                check.after,
             )
         }
-        _ => (verdict_no_identity(true), None, None),
+        // Nothing to check the install against: the whole package reaching the console is the
+        // best word there is, and of a bare link not even that.
+        _ if observable => (verdict_no_identity(true), None, None),
+        _ => (Verdict::Unverified, None, None),
     };
+    if ended_by_stop(&state, &job, &req, started, None).await {
+        return;
+    }
     // The last resort is the one route with nothing to observe: no bytes served, no session.
     // Sony's "accepted" is not proof there: one form of it returned 0 and left a tile with no
     // content. So this route is only "installed" once the content is on a drive.
@@ -1442,20 +1585,24 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     let verdict = match (&title_id, via_plain_path && route == Route::Path) {
         (Some(t), true) => {
             let (m, t) = (mgmt.clone(), t.clone());
+            let (st, jb) = (state.clone(), job.clone());
             let present = tokio::task::spawn_blocking(move || {
                 let deadline = std::time::Instant::now() + PLAIN_PATH_CONTENT_WAIT;
                 loop {
                     if crate::pkg_install::base_content_present(&m, &t) {
                         return true;
                     }
-                    if std::time::Instant::now() >= deadline {
+                    if std::time::Instant::now() >= deadline || st.jobs.is_cancelled(&jb) {
                         return false;
                     }
-                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    std::thread::sleep(std::time::Duration::from_secs(1));
                 }
             })
             .await
             .unwrap_or(false);
+            if ended_by_stop(&state, &job, &req, started, None).await {
+                return;
+            }
             if present {
                 verdict
             } else {
@@ -1501,6 +1648,9 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             s.reason = Some(FailReason::SonyRefused);
             s.hint = Some(h.clone());
         }
+        if verdict == Verdict::Unverified {
+            s.hint = Some(unverified_hint(delivered, verify_ms));
+        }
         s.patch_verdict = patch_verdict;
         s.app_ver_after = app_ver_after.clone();
         s.shortened = shortened;
@@ -1513,10 +1663,24 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     finalize(&state, &job, &req, started).await;
 }
 
+/// Why this engine cannot call an install finished: said to anyone reading the status directly
+/// (the app words its own message from the verdict and the time waited).
+fn unverified_hint(delivered: bool, waited_ms: u64) -> String {
+    if delivered {
+        format!(
+            "the PS5 has the whole package and its version had not changed after {} s; it may still be installing, so the package was kept",
+            waited_ms / 1000
+        )
+    } else {
+        "the PS5 took the link and downloads it by itself; check Downloads on the PS5".to_string()
+    }
+}
+
 /// Reuse the existing start handler in serve-only mode to create a pkg-host
 /// session for a host/remote source, returning (session_id, url).
 async fn create_serve_session(
     state: &PkgInstallStateHandle,
+    job: &str,
     req: &InstallRequest,
 ) -> Result<(String, String), String> {
     let path = match &req.source {
@@ -1524,7 +1688,34 @@ async fn create_serve_session(
         Source::Remote { connection, path } => format!("remote://{connection}/{path}"),
         _ => return Err("create_serve_session called for a non-stream source".into()),
     };
-    create_serve_session_for(state, req, &path).await
+    serve_session_unless_stopped(state, job, req, &path).await
+}
+
+/// `create_serve_session_for`, given up on as soon as the user stops `job`. Setting a session up can
+/// take a while (a link's first requests, a server's connection). It runs on: a session that still
+/// comes up is released, or it would hold the package as "already running".
+async fn serve_session_unless_stopped(
+    state: &PkgInstallStateHandle,
+    job: &str,
+    req: &InstallRequest,
+    path: &str,
+) -> Result<(String, String), String> {
+    let start_req = serve_session_request(req, path);
+    let st = state.clone();
+    let mut task = tokio::spawn(async move { create_serve_session_for(&st, start_req).await });
+    tokio::select! {
+        biased;
+        _ = state.jobs.stop_requested(job) => {
+            let st = state.clone();
+            tokio::spawn(async move {
+                if let Ok(Ok((sid, _))) = task.await {
+                    crate::pkg_install::release_serve_session(&st.sessions, &sid);
+                }
+            });
+            Err("stopped by the user".into())
+        }
+        out = &mut task => out.unwrap_or_else(|e| Err(format!("serve session task failed: {e}"))),
+    }
 }
 
 /// A serve session for an explicit source path — a local file, `remote://…`
@@ -1554,10 +1745,8 @@ fn serve_session_request(req: &InstallRequest, path: &str) -> serde_json::Value 
 
 async fn create_serve_session_for(
     state: &PkgInstallStateHandle,
-    req: &InstallRequest,
-    path: &str,
+    start_req: serde_json::Value,
 ) -> Result<(String, String), String> {
-    let start_req = serve_session_request(req, path);
     let start_req: crate::pkg_install::InstallStartRequest =
         serde_json::from_value(start_req).map_err(|e| format!("build start request: {e}"))?;
     let resp =
@@ -2336,6 +2525,124 @@ mod tests {
         assert_eq!(verdict_from_verify(PV::DidNotApply, true), Verdict::Failed);
         assert_eq!(verdict_no_identity(true), Verdict::Installed);
         assert_eq!(verdict_no_identity(false), Verdict::Failed);
+    }
+
+    #[test]
+    fn a_version_check_that_ran_out_is_not_a_failure() {
+        use ps5upload_core::patch_verify::PatchVerdict as PV;
+        // The console holds the whole package.
+        assert_eq!(
+            verdict_after_wait(PV::Applied, false, true),
+            Verdict::Installed
+        );
+        assert_eq!(
+            verdict_after_wait(PV::Inconclusive, false, true),
+            Verdict::Installed,
+            "a same-version re-install has nothing to wait for"
+        );
+        assert_eq!(
+            verdict_after_wait(PV::Inconclusive, true, true),
+            Verdict::Unverified,
+            "a large update may still be writing"
+        );
+        assert_eq!(
+            verdict_after_wait(PV::Regressed, true, true),
+            Verdict::Failed,
+            "a loss is still concluded at the deadline"
+        );
+        // A link the console fetches by itself: nothing here saw any of it.
+        assert_eq!(
+            verdict_after_wait(PV::Applied, false, false),
+            Verdict::Installed
+        );
+        assert_eq!(
+            verdict_after_wait(PV::Inconclusive, false, false),
+            Verdict::Unverified
+        );
+        assert_eq!(
+            verdict_after_wait(PV::Inconclusive, true, false),
+            Verdict::Unverified
+        );
+        assert_eq!(
+            verdict_after_wait(PV::Regressed, true, false),
+            Verdict::Unverified
+        );
+    }
+
+    #[test]
+    fn the_unverified_hint_says_which_of_the_two_it_is() {
+        assert!(unverified_hint(true, 300_000).contains("after 300 s"));
+        assert!(unverified_hint(false, 0).contains("Downloads"));
+    }
+
+    #[tokio::test]
+    async fn a_stop_is_seen_before_and_while_waiting() {
+        let store = JobStore::new();
+        let job = store.begin("10.0.0.1").unwrap();
+        let other = store.begin("10.0.0.2").unwrap();
+        let waiter = {
+            let store = std::sync::Arc::new(store);
+            let (s, j) = (store.clone(), job.clone());
+            let handle = tokio::spawn(async move { s.stop_requested(&j).await });
+            tokio::task::yield_now().await;
+            // Another job's stop wakes the waiter, which goes back to waiting.
+            assert!(store.request_cancel(&other));
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            assert!(!handle.is_finished());
+            assert!(store.request_cancel(&job));
+            handle.await.unwrap();
+            store
+        };
+        // Asked before anyone waits: it must not be missed.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            waiter.stop_requested(&job),
+        )
+        .await
+        .expect("an earlier stop is seen at once");
+    }
+
+    /// The daemon can take 15 minutes to answer: Stop must not wait for it (it used to be
+    /// acknowledged and then ignored until the call returned).
+    #[tokio::test]
+    async fn a_stop_ends_a_blocking_call_it_cannot_interrupt() {
+        let state = std::sync::Arc::new(crate::pkg_install::PkgInstallState::default());
+        let job = state.jobs.begin("10.0.0.3").unwrap();
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let call = {
+            let (state, job) = (state.clone(), job.clone());
+            tokio::spawn(async move {
+                install_call(&state, &job, move || {
+                    let _ = gate.recv();
+                    Ok(ic::InstallReply::BadPath)
+                })
+                .await
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(state.jobs.request_cancel(&job));
+        let answer = tokio::time::timeout(std::time::Duration::from_secs(5), call)
+            .await
+            .expect("the stop ends the wait")
+            .unwrap();
+        assert!(answer.unwrap_err().contains("stopped"));
+        let _ = release.send(());
+    }
+
+    #[tokio::test]
+    async fn a_stopped_job_ends_cancelled_and_frees_the_console() {
+        let state = std::sync::Arc::new(crate::pkg_install::PkgInstallState::default());
+        let job = state.jobs.begin("10.0.0.4").unwrap();
+        let req = bare_req(Source::Url("http://h/x.pkg".into()));
+        let started = std::time::Instant::now();
+        assert!(!ended_by_stop(&state, &job, &req, started, None).await);
+        assert!(state.jobs.get(&job).unwrap().verdict.is_none());
+        assert!(state.jobs.request_cancel(&job));
+        assert!(ended_by_stop(&state, &job, &req, started, None).await);
+        let st = state.jobs.get(&job).unwrap();
+        assert_eq!(st.phase, Phase::Failed);
+        assert_eq!(st.reason, Some(FailReason::Cancelled));
+        assert!(!state.jobs.active_for("10.0.0.4"), "the slot is released");
     }
 
     #[test]

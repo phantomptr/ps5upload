@@ -31,6 +31,10 @@ pub enum Verdict {
     Installed,
     MayNotLaunch,
     Failed,
+    /// Sony accepted it and nothing failed, but this engine cannot say it finished: the console
+    /// fetches a bare link by itself, or an update's version had not moved when the wait ended.
+    /// The console may still be working on it; the package is kept.
+    Unverified,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,6 +221,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Verdict::MayNotLaunch).unwrap(),
             "may_not_launch"
+        );
+        assert_eq!(
+            serde_json::to_value(Verdict::Unverified).unwrap(),
+            "unverified"
         );
         assert_eq!(serde_json::to_value(Route::Loopback).unwrap(), "loopback");
         assert_eq!(serde_json::to_value(Phase::Failed).unwrap(), "failed");

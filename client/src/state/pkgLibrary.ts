@@ -262,6 +262,7 @@ function hexCode(code: number): string {
  *  the client only interprets the verdict:
  *    installed        → success
  *    may_not_launch   → success WITH a launch caution (artifact IS on disk)
+ *    unverified       → not a failure, not confirmed either: the package stays
  *    failed           → not installed, with the best available message
  *  There is no longer a client-side "stalled"/"acceptedUnverified" state — the
  *  engine's state machine always resolves to done|failed. */
@@ -269,6 +270,20 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
   const installed = st.verdict === "installed" || st.verdict === "may_not_launch";
   const mayNotLaunch = st.verdict === "may_not_launch";
   let errMessage = "";
+  if (st.verdict === "unverified") {
+    const minutes = Math.max(1, Math.round((st.metrics.phase_ms?.verify ?? 0) / 60_000));
+    errMessage =
+      st.patch_verdict === null
+        ? trStatic(
+            "pkg.link_unverified",
+            "The PS5 took the link and downloads it by itself. Check Downloads on the PS5 to see how it went.",
+          )
+        : trStatic(
+            "pkg.patch_unverified",
+            "The PS5 accepted this update, but the game's version had not changed after {minutes} min. It may still be installing, so check Downloads on the PS5. The package was kept. If the version never changes, the update does not match the installed base game: re-install the base game from its own package, then apply the update again.",
+          ).replace("{minutes}", String(minutes));
+    return { installed: false, unverified: true, mayNotLaunch: false, errMessage };
+  }
   if (!installed) {
     if (st.patch_verdict === "regressed") {
       errMessage = trStatic("pkg.patch_regressed", PKG_PATCH_REGRESSED_HINT);
@@ -461,6 +476,9 @@ export interface PkgEntry {
     ok: boolean;
     message: string;
     warn?: boolean;
+    /** Nothing failed, but the install was not confirmed: the console may still be working on
+     *  it, so the staged package is not spent yet. */
+    unconfirmed?: boolean;
     /** Show "Retry with Stream" beside this failure (see `PkgInstallOutcome`). */
     retryWithStream?: boolean;
     /** The console refused this package from its own storage: Install switches route. */
@@ -1182,7 +1200,7 @@ interface PkgLibraryState {
 /** A library row is "finished" when it's settled (idle) AND its last
  *  install succeeded — i.e. a spent staged package safe to delete. */
 export function isFinishedPkg(e: PkgEntry): boolean {
-  return e.status === "idle" && e.lastResult?.ok === true;
+  return e.status === "idle" && e.lastResult?.ok === true && !e.lastResult.unconfirmed;
 }
 
 /** Merge a freshly-listed set with the current rows, preserving transient
@@ -1242,6 +1260,10 @@ export interface PkgInstallOutcome {
   /** Installed only via the unlaunchable last-resort path (may not start on
    *  some firmware, notably FW 12.xx). Surface a caution, not a clean OK. */
   mayNotLaunch: boolean;
+  /** Sony accepted it and nothing failed, but the engine could not confirm it finished: the
+   *  console may still be working on it. Not a failure, and not `installed` either, so the
+   *  package stays. `errMessage` says what to check. */
+  unverified?: boolean;
   /** First error seen (empty when installed cleanly). */
   errMessage: string;
   /** The package_type the engine actually resolved the install to, from the
@@ -2176,6 +2198,12 @@ export async function runPkgInstall(
       if (deleteStaging) {
         await fsDelete(mgmtAddr(host), localPs5Path).catch(() => {});
       }
+    } else if (result.unverified) {
+      // Not a failure, not confirmed either: the task ends and says so, the staged copy stays.
+      useTaskStore.getState().finishTask(taskId, "done", {
+        progress: latestProgress,
+        detail: result.errMessage,
+      });
     } else {
       useTaskStore.getState().finishTask(taskId, "failed", {
         progress: latestProgress,
@@ -2790,6 +2818,7 @@ const makePkgLibraryStore = () =>
         const {
           installed,
           mayNotLaunch,
+          unverified,
           errMessage: mainErr,
           retryWithStream,
           stagedRefused,
@@ -2830,7 +2859,7 @@ const makePkgLibraryStore = () =>
         );
         useActivityHistoryStore
           .getState()
-          .finish(actId, installed ? "done" : "failed");
+          .finish(actId, installed || unverified ? "done" : "failed");
 
         if (installed) {
           await finalizePkgInstallSuccess({
@@ -2841,6 +2870,18 @@ const makePkgLibraryStore = () =>
             autoRemove,
           });
           outcome = { ok: true, mayNotLaunch };
+        } else if (unverified) {
+          // Not confirmed, so not recorded as installed and the package stays.
+          patch({
+            status: "idle",
+            lastResult: { ok: true, warn: true, unconfirmed: true, message: mainErr },
+          });
+          pushNotification(
+            "warning",
+            trStatic("pkg.check_the_ps5", "{label}: check the PS5").replace("{label}", label),
+            { jobOutcome: true, body: mainErr },
+          );
+          outcome = { ok: true, message: mainErr };
         } else {
           outcome = { ok: false, message: mainErr || "Install was rejected." };
           // Failed verdict → the pkg was KEPT on the PS5 (never deleted on a
@@ -3257,7 +3298,9 @@ const makePkgLibraryStore = () =>
             options: {},
           });
           const outcome = statusToOutcome(terminal);
-          if (outcome.installed) {
+          // A link the console fetches by itself is never confirmed here: `unverified` is its
+          // normal ending, and falling through would download the same package a second time.
+          if (outcome.installed || outcome.unverified) {
             useTaskStore.getState().finishTask(directTask, "done", {
               detail:
                 "Handed to the PS5, which downloads and installs it on its own. " +
@@ -3616,6 +3659,9 @@ const makePkgLibraryStore = () =>
             mayNotLaunch: outcome.mayNotLaunch,
           });
         }
+        if (outcome.unverified) {
+          return finishStreamTask({ ok: true, message: outcome.errMessage });
+        }
         return finishStreamTask({
           ok: false,
           stagedFallbackRecommended: true,
@@ -3824,6 +3870,7 @@ const makePkgLibraryStore = () =>
           await fsDelete(mgmtAddr(host), internalPath).catch(() => {});
         }
 
+        if (viaCopy.unverified) return { ok: true, message: viaCopy.errMessage };
         return viaCopy.installed
           ? { ok: true, mayNotLaunch: viaCopy.mayNotLaunch }
           : {
@@ -3892,7 +3939,7 @@ const makePkgLibraryStore = () =>
         // In-place install of a pkg the user pointed at on the console's disk
         // (e.g. from the File System browser). It's THEIR file at THEIR path, not
         // a staging copy we made — never delete it. deleteStaging: false.
-        const { installed, mayNotLaunch, errMessage } = await runPkgInstall(
+        const { installed, mayNotLaunch, unverified, errMessage } = await runPkgInstall(
           host,
           path,
           null,
@@ -3904,6 +3951,7 @@ const makePkgLibraryStore = () =>
             installSampleFeed(hooks),
             (msg) => hooks?.onStatus(msg),
           );
+        if (unverified) return { ok: true, message: errMessage };
         return installed
           ? { ok: true, mayNotLaunch }
           : {
@@ -4120,9 +4168,11 @@ registerInstallJobResolver(async (job) => {
     const o = statusToOutcome(st);
     return {
       state: "finished",
-      result: o.installed
-        ? { ok: true, mayNotLaunch: o.mayNotLaunch }
-        : { ok: false, message: o.errMessage || "The install didn't complete." },
+      result: o.unverified
+        ? { ok: true, message: o.errMessage }
+        : o.installed
+          ? { ok: true, mayNotLaunch: o.mayNotLaunch }
+          : { ok: false, message: o.errMessage || "The install didn't complete." },
     };
   }
   const s = sampleFromStatus(st);

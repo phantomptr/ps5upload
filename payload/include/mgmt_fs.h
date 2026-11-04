@@ -31,6 +31,9 @@ typedef struct {
     int (*dev_of)(const char *path, unsigned long long *out);
     /* Device id of the rename's SOURCE: its own device, a link not followed; NULL = lstat(2). */
     int (*src_dev_of)(const char *path, unsigned long long *out);
+    /* The mount holding this existing path is an attached disk image: fs.freespace keeps no working
+     * margin there. NULL = none is. */
+    int (*is_image_mount)(const char *path);
 } mgmt_fs_policy_t;
 
 /* Installs the policy (copied). Until it is called every path is refused. */
