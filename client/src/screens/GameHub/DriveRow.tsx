@@ -644,7 +644,7 @@ function LibraryRowImpl({
     // delete use; the label disambiguates by name.
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-delete", `Deleting ${entry.name}`, {
+      .start("library-delete", trStatic("task_deleting", "Deleting {name}", { name: entry.name }), {
         addr: consoleAddr(host),
         fromPath: entry.path,
         files: 1,
@@ -687,7 +687,7 @@ function LibraryRowImpl({
     // the op is still running if they tab away.
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-chmod", `Setting permissions on ${entry.name}`, {
+      .start("library-chmod", trStatic("task_set_perms", "Setting permissions on {name}", { name: entry.name }), {
         addr: consoleAddr(host),
         fromPath: entry.path,
       });
@@ -770,7 +770,7 @@ function LibraryRowImpl({
     // for the slow case.
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-mount", `Mounting ${entry.name}`, {
+      .start("library-mount", trStatic("task_mounting", "Mounting {name}", { name: entry.name }), {
         addr: consoleAddr(host),
         fromPath: entry.path,
         toPath: opts.mountPoint,
@@ -1237,7 +1237,7 @@ function LibraryRowImpl({
       .getState()
       .start(
         "library-edit-checkout",
-        `Checking out ${entry.name} for editing`,
+        trStatic("task_checkout", "Checking out {name} for editing", { name: entry.name }),
         {
           addr: consoleAddr(host),
           fromPath: entry.path,
@@ -1308,7 +1308,7 @@ function LibraryRowImpl({
     setMountNote(null);
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-unmount", `Unmounting ${entry.name}`, {
+      .start("library-unmount", trStatic("task_unmounting", "Unmounting {name}", { name: entry.name }), {
         addr: consoleAddr(host),
         fromPath: mountPointToUnmount,
       });
@@ -1421,7 +1421,7 @@ function LibraryRowImpl({
     setMountNote(null);
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-launch", `Launching ${entry.name}`, {
+      .start("library-launch", trStatic("task_launching", "Launching {name}", { name: entry.name }), {
         addr: consoleAddr(host),
         fromPath: entry.path,
       });
@@ -1529,7 +1529,7 @@ function LibraryRowImpl({
     setMountNote(null);
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-register", `Registering ${entry.name}`, {
+      .start("library-register", trStatic("task_registering", "Registering {name}", { name: entry.name }), {
         addr: consoleAddr(host),
         fromPath: entry.path,
       });
@@ -1622,9 +1622,9 @@ function LibraryRowImpl({
       await startTransferDownload(entry.path, dest, addr, "folder");
       pushNotification(
         "info",
-        withConsolePrefix(host, `Backup started: ${entry.name}`),
+        withConsolePrefix(host, trStatic("game_backup_started", "Backup started: {name}", { name: entry.name })),
         {
-          body: `Downloading ${entry.path} → ${dest}. Track progress in the Activity tab.`,
+          body: trStatic("game_backup_started_body", "Downloading {path} → {dest}. Track progress in the Activity tab.", { path: entry.path, dest }),
         },
       );
     } catch (e) {
@@ -1700,7 +1700,7 @@ function LibraryRowImpl({
     setMountNote(null);
     const activityId = useActivityHistoryStore
       .getState()
-      .start("library-unregister", `Unregistering ${entry.name}`, {
+      .start("library-unregister", trStatic("task_unregistering", "Unregistering {name}", { name: entry.name }), {
         addr: consoleAddr(host),
         fromPath: entry.path,
       });

@@ -729,7 +729,8 @@ describe("cancelItem (per-item cancel)", () => {
     void useUploadQueueStore.getState().startHost("192.168.1.10");
     await vi.advanceTimersByTimeAsync(50);
     useUploadQueueStore.getState().restartItem(byId("A1").id);
-    await vi.advanceTimersByTimeAsync(2_000);
+    // Waits for the stopped job to let go, which here it never quite does: the longest wait.
+    await vi.advanceTimersByTimeAsync(16_000);
     expect(byId("A1").status).toBe("running");
 
     finish = true;

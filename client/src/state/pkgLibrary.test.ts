@@ -1376,7 +1376,7 @@ describe("clearFinished", () => {
       .entries.map((e) => e.name);
     expect(names).toEqual(["done2.pkg"]);
     expect(pkgLibraryStore(HOST).getState().error).toContain(
-      "Failed to delete 1",
+      "Files that could not be deleted: 1",
     );
   });
 

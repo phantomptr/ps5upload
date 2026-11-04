@@ -1047,7 +1047,7 @@ export default function FileSystemScreen() {
     const itemPath = joinPath(path, name);
     const activityId = useActivityHistoryStore
       .getState()
-      .start("fs-delete", `Deleting ${name}`, {
+      .start("fs-delete", trStatic("task_deleting", "Deleting {name}", { name }), {
         fromPath: itemPath,
         files: 1,
       });
@@ -1291,7 +1291,7 @@ export default function FileSystemScreen() {
           host,
           tr("notif_fs_rename_failed", undefined, "Rename failed"),
         ),
-        { body: `First failure: ${failures[0]}` },
+        { body: trStatic("fs_first_failure", "First failure: {error}", { error: failures[0] }) },
       );
     }
     await alertDialog({
@@ -1911,7 +1911,7 @@ export default function FileSystemScreen() {
     const task = beginTask({
       kind: "fs-unpack",
       origin: "files",
-      label: `Decompress ${entry.name}`,
+      label: trStatic("task_decompress", "Decompress {name}", { name: entry.name }),
       consoleId: host.trim(),
     });
     let stopped = false;
@@ -2002,7 +2002,7 @@ export default function FileSystemScreen() {
     const task = beginTask({
       kind: "fs-extract",
       origin: "files",
-      label: `Extract ${entry.name}`,
+      label: trStatic("task_extract", "Extract {name}", { name: entry.name }),
       consoleId: host.trim(),
     });
     let stopped = false;

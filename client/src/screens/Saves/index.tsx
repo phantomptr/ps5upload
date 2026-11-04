@@ -546,7 +546,7 @@ export default function SavesScreen() {
       if (!android && (!destZip || typeof destZip !== "string")) return;
       // 1) Scratch dir under the OS temp root. The engine's download
       // walker will create `<scratch>/<title_id>/<files>` for us.
-      task = beginTask({ kind: "save-backup", origin: "saves", label: `Save backup ${entry.title_id}`, consoleId: host.trim() });
+      task = beginTask({ kind: "save-backup", origin: "saves", label: trStatic("task_save_backup", "Save backup {title}", { title: entry.title_id }), consoleId: host.trim() });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       // 2) Pull the PS5 save folder into the scratch dir.
       const jobId = await startTransferDownload(
@@ -567,7 +567,7 @@ export default function SavesScreen() {
         "success",
         withConsolePrefix(host, trStatic("saves_backed_up_title", "Backed up {title}", { title: entry.title_id })),
         {
-          body: `Saved to ${savedTo}`,
+          body: trStatic("saves_saved_to", "Saved to {path}", { path: savedTo }),
         },
       );
     } catch (e) {
@@ -638,7 +638,7 @@ export default function SavesScreen() {
       if (!localZip || typeof localZip !== "string") return;
       // 1) Scratch dir + strict-validate the zip layout before we touch
       // the live save. Bad layout → throw before any delete fires.
-      task = beginTask({ kind: "save-restore", origin: "saves", label: `Save restore ${entry.title_id}`, consoleId: restoreHost });
+      task = beginTask({ kind: "save-restore", origin: "saves", label: trStatic("task_save_restore", "Save restore {title}", { title: entry.title_id }), consoleId: restoreHost });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       await saveArchiveUnzip(localZip, tempDir, entry.title_id);
       // 1.5) Format-aware prep: re-add `sdimg_` prefix to any bare image
@@ -753,7 +753,7 @@ export default function SavesScreen() {
         }
       }
       // 1) Scratch dir + pull the PS5 save folder, same as handleDownload.
-      task = beginTask({ kind: "save-backup", origin: "saves", label: `Save backup ${entry.title_id} to USB`, consoleId: backupHost });
+      task = beginTask({ kind: "save-backup", origin: "saves", label: trStatic("task_save_backup_usb", "Save backup {title} to USB", { title: entry.title_id }), consoleId: backupHost });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       const jobId = await startTransferDownload(entry.path, tempDir, addr, "folder");
       await waitForJob(jobId);
@@ -805,7 +805,7 @@ export default function SavesScreen() {
       pushNotification(
         "success",
         withConsolePrefix(backupHost, trStatic("saves_backed_up_usb", "Backed up {title} to USB", { title: entry.title_id })),
-        { body: `Saved to ${remoteZip}` },
+        { body: trStatic("saves_saved_to", "Saved to {path}", { path: remoteZip }) },
       );
     } catch (e) {
       task?.fail(e);
@@ -930,7 +930,7 @@ export default function SavesScreen() {
         if (!ok) return "ok"; // user cancelled — not an error or a skip
       }
       // 1) Scratch dir + pull the zip off the USB drive (single-file download).
-      task = beginTask({ kind: "save-restore", origin: "saves", label: `Save restore ${entry.title_id} from USB`, consoleId: restoreHost });
+      task = beginTask({ kind: "save-restore", origin: "saves", label: trStatic("task_save_restore_usb", "Save restore {title} from USB", { title: entry.title_id }), consoleId: restoreHost });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       const jobId = await startTransferDownload(remoteZip, tempDir, addr, "file");
       await waitForJob(jobId);
@@ -970,7 +970,7 @@ export default function SavesScreen() {
       pushNotification(
         "success",
         withConsolePrefix(restoreHost, trStatic("saves_restored_usb", "Restored {title} from USB", { title: entry.title_id })),
-        { body: `Restored from ${remoteZip} → ${entry.path}` },
+        { body: trStatic("saves_restored_from", "Restored from {zip} → {path}", { zip: remoteZip, path: entry.path }) },
       );
       return "ok";
     } catch (e) {
@@ -1034,7 +1034,7 @@ export default function SavesScreen() {
           `No USB/external drive found at ${base}. Plug it into the PS5 and try again.`,
         );
         setError(msg);
-        pushNotification("error", withConsolePrefix(restoreHost, "USB restore failed"), {
+        pushNotification("error", withConsolePrefix(restoreHost, trStatic("saves_usb_restore_failed_all", "USB restore failed")), {
           body: msg,
         });
         return;
@@ -1098,7 +1098,7 @@ export default function SavesScreen() {
           `No writable USB/external drive found at ${base}. Plug it into the PS5 and try again.`,
         );
         setError(msg);
-        pushNotification("error", withConsolePrefix(backupHost, "USB backup failed"), {
+        pushNotification("error", withConsolePrefix(backupHost, trStatic("saves_usb_backup_failed_all", "USB backup failed")), {
           body: msg,
         });
         return;

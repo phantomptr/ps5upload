@@ -139,7 +139,7 @@ describe("downloadAndInstallApk", () => {
     updateDownloadApk.mockResolvedValue({ path: "/p.apk", bytes: 1, verified: true });
     const p = downloadAndInstallApk(RESULT);
     await vi.advanceTimersByTimeAsync(2000);
-    expect(await p).toBe("install failed");
+    expect(await p).toBe("The install failed");
   });
 
   it("goes back to idle when the dialog is cancelled", async () => {

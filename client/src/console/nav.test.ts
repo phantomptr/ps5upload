@@ -160,10 +160,6 @@ describe("default input map", () => {
   });
 });
 
-describe("hint bar entries", () => {
-
-});
-
 describe("text editor keys", () => {
   const box = (value: string, at: number) => ({ tagName: "TEXTAREA", value, selectionStart: at, selectionEnd: at });
   it("keeps up/down inside a multi-line box until the first/last line", () => {

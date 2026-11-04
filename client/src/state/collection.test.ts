@@ -29,16 +29,6 @@ describe("startCollectionScan", () => {
     useCollectionStore.setState({ error: null, scan: null });
   });
 
-  it("joins a scan already running instead of reporting an error", async () => {
-    api.scan.mockRejectedValue(new Error("a scan is already running"));
-    api.scanStatus.mockResolvedValue(RUNNING);
-    await startCollectionScan(false);
-    const s = useCollectionStore.getState();
-    expect(s.error).toBeNull();
-    expect(s.scan?.running).toBe(true);
-    vi.useRealTimers();
-  });
-
   it("keeps following the scan after a failed read, so it does not stay on running", async () => {
     api.scan.mockResolvedValue(RUNNING);
     api.library.mockResolvedValue({ games: [] });
@@ -50,6 +40,17 @@ describe("startCollectionScan", () => {
     api.scanStatus.mockResolvedValueOnce({ ...RUNNING, running: false });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(useCollectionStore.getState().scan?.running).toBe(false);
+    expect(useCollectionStore.getState().error).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("joins a scan already running instead of reporting an error", async () => {
+    api.scan.mockRejectedValue(new Error("a scan is already running"));
+    api.scanStatus.mockResolvedValue(RUNNING);
+    await startCollectionScan(false);
+    const s = useCollectionStore.getState();
+    expect(s.error).toBeNull();
+    expect(s.scan?.running).toBe(true);
     vi.useRealTimers();
   });
 
