@@ -217,6 +217,18 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
         .find(|s| !s.is_empty())
         .unwrap_or("server")
         .to_string();
+    // What the server calls it lands as one file here, whatever this computer is: `CON`, `a:b`
+    // or `x.` is a device, a stream or another name on Windows (and a listed folder's own files
+    // get the same rule from `safe_join`).
+    if let Some(why) = ps5upload_core::transfer::host_unsafe_component(&name) {
+        if made_dir {
+            let _ = std::fs::remove_dir_all(&dest_dir);
+        }
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("{name:?} cannot be saved on this computer: {why}."),
+        );
+    }
     let dest = dest_dir.join(&name);
     // The copy and a RAR set's other volumes alike: never write over (and later delete) a file
     // that was already there.
@@ -382,7 +394,12 @@ fn safe_join(dest: &Path, rel: &str) -> Result<PathBuf, String> {
     let mut out = dest.to_path_buf();
     for c in Path::new(rel).components() {
         match c {
-            Component::Normal(part) => out.push(part),
+            Component::Normal(part)
+                if ps5upload_core::transfer::host_unsafe_component(&part.to_string_lossy())
+                    .is_none() =>
+            {
+                out.push(part)
+            }
             _ => return Err(unsafe_name()),
         }
     }

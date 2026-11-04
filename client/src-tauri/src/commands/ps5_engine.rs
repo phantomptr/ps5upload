@@ -1677,6 +1677,10 @@ pub struct TransferDownloadZipReq {
     /// allow-list (e.g. /system, /system_data). Read-only. Default false.
     #[serde(default)]
     pub unsafe_read: bool,
+    /// `replace`: the person chose to overwrite a file already at `dest_zip`. Without it the
+    /// engine refuses one with a 409.
+    #[serde(default)]
+    pub existing: Option<String>,
 }
 
 #[tauri::command]
@@ -1689,6 +1693,7 @@ pub async fn transfer_download_zip(req: TransferDownloadZipReq) -> Result<JsonVa
         "addr": req.addr,
         "kind": req.kind,
         "unsafe_read": req.unsafe_read,
+        "existing": req.existing,
     });
     post_json(&url, &body).await
 }

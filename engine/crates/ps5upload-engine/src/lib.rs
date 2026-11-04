@@ -9980,6 +9980,13 @@ async fn transfer_download_handler(
         )
         .into_response();
     }
+    if let Some(why) = ps5upload_core::transfer::host_unsafe_component(basename) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!("{basename:?} cannot be saved on this computer: {why}."),
+        )
+        .into_response();
+    }
     // Stat via spawn_blocking — dest_dir can be a network mount where
     // a blocking stat would stall the reactor for every console.
     let dest_dir_for_stat = dest_dir.clone();
@@ -10032,6 +10039,10 @@ struct TransferDownloadZipReq {
     /// (smaller for text-heavy trees; cannot resume, so a drop restarts the archive).
     #[serde(default)]
     compression: Option<String>,
+    /// What to do with a file already at `dest_zip`: `replace` overwrites it (the person chose
+    /// that, say in a save dialog). Absent: refuse with a 409, as the link download does.
+    #[serde(default)]
+    existing: Option<String>,
 }
 
 /// POST /api/transfer/download-zip — pull a PS5 file/folder straight into a
@@ -10098,6 +10109,22 @@ async fn transfer_download_zip_handler(
                 return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
                     .into_response()
             }
+        }
+    }
+    // A finished download renames over the destination: an archive already there would be gone
+    // without a word.
+    if req.existing.as_deref() != Some("replace") {
+        let at = dest_zip.clone();
+        if let Ok(Ok(md)) = tokio::task::spawn_blocking(move || std::fs::metadata(&at)).await {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("{} already exists ({} bytes).", dest_zip.display(), md.len()),
+                    "existing_path": dest_zip.display().to_string(),
+                    "existing_bytes": md.len(),
+                })),
+            )
+                .into_response();
         }
     }
 

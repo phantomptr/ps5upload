@@ -870,6 +870,7 @@ export async function startTransferDownloadZip(
       addr: transferAddr,
       kind,
       unsafe_read: unsafeRead,
+      existing: "replace",
     },
   });
   return res.job_id;

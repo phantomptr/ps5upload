@@ -1639,6 +1639,7 @@ export async function browserInvoke<T>(
         addr: args["req"]?.addr,
         kind: args["req"]?.kind,
         unsafe_read: args["req"]?.unsafe_read,
+        existing: args["req"]?.existing,
       });
 
     case "transfer_dir_diff_preview":
