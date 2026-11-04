@@ -28,9 +28,12 @@ import { isMobile } from "../../lib/platform";
 import { getEngineUrl, isLoopbackUrl } from "../../state/engine";
 import { useGoLiveStore } from "../../state/goLive";
 import { useTr } from "../../state/lang";
+import { presetName, problemText, runSite } from "./goLiveText";
 import { useRpQualityStore } from "../../state/rpQuality";
 
 type Tr = ReturnType<typeof useTr>;
+
+export { presetName, problemText };
 
 /** The Stream button and panel are for computers: the desktop app and the web UI (where Go
  *  live runs on the engine's computer). The phone apps have no streaming pipeline in 11.0.0. */
@@ -54,10 +57,6 @@ const PRESET_COLOR: Record<PresetId, string> = {
   facebook: "#0866ff",
   custom: "#8b8b8b",
 };
-
-export function presetName(tr: Tr, id: PresetId): string {
-  return id === "custom" ? tr("golive_custom", undefined, "Custom server") : ({ youtube: "YouTube", twitch: "Twitch", kick: "Kick", facebook: "Facebook" } as const)[id];
-}
 
 /** Where the key is, per site. */
 function keyHelp(tr: Tr, id: PresetId): string {
@@ -149,40 +148,6 @@ export function checkText(tr: Tr, c: LiveCheck, site: string): string {
   }
 }
 
-/** An engine error code in the user's language (the engine's sentence when there is none). */
-export function problemText(tr: Tr, code: string, fallback: string, site?: string): string {
-  const s = site ?? tr("golive_the_site", undefined, "the site");
-  switch (code) {
-    case "unreachable":
-      return tr("golive_err_unreachable", { site: s }, `Can't reach ${s}'s server. Check this computer's internet connection (and the server address).`);
-    case "rejected":
-      return tr(
-        "golive_err_rejected",
-        { site: s },
-        `${s} refused the stream. That is almost always the stream key: copy it again from ${s} (keys change when you reset them).`,
-      );
-    case "codec_not_allowed":
-      return tr("golive_err_codec", { site: s }, `${s} doesn't take this video format. Restart Play in H.264 and go live again.`);
-    case "dropped":
-      return tr("golive_err_dropped", { site: s }, `The connection to ${s} dropped.`);
-    case "play_ended":
-      return tr("golive_err_play_ended", undefined, "Remote Play stopped, so the stream ended.");
-    case "no_session":
-      return tr("golive_err_no_session", undefined, "Start Remote Play first: Go live sends what it shows.");
-    case "ffmpeg_missing":
-      return tr("golive_err_ffmpeg_missing", undefined, "Download the streaming helper first.");
-    case "no_destinations":
-      return tr("golive_err_no_destinations", undefined, "Tick at least one place to stream to.");
-    case "already_live":
-      return tr("golive_err_already_live", undefined, "Already live.");
-    case "checksum":
-      return tr("golive_err_checksum", undefined, "The download was not the expected file, so it was deleted and not used. Try again later.");
-    case "download":
-      return tr("golive_err_download", undefined, "The download failed. Check this computer's internet connection and try again.");
-    default:
-      return fallback;
-  }
-}
 
 function SiteDot({ id }: { id: PresetId }) {
   return <span aria-hidden className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: PRESET_COLOR[id] }} />;
@@ -196,7 +161,18 @@ function FfmpegPrompt({ status }: { status: StreamStatus }) {
   const mb = String(Math.round((f.download_bytes ?? 60_000_000) / 1_000_000));
   if (!f.supported) {
     return (
-      <Callout tone="warn" title={tr("golive_ffmpeg_unsupported", undefined, "Going live isn't available on this computer's system.")} />
+      <Callout
+        tone="warn"
+        title={
+          f.needs_own
+            ? tr(
+                "golive_ffmpeg_needs_own",
+                undefined,
+                "The ffmpeg download can't run on this system (a Docker image, for example). To go live here, give the engine your own ffmpeg with PS5UPLOAD_FFMPEG. The FAQ says how.",
+              )
+            : tr("golive_ffmpeg_unsupported", undefined, "Going live isn't available on this computer's system.")
+        }
+      />
     );
   }
   const st = f.install;
@@ -375,6 +351,11 @@ function DestinationRow({ d, disabled }: { d: LiveDestination; disabled: boolean
           <Trash2 size={14} />
         </button>
       </div>
+      {d.key_lost && (
+        <p className="ps-6 text-xs text-[var(--color-danger,#dc2626)]" data-testid="golive-key-lost">
+          {tr("golive_key_lost", undefined, "The saved stream key can't be read. Remove this site and add it again.")}
+        </p>
+      )}
       {d.preset === "twitch" && (
         <label className="flex items-center gap-2 ps-6 text-xs">
           <input
@@ -413,6 +394,7 @@ function LiveView({ run }: { run: LiveRun }) {
   const tr = useTr();
   const stop = useGoLiveStore((s) => s.stop);
   const busy = useGoLiveStore((s) => s.busy);
+  const stopping = run.phase === "stopping";
   const stateText = (s: string) =>
     s === "live"
       ? tr("golive_state_live", undefined, "Live")
@@ -433,7 +415,7 @@ function LiveView({ run }: { run: LiveRun }) {
       </div>
       {run.phase === "reconnecting" && (
         <p className="text-xs text-[var(--color-warn)]" role="status" data-testid="golive-reconnecting">
-          {run.error ? problemText(tr, run.error.code, run.error.message) + " " : ""}
+          {run.error ? problemText(tr, run.error.code, run.error.message, runSite(tr, run)) + " " : ""}
           {/* The wait is over and the attempt is under way: not "again in 0 s". */}
           {run.retry_in_s
             ? tr("golive_retry_in", { s: String(run.retry_in_s) }, `Trying again in ${run.retry_in_s} s.`)
@@ -471,8 +453,8 @@ function LiveView({ run }: { run: LiveRun }) {
           </li>
         ))}
       </ul>
-      <Button size="sm" variant="danger" onClick={() => void stop()} disabled={busy} data-testid="golive-stop">
-        {tr("golive_stop", undefined, "Stop streaming")}
+      <Button size="sm" variant="danger" onClick={() => void stop()} disabled={busy || stopping} data-testid="golive-stop">
+        {stopping ? tr("golive_state_stopping", undefined, "Stopping…") : tr("golive_stop", undefined, "Stop streaming")}
       </Button>
     </div>
   );
@@ -489,7 +471,9 @@ export function LivePill({ run }: { run: LiveRun }) {
       ? tr("golive_state_retrying", undefined, "Reconnecting…")
       : run.phase === "waiting_for_play"
         ? tr("golive_waiting_short", undefined, "Waiting for Play")
-        : tr("golive_state_connecting", undefined, "Connecting…");
+        : run.phase === "stopping"
+          ? tr("golive_state_stopping", undefined, "Stopping…")
+          : tr("golive_state_connecting", undefined, "Connecting…");
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold text-white ${
@@ -537,16 +521,21 @@ function GoLiveTab({ status }: { status: StreamStatus }) {
   const lastFailed = run?.phase === "failed" ? run : null;
   return (
     <div className="space-y-3">
+      {status.store_error && (
+        <div data-testid="golive-store-error">
+          <Callout tone="error" title={tr("golive_store_error_title", undefined, "Your saved sites can't be read")}>
+            <p className="text-xs">
+              {tr("golive_store_error_hint", undefined, "Fix the file named here or move it away. Go live tries again by itself.")}
+            </p>
+            <p className="break-all font-mono text-xs">{status.store_error}</p>
+          </Callout>
+        </div>
+      )}
       {!status.ffmpeg.installed && <FfmpegPrompt status={status} />}
       {lastFailed?.error && (
         <div data-testid="golive-failed">
           <Callout tone="error" title={tr("golive_stopped", undefined, "The stream stopped")}>
-            {problemText(
-              tr,
-              lastFailed.error.code,
-              lastFailed.error.message,
-              lastFailed.destinations.length === 1 ? presetName(tr, lastFailed.destinations[0].preset) : undefined,
-            )}
+            {problemText(tr, lastFailed.error.code, lastFailed.error.message, runSite(tr, lastFailed))}
           </Callout>
         </div>
       )}
@@ -598,16 +587,20 @@ function GoLiveTab({ status }: { status: StreamStatus }) {
           <p className="text-xs">
             {fix.codec && fix.bitrateKbps
               ? tr(
-                  "golive_fix_both",
+                  "golive_fix_both2",
                   { mbps: String(fix.bitrateKbps / 1000) },
-                  `Restart Remote Play in H.264 at ${fix.bitrateKbps / 1000} Mbps? The game keeps running; the picture comes back in a few seconds.`,
+                  `Restart Remote Play in H.264 at ${fix.bitrateKbps / 1000} Mbps? The game keeps running; the picture comes back in about 15 s. Play keeps these settings until you change them in Settings › Picture.`,
                 )
               : fix.codec
-                ? tr("golive_fix_codec", undefined, "Restart Remote Play in H.264? The game keeps running; the picture comes back in a few seconds.")
+                ? tr(
+                    "golive_fix_codec2",
+                    undefined,
+                    "Restart Remote Play in H.264? The game keeps running; the picture comes back in about 15 s. Play keeps this setting until you change it in Settings › Picture.",
+                  )
                 : tr(
-                    "golive_fix_bitrate",
+                    "golive_fix_bitrate2",
                     { mbps: String((fix.bitrateKbps ?? 0) / 1000) },
-                    `Restart Remote Play at ${(fix.bitrateKbps ?? 0) / 1000} Mbps? The game keeps running; the picture comes back in a few seconds.`,
+                    `Restart Remote Play at ${(fix.bitrateKbps ?? 0) / 1000} Mbps? The game keeps running; the picture comes back in about 15 s. Play keeps this setting until you change it in Settings › Picture.`,
                   )}
           </p>
           <Button

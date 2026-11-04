@@ -237,6 +237,46 @@ ffmpeg -i http://127.0.0.1:19113/api/ps5/rp/live.ts -c copy recording.ts
 `consumers` counts players reading `live.ts`; `go_live` is the app's own Go live, which reads
 the same feed inside the engine. `{"running": false, "consumers": 0}` when nothing streams.
 
+## Go live
+
+The app's own broadcast to YouTube, Twitch, Kick, Facebook or any RTMP/SRT server. These answer on
+the engine's usual guard: this computer, plus addresses in `PS5UPLOAD_ALLOW_IP` (wider than
+`live.ts`, which is this computer only, because the web UI's Go live runs from elsewhere).
+
+| Request | Does |
+|---|---|
+| `GET /api/stream/status` | ffmpeg, the session, each site's checks against it, the live run |
+| `POST /api/stream/start` | `{"destinations": [{"key_id": "<id>"}], "audio_kbps": 160}` starts a run; a stop still finishing is waited for |
+| `POST /api/stream/stop` | Stops the run; `phase` says `stopping` until ffmpeg has gone |
+| `POST /api/stream/destinations` | Adds a site: `{preset, key, server?, url?, label?, bandwidth_test?}` |
+| `POST /api/stream/destinations/{id}` | Changes a site: only what changes, for example `{"enabled": false}`. No `key` keeps the saved one |
+| `DELETE /api/stream/destinations/{id}` | Removes a site |
+| `POST /api/stream/tools/ffmpeg/install` | Downloads ffmpeg; progress is in the status |
+
+Stream keys are never returned, only `key_hint` (the last four characters). `key_lost: true` means
+the saved key can't be read any more: add the site again. A run's `phase` is `starting`, `live`,
+`reconnecting`, `waiting_for_play`, `stopping`, `ended` or `failed`.
+
+Refusals are `{"error": "<sentence>", "code": "<code>"}`. A run's and a destination's `error` have the
+same `code`, and one of the failure codes.
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `no_session` | 409 | No Remote Play session to stream |
+| `already_live` | 409 | A run is going: stop it first |
+| `ffmpeg_missing` | 412 | Install ffmpeg first |
+| `no_destinations` | 400 | The start named no site |
+| `codec_not_allowed` | 409 | A site doesn't take the session's video format; `destinations` says which |
+| `destination_missing`, `not_found` | 404 | No such site |
+| `preset_unknown` | 400 | Not one of the sites |
+| `key_missing`, `key_invalid`, `key_lost` | 400 | No usable stream key |
+| `server_missing`, `url_invalid` | 400 | The server address |
+| `unsupported` | 501 | No ffmpeg download can run on this system: set `PS5UPLOAD_FFMPEG` |
+| `disk`, `store` | 500 | This computer's disk, or a damaged saved file (named in `store_error` in the status) |
+| `checksum`, `download`, `unpack` | in `ffmpeg.install` | The ffmpeg download |
+| `unreachable`, `tls`, `rejected`, `codec_not_allowed`, `dropped`, `stopped` | in the run | Why a site stopped: can't be reached, certificate, refused key, wrong codec, dropped, other |
+| `all_failed`, `ffmpeg_failed`, `play_ended` | in the run | No site took it, ffmpeg can't start, Remote Play stayed off for two minutes |
+
 ## An MCP adapter
 
 These endpoints map directly to tools an MCP (Model Context Protocol) server could expose:

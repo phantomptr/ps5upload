@@ -7,6 +7,7 @@ import { linkFromSocket, normalizeCode, parseJoinLink, type JoinLink } from "../
 import { JoinView } from "../../join/JoinView";
 import { lastName, rememberName } from "../../join/guestName";
 import { useTr } from "../../state/lang";
+import { useJoinPresence } from "../../state/joinPresence";
 import { activeJoin, useJoinStore } from "../../state/joinSession";
 import { useRemotePlayStore } from "../../state/remotePlay";
 import { holdPageStill, lockLandscape, setWindowFullscreen, unlockOrientation } from "./immersive";
@@ -93,6 +94,11 @@ export async function okToStartPlay(tr: Tr, confirm: Confirm): Promise<boolean> 
  * The app decodes with WebCodecs (a secure page), the lowest-delay path.
  */
 export function JoinAFriend({ pending, onPendingDone }: { pending?: string | null; onPendingDone?: () => void }) {
+  // The keyboard is the game's only while this shows (join/session.ts).
+  useEffect(() => {
+    useJoinPresence.setState({ onScreen: true });
+    return () => useJoinPresence.setState({ onScreen: false });
+  }, []);
   const tr = useTr();
   const session = useJoinStore((s) => s.session);
   const lastLink = useJoinStore((s) => s.link);

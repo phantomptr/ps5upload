@@ -3,38 +3,21 @@
  * inlined, to engine/crates/ps5upload-engine/src/pad_page.html, which the engine embeds and serves
  * at GET /pad to a phone that scanned the computer's QR code (pad_link.rs). Commit the result.
  *
- * - English only: state/lang is swapped for src/pad/langStub.ts and lib/trStatic for
- *   src/pad/trStaticStub.ts (all locales inlined would be
- *   megabytes). The phone app's own controller screen (PadRemote) is translated.
- * - Budget: the build fails over 660 KiB raw (600 before the Touchpad & keyboard tab, 640 before
- *   the "Open in the PS5Upload app?" question, OpenInAppGate).
+ * - In the phone's language, as /join is: src/join/joinLang.ts with only the keys the page's own
+ *   modules use, in every locale (vite.pagePlugins.ts).
+ * - The built CSS goes through what the app's does (oneLangPerSelector).
+ * - Budget: the build fails over 800 KiB raw (660 before the strings, 640 before the "Open in the
+ *   PS5Upload app?" question, OpenInAppGate, 600 before the Touchpad & keyboard tab).
  */
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { oneLangPerSelector, pageStrings } from "./vite.pagePlugins";
 
-const RAW_BUDGET = 660 * 1024;
+const RAW_BUDGET = 800 * 1024;
 const OUT = fileURLToPath(new URL("../engine/crates/ps5upload-engine/src/pad_page.html", import.meta.url));
-const LANG = fileURLToPath(new URL("./src/state/lang.ts", import.meta.url));
-const STUB = fileURLToPath(new URL("./src/pad/langStub.ts", import.meta.url));
-const TR_STATIC = fileURLToPath(new URL("./src/lib/trStatic.ts", import.meta.url));
-const TR_STATIC_STUB = fileURLToPath(new URL("./src/pad/trStaticStub.ts", import.meta.url));
-
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/** state/lang and lib/trStatic → the English-only stubs. */
-function englishOnly(): Plugin {
-  return {
-    name: "ps5upload-pad-english-only",
-    enforce: "pre",
-    async resolveId(source, importer, opts) {
-      const r = await this.resolve(source, importer, { ...opts, skipSelf: true });
-      if (r?.id === LANG) return STUB;
-      return r?.id === TR_STATIC ? TR_STATIC_STUB : null;
-    },
-  };
-}
 
 /** Everything into index.html, written to the engine's pad_page.html. */
 function singleFile(): Plugin {
@@ -71,7 +54,7 @@ export default defineConfig({
   // The client root, not src/pad: Tailwind finds the classes it generates by scanning from the
   // root, and the controller (screens/Play/TouchControls.tsx) lives outside src/pad.
   base: "./",
-  plugins: [englishOnly(), react(), tailwindcss(), singleFile()],
+  plugins: [pageStrings("pad"), react(), tailwindcss(), oneLangPerSelector(), singleFile()],
   build: {
     outDir: fileURLToPath(new URL("./dist-pad", import.meta.url)),
     emptyOutDir: true,

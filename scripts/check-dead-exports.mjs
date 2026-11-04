@@ -16,7 +16,6 @@ const ALLOW = new Set([
   // Stand-ins vite aliases over the real modules in the small pad and join page builds.
   "client/src/join/joinLang.ts:useTr",
   "client/src/pad/langStub.ts:useTr",
-  "client/src/pad/trStaticStub.ts:trStatic",
   // Typed client for a live engine route; api/ps5.ts says why these stay without a screen.
   "client/src/api/ps5.ts:zipInspect",
   "client/src/api/ps5.ts:sevenzInspect",

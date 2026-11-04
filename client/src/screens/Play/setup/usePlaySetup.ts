@@ -39,15 +39,26 @@ export function usePlaySetup(opts: { poll?: boolean } = {}) {
   const [info, setInfo] = useState<ProfileInfo | null>(null);
   const [np, setNp] = useState<NpState | null>(null);
   const [blockers, setBlockers] = useState<string[] | null>(null);
+  // The last read's failure. The last good readiness stays: one failed read must not undo the
+  // steps done (and close a form with a PIN half typed).
+  const [readError, setReadError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!host || !connected) return;
     const [r, i, b] = await Promise.all([
-      remoteplayReadiness(transferAddr(host)).catch(() => null),
+      remoteplayReadiness(transferAddr(host)).catch((e: unknown) => {
+        setReadError(e instanceof Error ? e.message : String(e));
+        return null;
+      }),
       profileInfo(mgmtAddr(host)).catch(() => null),
       detectBlockers(blockerCtx(host)).catch(() => null),
     ]);
-    setReadiness(r && r.registry_err === 0 ? r : null);
+    if (r && r.registry_err === 0) {
+      setReadiness(r);
+      setReadError(null);
+    } else if (r) {
+      setReadError(`registry error ${r.registry_err}`);
+    }
     setInfo(i);
     setBlockers(b ? b.map((x) => x.id) : null);
     const t = npBackupTarget(i);
@@ -60,6 +71,7 @@ export function usePlaySetup(opts: { poll?: boolean } = {}) {
     setInfo(null);
     setNp(null);
     setBlockers(null);
+    setReadError(null);
   }, [host]);
 
   useEffect(() => {
@@ -74,6 +86,7 @@ export function usePlaySetup(opts: { poll?: boolean } = {}) {
     host,
     connected,
     readiness,
+    readError,
     info,
     states,
     next: nextStep(states),

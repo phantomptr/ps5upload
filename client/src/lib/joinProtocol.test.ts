@@ -87,6 +87,17 @@ describe("engine messages", () => {
     expect(readServerMessage('{"stage":"refused","why":"weird"}')).toEqual({ kind: "refused", why: "refused" });
   });
 
+  it("keeps a lost place and an unanswered ask apart from an expired invite and a no", () => {
+    expect(readServerMessage('{"stage":"refused","why":"expired"}')).toEqual({ kind: "refused", why: "expired" });
+    expect(readServerMessage('{"stage":"refused","why":"no_answer"}')).toEqual({ kind: "refused", why: "no_answer" });
+  });
+
+  it("says why a guest is out: another tab, or the console lost the controller", () => {
+    expect(readServerMessage('{"bye":"replaced"}')).toEqual({ kind: "bye", why: "replaced" });
+    expect(readServerMessage('{"bye":"lost"}')).toEqual({ kind: "bye", why: "pad_lost" });
+    expect(readServerMessage('{"bye":"toString"}')).toEqual({ kind: "bye", why: "closed" });
+  });
+
   it("reads status, feedback, bye and pong", () => {
     expect(
       readServerMessage('{"status":{"player":3,"state":"picking_user","rtt_ms":42,"host":"Ann","block_system":true}}'),

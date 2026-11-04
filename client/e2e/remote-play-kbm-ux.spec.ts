@@ -292,13 +292,13 @@ test.describe("phone, nothing attached", () => {
         }
       }, events);
 
-    // One finger drag: relative movement (times the speed, 1.5).
+    // One finger drag: relative movement (times the speed, 1.5). Odd steps: fractions of a unit.
     engine.reports.length = 0;
     await fire([
       ["pointerdown", 1, 400, 200],
-      ["pointermove", 1, 420, 200],
-      ["pointermove", 1, 440, 210],
-      ["pointerup", 1, 440, 210],
+      ["pointermove", 1, 421, 200],
+      ["pointermove", 1, 440, 211],
+      ["pointerup", 1, 440, 211],
     ]);
     await expect.poll(() => engine.reports.reduce((s, r) => s + (r[2] | (r[3] << 8)), 0)).toBeGreaterThan(0);
     expect(engine.reports.every((r) => r[0] === 0)).toBe(true); // no click

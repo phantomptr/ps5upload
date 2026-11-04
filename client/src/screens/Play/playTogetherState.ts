@@ -17,6 +17,8 @@ export interface JoinGuest {
   reconnectingLeftS: number | null;
   rttMs: number | null;
   connected: boolean;
+  /** Pictures were skipped in the last few seconds: their connection can't keep up. */
+  behind: boolean;
 }
 
 export interface JoinHostState {
@@ -75,19 +77,21 @@ export function readJoinState(v: unknown): JoinHostState {
     .filter((g) => typeof g.id === "number" || typeof g.id === "string")
     .map((g) => ({
       id: Number(g.id),
-      name: typeof g.name === "string" && g.name ? g.name : "?",
+      // Empty: they gave no name, the panel says "Friend" in this app's language.
+      name: typeof g.name === "string" ? g.name : "",
       player: num(g.player) ?? 0,
       // The engine's field is `state` (`status` kept for an older one).
       status: stateOf(g.state ?? g.status),
       reconnectingLeftS: num(g.reconnect_left_s) ?? num(g.reconnecting_left_s),
       rttMs: num(g.rtt_ms),
       connected: g.connected !== false,
+      behind: g.behind === true,
     }))
     .sort((a, b) => a.player - b.player);
   // Friends asking to join: the engine's `pending` (`asks` kept for an older one).
   const asks = (Array.isArray(o.pending) ? o.pending : Array.isArray(o.asks) ? o.asks : [])
     .filter((a): a is { id: number; name: string } => !!a && typeof a.id === "number")
-    .map((a) => ({ id: a.id, name: typeof a.name === "string" && a.name ? a.name : "?" }));
+    .map((a) => ({ id: a.id, name: typeof a.name === "string" ? a.name : "" }));
   const s = (o.settings ?? {}) as Record<string, unknown>;
   return {
     open: o.open === true,

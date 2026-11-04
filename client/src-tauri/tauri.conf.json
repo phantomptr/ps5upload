@@ -68,6 +68,9 @@
         "bundleMediaFramework": true
       },
       "deb": {
+        "files": {
+          "/usr/lib/udev/rules.d/70-ps5upload-dualsense.rules": "70-ps5upload-dualsense.rules"
+        },
         "depends": [
           "libasound2"
         ],
@@ -78,6 +81,9 @@
         ]
       },
       "rpm": {
+        "files": {
+          "/usr/lib/udev/rules.d/70-ps5upload-dualsense.rules": "70-ps5upload-dualsense.rules"
+        },
         "depends": [
           "alsa-lib"
         ],

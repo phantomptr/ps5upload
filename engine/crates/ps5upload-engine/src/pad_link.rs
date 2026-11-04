@@ -16,6 +16,14 @@
 //!
 //! `/pad` and `/api/pad/` are the only routes a LAN peer reaches besides `/pkg-host/`
 //! (`loopback_allows` in lib.rs), and the socket checks the key or the computer's yes itself.
+//! A phone also names its device (`d=`, random, kept on the phone): a device the computer allowed
+//! comes back after a dropped socket without asking again, and one it disconnected stays out until
+//! the link is closed.
+//!
+//! A phone that vanishes (out of Wi-Fi range, asleep with a thumb on the stick) must not stay on
+//! the console's pad: the socket hears a WebSocket ping every second and ends when nothing at all
+//! comes back for a few, and a page that says it keeps sending (`"ka"` on its pad messages, every
+//! 250 ms) is let go after a second without one.
 //! A phone sends pad states and, for its touchpad & keyboard, native keyboard & mouse input
 //! (`{"kbm": {"on", "mouse", "keyboard"}}` repeated every 500 ms as a heartbeat, and binary
 //! `[8][16-byte report]`). That input is only forwarded to the computer's page as `{"pad_kbm":
@@ -30,8 +38,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::Query;
-use axum::http::HeaderMap;
+use axum::extract::{ConnectInfo, Query};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::rp_stream::ControllerState;
@@ -45,8 +53,16 @@ const MAX_PENDING: usize = 4;
 const MAX_PADS: usize = 4;
 /// Watchers at once (watch party): each is a full copy of the stream on the LAN.
 const MAX_WATCHERS: usize = 4;
-/// How often a phone hears whether the session is playing.
-const STATE_EVERY: Duration = Duration::from_secs(1);
+/// How often a phone hears whether the session is playing (and a WebSocket ping).
+const STATE_EVERY: Duration = crate::rp_stream_api::PEER_PING_EVERY;
+/// A page that keeps sending (`"ka"`) and has not for this long: its pad is let go. The socket may
+/// well be fine (a hidden page's timers, a busy phone): it comes back with its next state.
+const PAD_SILENT_AFTER: Duration = Duration::from_millis(if cfg!(test) { 300 } else { 1000 });
+/// The largest message a phone's socket takes. Its pad states are small JSON, its keyboard and
+/// mouse reports 17 bytes; what it receives (a watcher's pictures) is not limited by this.
+const PHONE_MSG_MAX: usize = crate::join::GUEST_MSG_MAX;
+/// Asks waiting from one address.
+const MAX_PENDING_PER_IP: usize = 2;
 
 /// Merge controller states into the one pad the console gets: buttons from all, the deeper
 /// trigger, and for each stick axis the one pushed furthest (a resting controller never cancels
@@ -104,6 +120,8 @@ impl PadSources {
 struct Pad {
     id: u64,
     name: String,
+    /// The device's own id, when it gave one.
+    device: Option<String>,
     since_ms: u128,
     tx: mpsc::Sender<Message>,
     /// A watcher (watch party): it sees the stream, and plays only once handed the controller.
@@ -115,6 +133,7 @@ struct Pad {
 struct Pending {
     id: u64,
     name: String,
+    ip: std::net::IpAddr,
     answer: oneshot::Sender<bool>,
 }
 
@@ -124,6 +143,10 @@ struct Link {
     key: Option<String>,
     pads: Vec<Pad>,
     pending: Vec<Pending>,
+    /// Devices the computer allowed: back in without asking on a new socket.
+    allowed: std::collections::HashSet<String>,
+    /// Devices the computer disconnected: out until the link closes.
+    denied: std::collections::HashSet<String>,
 }
 
 static LINK: Mutex<Option<Link>> = Mutex::new(None);
@@ -371,24 +394,50 @@ pub struct OpenReq {
     console: Option<String>,
 }
 
+/// `pad`'s input off the console now, whatever its socket is doing: a stalled one may not read
+/// its Close for minutes (or its queue is full and the Close was dropped).
+fn release(id: u64, watch: bool) {
+    crate::rp_stream_api::push_pad(id, None);
+    crate::rp_stream_api::push_pad_kbm(kbm_left(id));
+    if watch {
+        crate::rp_stream_api::remove_spectator(id);
+    }
+}
+
+/// `p` is told why, and goes.
+fn let_go(p: &Pad, why: &str) {
+    let _ =
+        p.tx.try_send(say(serde_json::json!({"stage": "refused", "why": why})));
+    let _ = p.tx.try_send(Message::Close(None));
+}
+
 /// `POST /api/ps5/rp/pad-link {open, console?}`: open the QR link (a new key), or close it,
 /// which also lets every phone go.
 pub async fn set_open(headers: HeaderMap, Json(r): Json<OpenReq>) -> Json<serde_json::Value> {
-    with_link(|l| {
+    let gone = with_link(|l| {
         if r.open {
             if l.key.is_none() {
                 l.key = random_key();
             }
-        } else {
-            l.key = None;
-            for p in l.pads.drain(..) {
-                let _ = p.tx.try_send(Message::Close(None));
-            }
-            for p in l.pending.drain(..) {
-                let _ = p.answer.send(false);
-            }
+            return Vec::new();
         }
+        l.key = None;
+        l.allowed.clear();
+        l.denied.clear();
+        for p in l.pending.drain(..) {
+            let _ = p.answer.send(false);
+        }
+        l.pads
+            .drain(..)
+            .map(|p| {
+                let_go(&p, "closed");
+                (p.id, p.watch)
+            })
+            .collect()
     });
+    for (id, watch) in gone {
+        release(id, watch);
+    }
     Json(status(&headers, r.console.as_deref()))
 }
 
@@ -404,10 +453,11 @@ pub async fn decide(Json(r): Json<DecideReq>) -> Json<serde_json::Value> {
         let i = l.pending.iter().position(|p| p.id == r.id)?;
         Some(l.pending.remove(i))
     });
+    let ok = found.is_some();
     if let Some(p) = found {
         let _ = p.answer.send(r.allow);
     }
-    Json(serde_json::json!({"ok": true}))
+    Json(serde_json::json!({ "ok": ok }))
 }
 
 #[derive(serde::Deserialize)]
@@ -415,15 +465,24 @@ pub struct KickReq {
     id: u64,
 }
 
-/// `POST /api/ps5/rp/pad-link/kick {id}`: let a phone go.
+/// `POST /api/ps5/rp/pad-link/kick {id}`: let a phone go, and keep it out until the link closes
+/// (the link's key alone would let it back in with one tap).
 pub async fn kick(Json(r): Json<KickReq>) -> Json<serde_json::Value> {
-    with_link(|l| {
-        if let Some(i) = l.pads.iter().position(|p| p.id == r.id) {
-            let p = l.pads.remove(i);
-            let _ = p.tx.try_send(Message::Close(None));
+    let gone = with_link(|l| {
+        let i = l.pads.iter().position(|p| p.id == r.id)?;
+        let p = l.pads.remove(i);
+        let_go(&p, "kicked");
+        if let Some(d) = &p.device {
+            l.allowed.remove(d);
+            l.denied.insert(d.clone());
         }
+        Some((p.id, p.watch))
     });
-    Json(serde_json::json!({"ok": true}))
+    let ok = gone.is_some();
+    if let Some((id, watch)) = gone {
+        release(id, watch);
+    }
+    Json(serde_json::json!({ "ok": ok }))
 }
 
 #[derive(serde::Deserialize)]
@@ -476,9 +535,13 @@ pub struct PadQuery {
     /// `w=1`: join to watch (watch party), not to play.
     #[serde(default)]
     w: Option<u8>,
+    /// This device's own id (random, kept on the device).
+    #[serde(default)]
+    d: Option<String>,
 }
 
-/// A phone's name as it gave it: printable, short.
+/// A phone's name as it gave it: printable, short. Empty when it gave none, and the /pad page sends
+/// a word for what it is (`iphone`, `android`...): the computer's own app says those in its language.
 fn clean_name(n: Option<&str>) -> String {
     let n: String = n
         .unwrap_or("")
@@ -486,17 +549,53 @@ fn clean_name(n: Option<&str>) -> String {
         .filter(|c| !c.is_control())
         .take(40)
         .collect();
-    let n = n.trim();
-    if n.is_empty() {
-        "Phone".into()
-    } else {
-        n.to_string()
-    }
+    n.trim().to_string()
 }
 
-/// `GET /api/pad/ws?t=&name=`: a phone's controller socket.
-pub async fn ws(upgrade: WebSocketUpgrade, Query(q): Query<PadQuery>) -> Response {
-    upgrade.on_upgrade(move |s| pad_session(s, q))
+/// A device id when it looks like one (hex, as the page makes them).
+fn clean_device(d: Option<&str>) -> Option<String> {
+    d.filter(|d| (8..=128).contains(&d.len()) && d.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(str::to_string)
+}
+
+static CONNECTS: crate::join::ConnectLimit = crate::join::ConnectLimit::new();
+
+/// A socket that has the computer's word already: the link's key, or a device it allowed. Those
+/// come back as often as a flaky Wi-Fi drops them; the limit is for everyone else.
+fn is_expected(q: &PadQuery) -> bool {
+    let device = clean_device(q.d.as_deref());
+    with_link(|l| {
+        q.t.as_deref()
+            .is_some_and(|t| l.key.as_deref().is_some_and(|k| same_key(k, t)))
+            || device.is_some_and(|d| l.allowed.contains(&d))
+    })
+}
+
+/// `GET /api/pad/ws?t=&name=&d=`: a phone's controller socket. Any device on the LAN reaches it, so
+/// the same limits as a Play Together guest's (join.rs): sockets per address, and small messages.
+pub async fn ws(
+    upgrade: WebSocketUpgrade,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    Query(q): Query<PadQuery>,
+) -> Response {
+    let ip = peer.ip();
+    if !is_expected(&q)
+        && !CONNECTS.allow(
+            ip,
+            crate::join::connects_per_min(ip),
+            std::time::Instant::now(),
+        )
+    {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many tries, wait a minute",
+        )
+            .into_response();
+    }
+    upgrade
+        .max_message_size(PHONE_MSG_MAX)
+        .max_frame_size(PHONE_MSG_MAX)
+        .on_upgrade(move |s| pad_session(s, q, ip))
 }
 
 fn say(v: serde_json::Value) -> Message {
@@ -552,56 +651,68 @@ fn plays(id: u64) -> bool {
     with_link(|l| l.pads.iter().any(|x| x.id == id && (!x.watch || x.control)))
 }
 
-async fn pad_session(mut socket: WebSocket, q: PadQuery) {
+async fn pad_session(mut socket: WebSocket, q: PadQuery, ip: std::net::IpAddr) {
+    use crate::rp_stream_api::send_limited;
     let name = clean_name(q.name.as_deref());
+    let device = clean_device(q.d.as_deref());
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let keyed =
-        q.t.as_deref()
-            .is_some_and(|t| with_link(|l| l.key.as_deref().is_some_and(|k| same_key(k, t))));
+    let refuse = |why: &str| say(serde_json::json!({"stage": "refused", "why": why}));
+    let out = device
+        .as_ref()
+        .is_some_and(|d| with_link(|l| l.denied.contains(d)));
+    if out {
+        send_limited(&mut socket, refuse("kicked")).await;
+        return;
+    }
+    let keyed = is_expected(&q);
     if !keyed {
         if q.t.is_some() {
             // A QR code from a link closed since (or a guess).
-            let _ = socket
-                .send(say(serde_json::json!({"stage": "refused", "why": "key"})))
-                .await;
+            send_limited(&mut socket, refuse("key")).await;
             return;
         }
         // Asking: the computer's page shows it; wait for the answer.
         let (tx, rx) = oneshot::channel();
         let queued = with_link(|l| {
-            if l.pending.len() >= MAX_PENDING {
+            if l.pending.len() >= MAX_PENDING
+                || l.pending.iter().filter(|p| p.ip == ip).count() >= MAX_PENDING_PER_IP
+            {
                 return false;
             }
             l.pending.push(Pending {
                 id,
                 name: name.clone(),
+                ip,
                 answer: tx,
             });
             true
         });
         if !queued {
-            let _ = socket
-                .send(say(serde_json::json!({"stage": "refused", "why": "busy"})))
-                .await;
+            send_limited(&mut socket, refuse("busy")).await;
             return;
         }
-        let _ = socket
-            .send(say(serde_json::json!({"stage": "asking"})))
-            .await;
-        let allowed = tokio::select! {
-            a = rx => a.unwrap_or(false),
-            _ = tokio::time::sleep(ASK_WAIT) => false,
+        send_limited(&mut socket, say(serde_json::json!({"stage": "asking"}))).await;
+        let answer = tokio::select! {
+            a = rx => a.ok(),
+            _ = tokio::time::sleep(ASK_WAIT) => None,
             // The phone gave up.
-            _ = async { loop { match socket.recv().await { Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break, _ => {} } } } => false,
+            _ = async { loop { match socket.recv().await { Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break, _ => {} } } } => Some(false),
         };
         with_link(|l| l.pending.retain(|p| p.id != id));
-        if !allowed {
-            let _ = socket
-                .send(say(
-                    serde_json::json!({"stage": "refused", "why": "denied"}),
-                ))
-                .await;
-            return;
+        match answer {
+            None => {
+                send_limited(&mut socket, refuse("no_answer")).await;
+                return;
+            }
+            Some(false) => {
+                send_limited(&mut socket, refuse("denied")).await;
+                return;
+            }
+            Some(true) => {
+                if let Some(d) = &device {
+                    with_link(|l| l.allowed.insert(d.clone()));
+                }
+            }
         }
     }
     let watch = q.w == Some(1);
@@ -610,11 +721,7 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
         match crate::rp_stream_api::add_spectator(id) {
             Some(r) => Some(r),
             None => {
-                let _ = socket
-                    .send(say(
-                        serde_json::json!({"stage": "refused", "why": "no_stream"}),
-                    ))
-                    .await;
+                send_limited(&mut socket, refuse("no_stream")).await;
                 return;
             }
         }
@@ -642,6 +749,7 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
         l.pads.push(Pad {
             id,
             name: name.clone(),
+            device: device.clone(),
             since_ms,
             tx,
             watch,
@@ -653,21 +761,26 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
         if watch {
             crate::rp_stream_api::remove_spectator(id);
         }
-        let _ = socket
-            .send(say(serde_json::json!({"stage": "refused", "why": "full"})))
-            .await;
+        send_limited(&mut socket, refuse("full")).await;
         return;
     }
+    // By number at this level: a bug report is posted in public (names under Detailed logs).
     crate::log_info!(
-        "pad_link: {name} joined as {} {id}",
+        "pad_link: phone {id} joined as {}",
         if watch { "watcher" } else { "controller" }
     );
+    crate::log_detail!("pad_link: phone {id} is {name}");
     let mut tick = tokio::time::interval(STATE_EVERY);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Rounds since anything came from the phone (counted, not timed: see rp_stream_api's page).
+    let mut quiet = 0u32;
+    // When a page that keeps sending is let go of if it hasn't.
+    let mut pad_due: Option<tokio::time::Instant> = None;
     loop {
         tokio::select! {
             out = rx.recv() => match out {
                 Some(Message::Close(_)) | None => break,
-                Some(m) => if socket.send(m).await.is_err() { break },
+                Some(m) => if !send_limited(&mut socket, m).await { break },
             },
             // A watcher's picture and sound (pending forever for a controller).
             f = async {
@@ -676,31 +789,50 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
                     None => std::future::pending().await,
                 }
             } => match f {
-                Some(m) => if socket.send(m).await.is_err() { break },
+                Some(m) => if !send_limited(&mut socket, m).await { break },
                 None => frames = None,
             },
             _ = tick.tick() => {
+                quiet += 1;
+                if quiet > crate::rp_stream_api::PEER_QUIET_PINGS {
+                    crate::log_info!("pad_link: phone {id} went silent; letting it go");
+                    break;
+                }
                 let s = crate::rp_stream_api::live_state();
                 let host = crate::rp_stream_api::live_host();
                 if host.is_some() && host != caps_host {
                     caps_host = host.clone();
                     ask_kbm_caps(host.unwrap_or_default(), caps_tx.clone());
                 }
-                if socket.send(say(serde_json::json!({"stage": "joined", "session": s}))).await.is_err() {
+                if !send_limited(&mut socket, say(serde_json::json!({"stage": "joined", "session": s}))).await
+                    || !send_limited(&mut socket, Message::Ping(Vec::new().into())).await
+                {
                     break;
                 }
             },
-            inc = socket.recv() => match inc {
+            _ = async {
+                match pad_due {
+                    Some(t) => tokio::time::sleep_until(t).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                pad_due = None;
+                crate::rp_stream_api::push_pad(id, None);
+            },
+            inc = socket.recv() => { quiet = 0; match inc {
                 Some(Ok(Message::Text(t))) => {
                     #[derive(serde::Deserialize)]
                     struct In {
                         #[serde(default)] pad: Option<ControllerState>,
                         #[serde(default)] kbm: Option<crate::vinput_api::KbmMsg>,
+                        /// This page sends its pad at least every 250 ms.
+                        #[serde(default)] ka: Option<serde_json::Value>,
                     }
                     if let Ok(m) = serde_json::from_str::<In>(t.as_str()) {
                         if let Some(p) = m.pad {
                             if plays(id) {
                                 crate::rp_stream_api::push_pad(id, Some(p));
+                                pad_due = m.ka.is_some().then(|| tokio::time::Instant::now() + PAD_SILENT_AFTER);
                             }
                         }
                         if let Some(k) = m.kbm {
@@ -719,16 +851,12 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery) {
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 _ => {}
-            },
+            }},
         }
     }
-    crate::rp_stream_api::push_pad(id, None);
-    crate::rp_stream_api::push_pad_kbm(kbm_left(id));
-    if watch {
-        crate::rp_stream_api::remove_spectator(id);
-    }
+    release(id, watch);
     with_link(|l| l.pads.retain(|p| p.id != id));
-    crate::log_info!("pad_link: controller {id} ({name}) left");
+    crate::log_info!("pad_link: phone {id} left");
 }
 
 #[derive(serde::Deserialize)]
@@ -742,11 +870,15 @@ pub struct RelayQuery {
     /// `w=1`: join to watch.
     #[serde(default)]
     w: Option<u8>,
+    /// The device's own id.
+    #[serde(default)]
+    d: Option<String>,
 }
 
 /// The pad socket's query for a relayed phone: its name, then the link's key and watch flag when
-/// it came from a link. A key is passed only when it looks like one (hex, as `random_key` makes).
-fn relay_query(name: &str, t: Option<&str>, watch: bool) -> String {
+/// it came from a link. A key is passed only when it looks like one (hex, as `random_key` makes);
+/// so is the device's id.
+fn relay_query(name: &str, t: Option<&str>, d: Option<&str>, watch: bool) -> String {
     let mut q = format!(
         "?name={}",
         name.bytes()
@@ -762,6 +894,10 @@ fn relay_query(name: &str, t: Option<&str>, watch: bool) -> String {
     {
         q.push_str("&t=");
         q.push_str(t);
+    }
+    if let Some(d) = clean_device(d) {
+        q.push_str("&d=");
+        q.push_str(&d);
     }
     if watch {
         q.push_str("&w=1");
@@ -838,7 +974,10 @@ pub(crate) fn lan_ws_target(url: &str, want: &str) -> Option<String> {
 /// `GET /api/ps5/rp/pad-relay?url=ws://<computer>/api/pad/ws&name=` (loopback only): the phone
 /// app's controller page talks to this, and this to the computer's engine.
 pub async fn relay(upgrade: WebSocketUpgrade, Query(q): Query<RelayQuery>) -> Response {
-    upgrade.on_upgrade(move |s| relay_session(s, q))
+    upgrade
+        .max_message_size(PHONE_MSG_MAX)
+        .max_frame_size(PHONE_MSG_MAX)
+        .on_upgrade(move |s| relay_session(s, q))
 }
 
 async fn relay_session(mut socket: WebSocket, q: RelayQuery) {
@@ -856,7 +995,7 @@ async fn relay_session(mut socket: WebSocket, q: RelayQuery) {
     ));
     let url = format!(
         "{target}{}",
-        relay_query(&name, q.t.as_deref(), q.w == Some(1))
+        relay_query(&name, q.t.as_deref(), q.d.as_deref(), q.w == Some(1))
     );
     relay_to(socket, &url).await;
 }
@@ -962,6 +1101,7 @@ mod tests {
                 Pad {
                     id: 1,
                     name: "Ann's phone".into(),
+                    device: None,
                     since_ms: 0,
                     tx: tx.clone(),
                     watch: false,
@@ -970,13 +1110,14 @@ mod tests {
                 Pad {
                     id: 2,
                     name: "Bob's tablet".into(),
+                    device: None,
                     since_ms: 0,
                     tx,
                     watch: true,
                     control: true,
                 },
             ],
-            pending: Vec::new(),
+            ..Default::default()
         };
         let v = diag_of(&l, true);
         let text = v.to_string();
@@ -992,16 +1133,21 @@ mod tests {
     #[test]
     fn relayed_link_passes_its_key_and_watch_flag_only_when_sound() {
         assert_eq!(
-            relay_query("Ann's phone", None, false),
+            relay_query("Ann's phone", None, None, false),
             "?name=Ann%27s%20phone"
         );
         assert_eq!(
-            relay_query("A", Some("0f0f0f0f0f0f0f0f"), true),
+            relay_query("A", Some("0f0f0f0f0f0f0f0f"), None, true),
             "?name=A&t=0f0f0f0f0f0f0f0f&w=1"
         );
+        assert_eq!(
+            relay_query("A", None, Some("abcdef0123456789"), false),
+            "?name=A&d=abcdef0123456789"
+        );
+        assert_eq!(relay_query("A", None, Some("ab&w=1zzzz"), false), "?name=A");
         // not a key: dropped (the computer then asks, as for any unkeyed phone)
-        assert_eq!(relay_query("A", Some("0f0f&w=1"), false), "?name=A");
-        assert_eq!(relay_query("A", Some("short"), false), "?name=A");
+        assert_eq!(relay_query("A", Some("0f0f&w=1"), None, false), "?name=A");
+        assert_eq!(relay_query("A", Some("short"), None, false), "?name=A");
     }
 
     #[test]
@@ -1087,7 +1233,11 @@ mod tests {
     #[test]
     fn names_are_printable_and_short() {
         assert_eq!(clean_name(Some("  Pixel 8\u{7}  ")), "Pixel 8");
-        assert_eq!(clean_name(None), "Phone");
+        assert_eq!(
+            clean_name(None),
+            "",
+            "the computer's app names it in its language"
+        );
         assert_eq!(clean_name(Some(&"x".repeat(100))).len(), 40);
     }
 
@@ -1208,6 +1358,303 @@ mod tests {
             kbm_caps(Err(anyhow::anyhow!("down"))),
             serde_json::json!({"kbm_caps": {"mouse": false, "keyboard": false, "reason": "unreachable"}})
         );
+    }
+
+    // ---- A phone's socket, for real ----
+
+    mod socket {
+        use super::*;
+        use crate::rp_stream_api::{test_live, LIVE_TEST_LOCK};
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message as TMsg;
+
+        type Phone = tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >;
+
+        async fn serve() -> String {
+            let app = axum::Router::new().route("/api/pad/ws", axum::routing::get(ws));
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = l.local_addr().unwrap();
+            tokio::spawn(async move {
+                axum::serve(
+                    l,
+                    app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                )
+                .await
+                .unwrap();
+            });
+            format!("ws://{addr}/api/pad/ws")
+        }
+
+        /// The link as a new engine has it, its key open.
+        fn fresh_link() -> String {
+            let key = random_key().unwrap();
+            let k = key.clone();
+            *LINK.lock().unwrap_or_else(|e| e.into_inner()) = Some(Link {
+                key: Some(k),
+                ..Default::default()
+            });
+            key
+        }
+
+        async fn phone(url: &str) -> Phone {
+            tokio_tungstenite::connect_async(url).await.unwrap().0
+        }
+
+        const PRESS: &str = r#"{"pad":{"buttons":1,"l2":0,"r2":0,"lx":0,"ly":0,"rx":0,"ry":0}}"#;
+        const PRESS_KA: &str =
+            r#"{"pad":{"buttons":1,"l2":0,"r2":0,"lx":0,"ly":0,"rx":0,"ry":0},"ka":1}"#;
+
+        /// Reads until `key`'s value says what is wanted (answering pings as a browser does).
+        async fn hear(
+            ws: &mut Phone,
+            want: impl Fn(&serde_json::Value) -> bool,
+        ) -> serde_json::Value {
+            let f = async {
+                loop {
+                    match ws.next().await {
+                        Some(Ok(TMsg::Text(t))) => {
+                            let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+                            if want(&v) {
+                                return v;
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        other => panic!("closed: {other:?}"),
+                    }
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(5), f)
+                .await
+                .expect("in time")
+        }
+
+        async fn until(what: &str, f: impl Fn() -> bool) {
+            let end = std::time::Instant::now() + Duration::from_secs(5);
+            while !f() {
+                assert!(std::time::Instant::now() < end, "timed out: {what}");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+
+        fn joined(v: &serde_json::Value) -> bool {
+            v["stage"] == "joined"
+        }
+
+        fn pads() -> usize {
+            with_link(|l| l.pads.len())
+        }
+
+        /// In the game, holding ✕, with the session's merged pad saying so.
+        async fn holding(url: &str, live: &test_live::Session) -> (Phone, u64) {
+            let mut ws = phone(url).await;
+            hear(&mut ws, joined).await;
+            let id = with_link(|l| l.pads.last().unwrap().id);
+            ws.send(TMsg::Text(PRESS.into())).await.unwrap();
+            until("pressed", || live.merged().buttons == 1).await;
+            (ws, id)
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn disconnecting_a_phone_lets_go_at_once_and_keeps_it_out() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let live = test_live::Session::start("10.0.77.3");
+            let key = fresh_link();
+            let base = serve().await;
+            let url = format!("{base}?t={key}&name=iphone&d=00112233445566778899aabbccddeeff");
+            let (mut ws, id) = holding(&url, &live).await;
+            let r = kick(Json(KickReq { id })).await;
+            assert_eq!(r.0["ok"], true);
+            // The engine itself, not the socket's loop.
+            assert_eq!(live.merged().buttons, 0);
+            let v = hear(&mut ws, |v| v["stage"] == "refused").await;
+            assert_eq!(v["why"], "kicked");
+            // Unknown now: says so.
+            assert_eq!(kick(Json(KickReq { id })).await.0["ok"], false);
+            assert_eq!(
+                decide(Json(DecideReq {
+                    id: 999_999,
+                    allow: true
+                }))
+                .await
+                .0["ok"],
+                false
+            );
+            // One tap on Try again: out, while the link's key still works for others.
+            let mut again = phone(&url).await;
+            assert_eq!(
+                hear(&mut again, |v| v["stage"] == "refused").await["why"],
+                "kicked"
+            );
+            let other = format!("{base}?t={key}&name=android&d=ffeeddccbbaa99887766554433221100");
+            let mut ws2 = phone(&other).await;
+            hear(&mut ws2, joined).await;
+            // The link closed: everyone told why, and the key void; a new link starts afresh.
+            let h = HeaderMap::new();
+            let _ = set_open(
+                h.clone(),
+                Json(OpenReq {
+                    open: false,
+                    console: Some("127.0.0.1".into()),
+                }),
+            )
+            .await;
+            assert_eq!(
+                hear(&mut ws2, |v| v["stage"] == "refused").await["why"],
+                "closed"
+            );
+            let mut after = phone(&url).await;
+            assert_eq!(
+                hear(&mut after, |v| v["stage"] == "refused").await["why"],
+                "key",
+                "the old code; the kicked mark went with the link"
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn closing_the_link_lets_go_of_every_phone_at_once() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let live = test_live::Session::start("10.0.77.3");
+            let key = fresh_link();
+            let base = serve().await;
+            let (_ws, _id) = holding(&format!("{base}?t={key}"), &live).await;
+            let _ = set_open(
+                HeaderMap::new(),
+                Json(OpenReq {
+                    open: false,
+                    console: Some("127.0.0.1".into()),
+                }),
+            )
+            .await;
+            assert_eq!(live.merged().buttons, 0);
+        }
+
+        /// Out of Wi-Fi range mid-press: no close ever comes, and it answers no ping (the client
+        /// library answers only while it is read).
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_phone_that_vanished_lets_go_within_seconds() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let live = test_live::Session::start("10.0.77.3");
+            let key = fresh_link();
+            let base = serve().await;
+            let (ws, _id) = holding(&format!("{base}?t={key}"), &live).await;
+            until("let go", || live.merged().buttons == 0 && pads() == 0).await;
+            drop(ws);
+        }
+
+        /// A phone that answers pings stays, as long as it wants.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_quiet_phone_that_answers_pings_stays_holding() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let live = test_live::Session::start("10.0.77.3");
+            let key = fresh_link();
+            let base = serve().await;
+            let (mut ws, _id) = holding(&format!("{base}?t={key}"), &live).await;
+            let end = std::time::Instant::now()
+                + STATE_EVERY * (crate::rp_stream_api::PEER_QUIET_PINGS + 3);
+            while std::time::Instant::now() < end {
+                let _ = tokio::time::timeout(Duration::from_millis(20), ws.next()).await;
+            }
+            assert_eq!(pads(), 1);
+            // An older app's page sends only changes: held is held.
+            assert_eq!(live.merged().buttons, 1);
+        }
+
+        /// A page that says it keeps sending and stopped (hidden, stuck): the pad goes, the socket
+        /// stays, and the next state brings it back.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_page_that_stopped_sending_is_let_go_of_and_comes_back() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let live = test_live::Session::start("10.0.77.3");
+            let key = fresh_link();
+            let base = serve().await;
+            let mut ws = phone(&format!("{base}?t={key}")).await;
+            hear(&mut ws, joined).await;
+            ws.send(TMsg::Text(PRESS_KA.into())).await.unwrap();
+            until("pressed", || live.merged().buttons == 1).await;
+            // Reading (so pings are answered), not sending.
+            let f = async {
+                while live.merged().buttons == 1 {
+                    let _ = tokio::time::timeout(Duration::from_millis(20), ws.next()).await;
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(3), f)
+                .await
+                .expect("let go");
+            assert_eq!(pads(), 1, "the socket is fine");
+            ws.send(TMsg::Text(PRESS_KA.into())).await.unwrap();
+            until("back", || live.merged().buttons == 1).await;
+        }
+
+        /// A device the computer allowed comes back without asking again.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn an_allowed_phone_comes_back_without_asking() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let _live = test_live::Session::start("10.0.77.3");
+            fresh_link();
+            let base = serve().await;
+            let url = format!("{base}?name=Pixel&d=00112233445566778899aabbccddeeff");
+            let mut ws = phone(&url).await;
+            hear(&mut ws, |v| v["stage"] == "asking").await;
+            let ask = with_link(|l| l.pending[0].id);
+            assert_eq!(
+                decide(Json(DecideReq {
+                    id: ask,
+                    allow: true
+                }))
+                .await
+                .0["ok"],
+                true
+            );
+            hear(&mut ws, joined).await;
+            drop(ws);
+            until("gone", || pads() == 0).await;
+            let mut ws = phone(&url).await;
+            hear(&mut ws, joined).await;
+            // Someone else, no id: still asks.
+            let mut other = phone(&format!("{base}?name=Other")).await;
+            hear(&mut other, |v| v["stage"] == "asking").await;
+        }
+
+        /// Any device on the LAN reaches this socket: asks and sizes have a limit.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn the_lan_cannot_flood_the_asks_or_send_huge_messages() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let _live = test_live::Session::start("10.0.77.3");
+            fresh_link();
+            let base = serve().await;
+            let mut a = phone(&base).await;
+            hear(&mut a, |v| v["stage"] == "asking").await;
+            let mut b = phone(&base).await;
+            hear(&mut b, |v| v["stage"] == "asking").await;
+            // A third from the same address, however the list stands.
+            let mut c = phone(&base).await;
+            assert_eq!(
+                hear(&mut c, |v| v["stage"] == "refused").await["why"],
+                "busy"
+            );
+            // An ask that sends a huge message is cut off.
+            let huge = "x".repeat(PHONE_MSG_MAX + 1);
+            let _ = a.send(TMsg::Text(huge.into())).await;
+            until("cut off", || with_link(|l| l.pending.len()) == 1).await;
+            // Sockets per address: over the limit an upgrade is refused outright.
+            let ip: std::net::IpAddr = "192.0.2.92".parse().unwrap();
+            let t = std::time::Instant::now();
+            let limit = crate::join::connects_per_min(ip);
+            for _ in 0..limit {
+                assert!(CONNECTS.allow(ip, limit, t));
+            }
+            assert!(!CONNECTS.allow(ip, limit, t));
+        }
+
+        #[test]
+        fn a_device_id_is_hex_or_nothing() {
+            assert_eq!(clean_device(None), None);
+            assert_eq!(clean_device(Some("short")), None);
+            assert_eq!(clean_device(Some("00112233&w=1")), None);
+            assert_eq!(clean_device(Some("00112233")).as_deref(), Some("00112233"));
+        }
     }
 
     #[test]

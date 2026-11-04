@@ -49,7 +49,8 @@ export function edgeAction(lag: number, end: number, latency: Latency | Edge): {
 /** WebCodecs exists only on a secure page (https or localhost); the watch link is plain http
  *  on the LAN, so phones go through Media Source Extensions instead (MsePlayer). */
 export function makeWatchPlayer(
-  onProblem: (p: WatchProblem) => void,
+  /** A problem with the picture; null when it is showing again. */
+  onProblem: (p: WatchProblem | null) => void,
   latency: Latency = "watch",
   onNeedKey?: () => void,
 ): WatchPlayer | MsePlayer {
@@ -214,6 +215,8 @@ export class WatchPlayer {
   private opening = false;
   private sawKey = false;
   private keyAsk: KeyAsker;
+  /** A problem is on show until the next picture. */
+  private problemShown = false;
   private ts = 0;
   /** Sound frames back in order, decoded (lib/rpAudioPipe, as the host's page does). */
   private pipe: OpusPipe | null = null;
@@ -231,7 +234,7 @@ export class WatchPlayer {
   onSoundFail: (() => void) | null = null;
 
   constructor(
-    private onProblem: (p: WatchProblem) => void,
+    private onProblem: (p: WatchProblem | null) => void,
     private latency: Latency = "watch",
     onNeedKey?: () => void,
   ) {
@@ -363,8 +366,17 @@ export class WatchPlayer {
           }
           this.ctx?.drawImage(frame, 0, 0, c.width, c.height);
           frame.close();
+          if (this.problemShown) {
+            this.problemShown = false;
+            this.onProblem(null);
+          }
         },
-        error: () => this.onProblem("decode"),
+        error: () => {
+          if (this.video !== v) return;
+          this.problemShown = true;
+          this.onProblem("decode");
+          this.rebuild();
+        },
       });
       v.configure(description ? { codec, description, optimizeForLatency: true } : { codec, optimizeForLatency: true });
       this.video = v;
@@ -376,8 +388,21 @@ export class WatchPlayer {
     }
   }
 
+  /** The decoder failed, or the browser took it back (a hidden page's hardware decoder): a new one
+   *  from the header, and the next keyframe. Without this the picture stays frozen for good. */
+  private rebuild(): void {
+    this.video = null;
+    this.sawKey = false;
+    if (!this.header) return;
+    void this.openVideo(this.header).then(() => this.keyAsk.waiting());
+  }
+
   private onVideo(au: Uint8Array): void {
     const v = this.video;
+    if (v?.state === "closed") {
+      if (!this.opening) this.rebuild();
+      return;
+    }
     if (!v || v.state !== "configured") return;
     const key = isKeyframe(au, this.hevc);
     if (!this.sawKey && !key) return this.keyAsk.waiting();
@@ -724,6 +749,7 @@ export class MsePlayer {
   private header: Uint8Array | null = null;
   private sawKey = false;
   private keyAsk: KeyAsker;
+  private problemShown = false;
   private vTime = 0;
   private vLast = 0;
   private soundOn = false;
@@ -731,7 +757,7 @@ export class MsePlayer {
   onSoundFail: (() => void) | null = null;
 
   constructor(
-    private onProblem: (p: WatchProblem) => void,
+    private onProblem: (p: WatchProblem | null) => void,
     private latency: Latency = "watch",
     onNeedKey?: () => void,
   ) {
@@ -746,6 +772,25 @@ export class MsePlayer {
     this.wrap.className = "h-full w-full";
     this.wrap.append(v, this.audio.el);
     this.video = new MseTrack(v, () => this.onProblem("decode"), latency);
+    // A decode error closes the source, and every segment after it would be dropped in silence.
+    v.addEventListener("error", () => this.restartVideo());
+    v.addEventListener("playing", () => {
+      if (!this.problemShown) return;
+      this.problemShown = false;
+      this.onProblem(null);
+    });
+  }
+
+  /** The element failed: open it again from the init segment and wait for the next keyframe. */
+  private restartVideo(): void {
+    this.problemShown = true;
+    this.onProblem("decode");
+    const h = this.header;
+    if (!h) return;
+    this.header = null;
+    this.openVideo(h);
+    this.sawKey = false;
+    this.keyAsk.waiting();
   }
 
   get element(): HTMLElement {

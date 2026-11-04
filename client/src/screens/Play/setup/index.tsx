@@ -32,14 +32,15 @@ export default function PlaySetupScreen() {
   const [opened, setOpened] = useState<SetupKey | "none" | null>(null);
   // A step just ticked: follow on to the new next one.
   const [seenNext, setSeenNext] = useState(s.next);
+  // Pairing with the PIN the PS5 shows: offered under the pair step, opened when pairing fails.
+  const [pinPair, setPinPair] = useState(false);
   if (seenNext !== s.next) {
     setSeenNext(s.next);
-    setOpened(null);
+    // A PIN being typed keeps its step open: the PS5 shows it for a limited time.
+    setOpened(pinPair ? "pair" : null);
   }
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<{ step: SetupKey; text: string } | null>(null);
-  // Pairing with the PIN the PS5 shows: offered under the pair step, opened when pairing fails.
-  const [pinPair, setPinPair] = useState(false);
   const open = opened === null ? s.next : opened === "none" ? null : opened;
   const addr = s.host ? mgmtAddr(s.host) : "";
 
@@ -48,6 +49,7 @@ export default function PlaySetupScreen() {
     setError(null);
     try {
       await fn();
+      if (step === "pair") setPinPair(false);
       await s.refresh();
     } catch (e) {
       setError({ step, text: humanizePs5Error(e instanceof Error ? e.message : String(e)) });
@@ -190,6 +192,7 @@ export default function PlaySetupScreen() {
               accountIdB64={r?.account_id_b64 ?? null}
               onPaired={() => {
                 setError(null);
+                setPinPair(false);
                 void s.refresh();
               }}
             />
@@ -295,7 +298,16 @@ export default function PlaySetupScreen() {
                   <div className="mt-2 space-y-3 ps-9 text-sm text-[var(--color-muted)]">
                     <p>{step.body}</p>
                     {st !== "wait" && step.act}
-                    {st === "wait" && (
+                    {/* A read that failed is not "do the steps above": they may all be done. */}
+                    {st === "wait" && s.readError && !s.readiness && (
+                      <Callout
+                        tone="warn"
+                        title={tr("play_setup_read_failed", undefined, "Couldn't read the PS5's settings. Trying again…")}
+                      >
+                        <span className="break-all text-xs">{humanizePs5Error(s.readError)}</span>
+                      </Callout>
+                    )}
+                    {st === "wait" && !(s.readError && !s.readiness) && (
                       <p className="text-xs">
                         {tr("play_setup_wait", undefined, "Do the steps above first; this one opens when they're done.")}
                       </p>

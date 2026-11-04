@@ -225,6 +225,8 @@ pub struct DualSenseInfo {
     pub usb: bool,
     /// Its USB audio device was found (haptics are played there).
     pub haptics: bool,
+    /// This computer doesn't let the app open it (Linux with no udev rule for it).
+    pub blocked: bool,
 }
 
 /// Is a DualSense attached to this computer? Desktop only; elsewhere it is never.
@@ -233,11 +235,12 @@ pub async fn pad_dualsense_info() -> DualSenseInfo {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         tauri::async_runtime::spawn_blocking(|| {
-            let (connected, usb) = crate::commands::pad_touchpad::find_dualsense();
+            let f = crate::commands::pad_touchpad::find_dualsense();
             DualSenseInfo {
-                connected,
-                usb,
-                haptics: usb && crate::commands::pad_haptics::device_present(),
+                connected: f.connected,
+                usb: f.usb,
+                blocked: f.blocked,
+                haptics: f.usb && crate::commands::pad_haptics::device_present(),
             }
         })
         .await

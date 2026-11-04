@@ -40,6 +40,8 @@ export interface LiveDestination {
   enabled: boolean;
   /** "…abcd": the key's last four characters (the key itself never leaves the engine). */
   key_hint: string;
+  /** The saved key can't be read any more (the key file changed): the site must be added again. */
+  key_lost?: boolean;
   name: string;
   checks?: LiveCheck[];
 }
@@ -58,7 +60,8 @@ export interface LiveProblem {
   message: string;
 }
 
-export type LivePhase = "starting" | "live" | "reconnecting" | "waiting_for_play" | "ended" | "failed";
+/** `stopping`: Stop was pressed and ffmpeg is finishing (a few seconds at most). */
+export type LivePhase = "starting" | "live" | "reconnecting" | "waiting_for_play" | "stopping" | "ended" | "failed";
 
 export interface LiveDestStatus {
   id: string;
@@ -93,6 +96,9 @@ export interface FfmpegStatus {
   installed: boolean;
   version: string;
   supported: boolean;
+  /** There is a download for this system's OS and CPU, but it can't run here (a Docker image):
+   *  the engine needs its own ffmpeg (`PS5UPLOAD_FFMPEG`). */
+  needs_own?: boolean;
   download_bytes: number | null;
   source: string | null;
   install: {

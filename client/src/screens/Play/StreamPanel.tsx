@@ -96,11 +96,12 @@ import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { closePip, openPip, pipPadsInBackground, pipSupport } from "./pip";
 import { CaptureBarButtons, CaptureOverlay } from "./CaptureControls";
 import { LatencyLine, QualityNotice } from "./NetworkExtras";
+import { streamErrorMessage } from "./streamErrors";
 import { RpBlockerNotice, RpBlockerPhase } from "./RpBlockers";
 import { RpKeyboardBox } from "./RpKeyboardBox";
 import { RpPasscodeBox } from "./RpPasscodeBox";
 import { pressClosedSettings, SETTINGS_OPENER, SettingsDrawer } from "./SettingsDrawer";
-import { beforeRemotePlay } from "../../state/rpBlockers";
+import { beforeRemotePlay, useRpBlockers } from "../../state/rpBlockers";
 import { useRpQualityStore } from "../../state/rpQuality";
 
 type Tr = ReturnType<typeof useTr>;
@@ -116,84 +117,7 @@ const ESC_HOLD_MS = 700;
 /** How long a quick Esc press holds its button down on the console. */
 const ESC_TAP_MS = 80;
 
-/** The plain-English line for an error from the engine or the decoder. */
-export function streamErrorMessage(tr: Tr, e: StreamError): string {
-  switch (e.code) {
-    case "busy":
-      return tr(
-        "rp_err_busy",
-        { s: e.retryS ?? 30 },
-        `The PS5 is still finishing the last Remote Play session. Try again in ${e.retryS ?? 30} s.`,
-      );
-    case "asleep":
-    case "wake_failed":
-      return tr(
-        "rp_err_wake",
-        undefined,
-        "The PS5 is in rest mode and did not wake. Check that it is plugged in and that Settings › System › Power Saving › Features Available in Rest Mode has Stay Connected to the Internet and Enable Turning On PS5 from Network on.",
-      );
-    case "unreachable":
-      return tr(
-        "rp_err_unreachable",
-        undefined,
-        "The PS5 does not answer on the network. Check that it is on, on the same network, and that Remote Play is enabled in its settings.",
-      );
-    case "keys":
-      return tr(
-        "rp_err_keys",
-        undefined,
-        "The PS5 did not accept this app's pairing. Set up Wake & sign in again for this console.",
-      );
-    case "refused":
-      return tr(
-        "rp_err_refused",
-        undefined,
-        "The PS5 refused to start Remote Play. On the console, check Settings › System › Remote Play › Enable Remote Play (turn it off and on again), press Allow in Play › Set up, or pair again. The code below says which refusal it was. Still refused? Restart the PS5: a console on for a long time can refuse until it restarts.",
-      );
-    case "rp_off":
-      return tr(
-        "rp_err_rp_off",
-        undefined,
-        "Remote Play is switched off on the PS5. On the console, open Settings › System › Remote Play and turn on Enable Remote Play (if it already shows on, turn it off and on again), then press Start.",
-      );
-    case "passcode_cancelled":
-      return tr("rp_err_passcode_cancelled", undefined, "Start cancelled: the PS5 needs this user's passcode to start Remote Play.");
-    case "passcode_too_many":
-      return tr("rp_err_passcode_too_many", undefined, "Too many wrong passcodes; enter it on the PS5.");
-    case "passcode_timeout":
-      return tr(
-        "rp_err_passcode_timeout",
-        undefined,
-        "The PS5 stopped waiting for the passcode. Press Start and enter it again.",
-      );
-    case "video_refused":
-      return tr("rp_err_video", undefined, "The PS5 refused that picture size. Try 720p.");
-    case "decode":
-      return tr("rp_err_decode", undefined, "This device could not decode the picture.");
-    case "no_decoder":
-      return tr("rp_err_no_decoder", undefined, "This device has no H.264 video decoder, so Remote Play cannot show the picture.");
-    case "busy_other":
-      return tr(
-        "rp_err_busy_other",
-        { host: e.host ?? "" },
-        `Remote Play is already streaming ${e.host ?? "another console"}. Stop that stream first.`,
-      );
-    case "lost":
-      return tr(
-        "rp_err_lost",
-        undefined,
-        "The connection to the PS5 dropped during the stream. Start it again; if it keeps happening, connect the PS5 or this device by cable.",
-      );
-    case "socket":
-      return tr(
-        "rp_err_socket_lost",
-        undefined,
-        "Lost the connection to the engine and could not get it back within 30 s.",
-      );
-    default:
-      return tr("rp_err_other", undefined, "The stream stopped.");
-  }
-}
+export { streamErrorMessage };
 
 /** What to do about an error, when there is something to do; else null. */
 export function streamErrorHelp(tr: Tr, e: StreamError, linux = isLinuxDesktop()): string | null {
@@ -465,6 +389,10 @@ export function StreamPanel() {
   const target = useRemotePlayStore((s) => s.target);
   const phase = useRemotePlayStore((s) => s.phase);
   const error = useRemotePlayStore((s) => s.error);
+  // A start is under way before it has a stream: looking for blockers, waiting for the PS5's slot.
+  const blockersChecking = useRpBlockers((s) => !!s.checking);
+  const slotWait = useRpQualityStore((s) => !!s.switching);
+  const startHeld = blockersChecking || slotWait;
   const stats = useRemotePlayStore((s) => s.stats);
   const light = useRemotePlayStore((s) => s.light);
   const prefs = useRemotePlayStore((s) => s.prefs);
@@ -687,18 +615,34 @@ export function StreamPanel() {
     // Full screen moves the stage (a portal), so the canvas follows it.
   }, [stream, full, running, pip, androidPip]);
 
-  // A stream this page does not show (a reload, another window): offer it here.
+  // A stream this page does not show (a reload, another window): offer it here. One whose stop is
+  // still finishing is not on offer, and is looked at again until it has gone.
   useEffect(() => {
     if (streaming) {
       setElsewhere(null);
       return;
     }
     let live = true;
-    void fetchRunningSession().then((r) => live && setElsewhere(r.host ?? null));
+    let timer = 0;
+    const look = async () => {
+      const r = await fetchRunningSession();
+      if (!live) return;
+      setElsewhere(r.stopping ? null : (r.host ?? null));
+      if (r.stopping) timer = window.setTimeout(() => void look(), 2000);
+    };
+    void look();
     return () => {
       live = false;
+      window.clearTimeout(timer);
     };
   }, [streaming]);
+
+  // Start right after a stop: the PS5 holds its slot for a few seconds. Waited out with a countdown
+  // and a Cancel, not an error that asks the player to count.
+  useEffect(() => {
+    if (error?.code !== "busy" || !target) return;
+    void useRpQualityStore.getState().startWhenFree(target);
+  }, [error, target]);
 
   // Two windows: the one you look at takes the stream.
   useEffect(() => {
@@ -873,6 +817,8 @@ export function StreamPanel() {
   useStreamLaunchRunner({
     playingHost: playing && profile ? hostOf(profile.host) : null,
     streamingHost: streaming && target ? hostOf(target.host) : null,
+    // "busy" is waited out (startWhenFree): not a failure yet.
+    streamError: error && error.code !== "busy" ? streamErrorMessage(tr, error) : null,
     // The console asked for is the selected one (the runner checks it is the connected one).
     startStream: async () => {
       if (streaming && !running) await switchHere();
@@ -1018,11 +964,17 @@ export function StreamPanel() {
   if (!canStream()) {
     return (
       <Callout tone="warn" title={tr("rp_no_webcodecs", undefined, "This browser cannot play a stream")}>
-        {tr(
-          "rp_no_webcodecs_body",
-          undefined,
-          "Remote Play here decodes video with WebCodecs, which this browser does not have. Use a current Chrome, Edge or Safari, or the desktop app on Windows or macOS.",
-        )}
+        {window.isSecureContext === false
+          ? tr(
+              "rp_no_webcodecs_http",
+              undefined,
+              "This page came over plain http, and browsers keep video decoding from such pages. Open it through https (see REVERSE_PROXY.md) or on the computer running the engine, or use the desktop app.",
+            )
+          : tr(
+              "rp_no_webcodecs_body2",
+              undefined,
+              "Remote Play here decodes video with WebCodecs, which this browser does not have. Use a current Chrome, Edge or Safari, or the desktop app on Windows, macOS or Linux.",
+            )}
       </Callout>
     );
   }
@@ -1533,7 +1485,7 @@ export function StreamPanel() {
             variant="primary"
             size="md"
             onClick={() => void (otherStream ? switchHere() : start())}
-            disabled={!paired}
+            disabled={!paired || startHeld}
             data-testid="rp-start"
           >
             <Play size={14} />
@@ -1729,8 +1681,19 @@ export function StreamPanel() {
       )}
 
       {error && (
-        <Callout tone="error" title={streamErrorMessage(tr, error)}>
-          {streamErrorHelp(tr, error) ?? error.detail}
+        <Callout
+          tone="error"
+          title={streamErrorMessage(tr, error)}
+          action={
+            error.code === "keys" ? (
+              <Button size="sm" variant="primary" onClick={() => navigate("/play/setup")} data-testid="rp-err-pair-again">
+                {tr("play_setup_title", undefined, "Set up Play")}
+              </Button>
+            ) : undefined
+          }
+        >
+          {/* The console's words are in the title already. */}
+          {streamErrorHelp(tr, error) ?? (error.code === "console_ended" ? null : error.detail)}
         </Callout>
       )}
       <RpBlockerNotice host={profile?.host ?? null} error={error} running={running} />

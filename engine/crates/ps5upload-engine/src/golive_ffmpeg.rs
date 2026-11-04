@@ -170,8 +170,11 @@ impl ProgressParser {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Failure {
-    /// The server could not be reached (name, refused, timed out, no route, TLS).
+    /// The server could not be reached (name, refused, timed out, no route).
     Unreachable,
+    /// The secure connection failed: mostly ffmpeg finding no trusted roots to check the site's
+    /// certificate against, which no amount of "check your internet" fixes.
+    Tls,
     /// The site took the connection and then refused the stream: almost always the key.
     Rejected,
     /// The site does not take this video codec.
@@ -196,6 +199,21 @@ impl Failure {
             ),
             Failure::Dropped => format!("The connection to {site} dropped."),
             Failure::Other => format!("Streaming to {site} stopped."),
+            Failure::Tls => format!(
+                "Can't make a secure connection to {site}: its certificate could not be checked. Set SSL_CERT_FILE to this computer's certificate bundle, or check the server address."
+            ),
+        }
+    }
+
+    /// The same when several sites stopped together.
+    pub(crate) fn message_many(self) -> String {
+        match self {
+            Failure::Unreachable => "Can't reach the streaming sites' servers. Check this computer's internet connection (and the server addresses).".into(),
+            Failure::Rejected => "The streaming sites refused the stream. That is almost always the stream key: copy each one again from its site (keys change when you reset them).".into(),
+            Failure::Codec => "The streaming sites don't take this video format. Restart Play in H.264 and go live again.".into(),
+            Failure::Dropped => "The connection to the streaming sites dropped.".into(),
+            Failure::Other => "Streaming to the sites stopped.".into(),
+            Failure::Tls => "Can't make a secure connection to the streaming sites: their certificates could not be checked. Set SSL_CERT_FILE to this computer's certificate bundle.".into(),
         }
     }
 }
@@ -213,6 +231,9 @@ pub(crate) fn classify(line: &str) -> Option<Failure> {
     ]) {
         return Some(Failure::Codec);
     }
+    if any(&["certificate", "tls handshake"]) {
+        return Some(Failure::Tls);
+    }
     if any(&[
         "connection refused",
         "connection timed out",
@@ -225,8 +246,6 @@ pub(crate) fn classify(line: &str) -> Option<Failure> {
         "temporary failure in name resolution",
         "host is unreachable",
         "cannot open connection",
-        "certificate",
-        "tls handshake",
         "error in the pull function",
         "connection to tcp",
     ]) {
@@ -280,13 +299,18 @@ pub(crate) fn failed_open(line: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
+/// "Right after a start": less than this much sent…
+pub(crate) const EARLY_OUT_TIME_S: f64 = 8.0;
+/// …in less than this long.
+pub(crate) const EARLY_RUN: Duration = Duration::from_secs(15);
+
 /// What a failure that came this soon after the start most likely was. A site that refuses a
 /// key mostly just closes the connection (a "broken pipe" a few seconds in), which reads like
 /// a dropped connection; one that drops within the first seconds, before any output time,
 /// was refused.
 pub(crate) fn settle(f: Failure, out_time_s: f64, ran: Duration) -> Failure {
     match f {
-        Failure::Dropped | Failure::Other if out_time_s < 8.0 && ran < Duration::from_secs(15) => {
+        Failure::Dropped | Failure::Other if out_time_s < EARLY_OUT_TIME_S && ran < EARLY_RUN => {
             Failure::Rejected
         }
         f => f,

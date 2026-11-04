@@ -8,7 +8,7 @@ vi.mock("../../state/remotePlay", async () => {
 
 import type { LiveRun, StreamStatus } from "../../lib/goLive";
 import { useGoLiveStore } from "../../state/goLive";
-import { GoLiveChip, GoLivePanel, goLiveAvailable, obsFeedAvailable, ObsFeedView } from "./GoLivePanel";
+import { GoLiveChip, GoLivePanel, goLiveAvailable, obsFeedAvailable, ObsFeedView, problemText } from "./GoLivePanel";
 
 // No DOM here (vitest runs in node): static markup, asserting on what is shown.
 const html = (node: React.ReactNode) => renderToStaticMarkup(<>{node}</>);
@@ -104,6 +104,43 @@ describe("The Stream panel", () => {
     const out = html(<GoLivePanel onClose={() => {}} />);
     expect(out).toContain("PS5Upload needs a free helper (ffmpeg, about 28 MB) to convert the sound for streaming sites. Download it?");
     expect(out).toContain('data-testid="golive-ffmpeg-download"');
+  });
+
+  it("says what to do when the ffmpeg download can't run here (a Docker image)", () => {
+    const s = status();
+    s.ffmpeg.installed = false;
+    s.ffmpeg.supported = false;
+    s.ffmpeg.needs_own = true;
+    set({ status: s });
+    const out = html(<GoLivePanel onClose={() => {}} />);
+    expect(out).toContain("PS5UPLOAD_FFMPEG");
+    expect(out).not.toContain('data-testid="golive-ffmpeg-download"');
+  });
+
+  it("shows a store that can't be read, with the file to look at", () => {
+    set({ status: status({ store_error: "reading /data/stream-destinations.json: expected value" }) });
+    const out = html(<GoLivePanel onClose={() => {}} />);
+    expect(out).toContain('data-testid="golive-store-error"');
+    expect(out).toContain("/data/stream-destinations.json");
+  });
+
+  it("says a saved key can't be read", () => {
+    set({
+      status: status({
+        destinations: [
+          { id: "t1", preset: "twitch", label: "Twitch", server: "", bandwidth_test: false, enabled: true, key_hint: "", key_lost: true, name: "Twitch" },
+        ],
+      }),
+    });
+    expect(html(<GoLivePanel onClose={() => {}} />)).toContain('data-testid="golive-key-lost"');
+  });
+
+  it("shows Stopping, with Stop off, until ffmpeg has gone", () => {
+    set({ status: status({ live: run({ phase: "stopping" }) }) });
+    const out = html(<GoLivePanel onClose={() => {}} />);
+    expect(out).toContain("Stopping…");
+    expect(out).toMatch(/<button[^>]*data-testid="golive-stop"[^>]*disabled|<button[^>]*disabled[^>]*data-testid="golive-stop"/);
+    expect(out).not.toContain("LIVE");
   });
 
   it("offers each site to add when there is none", () => {
@@ -221,5 +258,49 @@ describe("The Stream panel", () => {
     expect(out).toContain("Input format: mpegts");
     expect(out).toContain("OBS connected (1)");
     expect(out).toContain("1080p 60 fps");
+  });
+});
+
+describe("engine error codes", () => {
+  const tr = ((_k: string, _v: unknown, fallback?: string) => fallback ?? _k) as unknown as Parameters<typeof problemText>[0];
+
+  it("never shows the engine's own English for a code it knows", () => {
+    for (const code of [
+      "unreachable",
+      "tls",
+      "rejected",
+      "codec_not_allowed",
+      "dropped",
+      "stopped",
+      "all_failed",
+      "ffmpeg_failed",
+      "destination_missing",
+      "not_found",
+      "preset_unknown",
+      "key_lost",
+      "key_missing",
+      "key_invalid",
+      "server_missing",
+      "url_invalid",
+      "store",
+      "disk",
+      "unsupported",
+      "unpack",
+      "network",
+      "play_ended",
+      "no_session",
+      "ffmpeg_missing",
+      "no_destinations",
+      "already_live",
+      "checksum",
+      "download",
+    ]) {
+      expect(problemText(tr, code, "ENGINE ENGLISH", "Twitch"), code).not.toContain("ENGINE ENGLISH");
+    }
+  });
+
+  it("says HTTP errors in words and passes an unknown code's sentence on", () => {
+    expect(problemText(tr, "http_500", "HTTP 500")).toBe("The engine refused that (HTTP 500). Try again.");
+    expect(problemText(tr, "brand_new", "A sentence from a newer engine.")).toBe("A sentence from a newer engine.");
   });
 });

@@ -50,7 +50,8 @@
 //! one session at a time and holds its slot for 12-30 s after one ends, so a
 //! page that leaves (another screen, a reload, a dropped socket) only
 //! detaches: the session waits `keep_alive_s` (60 by default) for a page to
-//! attach again, with the pad let go. A start for the console already
+//! attach again, with the pad let go. So does a page that vanished without closing (it answers no
+//! WebSocket ping, or a write to it stalls). A start for the console already
 //! streaming attaches to it (headers replayed, a keyframe asked for), and the
 //! page it was showing on is told `{"stage": "moved"}`. Only `stop`, the wait
 //! running out, or the console ends it; the page then gets `{"stage":
@@ -94,6 +95,10 @@ const VIDEO_QUEUE_LOW_LATENCY: usize = 2;
 const CTL_QUEUE: usize = 512;
 const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(60);
 const MAX_KEEP_ALIVE: Duration = Duration::from_secs(600);
+/// A start while the console's last session is finishing: asked to look again this soon.
+const STOPPING_RETRY_S: u64 = 2;
+/// Pad states waiting for the stream thread.
+const PAD_QUEUE: usize = 256;
 /// Engine → page binary kind: one DualSense haptics frame (rp_stream `StreamSink::haptics`).
 const KIND_HAPTICS: u8 = 6;
 /// Page → engine binary kind: one microphone Opus packet.
@@ -261,6 +266,8 @@ struct Live {
     /// The page cannot use a frame until the next keyframe.
     need_key: AtomicBool,
     want_key: AtomicBool,
+    /// When a keyframe was last asked for on behalf of a watcher or player.
+    guest_key_asked: Mutex<Option<Instant>>,
     dropped: AtomicU64,
     next_viewer: AtomicU64,
     /// The session was set up for the mic; if not, the mic is ignored.
@@ -297,6 +304,11 @@ struct Spectator {
     need_header: bool,
     /// Pictures skipped to the next keyframe because the queue was full (players' health).
     skipped: Option<Arc<AtomicU64>>,
+    /// When a keyframe was last asked for on its behalf.
+    key_asked: Option<Instant>,
+    /// Skips in a row (each soon after the last), and when the last was.
+    lag_skips: u32,
+    last_skip: Option<Instant>,
 }
 
 impl Spectator {
@@ -308,7 +320,22 @@ impl Spectator {
             video: None,
             need_header: false,
             skipped: None,
+            key_asked: None,
+            lag_skips: 0,
+            last_skip: None,
         }
+    }
+
+    /// A picture did not fit its queue.
+    fn skipped_at(&mut self, now: Instant) {
+        if self
+            .last_skip
+            .is_none_or(|t| now.saturating_duration_since(t) > LAG_FORGIVEN)
+        {
+            self.lag_skips = 0;
+        }
+        self.lag_skips = self.lag_skips.saturating_add(1);
+        self.last_skip = Some(now);
     }
 }
 
@@ -321,9 +348,48 @@ pub(crate) struct PlayerFeed {
 
 /// Frames queued for a watcher before it is skipped to the next keyframe (about 2 s at 60 fps).
 const SPECTATOR_QUEUE: usize = 120;
+/// The least time between keyframes asked for on behalf of watchers and players (the console has
+/// one stream: each keyframe costs everyone's picture some quality, so one guest who can't keep
+/// up must not set the rate).
+const GUEST_KEY_GAP: Duration = Duration::from_secs(2);
+/// …and for one who keeps falling behind: this many skips, each within [`LAG_FORGIVEN`] of the
+/// last, and it gets a keyframe this rarely.
+const LAG_SKIPS: u32 = 3;
+const LAGGING_KEY_GAP: Duration = Duration::from_secs(5);
+const LAG_FORGIVEN: Duration = Duration::from_secs(10);
+
+/// How often a page's or phone's socket hears a WebSocket ping. The browser answers it itself,
+/// without the page's timers, which a hidden tab has hardly any of.
+pub(crate) const PEER_PING_EVERY: Duration =
+    Duration::from_millis(if cfg!(test) { 100 } else { 1000 });
+/// Pings in a row with nothing back at all: a device that vanished without closing (out of Wi-Fi
+/// range, a laptop lid, a phone asleep). The kernel would take minutes to say so.
+pub(crate) const PEER_QUIET_PINGS: u32 = 5;
+/// A write this slow: nothing has drained the socket for that long, the same thing seen from the
+/// other side. It would otherwise hold up everything else this socket's loop does.
+const PEER_SEND_STALL: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 });
+/// What a page may send at once: a snapshot's picture, its metadata and its kind.
+const PAGE_MSG_MAX: usize = automation::MAX_SNAPSHOT_BYTES + 64 * 1024;
+
+/// Sends `m`; false when the socket is gone or stuck.
+pub(crate) async fn send_limited(socket: &mut WebSocket, m: Message) -> bool {
+    matches!(
+        tokio::time::timeout(PEER_SEND_STALL, socket.send(m)).await,
+        Ok(Ok(()))
+    )
+}
+
+/// One console however it is spelled (`10.0.0.2`, `10.0.0.2:9120`).
+fn same_console(a: &str, b: &str) -> bool {
+    crate::vinput_api::host_key(a) == crate::vinput_api::host_key(b)
+}
 
 /// The console serves one Remote Play session at a time; so do we.
 static LIVE: Mutex<Option<Arc<Live>>> = Mutex::new(None);
+
+/// Tests that put a session in [`LIVE`] (phones, Go live) take turns.
+#[cfg(test)]
+pub(crate) static LIVE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// The last session's start: what was asked, each handshake stage with its time, and how it
 /// ended. For a bug report (`/api/diag/features`): a refusal like 80108b26 is gone from the page
@@ -449,13 +515,14 @@ pub(crate) fn live_session(host: &str) -> Option<u64> {
 }
 
 /// A Play Together player's picture is waiting for a keyframe (it skipped frames it could not
-/// keep up with, or a decode failed; join.rs): ask the console for one, as the host page does.
-pub(crate) fn request_keyframe(host: &str) {
+/// keep up with, or a decode failed; join.rs): ask the console for one, within the limits for
+/// guests ([`GUEST_KEY_GAP`]).
+pub(crate) fn request_keyframe(host: &str, spectator: u64) {
     let key = crate::vinput_api::host_key(host);
     if let Some(l) = live()
         .filter(|l| crate::vinput_api::host_key(&l.host) == key && !l.stop.load(Ordering::Relaxed))
     {
-        l.want_key.store(true, Ordering::Relaxed);
+        l.guest_key_ask(spectator, Instant::now());
     }
 }
 
@@ -553,61 +620,91 @@ impl Live {
     /// Every watcher gets `kind`'s message; a video access unit only from a keyframe on, and a
     /// watcher that fell behind skips to the next keyframe (it never slows the session).
     fn to_spectators(&self, kind: u8, data: &[u8], key: bool) {
+        self.to_spectators_at(kind, data, key, Instant::now());
+    }
+
+    fn to_spectators_at(&self, kind: u8, data: &[u8], key: bool, now: Instant) {
         let Ok(mut g) = self.spectators.lock() else {
             return;
         };
         if g.is_empty() {
             return;
         }
-        let mut lagging = false;
         for sp in g.iter_mut() {
-            if let Some(v) = sp.video.as_ref().filter(|_| kind <= 1) {
-                // A player: header and pictures on the shallow queue.
-                if kind == 0 {
-                    if v.try_send(bin(0, data)).is_err() {
-                        sp.need_header = true;
-                        sp.need_key = true;
-                    }
-                    continue;
-                }
-                if sp.need_key && !key {
-                    continue;
-                }
-                if sp.need_header {
-                    let h = self.video_header.lock().ok().and_then(|g| g.clone());
-                    match h {
-                        Some(h) if v.try_send(bin(0, &h)).is_err() => {
-                            lagging = true;
-                            continue;
-                        }
-                        _ => sp.need_header = false,
-                    }
-                }
-                sp.need_key = false;
-                if let Err(mpsc::error::TrySendError::Full(_)) = v.try_send(bin(1, data)) {
+            if kind > 1 {
+                // Sound and the rest: a full queue just misses it.
+                let _ = sp.tx.try_send(bin(kind, data));
+                continue;
+            }
+            // A player has its shallow queue for the header and pictures; a watcher one for all.
+            let q = sp.video.clone().unwrap_or_else(|| sp.tx.clone());
+            if kind == 0 {
+                // Lost, the next keyframes would decode with the previous parameter sets.
+                if q.try_send(bin(0, data)).is_err() {
+                    sp.need_header = true;
                     sp.need_key = true;
-                    lagging = true;
-                    if let Some(c) = &sp.skipped {
-                        c.fetch_add(1, Ordering::Relaxed);
-                    }
                 }
                 continue;
             }
-            if kind == 1 {
-                if sp.need_key && !key {
-                    continue;
-                }
-                sp.need_key = false;
+            if sp.need_key && !key {
+                // Waiting for a keyframe nobody else asked for.
+                self.lag_ask(sp, now);
+                continue;
             }
-            if let Err(mpsc::error::TrySendError::Full(_)) = sp.tx.try_send(bin(kind, data)) {
-                if kind == 1 {
-                    sp.need_key = true;
-                    lagging = true;
+            if sp.need_header {
+                let h = self.video_header.lock().ok().and_then(|g| g.clone());
+                match h {
+                    Some(h) if q.try_send(bin(0, &h)).is_err() => {
+                        sp.skipped_at(now);
+                        self.lag_ask(sp, now);
+                        continue;
+                    }
+                    _ => sp.need_header = false,
                 }
+            }
+            sp.need_key = false;
+            if let Err(mpsc::error::TrySendError::Full(_)) = q.try_send(bin(1, data)) {
+                sp.need_key = true;
+                sp.skipped_at(now);
+                if let Some(c) = &sp.skipped {
+                    c.fetch_add(1, Ordering::Relaxed);
+                }
+                self.lag_ask(sp, now);
             }
         }
-        if lagging {
+    }
+
+    /// `sp` waits for a keyframe: ask the console, unless that was done too recently. Every
+    /// watcher and player together get at most one per [`GUEST_KEY_GAP`], and one who keeps
+    /// falling behind only one per [`LAGGING_KEY_GAP`]; it still gets any keyframe that comes.
+    fn lag_ask(&self, sp: &mut Spectator, now: Instant) {
+        let own_gap = if sp.lag_skips >= LAG_SKIPS {
+            LAGGING_KEY_GAP
+        } else {
+            GUEST_KEY_GAP
+        };
+        let ago = |t: Option<Instant>, gap: Duration| {
+            t.is_none_or(|t| now.saturating_duration_since(t) >= gap)
+        };
+        if !ago(sp.key_asked, own_gap) {
+            return;
+        }
+        let Ok(mut last) = self.guest_key_asked.lock() else {
+            return;
+        };
+        if ago(*last, GUEST_KEY_GAP) {
+            *last = Some(now);
+            sp.key_asked = Some(now);
             self.want_key.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Watcher or player `id` itself asks for a keyframe.
+    fn guest_key_ask(&self, id: u64, now: Instant) {
+        if let Ok(mut g) = self.spectators.lock() {
+            if let Some(sp) = g.iter_mut().find(|s| s.id == id) {
+                self.lag_ask(sp, now);
+            }
         }
     }
 
@@ -655,6 +752,7 @@ impl Live {
             playing: AtomicBool::new(false),
             need_key: AtomicBool::new(false),
             want_key: AtomicBool::new(false),
+            guest_key_asked: Mutex::new(None),
             dropped: AtomicU64::new(0),
             next_viewer: AtomicU64::new(1),
             mic_enabled: AtomicBool::new(false),
@@ -858,9 +956,16 @@ impl Live {
     fn push_pad(&self, source: u64, state: Option<ControllerState>) {
         let merged = self.sources.set(source, state);
         if let Ok(mut g) = self.pad.lock() {
-            if g.len() < 256 {
-                g.push_back(merged);
+            if !self.playing.load(Ordering::Relaxed) {
+                // Nothing reads these during a wake and the handshake. Replayed at the start they
+                // would be stale presses; only where the pad is now counts.
+                g.clear();
+            } else if g.len() >= PAD_QUEUE {
+                // The stream thread is held up: an old state goes, never the newest (a release
+                // lost here would leave its press held).
+                g.pop_front();
             }
+            g.push_back(merged);
         }
     }
 
@@ -879,6 +984,8 @@ impl Live {
             "playing": self.playing.load(Ordering::Relaxed),
             "attached": attached,
             "passcode": passcode,
+            // Told to stop, and finishing (a wake or handshake takes a moment to cut short).
+            "stopping": self.stop.load(Ordering::Relaxed),
         })
     }
 }
@@ -1077,6 +1184,7 @@ fn error_status(e: &anyhow::Error) -> serde_json::Value {
     let text = format!("{e:#}");
     let (code, retry_s) = match e.downcast_ref::<NotReady>() {
         Some(NotReady::Busy(d)) => ("busy", Some(d.as_secs().max(1))),
+        Some(NotReady::InUse(d)) => ("in_use", Some(d.as_secs().max(1))),
         Some(NotReady::Standby) => ("asleep", None),
         Some(NotReady::Unreachable) => ("unreachable", None),
         None if text.contains("refused the control session") => ("keys", None),
@@ -1103,7 +1211,12 @@ fn error_status(e: &anyhow::Error) -> serde_json::Value {
 }
 
 pub async fn ws(upgrade: WebSocketUpgrade) -> Response {
-    upgrade.on_upgrade(session)
+    // A snapshot (rp_automation.rs) comes as one message: left at tungstenite's 16 MiB per frame,
+    // a large one would end this socket, and the player's own picture with it.
+    upgrade
+        .max_message_size(PAGE_MSG_MAX)
+        .max_frame_size(PAGE_MSG_MAX)
+        .on_upgrade(session)
 }
 
 /// What is streaming now, for a page that wants to show or rejoin it.
@@ -1147,12 +1260,14 @@ pub async fn replay() -> Response {
 }
 
 async fn close(socket: &mut WebSocket, reason: &'static str) {
-    let _ = socket
-        .send(Message::Close(Some(CloseFrame {
+    send_limited(
+        socket,
+        Message::Close(Some(CloseFrame {
             code: 1000,
             reason: reason.into(),
-        })))
-        .await;
+        })),
+    )
+    .await;
 }
 
 /// Start the session `start` asks for on a new worker thread.
@@ -1225,13 +1340,9 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         // A panic must still end the session: left in LIVE, it would turn every later start
         // for this console into a join of a dead stream.
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_stream(
-                &l.host,
-                &creds,
-                cfg,
-                Duration::from_secs(4 * 3600),
-                &mut sink,
-            )
+            // No time limit: a console that went quiet or closed ctrl ends the stream by itself
+            // (SILENCE_LIMIT), and a long session or broadcast must not be cut for its length.
+            run_stream(&l.host, &creds, cfg, Duration::MAX, &mut sink)
         }))
         .unwrap_or_else(|p| {
             Err(anyhow::anyhow!(
@@ -1318,15 +1429,34 @@ async fn session(mut socket: WebSocket) {
         start.attach_only,
         running
             .as_ref()
-            .map(|l| if l.host == start.host {
+            .map(|l| if same_console(&l.host, &start.host) {
                 "this console's"
             } else {
                 "another console's"
             })
             .unwrap_or("none")
     );
+    // On its way out: joining it would end with it, a moment later and with no word why.
+    if running
+        .as_ref()
+        .is_some_and(|l| same_console(&l.host, &start.host) && l.stop.load(Ordering::Relaxed))
+    {
+        let m = if start.attach_only {
+            serde_json::json!({"stage": "ended", "reason": "no session"})
+        } else {
+            serde_json::json!({
+                "stage": "error",
+                "code": "busy",
+                "retry_s": STOPPING_RETRY_S,
+                "error": "the last session is still finishing",
+            })
+        };
+        let _ = socket.send(text(m)).await;
+        close(&mut socket, "stopping").await;
+        return;
+    }
     let live = match running {
-        Some(l) if l.host == start.host => l,
+        Some(l) if same_console(&l.host, &start.host) => l,
         Some(l) => {
             let _ = socket
                 .send(text(serde_json::json!({
@@ -1370,7 +1500,7 @@ async fn session(mut socket: WebSocket) {
                     return;
                 };
                 match g.as_ref() {
-                    Some(l) if l.host == start.host => Some(l.clone()),
+                    Some(l) if same_console(&l.host, &start.host) => Some(l.clone()),
                     Some(_) => None,
                     None => {
                         let l = begin(&start, creds);
@@ -1399,6 +1529,11 @@ async fn session(mut socket: WebSocket) {
     crate::log_detail!("rp_stream: {}: page {id} shows the session", live.host);
 
     let mut reason = "ended";
+    let mut ping = tokio::time::interval(PEER_PING_EVERY);
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Pings since the page was last heard from. Counted, not timed: a computer waking from sleep
+    // has its clock moved on, not a silent page.
+    let mut quiet = 0u32;
     loop {
         tokio::select! {
             // Audio and status first: a big keyframe must not hold up sound.
@@ -1406,7 +1541,8 @@ async fn session(mut socket: WebSocket) {
             out = ctl_rx.recv() => match out {
                 Some(m) => {
                     let moved = matches!(&m, Message::Text(t) if t.as_str().contains("\"moved\""));
-                    if socket.send(m).await.is_err() {
+                    if !send_limited(&mut socket, m).await {
+                        reason = "gone";
                         break;
                     }
                     if moved {
@@ -1418,13 +1554,14 @@ async fn session(mut socket: WebSocket) {
             },
             out = video_rx.recv() => match out {
                 Some(m) => {
-                    if socket.send(m).await.is_err() {
+                    if !send_limited(&mut socket, m).await {
+                        reason = "gone";
                         break;
                     }
                 }
                 None => break,
             },
-            inc = socket.recv() => match inc {
+            inc = socket.recv() => { quiet = 0; match inc {
                 Some(Ok(Message::Text(t))) => {
                     if let Ok(m) = serde_json::from_str::<ClientMsg>(t.as_str()) {
                         if let Some(p) = pong(&m) {
@@ -1488,7 +1625,16 @@ async fn session(mut socket: WebSocket) {
                     return;
                 }
                 _ => {}
-            },
+            }},
+            // After the socket, so a page whose messages wait behind a busy loop is not called
+            // silent.
+            _ = ping.tick() => {
+                quiet += 1;
+                if quiet > PEER_QUIET_PINGS || !send_limited(&mut socket, Message::Ping(Bytes::new())).await {
+                    reason = "gone";
+                    break;
+                }
+            }
         }
     }
     crate::log_detail!(
@@ -1503,6 +1649,33 @@ async fn session(mut socket: WebSocket) {
 
 pub async fn player() -> impl IntoResponse {
     Html(include_str!("rp_player.html"))
+}
+
+/// A session in [`LIVE`] for other modules' tests (hold [`LIVE_TEST_LOCK`]).
+#[cfg(test)]
+pub(crate) mod test_live {
+    use super::*;
+
+    pub(crate) struct Session(Arc<Live>);
+
+    impl Session {
+        pub(crate) fn start(host: &str) -> Self {
+            let live = Arc::new(Live::new(host.into(), false, DEFAULT_KEEP_ALIVE));
+            *LIVE.lock().unwrap() = Some(live.clone());
+            Session(live)
+        }
+
+        /// The pad the console would get now.
+        pub(crate) fn merged(&self) -> ControllerState {
+            self.0.sources.set(u64::MAX - 1, None)
+        }
+    }
+
+    impl Drop for Session {
+        fn drop(&mut self) {
+            *LIVE.lock().unwrap() = None;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1619,7 +1792,8 @@ mod tests {
         // The next frame overflows the slow one: it waits for a keyframe, one is asked for, and
         // the fast one is not held back.
         live.want_key.store(false, Ordering::Relaxed);
-        live.to_spectators(1, b"delta2", false);
+        let later = Instant::now() + GUEST_KEY_GAP * 2;
+        live.to_spectators_at(1, b"delta2", false, later);
         assert!(fast.try_recv().is_ok());
         assert!(live.spectators.lock().unwrap()[1].need_key);
         assert!(live.want_key.load(Ordering::Relaxed));
@@ -1655,7 +1829,7 @@ mod tests {
         live.to_spectators(1, b"d1", false);
         // full (2): the next picture is skipped, counted, and a keyframe asked for
         live.want_key.store(false, Ordering::Relaxed);
-        live.to_spectators(1, b"d2", false);
+        live.to_spectators_at(1, b"d2", false, Instant::now() + GUEST_KEY_GAP * 2);
         assert_eq!(skipped.load(Ordering::Relaxed), 1);
         assert!(live.want_key.load(Ordering::Relaxed));
         assert_eq!(kinds(&mut video), vec!["bin1", "bin1"]);
@@ -1674,6 +1848,309 @@ mod tests {
         *live.video_header.lock().unwrap() = Some(b"hdr2".to_vec());
         live.to_spectators(1, b"key2", true);
         assert_eq!(kinds(&mut video), vec!["bin0", "bin1"]);
+    }
+
+    /// How many keyframes the console is asked for over `secs` of pictures with `live`'s
+    /// spectators doing what they do.
+    fn asks_over(live: &Live, from: Instant, secs: u64) -> usize {
+        let mut asks = 0;
+        for f in 0..secs * 60 {
+            let now = from + Duration::from_millis(f * 1000 / 60);
+            live.to_spectators_at(1, b"delta", false, now);
+            if live.want_key.swap(false, Ordering::Relaxed) {
+                asks += 1;
+            }
+        }
+        asks
+    }
+
+    /// One player who can't keep up: the console's one stream must not turn into keyframes for
+    /// everyone. Before, it was one every 500 ms (the stream thread's own limit).
+    #[test]
+    fn a_lagging_player_does_not_set_the_keyframe_rate() {
+        let live = Live::new("10.0.0.9".into(), false, Duration::from_secs(60));
+        let (tx, _other) = mpsc::channel(SPECTATOR_QUEUE);
+        let (vtx, _video) = mpsc::channel::<Message>(1);
+        live.add_spectator(
+            Spectator {
+                video: Some(vtx),
+                ..Spectator::watcher(7, tx)
+            },
+            None,
+        );
+        live.want_key.store(false, Ordering::Relaxed);
+        // The join's own ask has just gone: fill the queue with the first keyframe.
+        let t0 = Instant::now();
+        live.to_spectators_at(1, b"key", true, t0);
+        let asks = asks_over(&live, t0, 10);
+        assert!((3..=6).contains(&asks), "{asks} asks in 10 s");
+        // Keyframes that still don't fit: it keeps falling behind, so far fewer.
+        for i in 0..3 {
+            live.to_spectators_at(1, b"key", true, t0 + Duration::from_secs(10 + i));
+        }
+        assert!(live.spectators.lock().unwrap()[0].lag_skips >= LAG_SKIPS);
+        live.want_key.store(false, Ordering::Relaxed);
+        let later = t0 + Duration::from_secs(14);
+        // Waiting for a keyframe is no skip: the count stands while it waits.
+        let asks = asks_over(&live, later, 20);
+        assert!((3..=5).contains(&asks), "{asks} asks in 20 s");
+        // Its own asks go through the same limit.
+        live.want_key.store(false, Ordering::Relaxed);
+        let t = later + Duration::from_secs(60);
+        live.guest_key_ask(7, t);
+        assert!(live.want_key.swap(false, Ordering::Relaxed));
+        live.guest_key_ask(7, t + Duration::from_secs(1));
+        assert!(!live.want_key.load(Ordering::Relaxed));
+        // Nobody by that id: nothing.
+        live.guest_key_ask(99, t + Duration::from_secs(100));
+        assert!(!live.want_key.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_host_page_asking_is_not_held_to_the_guests_limit() {
+        let live = Live::new("10.0.0.9".into(), false, Duration::from_secs(60));
+        let (tx, _rx) = mpsc::channel(8);
+        live.add_spectator(Spectator::watcher(1, tx), None);
+        let t = Instant::now();
+        live.guest_key_ask(1, t);
+        live.want_key.store(false, Ordering::Relaxed);
+        // What the page's own branch and the live feed do.
+        let (vtx, _vrx, ctx, _crx) = page();
+        live.attach(vtx, ctx, false);
+        assert!(live.want_key.load(Ordering::Relaxed));
+    }
+
+    /// A header that does not fit a watcher's full queue goes again before its next keyframe: a
+    /// slow viewer otherwise decodes on with the old parameter sets after a profile switch.
+    #[test]
+    fn a_watcher_gets_a_lost_codec_header_again() {
+        let live = Live::new("10.0.0.9".into(), false, Duration::from_secs(60));
+        let (tx, mut rx) = mpsc::channel(2);
+        live.spectators
+            .lock()
+            .unwrap()
+            .push(Spectator::watcher(1, tx));
+        live.to_spectators(1, b"key", true);
+        live.to_spectators(1, b"d1", false);
+        // Full: the switch's header is lost.
+        *live.video_header.lock().unwrap() = Some(b"hdr2".to_vec());
+        live.to_spectators(0, b"hdr2", false);
+        assert_eq!(kinds(&mut rx), vec!["bin1", "bin1"]);
+        live.to_spectators(1, b"d2", false);
+        assert!(rx.try_recv().is_err(), "nothing before a keyframe");
+        live.to_spectators(1, b"key2", true);
+        let got: Vec<Vec<u8>> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|m| match m {
+                Message::Binary(b) => b.to_vec(),
+                _ => vec![],
+            })
+            .collect();
+        assert_eq!(got, vec![b"\0hdr2".to_vec(), b"\x01key2".to_vec()]);
+    }
+
+    #[test]
+    fn pad_states_from_before_the_stream_are_not_replayed() {
+        let mut live = Live::new("10.0.0.9".into(), false, Duration::from_secs(60));
+        let st = |b: u32| ControllerState {
+            buttons: b,
+            ..Default::default()
+        };
+        // A long wake: only where the pad is now counts.
+        for b in 0..300 {
+            live.push_pad(PAGE_SOURCE, Some(st(b)));
+        }
+        assert_eq!(live.pad.lock().unwrap().len(), 1);
+        assert_eq!(live.pad.lock().unwrap().back().unwrap().buttons, 299);
+        // Playing: all in order, and when the thread is held up the oldest goes, not a release.
+        live.playing.store(true, Ordering::Relaxed);
+        for b in 0..(PAD_QUEUE as u32 + 10) {
+            live.push_pad(PAGE_SOURCE, Some(st(b)));
+        }
+        live.push_pad(PAGE_SOURCE, Some(st(0)));
+        let g = live.pad.get_mut().unwrap();
+        assert_eq!(g.len(), PAD_QUEUE);
+        assert_eq!(g.back().unwrap().buttons, 0);
+    }
+
+    #[test]
+    fn another_device_using_the_console_is_not_called_our_last_session() {
+        use ps5upload_core::rp_stream::guard::NotReady;
+        let e = anyhow::Error::new(NotReady::InUse(Duration::from_secs(30)));
+        let v = error_status(&e);
+        assert_eq!(v["code"], "in_use");
+        assert_eq!(v["retry_s"], 30);
+        let e = anyhow::Error::new(NotReady::Busy(Duration::from_secs(12)));
+        assert_eq!(error_status(&e)["code"], "busy");
+    }
+
+    #[test]
+    fn a_console_is_the_same_with_its_port() {
+        assert!(same_console("10.0.0.2", "10.0.0.2:9120"));
+        assert!(same_console("10.0.0.2:9295", "10.0.0.2:9120"));
+        assert!(!same_console("10.0.0.2", "10.0.0.3"));
+    }
+
+    // ---- The page's socket, for real ----
+
+    mod socket {
+        use super::*;
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message as TMsg;
+
+        async fn serve() -> String {
+            let app = axum::Router::new().route("/ws", axum::routing::get(ws));
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = l.local_addr().unwrap();
+            tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+            format!("ws://{addr}/ws")
+        }
+
+        /// A running session for 10.0.77.2, until dropped.
+        struct Session(Arc<Live>);
+        impl Session {
+            fn start() -> Self {
+                let live = Arc::new(Live::new("10.0.77.2".into(), false, DEFAULT_KEEP_ALIVE));
+                *LIVE.lock().unwrap() = Some(live.clone());
+                Session(live)
+            }
+        }
+        impl Drop for Session {
+            fn drop(&mut self) {
+                *LIVE.lock().unwrap() = None;
+            }
+        }
+
+        const ATTACH: &str =
+            r#"{"host":"10.0.77.2:9120","regist_key":"","rp_key":"","attach_only":true}"#;
+
+        /// A page that vanished without closing, mid-press: the socket says nothing and answers
+        /// no ping. Its pad is let go within a few seconds rather than minutes.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_page_that_vanished_lets_go_of_the_pad() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let s = Session::start();
+            let url = serve().await;
+            // Named with a port: the same console, attached (not "busy").
+            let (mut c, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+            c.send(TMsg::Text(ATTACH.into())).await.unwrap();
+            let pad = r#"{"pad":{"buttons":1,"l2":0,"r2":0,"lx":0,"ly":0,"rx":0,"ry":0}}"#;
+            c.send(TMsg::Text(pad.into())).await.unwrap();
+            let held = async {
+                loop {
+                    if s.0.sources.set(u64::MAX - 1, None).buttons == 1 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(3), held)
+                .await
+                .unwrap();
+            assert!(s.0.viewer.lock().unwrap().is_some());
+            // From here the client reads nothing, so it answers no ping: it is simply gone.
+            let released = async {
+                loop {
+                    if s.0.viewer.lock().unwrap().is_none() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(5), released)
+                .await
+                .expect("the page was let go");
+            assert_eq!(s.0.sources.set(u64::MAX - 1, None).buttons, 0);
+            assert!(
+                s.0.alone_since.lock().unwrap().is_some(),
+                "the session waits"
+            );
+            drop(c);
+        }
+
+        /// A session told to stop is not joined: a start hears "busy, look again", a page coming
+        /// back that it has gone. Attaching used to end with it, a minute later, with no word.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_session_on_its_way_out_is_not_joined() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let s = Session::start();
+            s.0.stop.store(true, Ordering::Relaxed);
+            assert_eq!(s.0.snapshot()["stopping"], true);
+            let url = serve().await;
+            let hear = |msg: &'static str| {
+                let url = url.clone();
+                async move {
+                    let (mut c, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+                    c.send(TMsg::Text(msg.into())).await.unwrap();
+                    loop {
+                        match c.next().await {
+                            Some(Ok(TMsg::Text(t))) => {
+                                return serde_json::from_str::<serde_json::Value>(t.as_str())
+                                    .unwrap()
+                            }
+                            Some(Ok(_)) => {}
+                            other => panic!("closed: {other:?}"),
+                        }
+                    }
+                }
+            };
+            let v = hear(ATTACH).await;
+            assert_eq!(v["stage"], "ended");
+            assert_eq!(v["reason"], "no session");
+            let v = hear(r#"{"host":"10.0.77.2","regist_key":"","rp_key":"","attach_only":false}"#)
+                .await;
+            assert_eq!(v["code"], "busy");
+            assert_eq!(v["retry_s"], STOPPING_RETRY_S);
+        }
+
+        /// A page that answers pings stays, however quiet it is itself.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_quiet_page_that_answers_pings_stays() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let s = Session::start();
+            let url = serve().await;
+            let (mut c, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+            c.send(TMsg::Text(ATTACH.into())).await.unwrap();
+            let t0 = Instant::now();
+            let mut pings = 0;
+            while t0.elapsed() < PEER_PING_EVERY * (PEER_QUIET_PINGS + 3) {
+                // Reading is what makes the client library answer.
+                if let Ok(Some(Ok(TMsg::Ping(_)))) =
+                    tokio::time::timeout(Duration::from_millis(50), c.next()).await
+                {
+                    pings += 1;
+                }
+            }
+            assert!(pings >= 3, "{pings} pings");
+            assert!(s.0.viewer.lock().unwrap().is_some());
+        }
+
+        /// A snapshot above tungstenite's 16 MiB frame limit (an upscaled 4K PNG): it must not end
+        /// the player's own socket.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_big_snapshot_does_not_end_the_pages_socket() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let s = Session::start();
+            let url = serve().await;
+            let (mut c, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+            c.send(TMsg::Text(ATTACH.into())).await.unwrap();
+            let mut big = vec![0u8; 20 * 1024 * 1024];
+            big[0] = automation::KIND_SNAPSHOT;
+            c.send(TMsg::Binary(big.into())).await.unwrap();
+            c.send(TMsg::Text(r#"{"ping":1}"#.into())).await.unwrap();
+            let pong = async {
+                loop {
+                    match c.next().await {
+                        Some(Ok(TMsg::Text(t))) if t.as_str().contains("pong") => return true,
+                        Some(Ok(_)) => {}
+                        _ => return false,
+                    }
+                }
+            };
+            assert!(tokio::time::timeout(Duration::from_secs(5), pong)
+                .await
+                .unwrap());
+            assert!(s.0.viewer.lock().unwrap().is_some());
+        }
     }
 
     const KEY: &[u8] = &[0, 0, 0, 1, 0x65, 1, 2]; // H.264 IDR slice

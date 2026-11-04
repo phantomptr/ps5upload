@@ -151,10 +151,11 @@ export function useNativeKbm({
   }, [owner, host, setCaps]);
 
   // Asked again when the engine's answer changes its error (the console's helper starting, up, or
-  // unable to start), and every few seconds while the console says it is starting: the bar button
-  // and Settings › Controls follow it.
+  // unable to start), and every few seconds while the console says it is starting or its helper
+  // does not answer (a stream started from rest is often up first): the bar button and Settings ›
+  // Controls follow it.
   const lastErr = useRef(err);
-  const starting = hostCaps?.companion === "starting";
+  const starting = hostCaps?.companion === "starting" || hostCaps?.reason === "unreachable";
   useEffect(() => {
     if (lastErr.current === err) return;
     lastErr.current = err;

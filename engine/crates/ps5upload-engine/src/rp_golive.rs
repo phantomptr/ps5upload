@@ -16,15 +16,16 @@
 //! Twitch, say) and carries on with it.
 //!
 //! API (behind the engine's usual LAN guard; the web UI's Go live runs on the engine's
-//! computer):
+//! computer; AUTOMATION.md has the requests, answers and error codes):
 //! * `GET /api/stream/status`: ffmpeg (installed, download size, progress), the session and
 //!   each preset's and saved destination's checks against it, and the live run (phase,
 //!   elapsed, bitrate, fps, per destination state, reconnects, errors).
 //! * `POST /api/stream/start {"destinations": [{"key_id"}], "audio_kbps"?}`,
 //!   `POST /api/stream/stop`.
 //! * `POST /api/stream/destinations` (add: `{preset, key, server?, url?, label?,
-//!   bandwidth_test?}`), `POST /api/stream/destinations/{id}` (change; no `key` keeps it),
-//!   `DELETE /api/stream/destinations/{id}`. Keys are never returned (golive_dest.rs).
+//!   bandwidth_test?}`), `POST /api/stream/destinations/{id}` (change: only what changes; no
+//!   `key` keeps it), `DELETE /api/stream/destinations/{id}`. Keys are never returned
+//!   (golive_dest.rs).
 //! * `POST /api/stream/tools/ffmpeg/install`: download ffmpeg (progress in the status).
 
 use std::collections::VecDeque;
@@ -60,8 +61,38 @@ const STALL_AFTER: Duration = Duration::from_secs(20);
 /// The same before the first frame went out: a server that took the connection and never
 /// answered the handshake.
 const CONNECT_STALL_AFTER: Duration = Duration::from_secs(30);
+/// How long a new start waits for a stop still finishing, before it says "already live": a site
+/// refuses a second stream on a key the old ffmpeg still holds. STOP_GRACE, then the kill and the
+/// run's last words.
+const STOP_WAIT: Duration = Duration::from_secs(10);
+/// A site of several that fails this many times in a row right after a start stays out: that is
+/// what a refused key looks like when the site only closes the connection, and each try would
+/// cut everyone else's stream for a moment.
+const MAX_EARLY_FAILS: u32 = 2;
 /// ffmpeg's last lines (scrubbed of keys) kept for the status.
 const LOG_LINES: usize = 12;
+
+/// How long a run waits for things (tests shorten them).
+#[derive(Clone, Copy)]
+pub(crate) struct Timing {
+    wait_for_play: Duration,
+    rejoin_after: Duration,
+    stop_grace: Duration,
+    stall_after: Duration,
+    connect_stall_after: Duration,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Timing {
+            wait_for_play: WAIT_FOR_PLAY,
+            rejoin_after: REJOIN_AFTER,
+            stop_grace: STOP_GRACE,
+            stall_after: STALL_AFTER,
+            connect_stall_after: CONNECT_STALL_AFTER,
+        }
+    }
+}
 
 /// One destination of a run, with its secret parts resolved.
 #[derive(Clone)]
@@ -93,11 +124,15 @@ struct DestStatus {
     bandwidth_test: bool,
     #[serde(skip)]
     rejoins: u32,
+    /// Failures in a row right after a start.
+    #[serde(skip)]
+    early_fails: u32,
 }
 
 #[derive(Default)]
 struct RunState {
-    /// "starting", "live", "reconnecting", "waiting_for_play", "ended", "failed".
+    /// "starting", "live", "reconnecting", "waiting_for_play", "ended", "failed". While a stop is
+    /// finishing the status says "stopping" (`Run::phase`).
     phase: &'static str,
     error: Option<Problem>,
     live_since: Option<Instant>,
@@ -123,6 +158,7 @@ pub(crate) struct Run {
     audio_kbps: u32,
     dests: Vec<Dest>,
     ffmpeg: FfmpegCmd,
+    timing: Timing,
     st: Mutex<RunState>,
     sent: AtomicU64,
 }
@@ -149,11 +185,29 @@ impl Run {
         self.wake.notify_waiters();
     }
 
-    fn running(&self) -> bool {
+    /// Nothing of the run is left: no ffmpeg, no connection to a site.
+    fn finished(&self) -> bool {
         self.st
             .lock()
-            .map(|g| !matches!(g.phase, "ended" | "failed"))
-            .unwrap_or(false)
+            .map(|g| matches!(g.phase, "ended" | "failed"))
+            .unwrap_or(true)
+    }
+
+    /// The phase as anyone outside sees it: from a stop until ffmpeg has gone, "stopping".
+    fn phase(&self, phase: &'static str) -> &'static str {
+        if self.stopped() && !matches!(phase, "ended" | "failed") {
+            "stopping"
+        } else {
+            phase
+        }
+    }
+
+    /// Until the run has finished, or `limit` passed.
+    async fn wait_finished(&self, limit: Duration) {
+        let end = Instant::now() + limit;
+        while !self.finished() && Instant::now() < end {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Sleeps `d`, or less if stopped.
@@ -196,7 +250,7 @@ impl Run {
         let now = Instant::now();
         let p = s.progress.clone().unwrap_or_default();
         serde_json::json!({
-            "phase": s.phase,
+            "phase": self.phase(s.phase),
             "error": s.error,
             "started_s": now.saturating_duration_since(self.started).as_secs(),
             "live_s": s.live_since.map(|t| now.saturating_duration_since(t).as_secs()),
@@ -240,6 +294,7 @@ pub(crate) fn diag_summary() -> serde_json::Value {
                         "server_host": server_host(&d.dest.server),
                         "enabled": d.dest.enabled,
                         "bandwidth_test": d.dest.bandwidth_test,
+                        "key_lost": d.key_lost,
                     })
                 })
                 .collect::<Vec<_>>(),
@@ -251,7 +306,7 @@ pub(crate) fn diag_summary() -> serde_json::Value {
         let s = r.st.lock().ok()?;
         let now = Instant::now();
         Some(serde_json::json!({
-            "phase": s.phase,
+            "phase": r.phase(s.phase),
             "error_code": s.error.as_ref().map(|e| e.code),
             "started_s": now.saturating_duration_since(r.started).as_secs(),
             "live_s": s.live_since.map(|t| now.saturating_duration_since(t).as_secs()),
@@ -287,16 +342,29 @@ struct Exit {
     spawn_error: Option<String>,
 }
 
-/// Starts a run (stopping one that is already going).
-pub(crate) fn start_run(dests: Vec<Dest>, audio_kbps: u32, ffmpeg: FfmpegCmd) -> Arc<Run> {
-    if let Some(old) = current() {
-        old.request_stop();
+/// Starts a run, unless one is still going (None). The check and the start are one step under
+/// the lock: two starts at once would otherwise both pass, and the first run would go on with
+/// nothing able to stop it.
+pub(crate) fn start_run(dests: Vec<Dest>, audio_kbps: u32, ffmpeg: FfmpegCmd) -> Option<Arc<Run>> {
+    start_run_with(dests, audio_kbps, ffmpeg, Timing::default())
+}
+
+fn start_run_with(
+    dests: Vec<Dest>,
+    audio_kbps: u32,
+    ffmpeg: FfmpegCmd,
+    timing: Timing,
+) -> Option<Arc<Run>> {
+    let mut slot = RUN.lock().unwrap_or_else(|e| e.into_inner());
+    if slot.as_ref().is_some_and(|old| !old.finished()) {
+        return None;
     }
     let r = Arc::new(Run {
         started: Instant::now(),
         stop: AtomicBool::new(false),
         wake: tokio::sync::Notify::new(),
         audio_kbps,
+        timing,
         st: Mutex::new(RunState {
             phase: "starting",
             dests: dests
@@ -310,6 +378,7 @@ pub(crate) fn start_run(dests: Vec<Dest>, audio_kbps: u32, ffmpeg: FfmpegCmd) ->
                     error: None,
                     bandwidth_test: d.bandwidth_test,
                     rejoins: 0,
+                    early_fails: 0,
                 })
                 .collect(),
             ..Default::default()
@@ -318,9 +387,8 @@ pub(crate) fn start_run(dests: Vec<Dest>, audio_kbps: u32, ffmpeg: FfmpegCmd) ->
         ffmpeg,
         sent: AtomicU64::new(0),
     });
-    if let Ok(mut g) = RUN.lock() {
-        *g = Some(r.clone());
-    }
+    *slot = Some(r.clone());
+    drop(slot);
     crate::log_info!(
         "golive: going live to {}",
         r.dests
@@ -330,7 +398,7 @@ pub(crate) fn start_run(dests: Vec<Dest>, audio_kbps: u32, ffmpeg: FfmpegCmd) ->
             .join(", ")
     );
     tokio::spawn(run(r.clone()));
-    r
+    Some(r)
 }
 
 async fn run(r: Arc<Run>) {
@@ -349,7 +417,7 @@ async fn run(r: Arc<Run>) {
                     d.state = "connecting";
                 }
             });
-            if since.elapsed() >= WAIT_FOR_PLAY {
+            if since.elapsed() >= r.timing.wait_for_play {
                 r.fail(Problem {
                     code: "play_ended",
                     message: "Remote Play stopped, so the stream ended.".into(),
@@ -423,7 +491,6 @@ async fn run(r: Arc<Run>) {
             exit.out_time_s,
             exit.ran,
         );
-        let site = site_names(&r, &active);
         match backoff.after(f, exit.ran, Instant::now()) {
             Next::Retry(d) => {
                 crate::log_info!(
@@ -431,7 +498,7 @@ async fn run(r: Arc<Run>) {
                     exit.ran.as_secs_f64(),
                     d.as_secs()
                 );
-                let msg = f.message(&site);
+                let msg = failure_message(&r, &active, f);
                 r.set(|s| {
                     s.phase = "reconnecting";
                     s.reconnects += 1;
@@ -441,21 +508,26 @@ async fn run(r: Arc<Run>) {
                         code: failure_code(f),
                         message: msg.clone(),
                     });
+                    // Not one that this run already left out for good (its own reason stands).
                     for &i in &active {
-                        s.dests[i].state = "retrying";
+                        if s.dests[i].state != "failed" {
+                            s.dests[i].state = "retrying";
+                        }
                     }
                 });
                 r.sleep(d).await;
             }
             Next::GiveUp(f) => {
-                let msg = f.message(&site);
+                let msg = failure_message(&r, &active, f);
                 r.set(|s| {
                     for &i in &active {
-                        s.dests[i].state = "failed";
-                        s.dests[i].error = Some(Problem {
-                            code: failure_code(f),
-                            message: msg.clone(),
-                        });
+                        if s.dests[i].state != "failed" {
+                            s.dests[i].state = "failed";
+                            s.dests[i].error = Some(Problem {
+                                code: failure_code(f),
+                                message: msg.clone(),
+                            });
+                        }
                     }
                 });
                 r.fail(Problem {
@@ -481,20 +553,22 @@ async fn run(r: Arc<Run>) {
     );
 }
 
-fn site_names(r: &Run, idx: &[usize]) -> String {
+/// `f` in words, naming the site when all of `idx` are the same one.
+fn failure_message(r: &Run, idx: &[usize], f: Failure) -> String {
     let mut v: Vec<&str> = idx.iter().map(|&i| r.dests[i].preset.name).collect();
     let mut seen = std::collections::HashSet::new();
     v.retain(|n| seen.insert(*n));
     if v.len() == 1 {
-        v[0].to_string()
+        f.message(v[0])
     } else {
-        "the streaming sites".to_string()
+        f.message_many()
     }
 }
 
 pub(crate) fn failure_code(f: Failure) -> &'static str {
     match f {
         Failure::Unreachable => "unreachable",
+        Failure::Tls => "tls",
         Failure::Rejected => "rejected",
         Failure::Codec => "codec_not_allowed",
         Failure::Dropped => "dropped",
@@ -504,8 +578,10 @@ pub(crate) fn failure_code(f: Failure) -> &'static str {
 
 fn rank(f: Failure) -> u8 {
     match f {
-        Failure::Codec => 4,
-        Failure::Rejected => 3,
+        Failure::Codec => 5,
+        Failure::Rejected => 4,
+        // Above "unreachable": a failed handshake is followed by "Cannot open connection".
+        Failure::Tls => 3,
         Failure::Unreachable => 2,
         Failure::Dropped => 1,
         Failure::Other => 0,
@@ -536,6 +612,8 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
     let out_time = Arc::new(Mutex::new(0f64));
     // A failed output of several: its index among `idx`, when it went.
     let rejoin_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    // Upload skips of the earlier ffmpegs of this run (each reader counts from zero).
+    let skips_before = r.st.lock().map(|g| g.upload_skips).unwrap_or(0);
 
     // Progress, once a second.
     let progress_task = child.stdout.take().map(|so| {
@@ -582,6 +660,7 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
         let r = r.clone();
         let failure = failure.clone();
         let rejoin_at = rejoin_at.clone();
+        let out_time = out_time.clone();
         let idx = idx.to_vec();
         let secrets = r.secrets();
         tokio::spawn(async move {
@@ -610,23 +689,27 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
                     }
                     if let (Some(n), true) = (which, idx.len() > 1) {
                         let Some(&i) = idx.get(n) else { return };
-                        let f = kind.unwrap_or(Failure::Dropped);
+                        let t_out = out_time.lock().map(|t| *t).unwrap_or(0.0);
                         let d = &mut s.dests[i];
+                        let (f, stay_out) = slave_failed(
+                            kind,
+                            t_out,
+                            started.elapsed(),
+                            &mut d.early_fails,
+                            d.rejoins,
+                        );
                         let site = r.dests[i].preset.name;
                         d.error = Some(Problem {
                             code: failure_code(f),
                             message: f.message(site),
                         });
-                        // A refused key or codec stays out; anything else is let back in.
-                        if matches!(f, Failure::Rejected | Failure::Codec)
-                            || d.rejoins >= MAX_REJOINS
-                        {
+                        if stay_out {
                             d.state = "failed";
                         } else {
                             d.state = "retrying";
                             d.rejoins += 1;
                             if let Ok(mut g) = rejoin_at.lock() {
-                                g.get_or_insert(Instant::now() + REJOIN_AFTER);
+                                g.get_or_insert(Instant::now() + r.timing.rejoin_after);
                             }
                         }
                     }
@@ -673,18 +756,21 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
     let mut last_tick = Instant::now();
     let mut rejoin = false;
     let mut moved = (0f64, Instant::now());
+    // Since when ffmpeg has had the end of the session and is finishing.
+    let mut session_over: Option<Instant> = None;
+    let grace = r.timing.stop_grace;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let status = loop {
         tokio::select! {
             st = child.wait() => break st.ok(),
             _ = r.wake.notified() => {
                 if r.stopped() {
-                    break finish(&mut child, &writer).await;
+                    break finish(&mut child, &writer, grace).await;
                 }
             }
             _ = tick.tick() => {
                 if r.stopped() {
-                    break finish(&mut child, &writer).await;
+                    break finish(&mut child, &writer, grace).await;
                 }
                 let now = Instant::now();
                 let sent = r.sent.load(Ordering::Relaxed);
@@ -695,13 +781,24 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
                 let skips = stats.dropped_slow.load(Ordering::Relaxed);
                 r.set(|s| {
                     s.kbps = if s.kbps == 0.0 { kbps } else { s.kbps * 0.6 + kbps * 0.4 };
-                    s.upload_skips = s.upload_skips.max(skips);
+                    s.upload_skips = skips_before + skips;
                 });
                 let t_out = out_time.lock().map(|t| *t).unwrap_or(0.0);
                 if t_out > moved.0 {
                     moved = (t_out, now);
                 }
-                let limit = if moved.0 > 0.0 { STALL_AFTER } else { CONNECT_STALL_AFTER };
+                // The session is over and ffmpeg has had the end of its input. If its upload is
+                // stuck it never gets to finish, and the stall check below is off by now: the
+                // run would stay "live" for as long as the system keeps that connection.
+                if session_ended.load(Ordering::Relaxed) {
+                    let since = *session_over.get_or_insert(now);
+                    if now.saturating_duration_since(since) >= grace {
+                        crate::log_info!("golive: ffmpeg did not finish after the session ended; stopping it");
+                        let _ = child.kill().await;
+                        break child.wait().await.ok();
+                    }
+                }
+                let limit = if moved.0 > 0.0 { r.timing.stall_after } else { r.timing.connect_stall_after };
                 if now.saturating_duration_since(moved.1) >= limit
                     && !session_ended.load(Ordering::Relaxed)
                 {
@@ -716,18 +813,20 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
                             Failure::Unreachable
                         });
                     }
-                    break finish(&mut child, &writer).await;
+                    break finish(&mut child, &writer, grace).await;
                 }
                 let due = rejoin_at.lock().ok().and_then(|g| *g).is_some_and(|t| now >= t);
                 if due {
                     crate::log_info!("golive: letting a dropped destination back in (short restart)");
                     rejoin = true;
-                    break finish(&mut child, &writer).await;
+                    break finish(&mut child, &writer, grace).await;
                 }
             }
         }
     };
     writer.abort();
+    let skips = stats.dropped_slow.load(Ordering::Relaxed);
+    r.set(|s| s.upload_skips = skips_before + skips);
     if let Some(t) = progress_task {
         let _ = tokio::time::timeout(Duration::from_secs(2), t).await;
     }
@@ -756,13 +855,37 @@ async fn run_ffmpeg(r: &Arc<Run>, mut reader: live_feed::FeedReader, idx: &[usiz
     }
 }
 
+/// What a failed site of several means: the failure to show, and whether it stays out rather
+/// than being let back in. A refused key or a codec named in the log stays out at once. Most
+/// sites refuse a key by just closing the connection, which reads as a drop: one that fails
+/// right after a start is taken for refused (`gf::settle`), as with a single site, and like a
+/// single site gets one more try. Any other failure right after a start (a server that can't be
+/// reached) also stays out once it has failed that way twice in a row, and every restart costs
+/// the other sites a moment of their stream.
+fn slave_failed(
+    named: Option<Failure>,
+    out_time_s: f64,
+    ran: Duration,
+    early_fails: &mut u32,
+    rejoins: u32,
+) -> (Failure, bool) {
+    let f = gf::settle(named.unwrap_or(Failure::Dropped), out_time_s, ran);
+    if matches!(named, Some(Failure::Rejected | Failure::Codec)) {
+        return (f, true);
+    }
+    let early = out_time_s < gf::EARLY_OUT_TIME_S && ran < gf::EARLY_RUN;
+    *early_fails = if early { *early_fails + 1 } else { 0 };
+    (f, *early_fails >= MAX_EARLY_FAILS || rejoins >= MAX_REJOINS)
+}
+
 /// Ends ffmpeg's input (it then finishes its outputs cleanly), and kills it if it takes long.
 async fn finish(
     child: &mut tokio::process::Child,
     writer: &tokio::task::JoinHandle<()>,
+    grace: Duration,
 ) -> Option<std::process::ExitStatus> {
     writer.abort();
-    match tokio::time::timeout(STOP_GRACE, child.wait()).await {
+    match tokio::time::timeout(grace, child.wait()).await {
         Ok(st) => st.ok(),
         Err(_) => {
             let _ = child.kill().await;
@@ -815,7 +938,7 @@ fn resolve(ids: &[String]) -> Result<Vec<Dest>, (StatusCode, &'static str, Strin
         let Some((url, format)) = golive_dest::publish_url(&d, &s) else {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "key_missing",
+                "key_lost",
                 format!("{} has no stream key saved: add it again.", d.label),
             ));
         };
@@ -915,15 +1038,19 @@ pub async fn start(
         )
             .into_response();
     }
-    if current().is_some_and(|r| r.running()) {
+    // A stop still finishing (a script's stop-then-start): its ffmpeg is about to go, and a site
+    // would refuse a second stream on the key it still holds.
+    if let Some(old) = current().filter(|r| r.stopped()) {
+        old.wait_finished(STOP_WAIT).await;
+    }
+    let audio = req.audio_kbps.unwrap_or(160).clamp(64, 320);
+    let Some(r) = start_run(dests, audio, ff) else {
         return err(
             StatusCode::CONFLICT,
             "already_live",
             "Already live: stop first.",
         );
-    }
-    let audio = req.audio_kbps.unwrap_or(160).clamp(64, 320);
-    let r = start_run(dests, audio, ff);
+    };
     Json(serde_json::json!({ "ok": true, "live": r.status() })).into_response()
 }
 
@@ -1004,12 +1131,17 @@ pub async fn status(
 }
 
 fn invalid(e: golive_dest::Invalid) -> Response {
-    let code = if e.0 == "not_found" {
-        StatusCode::NOT_FOUND
-    } else {
-        StatusCode::BAD_REQUEST
-    };
-    err(code, e.0, e.1)
+    err(error_status(e.0), e.0, e.1)
+}
+
+/// The HTTP status of an error code: the request was fine when this computer's disk failed it.
+fn error_status(code: &str) -> StatusCode {
+    match code {
+        "not_found" => StatusCode::NOT_FOUND,
+        "disk" | "store" => StatusCode::INTERNAL_SERVER_ERROR,
+        "unsupported" => StatusCode::NOT_IMPLEMENTED,
+        _ => StatusCode::BAD_REQUEST,
+    }
 }
 
 /// `POST /api/stream/destinations`.
@@ -1086,7 +1218,7 @@ pub async fn install_ffmpeg(
     match ffmpeg_tool::start_install() {
         Ok(_) => Json(serde_json::json!({"ok": true, "ffmpeg": ffmpeg_tool::status_json()}))
             .into_response(),
-        Err((code, msg)) => err(StatusCode::BAD_REQUEST, code, msg),
+        Err((code, msg)) => err(error_status(code), code, msg),
     }
 }
 

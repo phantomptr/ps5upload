@@ -201,7 +201,27 @@ const STANDARD_BUTTONS = [
 /** Where one control of the console's pad comes from on a controller: a button (by index), or
  *  half of an axis (index, the direction it moves when pressed, and where it rests: -1 for a
  *  trigger reported as an axis that rests at one end). */
-export type PadSource = { b: number } | { a: number; d: 1 | -1; rest?: number };
+export type PadSource = { b: number } | { a: number; d: 1 | -1; rest?: number } | HatSource;
+
+/** A d-pad reported as one axis (non-standard pads in Chromium and Firefox): 8 positions in
+ *  sevenths from -1 (up) clockwise to 1 (up left), resting outside -1..1 (9/7). `at`: the position,
+ *  0-7, this source means; its two neighbours (the diagonals) count too. */
+export interface HatSource {
+  h: number;
+  at: number;
+}
+
+/** Up, right, down and left on a hat. */
+export const HAT_UP = 0;
+export const HAT_RIGHT = 2;
+export const HAT_DOWN = 4;
+export const HAT_LEFT = 6;
+
+/** Where a hat axis's reading is, 0-7, or null at rest. */
+export function hatPosition(v: number): number | null {
+  if (!(Math.abs(v) <= 1.01)) return null;
+  return Math.round((v + 1) * 3.5) % 8;
+}
 
 /** A stick axis: the controller's axis index, inverted when it reads the other way round. */
 export interface PadAxis {
@@ -238,6 +258,12 @@ export function sourceValue(g: Gamepad, src: PadSource): number {
     const b = g.buttons[src.b];
     return b ? Math.max(b.pressed ? 1 : 0, b.value) : 0;
   }
+  if ("h" in src) {
+    const at = hatPosition(g.axes[src.h] ?? 9);
+    if (at === null) return 0;
+    const off = (at - src.at + 8) % 8;
+    return off === 0 || off === 1 || off === 7 ? 1 : 0;
+  }
   const v = g.axes[src.a];
   if (v === undefined) return 0;
   const rest = src.rest ?? 0;
@@ -246,7 +272,29 @@ export function sourceValue(g: Gamepad, src: PadSource): number {
 
 /** A controller the browser lays out the standard way, or one it does not recognize: then the
  *  standard order is the best guess (most controllers follow it), until it is mapped. */
-export const guessProfile = (_g: Gamepad): PadProfile => STANDARD_PROFILE;
+export function guessProfile(g: Gamepad): PadProfile {
+  if (g.mapping === "standard") return STANDARD_PROFILE;
+  const known = hatGuesses.get(g.id);
+  if (known) return known;
+  // Only a hat at rest reads outside -1..1: one seen once is that pad's for this run.
+  const hat = g.axes.findIndex((v) => Math.abs(v) > 1.05);
+  if (hat < 0) return STANDARD_PROFILE;
+  const prof: PadProfile = {
+    ...STANDARD_PROFILE,
+    buttons: [
+      ...STANDARD_PROFILE.buttons,
+      [PadButton.UP, { h: hat, at: HAT_UP }],
+      [PadButton.RIGHT, { h: hat, at: HAT_RIGHT }],
+      [PadButton.DOWN, { h: hat, at: HAT_DOWN }],
+      [PadButton.LEFT, { h: hat, at: HAT_LEFT }],
+    ],
+  };
+  hatGuesses.set(g.id, prof);
+  return prof;
+}
+
+/** The usual layout plus a hat d-pad, per controller seen with one. */
+const hatGuesses = new Map<string, PadProfile>();
 
 /** The pad the connected controllers amount to (all of them, merged), each read through its
  *  profile. */
@@ -290,9 +338,18 @@ export function mergePads(a: PadState, b: PadState): PadState {
 /** Play the console's rumble on every controller that can (Gamepad API "dual-rumble").
  *  Each message is the current level, so it is played for a while and replaced by the next;
  *  zero stops it. */
-export function playRumble(pads: ReadonlyArray<Gamepad | null>, strong: number, weak: number): void {
-  for (const g of pads) {
-    const act = (g as (Gamepad & { vibrationActuator?: GamepadHapticActuator | null }) | null)?.vibrationActuator;
+export function playRumble(
+  pads: ReadonlyArray<Gamepad | null>,
+  strong: number,
+  weak: number,
+  /** The browser's own list: the app's controller readers (lib/nativePad.ts) have no motors, and
+   *  the browser may see the same controller and be able to shake it. */
+  browserPads: () => ReadonlyArray<Gamepad | null> = () => globalThis.navigator?.getGamepads?.() ?? [],
+): void {
+  const actuator = (g: Gamepad | null) =>
+    (g as (Gamepad & { vibrationActuator?: GamepadHapticActuator | null }) | null)?.vibrationActuator;
+  for (const g of pads.some(actuator) ? pads : browserPads()) {
+    const act = actuator(g);
     if (!act) continue;
     if (strong === 0 && weak === 0) {
       void act.reset?.();
@@ -462,9 +519,10 @@ export type StreamPhase =
   | "error";
 
 export interface StreamError {
-  /** Stable, from the engine: busy, busy_other, asleep, unreachable, keys, wake_failed,
-   *  passcode_cancelled, passcode_timeout, video_refused, lost (dropped mid-stream), other — or
-   *  client-side: decode, no_decoder, socket. */
+  /** Stable, from the engine: busy, in_use (another device has the console), busy_other, asleep,
+   *  unreachable, keys, wake_failed, passcode_cancelled, passcode_timeout, video_refused, lost
+   *  (dropped mid-stream), other — or client-side: decode, no_decoder, socket, console_ended (the
+   *  console ended it; `detail` is what it said), no_session (over while the socket was away). */
   code: string;
   retryS?: number;
   /** busy_other: the console that is streaming. */
@@ -527,6 +585,8 @@ export interface StreamOptions {
   /** The console's light-bar colour for this pad. Browsers cannot set a controller's light
    *  bar (the Gamepad API has no such control), so the screen shows it. */
   onLight?: (rgb: [number, number, number]) => void;
+  /** The page went to the background: let go of what only it can let go of. */
+  onHidden?: () => void;
   /** The engine's answer about native keyboard & mouse (`{"kbm": …}`, lib/kbmInput.ts). */
   onKbm?: (s: unknown) => void;
   /** A phone's touchpad & keyboard, forwarded by the engine (`{"pad_kbm": …}`, lib/kbmInput.ts). */
@@ -548,6 +608,11 @@ export interface StreamOptions {
  *  long in all. */
 const RECONNECT_WAITS_MS = [250, 500, 1000, 2000, 4000];
 const RECONNECT_FOR_MS = 30_000;
+/** A first socket that never opened is tried this many more times, this far apart. */
+const FIRST_SOCKET_TRIES = 2;
+const FIRST_SOCKET_WAIT_MS = 1000;
+/** Frames kept for a decoder not ready yet: 10 s at 60 fps. */
+const MAX_QUEUED_FRAMES = 600;
 /** Frames whose times are kept for the latency stages: ~2 s at 60 fps, far more than in flight. */
 const FRAME_SLOTS = 128;
 /** A "latency:" line in the logs this often while playing (and so in a bug report's logs). */
@@ -613,6 +678,10 @@ export class RemotePlayStream {
   private soundUnlockOff: (() => void) | null = null;
   /** Stops laying the picture out again after the Linux app's window comes back. */
   private restoreOff: (() => void) | null = null;
+  private hiddenOff: (() => void) | null = null;
+  /** A socket has reached the engine (a later drop is a session to rejoin). */
+  private socketOpened = false;
+  private firstSocketTries = 0;
   /** The sound decoded on the page (no decoding worker here), made at the first header. */
   private audioPipe: OpusPipe | null = null;
   /** The sound decoded in a worker that feeds the worklet itself (rpAudioWorker.ts). */
@@ -1025,6 +1094,8 @@ export class RemotePlayStream {
       pref === "h264" ? Promise.resolve(false) : chooseCodec(width, height).then((c) => c === "h265"),
       pref === "hdr" ? hdrSupport(width, height) : Promise.resolve(null),
     ]);
+    // Stopped while waiting: no socket, no console woken, nothing behind a page that has gone on.
+    if (this.ended) return;
     let { codec, hdrOff } = pickCodec(pref, hevc, hdr);
     if (codec === "h265_hdr") {
       // The HDR canvas is set up before the console is asked: if it cannot be, the session is
@@ -1035,6 +1106,7 @@ export class RemotePlayStream {
         codec = hevc ? "h265" : "h264";
         hdrOff = String(e);
       }
+      if (this.ended) return;
     }
     if (hdrOff) {
       log.warn("remote-play", `HDR was asked for but is not used (${hdrOff}): streaming ${codec}`);
@@ -1042,15 +1114,18 @@ export class RemotePlayStream {
     }
     if (codec === "h264" && !(await canDecodeAvc(width, height))) {
       // Found before the console is woken or asked to stream.
+      if (this.ended) return;
       this.o.onError({ code: "no_decoder", detail: "" });
       this.finish();
       return;
     }
+    if (this.ended) return;
     this.codecChoice = codec;
     this.hevc = codec !== "h264";
     this.connect(!!this.o.attach);
     this.ticking = true;
     this.schedule();
+    this.watchHidden();
     let lastDecoded = 0;
     let lastBytes = 0;
     this.statsTimer = window.setInterval(() => {
@@ -1079,6 +1154,21 @@ export class RemotePlayStream {
         log.info("remote-play", `latency: ${this.linkLogText()}; ${this.audioLogLine()}`);
       }
     }, 1000);
+  }
+
+  /** A page in the background has no animation frames, so nothing would read the pad again: what
+   *  was held when it went away would stay held on the console until it comes back. */
+  private watchHidden(): void {
+    const away = () => {
+      if (document.visibilityState === "hidden") this.o.onHidden?.();
+      this.sendPad();
+    };
+    document.addEventListener("visibilitychange", away);
+    window.addEventListener("pagehide", away);
+    this.hiddenOff = () => {
+      document.removeEventListener("visibilitychange", away);
+      window.removeEventListener("pagehide", away);
+    };
   }
 
   /** Whether the browser holds the sound back (the context is not running). */
@@ -1320,8 +1410,11 @@ export class RemotePlayStream {
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
     this.ws = ws;
+    // The engine let go of this page's pad when its last socket left: what is held goes again.
+    this.lastPad = "";
     if (!attachOnly) this.setPhase("connecting");
     ws.onopen = () => {
+      this.socketOpened = true;
       ws.send(
         JSON.stringify({
           host: this.o.host,
@@ -1373,8 +1466,20 @@ export class RemotePlayStream {
       this.ws = null;
       if (this.stopping || this.engineEnded) return this.finish();
       if (this.moved) return this.setPhase("moved");
+      // Never reached the engine: nothing was started, so there is nothing to rejoin.
+      if (!this.socketOpened) return this.firstSocketFailed();
       this.reconnect();
     };
+  }
+
+  /** The first socket never opened: try the same start again, then say so. */
+  private firstSocketFailed(): void {
+    if (this.firstSocketTries >= FIRST_SOCKET_TRIES) {
+      this.o.onError({ code: "socket", detail: "" });
+      return this.finish();
+    }
+    this.firstSocketTries++;
+    this.reconnectTimer = window.setTimeout(() => this.connect(!!this.o.attach), FIRST_SOCKET_WAIT_MS);
   }
 
   /** The socket dropped while the session runs: rejoin it, a little later each time. */
@@ -1636,6 +1741,8 @@ export class RemotePlayStream {
     this.watchBox(false);
     this.restoreOff?.();
     this.restoreOff = null;
+    this.hiddenOff?.();
+    this.hiddenOff = null;
     this.resetMedia();
     this.releasePicture();
     this.closeAudio();
@@ -1663,6 +1770,7 @@ export class RemotePlayStream {
       retry?: boolean;
       wait_s?: number;
       snapshot?: unknown;
+      reason?: unknown;
     };
     try {
       s = JSON.parse(text);
@@ -1750,9 +1858,15 @@ export class RemotePlayStream {
       case "moved":
         this.moved = true;
         break;
-      case "ended":
+      case "ended": {
         this.engineEnded = true;
+        // The player's own Stop needs no word; anything else does, or the picture just goes.
+        if (this.stopping) break;
+        const why = typeof s.reason === "string" ? s.reason : "";
+        if (why === "no session") this.o.onError({ code: "no_session", detail: "" });
+        else if (why) this.o.onError({ code: "console_ended", detail: why });
         break;
+      }
       case "error":
         this.engineEnded = true;
         this.o.onError({
@@ -1824,6 +1938,11 @@ export class RemotePlayStream {
       // The HEVC codec string is still being probed: "queue" runs until it is handed in.
       this.slotSubmit[slot] = NaN;
       this.queued.push(chunk);
+      // Never that long for a real probe. Start over from a later keyframe, not memory for ever.
+      if (this.queued.length > MAX_QUEUED_FRAMES) {
+        this.queued = [];
+        this.sawKey = false;
+      }
       return;
     }
     this.slotSubmit[slot] = now;
@@ -2180,19 +2299,26 @@ export class RemotePlayStream {
         if (c) void configure(c);
         else {
           this.o.onHdrOff?.("no HEVC Main10 decoder", true);
-          this.o.onError({ code: "decode", detail: "This device cannot decode the HDR stream (HEVC Main10)." });
+          this.cannotDecode("This device cannot decode the HDR stream (HEVC Main10).");
         }
       })();
     } else if (this.hevc) {
       void supportedHevc(this.o.width, this.o.height).then((c) => {
         if (c) void configure(c);
-        else this.o.onError({ code: "decode", detail: "This device cannot decode HEVC." });
+        else this.cannotDecode("This device cannot decode HEVC.");
       });
     } else if (this.header) {
       const description = avcDescription(this.header);
       if (description) void configure(avcCodecString(this.header), description);
-      else this.o.onError({ code: "decode", detail: "The stream's H.264 header has no SPS/PPS." });
+      else this.cannotDecode("The stream's H.264 header has no SPS/PPS.");
     }
+  }
+
+  /** No decoder will ever take this stream: said, and the session ends rather than go on streaming
+   *  to nothing (with its frames piling up). */
+  private cannotDecode(detail: string): void {
+    this.o.onError({ code: "decode", detail });
+    this.stop();
   }
 
   /** An audio record (3 header, 4 frame): to the decoding worker as it is (the socket's buffer

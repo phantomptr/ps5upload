@@ -93,6 +93,7 @@ import { ShortcutsOverlay } from "../components/ShortcutsOverlay";
 import { LocalPathPicker } from "../components/LocalPathPicker";
 import { Toaster } from "../components/Toaster";
 import { WakePasscodeHost } from "../components/WakePasscodeHost";
+import { RemotePlayHost } from "./RemotePlayHost";
 import { SignInNeededHost } from "../components/SignInNeededHost";
 import { LiveRegion } from "../components/LiveRegion";
 import { SkipNav } from "../components/SkipNav";
@@ -1777,6 +1778,7 @@ export default function AppShell() {
       <Toaster />
       <SignInNeededHost />
       <WakePasscodeHost />
+      <RemotePlayHost />
       <PairingDialog />
       <InstallAskHost />
     </div>
