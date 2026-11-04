@@ -1,11 +1,11 @@
 /* ---- Files: viewer (text with find, hex, image browsing) and the game-folder banner ---- */
 .cw-viewer-count {
   flex: none;
-  margin-right: 0.8rem;
+  margin-inline-end: 0.8rem;
 }
 .cw-viewer-head > .cw-button {
   flex: none;
-  margin-left: 0.6rem;
+  margin-inline-start: 0.6rem;
 }
 .cw-viewer-body.is-image {
   display: flex;
@@ -57,17 +57,17 @@
 }
 .cw-tv-bar > .cw-button {
   flex: none;
-  margin-right: 0.5rem;
+  margin-inline-end: 0.5rem;
 }
 .cw-tv-find {
   display: flex;
   align-items: center;
-  margin-right: 0.6rem;
+  margin-inline-end: 0.6rem;
 }
 .cw-tv-find svg {
   width: 1.1rem;
   height: 1.1rem;
-  margin-right: 0.4rem;
+  margin-inline-end: 0.4rem;
   color: var(--color-muted);
 }
 .cw-tv-find .cw-input {
@@ -75,7 +75,7 @@
   margin-top: 0;
 }
 .cw-tv-count {
-  margin-right: 0.8rem;
+  margin-inline-end: 0.8rem;
   font-size: 0.9rem;
 }
 .cw-tv-bar [aria-pressed="true"] {
@@ -83,6 +83,8 @@
   color: var(--color-accent);
 }
 .cw-tv-body {
+  /* A file's lines and bytes read left to right in every language of the page. */
+  direction: ltr;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -107,9 +109,11 @@
   flex: none;
   box-sizing: content-box;
   width: var(--cw-gutter, 4ch);
-  padding: 0 0.8ch 0 0.4ch;
+  padding: 0;
+  padding-inline-start: 0.4ch;
+  padding-inline-end: 0.8ch;
   white-space: nowrap;
-  text-align: right;
+  text-align: end;
   color: var(--color-muted);
   user-select: none;
   -webkit-user-select: none;
@@ -117,8 +121,8 @@
 .cw-tv-t {
   flex: 1 1 auto;
   min-width: 0;
-  padding-left: 0.6ch;
-  border-left: 1px solid var(--color-border);
+  padding-inline-start: 0.6ch;
+  border-inline-start: 1px solid var(--color-border);
 }
 .cw-tv-t mark {
   background: var(--color-accent-soft);
@@ -142,11 +146,11 @@
   flex: none;
   width: 50ch;
   padding: 0 1.2ch;
-  border-left: 1px solid var(--color-border);
-  border-right: 1px solid var(--color-border);
+  border-inline-start: 1px solid var(--color-border);
+  border-inline-end: 1px solid var(--color-border);
 }
 .cw-hex-ascii {
-  padding-left: 1.2ch;
+  padding-inline-start: 1.2ch;
 }
 .cw-gb {
   display: flex;
@@ -164,7 +168,7 @@
   flex: none;
   width: 4rem;
   height: 4rem;
-  margin-right: 1rem;
+  margin-inline-end: 1rem;
   border-radius: var(--radius-control);
   object-fit: cover;
 }
@@ -225,9 +229,10 @@
   margin: 0.4rem 0 0.8rem;
 }
 .cw-perm-grid th {
-  padding: 0.2rem 0.8rem 0.2rem 0;
+  padding: 0.2rem 0;
+  padding-inline-end: 0.8rem;
   font-weight: normal;
-  text-align: left;
+  text-align: start;
   color: var(--color-muted);
 }
 .cw-perm-grid thead th {
@@ -258,7 +263,8 @@
   margin: 0.6rem 0 0;
 }
 .cw-upload-pick > * {
-  margin: 0 0.6rem 0.6rem 0;
+  margin: 0 0 0.6rem;
+  margin-inline-end: 0.6rem;
 }
 .cw-upload-run p {
   margin: 0.4rem 0;
