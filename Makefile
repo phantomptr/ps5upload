@@ -1094,6 +1094,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/smb/smbd_path.c $(AVA1_C)/third_party/monocypher/monocypher.c
 	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-webui-smb-selftest
 	@echo "✓ saved shares keep passwords out of the page and the file; copies obey the helper's path policy"
+	@echo "Running path policy self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o $(SELFTEST_DIR)/ps5upload-path-policy-selftest $(PAYLOAD_DIR)/tests/path_policy_selftest.c \
+		$(PAYLOAD_DIR)/src/path_policy.c
+	@$(RUN_LIMITED) $(SELFTEST_DIR)/ps5upload-path-policy-selftest
+	@echo "✓ the trust store and the saved shares' key are refused under /data and /user/data alike"
 	@echo "Running file index name-match self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
 		-o $(SELFTEST_DIR)/ps5upload-index-glob-selftest $(PAYLOAD_DIR)/tests/index_glob_selftest.c

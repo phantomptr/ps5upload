@@ -114,10 +114,19 @@ fn stderr_sink() -> &'static std::sync::mpsc::SyncSender<String> {
     })
 }
 
+/// A line as it may be kept: every copy of it, the ring and engine.log, goes through this.
+fn clean(msg: String) -> String {
+    match ps5upload_core::secret_text::without_secrets(&msg) {
+        std::borrow::Cow::Owned(clean) => clean,
+        std::borrow::Cow::Borrowed(_) => msg,
+    }
+}
+
 /// Record a log line. Cheap: one allocation for the formatted message,
 /// one mutex acquisition, bounded-time pop on overflow. Also mirrors to
 /// stderr with a `[engine]` tag so terminal watchers see it too.
-pub(crate) fn record(level: &'static str, mut msg: String) {
+pub(crate) fn record(level: &'static str, msg: String) {
+    let mut msg = clean(msg);
     if msg.len() > MSG_MAX_BYTES {
         // Truncate on a valid UTF-8 char boundary so the String stays
         // well-formed. `floor_char_boundary` is stable; use a manual
@@ -145,7 +154,7 @@ pub(crate) fn record(level: &'static str, mut msg: String) {
 
 /// Only the ring, not the stderr mirror: for a line the host has already written elsewhere.
 pub(crate) fn record_quiet(level: &'static str, msg: String) {
-    push(level, now_ms(), msg);
+    push(level, now_ms(), clean(msg));
 }
 
 fn push(level: &'static str, ts: u64, msg: String) {
@@ -242,6 +251,25 @@ macro_rules! log_detail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/api/engine-logs` answers from the rings, at both levels, and quiet lines too.
+    #[test]
+    fn no_line_keeps_a_secret() {
+        let id = std::process::id();
+        record("warn", format!("fetch https://u:hunter2@h/a-{id} failed"));
+        record("debug", format!("call-{id}?token=hunter2"));
+        record_quiet("info", format!("quiet-{id} password=hunter2"));
+        let mine: Vec<LogEntry> = tail_since(0)
+            .into_iter()
+            .filter(|e| e.msg.contains(&id.to_string()))
+            .collect();
+        assert!(mine.len() >= 3);
+        assert!(
+            mine.iter().all(|e| !e.msg.contains("hunter2")),
+            "{}",
+            mine.len()
+        );
+    }
 
     /// A flood of debug lines (one per request) does not push a warning out of the tail.
     #[test]

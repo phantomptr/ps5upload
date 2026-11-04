@@ -3532,7 +3532,7 @@ async fn ps5_syslog_tail(
             .map_err(anyhow::Error::from)
             .and_then(|r| r);
     match r {
-        Ok(v) => (StatusCode::OK, Json(serde_json::json!({ "text": v }))).into_response(),
+        Ok(v) => (StatusCode::OK, Json(console_log_reply(&v))).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
@@ -3938,9 +3938,15 @@ async fn ps5_klog(State(state): State<AppState>, Query(q): Query<KlogQuery>) -> 
         .map_err(anyhow::Error::from)
         .and_then(|r| r);
     match r {
-        Ok(text) => (StatusCode::OK, Json(serde_json::json!({ "text": text }))).into_response(),
+        Ok(text) => (StatusCode::OK, Json(console_log_reply(&text))).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
+}
+
+/// A console's kernel log or syslog as a reply: nothing of ours writes a secret there, but
+/// everything on the console can, and these go to whoever asks.
+fn console_log_reply(text: &str) -> serde_json::Value {
+    serde_json::json!({ "text": ps5upload_core::secret_text::without_secrets(text) })
 }
 
 /// GET /api/cache/artwork — how much disk the artwork cache is using.
@@ -12896,6 +12902,20 @@ mod loopback_guard_tests {
         LoopbackGuardConfig {
             allowed_ips: ips.iter().map(|s| AllowRule::parse(s).unwrap()).collect(),
         }
+    }
+
+    #[test]
+    fn a_console_log_goes_out_without_a_secret() {
+        let reply = console_log_reply("sceSomething key=abc123 url=http://u:hunter2@h/x done");
+        let text = reply["text"].as_str().unwrap();
+        assert!(
+            !text.contains("abc123") && !text.contains("hunter2"),
+            "{text}"
+        );
+        assert!(
+            text.contains("sceSomething") && text.contains("done"),
+            "{text}"
+        );
     }
 
     #[test]

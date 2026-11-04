@@ -31,6 +31,17 @@ const KEY_FIELDS: &[&str] = &[
     "launch_token",
 ];
 
+/// Where an answer reports a failure in words, which can quote the URL or request it failed on.
+const REPORT_FIELDS: &[&str] = &[
+    "error",
+    "error_detail",
+    "error_reason",
+    "detail",
+    "message",
+    "msg",
+    "reason",
+];
+
 /// Takes every key out of an answer. Pairing still works and stores them: the route has done its
 /// job by now, this is only what a tool gets to see. A drive's password hash (`lock`) goes too,
 /// since it can be cracked offline, leaving that it has one. A key in a route's own words, such as
@@ -47,8 +58,12 @@ pub(crate) fn redact_keys(value: &mut Value) -> bool {
                 map.insert("has_password".to_string(), json!(true));
                 any = true;
             }
-            for v in map.values_mut() {
-                any |= redact_keys(v);
+            for (name, v) in map.iter_mut() {
+                if REPORT_FIELDS.contains(&name.as_str()) {
+                    any |= ps5upload_core::secret_text::value_without_secrets(v);
+                } else {
+                    any |= redact_keys(v);
+                }
             }
         }
         Value::Array(items) => {
@@ -107,8 +122,11 @@ fn any_text(value: &Value, found: &dyn Fn(&str) -> bool) -> bool {
     }
 }
 
-/// Where the helper keeps a copy of each user's PSN sign-in files (payload/include/profile.h).
-const NP_BACKUP_ROOT: &str = "/data/ps5upload/np-backup/";
+/// On the console, what no tool reads: the copy of each user's PSN sign-in files
+/// (payload/include/profile.h), and the helper's AVA1 identity and saved shares' key, which a
+/// helper of this version refuses by itself (payload/src/path_policy.c). By the part below the
+/// drive, since `/user/data` is `/data` under another name.
+const KEY_FOLDERS: &[&str] = &["/ps5upload/np-backup", "/ps5upload/ava", "/ps5upload/smb"];
 
 /// A console document that holds keys: its backup slots (that console's), `state` and `consoles`
 /// (every console on the roster), `drives` (Mesh Drive password hashes).
@@ -143,7 +161,9 @@ pub(crate) fn reaches_a_key_document(
         plain
             .rsplit_once("/mesh/v1/doc-")
             .is_some_and(|(_, name)| is_key_document(name))
-            || plain.starts_with(NP_BACKUP_ROOT)
+            || KEY_FOLDERS
+                .iter()
+                .any(|d| plain.ends_with(d) || plain.contains(&format!("{d}/")))
     };
     query.iter().any(|(_, v)| file(v)) || body.is_some_and(|b| any_text(b, &file))
 }
@@ -890,6 +910,27 @@ mod tests {
     }
 
     #[test]
+    fn a_failure_in_words_loses_what_it_quotes() {
+        let mut job = json!({
+            "jobs": [{
+                "status": "failed",
+                "error": "fetch https://me:hunter2@nas/a.pkg?token=abc123 failed",
+                "error_detail": "password=hunter2",
+                "path": "/data/token=kept.txt",
+            }],
+            "message": {"why": "Bearer abcdef0123456789"},
+        });
+        assert!(redact_keys(&mut job));
+        let text = job.to_string();
+        for secret in ["hunter2", "abc123", "abcdef0123456789"] {
+            assert!(!text.contains(secret), "{text}");
+        }
+        // A path is the user's, not a report.
+        assert_eq!(job["jobs"][0]["path"], "/data/token=kept.txt");
+        assert!(!redact_keys(&mut job));
+    }
+
+    #[test]
     fn a_document_with_keys_is_refused_however_it_is_written_and_only_those() {
         let doc = |path: &str, name: &str| {
             reaches_a_key_document(path, &[("name", name.to_string())], None)
@@ -931,6 +972,31 @@ mod tests {
             &[],
             Some(&shell)
         ));
+        for file in [
+            "/user/data/ps5upload/np-backup/0x00000001.txt",
+            "/user/data/ps5upload/mesh/v1/doc-consoles",
+            "/data/ps5upload/ava/identity",
+            "/user/data/ps5upload/ava",
+            "/user/data/ps5upload/smb/shares.key",
+        ] {
+            let body = json!({"addr": "a", "path": file});
+            assert!(
+                reaches_a_key_document("/api/ps5/fs/read-preview", &[], Some(&body)),
+                "{file}"
+            );
+        }
+        for file in [
+            "/user/data/ps5upload/pkg_temp/a.pkg",
+            "/user/home/1/savedata/x",
+            "/data/ps5upload/stderr.log",
+            "/data/ps5upload/avatars/a.png",
+        ] {
+            let body = json!({"addr": "a", "path": file});
+            assert!(
+                !reaches_a_key_document("/api/ps5/fs/read-preview", &[], Some(&body)),
+                "{file}"
+            );
+        }
         let np = json!({"path": "/data/ps5upload/np-backup/0x00000001.txt"});
         assert!(reaches_a_key_document(
             "/api/ps5/fs/read-preview",

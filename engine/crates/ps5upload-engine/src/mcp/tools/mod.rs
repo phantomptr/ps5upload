@@ -379,6 +379,15 @@ impl ToolOutput {
     /// What leaves the server: every key out, whatever route it came from. Tools read keys inside
     /// (a wake needs its credential); only their results are held to this.
     fn without_keys(mut self) -> Self {
+        // A failure is sentences, not an answer, and can quote what it failed on.
+        if self.is_error {
+            for block in &mut self.content {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    let clean = ps5upload_core::secret_text::without_secrets(text).into_owned();
+                    block["text"] = json!(clean);
+                }
+            }
+        }
         let mut changed = false;
         if let Some(structured) = self.structured.as_mut() {
             changed = crate::mcp::catalog_routes::redact_keys(structured);
@@ -712,6 +721,19 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string()
+    }
+
+    #[test]
+    fn a_tool_failure_loses_what_it_quotes() {
+        let out =
+            ToolOutput::error("GET https://me:hunter2@nas/x?key=abc123: HTTP 502".to_string())
+                .without_keys();
+        let text = out.content[0]["text"].as_str().unwrap();
+        assert!(
+            !text.contains("hunter2") && !text.contains("abc123"),
+            "{text}"
+        );
+        assert!(text.contains("HTTP 502"), "{text}");
     }
 
     #[test]

@@ -107,6 +107,17 @@ pub fn console_host(addr: &str) -> String {
 }
 
 impl Event {
+    /// Secrets out of its message and detail (`secret_text`): where events are kept or sent.
+    pub fn without_secrets(mut self) -> Self {
+        if let std::borrow::Cow::Owned(clean) = crate::secret_text::without_secrets(&self.msg) {
+            self.msg = clean;
+        }
+        if let Some(detail) = self.detail.as_mut() {
+            crate::secret_text::value_without_secrets(detail);
+        }
+        self
+    }
+
     /// An engine event stamped now. `msg` is cut to 1 KiB; a `detail` over 2 KiB is dropped.
     pub fn new(
         cat: Cat,
@@ -176,6 +187,24 @@ pub fn emit_detail(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_event_keeps_no_secret() {
+        let e = Event::new(
+            Cat::Api,
+            Level::Error,
+            "x",
+            None,
+            "GET https://u:hunter2@h/x?token=abc123 failed".into(),
+            Some(serde_json::json!({"rp_key": "abc123", "why": "password=hunter2"})),
+        )
+        .without_secrets();
+        let text = serde_json::to_string(&e).unwrap();
+        assert!(
+            !text.contains("hunter2") && !text.contains("abc123"),
+            "{text}"
+        );
+    }
     use std::sync::{Arc, Mutex};
 
     #[test]

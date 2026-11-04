@@ -106,19 +106,29 @@ static int has_dotdot(const char *p) {
     return 0;
 }
 
+/* /data is a nullfs mount of /user/data (the mount table says so, see volumes.rs), and realpath does
+ * not see through a mount: /user/data/ps5upload/ava is the store under a name no form above matches.
+ * `dir` under /data: its /user/data name in `out`, returning 1. */
+static int data_alias(const char *dir, char *out, size_t cap) {
+    if (strncasecmp(dir, "/data/", 6) != 0) return 0;
+    return snprintf(out, cap, "/user%s", dir) < (int)cap;
+}
+
 /* `norm`/`canon` (the path's two forms) against one protected directory: in_dir = the path is the
  * directory or below it; contains_dir = the directory is the path or below it. */
 static int in_dir(const char *norm, const char *canon, const char *dir) {
-    char pnorm[PATH_MAX], pcanon[PATH_MAX];
+    char pnorm[PATH_MAX], pcanon[PATH_MAX], alias[PATH_MAX];
     lex_normalize(dir, pnorm, sizeof pnorm);
     canonical_of(dir, pcanon, sizeof pcanon);
+    if (data_alias(pnorm, alias, sizeof alias) && (under(norm, alias) || under(canon, alias))) return 1;
     return under(norm, pnorm) || under(canon, pnorm) || under(norm, pcanon) || under(canon, pcanon);
 }
 
 static int contains_dir(const char *norm, const char *canon, const char *dir) {
-    char pnorm[PATH_MAX], pcanon[PATH_MAX];
+    char pnorm[PATH_MAX], pcanon[PATH_MAX], alias[PATH_MAX];
     lex_normalize(dir, pnorm, sizeof pnorm);
     canonical_of(dir, pcanon, sizeof pcanon);
+    if (data_alias(pnorm, alias, sizeof alias) && (under(alias, norm) || under(alias, canon))) return 1;
     return under(pnorm, norm) || under(pcanon, canon) || under(pnorm, canon) || under(pcanon, norm);
 }
 

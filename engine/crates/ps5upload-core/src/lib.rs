@@ -52,6 +52,7 @@ pub mod rp_stream;
 pub mod save_archive;
 pub mod saves;
 pub mod sdk_changer;
+pub mod secret_text;
 pub mod smp;
 pub mod smp_api;
 pub mod smp_checkout;

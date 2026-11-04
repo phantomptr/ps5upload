@@ -236,6 +236,20 @@ keys. Stream keys for Go live show only their last four characters. Play Togethe
 controller links do reach a tool, because handing them out is what those calls are for, and the
 host still approves who joins.
 
+**Logs.** Engine log lines and journal events are cleaned where they are written, and again when an
+older journal line is read: a password in a URL, a field or `name=value` named as a key, token, password
+or secret, a bearer token, and the key at the end of an `rtmp://` address. The console's kernel log and
+syslog are cleaned the same way when read, and so are the error messages in any tool's answer. This goes
+by shape, so a key with no name beside it can't be recognised: the app never logs one.
+
+**The console's own files.** File tools reach what the helper does, which includes everything under
+`/user` and `/data`: saves, game data, the console's account data. That is your console's data, not this
+app's, and a file read can't tell a secret in it from anything else, so it isn't filtered. This app keeps
+no keys under `/user` apart from `/user/data`, which is `/data` under another name and is held to the
+same rules: the helper refuses its AVA1 identity and the saved shares' key, and no tool reads the PSN
+sign-in copies in `np-backup`. Those rules go by path, so copying a whole folder to read it elsewhere is
+a step around them; copying is a tool that asks for confirmation for that reason.
+
 **A shell on the console has everything.** `shell_run`, and `api_request` calling `/api/ps5/shell/run`, can read any file on the console, including the files the rules above keep other tools from. Nothing filters what a command reads, and no filter could. `payloads_send` runs a program there, which can do the same. So these tools are marked destructive, and read-only mode refuses them. Keep them on "ask" and read each command before you allow it, or turn them off in your client.
 
 ## Things that need more than the engine

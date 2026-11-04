@@ -113,8 +113,7 @@ pub fn credential_from_regist_key(regist_key_hex: &str) -> Result<u64> {
     if text.is_empty() {
         bail!("regist key decoded to an empty string");
     }
-    u64::from_str_radix(text, 16)
-        .with_context(|| format!("regist key {text:?} is not a hex number"))
+    u64::from_str_radix(text, 16).context("regist key is not a hex number")
 }
 
 fn parse_hex(s: &str) -> Option<Vec<u8>> {
@@ -706,6 +705,14 @@ mod tests {
             .headers
             .iter()
             .any(|(k, v)| k == "rp-version" && v == "1.0"));
+    }
+
+    #[test]
+    fn a_bad_regist_key_is_not_quoted_in_its_error() {
+        // Decodes to text that isn't hex.
+        let hex: String = "SECRETZZ".bytes().map(|b| format!("{b:02x}")).collect();
+        let e = format!("{:#}", credential_from_regist_key(&hex).unwrap_err());
+        assert!(!e.contains("SECRETZZ"), "{e}");
     }
 
     #[test]

@@ -307,7 +307,9 @@ impl ReadPlan {
             out.extend(
                 text.lines()
                     .filter_map(|l| serde_json::from_str::<Event>(l).ok())
-                    .filter(|e| keep(e)),
+                    .filter(|e| keep(e))
+                    // A line from before lines were cleaned stays on disk for a week.
+                    .map(Event::without_secrets),
             );
         }
         out.extend(self.pending);
@@ -336,7 +338,8 @@ pub fn journal_dir() -> PathBuf {
 pub fn install() {
     let j = JOURNAL.get_or_init(|| Mutex::new(Journal::open(journal_dir(), MAX_TOTAL, MAX_AGE_MS)));
     let (tx, rx) = std::sync::mpsc::sync_channel::<Event>(4096);
-    set_sink(move |mut e| {
+    set_sink(move |e| {
+        let mut e = e.without_secrets();
         // The same number on the live feed (`journal` events) and in the journal, so
         // `?since_seq=` and `Last-Event-ID` are one cursor.
         crate::event_bus::bus().publish_with(Some("journal"), |seq| {
@@ -732,6 +735,23 @@ mod tests {
         }
         j.flush();
         assert_eq!(j.read_range(0, u64::MAX, None).len(), 3);
+    }
+
+    #[test]
+    fn a_line_kept_on_disk_is_read_without_its_secret() {
+        let t = TmpDir::new("secret");
+        let mut j = Journal::open(t.0.clone(), 32 << 20, 7 * 86_400_000);
+        let mut e = ev(now_ms() - 1_000, "a");
+        e.msg = "fetch https://u:hunter2@h/x?token=abc123".into();
+        j.push(e);
+        j.flush();
+        let read = j.read_range(0, u64::MAX, None);
+        assert_eq!(read.len(), 1);
+        let text = serde_json::to_string(&read).unwrap();
+        assert!(
+            !text.contains("hunter2") && !text.contains("abc123"),
+            "{text}"
+        );
     }
 
     #[test]
