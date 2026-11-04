@@ -228,6 +228,31 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
     expect(o.errMessage).toBe(PKG_PATCH_DID_NOT_APPLY_HINT);
   });
 
+  it("an update still unconfirmed when the wait ended is not a failure and keeps the package", () => {
+    const o = statusToOutcome(
+      status({
+        phase: "done",
+        verdict: "unverified",
+        patch_verdict: "inconclusive",
+        metrics: { ...status({}).metrics, phase_ms: { verify: 420_000 } },
+      }),
+    );
+    expect(o.unverified).toBe(true);
+    // `installed` is what authorizes deleting the staged package.
+    expect(o.installed).toBe(false);
+    expect(o.errMessage).toContain("after 7 min");
+    expect(o.errMessage).toContain("The package was kept");
+  });
+
+  it("a link the console fetches by itself is sent, not installed", () => {
+    const o = statusToOutcome(
+      status({ phase: "done", verdict: "unverified", patch_verdict: null }),
+    );
+    expect(o.unverified).toBe(true);
+    expect(o.installed).toBe(false);
+    expect(o.errMessage).toContain("downloads it by itself");
+  });
+
   it("falls back to the hex code when the engine gave no hint", () => {
     const o = statusToOutcome(
       status({ phase: "failed", verdict: "failed", hint: null, code: 0x80b2116f }),

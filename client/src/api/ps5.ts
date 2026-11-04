@@ -6028,7 +6028,10 @@ export interface InstallStatus {
   title_id: string | null;
   phase: "resolve" | "deliver" | "install" | "verify" | "done" | "failed";
   route: "loopback" | "stream" | "path" | null;
-  verdict: "installed" | "may_not_launch" | "failed" | null;
+  /** `unverified`: Sony accepted it and nothing failed, but the engine cannot say it finished
+   *  (the console fetches a bare link by itself; an update's version had not moved when the wait
+   *  ended). The package is kept. */
+  verdict: "installed" | "may_not_launch" | "failed" | "unverified" | null;
   code: number;
   hint: string | null;
   reason: string | null;

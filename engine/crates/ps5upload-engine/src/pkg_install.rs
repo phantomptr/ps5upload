@@ -2535,22 +2535,65 @@ pub(crate) fn read_installed_app_ver(mgmt_addr: &str, title_id: &str) -> Option<
         .filter(|v| !v.trim().is_empty())
 }
 
+/// What the wait for a patch to take effect found.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PatchCheck {
+    pub verdict: ps5upload_core::patch_verify::PatchVerdict,
+    /// The last version read.
+    pub after: Option<String>,
+    /// The budget ran out with the version still short of the package's. That alone proves
+    /// nothing: the console may still be writing it.
+    pub timed_out: bool,
+}
+
+/// How long a patch gets to show up after the console has it. A patch landed 150 s after the
+/// call on hardware, and a multi-GB one is decrypted and written for longer than a small one, so
+/// the wait grows with the package (about 50 MiB/s, past a floor that covers the measured case).
+pub(crate) fn patch_verify_budget(package_bytes: u64) -> std::time::Duration {
+    const FLOOR_SECS: u64 = 240;
+    const CEILING_SECS: u64 = 60 * 60;
+    let secs = FLOOR_SECS.saturating_add(package_bytes / (50 * 1024 * 1024));
+    std::time::Duration::from_secs(secs.min(CEILING_SECS))
+}
+
 /// Wait for a patch to take effect, then say whether it did.
 ///
 /// A PS5 install is asynchronous: on hardware the same patch landed 150 s
 /// after the call returned. Polling too early is exactly how this bug was
 /// twice mis-diagnosed, so this waits, and returns the moment the version
 /// moves rather than burning the whole budget on a success.
+///
+/// `stop` ends the wait early (the user stopped the install).
 pub(crate) fn verify_patch_after_install(
     mgmt_addr: &str,
     title_id: &str,
     before: Option<&str>,
     package_app_ver: &str,
-) -> (ps5upload_core::patch_verify::PatchVerdict, Option<String>) {
+    budget: std::time::Duration,
+    stop: &dyn Fn() -> bool,
+) -> PatchCheck {
+    wait_for_patch(
+        &|| read_installed_app_ver(mgmt_addr, title_id),
+        before,
+        package_app_ver,
+        budget,
+        std::time::Duration::from_secs(10),
+        stop,
+    )
+}
+
+/// [`verify_patch_after_install`] with the read and the step passed in, so the waiting rules are
+/// tested without a console.
+fn wait_for_patch(
+    read: &dyn Fn() -> Option<String>,
+    before: Option<&str>,
+    package_app_ver: &str,
+    budget: std::time::Duration,
+    step: std::time::Duration,
+    stop: &dyn Fn() -> bool,
+) -> PatchCheck {
     use ps5upload_core::patch_verify::{parse_app_ver, verify_patch_applied, PatchVerdict};
-    const BUDGET: std::time::Duration = std::time::Duration::from_secs(240);
-    const STEP: std::time::Duration = std::time::Duration::from_secs(10);
-    let deadline = std::time::Instant::now() + BUDGET;
+    let deadline = std::time::Instant::now() + budget;
     let mut latest: Option<String> = before.map(|s| s.to_string());
 
     // When the package does not claim a newer version there is no change to
@@ -2564,7 +2607,7 @@ pub(crate) fn verify_patch_after_install(
         _ => false,
     };
     if !expecting_rise {
-        let after = read_installed_app_ver(mgmt_addr, title_id).or(latest.clone());
+        let after = read().or(latest.clone());
         let verdict = verify_patch_applied(before, after.as_deref(), Some(package_app_ver));
         // A single sample is enough ONLY when it is not claiming a loss.
         // Sony's overwrite removes the old update before writing the new one,
@@ -2574,13 +2617,17 @@ pub(crate) fn verify_patch_after_install(
         // that looks like a loss falls through to the wait loop, which only
         // concludes at its deadline.
         if verdict != PatchVerdict::Regressed {
-            return (verdict, after);
+            return PatchCheck {
+                verdict,
+                after,
+                timed_out: false,
+            };
         }
         latest = after;
     }
 
     loop {
-        let after = read_installed_app_ver(mgmt_addr, title_id);
+        let after = read();
         if after.is_some() {
             latest = after.clone();
         }
@@ -2592,18 +2639,42 @@ pub(crate) fn verify_patch_after_install(
         // Concluding "regressed" from that sample would fail a perfectly good
         // install, which is worse than the silent no-op this exists to catch.
         // Only the deadline decides a failure.
-        if verify_patch_applied(before, latest.as_deref(), Some(package_app_ver))
-            == PatchVerdict::Applied
+        let verdict = verify_patch_applied(before, latest.as_deref(), Some(package_app_ver));
+        // A re-install that claims no rise is over once the title is back where it started.
+        if verdict == PatchVerdict::Applied
+            || (!expecting_rise && verdict != PatchVerdict::Regressed)
         {
-            return (PatchVerdict::Applied, latest);
+            return PatchCheck {
+                verdict,
+                after: latest,
+                timed_out: false,
+            };
+        }
+        if stop() {
+            return PatchCheck {
+                verdict: PatchVerdict::Inconclusive,
+                after: latest,
+                timed_out: false,
+            };
         }
         if std::time::Instant::now() >= deadline {
-            return (
-                verify_patch_applied(before, latest.as_deref(), Some(package_app_ver)),
-                latest,
-            );
+            // A version that has not moved when the wait ends is not a verdict of "did not
+            // apply": a large patch may still be writing. A loss is still only ever concluded
+            // here, at the end.
+            return PatchCheck {
+                verdict: match verdict {
+                    PatchVerdict::Regressed => PatchVerdict::Regressed,
+                    _ => PatchVerdict::Inconclusive,
+                },
+                after: latest,
+                timed_out: true,
+            };
         }
-        std::thread::sleep(STEP);
+        // In slices, so a stop is seen within a moment.
+        let wake = std::time::Instant::now() + step;
+        while std::time::Instant::now() < wake && !stop() {
+            std::thread::sleep(step.min(std::time::Duration::from_millis(250)));
+        }
     }
 }
 
@@ -4447,6 +4518,110 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     // failure they guard against: a 25 GB / 200 GB install reported "done"
     // after a fixed timer, deleting the staged pkg WHILE Sony was still
     // installing from it. The cure is "Complete only on observed completion".
+
+    // ── the wait for a patch to show up ──
+
+    #[test]
+    fn the_patch_wait_grows_with_the_package_up_to_a_limit() {
+        use std::time::Duration;
+        assert_eq!(patch_verify_budget(0), Duration::from_secs(240));
+        // 8.69 GB, the patch measured on hardware.
+        let b = patch_verify_budget(8_690_000_000);
+        assert!(
+            b > Duration::from_secs(400) && b < Duration::from_secs(500),
+            "{b:?}"
+        );
+        assert_eq!(patch_verify_budget(u64::MAX), Duration::from_secs(3600));
+    }
+
+    const PATCH_STEP: std::time::Duration = std::time::Duration::from_millis(5);
+
+    #[test]
+    fn a_patch_still_installing_when_the_wait_ends_is_not_a_failure() {
+        use ps5upload_core::patch_verify::PatchVerdict;
+        let c = wait_for_patch(
+            &|| Some("01.00".into()),
+            Some("01.00"),
+            "01.09",
+            std::time::Duration::from_millis(20),
+            PATCH_STEP,
+            &|| false,
+        );
+        assert_eq!(c.verdict, PatchVerdict::Inconclusive);
+        assert!(c.timed_out);
+        assert_eq!(c.after.as_deref(), Some("01.00"));
+    }
+
+    #[test]
+    fn a_patch_that_lands_ends_the_wait_at_once() {
+        use ps5upload_core::patch_verify::PatchVerdict;
+        let reads = std::sync::atomic::AtomicU32::new(0);
+        let c = wait_for_patch(
+            &|| {
+                let n = reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Some(if n < 2 { "01.00" } else { "01.09" }.to_string())
+            },
+            Some("01.00"),
+            "01.09",
+            std::time::Duration::from_secs(60),
+            PATCH_STEP,
+            &|| false,
+        );
+        assert_eq!(c.verdict, PatchVerdict::Applied);
+        assert!(!c.timed_out);
+    }
+
+    /// Sony removes the old update first, so a lower reading is only a loss at the deadline.
+    #[test]
+    fn a_lower_version_is_only_a_loss_at_the_end_of_the_wait() {
+        use ps5upload_core::patch_verify::PatchVerdict;
+        let reads = std::sync::atomic::AtomicU32::new(0);
+        let c = wait_for_patch(
+            &|| {
+                let n = reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Some(if n < 2 { "01.00" } else { "01.09" }.to_string())
+            },
+            Some("01.09"),
+            "01.09",
+            std::time::Duration::from_secs(60),
+            PATCH_STEP,
+            &|| false,
+        );
+        assert_eq!(
+            c.verdict,
+            PatchVerdict::Inconclusive,
+            "back where it started"
+        );
+        assert!(!c.timed_out);
+        assert_eq!(c.after.as_deref(), Some("01.09"));
+        let c = wait_for_patch(
+            &|| Some("01.00".into()),
+            Some("01.09"),
+            "01.09",
+            std::time::Duration::from_millis(20),
+            PATCH_STEP,
+            &|| false,
+        );
+        assert_eq!(c.verdict, PatchVerdict::Regressed);
+        assert!(c.timed_out);
+    }
+
+    #[test]
+    fn a_stop_ends_the_patch_wait_without_a_verdict() {
+        use ps5upload_core::patch_verify::PatchVerdict;
+        let started = std::time::Instant::now();
+        let c = wait_for_patch(
+            &|| Some("01.00".into()),
+            Some("01.00"),
+            "01.09",
+            std::time::Duration::from_secs(600),
+            std::time::Duration::from_secs(600),
+            &|| started.elapsed() > std::time::Duration::from_millis(30),
+        );
+        assert_eq!(c.verdict, PatchVerdict::Inconclusive);
+        assert!(!c.timed_out);
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    }
 
     // ── delete_staging / staging cleanup (the Auto-Delete data-loss fix) ──
 
