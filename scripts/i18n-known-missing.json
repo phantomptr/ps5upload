@@ -10,8 +10,6 @@
       "cw_settings_app_name",
       "ffpkg_inspect_sce_sys",
       "helper_copy_place_pldmgr",
-      "play_title",
-      "rp_pip_title",
       "smp_meta_json"
     ]
   },
@@ -26,9 +24,7 @@
       "cw_settings_app_name",
       "ffpkg_inspect_sce_sys",
       "helper_copy_place_pldmgr",
-      "play_title",
       "processes_pid",
-      "rp_pip_title",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
       "smp_meta_json"
@@ -52,12 +48,9 @@
       "game_hub_addons",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
-      "play_title",
       "power_wake_signin_rpkey",
       "processes_pid",
-      "remotePlay_slot",
       "remote_play",
-      "rp_pip_title",
       "smp_meta_json"
     ]
   },
@@ -75,11 +68,9 @@
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
-      "play_title",
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "rp_pip_title",
       "smp_meta_json"
     ]
   },
@@ -94,9 +85,7 @@
       "cw_settings_app_name",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
-      "play_title",
-      "remote_play",
-      "rp_pip_title"
+      "remote_play"
     ]
   },
   "fr": {
@@ -130,9 +119,7 @@
       "cw_settings_app_name",
       "ffpkg_inspect_sce_sys",
       "helper_copy_place_pldmgr",
-      "play_title",
       "processes_pid",
-      "rp_pip_title",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
       "smp_meta_json"
@@ -152,11 +139,9 @@
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
       "pkglib.auth.fake",
-      "play_title",
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "rp_pip_title",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
       "smp_meta_json"
@@ -176,11 +161,8 @@
       "fs_item_one",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
-      "play_title",
       "processes_pid",
-      "remotePlay_slot",
       "remote_play",
-      "rp_pip_title",
       "smp_meta_json",
       "status_helper_version"
     ]
@@ -202,12 +184,9 @@
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
       "hw_cpu_core_clock",
-      "play_title",
       "processes_pid",
-      "remotePlay_slot",
       "remote_play",
       "rp_pip",
-      "rp_pip_title",
       "shortcuts_sec_filesystem",
       "smp_meta_json",
       "status_helper_version"
@@ -259,11 +238,9 @@
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
-      "play_title",
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "rp_pip_title",
       "smp_meta_json"
     ]
   },
@@ -287,7 +264,6 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "queue_console_total",
-      "remotePlay_slot",
       "smp_meta_json"
     ]
   },
@@ -301,13 +277,9 @@
       "br_where_discord",
       "cw_settings_app_name",
       "ffpkg_inspect_sce_sys",
-      "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
-      "play_title",
       "power_wake_signin_rpkey",
       "processes_pid",
-      "remote_play",
-      "rp_pip_title",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
       "smp_meta_json"
@@ -325,10 +297,8 @@
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
-      "play_title",
       "processes_pid",
       "remote_play",
-      "rp_pip_title",
       "smp_meta_json"
     ]
   },
@@ -344,11 +314,9 @@
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
-      "play_title",
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "rp_pip_title",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
       "smp_meta_json"
@@ -367,11 +335,9 @@
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
-      "play_title",
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "rp_pip_title",
       "smp_meta_json"
     ]
   },

@@ -56,7 +56,7 @@ const NON_EN: ReadonlyArray<readonly [string, Translations]> = [
  * invariant below. Keep this list SMALL and shrinking; if you add to it, you
  * probably meant to delete the dead key from the locale files instead.
  */
-const KNOWN_STALE = new Set<string>(["upload_scanning_archive_hint"]);
+const KNOWN_STALE = new Set<string>([]);
 
 describe("i18n locale integrity", () => {
   it("English source catalog is a non-empty string map", () => {
@@ -144,6 +144,27 @@ describe("i18n placeholder integrity", () => {
       expect(drift, `Placeholder drift in ${code}:\n${drift.join("\n")}`).toEqual(
         [],
       );
+    },
+  );
+
+  /**
+   * Machine-translation leftovers no placeholder check can see: a C format
+   * string, a debugger's "[state]", a Windows menu mnemonic like "(N)...".
+   * The app has no such syntax, so they always show up on screen as garbage.
+   */
+  const LEFTOVER = /%[sd]\b|\[state\]|\([A-Z]\)\.\.\./;
+
+  it.each(NON_EN.map(([code]) => code))(
+    "locale %s has no machine-translation leftovers",
+    (code) => {
+      const dict = NON_EN.find(([c]) => c === code)![1] as Record<
+        string,
+        string
+      >;
+      const bad = Object.entries(dict)
+        .filter(([k, v]) => LEFTOVER.test(v) && !LEFTOVER.test(en[k] ?? ""))
+        .map(([k, v]) => `${k}: ${v}`);
+      expect(bad, `Garbage in ${code}:\n${bad.join("\n")}`).toEqual([]);
     },
   );
 });
