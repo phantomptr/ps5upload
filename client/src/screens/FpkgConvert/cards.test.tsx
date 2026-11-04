@@ -28,6 +28,13 @@ const estimates = {
 };
 
 describe("CompressionTiles", () => {
+  it("says the level only trades build time for size, and Stored is the odd one out", () => {
+    const html = renderToStaticMarkup(<CompressionTiles value="balanced" onChange={() => {}} estimates={null} />);
+    expect(html).toContain("Same game either way");
+    const stored = renderToStaticMarkup(<CompressionTiles value="stored" onChange={() => {}} estimates={null} />);
+    expect(stored).not.toContain("Same game either way");
+  });
+
   it("is a radio group with the chosen level checked", () => {
     const out = renderToStaticMarkup(
       <CompressionTiles value="balanced" onChange={() => {}} estimates={estimates} />,
@@ -61,6 +68,14 @@ describe("CompressionTiles", () => {
 });
 
 describe("MakeCard", () => {
+  it("does not ask to check an archive, which is looked at when it is unpacked", () => {
+    const html = renderToStaticMarkup(
+      <MakeCard make="pkg" onMake={() => {}} kernel="11.00" contentId={null} checked={false} archive />,
+    );
+    expect(html).not.toContain("Check a game");
+    expect(html).toContain("after it is unpacked");
+  });
+
   it("explains both, and marks the image for a PS5 game the firmware will not play as a package", () => {
     const fw = renderToStaticMarkup(
       <MakeCard make="pkg" onMake={() => {}} kernel="r229358/releases/13.60" contentId="UP9000-PPSA03671_00-X" checked />,
@@ -464,6 +479,8 @@ describe("queued game choices (#518)", () => {
     expect(kindsFor("/dl/game.exfat")).toEqual(["pkg", "image", "folder"]);
     expect(kindsFor("/dl/game.zip")).toEqual(["pkg", "image"]);
     expect(kindsFor("/dl/notes.txt")).toEqual(["pkg"]);
+    // A folder with a dotted name, known to be a folder when it was added.
+    expect(kindsFor("/games/Some.Game.2024", true)).toEqual(["pkg", "image"]);
   });
 
   it("keeps an image's format and moves the after-step to what the new kind can do", async () => {

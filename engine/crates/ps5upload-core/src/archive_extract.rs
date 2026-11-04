@@ -104,8 +104,8 @@ pub fn remove_path_retrying(path: &Path) -> std::io::Result<()> {
     last
 }
 
-/// Image files Convert builds from directly.
-const IMAGE_EXTS: [&str; 3] = ["exfat", "ffpkg", "ffpfsc"];
+/// Game files Workshop builds from directly: the images it reads and a package.
+pub const GAME_FILE_EXTS: [&str; 6] = ["exfat", "ffpkg", "ufs2", "ffpfs", "ffpfsc", "pkg"];
 
 /// The unpacked size of every file, from the archive's listing (no decompression).
 pub fn unpacked_size(archive: &Path, password: Option<&str>) -> Result<u64> {
@@ -453,7 +453,7 @@ pub fn find_game(root: &Path) -> Result<PathBuf> {
                 && path
                     .extension()
                     .and_then(|x| x.to_str())
-                    .is_some_and(|x| IMAGE_EXTS.contains(&x.to_ascii_lowercase().as_str()))
+                    .is_some_and(|x| GAME_FILE_EXTS.contains(&x.to_ascii_lowercase().as_str()))
             {
                 found.push(path);
             }
@@ -463,7 +463,7 @@ pub fn find_game(root: &Path) -> Result<PathBuf> {
     match found.len() {
         1 => Ok(found.remove(0)),
         0 => bail!(
-            "no game in the archive: no folder with sce_sys/param.json, and no .exfat, .ffpkg or .ffpfsc image"
+            "no game in the archive: no folder with sce_sys/param.json, and no game image or package"
         ),
         _ => {
             let names: Vec<String> = found

@@ -2,6 +2,7 @@
 // passes before it is queued. Each check blocks or explains; none guesses.
 
 import { formatBytes } from "./format";
+import { isRarLaterVolume } from "./rarVolumes";
 
 export type ScanClass = "folder" | "package" | "archive" | "image" | "other";
 
@@ -12,6 +13,8 @@ export function classifyScanEntry(name: string, isDir: boolean): ScanClass {
   if (isDir) return "folder";
   const lower = name.toLowerCase();
   if (/\.f?pkg$/.test(lower)) return "package";
+  // A later part of a RAR set is read through the first: not a game of its own.
+  if (isRarLaterVolume(lower)) return "other";
   if (/\.(zip|7z|rar)$/.test(lower)) return "archive";
   if (/\.(exfat|ffpkg|ffpfs|ffpfsc)$/.test(lower)) return "image";
   return "other";

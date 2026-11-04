@@ -18,6 +18,7 @@ vi.mock("../state/fpkgConversion", () => ({
         pipeline = { phase: "done", packagePath: "/out/Game.ffpfsc" };
       },
       cancel: async () => {},
+      attachRunning: async () => {},
     }),
     subscribe: () => () => {},
   },

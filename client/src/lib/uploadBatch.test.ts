@@ -5,6 +5,11 @@ import { classifyScanEntry, validateBatch, volumeOfDest, type BatchCheckRow } fr
 describe("classifying a scanned folder's children", () => {
   it("pre-checks games, packages, archives and images, and leaves the rest out", () => {
     expect(classifyScanEntry("My Game", true)).toBe("folder");
+    // A multi-part RAR is one game: its first part, the rest read through it.
+    expect(classifyScanEntry("Game.part1.rar", false)).toBe("archive");
+    expect(classifyScanEntry("Game.part01.rar", false)).toBe("archive");
+    expect(classifyScanEntry("Game.part2.rar", false)).toBe("other");
+    expect(classifyScanEntry("Game.rar", false)).toBe("archive");
     expect(classifyScanEntry("a.pkg", false)).toBe("package");
     expect(classifyScanEntry("g.part1.rar", false)).toBe("archive");
     expect(classifyScanEntry("G.exfat", false)).toBe("image");

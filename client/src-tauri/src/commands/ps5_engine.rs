@@ -2548,26 +2548,11 @@ pub async fn fpkg_extract_cleanup(path: String) -> Result<JsonValue, String> {
     post_json(&url, &serde_json::json!({ "path": path })).await
 }
 
-/// Compress a game image into a `.ffpfsc` for ShadowMountPlus; runs as an engine job.
+/// Workshop jobs the engine is running now, whoever started them.
 #[tauri::command]
-pub async fn ffpfsc_compress(
-    source: String,
-    output_dir: Option<String>,
-    level: Option<u32>,
-    full_verify: Option<bool>,
-) -> Result<JsonValue, String> {
+pub async fn workshop_jobs() -> Result<JsonValue, String> {
     let base = engine::url();
-    let url = format!("{base}/api/ffpfsc/compress");
-    post_json(
-        &url,
-        &serde_json::json!({
-            "source": source,
-            "output_dir": output_dir,
-            "level": level,
-            "full_verify": full_verify.unwrap_or(false),
-        }),
-    )
-    .await
+    get_json(&format!("{base}/api/workshop/jobs")).await
 }
 
 /// Write a game folder as one `.exfat` image for ShadowMountPlus; runs as an engine job.

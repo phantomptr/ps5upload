@@ -18,8 +18,9 @@ type Kind = ConvertBuild["kind"];
 
 /** What this source can become: a folder only from an image or package; an image from a game
  *  folder, image, package or archive (a file of any other kind cannot). */
-export function kindsFor(source: string): Kind[] {
-  const file = /\.[a-z0-9]{2,6}$/i.test(source.trim());
+export function kindsFor(source: string, isDir?: boolean): Kind[] {
+  // Known to be a folder when added; a name is only a guess (`Some.Game.2024` is a folder).
+  const file = !isDir && /\.[a-z0-9]{2,6}$/i.test(source.trim());
   const kinds: Kind[] = ["pkg"];
   if (!file || isFolderableSource(source) || isArchiveSource(source)) kinds.push("image");
   if (isFolderableSource(source)) kinds.push("folder");
@@ -68,7 +69,7 @@ export function QueueItemOptions({
   const rememberedVerify = useConvertPrefs((s) => s.fullVerify);
   const rememberedLevel = useConvertPrefs((s) => s.imageLevel);
   const kind: Kind = item.build?.kind ?? "pkg";
-  const kinds = kindsFor(item.source);
+  const kinds = kindsFor(item.source, item.isDir);
   const kindLabel: Record<Kind, string> = {
     pkg: tr("cq_opt_pkg", undefined, "Package"),
     image: tr("cq_opt_image", undefined, "Game image"),

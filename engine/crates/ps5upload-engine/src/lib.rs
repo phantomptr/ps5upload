@@ -11143,10 +11143,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             "/api/fpkg/extract/cleanup",
             post(fpkg_api::fpkg_extract_cleanup_handler),
         )
-        .route(
-            "/api/ffpfsc/compress",
-            post(fpkg_api::ffpfsc_compress_handler),
-        )
         .route("/api/exfat/build", post(fpkg_api::exfat_build_handler))
         .route("/api/folder/build", post(fpkg_api::folder_build_handler))
         .route(
@@ -11709,6 +11705,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/jobs/{id}/pause", post(workshop_api::pause_job))
         .route("/api/jobs/{id}/resume", post(workshop_api::resume_job))
+        .route("/api/workshop/jobs", get(workshop_api::get_jobs))
         .route(
             "/api/workshop/settings",
             get(workshop_api::get_settings).post(workshop_api::set_settings),

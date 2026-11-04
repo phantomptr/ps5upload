@@ -836,13 +836,8 @@ export async function browserInvoke<T>(
     case "fpkg_extract_cleanup": {
       return postJson<T>("/api/fpkg/extract/cleanup", { path: args["path"] });
     }
-    case "ffpfsc_compress": {
-      return postJson<T>("/api/ffpfsc/compress", {
-        source: args["source"],
-        output_dir: args["outputDir"],
-        level: args["level"],
-        full_verify: args["fullVerify"] ?? false,
-      });
+    case "workshop_jobs": {
+      return getJson<T>("/api/workshop/jobs");
     }
     case "exfat_build": {
       return postJson<T>("/api/exfat/build", {

@@ -64,7 +64,7 @@ pub(crate) fn shortfall(free: u64, total: u64, out: &Path) -> Option<String> {
     let needed = total.saturating_add(SPARE);
     (free < needed).then(|| {
         format!(
-            "only {:.1} GiB free in {}, and the folder needs about {:.1} GiB",
+            "only {:.1} GiB free in {}, and this needs about {:.1} GiB",
             free as f64 / (1u64 << 30) as f64,
             out.display(),
             needed as f64 / (1u64 << 30) as f64,

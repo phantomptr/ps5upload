@@ -97,6 +97,15 @@ export interface FpkgBuildRequest {
 /** `stored` = no compression: the fallback for a console that refuses a compressed package. */
 export type FpkgCompression = "fast" | "balanced" | "smallest" | "stored";
 
+/** A Workshop job running in the engine. `source`: what the user chose (an archive for a game
+ *  unpacked from one). */
+export interface WorkshopRun {
+  job_id: string;
+  kind: "package" | "image" | "folder" | "extract";
+  source: string;
+  started_at_ms: number;
+}
+
 export const fpkg = {
   inspect: (source: string, outputDir?: string) =>
     invoke<FpkgInspection>("fpkg_inspect", { source, outputDir }),
@@ -126,10 +135,8 @@ export const fpkg = {
   /** Delete a package this engine built (the Convert screen's Delete package); the engine
    *  refuses any other file. */
   deletePackage: (path: string) => invoke<{ ok: boolean }>("fpkg_delete", { path }),
-  /** Compress an .exfat / .ffpkg game image into a .ffpfsc for ShadowMountPlus.
-   *  Starts a job; the output lands next to the source unless outputDir says otherwise. */
-  compress: (source: string, outputDir?: string, fullVerify = false) =>
-    invoke<{ job_id: string }>("ffpfsc_compress", { source, outputDir, fullVerify }),
+  /** Workshop jobs the engine is running now, whoever started them. */
+  runningJobs: () => invoke<WorkshopRun[]>("workshop_jobs", {}),
   /** Write a game folder as one .exfat image for ShadowMountPlus. Starts a job; the image
    *  lands in the output folder, named after the game folder. */
   /** One job: the image is planned, written (straight into a .ffpfsc when `compress`), read

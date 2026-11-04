@@ -42,20 +42,14 @@ import {
   pkgStorageFor,
 } from "../lib/pkgStorage";
 import { rarPasswordProblem, type RarPasswordProblem } from "../lib/rarPassword";
+import { isRarFirstVolume } from "../lib/rarVolumes";
 import { splitPkgBytes, type ListedFile } from "../lib/splitPkgSize";
 import { pkgLibraryStore } from "./pkgLibrary";
 
 /** The exclude entry that keeps only packages; the engine lists with the same one. */
 export const RAR_PKG_ALLOW = "!*.pkg";
 
-/** True for the first (or only) volume of a RAR set: `.rar`, `.part1.rar`, `.part01.rar`. */
-export function isRarFirstVolume(path: string): boolean {
-  const name = path.replace(/\\/g, "/").split("/").pop() ?? "";
-  const lower = name.toLowerCase();
-  if (!lower.endsWith(".rar")) return false;
-  const part = /\.part0*(\d+)\.rar$/.exec(lower);
-  return part ? Number(part[1]) === 1 : true;
-}
+export { isRarFirstVolume };
 
 export type ArchiveKind = "zip" | "7z" | "rar";
 

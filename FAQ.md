@@ -2064,7 +2064,10 @@ image** under **② What to make** and the format under **③ Options**, then **
   every block, several times slower for a little more). The level only trades build time for
   size: every level writes the same kind of blocks and checks each one against the console's
   decoder rules, so none is more stable than another. If Balanced saves you only a gigabyte or
-  so on a game, Fast is a fine choice.
+  so on a game, Fast is a fine choice. A **package** works the same way: Fast, Balanced and
+  Smallest make the same game and only trade build time for size. The one choice that changes
+  what the console reads is **Stored**, which skips compression; try it if a compressed package
+  installs but will not start.
 - **AMPR LZ4 asset packs** (`.exfat` only, not with `.ffpfsc`): for games that read their files
   through AMPR, the data is packed into LZ4 asset packs that the game's own `ampr_emu`
   (`fakelib/libSceAmpr.sprx`) reads back, so the image is smaller while executables, system

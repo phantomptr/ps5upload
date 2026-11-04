@@ -32,6 +32,7 @@ export function MakeCard({
   kernel,
   contentId,
   checked,
+  archive = false,
   locked = false,
   forNext = false,
 }: {
@@ -43,6 +44,8 @@ export function MakeCard({
   contentId: string | null | undefined;
   /** A game has been checked: the recommendation is about it. */
   checked: boolean;
+  /** The source is an archive: it is looked at only once a run unpacks it. */
+  archive?: boolean;
   locked?: boolean;
   /** A game is being made: this card sets what the next game added becomes (#669). */
   forNext?: boolean;
@@ -128,7 +131,9 @@ export function MakeCard({
           {chosen.body}
         </div>
         {!forNext && <div className="text-xs text-[var(--color-muted)]">
-          {!checked
+          {archive
+            ? tr("fpkg.make.archive_later", undefined, "An archive is looked at after it is unpacked, so no choice is marked here.")
+            : !checked
             ? tr("fpkg.make.pick_game", undefined, "Check a game under ① and the better choice for it on your PS5 is marked.")
             : unplayableOn
               ? tr(

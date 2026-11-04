@@ -416,7 +416,7 @@ describe("RunCard", () => {
     const offline = html({ ...done, mode: "convert" }, { canInstall: false });
     expect(button(offline, "Stream & install")).toMatchObject({ disabled: true });
     expect(button(offline, "Upload & install")).toMatchObject({ disabled: true });
-    expect(button(html({ ...done, mode: "ffpfsc" }), "Upload & install")).toBeNull();
+    expect(button(html({ ...done, mode: "image" }), "Upload & install")).toBeNull();
   });
 
   it("drops the package actions once the package is deleted", () => {

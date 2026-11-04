@@ -366,6 +366,8 @@ pub(crate) async fn fpkg_build_handler(
     };
 
     let job_id = Uuid::new_v4();
+    crate::workshop_api::note_run(job_id, "package", &source_path);
+    let scaffold = Scaffold::of(&source_path);
     let cancel = register_workshop_job(job_id);
     let bytes = Arc::new(AtomicU64::new(0));
     let total = Arc::new(AtomicU64::new(inspection.planned_size));
@@ -438,6 +440,8 @@ pub(crate) async fn fpkg_build_handler(
     let request_source = source_path.clone();
     let ticker = JobTicker(ticker.abort_handle());
     spawn_workshop_job(move || {
+        // First in, last out: gone only after everything reading it has been dropped.
+        let _scaffold = scaffold;
         // A panic in the work below must not leave the job "running" forever with its
         // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
         let mut fail = JobFailOnDropGuard::new(
@@ -609,222 +613,6 @@ mod path_tests {
         let absolute = std::env::current_dir().unwrap().join("fpkg");
         assert_eq!(output_dir(Some(absolute.to_str().unwrap())), absolute);
     }
-}
-
-#[derive(Deserialize)]
-pub(crate) struct CompressReq {
-    /// A game image: `.exfat` (most compatible) or `.ffpkg`.
-    source: String,
-    /// Where the `.ffpfsc` goes; the source's own folder by default.
-    #[serde(default)]
-    output_dir: Option<String>,
-    /// zlib level 1–9; the library default when absent.
-    #[serde(default)]
-    level: Option<u32>,
-    /// Decode every block to verify the output; by default a seeded sample (and the table).
-    #[serde(default)]
-    full_verify: bool,
-}
-
-/// POST /api/ffpfsc/compress — compress a game image into a `.ffpfsc` for ShadowMountPlus.
-/// Runs as a job like a package build: the ticker publishes bytes read, and the job's cancel
-/// stops it between blocks. The output is written as `.partial`, read back and matched
-/// against the source, and only then renamed.
-pub(crate) async fn ffpfsc_compress_handler(
-    State(state): State<AppState>,
-    Json(req): Json<CompressReq>,
-) -> impl IntoResponse {
-    use ps5upload_fpkg::ffpfsc;
-    let source = resolve_engine_path(&req.source);
-    let size = match tokio::fs::metadata(&source).await {
-        Ok(m) if m.is_file() && m.len() > 0 => m.len(),
-        Ok(_) => {
-            return json_err(
-                StatusCode::BAD_REQUEST,
-                format!("{} is not a game image file", source.display()),
-            )
-            .into_response()
-        }
-        Err(e) => {
-            return json_err(
-                StatusCode::BAD_REQUEST,
-                format!("{}: {e}", source.display()),
-            )
-            .into_response()
-        }
-    };
-    let out_dir = match req.output_dir.as_deref() {
-        Some(dir) if !dir.trim().is_empty() => resolve_engine_path(dir),
-        _ => source
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(default_output_dir),
-    };
-    let stem = source
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "image".to_string());
-    let output = out_dir.join(format!("{stem}.ffpfsc"));
-    if tokio::fs::try_exists(&output).await.unwrap_or(false) {
-        return json_err(
-            StatusCode::CONFLICT,
-            format!("{} already exists", output.display()),
-        )
-        .into_response();
-    }
-    if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
-        return json_err(
-            StatusCode::BAD_REQUEST,
-            format!("{}: {e}", out_dir.display()),
-        )
-        .into_response();
-    }
-
-    let partial_out = PathBuf::from(format!("{}.partial", output.display()));
-    let Some(writing) = Writing::claim_off_thread(partial_out.clone()).await else {
-        return already_building(&partial_out);
-    };
-
-    let job_id = Uuid::new_v4();
-    let cancel = register_workshop_job(job_id);
-    let bytes = Arc::new(AtomicU64::new(0));
-    let started_at_ms = now_ms();
-    set_job(
-        &state.jobs,
-        &state.events_tx,
-        job_id,
-        JobState::Running {
-            stage: None,
-            started_at_ms,
-            bytes_sent: 0,
-            total_bytes: size,
-            files: Default::default(),
-            skipped_files: 0,
-            skipped_bytes: 0,
-            files_processing: 0,
-            files_finalized: 0,
-            files_finalizing_total: 0,
-            bytes_finalized: 0,
-        },
-    );
-    let jobs = state.jobs.clone();
-    let events_tx = state.events_tx.clone();
-    let tick_bytes = bytes.clone();
-    let ticker = tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            let mut g = jobs.lock().unwrap_or_else(|e| e.into_inner());
-            match g.get_mut(&job_id) {
-                Some(JobState::Running { bytes_sent, .. }) => {
-                    *bytes_sent = tick_bytes.load(Ordering::Relaxed);
-                    // Nobody listening: nothing to build.
-                    let state = (events_tx.receiver_count() > 0)
-                        .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
-                        .flatten();
-                    drop(g);
-                    if let Some(state) = state {
-                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": crate::with_live_notes(job_id, state) });
-                        let _ = events_tx.send(msg.to_string());
-                    }
-                }
-                _ => break,
-            }
-        }
-    });
-
-    let state_for_job = state.clone();
-    let ticker = JobTicker(ticker.abort_handle());
-    spawn_workshop_job(move || {
-        // A panic in the work below must not leave the job "running" forever with its
-        // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
-        let mut fail = JobFailOnDropGuard::new(
-            state_for_job.jobs.clone(),
-            state_for_job.events_tx.clone(),
-            job_id,
-            started_at_ms,
-        );
-        sweep_output_leftovers(&out_dir);
-        let mut options = ffpfsc::WrapOptions::default();
-        if let Some(level) = req.level {
-            options.level = level;
-        }
-        options.sample = (!req.full_verify).then(ps5upload_fpkg::sample::fresh_seed);
-        let mut progress = |done: u64, _total: u64| bytes.store(done, Ordering::Relaxed);
-        let mut control = ffpfsc::Control {
-            progress: Some(&mut progress),
-            cancel: Some(&cancel),
-        };
-        let outcome = ffpfsc::wrap(&source, &output, &options, &mut control);
-        drop(writing);
-        if outcome.is_err() {
-            sweep_output_leftovers(&out_dir);
-        }
-        let completed_at_ms = now_ms();
-        drop(ticker);
-        match outcome {
-            Ok(report) => {
-                crate::engine_log::record(
-                    "info",
-                    format!(
-                        "ffpfsc: {} -> {} ({} -> {} bytes, {}/{} blocks compressed, verified; elapsed_ms={} level={} workers={} full_verify={})",
-                        source.display(),
-                        report.output.display(),
-                        report.raw_size,
-                        report.image_size,
-                        report.compressed_blocks,
-                        report.blocks,
-                        completed_at_ms.saturating_sub(started_at_ms),
-                        options.level,
-                        ps5upload_fpkg::workshop::workshop_threads(),
-                        options.sample.is_none(),
-                    ),
-                );
-                set_job(
-                    &state_for_job.jobs,
-                    &state_for_job.events_tx,
-                    job_id,
-                    JobState::Done {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        tx_id_hex: report.inner_name.clone(),
-                        bytes_sent: report.image_size,
-                        dest: report.output.display().to_string(),
-                        files_sent: 1,
-                        skipped_files: 0,
-                        skipped_bytes: 0,
-                        commit_ack: None,
-                    },
-                );
-            }
-            Err(error) => {
-                crate::engine_log::record("warn", format!("ffpfsc: compression failed: {error}"));
-                set_job(
-                    &state_for_job.jobs,
-                    &state_for_job.events_tx,
-                    job_id,
-                    JobState::Failed {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        error: error.to_string(),
-                        error_reason: None,
-                        error_detail: None,
-                        error_console: None,
-                    },
-                );
-            }
-        }
-        fail.mark_succeeded();
-    });
-
-    (
-        StatusCode::ACCEPTED,
-        Json(JobCreated {
-            job_id: job_id.to_string(),
-        }),
-    )
-        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -1203,6 +991,16 @@ pub(crate) async fn exfat_build_handler(
         )
         .into_response();
     }
+    // An uncompressed image is at least as large as the game: refused before the first write
+    // rather than filling the drive and failing near the end. A compressed one or LZ4 packs may
+    // well fit in less, so the screen warns and it goes ahead.
+    if !compress && packs.is_none() {
+        if let Some(why) = build::free_bytes(&out_dir)
+            .and_then(|free| folder_build::shortfall(free, total, &out_dir))
+        {
+            return json_err(StatusCode::BAD_REQUEST, why).into_response();
+        }
+    }
 
     let partial_out = PathBuf::from(format!("{}.partial", output.display()));
     let Some(writing) = Writing::claim_off_thread(partial_out.clone()).await else {
@@ -1214,6 +1012,8 @@ pub(crate) async fn exfat_build_handler(
     };
 
     let job_id = Uuid::new_v4();
+    crate::workshop_api::note_run(job_id, "image", &source);
+    let scaffold = Scaffold::of(&source);
     let cancel = register_workshop_job(job_id);
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
@@ -1269,6 +1069,8 @@ pub(crate) async fn exfat_build_handler(
     let state_for_job = state.clone();
     let ticker = JobTicker(ticker.abort_handle());
     spawn_workshop_job(move || {
+        // First in, last out: gone only after everything reading it has been dropped.
+        let _scaffold = scaffold;
         // A panic in the work below must not leave the job "running" forever with its
         // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
         let mut fail = JobFailOnDropGuard::new(
@@ -1615,6 +1417,7 @@ pub(crate) async fn folder_build_handler(
     let mode = ps5upload_fpkg::sample::VerifyMode::from_full(req.full_verify, false);
 
     let job_id = Uuid::new_v4();
+    crate::workshop_api::note_run(job_id, "folder", &source);
     let cancel = register_workshop_job(job_id);
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
@@ -1814,6 +1617,30 @@ impl Drop for Unpacking {
     }
 }
 
+/// The unpack folder a build reads its game from, removed when the build is over however it ends,
+/// so nothing depends on the page that started it still being open (#14 of the audit: a reload
+/// used to leave it behind for good).
+struct Scaffold(Option<PathBuf>);
+
+impl Scaffold {
+    fn of(source: &Path) -> Self {
+        Scaffold(extract_root_of(source))
+    }
+}
+
+impl Drop for Scaffold {
+    fn drop(&mut self) {
+        if let Some(root) = self.0.take() {
+            let _ = ps5upload_core::archive_extract::remove_path_retrying(&root);
+            active_extracts()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&root);
+            crate::workshop_api::forget_unpack(&root);
+        }
+    }
+}
+
 /// Package files being written by a build in this engine (`<stem>.pkg.partial`).
 fn active_partials() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
     static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
@@ -1918,6 +1745,7 @@ fn remove_file_retrying(path: &Path) {
 /// after one fails (#432: they took up the system drive with nothing to show where).
 pub(crate) fn sweep_output_leftovers(out: &Path) {
     remove_stale_extracts(out);
+    crate::remote::fetch::sweep_copies_in_output(out);
     let Ok(entries) = std::fs::read_dir(out) else {
         return;
     };
@@ -1970,7 +1798,7 @@ fn extract_shortfall(free: u64, unpacked: u64) -> Option<String> {
     let needed = unpacked.saturating_mul(2).saturating_add(unpacked / 100);
     (free < needed).then(|| {
         format!(
-            "only {:.1} GiB free in the output folder; unpacking this archive and building its package needs about {:.1} GiB",
+            "only {:.1} GiB free in the output folder; unpacking this archive and building from it needs about {:.1} GiB",
             free as f64 / (1u64 << 30) as f64,
             needed as f64 / (1u64 << 30) as f64,
         )
@@ -2071,6 +1899,8 @@ pub(crate) async fn fpkg_extract_handler(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(dest.clone());
+    crate::workshop_api::note_run(job_id, "extract", &source);
+    crate::workshop_api::note_unpack(&dest, &source);
     let cancel = register_workshop_job(job_id);
     let bytes = Arc::new(AtomicU64::new(0));
     let started_at_ms = now_ms();
@@ -2288,6 +2118,26 @@ mod extract_tests {
         assert!(outcome.is_err(), "the damaged entry must fail the unpack");
         assert!(!dest.exists(), "the failed unpack's files were left behind");
         assert!(!active_extracts().lock().unwrap().contains(&dest));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The unpack folder a build read from goes with the build, page or no page; a game from
+    /// anywhere else is never touched.
+    #[test]
+    fn a_build_removes_the_unpack_folder_it_read_from() {
+        let base = std::env::temp_dir().join(format!("ps5upload-scaffold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join(format!("{EXTRACT_PREFIX}run"));
+        let game = root.join("Game");
+        std::fs::create_dir_all(&game).unwrap();
+        active_extracts().lock().unwrap().insert(root.clone());
+        drop(Scaffold::of(&game));
+        assert!(!root.exists());
+        assert!(!active_extracts().lock().unwrap().contains(&root));
+        let own = base.join("Own");
+        std::fs::create_dir_all(&own).unwrap();
+        drop(Scaffold::of(&own));
+        assert!(own.exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 
