@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import faqText from "virtual:doc/faq";
 
-import { faqItemUrl, parseFaq, searchFaq, slugOf } from "./faqDoc";
+import { faqItemUrl, parseFaq, plainText, searchFaq, slugOf } from "./faqDoc";
 
 const MD = `# FAQ
 
@@ -94,8 +94,38 @@ describe("parseFaq", () => {
   });
 });
 
+describe("plainText", () => {
+  it("keeps underscores inside a name and drops them as emphasis", () => {
+    expect(plainText("Set `PS5UPLOAD_PKG_HOST_IP` to _your_ address")).toBe(
+      "Set PS5UPLOAD_PKG_HOST_IP to your address",
+    );
+    expect(plainText("__bold__ and a_b_c")).toBe("bold and a_b_c");
+  });
+});
+
+describe("parseFaq section rules", () => {
+  it("leaves the --- between sections out of the answer before it", () => {
+    const d = parseFaq("## A\n\n**Q: One?**\nYes.\n\n---\n\n## B\n\nIntro.\n\n---\n");
+    expect(d.topics[0].items[0].answer).toBe("Yes.");
+    expect(d.topics[1].intro).toBe("Intro.");
+  });
+
+  it("keeps a --- inside an answer", () => {
+    const d = parseFaq("## A\n\n**Q: One?**\nYes.\n\n---\n\nMore.\n");
+    expect(d.topics[0].items[0].answer).toContain("---");
+  });
+});
+
 describe("searchFaq", () => {
   const doc = parseFaq(MD);
+
+  it("finds a name with underscores, whichever case it is typed in", () => {
+    const d = parseFaq("## T\n\n**Q: Why?**\nSet `PS5UPLOAD_ALLOW_IP` and **ampr_emu**.\n");
+    expect(searchFaq(d, "PS5UPLOAD_ALLOW_IP")).toHaveLength(1);
+    expect(searchFaq(d, "ps5upload_allow_ip")).toHaveLength(1);
+    expect(searchFaq(d, "ampr_emu")).toHaveLength(1);
+    expect(searchFaq(d, "ps5upload_allow_ip")[0].excerpt).toContain("PS5UPLOAD_ALLOW_IP");
+  });
 
   it("finds questions by every word, in the question or its answer", () => {
     expect(
