@@ -36,7 +36,7 @@ import { isTauriEnv } from "../../lib/tauriEnv";
 import { isLinuxDesktop, isMobile } from "../../lib/platform";
 import { setScreenWakeReason } from "../../lib/androidScreenWake";
 import {
-  canStream,
+  streamRefusal,
   stopEngineSession,
   touchAt,
   FIT_ORDER,
@@ -1015,13 +1015,25 @@ export function StreamPanel() {
     requestCapture(el);
   }, [prefs.capturePointer, kbm.mouseNative]);
 
-  if (!canStream()) {
+  const refusal = streamRefusal();
+  if (refusal === "insecure_page") {
+    return (
+      <Callout tone="warn" title={tr("rp_insecure_page", undefined, "Play needs an https:// page")}>
+        {tr(
+          "rp_insecure_page_body",
+          undefined,
+          "Browsers only decode video on an https:// page or on the computer running the engine, and this page is plain http://. Open it over https through a proxy, open it as localhost on the engine's computer, or use the app for Windows, macOS, Linux, Android or iPhone.",
+        )}
+      </Callout>
+    );
+  }
+  if (refusal) {
     return (
       <Callout tone="warn" title={tr("rp_no_webcodecs", undefined, "This browser cannot play a stream")}>
         {tr(
           "rp_no_webcodecs_body",
           undefined,
-          "Remote Play here decodes video with WebCodecs, which this browser does not have. Use a current Chrome, Edge or Safari, or the desktop app on Windows or macOS.",
+          "Play decodes video with WebCodecs, which this browser does not have. Use a current Chrome, Edge or Safari, or the app for Windows, macOS, Linux, Android or iPhone.",
         )}
       </Callout>
     );

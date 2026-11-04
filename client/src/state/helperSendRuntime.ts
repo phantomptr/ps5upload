@@ -135,7 +135,7 @@ export async function sendHelperTo(
       waiting: tr(
         "connection_waiting_boot",
         undefined,
-        "Waiting for payload to boot…",
+        "Waiting for the helper to start…",
       ),
       running: tr(
         "connection_payload_running",

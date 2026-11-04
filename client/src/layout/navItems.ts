@@ -122,7 +122,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     to: "/files",
     key: "v5_tab_files",
-    fallback: "File System",
+    fallback: "Files",
     icon: FolderTree,
     section: { key: "nav_section_files", fallback: "Files & Storage" },
   },

@@ -1136,7 +1136,7 @@ export default function SavesScreen() {
       {confirmDialogNode}
       <PageHeader
         icon={Save}
-        title={tr("saves_title", undefined, "Save data")}
+        title={tr("saves_title", undefined, "Save Data")}
         count={saves?.length}
         loading={loading}
         description={

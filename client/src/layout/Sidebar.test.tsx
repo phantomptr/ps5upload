@@ -191,7 +191,7 @@ describe("Sidebar", () => {
     const group = html.slice(html.indexOf('data-testid="nav-pinned"'));
     const inGroup = group.slice(0, group.indexOf("</section>"));
     expect(inGroup).toMatch(/<a[^>]*href="\/files"/);
-    expect(inGroup).toContain('title="File System"');
+    expect(inGroup).toContain('title="Files"');
     expect(inGroup).not.toContain(">Pinned<");
     expect(inGroup).not.toContain("<button");
     expect(inGroup).not.toContain("draggable");

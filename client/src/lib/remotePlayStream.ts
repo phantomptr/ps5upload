@@ -378,6 +378,14 @@ export function canStream(): boolean {
   return typeof VideoDecoder !== "undefined" && typeof WebSocket !== "undefined";
 }
 
+/** Why a stream can't play here: browsers only give VideoDecoder to a secure page, so on a plain
+ *  http:// address (the Docker web UI opened from another device) even a current Chrome has none,
+ *  and telling that visitor to get a newer browser can't help. */
+export function streamRefusal(): "insecure_page" | "no_decoder" | null {
+  if (canStream()) return null;
+  return typeof window !== "undefined" && window.isSecureContext === false ? "insecure_page" : "no_decoder";
+}
+
 export interface StreamStats {
   /** The browser holds the sound back until the page is clicked or a key pressed (autoplay
    *  rules: the session started without a click right before it). */
