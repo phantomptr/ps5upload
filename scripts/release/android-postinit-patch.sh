@@ -220,7 +220,7 @@ else
   # the template and is patched again.
   python3 - "$mainactivity" <<'PY'
 import sys
-REV = "// ps5upload-patch-rev: 3\n"
+REV = "// ps5upload-patch-rev: 4\n"
 TEMPLATE = """package com.phantomptr.ps5upload
 
 import android.os.Bundle
@@ -1201,6 +1201,12 @@ members = '''
   }
 
   override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+    // A pad key the page did not use comes back from the WebView as Android's fallback for it
+    // (WebViewClient.onUnhandledKeyEvent; measured: BUTTON_B moved the page back here even when
+    // this function answered true for the key itself).
+    if (padsActive && isPad(event.source) && (event.flags and android.view.KeyEvent.FLAG_FALLBACK) != 0) {
+      return true
+    }
     val i = padIndex(event.keyCode)
     // A D-pad key from a keyboard or a TV remote is not a controller: only pads count.
     if (!padsActive || i < 0 || !isPad(event.source)) return super.dispatchKeyEvent(event)
