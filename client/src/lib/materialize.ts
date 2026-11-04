@@ -7,6 +7,7 @@ import { remoteApi } from "../api/remote";
 import { useConnectionsStore } from "../state/connections";
 import { useTaskStore } from "../state/tasks";
 import { isRemotePath, parseRemotePath } from "./remotePath";
+import { readWithRetries } from "./pollRead";
 import { trStatic } from "./trStatic";
 
 /** Local copies this app made of server files, so only those are ever cleaned up. */
@@ -55,7 +56,7 @@ export async function fetchRemote(
   const { job_id } = await remoteApi.fetch(path, opts.destDir);
   opts.onJob?.(job_id);
   for (;;) {
-    const s = (await jobStatus(job_id)) as {
+    const s = (await readWithRetries(() => jobStatus(job_id))) as {
       status: string;
       dest?: string;
       error?: string;

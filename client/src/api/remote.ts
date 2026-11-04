@@ -2,6 +2,7 @@
 // against the engine URL, so the desktop app, Android and the web build share one path.
 
 import { getEngineUrl } from "../state/engine";
+import { ENGINE_TIMEOUT_MS, engineFetch } from "../lib/engineFetch";
 
 export type Protocol = "smb" | "ftp" | "ftps" | "sftp" | "webdav" | "webdavs";
 
@@ -71,7 +72,9 @@ export class RemoteApiError extends Error {
 }
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${getEngineUrl()}/api/remote${path}`, {
+  // A NAS can take its time to answer, and the engine retries a connection before it gives up.
+  const res = await engineFetch(`${getEngineUrl()}/api/remote${path}`, {
+    timeoutMs: 2 * ENGINE_TIMEOUT_MS,
     method,
     headers: body === undefined ? undefined : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),

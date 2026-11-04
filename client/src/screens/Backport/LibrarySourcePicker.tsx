@@ -13,6 +13,7 @@ import {
   type ScanTitleInput,
 } from "../../state/fakelibCorpus";
 import { beginTask, trackTask } from "../../state/trackTask";
+import { trStatic } from "../../lib/trStatic";
 
 /** The two ways to get backport libraries.
  *
@@ -145,7 +146,7 @@ export function LibrarySourcePicker({
         const task = beginTask({
           kind: "fakelib-scan",
           origin: "backport",
-          label: `Library scan ${target.name}`,
+          label: trStatic("task_library_scan", "Library scan {name}", { name: target.name }),
           consoleId: target.host,
         });
         try {

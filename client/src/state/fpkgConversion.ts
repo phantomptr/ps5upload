@@ -23,6 +23,8 @@ import { fetchRemote } from "../lib/materialize";
 import { isRemotePath } from "../lib/remotePath";
 import { finishSwap, runSwap, type SwapJournal } from "../lib/dumpSwap";
 import { consoleSwapDeps } from "../lib/dumpSwapConsole";
+import { readWithRetries } from "../lib/pollRead";
+import { trStatic } from "../lib/trStatic";
 
 export type PipelineStage =
   | "copy"
@@ -190,19 +192,23 @@ const BUILD_STAGES: readonly PipelineStage[] = ["check", "pack", "plan", "compre
 type Running = Extract<Pipeline, { phase: "running" }>;
 
 /** The stage names Convert's progress card shows. */
-const STAGE_LABEL: Record<PipelineStage, string> = {
-  copy: "Copy from server",
-  extract: "Unpack archive",
-  check: "Check source",
-  pack: "Pack LZ4 assets",
-  plan: "Plan package",
-  compress: "Compress",
-  write: "Write package",
-  verify: "Verify",
-  park: "Set the dump aside",
-  send: "Send to PS5",
-  install: "Install on PS5",
-};
+/** The stage as a Tasks line, in the language of the moment. */
+function stageLabel(stage: PipelineStage): string {
+  const english: Record<PipelineStage, string> = {
+    copy: "Copy from server",
+    extract: "Unpack archive",
+    check: "Check source",
+    pack: "Pack LZ4 assets",
+    plan: "Plan package",
+    compress: "Compress",
+    write: "Write package",
+    verify: "Verify",
+    park: "Set the dump aside",
+    send: "Send to PS5",
+    install: "Install on PS5",
+  };
+  return trStatic(`fpkg.stage.${stage}`, english[stage]);
+}
 
 function baseName(path: string): string {
   return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
@@ -255,7 +261,7 @@ function markPaused(paused: boolean) {
 function reportStage(taskId: string | null, stage: PipelineStage, done: number, total: number) {
   if (!taskId) return;
   useTaskStore.getState().updateTask(taskId, {
-    stage: STAGE_LABEL[stage],
+    stage: stageLabel(stage),
     progress: total > 0 ? { current: done, total, unit: "bytes" } : undefined,
   });
 }
@@ -292,16 +298,16 @@ function fail(stage: PipelineStage, message: string, packagePath: string | null)
         lastError: { code: "FPKG_FAILED", message, recoverable: false },
       });
   }
-  const what =
+  const failedTitle =
     p.mode === "ffpfsc"
-      ? "Compression"
+      ? trStatic("fpkg_failed_compress", "Compression failed")
       : p.mode === "image"
-        ? "Making the game image"
+        ? trStatic("fpkg_failed_image", "Making the game image failed")
         : p.mode === "folder"
-          ? "Making the game folder"
+          ? trStatic("fpkg_failed_folder", "Making the game folder failed")
           : p.mode === "convert"
-          ? "FPKG conversion"
-          : "Convert & install";
+            ? trStatic("fpkg_failed_convert", "FPKG conversion failed")
+            : trStatic("fpkg_failed_install", "Convert & install failed");
   useFpkgConversion.setState({
     pipeline: {
       phase: "failed",
@@ -317,7 +323,7 @@ function fail(stage: PipelineStage, message: string, packagePath: string | null)
   });
   // An install-stage failure links to the install-route matrix entry for its
   // error; a build failure has no such page, so it goes back to Convert.
-  pushNotification("error", `${what} failed`, {
+  pushNotification("error", failedTitle, {
     // The install stage's failure is an engine job's ending, which the host announces.
     jobOutcome: stage === "install",
     body: message,
@@ -410,8 +416,8 @@ async function runReplace(packagePath: string, host: string, dump: string) {
   }
   const cur = running()!;
   installDone(packagePath, startedMs - cur.startedMs, Date.now() - startedMs, r.journal ?? null);
-  pushNotification("success", "Installed on the PS5", {
-    body: "The old dump is set aside; delete it or keep it on the Convert screen.",
+  pushNotification("success", trStatic("fpkg_installed_on_ps5", "Installed on the PS5"), {
+    body: trStatic("fpkg_dump_set_aside", "The old dump is set aside. Delete it or keep it on the Convert screen."),
     link: "/workshop",
   });
 }
@@ -420,7 +426,7 @@ async function runInstall(packagePath: string, host: string | null, method: Inst
   const p = running();
   if (!p) return;
   if (!host) {
-    fail("send", "Connect to a PS5 to install.", packagePath);
+    fail("send", trStatic("fpkg_connect_to_install", "Connect to a PS5 to install."), packagePath);
     return;
   }
   const dump = consoleDumpPath(p.source);
@@ -442,7 +448,7 @@ async function runInstall(packagePath: string, host: string | null, method: Inst
     const cur = running()!;
     const convertMs = cur.mode === "install" ? 0 : startedMs - cur.startedMs;
     installDone(packagePath, convertMs, Date.now() - startedMs);
-    pushNotification("success", "Installed on the PS5", {
+    pushNotification("success", trStatic("fpkg_installed_on_ps5", "Installed on the PS5"), {
       body: packagePath,
       link: "/workshop",
       jobOutcome: true,
@@ -520,8 +526,8 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
         fail(
           p.stage,
           stopped
-            ? "The engine stopped responding, so the conversion was stopped."
-            : "The engine stopped responding; the conversion may still be running there. Check Tasks before starting it again.",
+            ? trStatic("fpkg_engine_stopped", "The engine stopped responding, so the conversion was stopped.")
+            : trStatic("fpkg_engine_lost", "The engine stopped responding. The conversion may still be running there. Check Tasks before starting it again."),
           null,
         );
       } else {
@@ -557,7 +563,7 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
         if (target.gone) {
           fail(
             "send",
-            `${target.gone} is no longer in your consoles. The package is kept; choose a console and install it from here.`,
+            trStatic("fpkg_console_gone", "{name} is no longer in your consoles. The package is kept. Choose a console and install it from here.", { name: target.gone }),
             path,
           );
           return;
@@ -569,12 +575,12 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
         pushNotification(
           "success",
           cur.mode === "ffpfsc"
-            ? "Compression complete"
+            ? trStatic("fpkg_done_compress", "Compression complete")
             : cur.mode === "image"
-              ? "Game image ready"
+              ? trStatic("fpkg_done_image", "Game image ready")
               : cur.mode === "folder"
-                ? "Game folder ready"
-                : "FPKG conversion complete",
+                ? trStatic("fpkg_done_folder", "Game folder ready")
+                : trStatic("fpkg_done_fpkg", "FPKG conversion complete"),
           { body: path, link: "/workshop" },
         );
       }
@@ -660,7 +666,7 @@ async function extractArchive(archive: string, outputDir: string | undefined, pa
   const { job_id } = await fpkg.extract(archive, outputDir, password);
   update({ jobId: job_id });
   for (;;) {
-    const s = await jobStatus(job_id);
+    const s = await readWithRetries(() => jobStatus(job_id));
     if (running()?.jobId === job_id) markPaused(s.status === "running" && s.paused === true);
     if (s.status === "done") return s.dest ?? "";
     if (s.status === "failed") throw new Error(s.error ?? "The archive did not unpack.");

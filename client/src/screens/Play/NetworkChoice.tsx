@@ -1,7 +1,7 @@
 import { useTr } from "../../state/lang";
 
 /** The host of a link (`http://10.0.0.5:19113/join#…` → `10.0.0.5`), or the text itself. */
-export function linkHost(u: string): string {
+export function urlHost(u: string): string {
   try {
     return new URL(u.includes("://") ? u : `http://${u}`).hostname;
   } catch {
@@ -12,7 +12,7 @@ export function linkHost(u: string): string {
 /** The links split by network: the Tailscale one (when the engine named its address) and the
  *  home network's, best first. */
 export function splitByNetwork(urls: string[], tailscale: string | null): { lan: string[]; tailnet: string | null } {
-  const tailnet = tailscale ? (urls.find((u) => linkHost(u) === tailscale) ?? null) : null;
+  const tailnet = tailscale ? (urls.find((u) => urlHost(u) === tailscale) ?? null) : null;
   return { lan: urls.filter((u) => u !== tailnet), tailnet };
 }
 
@@ -45,7 +45,7 @@ export function NetworkChoice({
 }) {
   const tr = useTr();
   const { lan, tailnet } = splitByNetwork(urls, tailscale);
-  const onTailnet = !!tailnet && !!current && linkHost(current) === tailscale;
+  const onTailnet = !!tailnet && !!current && urlHost(current) === tailscale;
   if (!(tailnet && lan.length > 0) && !onTailnet && lan.length < 2) return null;
   return (
     <div className="space-y-2" data-testid={testId}>
@@ -88,12 +88,12 @@ export function NetworkChoice({
               <button
                 key={u}
                 type="button"
-                aria-pressed={!!current && linkHost(u) === linkHost(current)}
+                aria-pressed={!!current && urlHost(u) === urlHost(current)}
                 onClick={() => onPick(u)}
                 className="chip min-h-8 px-3 font-mono text-xs"
                 data-testid={addressTestId}
               >
-                {linkHost(u)}
+                {urlHost(u)}
               </button>
             ))}
           </div>

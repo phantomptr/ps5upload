@@ -44,8 +44,6 @@ describe("taskStore lifecycle", () => {
     expect(t!.id).toBe(id);
     expect(t!.kind).toBe("upload-file");
     expect(t!.status).toBe("running");
-    expect(t!.attempts).toBe(1);
-    expect(t!.maxAttempts).toBe(3);
     // hostOf strips the port → bare host is the canonical consoleId.
     expect(t!.consoleId).toBe("192.168.86.100");
     expect(t!.endedAtMs).toBeUndefined();
@@ -246,8 +244,6 @@ describe("bounded task history", () => {
     status,
     createdAt: new Date(id).toISOString(),
     updatedAtMs: id,
-    attempts: 1,
-    maxAttempts: 3,
   });
 
   it("caps terminal history while preserving active tasks in original order", () => {

@@ -26,12 +26,22 @@ export interface HostReadState {
 const STORAGE_KEY = "ps5upload.ps5notif_read.v1";
 const EMPTY: HostReadState = { upTo: 0, read: [], unread: [] };
 
-function load(): Record<string, HostReadState> {
+function isReadState(v: unknown): v is HostReadState {
+  if (!v || typeof v !== "object") return false;
+  const s = v as Partial<Record<keyof HostReadState, unknown>>;
+  const seqs = (a: unknown) => Array.isArray(a) && a.every((n) => typeof n === "number");
+  return typeof s.upTo === "number" && seqs(s.read) && seqs(s.unread);
+}
+
+export function loadNotifReadState(): Record<string, HostReadState> {
   try {
     const raw = safeGetItem(STORAGE_KEY);
     const parsed = raw ? (JSON.parse(raw) as unknown) : null;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return parsed as Record<string, HostReadState>;
+    // A damaged entry reads as nothing read yet, rather than throwing where it is used.
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, HostReadState] => isReadState(entry[1])),
+    );
   } catch {
     return {};
   }
@@ -76,7 +86,7 @@ export const usePs5NotifRead = create<Ps5NotifReadStore>((set, get) => {
     safeSetItem(STORAGE_KEY, JSON.stringify(byHost));
   };
   return {
-    byHost: load(),
+    byHost: loadNotifReadState(),
     markAll: (host, maxSeq) => {
       const h = hostOf(host);
       save({ ...get().byHost, [h]: markAllUpTo(get().byHost[h], maxSeq) });

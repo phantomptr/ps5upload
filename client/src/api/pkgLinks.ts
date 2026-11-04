@@ -2,6 +2,7 @@
 // (engine/crates/ps5upload-engine/src/pkg_install.rs, /api/pkg/links).
 
 import { getEngineUrl } from "../state/engine";
+import { engineFetch } from "../lib/engineFetch";
 
 export interface SharedLink {
   id: string;
@@ -18,7 +19,7 @@ export interface SharedLink {
 }
 
 async function call<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${getEngineUrl()}/api/pkg/links${path}`, {
+  const res = await engineFetch(`${getEngineUrl()}/api/pkg/links${path}`, {
     method: body === undefined ? "GET" : "POST",
     headers:
       body === undefined ? undefined : { "content-type": "application/json" },

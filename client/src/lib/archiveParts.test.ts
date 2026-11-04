@@ -74,6 +74,18 @@ describe("needsManualPartUploads", () => {
     expect(needsManualPartUploads("G.part1.rar", rars)).toBe(false);
   });
 
+  it("does not take other archive types for parts of a set", () => {
+    // Seen in a real folder: part 1 is a zip, parts 2-11 are rar. No two share a type, so there
+    // is no zip set to upload by hand.
+    const mixed = [
+      "Game.part01.zip",
+      ...Array.from({ length: 10 }, (_, i) => `Game.part${String(i + 2).padStart(2, "0")}.rar`),
+    ];
+    expect(siblingParts(mixed[0], mixed)).toEqual([]);
+    expect(needsManualPartUploads(mixed[0], mixed)).toBe(false);
+    expect(siblingParts(mixed[1], mixed)).toHaveLength(10);
+  });
+
   it("is false for an ordinary single archive", () => {
     expect(needsManualPartUploads("Game.zip", ["Game.zip"])).toBe(false);
   });

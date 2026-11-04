@@ -1,3 +1,4 @@
+import { trStatic } from "./trStatic";
 /**
  * Upload time-budget estimator.
  *
@@ -160,13 +161,15 @@ export function pickBannerMode(fileCount: number): BannerMode {
  */
 export function formatEtaSeconds(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "—";
-  if (seconds < 60) return `${Math.round(seconds)} sec`;
+  if (seconds < 60) return trStatic("eta_sec", "{n} sec", { n: Math.round(seconds) });
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 60) return trStatic("eta_min", "{n} min", { n: minutes });
   const hours = Math.floor(minutes / 60);
   const remMinutes = minutes % 60;
   if (hours < 24) {
-    return remMinutes === 0 ? `${hours} h` : `${hours} h ${remMinutes} min`;
+    return remMinutes === 0
+      ? trStatic("eta_h", "{n} h", { n: hours })
+      : trStatic("eta_h_min", "{h} h {m} min", { h: hours, m: remMinutes });
   }
-  return `${hours} h`;
+  return trStatic("eta_h", "{n} h", { n: hours });
 }

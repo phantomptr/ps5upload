@@ -41,7 +41,7 @@ use tauri::{AppHandle, Manager};
 #[derive(Serialize, Clone)]
 pub struct UsbDrive {
     /// Mount path the user / OS sees: `/Volumes/MyStick`,
-    /// `/media/yunpeng/STICK`, `E:\\`. Suitable for `Path::new()`.
+    /// `/media/alice/STICK`, `E:\\`. Suitable for `Path::new()`.
     path: String,
     /// Human label (volume name). Falls back to the basename of
     /// `path` when the OS doesn't expose one.
@@ -187,7 +187,7 @@ fn enumerate_drives() -> Vec<UsbDrive> {
             });
         }
     }
-    // Dedupe by path — /media/yunpeng/STICK and /run/media/yunpeng/STICK
+    // Dedupe by path — /media/alice/STICK and /run/media/alice/STICK
     // can both be present if both stacks are configured.
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out.dedup_by(|a, b| a.path == b.path);

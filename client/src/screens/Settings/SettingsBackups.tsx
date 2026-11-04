@@ -13,7 +13,7 @@ import { syncId } from "../../lib/meshShare";
 import {
   applyBundle,
   backupBeforeChange,
-  buildBundle,
+  buildBackupBundle,
   getEngineBackup,
   listConsoleBackups,
   listEngineBackups,
@@ -84,7 +84,7 @@ export function SettingsBackups() {
     setBusy(true);
     setError(null);
     try {
-      const b = buildBundle("manual", label);
+      const b = buildBackupBundle("manual", label);
       await saveEngineBackup(b);
       if (consoleOk) await saveConsoleBackup(host, me, label, b);
       useToastStore.getState().push({ tone: "success", message: tr("backup_saved", undefined, "Settings backed up") });

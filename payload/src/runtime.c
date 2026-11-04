@@ -8165,9 +8165,9 @@ static int handle_files_handoff_take(runtime_state_t *state, const char *body, u
 /* ── The PC's keyboard and mouse (vinput.c) ─────────────────────────────
  * The answers are the bodies vinput.c writes; a refusal ({"ok":false,"err":..}) is kept as the answer
  * (mgmt_call_text_keep), so the engine reads which device is missing and why. The console's own
- * devices (vinput_ps5.c, libSceMouse / libSceKeyboard) are off by default; then vinput.c's stub
- * answers "vinput_unsupported". */
-/* The console's devices replace the stub on first use, when vinput_ps5.c allows them (off by
+ * devices (vinput_ps5.c, libSceMouse / libSceKeyboard) are on by default; switched off, vinput.c's
+ * stub answers "vinput_unsupported". */
+/* The console's devices replace the stub on first use, when vinput_ps5.c allows them (on by
  * default). */
 static pthread_once_t g_vinput_backend_once = PTHREAD_ONCE_INIT;
 static void vinput_backend_pick(void) {

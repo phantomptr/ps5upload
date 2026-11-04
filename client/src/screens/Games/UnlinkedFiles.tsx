@@ -64,6 +64,18 @@ export function UnlinkedFiles() {
           {retry}
         </p>
       )}
+      {slot.incomplete && !slot.error && (
+        <p className="flex flex-wrap items-center gap-2 text-xs text-[var(--color-warn)]">
+          <span>
+            {tr(
+              "library_scan_incomplete",
+              undefined,
+              "Some folders on the PS5 could not be read, so this list may be missing games.",
+            )}
+          </span>
+          {retry}
+        </p>
+      )}
       {slot.entries === null && slot.loading && (
         <p className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
           <Spinner size={12} />

@@ -21,6 +21,7 @@ import { Button, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { formatBytes } from "../../lib/format";
+import { trStatic } from "../../lib/trStatic";
 
 /**
  * Local UFS2 inspector panel — collapsed by default, expands into
@@ -78,13 +79,13 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
     try {
       const r = await ffpkgExtract(path, innerPath, dest);
       setExtractResult(r);
-      pushNotification("success", `Extracted ${displayName}`, {
-        body: `${r.file_count} file${r.file_count === 1 ? "" : "s"}, ${formatBytes(r.bytes_written)} written to ${dest}.`,
+      pushNotification("success", trStatic("ffpkg_extracted", "Extracted {name}", { name: displayName }), {
+        body: trStatic("ffpkg_extracted_body", "Files: {count}. {size} written to {dest}.", { count: r.file_count, size: formatBytes(r.bytes_written), dest }),
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
-      pushNotification("error", `Extract failed: ${displayName}`, { body: msg });
+      pushNotification("error", trStatic("ffpkg_extract_failed", "Extract failed: {name}", { name: displayName }), { body: msg });
     } finally {
       setExtractBusy(null);
     }

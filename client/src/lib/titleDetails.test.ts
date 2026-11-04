@@ -8,7 +8,7 @@ import {
   patchesSiteUrl,
   platformForTitleId,
   readTitleCache,
-  titleIdFromContentId,
+  findTitleId,
   writeTitleCache,
 } from "./titleDetails";
 
@@ -87,20 +87,20 @@ describe("metaSourceForTitleId", () => {
   });
 });
 
-describe("titleIdFromContentId", () => {
+describe("findTitleId", () => {
   it("extracts the title id from a full ContentID", () => {
-    expect(titleIdFromContentId("EP4040-PPSA01342_00-DEADSPACEPS5BB00")).toBe(
+    expect(findTitleId("EP4040-PPSA01342_00-DEADSPACEPS5BB00")).toBe(
       "PPSA01342",
     );
-    expect(titleIdFromContentId("UP0006-CUSA57609_00-CARDEALERSIM0000")).toBe(
+    expect(findTitleId("UP0006-CUSA57609_00-CARDEALERSIM0000")).toBe(
       "CUSA57609",
     );
   });
   it("returns null for headerless / unrecognizable ids", () => {
-    expect(titleIdFromContentId("")).toBeNull();
-    expect(titleIdFromContentId(null)).toBeNull();
-    expect(titleIdFromContentId(undefined)).toBeNull();
-    expect(titleIdFromContentId("EP4040-XX_00")).toBeNull();
+    expect(findTitleId("")).toBeNull();
+    expect(findTitleId(null)).toBeNull();
+    expect(findTitleId(undefined)).toBeNull();
+    expect(findTitleId("EP4040-XX_00")).toBeNull();
   });
 });
 

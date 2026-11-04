@@ -101,6 +101,7 @@ runInline("script syntax", "node", ["scripts/check-scripts.mjs"]);
 runInline("linux launcher", "sh", ["scripts/release/linux-launcher-selftest.sh"]);
 runInline("script inventory", "node", ["scripts/audit-scripts.mjs"]);
 runInline("i18n coverage", "node", ["scripts/i18n-coverage.mjs"]);
+runInline("dead exports", "node", ["scripts/check-dead-exports.mjs"]);
 runInline("git whitespace", "git", ["diff", "--check"]);
 
 const engineSteps = [

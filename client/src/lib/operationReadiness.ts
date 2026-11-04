@@ -37,7 +37,7 @@ export function evaluateOperationReadiness(
   const blockers: string[] = [];
   const warnings: string[] = [];
 
-  if (!context.engineUp) blockers.push(trStatic("readiness_engine_offline", "The ps5upload engine is offline."));
+  if (!context.engineUp) blockers.push(trStatic("readiness_engine_offline", "The PS5Upload engine is offline."));
   if (operation !== "local-only") {
     if (!context.host.trim()) blockers.push(trStatic("readiness_no_console", "No PS5 is selected."));
     if (!context.helperUp) blockers.push(helperNotConnected());

@@ -8,8 +8,8 @@
 //!
 //! The helper owns the devices and lets go of everything on its own when the heartbeat stops
 //! ([`TIMEOUT`]); the engine keeps it alive with [`SessionOp::Heartbeat`] every [`HEARTBEAT`] while a
-//! page wants input sent. Today's helpers make no devices (their firmware backend is a stub): `caps`
-//! answers both false and `open` answers `vinput_unsupported`.
+//! page wants input sent. A helper with the console's devices switched off, or an older one, makes none:
+//! `caps` answers both false and `open` answers `vinput_unsupported`.
 
 use std::time::Duration;
 
@@ -163,7 +163,7 @@ pub struct Caps {
     /// A session is open (this engine's or another's).
     #[serde(default)]
     pub open: bool,
-    /// The helper's backend: "stub" until the firmware's calls are in.
+    /// The helper's backend: "stub" when it makes no devices.
     #[serde(default)]
     pub backend: String,
     /// Why nothing can be made (`vinput_unsupported`, `vinput_needs_loader`,

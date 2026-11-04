@@ -236,10 +236,32 @@ describe("runFsUpload", () => {
       "/pc/a.bin",
       "/pc/b.bin",
     ]);
-    expect(waits).toContain(5000);
+    // The first retry's wait, in slices Cancel can end.
+    expect(waits.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(5000);
     expect(
       fsUploadForHost(useFsUploadStore.getState(), HOST).stopped,
     ).toBeNull();
+  });
+
+  it("Cancel ends the wait before a retry instead of leaving the row busy", async () => {
+    const e = fakeEngine({
+      "job-1": [{ status: "failed", error: "connection reset" } as Snap],
+    });
+    const waits: number[] = [];
+    const r = await runFsUpload(
+      { host: HOST, addr: HOST, destDir: "/data/x", srcPaths: ["/pc/a.bin"] },
+      {
+        ...e.deps,
+        shouldRetry: () => true,
+        sleep: async (ms) => {
+          waits.push(ms);
+          if (waits.length === 3) cancelFsUpload(HOST, e.deps);
+        },
+      },
+    );
+    expect(r.ok).toBe(false);
+    expect(waits.reduce((a, b) => a + b, 0)).toBeLessThan(5000);
+    expect(e.started).toHaveLength(1);
   });
 
   it("shows that it is waiting to retry, and which try", async () => {
@@ -252,10 +274,10 @@ describe("runFsUpload", () => {
       {
         ...e.deps,
         shouldRetry: () => true,
-        sleep: async (ms) => {
-          if (ms >= 5000)
-            seen = fsUploadForHost(useFsUploadStore.getState(), HOST).active
-              ?.retry;
+        sleep: async () => {
+          seen ??=
+            fsUploadForHost(useFsUploadStore.getState(), HOST).active?.retry ??
+            null;
         },
       },
     );

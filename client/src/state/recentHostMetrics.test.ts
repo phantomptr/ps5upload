@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { MAX_AGE_MS, useRecentHostMetricsStore } from "./recentHostMetrics";
+import { useRecentHostMetricsStore } from "./recentHostMetrics";
 
 function resetStore() {
   useRecentHostMetricsStore.setState({ entries: {} });
@@ -107,12 +107,5 @@ describe("useRecentHostMetricsStore", () => {
     expect(
       useRecentHostMetricsStore.getState().lookup("10.0.0.5:9113"),
     ).toBeUndefined();
-  });
-
-  it("MAX_AGE_MS pins the documented 7-day window", () => {
-    // The exact value matters for the consumer's staleness check; if a
-    // future PR changes this constant the consumer logic that reads it
-    // needs corresponding updates. Pin so the change is intentional.
-    expect(MAX_AGE_MS).toBe(7 * 24 * 60 * 60 * 1000);
   });
 });

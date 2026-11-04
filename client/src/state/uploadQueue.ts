@@ -131,6 +131,7 @@ import { useConnectionStore } from "./connection";
 import { startPs5ToPs5 } from "../api/ava1";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { createQueueLeader } from "../lib/queueLeader";
+import { isJobUnknownError } from "../lib/pollRead";
 
 /** The engine job id currently uploading on each console (bare host key).
  *  runOne records it so stopHost/stop can ask the engine to TRULY cancel the
@@ -576,12 +577,10 @@ export const LOST_CONTACT_GIVE_UP_MS = 120_000;
  *  recovery for these re-sends the helper only when it no longer answers, since the
  *  transfer may still be running on it. */
 const lostContactErrors = new WeakSet<object>();
-/** The engine answered that it has no such job (it restarted): the transfer is gone. */
-const isJobUnknownError = (e: unknown) =>
-  /job not found/i.test(e instanceof Error ? e.message : String(e));
 /** No new bytes for this long while sending (not while the console finalizes): say so on the row. */
 const STALL_AFTER_MS = 90_000;
 const SAVE_DEBOUNCE_MS = 300;
+const PROGRESS_SAVE_MS = 2000;
 
 function newId(): string {
   // Same compatibility path as the transfer tx id. In an insecure LAN
@@ -609,6 +608,10 @@ export function distinctPendingHosts(
     }
   }
   return out;
+}
+
+function pendingCount(items: QueueItem[]): number {
+  return items.reduce((n, it) => (it.status === "pending" ? n + 1 : n), 0);
 }
 
 /** Install-order priority for a queued item. A base game must install before
@@ -927,6 +930,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
    *  shows its progress and does the item's post-upload steps. A job the engine no longer knows
    *  (it restarted) or one that failed leaves the item pending, to be started again and
    *  resumed from the console's journal as before. Never throws. */
+  let reattachLookup: Promise<void> = Promise.resolve();
   const reattachRunning = async (
     list: Array<{ id: string; jobId: string; addr: string }>,
   ) => {
@@ -1080,6 +1084,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
    *  calls within 300 ms collapse into one fsync. The runner can
    *  legitimately fire a half-dozen patches per second (bytes_sent
    *  updates), and we don't want to round-trip Tauri/disk on each. */
+  let lastProgressSave = 0;
   const scheduleSave = () => {
     // Never save before the saved queue has loaded: it would overwrite it
     // with only what was added since the app started. hydrate() saves the
@@ -1681,7 +1686,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
               handedToSmp = true;
               mountedAt = r.added
                 ? HANDED_TO_SMP
-                : "already in ShadowMount+ list";
+                : trStatic("smp_already_listed", "already in ShadowMount+ list");
             } catch (e) {
               // Still fall back — an unmounted image helps nobody — but say
               // so, because this mount may later fight ShadowMount+.
@@ -2064,6 +2069,12 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       const moved = `${bytesSent}/${snap.skip_done_bytes ?? 0}/${snap.stage?.id ?? ""}/${snap.stage?.done ?? 0}`;
       if (moved !== lastMoved) {
         lastMoved = moved;
+        // A second tab shows what the runner saves (syncFollower): save progress now and then,
+        // or its bar stands still until the next state change.
+        if (!isTauriEnv() && now - lastProgressSave >= PROGRESS_SAVE_MS) {
+          lastProgressSave = now;
+          scheduleSave();
+        }
         lastMoveAt = now;
       }
       const totalNow = snap.total_bytes ?? 0;
@@ -2704,7 +2715,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           persistenceError: null,
         });
         if (live.length > 0) scheduleSave();
-        if (wasRunning.length > 0) void reattachRunning(wasRunning);
+        if (wasRunning.length > 0) reattachLookup = reattachRunning(wasRunning);
         for (const r of installsToFind) findInstallJob(r);
       } catch (e) {
         // load_json_or_default returns {} on missing file, so this
@@ -2815,14 +2826,20 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
               resolve({ ok: true });
             },
           })
-          .then(() => {
-            if (!accepted) {
-              resolve({
-                ok: false,
-                message: lib.getState().error ?? "The package couldn't be added.",
-              });
-            }
-          });
+          .then(
+            () => {
+              if (!accepted) {
+                resolve({
+                  ok: false,
+                  message: lib.getState().error ?? "The package couldn't be added.",
+                });
+              }
+            },
+            (e) => {
+              // Rejected: without this the row's Retry button stays busy for good.
+              if (!accepted) resolve({ ok: false, message: e instanceof Error ? e.message : String(e) });
+            },
+          );
       });
     },
 
@@ -2891,14 +2908,40 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
             if (!now || now.status !== "running") break;
             job = now.installJobId ?? null;
           }
-          if (job) await pkgInstallStop(job).catch(() => undefined);
-          else get().stopHost(hostOf(item.addr));
+          let stopFailed = false;
+          if (job) {
+            await pkgInstallStop(job).catch((e) => {
+              stopFailed = true;
+              log.warn("queue", `install stop failed for ${job}`, e);
+            });
+          } else get().stopHost(hostOf(item.addr));
           for (let i = 0; i < 60; i++) {
             const now = get().items.find((it) => it.id === id);
             if (!now || now.status !== "running") break;
             await new Promise((r) => setTimeout(r, 500));
           }
-          settle(id, { ok: false, message: "Stopped." });
+          // Still running: the install goes on, so the row stays and says so. Dropping it would
+          // leave the console installing a game the app says was stopped, with nothing to watch.
+          const after = get().items.find((it) => it.id === id);
+          if (after?.status === "running") {
+            set((s) => ({
+              items: patchItem(s.items, id, {
+                stopping: false,
+                installNote: stopFailed
+                  ? trStatic(
+                      "queue_install_stop_refused",
+                      "The stop did not go through, so this install is still running. Try again, or cancel it on the PS5.",
+                    )
+                  : trStatic(
+                      "queue_install_stop_waiting",
+                      "This install has not stopped yet. Try again, or cancel it on the PS5.",
+                    ),
+              }),
+            }));
+            scheduleSave();
+            return;
+          }
+          settle(id, { ok: false, message: trStatic("queue_install_stopped", "Stopped.") });
           set((s) => ({ items: removeItem(s.items, id) }));
           scheduleSave();
           // Stopping the loop held the console's other waiting items: let them go on.
@@ -3091,9 +3134,10 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       const again = scope
         ? { installsOnly: scope.installs, onlyIds: [...scope.ids, id] }
         : undefined;
+      const stoppedJob = runningJobByHost.get(host) ?? null;
       get().stopHost(host);
-      // Let the engine let go of the job; the next run resumes it from the console's journal.
-      setTimeout(() => void get().startHost(host, again), 1500);
+      // Once the engine has let go of the job; the next run resumes it from the console's journal.
+      restartAfterStop(host, item.addr, stoppedJob, again);
     },
 
     retryItem(id) {
@@ -3283,7 +3327,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
                       : {
                           body:
                             ack.err ||
-                            "The PS5 declined standby (may be unavailable on this firmware).",
+                            trStatic("queue_rest_declined", "The PS5 declined rest mode. It may be unavailable on this firmware."),
                         },
                   );
                 })
@@ -3354,8 +3398,15 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
           includeWaitingForWake: pass === 0,
         }).filter((h) => !get().runningHosts[h] && (pass === 0 || !hostAsleep(h)));
         if (hosts.length === 0) break;
+        // A row still being looked up after a reload is pending but no run can take it yet: wait
+        // for the answer. Otherwise startHost drains nothing and this loop spins in microtasks,
+        // so the fetch that would end the lookup never completes and the tab hangs.
+        await reattachLookup;
+        const before = pendingCount(get().items);
         await Promise.all(hosts.map((h) => get().startHost(h)));
         if (!get().continueOnFailure) break;
+        // Nothing left the pending list and nothing was added: another pass would do the same.
+        if (pendingCount(get().items) === before) break;
       }
     },
 
@@ -3373,16 +3424,16 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
 
   // A tab that is not the runner shows the queue and changes nothing: every action is a no-op
   // with the neutral answer its caller expects (see lib/queueLeader).
-  const readOnlyMessage =
+  const readOnlyMessage = () =>
     trStatic("queue_other_tab", "The queue is running in another tab of this browser. Use that tab to change it.");
   const refusals: Partial<Record<keyof QueueState, () => unknown>> = {
     add: () => undefined,
     enqueueInstall: () => ({
       id: "",
-      done: Promise.resolve({ ok: false, message: readOnlyMessage }),
+      done: Promise.resolve({ ok: false, message: readOnlyMessage() }),
     }),
     retryInstall: () => null,
-    retryInstallViaUpload: () => Promise.resolve({ ok: false, message: readOnlyMessage }),
+    retryInstallViaUpload: () => Promise.resolve({ ok: false, message: readOnlyMessage() }),
     remove: () => undefined,
     cancelItem: () => undefined,
     noteSourceSize: () => undefined,

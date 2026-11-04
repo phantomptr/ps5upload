@@ -1,6 +1,7 @@
 // Automatic save backups, run by the engine (engine/crates/ps5upload-engine/src/save_backup.rs).
 
 import { getEngineUrl } from "../state/engine";
+import { ENGINE_LONG_TIMEOUT_MS, engineFetch, type EngineFetchInit } from "../lib/engineFetch";
 
 export interface SaveBackupSettings {
   enabled: boolean;
@@ -36,8 +37,11 @@ export interface SaveBackupFile {
   tag?: string;
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getEngineUrl()}/api/save-backup${path}`, {
+/** Takes or restores a backup before it answers. */
+const LONG = { timeoutMs: ENGINE_LONG_TIMEOUT_MS };
+
+async function call<T>(path: string, init?: EngineFetchInit): Promise<T> {
+  const res = await engineFetch(`${getEngineUrl()}/api/save-backup${path}`, {
     ...init,
     headers: init?.body ? { "content-type": "application/json" } : undefined,
   });
@@ -102,11 +106,11 @@ export const serverBackupApi = {
   view: () => call<ServerBackupView>("/server"),
   set: (patch: Partial<ServerBackupSettings>) =>
     call<ServerBackupView>("/server", { method: "PUT", body: JSON.stringify(patch) }),
-  runNow: () => call<ServerBackupView>("/server/run", { method: "POST" }),
+  runNow: () => call<ServerBackupView>("/server/run", { ...LONG, method: "POST" }),
   list: async (titleId: string) =>
     (await call<{ backups: SaveBackupFile[] }>(`/server/list?title_id=${encodeURIComponent(titleId)}`)).backups,
   restore: (req: { addr: string; title_id: string; file: string; save_path: string; user_id: number }) =>
-    call<{ ok: boolean }>("/server/restore", { method: "POST", body: JSON.stringify(req) }),
+    call<{ ok: boolean }>("/server/restore", { ...LONG, method: "POST", body: JSON.stringify(req) }),
 };
 
 /** A save of ProsperoEden, the Switch emulator (PPSA99008): `title_id` is the game's 16-hex-digit
@@ -144,18 +148,18 @@ export const saveBackupApi = {
   view: () => call<SaveBackupView>(""),
   set: (patch: Partial<SaveBackupSettings>) =>
     call<SaveBackupView>("", { method: "PUT", body: JSON.stringify(patch) }),
-  runNow: () => call<SaveBackupView>("/run", { method: "POST" }),
+  runNow: () => call<SaveBackupView>("/run", { ...LONG, method: "POST" }),
   list: async (titleId: string) =>
     (await call<{ backups: SaveBackupFile[] }>(`/list?title_id=${encodeURIComponent(titleId)}`)).backups,
   restore: (req: { addr: string; title_id: string; file: string; save_path: string; user_id: number }) =>
-    call<{ ok: boolean }>("/restore", { method: "POST", body: JSON.stringify(req) }),
+    call<{ ok: boolean }>("/restore", { ...LONG, method: "POST", body: JSON.stringify(req) }),
   /** Back up a game's save now, while it may be running: a copy taken only while the save sits
    *  still, kept apart from the automatic backups. */
   snapshot: (req: { addr: string; title_id: string }) =>
-    call<{ ok: boolean; files: string[] }>("/snapshot", { method: "POST", body: JSON.stringify(req) }),
+    call<{ ok: boolean; files: string[] }>("/snapshot", { ...LONG, method: "POST", body: JSON.stringify(req) }),
   /** Back up one user's save of a game now, every part of it (a snapshot while it runs). */
   now: (req: { addr: string; title_id: string; user_id: number }) =>
-    call<{ ok: boolean; file: string }>("/now", { method: "POST", body: JSON.stringify(req) }),
+    call<{ ok: boolean; file: string }>("/now", { ...LONG, method: "POST", body: JSON.stringify(req) }),
   /** The newest backup of each game and user in the backup folder. */
   latest: async () =>
     (await call<{ latest: Array<{ title_id: string; user_id: number; stamp: string }> }>("/latest")).latest,

@@ -6,6 +6,7 @@ import { useLangStore } from "./lang";
 import { useKeepAwakeStore } from "./keepAwake";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useConnectionStore } from "./connection";
+import { selectConsoleByAddress, useRosterStore } from "./roster";
 import { useEngineStore, normalizeEngineUrl } from "./engine";
 import { useSaveSettingsStore, normalizeSavePath } from "./saveSettings";
 import { useAccessibilityStore } from "./accessibility";
@@ -97,6 +98,8 @@ function snapshotCurrent(): SettingsSnapshot {
 }
 
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+/** What the file last got, so a change that did not touch the snapshot writes nothing. */
+let lastWritten: string | null = null;
 
 /** Request a file-mirror write. Coalesces rapid changes into one write. */
 function schedulePersist() {
@@ -105,7 +108,11 @@ function schedulePersist() {
   pendingTimer = setTimeout(async () => {
     pendingTimer = null;
     try {
-      await invoke("user_config_save", { config: snapshotCurrent() });
+      const config = snapshotCurrent();
+      const text = JSON.stringify(config);
+      if (text === lastWritten) return;
+      await invoke("user_config_save", { config });
+      lastWritten = text;
     } catch (e) {
       // Silent: file-mirror is best-effort. localStorage is still the
       // source of truth, so a failed disk write doesn't lose anything.
@@ -134,11 +141,11 @@ export function installUserConfigMirror() {
   useKeepAwakeStore.subscribe(schedulePersist);
   useUploadSettingsStore.subscribe(schedulePersist);
   // `host` is the only field in useConnectionStore that persists across
-  // launches — status/step fields are transient. But Zustand.subscribe
-  // fires on any slice change, so we coarsely re-snapshot on every
-  // connection-store update; the debounce coalesces those into a
-  // single write.
-  useConnectionStore.subscribe(schedulePersist);
+  // launches. Status and step fields change on every poll and must not
+  // mean a file write each time.
+  useConnectionStore.subscribe((s, prev) => {
+    if (s.host !== prev.host) schedulePersist();
+  });
   // Engine URL: persist to disk AND push to the Rust shell so its command
   // proxies follow the change live (the spawn-mode switch still needs a
   // restart). Fires on any engine-store change.
@@ -216,13 +223,16 @@ export async function hydrateFromUserConfig(): Promise<void> {
     // fall back to "en" inside the store — no throw.
     useLangStore.getState().setLang(data.lang as never);
   }
-  const liveHost = useConnectionStore.getState().host;
+  // The roster's active profile decides which console is selected. A file that differs from it
+  // (a settings restore, a quit inside the mirror's debounce) must not move connection.host away
+  // from it, or the tab strip shows one console while screens read another. It only says
+  // something when there is no roster yet, and only then does a host not reconciled later stick.
   if (
     typeof data.ps5_host === "string" &&
     data.ps5_host.trim() &&
-    data.ps5_host !== liveHost
+    useRosterStore.getState().profiles.length === 0
   ) {
-    useConnectionStore.getState().setHost(data.ps5_host);
+    selectConsoleByAddress(data.ps5_host);
   }
   const liveEngineUrl = useEngineStore.getState().engineUrl;
   if (

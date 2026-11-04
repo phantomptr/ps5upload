@@ -44,7 +44,7 @@ export async function linkProbe(
 ): Promise<LinkClass> {
   return invoke<LinkClass>("link_probe", {
     url,
-    insecure_tls: insecureTls,
+    insecureTls,
   });
 }
 

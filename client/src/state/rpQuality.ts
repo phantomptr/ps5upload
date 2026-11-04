@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import type { RemotePlayStream } from "../lib/remotePlayStream";
-import { useRemotePlayStore, type RpPrefs } from "./remotePlay";
+import { useRemotePlayStore, type SessionQuality } from "./remotePlay";
 
 /** Sessions the lower quality was already offered for (once each, taken or not). */
 const offered = new WeakSet<RemotePlayStream>();
@@ -21,7 +21,7 @@ interface QualityState {
   offer: (s: RemotePlayStream) => void;
   dismiss: () => void;
   switchTo720: () => Promise<void>;
-  restartWith: (prefs: Partial<RpPrefs>) => Promise<void>;
+  restartWith: (quality: SessionQuality) => Promise<void>;
   cancelSwitch: () => void;
 }
 
@@ -53,23 +53,26 @@ export const useRpQualityStore = create<QualityState>((set, get) => ({
     await get().restartWith({ res: "1280x720" });
   },
 
-  /** Stop the stream and start it again with `prefs` (720p, or H.264 at a site's bitrate for
-   *  Go live). Resolution, codec and bitrate are fixed for a session, and the PS5 keeps its one
-   *  Remote Play slot for ~12 s after a session ends: the engine answers "busy, try in N s"
-   *  without asking the console, and this waits that long and tries again. */
-  async restartWith(prefs) {
+  /** Stop the stream and start it again with `quality` (720p, or H.264 at a site's bitrate for
+   *  Go live), for this session only: Settings keep what the user chose, so one bad-network
+   *  moment does not make every later stream 720p. Resolution, codec and bitrate are fixed for a
+   *  session, and the PS5 keeps its one Remote Play slot for ~12 s after a session ends: the
+   *  engine answers "busy, try in N s" without asking the console, and this waits that long and
+   *  tries again. */
+  async restartWith(next) {
     const rp = useRemotePlayStore.getState();
     const t = rp.target;
     if (!t || !rp.stream || get().switching) return;
     set({ switching: { retryAt: null } });
-    rp.setPrefs(prefs);
+    // On top of an earlier restart of this session (720p, then Go live's H.264).
+    const quality = { ...rp.sessionQuality, ...next };
     rp.stop();
     await until(() => !useRemotePlayStore.getState().stream, 10_000);
     const deadline = Date.now() + SWITCH_FOR_MS;
     while (get().switching && Date.now() < deadline) {
       if (useRemotePlayStore.getState().stream) break; // started again by hand
       useRemotePlayStore.setState({ error: null });
-      await useRemotePlayStore.getState().start(t);
+      await useRemotePlayStore.getState().start(t, { quality });
       await until(() => {
         const s = useRemotePlayStore.getState();
         return s.phase === "playing" || !s.stream || !!s.error;

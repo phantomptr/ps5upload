@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { searchPS5, sendPayload } from "./ps5";
+import { checkDestinationFreeSpace, searchPS5, sendPayload } from "./ps5";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -10,6 +10,20 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => true }));
 
 const mockedInvoke = vi.mocked(invoke);
+
+describe("checkDestinationFreeSpace", () => {
+  beforeEach(() => {
+    mockedInvoke.mockReset();
+  });
+
+  it("compares against what can really be allocated, not raw free bytes", async () => {
+    mockedInvoke.mockResolvedValue({
+      volumes: [{ path: "/data", writable: true, is_placeholder: false, free_bytes: 100, total_bytes: 200, allocatable_bytes: 10 }],
+    });
+    const r = await checkDestinationFreeSpace("10.0.0.5", "/data/x", 50);
+    expect(r).toMatchObject({ insufficient: true, freeBytes: 10, shortBy: 40 });
+  });
+});
 
 describe("searchPS5", () => {
   beforeEach(() => {
@@ -73,7 +87,9 @@ describe("searchPS5", () => {
 });
 
 describe("sendPayload failures", () => {
-  beforeEach(() => mockedInvoke.mockReset());
+  beforeEach(() => {
+    mockedInvoke.mockReset();
+  });
 
   it("leaves a failure as the engine said it", async () => {
     mockedInvoke.mockResolvedValueOnce({ ok: false, error: "connect 10.0.0.2:9021: timeout" });

@@ -730,7 +730,8 @@ describe("cancelItem (per-item cancel)", () => {
     void useUploadQueueStore.getState().startHost("192.168.1.10");
     await vi.advanceTimersByTimeAsync(50);
     useUploadQueueStore.getState().restartItem(byId("A1").id);
-    await vi.advanceTimersByTimeAsync(2_000);
+    // Waits for the stopped job to let go, which here it never quite does: the longest wait.
+    await vi.advanceTimersByTimeAsync(16_000);
     expect(byId("A1").status).toBe("running");
 
     finish = true;
@@ -1597,6 +1598,32 @@ describe("install items", () => {
     expect(useUploadQueueStore.getState().items.find((i) => i.id === q.id)?.stopping).toBe(true);
     // The engine ends the job as stopped; the row then leaves the queue.
     gate.get("/stop.pkg")!({ ok: false, message: "stopped" });
+    await waitFor(() => !useUploadQueueStore.getState().items.some((i) => i.id === q.id));
+  });
+
+  it("keeps a running install's row and says so when the stop did not go through", async () => {
+    const api = await import("../api/ps5");
+    vi.mocked(api.pkgInstallStop).mockRejectedValueOnce(new Error("engine unreachable"));
+    const q = useUploadQueueStore.getState().enqueueInstall({
+      host, request: { via: "stream", source: "/refused.pkg" }, displayName: "R",
+    });
+    await waitFor(() => calls.length === 1);
+    useUploadQueueStore.setState((st) => ({
+      items: st.items.map((i) => (i.id === q.id ? { ...i, installJobId: "job-9" } : i)),
+    }));
+    vi.useFakeTimers();
+    try {
+      useUploadQueueStore.getState().cancelItem(q.id);
+      await vi.advanceTimersByTimeAsync(31_000);
+    } finally {
+      vi.useRealTimers();
+    }
+    const row = useUploadQueueStore.getState().items.find((i) => i.id === q.id);
+    expect(row).toMatchObject({ status: "running", stopping: false });
+    expect(row?.installNote).toMatch(/still running/);
+    // It can be asked again; the install ends and the row leaves.
+    useUploadQueueStore.getState().cancelItem(q.id);
+    gate.get("/refused.pkg")!({ ok: false, message: "stopped" });
     await waitFor(() => !useUploadQueueStore.getState().items.some((i) => i.id === q.id));
   });
 

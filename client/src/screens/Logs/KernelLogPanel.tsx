@@ -11,6 +11,7 @@ import { writeClipboard } from "../../lib/clipboard";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { usePoll } from "../../lib/usePoll";
 import { windowRange } from "../../lib/windowing";
+import { trStatic } from "../../lib/trStatic";
 
 /**
  * Live kernel log viewer with noise filtering.
@@ -276,14 +277,14 @@ export default function KernelLogPanel() {
     if (ok) {
       pushNotification(
         "success",
-        withConsolePrefix(host, "Kernel log copied"),
+        withConsolePrefix(host, trStatic("klog_copied", "Kernel log copied")),
         {
-          body: `${visible.length} visible line${visible.length === 1 ? "" : "s"} on the clipboard. (${entries.length - visible.length} filtered.)`,
+          body: trStatic("klog_copied_body", "Lines on the clipboard: {count}. Filtered out: {filtered}.", { count: visible.length, filtered: entries.length - visible.length }),
         },
       );
     } else {
-      pushNotification("warning", "Copy failed", {
-        body: "Clipboard access denied.",
+      pushNotification("warning", trStatic("klog_copy_failed", "Copy failed"), {
+        body: trStatic("klog_clipboard_denied", "Clipboard access denied."),
       });
     }
   }
@@ -449,7 +450,7 @@ export default function KernelLogPanel() {
                   undefined,
                   "Waiting for kernel log output… (the buffer empties between reads, so messages from before you opened this tab won't appear here).",
                 )
-              : `All ${entries.length} buffered line${entries.length === 1 ? "" : "s"} are hidden by your filters. Open the Filters panel to enable more categories.`}
+              : tr("klog_all_filtered", { count: entries.length }, `Your filters hide all ${entries.length} buffered lines. Open the Filters panel to turn on more categories.`)}
           </div>
         ) : (
           <div

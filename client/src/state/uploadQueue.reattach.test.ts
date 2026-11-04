@@ -224,6 +224,28 @@ describe("the web UI re-attaches to running jobs after a reload", () => {
     expect(useUploadQueueStore.getState().runningHosts["10.0.0.2"]).toBeFalsy();
   });
 
+  it("Start all during the lookup waits for it instead of spinning (and hanging the tab)", async () => {
+    vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
+      continueOnFailure: true,
+      items: [{ ...base, id: "d", status: "running", jobId: "GONE" }],
+    } as never);
+    let answer: (e: Error) => void = () => {};
+    vi.mocked(jobStatus).mockImplementationOnce(
+      () => new Promise((_, reject) => (answer = reject)) as never,
+    );
+    vi.mocked(jobStatus).mockResolvedValue({ status: "done", bytes_sent: 1, dest: "/data/big.bin" } as never);
+    await useUploadQueueStore.getState().hydrate();
+    expect(row("d")?.status).toBe("pending");
+
+    const started = useUploadQueueStore.getState().start();
+    // A macrotask still runs: this answer could never arrive while the loop spun.
+    await new Promise((r) => setTimeout(r, 5));
+    answer(new Error("job not found"));
+    await started;
+    expect(startTransferFile).toHaveBeenCalled();
+    expect(row("d")?.status).not.toBe("pending");
+  });
+
   it("never carries an adopt marker across a reload", async () => {
     vi.mocked(uploadQueueLoad).mockResolvedValueOnce({
       continueOnFailure: false,

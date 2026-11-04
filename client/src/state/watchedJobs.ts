@@ -4,6 +4,7 @@ import type { JobSnapshot } from "../api/ps5";
 import { hostOf } from "../lib/addr";
 import { beginTask } from "./trackTask";
 import type { TaskKind } from "./tasks";
+import { readWithRetries } from "../lib/pollRead";
 
 /**
  * One engine job started from a screen and watched to its end, kept outside the screen.
@@ -130,7 +131,7 @@ export async function watchJob(
     // A Stop pressed before the job id arrived had nothing to end: end it now.
     if (stopRequested()) void deps.jobCancel(jobId).catch(() => {});
     for (;;) {
-      const snap = await deps.jobStatus(jobId);
+      const snap = await readWithRetries(() => deps.jobStatus(jobId), deps.sleep);
       const sent = snap.bytes_sent ?? 0;
       const total = snap.total_bytes ?? 0;
       if (snap.status === "done") {

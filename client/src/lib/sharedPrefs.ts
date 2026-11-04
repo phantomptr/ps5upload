@@ -95,16 +95,10 @@ export const MESH_KEYS: readonly string[] = SHARED_KEYS.filter(
 );
 
 /** Which keys a sync covers and where it keeps its own bookkeeping. */
-export interface Channel {
-  keys: ReadonlySet<string>;
-  metaKey: string;
-}
 
 /** The Docker engine's shared settings (`/api/shared/prefs`). */
-export const ENGINE_CHANNEL: Channel = { keys: new Set(SHARED_KEYS), metaKey: "ps5upload.shared_prefs.meta.v1" };
-/** A console's shared settings (the mesh "prefs" document). One bookkeeping for every console:
- *  when a key changed here is the same fact whichever console hears it. */
-export const MESH_CHANNEL: Channel = { keys: new Set(MESH_KEYS), metaKey: "ps5upload.mesh_prefs.meta.v1" };
+const SHARED_KEY_SET: ReadonlySet<string> = new Set(SHARED_KEYS);
+const META_KEY = "ps5upload.shared_prefs.meta.v1";
 
 /** One key's shared value: the raw localStorage string (null: removed) and when it changed. */
 export interface Entry {
@@ -125,16 +119,16 @@ interface Meta {
   at: Record<string, number>;
 }
 
-function loadMeta(ch: Channel = ENGINE_CHANNEL): Meta {
+function loadMeta(): Meta {
   try {
-    const m = JSON.parse(safeGetItem(ch.metaKey) ?? "null") as Partial<Meta> | null;
+    const m = JSON.parse(safeGetItem(META_KEY) ?? "null") as Partial<Meta> | null;
     if (m && typeof m.rev === "number" && m.at && typeof m.at === "object") return { rev: m.rev, at: { ...m.at } };
   } catch {
     // A bad meta starts over: the engine's values win, this browser's unshared ones are offered.
   }
   return { rev: 0, at: {} };
 }
-const saveMeta = (m: Meta, ch: Channel = ENGINE_CHANNEL) => safeSetItem(ch.metaKey, JSON.stringify(m));
+const saveMeta = (m: Meta) => safeSetItem(META_KEY, JSON.stringify(m));
 
 /** The engine's answer, checked: anything else is an error, so a misread answer can never
  *  overwrite this browser's settings. Entries that are not well formed are dropped. */
@@ -270,29 +264,29 @@ function writeLocal(entries: Entries, meta: Meta): string[] {
 
 /** One sync round: take what is newer on the engine, send what is newer here. Retries a few times
  *  when another browser saves in between. Returns the keys written here. */
-export async function syncOnce(api: PrefsApi, signal?: AbortSignal, ch: Channel = ENGINE_CHANNEL): Promise<string[]> {
-  const meta = loadMeta(ch);
+export async function syncOnce(api: PrefsApi, signal?: AbortSignal): Promise<string[]> {
+  const meta = loadMeta();
   let doc = await api.get(signal);
   const written: string[] = [];
   for (let attempt = 0; attempt < 4; attempt++) {
     const remote = doc.value?.keys ?? {};
-    const { apply, send } = plan(localEntries(safeGetItem, meta.at, ch.keys), remote, Date.now(), ch.keys);
+    const { apply, send } = plan(localEntries(safeGetItem, meta.at, SHARED_KEY_SET), remote, Date.now(), SHARED_KEY_SET);
     written.push(...writeLocal(apply, meta));
     meta.rev = doc.rev;
     if (!send) {
-      saveMeta(meta, ch);
+      saveMeta(meta);
       return written;
     }
     const r = await api.put(doc.rev, send);
     if ("rev" in r) {
-      for (const [k, e] of Object.entries(send)) if (ch.keys.has(k)) meta.at[k] = e.at;
+      for (const [k, e] of Object.entries(send)) if (SHARED_KEY_SET.has(k)) meta.at[k] = e.at;
       meta.rev = r.rev;
-      saveMeta(meta, ch);
+      saveMeta(meta);
       return written;
     }
     doc = r.conflict;
   }
-  saveMeta(meta, ch);
+  saveMeta(meta);
   return written;
 }
 
@@ -326,14 +320,13 @@ const PUSH_DEBOUNCE_MS = 500;
 export function startSharedPrefs(
   onLive: (keys: string[]) => void,
   api: PrefsApi = enginePrefsApi,
-  ch: Channel = ENGINE_CHANNEL,
 ): () => void {
   let timer: number | undefined;
   let running: Promise<void> = Promise.resolve();
   const warn = (e: unknown) => console.warn("[shared-prefs]", e instanceof Error ? e.message : String(e));
   const run = () => {
     running = running
-      .then(() => syncOnce(api, undefined, ch))
+      .then(() => syncOnce(api))
       .then((written) => {
         // Every store re-reads what changed (lib/liveSettings): no reload needed.
         reloadSettings(written);
@@ -343,10 +336,10 @@ export function startSharedPrefs(
       .catch(warn);
   };
   const stopWrites = onStorageWrite((key) => {
-    if (applying || !ch.keys.has(key)) return;
-    const meta = loadMeta(ch);
+    if (applying || !SHARED_KEY_SET.has(key)) return;
+    const meta = loadMeta();
     meta.at[key] = Date.now();
-    saveMeta(meta, ch);
+    saveMeta(meta);
     window.clearTimeout(timer);
     timer = window.setTimeout(run, PUSH_DEBOUNCE_MS);
   });

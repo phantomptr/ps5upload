@@ -9,6 +9,7 @@
 
 import { meshDocGet, meshDocPut } from "../api/mesh";
 import { getEngineUrl } from "../state/engine";
+import { hostOf } from "./addr";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "./safeStorage";
 
 export const NS_PREFIX = "ps5upload.";
@@ -26,6 +27,12 @@ const OWN_KEYS = new Set([
   "ps5upload.mesh_prefs.meta.v1",
   "ps5upload.mesh.client",
 ]);
+/** The keys that sign in to a console's user. A saved file can go anywhere, so it never carries them
+ *  (`buildBundle`). The engine's copy keeps them sealed (settings_backup.rs) and a console's own copy
+ *  holds only that console's (`forConsole`), so a wiped device can still wake and sign in
+ *  (`buildBackupBundle`). A restore keeps the ones this app holds. */
+const ROSTER_KEY = "ps5upload.roster.v1";
+const PAIRING_FIELDS = ["wake_credential", "wake_regist_key", "wake_rp_key"] as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Before-sync backups at most this often (a busy sync must not rotate the daily ones out). */
 const BEFORE_SYNC_EVERY_MS = 60 * 60 * 1000;
@@ -45,13 +52,9 @@ export interface Bundle {
   local_storage: Record<string, string | null>;
 }
 
-const ROSTER_KEY = "ps5upload.roster.v1";
-/** What wakes a console and signs in to it (`PS5Profile`): the engine keeps these encrypted, and
- *  hands them back only to its own computer. */
-const WAKE_FIELDS = ["wake_credential", "wake_regist_key", "wake_rp_key"] as const;
-
 type RosterProfile = Record<string, unknown> & { id?: unknown; host?: unknown };
 
+/** The profiles of a stored roster, or null when the value is not one. */
 function parseProfiles(text: string | null | undefined): { doc: Record<string, unknown>; profiles: RosterProfile[] } | null {
   if (!text) return null;
   try {
@@ -63,17 +66,31 @@ function parseProfiles(text: string | null | undefined): { doc: Record<string, u
   }
 }
 
-/** The restored roster, with the wake keys this device already holds for any console the backup
- *  has none for (one the engine kept them back from, or a console's own copy). A restore must not
- *  cost the ability to wake a console. */
+function sameConsole(a: unknown, b: unknown): boolean {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  return hostOf(a.trim()).toLowerCase() === hostOf(b.trim()).toLowerCase();
+}
+
+function withoutPairing(roster: string): string | null {
+  const r = parseProfiles(roster);
+  if (!r) return null;
+  for (const p of r.profiles) for (const f of PAIRING_FIELDS) delete p[f];
+  return JSON.stringify(r.doc);
+}
+
+/** The restored roster, with the keys this device already holds for any console the backup has
+ *  none for (one the engine kept them back from, a file, or a console's own copy). A restore must
+ *  not cost the ability to wake a console. Keys a backup does hold stand. */
 export function keepLiveWakeKeys(restored: string, live: string | null): string {
   const from = parseProfiles(live);
   const to = parseProfiles(restored);
   if (!from || !to) return restored;
   for (const p of to.profiles) {
-    const mine = from.profiles.find((l) => l.id === p.id) ?? from.profiles.find((l) => l.host === p.host);
+    const mine =
+      (p.id === undefined ? undefined : from.profiles.find((l) => l.id === p.id)) ??
+      from.profiles.find((l) => sameConsole(l.host, p.host));
     if (!mine) continue;
-    for (const f of WAKE_FIELDS) if (!p[f] && mine[f]) p[f] = mine[f];
+    for (const f of PAIRING_FIELDS) if (!p[f] && mine[f]) p[f] = mine[f];
   }
   return JSON.stringify(to.doc);
 }
@@ -89,20 +106,25 @@ export function forConsole(b: Bundle, host: string): Bundle {
     delete local_storage[ROSTER_KEY];
     return { ...b, local_storage };
   }
-  const same = (h: unknown) => typeof h === "string" && h.trim().toLowerCase() === host.trim().toLowerCase();
   for (const p of roster.profiles) {
-    if (!same(p.host)) for (const f of WAKE_FIELDS) delete p[f];
+    if (!sameConsole(p.host, host)) for (const f of PAIRING_FIELDS) delete p[f];
   }
   local_storage[ROSTER_KEY] = JSON.stringify(roster.doc);
   return { ...b, local_storage };
 }
 
-export function buildBundle(reason = "manual", device = ""): Bundle {
+function collectBundle(reason: string, device: string, roster: (text: string) => string | null): Bundle {
   const local_storage: Record<string, string | null> = {};
   try {
     for (let i = 0; i < window.localStorage.length; i++) {
       const k = window.localStorage.key(i);
-      if (k && k.startsWith(NS_PREFIX) && !OWN_KEYS.has(k)) local_storage[k] = safeGetItem(k);
+      if (!k || !k.startsWith(NS_PREFIX) || OWN_KEYS.has(k)) continue;
+      const v = safeGetItem(k);
+      if (k === ROSTER_KEY && v !== null) {
+        // A roster it cannot read stays out: never a risk of copying keys along.
+        const kept = roster(v);
+        if (kept !== null) local_storage[k] = kept;
+      } else local_storage[k] = v;
     }
   } catch {
     // Storage blocked: an empty bundle, which nothing restores from.
@@ -111,6 +133,17 @@ export function buildBundle(reason = "manual", device = ""): Bundle {
     meta: { generated_at_ms: Date.now(), schema: 1, reason, device },
     local_storage,
   };
+}
+
+/** The bundle for a file: no pairing keys. */
+export function buildBundle(reason = "manual", device = ""): Bundle {
+  return collectBundle(reason, device, withoutPairing);
+}
+
+/** The bundle for the backup copies: with the pairing keys, which the engine seals and
+ *  `saveConsoleBackup` narrows to the console it writes to. */
+export function buildBackupBundle(reason = "manual", device = ""): Bundle {
+  return collectBundle(reason, device, (text) => (parseProfiles(text) ? text : null));
 }
 
 /** Writes a bundle's keys back (only this app's namespace). Returns how many. Throws on a file
@@ -125,9 +158,7 @@ export function applyBundle(parsed: unknown): number {
     // Only our own namespace: a hand-edited bundle can't write arbitrary keys.
     if (!k.startsWith(NS_PREFIX) || OWN_KEYS.has(k)) continue;
     const v = ls[k];
-    if (k === ROSTER_KEY && typeof v === "string") {
-      actions.push({ key: k, value: keepLiveWakeKeys(v, safeGetItem(ROSTER_KEY)) });
-    } else if (typeof v === "string") actions.push({ key: k, value: v });
+    if (typeof v === "string") actions.push({ key: k, value: k === ROSTER_KEY ? keepLiveWakeKeys(v, safeGetItem(k)) : v });
     else if (v === null) actions.push({ key: k, value: null });
     else if (v !== undefined) throw new Error(`invalid value for ${k}`);
   }
@@ -297,7 +328,7 @@ export function backupBeforeChange(reason: "before-sync" | "before-restore", dev
     lastBeforeSync = Date.now();
   }
   // Built now (synchronously), so it holds the settings from before the change.
-  const b = buildBundle(reason, device);
+  const b = buildBackupBundle(reason, device);
   const saved = saveEngineBackup(b);
   return reason === "before-restore"
     ? saved
@@ -318,7 +349,7 @@ export async function dailyBackup(host: string | null, app: string | null, devic
   const engineDue = due(Number(safeGetItem(LAST_AUTO_KEY) ?? 0));
   const consoleDue = !!host && !!app && due(consoles[host]);
   if (!engineDue && !consoleDue) return;
-  const b = buildBundle("daily", device);
+  const b = buildBackupBundle("daily", device);
   if (!Object.keys(b.local_storage).length) return;
   if (engineDue) {
     try {

@@ -28,6 +28,7 @@ import { powerStateFromDdp, wakeUi, type PowerState } from "../../lib/wakeState"
 import WakeSetup from "./WakeSetup";
 import { busyText } from "../../lib/helperGuard";
 import { meshFor, othersBusy, useMeshStore } from "../../state/mesh";
+import { trStatic } from "../../lib/trStatic";
 
 /**
  * Compact power-control panel — one row of buttons (reboot, standby,
@@ -38,6 +39,20 @@ import { meshFor, othersBusy, useMeshStore } from "../../state/mesh";
  * (the console host). On the destructive actions we log a notification +
  * surface the connection-drop note from core (which is success).
  */
+type PowerKind = "reboot" | "shutdown" | "standby";
+
+function powerRequested(kind: PowerKind): string {
+  if (kind === "reboot") return trStatic("power_reboot_requested", "PS5 restart requested");
+  if (kind === "shutdown") return trStatic("power_shutdown_requested", "PS5 shutdown requested");
+  return trStatic("power_standby_requested", "PS5 rest mode requested");
+}
+
+function powerFailed(kind: PowerKind): string {
+  if (kind === "reboot") return trStatic("power_reboot_failed", "PS5 restart failed");
+  if (kind === "shutdown") return trStatic("power_shutdown_failed", "PS5 shutdown failed");
+  return trStatic("power_standby_failed", "PS5 rest mode failed");
+}
+
 export default function PowerControl({ host }: { host: string }) {
   const tr = useTr();
   const [runBusy, setBusy] = useState<null | "reboot" | "shutdown" | "standby">(null);
@@ -140,7 +155,7 @@ export default function PowerControl({ host }: { host: string }) {
       if (ack.ok) {
         pushNotification(
           "info",
-          withConsolePrefix(host, `PS5 ${kind} requested`),
+          withConsolePrefix(host, powerRequested(kind)),
           {
             body: ack.err
               ? ack.err
@@ -165,7 +180,7 @@ export default function PowerControl({ host }: { host: string }) {
         setError(msg);
         pushNotification(
           "error",
-          withConsolePrefix(host, `PS5 ${kind} failed`),
+          withConsolePrefix(host, powerFailed(kind)),
           {
             body: msg,
           },
@@ -183,7 +198,7 @@ export default function PowerControl({ host }: { host: string }) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
-      pushNotification("error", withConsolePrefix(host, `PS5 ${kind} failed`), {
+      pushNotification("error", withConsolePrefix(host, powerFailed(kind)), {
         body: msg,
       });
       audit(

@@ -1,6 +1,7 @@
 import { resolveSets, type FakelibSet } from "../lib/backport";
 import type { BackportPack, PackFile } from "../lib/backportPack";
 import { getEngineUrl } from "./engine";
+import { ENGINE_LONG_TIMEOUT_MS, engineFetch } from "../lib/engineFetch";
 
 /* The backport library corpus.
  *
@@ -44,7 +45,7 @@ async function errorText(response: Response): Promise<string> {
 
 export async function loadFakelibCorpus(): Promise<FakelibCorpus> {
   try {
-    const response = await fetch(`${getEngineUrl()}/api/fakelibs/corpus`);
+    const response = await engineFetch(`${getEngineUrl()}/api/fakelibs/corpus`);
     if (!response.ok) {
       return { ...EMPTY_CORPUS, error: await errorText(response) };
     }
@@ -88,7 +89,8 @@ export async function importFakelibSet(
   const form = new FormData();
   files.forEach((file, i) => form.append(`f${i}`, file, file.name));
   const query = `label=${encodeURIComponent(label)}&source=${encodeURIComponent(source)}`;
-  const response = await fetch(`${getEngineUrl()}/api/fakelibs/import?${query}`, {
+  const response = await engineFetch(`${getEngineUrl()}/api/fakelibs/import?${query}`, {
+    timeoutMs: ENGINE_LONG_TIMEOUT_MS,
     method: "POST",
     body: form,
   });
@@ -114,7 +116,7 @@ export async function importFakelibSet(
  *  a container.
  */
 export async function inspectBackportPack(path: string): Promise<BackportPack> {
-  const response = await fetch(
+  const response = await engineFetch(
     `${getEngineUrl()}/api/backport/pack?path=${encodeURIComponent(path)}`,
   );
   if (!response.ok) throw new Error(await errorText(response));
@@ -148,7 +150,8 @@ export async function importBackportPack(
   path: string,
   label?: string,
 ): Promise<{ setId: string | null; duplicate: boolean; titleIdHint: string | null }> {
-  const response = await fetch(`${getEngineUrl()}/api/backport/pack/import`, {
+  const response = await engineFetch(`${getEngineUrl()}/api/backport/pack/import`, {
+    timeoutMs: ENGINE_LONG_TIMEOUT_MS,
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ path, label: label ?? "" }),
@@ -167,7 +170,7 @@ export async function importBackportPack(
 }
 
 export async function deleteFakelibSet(id: string): Promise<void> {
-  const response = await fetch(`${getEngineUrl()}/api/fakelibs/set/${encodeURIComponent(id)}`, {
+  const response = await engineFetch(`${getEngineUrl()}/api/fakelibs/set/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   if (!response.ok) throw new Error(await errorText(response));
@@ -208,7 +211,7 @@ export async function startFakelibScan(
    *  machine count as two. */
   consoleKey = "",
 ): Promise<string> {
-  const response = await fetch(`${getEngineUrl()}/api/fakelibs/scan`, {
+  const response = await engineFetch(`${getEngineUrl()}/api/fakelibs/scan`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -226,7 +229,7 @@ export async function startFakelibScan(
 /** Poll one scan. A finished scan is forgotten by the engine after it is read,
  *  so callers must keep the last snapshot rather than re-reading it. */
 export async function pollFakelibScan(id: string): Promise<ScanProgress | null> {
-  const response = await fetch(`${getEngineUrl()}/api/fakelibs/scan/${encodeURIComponent(id)}`);
+  const response = await engineFetch(`${getEngineUrl()}/api/fakelibs/scan/${encodeURIComponent(id)}`);
   if (!response.ok) return null;
   const b = (await response.json()) as Record<string, unknown>;
   return {
@@ -263,7 +266,7 @@ export interface TitleSdkPair {
 export async function titleSdkPair(addr: string, source: string): Promise<TitleSdkPair | null> {
   try {
     const q = `addr=${encodeURIComponent(addr)}&path=${encodeURIComponent(source)}`;
-    const response = await fetch(`${getEngineUrl()}/api/ps5/title-sdk-pair?${q}`);
+    const response = await engineFetch(`${getEngineUrl()}/api/ps5/title-sdk-pair?${q}`);
     if (!response.ok) return null;
     return (await response.json()) as TitleSdkPair;
   } catch {

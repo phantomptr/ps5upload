@@ -29,7 +29,7 @@ describe("operation readiness", () => {
     });
     expect(result.ready).toBe(false);
     expect(result.blockers).toEqual([
-      "The ps5upload engine is offline.",
+      "The PS5Upload engine is offline.",
       "No PS5 is selected.",
       "The PS5 helper is not connected.",
     ]);

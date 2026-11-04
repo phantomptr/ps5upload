@@ -31,9 +31,3 @@ export function nativeJobNotify(): Promise<boolean> {
     });
   return pending;
 }
-
-/** Test hook: forget the cached answer. */
-export function resetNativeJobNotifyForTests(): void {
-  known = null;
-  pending = null;
-}

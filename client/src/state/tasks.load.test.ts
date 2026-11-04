@@ -14,7 +14,7 @@ it("records which tasks this start-up interrupted", async () => {
     addEventListener: () => {},
     removeEventListener: () => {},
   };
-  const base = { origin: "x", createdAt: new Date(0).toISOString(), attempts: 0, maxAttempts: 1, consoleId: "", payload: {}, label: "L", updatedAtMs: 5, endedAtMs: null };
+  const base = { origin: "x", createdAt: new Date(0).toISOString(), consoleId: "", payload: {}, label: "L", updatedAtMs: 5, endedAtMs: null };
   mem.set(
     "ps5upload.tasks.v1",
     JSON.stringify({

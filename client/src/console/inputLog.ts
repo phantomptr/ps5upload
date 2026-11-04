@@ -290,7 +290,3 @@ export function setInputLogEnabled(on: boolean): void {
     else document.removeEventListener(t, onEvent, OPTS);
   }
 }
-
-export function inputLogEnabled(): boolean {
-  return pageLog.enabled();
-}

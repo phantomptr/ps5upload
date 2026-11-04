@@ -8,7 +8,6 @@ import {
   devicesFor,
   effectiveMode,
   encodeReport,
-  isCycleHotkey,
   KBM_BLOCK_TEXT,
   kbmBlocked,
   kbmButtonView,
@@ -126,12 +125,6 @@ describe("routing", () => {
     expect(nextMode("controller", { mouse: true, keyboard: false })).toBe("mixed");
   });
 
-  it("reserves Ctrl+Alt+M, and never the command palette's Ctrl+K", () => {
-    const k = { code: "KeyM", ctrlKey: true, altKey: true, metaKey: false, shiftKey: false };
-    expect(isCycleHotkey(k)).toBe(true);
-    expect(isCycleHotkey({ ...k, altKey: false })).toBe(false);
-    expect(isCycleHotkey({ ...k, code: "KeyK" })).toBe(false);
-  });
 });
 
 /** A sender over fake timers; what it sent, as hex reports or control objects. */

@@ -711,9 +711,8 @@ impl Party {
             {
                 gone.push(g.id);
             }
-            // TODO(#641): learn from the helper when the console has signed a user in on the
-            // pad (then PS can be blocked at once); until then the grace or the host's "They're
-            // in" decides.
+            // The helper does not say when the console has signed a user in on the pad, which
+            // would let PS be blocked at once: the grace or the host's "They're in" decides.
             if !g.playing && now.duration_since(g.picking_since) >= PICKING_GRACE {
                 g.playing = true;
             }

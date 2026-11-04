@@ -43,7 +43,6 @@ import {
 import clsx from "clsx";
 
 import { ProgressBar } from "./ProgressBar";
-import { Badge } from "./Badge";
 import { Spinner } from "./Spinner";
 import { ConsoleChip } from "./ConsoleChip";
 import { OverflowMenu, type OverflowMenuItem } from "./OverflowMenu";
@@ -337,11 +336,6 @@ function TaskRow({ task }: { task: Task }) {
         <span className="font-medium">
           {statusLabel(task.status, tr)}
         </span>
-        {task.attempts > 1 && (
-          <Badge tone="neutral" variant="soft">
-            {tr("task_attempts", { n: task.attempts }, `×${task.attempts}`)}
-          </Badge>
-        )}
       </div>
 
       {/* Error message */}

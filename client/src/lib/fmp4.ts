@@ -1,3 +1,4 @@
+import { rbsp } from "./rpSps";
 // Fragmented MP4 for Media Source Extensions: the watch page's way to play the stream where
 // WebCodecs is missing. Browsers expose VideoDecoder/AudioDecoder only on a secure page, and a
 // phone opens the watch link as plain http://<computer>:19113, so there the picture has to go
@@ -25,21 +26,6 @@ export function annexBNals(stream: Uint8Array): Uint8Array[] {
 const nalType = (n: Uint8Array, hevc: boolean) => (hevc ? (n[0] >> 1) & 0x3f : n[0] & 0x1f);
 
 /** The emulation-prevention bytes removed (00 00 03 → 00 00). */
-function rbsp(nal: Uint8Array): Uint8Array {
-  const out = new Uint8Array(nal.length);
-  let n = 0;
-  let zeros = 0;
-  for (const b of nal) {
-    if (zeros >= 2 && b === 3) {
-      zeros = 0;
-      continue;
-    }
-    zeros = b === 0 ? zeros + 1 : 0;
-    out[n++] = b;
-  }
-  return out.subarray(0, n);
-}
-
 function box(type: string, ...parts: Uint8Array[]): Uint8Array {
   const size = 8 + parts.reduce((a, p) => a + p.length, 0);
   const out = new Uint8Array(size);

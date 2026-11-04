@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyBundle,
+  buildBackupBundle,
   buildBundle,
   forConsole,
   keepLiveWakeKeys,
@@ -38,6 +39,83 @@ describe("settings bundles", () => {
     const b = buildBundle("daily", "Mac");
     expect(b.local_storage).toEqual({ "ps5upload.theme": "dark" });
     expect(b.meta).toMatchObject({ schema: 1, reason: "daily", device: "Mac" });
+  });
+
+  describe("pairing keys", () => {
+    const paired = {
+      id: "p1",
+      host: "10.0.0.2",
+      name: "Pro",
+      wake_credential: "cred",
+      wake_regist_key: "rk",
+      wake_rp_key: "rp",
+    };
+    const KEY = "ps5upload.roster.v1";
+    const roster = (...profiles: object[]) => JSON.stringify({ profiles, active_id: "p1" });
+
+    it("never go into a bundle; the rest of the roster does", () => {
+      window.localStorage.setItem(KEY, roster(paired));
+      const b = buildBundle();
+      const text = JSON.stringify(b);
+      for (const secret of ["cred", "rk", "rp"]) expect(text).not.toContain(`\\"${secret}\\"`);
+      expect(JSON.parse(b.local_storage[KEY]!)).toEqual({
+        profiles: [{ id: "p1", host: "10.0.0.2", name: "Pro" }],
+        active_id: "p1",
+      });
+    });
+
+    it("a roster that cannot be read stays out of the bundle", () => {
+      window.localStorage.setItem(KEY, "not json wake_rp_key");
+      expect(buildBundle().local_storage).toEqual({});
+    });
+
+    it("the backup copies keep them: the engine seals them and a console gets only its own", () => {
+      window.localStorage.setItem(KEY, roster(paired, { ...paired, id: "p2", host: "10.0.0.3" }));
+      const b = buildBackupBundle("daily");
+      expect(JSON.parse(b.local_storage[KEY]!).profiles[0].wake_rp_key).toBe("rp");
+      const onConsole = JSON.parse(forConsole(b, "10.0.0.2:9113").local_storage[KEY]!);
+      expect(onConsole.profiles[0].wake_rp_key).toBe("rp");
+      expect(onConsole.profiles[1].wake_rp_key).toBeUndefined();
+    });
+
+    it("a roster that cannot be read stays out of the backup copies too", () => {
+      window.localStorage.setItem(KEY, "not json wake_rp_key");
+      expect(buildBackupBundle().local_storage).toEqual({});
+    });
+
+    it("a profile with no id takes keys by address only", () => {
+      const out = JSON.parse(
+        keepLiveWakeKeys(
+          roster({ host: "10.0.0.9" }),
+          roster({ host: "10.0.0.2", wake_rp_key: "rp" }),
+        ),
+      );
+      expect(out.profiles[0].wake_rp_key).toBeUndefined();
+    });
+
+    it("a restore keeps the keys this app holds, by id or by address", () => {
+      window.localStorage.setItem(KEY, roster(paired));
+      applyBundle({
+        meta: {},
+        local_storage: {
+          [KEY]: roster(
+            { id: "p1", host: "10.0.0.2", name: "Renamed" },
+            { id: "other", host: "10.0.0.2:9113", name: "Same console" },
+            { id: "new", host: "10.0.0.3", name: "Never paired here" },
+          ),
+        },
+      });
+      const { profiles } = JSON.parse(window.localStorage.getItem(KEY)!) as { profiles: Array<Record<string, string>> };
+      expect(profiles[0]).toMatchObject({ name: "Renamed", wake_regist_key: "rk", wake_rp_key: "rp" });
+      expect(profiles[1]).toMatchObject({ name: "Same console", wake_credential: "cred" });
+      expect(profiles[2].wake_rp_key).toBeUndefined();
+    });
+
+    it("keys in a bundle from an older version stand", () => {
+      window.localStorage.setItem(KEY, roster(paired));
+      applyBundle({ meta: {}, local_storage: { [KEY]: roster({ ...paired, wake_rp_key: "older" }) } });
+      expect(JSON.parse(window.localStorage.getItem(KEY)!).profiles[0].wake_rp_key).toBe("older");
+    });
   });
 
   it("restore writes our namespace only and refuses what is not a bundle", () => {

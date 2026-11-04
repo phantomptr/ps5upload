@@ -4,6 +4,7 @@
 // screens/Play/GoLivePanel.tsx.
 
 import { getEngineUrl } from "../state/engine";
+import { ENGINE_LONG_TIMEOUT_MS, engineFetch, type EngineFetchInit } from "./engineFetch";
 
 export type PresetId = "youtube" | "twitch" | "kick" | "facebook" | "custom";
 
@@ -124,8 +125,8 @@ export class LiveApiError extends Error {
   }
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(`${getEngineUrl()}${path}`, {
+async function call<T>(path: string, init?: EngineFetchInit): Promise<T> {
+  const r = await engineFetch(`${getEngineUrl()}${path}`, {
     ...init,
     headers: init?.body ? { "content-type": "application/json" } : undefined,
   });
@@ -163,7 +164,7 @@ export const goLiveApi = {
     }),
   remove: (id: string) =>
     call<{ ok: boolean }>(`/api/stream/destinations/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  installFfmpeg: () => call<{ ok: boolean; ffmpeg: FfmpegStatus }>("/api/stream/tools/ffmpeg/install", { method: "POST" }),
+  installFfmpeg: () => call<{ ok: boolean; ffmpeg: FfmpegStatus }>("/api/stream/tools/ffmpeg/install", { timeoutMs: ENGINE_LONG_TIMEOUT_MS, method: "POST" }),
 };
 
 /** What the Add form holds. */

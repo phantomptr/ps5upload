@@ -32,8 +32,6 @@ export interface Reg {
 
 export type LwwMap = Record<string, Reg>;
 
-export const ZERO_DEVICE = "";
-
 /** -1, 0 or 1. */
 export function cmpHlc(a: Hlc, b: Hlc): number {
   if (a.t !== b.t) return a.t < b.t ? -1 : 1;

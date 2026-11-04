@@ -68,11 +68,13 @@ let polling: ReturnType<typeof setTimeout> | null = null;
 /** Follows a running scan, and reloads the library when it ends. */
 function pollScan(): void {
   if (polling) return;
+  let readFailed = false;
   const tick = async () => {
     polling = null;
     try {
       const st = await collection.scanStatus();
-      store().set({ scan: st });
+      store().set(readFailed ? { scan: st, error: null } : { scan: st });
+      readFailed = false;
       if (st.running) {
         polling = setTimeout(() => void tick(), 1000);
         return;
@@ -80,6 +82,10 @@ function pollScan(): void {
       await reloadLibrary();
     } catch (e) {
       store().set({ error: e instanceof Error ? e.message : String(e) });
+      // Whether the scan runs on is what this could not read: keep looking, or the screen says
+      // "running" until it is reloaded. A scan that is done says so on the next read.
+      readFailed = true;
+      if (store().scan?.running) polling = setTimeout(() => void tick(), 5000);
     }
   };
   polling = setTimeout(() => void tick(), 600);

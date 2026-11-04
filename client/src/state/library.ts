@@ -2,7 +2,7 @@ import { create } from "zustand";
 import {
   appsInstalled,
   fetchVolumes,
-  scanLibrary,
+  scanLibraryChecked,
   type LibraryEntry,
   type Volume,
 } from "../api/ps5";
@@ -34,6 +34,8 @@ export interface RegisteredTitle {
  */
 export interface LibrarySlot {
   entries: LibraryEntry[] | null;
+  /** The last scan could not read some folders, so `entries` may be missing games. */
+  incomplete: boolean;
   /** image_path → mount_point, derived from the probe (authoritative).
    *  Empty until first refresh completes. The probe-derived map can
    *  lag the actual kernel state by a beat right after fs_mount —
@@ -69,6 +71,7 @@ export interface LibrarySlot {
  *  every store action builds new Maps. */
 export const IDLE_LIBRARY: LibrarySlot = {
   entries: null,
+  incomplete: false,
   mountMap: new Map(),
   pendingMounts: new Map(),
   volumes: [],
@@ -94,6 +97,8 @@ interface LibraryStore {
     volumes: Volume[],
     registeredBySource: Map<string, RegisteredTitle>,
     pkgInstalled?: Set<string>,
+    /** Some folders could not be read: what the scan missed may still be there. */
+    incomplete?: boolean,
   ) => void;
   setLoading: (host: string, loading: boolean) => void;
   setError: (host: string, error: string | null) => void;
@@ -146,7 +151,7 @@ export const useLibraryStore = create<LibraryStore>((set) => {
     });
   return {
     byHost: {},
-    setData: (host, entries, mountMap, volumes, registeredBySource, pkgInstalled) =>
+    setData: (host, entries, mountMap, volumes, registeredBySource, pkgInstalled, incomplete = false) =>
       set((s) => {
         const key = keyOf(host);
         const cur = s.byHost[key] ?? IDLE_LIBRARY;
@@ -165,14 +170,22 @@ export const useLibraryStore = create<LibraryStore>((set) => {
         // produce a real count. (The "library goes blank after mounting"
         // symptom.)
         const hadEntries = (cur.entries ?? []).length > 0;
+        // A scan that could not read some folders says nothing about what it did not find, so
+        // earlier rows stay until a full scan: titles must not vanish on a helper blip.
+        const seen = new Set(entries.map((e) => e.path));
         const nextEntries =
-          entries.length === 0 && hadEntries ? cur.entries : entries;
+          entries.length === 0 && hadEntries
+            ? cur.entries
+            : incomplete
+              ? [...entries, ...(cur.entries ?? []).filter((e) => !seen.has(e.path))]
+              : entries;
         return {
           byHost: {
             ...s.byHost,
             [key]: {
               ...cur,
               entries: nextEntries,
+              incomplete,
               mountMap,
               pendingMounts: prunedPending,
               volumes,
@@ -255,7 +268,7 @@ export function refreshLibrary(host: string): Promise<void> {
     try {
       const addr = transferAddr(host);
       const [result, volumes, registered] = await Promise.all([
-        scanLibrary(addr),
+        scanLibraryChecked(addr),
         fetchVolumes(addr).catch((e) => {
           console.warn(
             "[library] volume probe failed; Move modal will offer no destinations:",
@@ -300,7 +313,7 @@ export function refreshLibrary(host: string): Promise<void> {
       const writable = volumes.filter((v) => v.writable && !v.is_placeholder);
       useLibraryStore
         .getState()
-        .setData(host, result, mountMap, writable, registeredBySource, pkgInstalled);
+        .setData(host, result.entries, mountMap, writable, registeredBySource, pkgInstalled, result.incomplete);
     } catch (e) {
       useLibraryStore
         .getState()

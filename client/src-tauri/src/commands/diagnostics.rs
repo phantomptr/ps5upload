@@ -2,7 +2,7 @@
 
 use ps5upload_core::diagnostics::{
     appdb_query, crc32_file, fs_write_bytes, klog_read, net_interfaces, peripheral_control,
-    proc_modules, shell_run, PeripheralAction,
+    shell_run, PeripheralAction,
 };
 use ps5upload_core::fs_ops::{fs_hash, fs_read_with_timeout};
 use ps5upload_core::hw::proc_list;
@@ -71,7 +71,7 @@ async fn invoke_periph(
 }
 
 /// Full running-process list (pid + name) for the bug-report PS5 snapshot.
-/// Distinct from `proc_modules_get` (which lists a single process's loaded
+/// Distinct from a process's module list (which lists a single process's loaded
 /// modules). Read-only allproc walk; cheap.
 #[tauri::command]
 pub async fn proc_list_get(addr: String) -> Result<JsonValue, String> {
@@ -80,16 +80,6 @@ pub async fn proc_list_get(addr: String) -> Result<JsonValue, String> {
         .map_err(|e| format!("proc_list task: {e}"))?
         .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("proc_list: {e}"))
-}
-
-#[tauri::command]
-pub async fn proc_modules_get(addr: String, pid: Option<i32>) -> Result<JsonValue, String> {
-    let p = pid.unwrap_or(0);
-    tokio::task::spawn_blocking(move || proc_modules(&addr, p))
-        .await
-        .map_err(|e| format!("modules task: {e}"))?
-        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
-        .map_err(|e| format!("modules: {e}"))
 }
 
 #[tauri::command]

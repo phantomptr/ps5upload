@@ -47,6 +47,7 @@ import {
   fsDelete,
   fsListDir,
   waitForJob,
+  isPathMissingError,
   saveArchiveMakeTemp,
   saveArchiveCleanupTemp,
   saveArchiveZip,
@@ -110,6 +111,7 @@ import MoveFromPs4 from "./MoveFromPs4";
 import SwitchSaves from "./SwitchSaves";
 import Ps2Saves from "./Ps2Saves";
 import { formatDate } from "../../lib/formatDate";
+import { trStatic } from "../../lib/trStatic";
 
 /**
  * Save data manager.
@@ -326,7 +328,7 @@ export default function SavesScreen() {
     if (!host?.trim() || openBusy) return;
     setOpenBusy(true);
     try {
-      const children = await fsListDir(consoleAddr(host.trim()), entry.path, { limit: 4096 });
+      const children = await fsListDir(consoleAddr(host.trim()), entry.path);
       const images = saveImagesOf(entry, children);
       if (images.length === 0) {
         pushNotification("info", tr("saves_open_none", undefined, "No save image in this folder."));
@@ -544,7 +546,7 @@ export default function SavesScreen() {
       if (!android && (!destZip || typeof destZip !== "string")) return;
       // 1) Scratch dir under the OS temp root. The engine's download
       // walker will create `<scratch>/<title_id>/<files>` for us.
-      task = beginTask({ kind: "save-backup", origin: "saves", label: `Save backup ${entry.title_id}`, consoleId: host.trim() });
+      task = beginTask({ kind: "save-backup", origin: "saves", label: trStatic("task_save_backup", "Save backup {title}", { title: entry.title_id }), consoleId: host.trim() });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       // 2) Pull the PS5 save folder into the scratch dir.
       const jobId = await startTransferDownload(
@@ -563,9 +565,9 @@ export default function SavesScreen() {
       const savedTo = await saveArchiveZip(tempDir, entry.title_id, destZip ?? "", destZipName);
       pushNotification(
         "success",
-        withConsolePrefix(host, `Backed up ${entry.title_id}`),
+        withConsolePrefix(host, trStatic("saves_backed_up_title", "Backed up {title}", { title: entry.title_id })),
         {
-          body: `Saved to ${savedTo}`,
+          body: trStatic("saves_saved_to", "Saved to {path}", { path: savedTo }),
         },
       );
     } catch (e) {
@@ -574,7 +576,7 @@ export default function SavesScreen() {
       setError(msg);
       pushNotification(
         "error",
-        withConsolePrefix(host, `Backup failed: ${entry.title_id}`),
+        withConsolePrefix(host, trStatic("saves_backup_failed_title", "Backup failed: {title}", { title: entry.title_id })),
         {
           body: msg,
         },
@@ -636,7 +638,7 @@ export default function SavesScreen() {
       if (!localZip || typeof localZip !== "string") return;
       // 1) Scratch dir + strict-validate the zip layout before we touch
       // the live save. Bad layout → throw before any delete fires.
-      task = beginTask({ kind: "save-restore", origin: "saves", label: `Save restore ${entry.title_id}`, consoleId: restoreHost });
+      task = beginTask({ kind: "save-restore", origin: "saves", label: trStatic("task_save_restore", "Save restore {title}", { title: entry.title_id }), consoleId: restoreHost });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       await saveArchiveUnzip(localZip, tempDir, entry.title_id);
       // 1.5) Format-aware prep: re-add `sdimg_` prefix to any bare image
@@ -668,7 +670,7 @@ export default function SavesScreen() {
         );
       }
       const addr = consoleAddr(restoreHost);
-      const children = await fsListDir(addr, entry.path, { limit: 4096 });
+      const children = await fsListDir(addr, entry.path);
       for (const child of children) {
         const childPath = entry.path.endsWith("/")
           ? `${entry.path}${child.name}`
@@ -688,7 +690,7 @@ export default function SavesScreen() {
       await waitForJob(jobId);
       pushNotification(
         "success",
-        withConsolePrefix(restoreHost, `Restored ${entry.title_id}`),
+        withConsolePrefix(restoreHost, trStatic("saves_restored", "Restored {title}", { title: entry.title_id })),
         {
           body:
             `Uploaded ${entry.title_id}.zip back to ${entry.path}.` +
@@ -703,7 +705,7 @@ export default function SavesScreen() {
       setError(msg);
       pushNotification(
         "error",
-        withConsolePrefix(restoreHost, `Restore failed: ${entry.title_id}`),
+        withConsolePrefix(restoreHost, trStatic("saves_restore_failed_title", "Restore failed: {title}", { title: entry.title_id })),
         {
           body: msg,
         },
@@ -751,7 +753,7 @@ export default function SavesScreen() {
         }
       }
       // 1) Scratch dir + pull the PS5 save folder, same as handleDownload.
-      task = beginTask({ kind: "save-backup", origin: "saves", label: `Save backup ${entry.title_id} to USB`, consoleId: backupHost });
+      task = beginTask({ kind: "save-backup", origin: "saves", label: trStatic("task_save_backup_usb", "Save backup {title} to USB", { title: entry.title_id }), consoleId: backupHost });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       const jobId = await startTransferDownload(entry.path, tempDir, addr, "folder");
       await waitForJob(jobId);
@@ -802,8 +804,8 @@ export default function SavesScreen() {
       await waitForJob(jobId2);
       pushNotification(
         "success",
-        withConsolePrefix(backupHost, `Backed up ${entry.title_id} to USB`),
-        { body: `Saved to ${remoteZip}` },
+        withConsolePrefix(backupHost, trStatic("saves_backed_up_usb", "Backed up {title} to USB", { title: entry.title_id })),
+        { body: trStatic("saves_saved_to", "Saved to {path}", { path: remoteZip }) },
       );
     } catch (e) {
       task?.fail(e);
@@ -811,7 +813,7 @@ export default function SavesScreen() {
       setError(msg);
       pushNotification(
         "error",
-        withConsolePrefix(backupHost, `USB backup failed: ${entry.title_id}`),
+        withConsolePrefix(backupHost, trStatic("saves_usb_backup_failed", "USB backup failed: {title}", { title: entry.title_id })),
         { body: msg },
       );
       throw e; // let the bulk handler count this as a failure
@@ -841,19 +843,18 @@ export default function SavesScreen() {
     const onlyUser = (allSaves ?? [])
       .filter((s) => s.title_id === entry.title_id)
       .every((s) => userHex(s.user_id) === userHex(entry.user_id));
-    try {
-      return await latestUsbBackup(
-        async (rel) => {
-          const list = await fsListDir(addr, rel ? `${titleDir}/${rel}` : titleDir).catch(() => []);
-          return list.filter((e) => e.kind === "dir").map((e) => e.name);
-        },
-        entry.user_id,
-        onlyUser,
-      );
-    } catch {
-      // Dir absent or unreadable — no backup has ever been written.
-      return null;
-    }
+    return latestUsbBackup(
+      async (rel) => {
+        // No folder: no backup. Any other failure is not a fact about the backups.
+        const list = await fsListDir(addr, rel ? `${titleDir}/${rel}` : titleDir).catch((e) => {
+          if (isPathMissingError(e)) return [];
+          throw e;
+        });
+        return list.filter((e) => e.kind === "dir").map((e) => e.name);
+      },
+      entry.user_id,
+      onlyUser,
+    );
   }
 
   /**
@@ -929,7 +930,7 @@ export default function SavesScreen() {
         if (!ok) return "ok"; // user cancelled — not an error or a skip
       }
       // 1) Scratch dir + pull the zip off the USB drive (single-file download).
-      task = beginTask({ kind: "save-restore", origin: "saves", label: `Save restore ${entry.title_id} from USB`, consoleId: restoreHost });
+      task = beginTask({ kind: "save-restore", origin: "saves", label: trStatic("task_save_restore_usb", "Save restore {title} from USB", { title: entry.title_id }), consoleId: restoreHost });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       const jobId = await startTransferDownload(remoteZip, tempDir, addr, "file");
       await waitForJob(jobId);
@@ -955,7 +956,7 @@ export default function SavesScreen() {
       }
       // 5) Wipe live save contents but keep the title_id folder itself —
       // see handleRestore lines 269-275 for why we can't mkdir it fresh.
-      const children = await fsListDir(addr, entry.path, { limit: 4096 });
+      const children = await fsListDir(addr, entry.path);
       for (const child of children) {
         const childPath = entry.path.endsWith("/")
           ? `${entry.path}${child.name}`
@@ -968,8 +969,8 @@ export default function SavesScreen() {
       await waitForJob(jobId2);
       pushNotification(
         "success",
-        withConsolePrefix(restoreHost, `Restored ${entry.title_id} from USB`),
-        { body: `Restored from ${remoteZip} → ${entry.path}` },
+        withConsolePrefix(restoreHost, trStatic("saves_restored_usb", "Restored {title} from USB", { title: entry.title_id })),
+        { body: trStatic("saves_restored_from", "Restored from {zip} → {path}", { zip: remoteZip, path: entry.path }) },
       );
       return "ok";
     } catch (e) {
@@ -978,7 +979,7 @@ export default function SavesScreen() {
       setError(msg);
       pushNotification(
         "error",
-        withConsolePrefix(restoreHost, `USB restore failed: ${entry.title_id}`),
+        withConsolePrefix(restoreHost, trStatic("saves_usb_restore_failed", "USB restore failed: {title}", { title: entry.title_id })),
         { body: msg },
       );
       throw e; // let the bulk handler count this as a failure
@@ -1033,7 +1034,7 @@ export default function SavesScreen() {
           `No USB/external drive found at ${base}. Plug it into the PS5 and try again.`,
         );
         setError(msg);
-        pushNotification("error", withConsolePrefix(restoreHost, "USB restore failed"), {
+        pushNotification("error", withConsolePrefix(restoreHost, trStatic("saves_usb_restore_failed_all", "USB restore failed")), {
           body: msg,
         });
         return;
@@ -1097,7 +1098,7 @@ export default function SavesScreen() {
           `No writable USB/external drive found at ${base}. Plug it into the PS5 and try again.`,
         );
         setError(msg);
-        pushNotification("error", withConsolePrefix(backupHost, "USB backup failed"), {
+        pushNotification("error", withConsolePrefix(backupHost, trStatic("saves_usb_backup_failed_all", "USB backup failed")), {
           body: msg,
         });
         return;

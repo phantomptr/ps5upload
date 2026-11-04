@@ -16,6 +16,8 @@ export const SETTLE_AFTER_CLOSE_MS = 8_000;
 /** How long the closed game has to leave the process list. */
 const GONE_POLL_MS = 500;
 const GONE_TRIES = 30;
+/** How often the first look at the process list is tried. */
+const FIRST_READ_TRIES = 3;
 
 export interface SwapDeps {
   /** The games running now, by title id. */
@@ -42,13 +44,18 @@ export async function closeRunningGameFirst(
   titleId: string,
   deps: SwapDeps,
 ): Promise<SwapOutcome> {
-  let others: RunningGame[];
-  try {
-    others = [...(await deps.running()).values()].filter(
-      (g) => g.titleId !== titleId,
-    );
-  } catch {
-    return "clear";
+  // A read that keeps failing goes ahead: the launch itself will say what is wrong. A single
+  // blip must not, because launching over a running game closes both.
+  let others: RunningGame[] = [];
+  for (let i = 0; i < FIRST_READ_TRIES; i++) {
+    try {
+      others = [...(await deps.running()).values()].filter(
+        (g) => g.titleId !== titleId,
+      );
+      break;
+    } catch {
+      if (i + 1 < FIRST_READ_TRIES) await deps.sleep(GONE_POLL_MS);
+    }
   }
   if (others.length === 0) return "clear";
   const other = others[0];
@@ -57,13 +64,9 @@ export async function closeRunningGameFirst(
     if (!(await deps.close(g))) return "close_failed";
   }
   for (let i = 0; i < GONE_TRIES; i++) {
-    let left: Map<string, RunningGame>;
-    try {
-      left = await deps.running();
-    } catch {
-      left = new Map();
-    }
-    if (![...left.keys()].some((id) => id !== titleId)) {
+    // A failed read says nothing about the game: it counts as a try, never as "gone".
+    const left = await deps.running().catch(() => null);
+    if (left && ![...left.keys()].some((id) => id !== titleId)) {
       await deps.sleep(SETTLE_AFTER_CLOSE_MS);
       return "closed";
     }

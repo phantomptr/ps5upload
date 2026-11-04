@@ -15,6 +15,7 @@ import {
   type FsExistingEntry,
   type FsUploadStep,
 } from "./fsUploadPlan";
+import { isJobUnknownError } from "../lib/pollRead";
 
 /**
  * An "Add files" / drag-in upload on the Files screen, kept outside the screen.
@@ -209,12 +210,11 @@ export interface FsUploadDeps {
 
 /** How many times one step is tried again unasked, and the wait before each. */
 const RETRY_WAITS_MS = [5_000, 15_000, 30_000] as const;
+const RETRY_WAIT_SLICE_MS = 250;
 /** Status reads that may fail in a row before the step counts as failed (the queue's bound).
  *  The engine runs the job by itself: one failed read is not a failed job. */
 const MAX_POLL_FAILURES = 6;
-/** The engine answered that it has no such job (it restarted, or the job ended long ago). */
-const jobNotFound = (e: unknown) =>
-  /job not found/i.test(e instanceof Error ? e.message : String(e));
+const jobNotFound = isJobUnknownError;
 
 /** A failed job, with the engine's reason kept beside its message. */
 class JobFailed extends Error {
@@ -575,7 +575,10 @@ export async function runFsUpload(
           }
           base.retry = { attempt: attempt + 1, of: RETRY_WAITS_MS.length };
           store.patch(host, { active: { ...base } });
-          await deps.sleep(RETRY_WAITS_MS[attempt]);
+          // In slices: Cancel ends the wait, instead of the row staying busy for up to 30 s.
+          for (let left = RETRY_WAITS_MS[attempt]; left > 0 && !cancelled(); left -= RETRY_WAIT_SLICE_MS) {
+            await deps.sleep(Math.min(left, RETRY_WAIT_SLICE_MS));
+          }
           if (cancelled()) break;
         }
       }

@@ -4,6 +4,7 @@ import { askToSignIn } from "../lib/signInNeeded";
 import { getEngineUrl } from "./engine";
 import {
   DEFAULT_KEYMAP,
+  FIT_ORDER,
   IDLE_PAD,
   PadButton,
   RemotePlayStream,
@@ -162,8 +163,16 @@ export function loadRpPrefs(): RpPrefs {
     const touchMode = p.touchMode === "touchpad" ? "touchpad" : "controller";
     const touchpadSpeed = Number.isFinite(p.touchpadSpeed) ? Math.min(4, Math.max(0.5, p.touchpadSpeed)) : 1.5;
     const bitrateKbps = RP_BITRATES.includes(p.bitrateKbps) ? p.bitrateKbps : 0;
+    // A value this version has no use for (hand-edited, a restored backup) falls back: `res` is
+    // split into numbers for the session, so a bad one would fail every stream.
+    const one = <T,>(v: T, allowed: readonly T[], fallback: T): T => (allowed.includes(v) ? v : fallback);
     return {
       ...p,
+      res: one(p.res, ["1920x1080", "1280x720"], DEFAULT_RP_PREFS.res),
+      fps: one(p.fps, [60, 30], DEFAULT_RP_PREFS.fps),
+      fit: one(p.fit, FIT_ORDER, DEFAULT_RP_PREFS.fit),
+      touchSize: one(p.touchSize, ["s", "m", "l"], DEFAULT_RP_PREFS.touchSize),
+      decoding: one(p.decoding, ["auto", "software"], DEFAULT_RP_PREFS.decoding),
       codec,
       bitrateKbps,
       touchMode,
@@ -183,6 +192,9 @@ export interface RpTarget {
   registKey: string;
   rpKey: string;
 }
+
+/** The fixed-for-a-session settings a restart may change for that session alone. */
+export type SessionQuality = Partial<Pick<RpPrefs, "res" | "codec" | "bitrateKbps">>;
 
 interface RpState {
   stream: RemotePlayStream | null;
@@ -209,7 +221,10 @@ interface RpState {
   pip: PipKind | null;
   /** The picture-in-picture window, when the picture is in one (not for "video"). */
   pipWindow: Window | null;
-  start: (t: RpTarget, opts?: { attach?: boolean }) => Promise<void>;
+  /** What this session runs at instead of the saved prefs ("Switch to 720p", Go live's restart).
+   *  Ends with the session: the saved settings are what the next one starts with. */
+  sessionQuality: SessionQuality | null;
+  start: (t: RpTarget, opts?: { attach?: boolean; quality?: SessionQuality | null }) => Promise<void>;
   stop: () => void;
   setPrefs: (p: Partial<RpPrefs>) => void;
   setKeymap: (k: Record<string, KeyAction> | null) => void;
@@ -309,12 +324,14 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
   onScreen: false,
   pip: null,
   pipWindow: null,
+  sessionQuality: null,
 
   async start(t, opts) {
     const cur = get().stream;
     if (cur && cur.currentPhase !== "ended") return;
     const { prefs } = get();
-    const [width, height] = prefs.res.split("x").map(Number);
+    const quality = opts?.quality ?? null;
+    const [width, height] = (quality?.res ?? prefs.res).split("x").map(Number);
     // A DualSense here: the session starts in DualSense mode (triggers and haptics). Only the
     // desktop app looks (and only it waits for the answer).
     const ds = prefs.dualSense && dualSenseCapable() ? await findDualSense() : null;
@@ -341,8 +358,8 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       replayS: prefs.replayS,
       picture: prefs.picture,
       decoding: prefs.decoding,
-      codec: prefs.codec,
-      bitrateKbps: prefs.bitrateKbps || undefined,
+      codec: quality?.codec ?? prefs.codec,
+      bitrateKbps: (quality?.bitrateKbps ?? prefs.bitrateKbps) || undefined,
       onPictureOff: (why) =>
         pushNotification(
           "warning",
@@ -379,7 +396,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
         if (p === "ended") {
           dualSense?.stop();
           rpInput.held.clear();
-          set({ stream: null, light: null, keyboard: null, passcode: null });
+          set({ stream: null, light: null, keyboard: null, passcode: null, sessionQuality: null });
         }
       },
       onStats: (st) => get().stream === stream && set({ stats: st }),
@@ -403,7 +420,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       gamepads: rpGamepads,
     });
     stream.setVolume(prefs.muted ? 0 : prefs.volume);
-    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null, passcode: null });
+    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null, passcode: null, sessionQuality: quality });
     await stream.start();
   },
 

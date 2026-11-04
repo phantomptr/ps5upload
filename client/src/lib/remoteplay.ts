@@ -35,8 +35,11 @@ function hexToDecimal(hex: string): string {
 }
 
 /** Decimal string → lower-case hex digits, or null past 64 bits. */
-function decimalToHex(dec: string): string | null {
-  let digits = dec.split("").map((c) => c.charCodeAt(0) - 48);
+/** A decimal PSN account id as hex; null when it is not all digits. */
+export function decimalToHex(dec: string): string | null {
+  const trimmed = dec.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  let digits = trimmed.split("").map((c) => c.charCodeAt(0) - 48);
   const out: string[] = [];
   while (digits.length > 0) {
     let remainder = 0;

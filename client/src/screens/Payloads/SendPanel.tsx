@@ -26,6 +26,7 @@ import { PlaylistsPanel } from "./PlaylistsPanel";
 import { dropIsOwnedElsewhere } from "./dropZone";
 import { probeVerdict } from "./probeVerdict";
 import { formatDate } from "../../lib/formatDate";
+import { trStatic } from "../../lib/trStatic";
 
 /**
  * Send tab of the Payloads screen — send any custom ELF (or BIN/JS/
@@ -190,7 +191,7 @@ export default function SendPanel() {
       // User-initiated: clicking Clear and seeing nothing happen is
       // confusing. The on-disk file might be read-only, full, or
       // gone — surface so the user knows to investigate.
-      pushNotification("warning", "Couldn't clear send history", {
+      pushNotification("warning", trStatic("payloads_clear_history_failed", "Couldn't clear send history"), {
         body: e instanceof Error ? e.message : String(e),
       });
     }
@@ -220,7 +221,7 @@ export default function SendPanel() {
         ],
       });
     } catch (e) {
-      pushNotification("warning", "Couldn't open file picker", {
+      pushNotification("warning", trStatic("payloads_picker_failed", "Couldn't open file picker"), {
         body: e instanceof Error ? e.message : String(e),
       });
       return;

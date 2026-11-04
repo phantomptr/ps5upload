@@ -157,6 +157,15 @@ export type TransferPhase =
       /** What this upload was started with, so Retry sends the same upload
        *  again rather than whatever the form holds now. */
       retryArgs?: StartArgs;
+      /** The upload itself is on the console and only its mount failed: Retry repeats the mount,
+       *  not a multi-GB transfer. */
+      retryMount?: {
+        path: string;
+        mountPoint: string;
+        readOnly: boolean;
+        /** The finished upload, shown once the mount works. */
+        done: Extract<TransferPhase, { kind: "done" }>;
+      };
     };
 
 export interface StartArgs {
@@ -245,6 +254,25 @@ export function phaseForHost(
   // when no console is selected; everything else keys by the real host.
   const key = host?.trim() ? hostFromAddr(host) : "";
   return s.phasesByHost[key] ?? IDLE_PHASE;
+}
+
+/** What a mount that worked still has to say; the same notes the Library's Mount shows. */
+function mountWarningsOf(
+  mounted: { layout_valid?: boolean; kernel_ro?: boolean },
+  readOnly: boolean,
+): string[] {
+  const out: string[] = [];
+  if (mounted.layout_valid === false) {
+    out.push(
+      trStatic("mount_warn_no_param", "Image is missing sce_sys/param.json at root, so Register and Launch will fail. Build the image again with its files at the root, not in an extra folder."),
+    );
+  }
+  if (mounted.kernel_ro && !readOnly) {
+    out.push(
+      trStatic("mount_warn_kernel_ro", "The console mounted this read-only, though you picked read-write. This is common for UFS .ffpkg images on some firmwares. Reads work; writes through the mount will fail."),
+    );
+  }
+  return out;
 }
 
 export const useTransferStore = create<TransferState>((set) => {
@@ -487,7 +515,7 @@ export const useTransferStore = create<TransferState>((set) => {
       // console UI. Best-effort over the mgmt port (responsive even during
       // a transfer); a matching "complete" toast fires on done.
       if (host) {
-        void toastPush(mgmtAddr(host), "Upload started", {
+        void toastPush(mgmtAddr(host), trStatic("toast_upload_started", "Upload started"), {
           subtitle: uploadName,
         }).catch(() => {});
       }
@@ -611,14 +639,15 @@ export const useTransferStore = create<TransferState>((set) => {
                 const r = await smpManualInstall(mgmt, finalDest);
                 handedToSmp = true;
                 mountedAt = r.added
-                  ? "handed to ShadowMount+"
-                  : "already in ShadowMount+ list";
+                  ? trStatic("smp_handed_over", "handed to ShadowMount+")
+                  : trStatic("smp_already_listed", "already in ShadowMount+ list");
               } catch (e) {
                 mountWarnings.push(
-                  `ShadowMount+ is running but the hand-off failed (${
-                    e instanceof Error ? e.message : String(e)
-                  }). Mounted it directly instead — if ShadowMount+ also ` +
-                    `picks it up you may see a duplicate or a blocked title.`,
+                  trStatic(
+                    "smp_handoff_failed",
+                    "ShadowMount+ is running but the hand-off failed ({error}). Mounted it directly instead. If ShadowMount+ also picks it up, you may see a duplicate or a blocked title.",
+                    { error: e instanceof Error ? e.message : String(e) },
+                  ),
                 );
               }
             }
@@ -629,23 +658,23 @@ export const useTransferStore = create<TransferState>((set) => {
             // this, the SMP branch falls through to the done-state / register
             // writes and clobbers the UI of whatever run replaced it.
             if (!isLive()) return;
+            // Mount point lives next to the source file: strip the
+            // image extension from finalDest. So an upload to
+            // `/data/homebrew/MyGame.ffpkg` mounts at
+            // `/data/homebrew/MyGame/`. Source + mount in the same
+            // conventional folder — both discoverable by third-party
+            // PS5 game scanners that walk /data/homebrew/.
+            // The payload auto-derives the same name when mountPoint
+            // is omitted but lands it under /mnt/ps5upload/<name>;
+            // setting mountPoint explicitly keeps it where the user
+            // dropped the file.
+            const mountPoint = finalDest.replace(
+              /\.(exfat|ffpkg|ffpfs)$/i,
+              "",
+            );
             // Only mount it ourselves when SMP didn't take it.
             if (!handedToSmp)
               try {
-                // Mount point lives next to the source file: strip the
-                // image extension from finalDest. So an upload to
-                // `/data/homebrew/MyGame.ffpkg` mounts at
-                // `/data/homebrew/MyGame/`. Source + mount in the same
-                // conventional folder — both discoverable by third-party
-                // PS5 game scanners that walk /data/homebrew/.
-                // The payload auto-derives the same name when mountPoint
-                // is omitted but lands it under /mnt/ps5upload/<name>;
-                // setting mountPoint explicitly keeps it where the user
-                // dropped the file.
-                const mountPoint = finalDest.replace(
-                  /\.(exfat|ffpkg|ffpfs)$/i,
-                  "",
-                );
                 const mounted = await fsMount(addr, finalDest, {
                   mountPoint,
                   readOnly: mountReadOnly,
@@ -655,16 +684,7 @@ export const useTransferStore = create<TransferState>((set) => {
                 // the Library row's manual Mount button shows. Pre-2.2.52
                 // this single-shot upload path swallowed them silently
                 // when `mountAfterUpload` was on.
-                if (mounted.layout_valid === false) {
-                  mountWarnings.push(
-                    "Image is missing sce_sys/param.json at root — Register/Launch will fail. Re-build the image with files at root (no extra folder).",
-                  );
-                }
-                if (mounted.kernel_ro && !mountReadOnly) {
-                  mountWarnings.push(
-                    "Kernel mounted this read-only despite the RW pick — common for UFS .ffpkg images on some firmwares. Reads work; writes through the mount will fail.",
-                  );
-                }
+                mountWarnings.push(...mountWarningsOf(mounted, mountReadOnly));
                 // Stop / reset / new-run can land between fsMount
                 // completing and the set({phase:"done"}) below. Two
                 // bad shapes if we just `return` here:
@@ -691,10 +711,26 @@ export const useTransferStore = create<TransferState>((set) => {
                 if (!isLive()) return;
                 setPhase(key, {
                   kind: "failed",
-                  error: `upload completed, but mount failed: ${
-                    e instanceof Error ? e.message : String(e)
-                  }`,
+                  error: trStatic("upload_mount_failed", "upload completed, but mount failed: {error}", {
+                    error: e instanceof Error ? e.message : String(e),
+                  }),
                   retryArgs: startArgs,
+                  retryMount: {
+                    path: finalDest,
+                    mountPoint,
+                    readOnly: mountReadOnly,
+                    done: {
+                      kind: "done",
+                      jobId,
+                      bytesSent: snap.bytes_sent ?? 0,
+                      elapsedMs: snap.elapsed_ms ?? 0,
+                      dest: finalDest,
+                      filesSent: snap.files_sent ?? 0,
+                      skippedFiles: snap.skipped_files ?? 0,
+                      skippedBytes: snap.skipped_bytes ?? 0,
+                      live: jobLiveFromSnapshot(snap),
+                    },
+                  },
                 });
                 return;
               }
@@ -815,7 +851,7 @@ export const useTransferStore = create<TransferState>((set) => {
           }
           // Matching "complete" toast on the PS5 itself.
           if (host) {
-            void toastPush(mgmtAddr(host), "Upload complete", {
+            void toastPush(mgmtAddr(host), trStatic("toast_upload_complete", "Upload complete"), {
               subtitle: uploadName,
             }).catch(() => {});
           }
@@ -907,7 +943,43 @@ export const useTransferStore = create<TransferState>((set) => {
     retry(host) {
       const cur = useTransferStore.getState().phasesByHost[hostFromAddr(host)];
       if (cur?.kind !== "failed" || !cur.retryArgs) return false;
-      void useTransferStore.getState().start(cur.retryArgs);
+      if (!cur.retryMount) {
+        void useTransferStore.getState().start(cur.retryArgs);
+        return true;
+      }
+      // Only the mount failed: the upload is on the console.
+      const key = hostFromAddr(host);
+      const gen = genFor(key);
+      const thisRun = gen.next();
+      const { retryMount, retryArgs, jobId } = cur;
+      setPhase(key, { kind: "starting" });
+      void (async () => {
+        try {
+          const mounted = await fsMount(retryArgs.addr, retryMount.path, {
+            mountPoint: retryMount.mountPoint,
+            readOnly: retryMount.readOnly,
+          });
+          if (!gen.isLive(thisRun)) {
+            await fsUnmount(retryArgs.addr, mounted.mount_point).catch(() => {});
+            return;
+          }
+          const warnings = mountWarningsOf(mounted, retryMount.readOnly);
+          setPhase(key, {
+            ...retryMount.done,
+            mountedAt: mounted.mount_point,
+            mountWarnings: warnings.length > 0 ? warnings : undefined,
+          });
+        } catch (e) {
+          if (!gen.isLive(thisRun)) return;
+          setPhase(key, {
+            kind: "failed",
+            error: trStatic("upload_mount_failed", "upload completed, but mount failed: {error}", { error: e instanceof Error ? e.message : String(e) }),
+            jobId,
+            retryArgs,
+            retryMount,
+          });
+        }
+      })();
       return true;
     },
 

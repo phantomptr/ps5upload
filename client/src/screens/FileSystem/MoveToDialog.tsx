@@ -6,17 +6,12 @@ import { Button, Modal } from "../../components";
 import { formatBytes } from "../../lib/format";
 import { planMove, quickDestinations, recentDestinations } from "../../lib/moveTo";
 import { useTr } from "../../state/lang";
+import { consoleParentDir as parentDir } from "../../lib/consolePath";
 
 export interface MoveItem {
   path: string;
   name: string;
   size: number;
-}
-
-function parentDir(p: string): string {
-  if (p === "/" || p === "") return "/";
-  const i = p.lastIndexOf("/");
-  return i <= 0 ? "/" : p.slice(0, i);
 }
 
 /** Pick where to move the selection, without browsing there first. Says before anything runs

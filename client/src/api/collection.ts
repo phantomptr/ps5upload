@@ -4,6 +4,7 @@
 import { getEngineUrl } from "../state/engine";
 import { invoke } from "../lib/invokeLogged";
 import { getCachedIcon, setCachedIcon } from "../lib/iconMemoryCache";
+import { ENGINE_LONG_TIMEOUT_MS, ENGINE_TIMEOUT_MS, engineFetch, type EngineFetchInit } from "../lib/engineFetch";
 
 /** Keyed by the cover's version too: a cover read out again must not be answered with the
  *  bytes this session held for the old one. */
@@ -324,8 +325,10 @@ export class CollectionApiError extends Error {
   }
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getEngineUrl()}/api/collection${path}`, {
+async function call<T>(path: string, init?: EngineFetchInit): Promise<T> {
+  // Reads a whole index, or a console: allowed more than a plain request.
+  const res = await engineFetch(`${getEngineUrl()}/api/collection${path}`, {
+    timeoutMs: 2 * ENGINE_TIMEOUT_MS,
     ...init,
     headers: init?.body ? { "content-type": "application/json" } : undefined,
   });
@@ -366,7 +369,7 @@ export const collection = {
     call<CollectionScanStatus>("/scan/cancel", { method: "POST" }),
   /** The export's text (json | csv | md). */
   exportText: async (format: "json" | "csv" | "md"): Promise<string> => {
-    const res = await fetch(
+    const res = await engineFetch(
       `${getEngineUrl()}/api/collection/export?format=${format}`,
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -384,6 +387,7 @@ export const collection = {
     }),
   trashApply: (token: string) =>
     call<{ moved: string[]; failed: string[] }>("/trash/apply", {
+      timeoutMs: ENGINE_LONG_TIMEOUT_MS,
       method: "POST",
       body: JSON.stringify({ token }),
     }),

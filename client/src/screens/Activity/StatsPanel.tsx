@@ -11,6 +11,7 @@ import { pushNotification } from "../../state/notifications";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { activityToCsv, computeStats, type ComputedStats } from "./stats";
 import { formatDate } from "../../lib/formatDate";
+import { trStatic } from "../../lib/trStatic";
 
 /**
  * Stats tab of the Tasks screen: aggregates of the activity history the
@@ -42,11 +43,11 @@ export function StatsPanel({ entries }: { entries: ActivityEntry[] }) {
         if (!dest || typeof dest !== "string") return;
         await writeTextFileToPath(dest, csv, fileName);
       }
-      pushNotification("success", "Activity exported", {
-        body: `Saved ${entries.length.toLocaleString()} rows.`,
+      pushNotification("success", trStatic("activity_exported", "Activity exported"), {
+        body: trStatic("activity_exported_rows", "Rows saved: {count}", { count: entries.length.toLocaleString() }),
       });
     } catch (e) {
-      pushNotification("error", "Couldn't export activity", {
+      pushNotification("error", trStatic("activity_export_failed", "Couldn't export activity"), {
         body: e instanceof Error ? e.message : String(e),
       });
     }

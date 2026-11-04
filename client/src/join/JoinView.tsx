@@ -9,6 +9,7 @@ import { TouchControls } from "../screens/Play/TouchControls";
 import { useTr } from "../state/lang";
 import { devicePad, useJoinSession, type JoinSession } from "./session";
 import { useAutoHide } from "./autoHide";
+import { clock } from "../lib/clockText";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -16,10 +17,7 @@ type Tr = ReturnType<typeof useTr>;
 const GUIDED_KEY = "ps5upload.join.guided";
 
 /** 42 → "0:42". */
-export function clock(s: number): string {
-  const t = Math.max(0, Math.ceil(s));
-  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
-}
+export { clock };
 
 /** The message for a guest who is not (or no longer) in the game. */
 export function endText(tr: Tr, stage: JoinStage, host: string): string {

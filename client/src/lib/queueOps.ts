@@ -123,15 +123,6 @@ export function patchItem<T extends { id: string }>(
   return next;
 }
 
-/** Find the next "pending" item to run. Returns null when the queue
- *  has no remaining pending work. Stable order = array order, so
- *  reorder-by-user maps directly to run-order. */
-export function nextPending<T extends { id: string; status: string }>(
-  items: T[],
-): T | null {
-  return items.find((it) => it.status === "pending") ?? null;
-}
-
 /** Decide whether the runner should continue after a failed item.
  *  Centralised so the rule (default = stop, opt-in skip) is testable
  *  and obvious instead of buried in the runner loop. */
@@ -139,26 +130,10 @@ export function shouldContinueAfterFailure(continueOnFailure: boolean): boolean 
   return continueOnFailure;
 }
 
-/** Reset every non-running item back to pending. Used by the "retry
- *  failed" action so users don't have to dismiss + re-add each one. */
-export function resetFailedToPending<T extends { id: string; status: string }>(
-  items: T[],
-): T[] {
-  let changed = false;
-  const next = items.map((it) => {
-    if (it.status === "failed") {
-      changed = true;
-      return { ...it, status: "pending" as const };
-    }
-    return it;
-  });
-  return changed ? next : items;
-}
-
 /** Reset any item that was actively running back to pending and zero
  *  the live counters. Used by the queue's stop() so a stopped row
  *  doesn't keep displaying its last mid-flight bytes/sec readout
- *  against a frozen progress bar. Same shape as resetFailedToPending
+ *  against a frozen progress bar. Same shape as patchItem
  *  (same-reference short-circuit when nothing was running).
  *
  *  `match` optionally narrows which running items reset — the per-console

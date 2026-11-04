@@ -5,7 +5,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import type { InstallStatus } from "../api/ps5";
 import { recoveryResendsHelper, isAutoRecoverable } from "../lib/uploadRecovery";
 import { isTransientRefusal, pkgRowInstalled, sampleFromStatus, statusToOutcome } from "./pkgLibrary";
-import { archiveFolderName, archiveSpaceCheck, isArchiveFolderName } from "./rarPackages";
+import { unpackFolderName, archiveSpaceCheck, isArchiveFolderName } from "./rarPackages";
 
 function status(p: Partial<InstallStatus>): InstallStatus {
   return {
@@ -157,11 +157,11 @@ describe("recovering a failed upload", () => {
 
 describe("archive folders and room", () => {
   it("keeps letters of every script, so two archives do not share a folder", () => {
-    const a = archiveFolderName("/x/游戏一.zip");
-    const b = archiveFolderName("/x/游戏二.zip");
+    const a = unpackFolderName("/x/游戏一.zip");
+    const b = unpackFolderName("/x/游戏二.zip");
     expect(a).not.toBe(b);
     expect(isArchiveFolderName(a)).toBe(true);
-    expect(archiveFolderName("/x/a b.part1.rar")).toBe("rar_a_b");
+    expect(unpackFolderName("/x/a b.part1.rar")).toBe("rar_a_b");
   });
 
   it("warns, but does not refuse, when the install also needs its room on internal storage", () => {

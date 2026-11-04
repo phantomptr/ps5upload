@@ -60,6 +60,10 @@ export function useTr(): Translator {
 }
 
 /** lib/trStatic for the page. */
-export function trStatic(key: string, fallback: string): string {
-  return dict[key] ?? en[key] ?? fallback;
+export function trStatic(
+  key: string,
+  fallback: string,
+  vars?: Record<string, string | number>,
+): string {
+  return fill(dict[key] ?? en[key] ?? fallback, vars);
 }

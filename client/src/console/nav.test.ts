@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bindingForKey, createPadReader, DEFAULT_INPUT_MAP, hintEntries, nextFocus, textareaKeepsKey, type InputMap } from "./nav";
+import { bindingForKey, createPadReader, DEFAULT_INPUT_MAP, nextFocus, textareaKeepsKey, type InputMap } from "./nav";
 
 // Vitest runs in node here (no jsdom): rects are plain objects and the
 // "elements" are tagged stand-ins, which is all nextFocus looks at.
@@ -157,20 +157,6 @@ describe("default input map", () => {
     const b: boolean[] = new Array(17).fill(false);
     b[6] = b[7] = b[8] = b[9] = b[10] = b[11] = true;
     expect(createPadReader(DEFAULT_INPUT_MAP)(b, 0)).toEqual([]);
-  });
-});
-
-describe("hint bar entries", () => {
-  it("shows ✕ and ○ always, others only once verified", () => {
-    expect(hintEntries(DEFAULT_INPUT_MAP).map((h) => h.glyph)).toEqual(["✕", "○"]);
-    const map = DEFAULT_INPUT_MAP.map((b) => (b.button === "l2" ? { ...b, verified: true } : b));
-    expect(hintEntries(map).map((h) => h.glyph)).toEqual(["✕", "○", "L2"]);
-  });
-
-  it("never advertises system buttons or the sticks", () => {
-    const all = DEFAULT_INPUT_MAP.map((b) => ({ ...b, verified: true }));
-    const glyphs = hintEntries(all).map((h) => h.glyph);
-    for (const g of ["PS", "MUTE", "LS", "RS"]) expect(glyphs).not.toContain(g);
   });
 });
 

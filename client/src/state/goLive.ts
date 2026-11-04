@@ -2,7 +2,6 @@ import { create } from "zustand";
 
 import {
   goLiveApi,
-  isLive,
   LiveApiError,
   type DestinationDraft,
   type LiveDestination,
@@ -132,8 +131,3 @@ export const useGoLiveStore = create<GoLiveState>((set, get) => ({
     set({ actionError: null });
   },
 }));
-
-/** Go live is running (or trying to), for the LIVE chip. */
-export function useIsGoingLive(): boolean {
-  return useGoLiveStore((s) => isLive(s.status?.live));
-}

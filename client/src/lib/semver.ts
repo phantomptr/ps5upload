@@ -32,7 +32,23 @@ export function compareVersions(a: string, b: string): -1 | 0 | 1 | null {
   if (pa.pre && !pb.pre) return -1;
   if (!pa.pre && pb.pre) return 1;
   if (pa.pre === pb.pre) return 0;
-  return (pa.pre ?? "") < (pb.pre ?? "") ? -1 : 1;
+  return comparePreRelease(pa.pre ?? "", pb.pre ?? "");
+}
+
+/** SemVer's rule: dot-separated identifiers left to right, numbers by value (so rc.9 < rc.10),
+ *  numbers before words, and with all else equal the shorter tag first. */
+function comparePreRelease(a: string, b: string): -1 | 1 {
+  const xs = a.split(".");
+  const ys = b.split(".");
+  for (let i = 0; i < Math.min(xs.length, ys.length); i++) {
+    const [x, y] = [xs[i], ys[i]];
+    if (x === y) continue;
+    const [xn, yn] = [/^\d+$/.test(x), /^\d+$/.test(y)];
+    if (xn && yn) return Number(x) < Number(y) ? -1 : 1;
+    if (xn !== yn) return xn ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  return xs.length < ys.length ? -1 : 1;
 }
 
 interface ParsedVersion {

@@ -106,8 +106,7 @@ import {
  * daemon on :9115 (also InstallByPackage since 2.25.2), then re-send the main
  * payload (the single-payload loader swapped it out). The payload's own tier
  * ladder (bgft.c) only drops to the unlaunchable `sceAppInstUtilAppInstallPkg`
- * as an absolute last resort, flagging it so we warn the user — see
- * `pkgInstallMayNotLaunch`.
+ * as an absolute last resort, flagging it so we warn the user.
  *
  * IMPORTANT: the library dir is deliberately NOT `pkg_temp/` — the payload
  * sweeps that on boot (`runtime_sweep_stale_pkg_temp`), which would wipe the
@@ -132,9 +131,12 @@ async function readVolumes(host: string): Promise<Volume[] | null> {
 export const PKG_TEMP_DIR = "/user/data/ps5upload/pkg_temp";
 
 /** Warning copy shown when an install lands via the unlaunchable last-resort
- *  path (register_path "appinst-local"); see `pkgInstallMayNotLaunch`. */
-export const PKG_MAY_NOT_LAUNCH_MESSAGE =
-  "Installed, but via a fallback that may not launch on this firmware. If the game won't start (“can't start the game or app”), re-install it from the PS5: Settings → System → Debug Settings → Game → Package Installer.";
+ *  path (register_path "appinst-local"). */
+export const pkgMayNotLaunchMessage = (): string =>
+  trStatic(
+    "pkg_may_not_launch",
+    "Installed, but via a fallback that may not launch on this firmware. If the game won't start (“can't start the game or app”), install it again from the PS5: Settings → System → Debug Settings → Game → Package Installer.",
+  );
 
 /** Shown when the background re-verify can never succeed for this package —
  *  no title id, and neither a fingerprint nor a size to match an installed
@@ -147,31 +149,6 @@ export const PKG_REVERIFY_IMPOSSIBLE_HINT =
 export const PKG_REVERIFY_GAVE_UP_HINT =
   "Still not confirmed after 30 minutes. A very large title can take longer — check the PS5's Notifications, or use Recheck to look again.";
 
-/** Whether an install response indicates the title may not launch.
- *
- *  Precedence:
- *   1. `launchable` — the engine's definitive app.db verification result
- *      (elf-arsenal `wait_for_install_row` analogue). `true` means the
- *      title_id was confirmed registered in the PS5's app.db, so the title
- *      IS launchable even if it landed via the `appinst-local` last-resort
- *      path → returns false (clean success). `false` means the title never
- *      registered within the verification window → returns true.
- *   2. When `launchable` is null/absent (verification not applicable —
- *      sqlite unavailable on this firmware, no real title_id, or an older
- *      engine/client), fall back to the heuristic: the engine's
- *      `may_not_launch` flag, or the unlaunchable `appinst-local`
- *      register_path. Every launchable tier (appinst / shellui-rpc /
- *      intdebug / regular) → false. */
-export function pkgInstallMayNotLaunch(r: {
-  register_path?: string;
-  may_not_launch?: boolean;
-  launchable?: boolean | null;
-}): boolean {
-  if (r.launchable === true) return false;
-  if (r.launchable === false) return true;
-  return r.may_not_launch ?? r.register_path === "appinst-local";
-}
-
 /** The lastResult for a SUCCESSFUL primary install — amber warn when the title
  *  may not launch, plain green success otherwise. */
 export function installedLastResult(mayNotLaunch: boolean): {
@@ -180,7 +157,7 @@ export function installedLastResult(mayNotLaunch: boolean): {
   warn?: boolean;
 } {
   return mayNotLaunch
-    ? { ok: true, warn: true, message: PKG_MAY_NOT_LAUNCH_MESSAGE }
+    ? { ok: true, warn: true, message: pkgMayNotLaunchMessage() }
     : { ok: true, message: trStatic("pkg.verified_on_console", "Installed package verified on the console.") };
 }
 
@@ -1482,17 +1459,6 @@ export const PKG_PATCH_DID_NOT_APPLY_HINT =
 export const PKG_PATCH_REGRESSED_HINT =
   "Re-applying this update removed it — the game has gone back to its base version. The PS5's installer treats a re-applied update as one to undo. Apply the update once more to return to the updated version, and avoid re-installing an update the game already has.";
 
-/** Guidance when a PATCH/UPDATE (a "…DP" package) can't be applied even after
- *  the DPI fallback. ps5upload applies updates through Sony's safe installer
- *  (in-process appinst, or the DPI daemon when the in-process path hits a
- *  firmware authid gate) — never the destructive tier that would delete the
- *  base. When even DPI declines it, the update usually doesn't match the
- *  installed game (or the base isn't installed). The base game is untouched;
- *  the PS5's own Package Installer is the most reliable last resort. This
- *  replaces the raw, misleading "PKG header — corrupt or wrongly named" text. */
-export const PKG_PATCH_REJECTED_HINT =
-  "This update couldn’t be applied. The PS5 itself declined it — most often because the update doesn’t match your installed version of the game, or the base game isn’t installed yet. Your base game is untouched. Check that this update is meant for the version you have installed, and that the base game is installed first.";
-
 /**
  * One observation of an in-flight install, as the engine's status poll reports
  * it. `phase` is the engine's own state for the session:
@@ -1869,16 +1835,16 @@ export async function finalizePkgInstallSuccess(args: {
     // Opens the game's page (play, saves, cheats) from the bell.
     ...(installedId ? { link: gamePath(installedId) } : {}),
     body: mayNotLaunch
-      ? PKG_MAY_NOT_LAUNCH_MESSAGE
+      ? pkgMayNotLaunchMessage()
       : trStatic("pkg.notify_ready", "Installed on the PS5 and ready to play."),
   });
   // Flash a toast on the PS5 itself (sceNotificationSend) so the
   // confirmation shows on the console screen too — handy when the desktop
   // app isn't focused. Fire-and-forget; never let it affect the install.
-  void toastPush(mgmtAddr(host), `${label} installed`, {
+  void toastPush(mgmtAddr(host), trStatic("pkg_installed_named", "{name} installed", { name: label }), {
     subtitle: mayNotLaunch
-      ? "Installed — may need the PS5’s Package Installer to launch"
-      : "Ready to play",
+      ? trStatic("pkg_toast_may_need_installer", "Installed. It may need the PS5's Package Installer to launch.")
+      : trStatic("pkg_toast_ready", "Ready to play"),
   }).catch(() => {});
   // Optional: auto-delete the spent staged .pkg so the library doesn't
   // accumulate installed packages. The ENGINE usually already removed the
@@ -2565,7 +2531,10 @@ function showInstallFailureToast(name: string, detail: string): void {
     action: {
       label: trStatic("pkg.open_tasks", "Open Tasks"),
       onClick: () => {
-        window.history.pushState({}, "", "/tasks");
+        // The router's basename is not applied to a bare pushState: a web UI at a sub-path
+        // would leave the app's URL space.
+        const base = (import.meta.env.VITE_BASE_URL || "").replace(/\/+$/, "");
+        window.history.pushState({}, "", `${base}/tasks`);
         window.dispatchEvent(new PopStateEvent("popstate"));
       },
     },

@@ -1,3 +1,4 @@
+import { trStatic } from "./trStatic";
 /**
  * Pure-function helpers for the Hardware screen's System time card.
  *
@@ -127,5 +128,5 @@ export function formatSyncSource(
   ntpServer: string | null,
 ): string {
   if (source === "ntp") return ntpServer ?? "NTP";
-  return "this computer";
+  return trStatic("systime_this_computer", "this computer");
 }

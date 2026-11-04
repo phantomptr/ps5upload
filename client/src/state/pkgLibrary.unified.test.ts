@@ -22,7 +22,7 @@ vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
 
 import {
   pkgLibraryStore,
-  PKG_MAY_NOT_LAUNCH_MESSAGE,
+  pkgMayNotLaunchMessage,
   PKG_PATCH_DID_NOT_APPLY_HINT,
   PKG_PATCH_REGRESSED_HINT,
   sampleFromStatus,
@@ -297,7 +297,7 @@ describe("sampleFromStatus — drives the live progress bar from metrics", () =>
 
 // Keep a reference to the imported message so an unused-import lint can't fire
 // if a future refactor drops one of the assertions above.
-expect(typeof PKG_MAY_NOT_LAUNCH_MESSAGE).toBe("string");
+expect(typeof pkgMayNotLaunchMessage()).toBe("string");
 
 describe("Retry with Stream (review 015 #04 §3)", () => {
   it("the outcome carries the retry only when the engine offers it on a failure", () => {

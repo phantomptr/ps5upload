@@ -10,7 +10,7 @@ import { SCREENSHOT_EVENT, type SavedShot } from "../lib/captureScreenshot";
 import {
   CAPTURES_DELETED_EVENT,
   captureDate,
-  deleteCaptures,
+  deleteAppCaptures,
   indexAfterDelete,
   listCaptures,
   openCapturesFolder,
@@ -109,7 +109,7 @@ export function CaptureViewer() {
     setBusy(true);
     setError(null);
     try {
-      const gone = await deleteCaptures([current.name]);
+      const gone = await deleteAppCaptures([current.name]);
       if (!gone.includes(current.name)) throw new Error(tr("cap_delete_failed", undefined, "The capture could not be deleted."));
       setIndex((i) => indexAfterDelete(i, count - 1));
     } catch (e) {

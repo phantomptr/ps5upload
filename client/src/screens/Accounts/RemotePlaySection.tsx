@@ -33,19 +33,6 @@ import { humanizePs5Error } from "../../lib/humanizeError";
 export const REMOTE_PLAY_ANCHOR = "remote-play";
 const SIGN_IN_ANCHOR = "remote-play-signin";
 
-/** Firmware magic to a human version, e.g. 0x09600004 -> "9.60".
- *
- *  Both bytes are BCD, not binary: 9.60 is 0x0960 and 10.00 is 0x1000.
- *  Reading them as plain integers gives "9.96" and "16.0" — which is
- *  exactly what this screen displayed before. The magic also carries
- *  low-order bits past the version, so it is never shown raw. */
-export function formatFirmware(magic: number): string {
-  const bcd = (b: number) => (b >> 4) * 10 + (b & 0x0f);
-  const major = bcd((magic >> 24) & 0xff);
-  const minor = bcd((magic >> 16) & 0xff);
-  return `${major}.${minor < 10 ? "0" : ""}${minor}`;
-}
-
 /**
  * Remote Play, as a section of Accounts: what the console still needs (the checklist, with a
  * fix on each row), signing the account in (`signIn`, Accounts' np-fake-signin step, which is

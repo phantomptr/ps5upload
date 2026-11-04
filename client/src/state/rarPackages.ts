@@ -83,7 +83,7 @@ export function isArchiveFirstVolume(path: string): boolean {
 /** Folder name for an archive's packages: `<kind>_<stem>`, deterministic so a resumed run
  *  lands in the same place. Letters of every script stay: two archives named only in Chinese
  *  must not share a folder. */
-export function archiveFolderName(archivePath: string): string {
+export function unpackFolderName(archivePath: string): string {
   const name = archivePath.replace(/\\/g, "/").split("/").pop() ?? "archive";
   const kind = archiveKindOf(archivePath) ?? "rar";
   const stem = name
@@ -94,7 +94,7 @@ export function archiveFolderName(archivePath: string): string {
   return `${kind}_${stem || "archive"}`.slice(0, 80);
 }
 
-/** True for a folder name `archiveFolderName` makes (`rar_…`, `zip_…`, `7z_…`). */
+/** True for a folder name `unpackFolderName` makes (`rar_…`, `zip_…`, `7z_…`). */
 export function isArchiveFolderName(name: string): boolean {
   return /^(rar|zip|7z)_[\p{L}\p{N}._-]+$/u.test(name);
 }
@@ -210,7 +210,7 @@ export async function planArchiveTarget(
       ? volumes
       : await fetchVolumes(transferAddr(host)).catch(() => null);
   const storage = pkgStorageFor(host, vols);
-  const dest = `${storage.dir}/${archiveFolderName(archivePath)}`;
+  const dest = `${storage.dir}/${unpackFolderName(archivePath)}`;
   const already = await consoleFolderBytes(host, dest);
   return {
     dest,

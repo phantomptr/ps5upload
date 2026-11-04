@@ -4,10 +4,8 @@ import {
   moveItemDownWithinGroup,
   moveItemToWithinGroup,
   moveItemUpWithinGroup,
-  nextPending,
   patchItem,
   removeItem,
-  resetFailedToPending,
   resetRunningToPending,
 } from "./queueOps";
 
@@ -37,36 +35,6 @@ describe("patchItem", () => {
   it("returns same reference when id missing", () => {
     const arr = items();
     expect(patchItem(arr, "missing", { status: "done" })).toBe(arr);
-  });
-});
-
-describe("nextPending", () => {
-  it("returns the first pending item in order", () => {
-    expect(nextPending(items())?.id).toBe("b");
-  });
-  it("returns null when nothing is pending", () => {
-    expect(
-      nextPending([
-        { id: "a", status: "done" },
-        { id: "b", status: "failed" },
-      ]),
-    ).toBeNull();
-  });
-});
-
-describe("resetFailedToPending", () => {
-  it("flips only failed entries", () => {
-    const arr: Item[] = [
-      { id: "a", status: "done" },
-      { id: "b", status: "failed" },
-      { id: "c", status: "running" },
-    ];
-    const next = resetFailedToPending(arr);
-    expect(next.map((i) => i.status)).toEqual(["done", "pending", "running"]);
-  });
-  it("returns same reference when nothing failed", () => {
-    const arr: Item[] = [{ id: "a", status: "done" }];
-    expect(resetFailedToPending(arr)).toBe(arr);
   });
 });
 

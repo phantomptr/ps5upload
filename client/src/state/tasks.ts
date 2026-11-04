@@ -157,8 +157,6 @@ export interface Task {
   rate?: TaskRate;
   eta?: number;
   lastError?: TaskError;
-  attempts: number;
-  maxAttempts: number;
   /** Bare host (port-stripped) of the PS5 this task runs against. */
   consoleId: string;
   /** Stable identity of that console: the roster profile id, resolved when the task was
@@ -239,10 +237,47 @@ function loadInitial(): Task[] {
   }
 }
 
-function persist(tasks: Task[]): void {
-  const trimmed = trimTaskHistory(tasks);
-  const shape: PersistedShape = { tasks: trimmed };
+/** At most one progress write per this long. A plain debounce would never fire: running
+ *  transfers report more often than this, so there would be no quiet window to write in. */
+const PROGRESS_PERSIST_MS = 500;
+let pendingPersist: Task[] | null = null;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function writeTasks(tasks: Task[]): void {
+  const shape: PersistedShape = { tasks: trimTaskHistory(tasks) };
   safeSetItem(STORAGE_KEY, JSON.stringify(shape));
+}
+
+/** Write what is pending now (on quit, and before any write that must not wait). */
+function flushPersist(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  if (pendingPersist) {
+    const tasks = pendingPersist;
+    pendingPersist = null;
+    writeTasks(tasks);
+  }
+}
+
+/** A change a restart must find (a task added, ended or removed): written now. */
+function persist(tasks: Task[]): void {
+  pendingPersist = tasks;
+  flushPersist();
+}
+
+/** A progress tick: serialising up to 200 tasks into a blocking setItem per tick, per running
+ *  transfer, stalls the main thread for nothing a restart would miss. */
+function persistProgress(tasks: Task[]): void {
+  pendingPersist = tasks;
+  if (!persistTimer) persistTimer = setTimeout(flushPersist, PROGRESS_PERSIST_MS);
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  // setItem is synchronous, so this completes before the page goes away.
+  window.addEventListener("beforeunload", flushPersist);
+  window.addEventListener("pagehide", flushPersist);
 }
 
 // ---------------------------------------------------------------------------
@@ -370,7 +405,6 @@ interface TaskState {
     control?: TaskControlRef;
     status?: TaskStatus;
     progress?: TaskProgress;
-    maxAttempts?: number;
   }) => string;
 
   /** Patch a task — typically progress/rate/eta as the engine reports.
@@ -427,8 +461,6 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       progress: init.progress,
       createdAt: new Date(now).toISOString(),
       updatedAtMs: now,
-      attempts: 1,
-      maxAttempts: init.maxAttempts ?? 3,
     };
     set((s) => {
       // New tasks go to the front so the Tasks tab shows newest first.
@@ -455,7 +487,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       const tasks = [...s.tasks];
       tasks[idx] = updated;
       const trimmed = trimTaskHistory(tasks);
-      persist(trimmed);
+      persistProgress(trimmed);
       return { tasks: trimmed };
     });
   },

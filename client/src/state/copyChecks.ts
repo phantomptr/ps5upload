@@ -16,6 +16,7 @@ export const useCopyChecks = create<CopyChecksState>(() => ({
 }));
 
 const POLL_MS = 1000;
+const RETRY_AFTER_ERROR_MS = 5000;
 let timer: ReturnType<typeof setTimeout> | null = null;
 
 function put(checks: CopyCheck[]) {
@@ -41,6 +42,16 @@ export async function refreshCopyChecks(): Promise<void> {
     useCopyChecks.setState({
       error: e instanceof Error ? e.message : String(e),
     });
+    // A check that was running may still be: keep looking, or its row stays "running".
+    const active = Object.values(useCopyChecks.getState().byPath).some(
+      (c) => c.state === "queued" || c.state === "running",
+    );
+    if (active && !timer) {
+      timer = setTimeout(() => {
+        timer = null;
+        void refreshCopyChecks();
+      }, RETRY_AFTER_ERROR_MS);
+    }
   }
 }
 
