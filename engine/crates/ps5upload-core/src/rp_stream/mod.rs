@@ -849,7 +849,7 @@ pub fn run_stream(
         Ok(n) => n,
         Err(e) if format!("{e:#}").contains(guard::REASON_IN_USE) => {
             guard::hold_off(host, guard::IN_USE_BACKOFF);
-            return Err(guard::NotReady::Busy(guard::IN_USE_BACKOFF).into());
+            return Err(guard::NotReady::InUse(guard::IN_USE_BACKOFF).into());
         }
         Err(e) => return Err(e),
     };

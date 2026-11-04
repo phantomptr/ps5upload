@@ -4059,6 +4059,7 @@ mod tests {
         st.tick(now);
         assert!(!lost(&ev));
         // Refused again, and this time it stays that way.
+        *f.not_open.lock().unwrap() = Some(2);
         *f.refuse_open.lock().unwrap() = Some("vpad_failed".into());
         st.on_cmd(
             Cmd::State {

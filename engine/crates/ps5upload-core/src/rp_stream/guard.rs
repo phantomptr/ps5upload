@@ -55,6 +55,9 @@ pub enum NotReady {
     Standby,
     /// The slot may still be held; try again after this long.
     Busy(Duration),
+    /// The console says Remote Play is in use: mostly another device (the PS Remote Play app,
+    /// chiaki), which is not going away by itself; try again after this long.
+    InUse(Duration),
     /// No answer to discovery at all.
     Unreachable,
 }
@@ -66,6 +69,11 @@ impl std::fmt::Display for NotReady {
             NotReady::Busy(d) => write!(
                 f,
                 "the PS5 is still finishing the last Remote Play session; try again in {} s",
+                d.as_secs().max(1)
+            ),
+            NotReady::InUse(d) => write!(
+                f,
+                "Remote Play on the PS5 is in use, by another device or a session still finishing; try again in {} s",
                 d.as_secs().max(1)
             ),
             NotReady::Unreachable => write!(f, "the PS5 does not answer on the network"),

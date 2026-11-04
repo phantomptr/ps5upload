@@ -95,6 +95,8 @@ const VIDEO_QUEUE_LOW_LATENCY: usize = 2;
 const CTL_QUEUE: usize = 512;
 const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(60);
 const MAX_KEEP_ALIVE: Duration = Duration::from_secs(600);
+/// A start while the console's last session is finishing: asked to look again this soon.
+const STOPPING_RETRY_S: u64 = 2;
 /// Pad states waiting for the stream thread.
 const PAD_QUEUE: usize = 256;
 /// Engine → page binary kind: one DualSense haptics frame (rp_stream `StreamSink::haptics`).
@@ -982,6 +984,8 @@ impl Live {
             "playing": self.playing.load(Ordering::Relaxed),
             "attached": attached,
             "passcode": passcode,
+            // Told to stop, and finishing (a wake or handshake takes a moment to cut short).
+            "stopping": self.stop.load(Ordering::Relaxed),
         })
     }
 }
@@ -1180,6 +1184,7 @@ fn error_status(e: &anyhow::Error) -> serde_json::Value {
     let text = format!("{e:#}");
     let (code, retry_s) = match e.downcast_ref::<NotReady>() {
         Some(NotReady::Busy(d)) => ("busy", Some(d.as_secs().max(1))),
+        Some(NotReady::InUse(d)) => ("in_use", Some(d.as_secs().max(1))),
         Some(NotReady::Standby) => ("asleep", None),
         Some(NotReady::Unreachable) => ("unreachable", None),
         None if text.contains("refused the control session") => ("keys", None),
@@ -1431,6 +1436,25 @@ async fn session(mut socket: WebSocket) {
             })
             .unwrap_or("none")
     );
+    // On its way out: joining it would end with it, a moment later and with no word why.
+    if running
+        .as_ref()
+        .is_some_and(|l| same_console(&l.host, &start.host) && l.stop.load(Ordering::Relaxed))
+    {
+        let m = if start.attach_only {
+            serde_json::json!({"stage": "ended", "reason": "no session"})
+        } else {
+            serde_json::json!({
+                "stage": "error",
+                "code": "busy",
+                "retry_s": STOPPING_RETRY_S,
+                "error": "the last session is still finishing",
+            })
+        };
+        let _ = socket.send(text(m)).await;
+        close(&mut socket, "stopping").await;
+        return;
+    }
     let live = match running {
         Some(l) if same_console(&l.host, &start.host) => l,
         Some(l) => {
@@ -1949,6 +1973,17 @@ mod tests {
     }
 
     #[test]
+    fn another_device_using_the_console_is_not_called_our_last_session() {
+        use ps5upload_core::rp_stream::guard::NotReady;
+        let e = anyhow::Error::new(NotReady::InUse(Duration::from_secs(30)));
+        let v = error_status(&e);
+        assert_eq!(v["code"], "in_use");
+        assert_eq!(v["retry_s"], 30);
+        let e = anyhow::Error::new(NotReady::Busy(Duration::from_secs(12)));
+        assert_eq!(error_status(&e)["code"], "busy");
+    }
+
+    #[test]
     fn a_console_is_the_same_with_its_port() {
         assert!(same_console("10.0.0.2", "10.0.0.2:9120"));
         assert!(same_console("10.0.0.2:9295", "10.0.0.2:9120"));
@@ -2030,6 +2065,41 @@ mod tests {
                 "the session waits"
             );
             drop(c);
+        }
+
+        /// A session told to stop is not joined: a start hears "busy, look again", a page coming
+        /// back that it has gone. Attaching used to end with it, a minute later, with no word.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_session_on_its_way_out_is_not_joined() {
+            let _turn = LIVE_TEST_LOCK.lock().await;
+            let s = Session::start();
+            s.0.stop.store(true, Ordering::Relaxed);
+            assert_eq!(s.0.snapshot()["stopping"], true);
+            let url = serve().await;
+            let hear = |msg: &'static str| {
+                let url = url.clone();
+                async move {
+                    let (mut c, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+                    c.send(TMsg::Text(msg.into())).await.unwrap();
+                    loop {
+                        match c.next().await {
+                            Some(Ok(TMsg::Text(t))) => {
+                                return serde_json::from_str::<serde_json::Value>(t.as_str())
+                                    .unwrap()
+                            }
+                            Some(Ok(_)) => {}
+                            other => panic!("closed: {other:?}"),
+                        }
+                    }
+                }
+            };
+            let v = hear(ATTACH).await;
+            assert_eq!(v["stage"], "ended");
+            assert_eq!(v["reason"], "no session");
+            let v = hear(r#"{"host":"10.0.77.2","regist_key":"","rp_key":"","attach_only":false}"#)
+                .await;
+            assert_eq!(v["code"], "busy");
+            assert_eq!(v["retry_s"], STOPPING_RETRY_S);
         }
 
         /// A page that answers pings stays, however quiet it is itself.
