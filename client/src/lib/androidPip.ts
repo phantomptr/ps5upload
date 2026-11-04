@@ -71,8 +71,10 @@ export function pipRequest(s: {
   stream: { canvas: HTMLCanvasElement } | null;
   phase: string | null;
   prefs: Pick<RpPrefs, "systemPip">;
+  /** False: nothing to float (the picture is off on this device). */
+  pictureHere?: boolean;
 }): { active: boolean; w: number; h: number } {
-  const active = !!s.stream && s.phase === "playing" && s.prefs.systemPip !== false;
+  const active = !!s.stream && s.phase === "playing" && s.prefs.systemPip !== false && s.pictureHere !== false;
   const [w, h] = aspectOf(canvasShape(s.stream?.canvas));
   return { active, w, h };
 }

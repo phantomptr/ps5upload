@@ -370,3 +370,108 @@ describe("RemotePlayStream at its end", () => {
     await flush();
   });
 });
+
+describe("the picture on this device", () => {
+  /** A socket that keeps what the page sends, opened. */
+  class SentSocket extends FakeSocket {
+    sent: string[] = [];
+    send(m?: unknown) {
+      this.sent.push(String(m));
+    }
+  }
+  const started = async (o: StreamOptions) => {
+    vi.stubGlobal("WebSocket", SentSocket);
+    const s = new RemotePlayStream(o);
+    await s.start();
+    await flush();
+    const ws = sockets[0] as unknown as SentSocket;
+    ws.readyState = 1;
+    ws.onopen?.();
+    return { s, ws };
+  };
+  const msgs = (ws: SentSocket) => ws.sent.map((m) => JSON.parse(m) as Record<string, unknown>);
+  const internals = (s: RemotePlayStream) => s as unknown as { video: unknown; drawer: unknown; ticking: boolean; header: unknown };
+
+  it("off, keeps nothing running and sends no controller; on, comes back and asks for a keyframe", async () => {
+    let press = 0;
+    const heard: boolean[] = [];
+    const o: StreamOptions = {
+      ...options(),
+      readPad: () => ({ buttons: ++press, l2: 0, r2: 0, lx: 0, ly: 0, rx: 0, ry: 0 }),
+      onPictureHere: (on) => heard.push(on),
+    };
+    const { s, ws } = await started(o);
+    expect(ctxs).toHaveLength(1);
+    const first = s.canvas;
+    const pass = { release: vi.fn(), lost: false };
+    const decoder = { close: vi.fn(), state: "configured" };
+    const raw = internals(s);
+    raw.drawer = { kind: "gl", pass };
+    raw.video = decoder;
+    s.sendPad();
+    expect(msgs(ws).some((m) => "pad" in m)).toBe(true);
+
+    ws.sent.length = 0;
+    s.setPictureHere(false);
+    expect(heard).toEqual([false]);
+    expect(msgs(ws)).toEqual([{ picture: false }]);
+    expect(decoder.close).toHaveBeenCalled();
+    expect(raw.video).toBeNull();
+    expect(pass.release).toHaveBeenCalled();
+    expect(raw.drawer).toBeNull();
+    expect(ctxs[0].closed).toBe(1);
+    expect(workers[0].terminated).toBe(true);
+    expect(raw.ticking).toBe(false);
+    // A new canvas: the old one's context is gone with it. And its pixels.
+    expect(s.canvas).not.toBe(first);
+    expect(first.width).toBe(0);
+    // No controller, no recording, and media still on its way is dropped.
+    s.sendPad();
+    expect(msgs(ws).some((m) => "pad" in m)).toBe(false);
+    expect(s.captureMedia(60)).toBeNull();
+    await expect(s.snapshot()).resolves.toBeNull();
+    const record = new Uint8Array([1, 0, 0, 1, 0x65]).buffer;
+    ws.onmessage?.({ data: record });
+    expect(raw.video).toBeNull();
+    // The decoder's watchdog has nothing to judge.
+    (s as unknown as { watchDecoder(): void }).watchDecoder();
+    expect(raw.video).toBeNull();
+
+    // The session goes on: the reconnect keeps asking for it off.
+    ws.sent.length = 0;
+    ws.onopen?.();
+    expect(msgs(ws)[0].picture).toBe(false);
+
+    ws.sent.length = 0;
+    s.setPictureHere(true);
+    expect(heard).toEqual([false, true]);
+    expect(msgs(ws)).toEqual([{ picture: true }, { keyframe: true }]);
+    expect(ctxs).toHaveLength(2);
+    expect(raw.ticking).toBe(true);
+    s.stop();
+    ws.close();
+    await flush();
+  });
+
+  it("starts off when asked, with no sound made, and says so in the start message", async () => {
+    const { s, ws } = await started({ ...options(), pictureHere: false });
+    expect(ctxs).toHaveLength(0);
+    expect(s.pictureHere).toBe(false);
+    expect(msgs(ws)[0]).toMatchObject({ host: "192.168.1.100", picture: false });
+    s.stop();
+    ws.close();
+    await flush();
+  });
+
+  it("a page joining says nothing and follows what the engine tells it", async () => {
+    const heard: boolean[] = [];
+    const { s, ws } = await started({ ...options(), attach: true, onPictureHere: (on) => heard.push(on) });
+    expect("picture" in msgs(ws)[0]).toBe(false);
+    ws.onmessage?.({ data: JSON.stringify({ picture: false }) });
+    expect(heard).toEqual([false]);
+    expect(s.pictureHere).toBe(false);
+    s.stop();
+    ws.close();
+    await flush();
+  });
+});

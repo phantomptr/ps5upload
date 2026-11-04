@@ -29,7 +29,9 @@ import { getEngineUrl, isLoopbackUrl } from "../../state/engine";
 import { useGoLiveStore } from "../../state/goLive";
 import { useTr } from "../../state/lang";
 import { presetName, problemText, runSite } from "./goLiveText";
+import { useRemotePlayStore } from "../../state/remotePlay";
 import { useRpQualityStore } from "../../state/rpQuality";
+import { PictureHereToggle } from "./PictureHere";
 
 type Tr = ReturnType<typeof useTr>;
 
@@ -762,6 +764,7 @@ export function GoLivePanel({ onClose }: { onClose: () => void }) {
   const status = useGoLiveStore((s) => s.status);
   const loadError = useGoLiveStore((s) => s.loadError);
   const obs = obsFeedAvailable({ mobile: isMobile(), engineUrl: getEngineUrl() });
+  const hasStream = useRemotePlayStore((s) => !!s.stream);
   const [tab, setTab] = useState<"live" | "obs">("live");
   return (
     <div
@@ -780,6 +783,15 @@ export function GoLivePanel({ onClose }: { onClose: () => void }) {
           <X size={16} />
         </button>
       </div>
+      {hasStream && (
+        <PictureHereToggle
+          hint={tr(
+            "golive_picture_hint",
+            undefined,
+            "Off, this computer sends the stream on without decoding or showing it, which saves CPU and heat. Keep the app running; you stay in control here.",
+          )}
+        />
+      )}
       {obs && (
         <div className="flex gap-1.5" role="group" data-testid="golive-tabs">
           {(["live", "obs"] as const).map((t) => (

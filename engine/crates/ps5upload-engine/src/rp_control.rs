@@ -444,6 +444,9 @@ pub struct SettingsReq {
     keyframe: bool,
     #[serde(default)]
     replay_s: Option<u64>,
+    /// The picture on the attached page on or off (see rp_stream_api's module note).
+    #[serde(default)]
+    picture: Option<bool>,
     #[serde(default)]
     width: Option<u32>,
     #[serde(default)]
@@ -510,9 +513,13 @@ pub async fn settings(
     if r.keyframe {
         live.want_key.store(true, Ordering::Relaxed);
     }
+    if let Some(on) = r.picture {
+        live.set_picture(on);
+    }
     Json(json!({
         "ok": true,
         "session": live.session,
+        "picture": !live.picture_off(),
         "replay_on": live.replay.lock().map(|g| g.is_some()).unwrap_or(false),
     }))
     .into_response()

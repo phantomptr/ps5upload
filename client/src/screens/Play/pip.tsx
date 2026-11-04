@@ -350,7 +350,7 @@ async function openVideoPip(canvas: HTMLCanvasElement): Promise<boolean> {
 /** The stream ended (Stop, the console): picture in picture closes with it. */
 function watchStreamEnd(cur: NonNullable<typeof open>): void {
   const unsub = useRemotePlayStore.subscribe((s) => {
-    if (!s.stream && open === cur) closePip();
+    if ((!s.stream || !s.pictureHere) && open === cur) closePip();
   });
   cur.cleanups.push(unsub);
 }

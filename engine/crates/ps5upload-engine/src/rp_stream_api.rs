@@ -58,6 +58,15 @@
 //! "ended"}` and a Close frame. `GET /api/ps5/rp/session` says what is
 //! running (with its `session` id). `GET /rp-player` is a test page.
 //!
+//! Picture on this device (#670, #649): `"picture": false` in the start message, `{"picture":
+//! false}` later, or `POST /api/ps5/rp/picture` (rp_automation.rs) stop the page's picture and
+//! sound and its controller, for the session (the page is told `{"picture": bool}`, on attach too
+//! when it is off). Nothing else changes: watchers, players, the live feed (Go live, OBS) and
+//! instant replay fan out before the page's queue, and a page left off keeps answering pings.
+//! `{"picture": true}` brings it back without a restart: the headers again and a keyframe. While
+//! it is off and Go live or Play Together is running, no page is needed for the session to go on
+//! (`keep_alive_s` does not run out).
+//!
 //! Automation (rp_automation.rs, #615): a local script or agent can ask for the picture the page
 //! shows (`GET /api/ps5/rp/frame`) and hold controller input as one more controller
 //! (`POST /api/ps5/rp/input`), without taking the stream over. The engine decodes no video itself:
@@ -167,6 +176,10 @@ struct StartReq {
     /// is as before.
     #[serde(default)]
     keyboard: bool,
+    /// The picture, sound and controller on this page: off for this session, or back on. Absent
+    /// (a page that does not know, a reload): what the session has now.
+    #[serde(default)]
+    picture: Option<bool>,
 }
 
 impl StartReq {
@@ -207,6 +220,9 @@ struct ClientMsg {
     /// The user would rather not enter it: the start ends.
     #[serde(default)]
     passcode_cancel: bool,
+    /// The picture on this device on or off (see the module's top).
+    #[serde(default)]
+    picture: Option<bool>,
 }
 
 /// A passcode as the page sent it: never printed, not even in a debug dump.
@@ -275,6 +291,9 @@ struct Live {
     /// The page cannot use a frame until the next keyframe.
     need_key: AtomicBool,
     want_key: AtomicBool,
+    /// No picture, sound or controller for the attached page: it only keeps the session's
+    /// controls (see the module's top).
+    page_off: AtomicBool,
     /// When a keyframe was last asked for on behalf of a watcher or player.
     guest_key_asked: Mutex<Option<Instant>>,
     dropped: AtomicU64,
@@ -438,6 +457,7 @@ pub(crate) fn diag_summary() -> serde_json::Value {
             "hevc": l.hevc,
             "playing": l.playing.load(Ordering::Relaxed),
             "page_attached": l.viewer.lock().map(|g| g.is_some()).unwrap_or(false),
+            "picture": !l.picture_off(),
             "alone_s": l.alone_since.lock().ok().and_then(|g| g.map(|t| t.elapsed().as_secs())),
             "keep_alive_s": l.keep_alive.as_secs(),
             "watchers": spectators - players,
@@ -781,6 +801,7 @@ impl Live {
             playing: AtomicBool::new(false),
             need_key: AtomicBool::new(false),
             want_key: AtomicBool::new(false),
+            page_off: AtomicBool::new(false),
             guest_key_asked: Mutex::new(None),
             dropped: AtomicU64::new(0),
             next_viewer: AtomicU64::new(1),
@@ -893,6 +914,72 @@ impl Live {
         }
     }
 
+    /// The picture on this device off (or back on) for this session. Off: the page's queues get
+    /// no more media, and what its controller and keyboard held is let go. Back on: the codec
+    /// headers again and the next keyframe, so the picture returns without a restart. Says so to
+    /// the page either way: the change may have come from the API.
+    pub(crate) fn set_picture(&self, on: bool) {
+        let was_on = !self.page_off.swap(!on, Ordering::Relaxed);
+        if was_on != on {
+            crate::log_info!(
+                "rp_stream: {}: the picture on this device is {}",
+                self.host,
+                if on { "on" } else { "off" }
+            );
+        }
+        self.send_ctl(text(serde_json::json!({ "picture": on })));
+        if on {
+            if was_on {
+                return;
+            }
+            if let Some(h) = self.video_header.lock().ok().and_then(|g| g.clone()) {
+                self.send_ctl(bin(0, &h));
+            }
+            if let Some(h) = self.audio_header.lock().ok().and_then(|g| g.clone()) {
+                self.send_ctl(bin(3, &h));
+            }
+            self.need_key.store(true, Ordering::Relaxed);
+            self.want_key.store(true, Ordering::Relaxed);
+        } else if was_on {
+            self.push_pad(PAGE_SOURCE, None);
+            let viewer = self
+                .viewer
+                .lock()
+                .ok()
+                .and_then(|g| g.as_ref().map(|v| v.id));
+            if let Some(id) = viewer {
+                crate::vinput_api::off(&self.host, crate::vinput_api::Owner::Page(id), "left");
+            }
+        }
+    }
+
+    fn picture_off(&self) -> bool {
+        self.page_off.load(Ordering::Relaxed)
+    }
+
+    /// With no page attached, the session still has a reason to run: the picture is off here on
+    /// purpose, and Go live or Play Together needs the stream.
+    fn held_without_page(&self) -> bool {
+        self.picture_off() && self.stream_needed()
+    }
+
+    fn stream_needed(&self) -> bool {
+        crate::rp_golive::run_needs_session() || crate::join::needs_session(&self.host)
+    }
+
+    /// `keep_alive_s` ran out with no page, and nothing holds the session.
+    fn alone_too_long(&self) -> bool {
+        self.wait_ran_out() && !self.held_without_page()
+    }
+
+    fn wait_ran_out(&self) -> bool {
+        self.alone_since
+            .lock()
+            .ok()
+            .and_then(|a| *a)
+            .is_some_and(|t| t.elapsed() > self.keep_alive)
+    }
+
     fn ctl(&self) -> Option<mpsc::Sender<Message>> {
         self.viewer.lock().ok()?.as_ref().map(|v| v.ctl.clone())
     }
@@ -920,12 +1007,18 @@ impl Live {
         timing: bool,
     ) -> u64 {
         let id = self.next_viewer.fetch_add(1, Ordering::Relaxed);
-        // The new page starts from the codec headers and the next keyframe.
-        if let Some(h) = self.video_header.lock().ok().and_then(|g| g.clone()) {
-            let _ = ctl.try_send(bin(0, &h));
-        }
-        if let Some(h) = self.audio_header.lock().ok().and_then(|g| g.clone()) {
-            let _ = ctl.try_send(bin(3, &h));
+        // The new page starts from the codec headers and the next keyframe, unless the picture is
+        // off here: then it is told, and the headers come when it is turned back on.
+        let off = self.picture_off();
+        if off {
+            let _ = ctl.try_send(text(serde_json::json!({ "picture": false })));
+        } else {
+            if let Some(h) = self.video_header.lock().ok().and_then(|g| g.clone()) {
+                let _ = ctl.try_send(bin(0, &h));
+            }
+            if let Some(h) = self.audio_header.lock().ok().and_then(|g| g.clone()) {
+                let _ = ctl.try_send(bin(3, &h));
+            }
         }
         if self.playing.load(Ordering::Relaxed) {
             let _ = ctl.try_send(text(
@@ -939,8 +1032,10 @@ impl Live {
         if let Some(retry) = self.passcode_ask.lock().ok().and_then(|g| *g) {
             let _ = ctl.try_send(Self::passcode_status(retry));
         }
-        self.need_key.store(true, Ordering::Relaxed);
-        self.want_key.store(true, Ordering::Relaxed);
+        if !off {
+            self.need_key.store(true, Ordering::Relaxed);
+            self.want_key.store(true, Ordering::Relaxed);
+        }
         let old = self.viewer.lock().ok().and_then(|mut g| {
             g.replace(Viewer {
                 id,
@@ -1013,6 +1108,8 @@ impl Live {
             "playing": self.playing.load(Ordering::Relaxed),
             "attached": attached,
             "passcode": passcode,
+            // Off: the picture, sound and controller on this device are off for this session.
+            "picture": !self.picture_off(),
             // Told to stop, and finishing (a wake or handshake takes a moment to cut short).
             "stopping": self.stop.load(Ordering::Relaxed),
         })
@@ -1035,7 +1132,9 @@ impl Sink {
                 *h = Some(au.to_vec());
             }
             live.feed.video_header(au);
-            live.send_ctl(bin(0, au));
+            if !live.picture_off() {
+                live.send_ctl(bin(0, au));
+            }
             live.to_spectators_tagged(0, &tagged(0, au), false);
             return true;
         }
@@ -1050,6 +1149,9 @@ impl Sink {
             msg.slice(1..),
         );
         live.to_spectators_tagged(1, &msg, key);
+        if live.picture_off() {
+            return true; // guests and the feed have it; this page asked not to
+        }
         let Some((tx, timing)) = live.video_tx() else {
             return true; // nobody watching: the session waits for a page
         };
@@ -1137,14 +1239,18 @@ impl StreamSink for Sink {
                 msg.slice(1..),
             );
         }
-        self.live.send_ctl(Message::Binary(msg.clone()));
+        if !self.live.picture_off() {
+            self.live.send_ctl(Message::Binary(msg.clone()));
+        }
         self.live.to_spectators_tagged(kind, &msg, false);
         true
     }
     fn rumble(&mut self, left: u8, right: u8) {
         let v = serde_json::json!({"rumble": [left, right]});
         crate::pad_link::broadcast(&v.to_string());
-        self.live.send_ctl(text(v));
+        if !self.live.picture_off() {
+            self.live.send_ctl(text(v));
+        }
     }
     fn light_bar(&mut self, rgb: [u8; 3]) {
         let v = serde_json::json!({"light": rgb});
@@ -1157,9 +1263,11 @@ impl StreamSink for Sink {
             v.extend_from_slice(&p);
             v
         };
-        self.live.send_ctl(text(
-            serde_json::json!({"triggers": {"left": side(left), "right": side(right)}}),
-        ));
+        if !self.live.picture_off() {
+            self.live.send_ctl(text(
+                serde_json::json!({"triggers": {"left": side(left), "right": side(right)}}),
+            ));
+        }
     }
     fn dualsense_intensity(&mut self, haptics: u8, triggers: u8) {
         self.live.send_ctl(text(
@@ -1167,7 +1275,9 @@ impl StreamSink for Sink {
         ));
     }
     fn haptics(&mut self, pcm: &[u8]) {
-        self.live.send_ctl(bin(KIND_HAPTICS, pcm));
+        if !self.live.picture_off() {
+            self.live.send_ctl(bin(KIND_HAPTICS, pcm));
+        }
     }
     fn input(&mut self) -> Option<ControllerState> {
         self.live.pad.lock().ok()?.pop_front()
@@ -1176,12 +1286,7 @@ impl StreamSink for Sink {
         if self.live.stop.load(Ordering::Relaxed) {
             return true;
         }
-        self.live
-            .alone_since
-            .lock()
-            .ok()
-            .and_then(|a| *a)
-            .is_some_and(|t| t.elapsed() > self.live.keep_alive)
+        self.live.alone_too_long()
     }
     fn wants_keyframe(&mut self) -> bool {
         let page = self.live.want_key.swap(false, Ordering::Relaxed);
@@ -1358,6 +1463,7 @@ fn begin(start: &StartReq, creds: ps5upload_core::rp_session::SessionCreds) -> A
         "keep_alive_s": start.keep_alive_s,
         "replay_s": start.replay_s,
         "low_latency": start.low_latency,
+        "picture": start.picture,
     });
     crate::log_detail!("rp_stream: {}: starting a session: {asked}", start.host);
     if let Ok(mut g) = LAST_SESSION.lock() {
@@ -1575,6 +1681,9 @@ async fn session(mut socket: WebSocket) {
     // so the time measured is the time the page's messages really take.
     let pong_tx = ctl_tx.clone();
     let kbm_tx = ctl_tx.clone();
+    if let Some(on) = start.picture {
+        live.set_picture(on);
+    }
     let id = live.attach(video_tx, ctl_tx, start.timing);
     crate::log_detail!("rp_stream: {}: page {id} shows the session", live.host);
 
@@ -1617,13 +1726,18 @@ async fn session(mut socket: WebSocket) {
                         if let Some(p) = pong(&m) {
                             let _ = pong_tx.try_send(p);
                         }
-                        if let Some(p) = m.pad {
+                        if let Some(p) = m.pad.filter(|_| !live.picture_off()) {
                             live.push_pad(PAGE_SOURCE, Some(p));
+                        }
+                        if let Some(on) = m.picture.filter(|_| live.is_viewer(id)) {
+                            live.set_picture(on);
                         }
                         if m.keyframe {
                             crate::log_detail!("rp_stream: {}: page {id} asks for a keyframe", live.host);
-                            live.need_key.store(true, Ordering::Relaxed);
-                            live.want_key.store(true, Ordering::Relaxed);
+                            if !live.picture_off() {
+                                live.need_key.store(true, Ordering::Relaxed);
+                                live.want_key.store(true, Ordering::Relaxed);
+                            }
                         }
                         if m.stop {
                             live.stop.store(true, Ordering::Relaxed);
@@ -1635,7 +1749,7 @@ async fn session(mut socket: WebSocket) {
                             live.set_replay(m.replay_s);
                         }
                         if let Some(k) = &m.kbm {
-                            if live.is_viewer(id) {
+                            if live.is_viewer(id) && !live.picture_off() {
                                 let tx = kbm_tx.clone();
                                 let status: crate::vinput_api::StatusFn = Arc::new(move |v| {
                                     let _ = tx.try_send(text(v));
@@ -1663,7 +1777,7 @@ async fn session(mut socket: WebSocket) {
                 }
                 // A native keyboard & mouse report: only from the page the session is shown on.
                 Some(Ok(Message::Binary(b))) if b.first() == Some(&crate::vinput_api::KIND_KBM) => {
-                    if live.is_viewer(id) {
+                    if live.is_viewer(id) && !live.picture_off() {
                         crate::vinput_api::report(&live.host, crate::vinput_api::Owner::Page(id), &b[1..]);
                     }
                 }
@@ -1810,6 +1924,187 @@ mod tests {
         assert!(m.passcode_cancel);
         assert!(sink.live.answer_passcode(id2, Passcode::Cancel));
         assert!(matches!(sink.passcode(), Some(Passcode::Cancel)));
+    }
+
+    /// One page attached to a session, as the stream thread feeds it.
+    fn pic_page(live: &Arc<Live>) -> (u64, mpsc::Receiver<Message>, mpsc::Receiver<Message>) {
+        let (vtx, vrx) = mpsc::channel(8);
+        let (ctx, crx) = mpsc::channel(64);
+        (live.attach(vtx, ctx, false), vrx, crx)
+    }
+
+    fn take_all(rx: &mut mpsc::Receiver<Message>) -> Vec<Message> {
+        std::iter::from_fn(|| rx.try_recv().ok()).collect()
+    }
+
+    fn bin_kinds(m: &[Message]) -> Vec<u8> {
+        m.iter()
+            .filter_map(|m| match m {
+                Message::Binary(b) => b.first().copied(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn says_picture(m: &[Message], on: bool) -> bool {
+        m.iter().any(|m| {
+            matches!(m, Message::Text(t)
+                if serde_json::from_str::<serde_json::Value>(t.as_str()).is_ok_and(|v| v["picture"] == on))
+        })
+    }
+
+    // H.264: an IDR slice and a plain slice.
+    const PIC_KEY: &[u8] = &[0, 0, 1, 0x65, 1];
+    const PIC_DELTA: &[u8] = &[0, 0, 1, 0x41, 1];
+
+    #[test]
+    fn picture_off_stops_the_page_and_nobody_else() {
+        let live = Arc::new(Live::new("10.0.0.9".into(), false, Duration::from_secs(60)));
+        let (id, mut video, mut ctl) = pic_page(&live);
+        // A guest (watcher), and a reader of the live feed's source: the replay window.
+        let (stx, mut guest) = mpsc::channel(32);
+        live.spectators
+            .lock()
+            .unwrap()
+            .push(Spectator::watcher(1, stx));
+        live.set_replay(Some(15));
+        let mut sink = Sink {
+            live: live.clone(),
+            t0: Instant::now(),
+        };
+        sink.video(b"hdr", true);
+        sink.audio(b"ahdr", true);
+        sink.video(PIC_KEY, false);
+        assert_eq!(take_all(&mut video).len(), 1);
+        assert_eq!(bin_kinds(&take_all(&mut ctl)), vec![0, 3]);
+        take_all(&mut guest);
+
+        // A pad held down lets go; off, the page's pad goes nowhere.
+        let held = ControllerState {
+            buttons: 1,
+            ..Default::default()
+        };
+        live.playing.store(true, Ordering::Relaxed);
+        live.push_pad(PAGE_SOURCE, Some(held));
+        live.want_key.store(false, Ordering::Relaxed);
+        live.set_picture(false);
+        assert_eq!(live.sources.set(u64::MAX - 1, None).buttons, 0);
+        assert!(says_picture(&take_all(&mut ctl), false));
+        assert_eq!(live.snapshot()["picture"], false);
+        assert!(!live.want_key.swap(false, Ordering::Relaxed));
+
+        sink.video(b"hdr2", true);
+        sink.video(PIC_KEY, false);
+        sink.video(PIC_DELTA, false);
+        sink.audio(b"opus", false);
+        sink.haptics(b"pcm");
+        sink.rumble(1, 2);
+        assert!(take_all(&mut video).is_empty(), "video reached a page off");
+        assert!(take_all(&mut ctl).is_empty(), "media reached a page off");
+        // Everyone else got all of it.
+        assert_eq!(bin_kinds(&take_all(&mut guest)), vec![0, 1, 1, 4]);
+        assert!(live.replay_parts().is_some());
+        // The session is still the page's: not detached, nothing asked of the console.
+        assert!(live.is_viewer(id));
+        assert!(!live.alone_too_long());
+    }
+
+    #[test]
+    fn turning_the_picture_back_on_needs_no_restart() {
+        let live = Arc::new(Live::new("10.0.0.9".into(), false, Duration::from_secs(60)));
+        let (_id, mut video, mut ctl) = pic_page(&live);
+        let mut sink = Sink {
+            live: live.clone(),
+            t0: Instant::now(),
+        };
+        sink.video(b"hdr", true);
+        sink.audio(b"ahdr", true);
+        live.set_picture(false);
+        // New headers while it is off are the ones it gets.
+        sink.video(b"hdr2", true);
+        take_all(&mut ctl);
+        take_all(&mut video);
+        live.want_key.store(false, Ordering::Relaxed);
+
+        live.set_picture(true);
+        let got = take_all(&mut ctl);
+        assert!(says_picture(&got, true));
+        assert_eq!(bin_kinds(&got), vec![0, 3]);
+        let hdr = got
+            .iter()
+            .find_map(|m| match m {
+                Message::Binary(b) if b[0] == 0 => Some(b[1..].to_vec()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(hdr, b"hdr2");
+        assert!(live.want_key.load(Ordering::Relaxed), "no keyframe asked");
+        // Only from the next keyframe on.
+        sink.video(PIC_DELTA, false);
+        assert!(take_all(&mut video).is_empty());
+        sink.video(PIC_KEY, false);
+        sink.video(PIC_DELTA, false);
+        assert_eq!(take_all(&mut video).len(), 2);
+        // Asked again while on: nothing changes.
+        live.want_key.store(false, Ordering::Relaxed);
+        live.set_picture(true);
+        assert!(!live.want_key.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_page_joining_a_session_with_the_picture_off_is_told_and_gets_nothing() {
+        let live = Arc::new(Live::new("10.0.0.9".into(), false, Duration::from_secs(60)));
+        *live.video_header.lock().unwrap() = Some(b"hdr".to_vec());
+        live.playing.store(true, Ordering::Relaxed);
+        live.set_picture(false);
+        let (_id, _video, mut ctl) = pic_page(&live);
+        let got = take_all(&mut ctl);
+        assert!(says_picture(&got, false));
+        assert!(bin_kinds(&got).is_empty());
+        assert!(got
+            .iter()
+            .any(|m| matches!(m, Message::Text(t) if t.as_str().contains("first_frame"))));
+        assert!(!live.want_key.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn with_no_page_the_wait_runs_out_unless_the_picture_is_off_for_a_reason() {
+        // Another test's Go live run may be under way (it is process-wide), so what Go live says
+        // is left out of the first part; Play Together is per console.
+        let live = Arc::new(Live::new(
+            "10.0.77.1".into(),
+            false,
+            Duration::from_millis(0),
+        ));
+        assert!(!live.wait_ran_out());
+        *live.alone_since.lock().unwrap() = Some(Instant::now() - Duration::from_secs(5));
+        assert!(live.wait_ran_out());
+        // Picture on: nothing holds it, whoever needs the stream.
+        assert!(!live.held_without_page());
+        assert!(live.alone_too_long());
+        // Off, with friends invited: it waits. On again: the window applies as ever.
+        crate::join::test_open_party("10.0.77.1");
+        assert!(crate::join::needs_session("10.0.77.1"));
+        live.set_picture(false);
+        assert!(live.held_without_page());
+        assert!(!live.alone_too_long());
+        live.set_picture(true);
+        assert!(live.alone_too_long());
+        crate::join::test_close_party("10.0.77.1");
+        assert!(!crate::join::needs_session("10.0.77.1"));
+    }
+
+    #[test]
+    fn the_start_and_later_messages_read_the_picture_switch() {
+        let m: ClientMsg = serde_json::from_str(r#"{"picture":false}"#).unwrap();
+        assert_eq!(m.picture, Some(false));
+        let s: StartReq =
+            serde_json::from_str(r#"{"host":"h","regist_key":"","rp_key":"","picture":false}"#)
+                .unwrap();
+        assert_eq!(s.picture, Some(false));
+        let s: StartReq =
+            serde_json::from_str(r#"{"host":"h","regist_key":"","rp_key":""}"#).unwrap();
+        assert_eq!(s.picture, None);
     }
 
     #[test]

@@ -16,6 +16,12 @@ describe("audioBufferFor", () => {
   });
 });
 
+describe("the picture on this device", () => {
+  it("is on unless the setting says otherwise", () => {
+    expect(DEFAULT_RP_PREFS.pictureHere).toBe(true);
+  });
+});
+
 describe("loadRpPrefs", () => {
   const stored = (v: unknown) => vi.spyOn(storage, "safeGetItem").mockReturnValue(v === null ? null : JSON.stringify(v));
 

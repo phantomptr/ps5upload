@@ -50,7 +50,8 @@ picks another and its log says which. A standalone engine takes the port from
 
 `host: null` (and `session: null`) means nothing is streaming; `last_end` then says how the last
 session ended (its `code` can be `busy`, `asleep`, `keys`, `rp_off`, and so on). `attached` is whether
-an app page shows the stream now. `session` changes every time a new stream starts; pass it to the
+an app page shows the stream now. `picture` is false while the picture is off on that page (see
+below; a frame needs it on). `session` changes every time a new stream starts; pass it to the
 other endpoints so a script never drives a session it did not mean to.
 
 The answer also has `stage` (how far the start got), `started_by` (`api` or `page`),
@@ -94,6 +95,20 @@ after a session ends; a start in that time fails with `last_end.code` `busy` and
 `{"host", "session", "keyframe": true, "replay_s": 30}`. `keyframe` asks the console for one;
 `replay_s` turns Instant Replay on (0 turns it off). Size, frame rate, bitrate and codec can only be
 set when a session starts: asking for one answers `409 restart_needed` with `fields`.
+`"picture": false` turns the picture off on the page, as below.
+
+### `POST /api/ps5/rp/picture`: the picture on this device
+
+```json
+{"host": "192.168.1.100", "session": 3, "on": false}
+```
+
+Off, the page gets no picture or sound, sends no controller and runs no decoder, for this session.
+Play Together guests, phones, the live feed (Go live, OBS) and instant replay carry on as before,
+and while Go live runs, friends are in or an invite is out, the session no longer needs a page at
+all. `on: true` brings it back without a restart: the page gets the codec headers again and the next
+keyframe. `session` is optional. Answers `{"ok": true, "session": 3, "picture": false}`, or 404
+`no_session`. While it is off, `GET /api/ps5/rp/frame` answers 409 `picture_off`.
 
 ### `POST /api/ps5/rp/passcode`: the sign-in passcode
 

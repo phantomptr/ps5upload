@@ -219,6 +219,20 @@ screen with your last name filled in: one tap on **Join** (11.0.3).
   still signed in on the TV, without asking again. After that, **Ask to join again**.
 - **The host closes Play Together or removes a friend:** the friend is told, and can ask again.
 
+**Q: Can I play on my TV with the console's DualSense, and use the app only to invite friends?**
+Yes, with two PS5 users. In Play Together, switch off **Picture on this device** (11.1.0): the app
+keeps the invite, and shows no picture and plays no sound on this device. Then press PS on the
+console's DualSense and pick a **different user** from the one you paired with PS5Upload. That user
+is you on the TV. If there's only one user on the console, add one first.
+- **Picking the stream's own user ends the stream for everyone**, friends included. The PS5 does
+  this, and the app can't change it.
+- **Keep the app open.** Friends' picture comes through the stream. It keeps running when the window
+  is hidden, and with the picture off it stays up while friends are in or an invite is out, even if
+  the app is closed for a while.
+- **Some games count the stream's user as a player too**, even though it presses nothing, so a
+  two-player game may have no place left for a friend. Friends' controllers are checked the same way
+  as always (they pick **Quick Play** on the TV), but this setup hasn't been tried with every game.
+
 **Q: Can a friend who isn't at my place play together, or use a phone controller?**
 Yes, with Tailscale (11.0.1). Your friend connects to your computer, not to the PS5, so only your
 computer and your friend's device need it; no payload on the PS5.
@@ -304,6 +318,9 @@ not in the phone apps yet):
 
 Things to know:
 
+- **An older computer.** In the Stream panel, switch off **Picture on this device** (11.1.0): the
+  computer sends the stream on without decoding or showing it, with no sound there either. The
+  broadcast and its controls carry on, and one click brings the picture back without restarting.
 - **Upload speed.** Go live sends the Remote Play video as it is: about 15 Mbps at 1080p unless
   you lower **Bitrate** in Play › Settings › Picture, and each site you stream to at once needs
   that again. Your internet upload has to keep up; the panel says roughly how much is needed.

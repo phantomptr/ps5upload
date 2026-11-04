@@ -119,6 +119,7 @@ pub(super) fn tools() -> Vec<ToolDef> {
                     "session": session_of_console(),
                     "keyframe": flag("Ask the console for a full picture now."),
                     "replay_s": whole("Instant replay: 15, 30 or 60 seconds, or 0 for off."),
+                    "picture": flag("The picture on the page showing this stream: false turns off its picture, sound and controller while guests, the live feed and replay carry on; true brings it back without a restart."),
                 }),
                 &[],
             ),
@@ -348,7 +349,7 @@ async fn stop(ctx: ToolCtx, args: Args) -> ToolResult {
 }
 
 async fn settings(ctx: ToolCtx, args: Args) -> ToolResult {
-    let fields = ["keyframe", "replay_s"];
+    let fields = ["keyframe", "replay_s", "picture"];
     let answer = session_call(&ctx, &args, "/api/ps5/rp/settings", &fields).await?;
     Ok(ToolOutput::ok("Changed the stream.", answer))
 }

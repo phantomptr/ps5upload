@@ -6,6 +6,8 @@ import { Button, Callout, Toggle } from "../../components";
 import { SendHelperButton } from "../../components/SendHelperButton";
 import { delayTone, formatCode, playerColor } from "../../lib/joinProtocol";
 import { useTr } from "../../state/lang";
+import { useRemotePlayStore } from "../../state/remotePlay";
+import { PictureHereToggle, PlayOnTvNote } from "./PictureHere";
 import { QrCode } from "./PhonePads";
 import {
   inviteOn,
@@ -169,6 +171,7 @@ export function PlayTogetherPanel({
   onPhones: () => void;
 }) {
   const tr = useTr();
+  const pictureHere = useRemotePlayStore((s) => s.pictureHere);
   const [failed, setFailed] = useState(false);
   // Why opening failed (`old_helper` shows the update callout; others are named in the text).
   const [why, setWhy] = useState<string | null>(null);
@@ -300,6 +303,16 @@ export function PlayTogetherPanel({
         </p>
       )}
 
+      {helperOk && !failed && (
+        <PictureHereToggle
+          hint={tr(
+            "pt_picture_hint",
+            undefined,
+            "Off, this device only invites your friends: no picture, sound or controller here, and your friends' game carries on. For playing on your TV.",
+          )}
+        />
+      )}
+      {helperOk && !failed && !pictureHere && <PlayOnTvNote />}
       {helperOk && !failed && (
         <div className="flex flex-col gap-3 lg:flex-row">
           <Step n={1} title={tr("pt_step_invite", undefined, "Invite")}>

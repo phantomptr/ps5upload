@@ -108,6 +108,9 @@ export interface RpPrefs {
   /** Android app: leaving the app while playing keeps the picture floating over other apps
    *  (Android's picture in picture, lib/androidPip.ts). */
   systemPip: boolean;
+  /** What a new session starts with: the picture, sound and controller on this device, or none
+   *  of them (Go live and Play Together keep getting the stream; #670, #649). */
+  pictureHere: boolean;
 }
 
 export const DEFAULT_RP_PREFS: RpPrefs = {
@@ -142,6 +145,7 @@ export const DEFAULT_RP_PREFS: RpPrefs = {
   touchpadSpeed: 1.5,
   miniPlayer: true,
   systemPip: true,
+  pictureHere: true,
 };
 
 /** The smallest sound buffer the Sound buffer setting offers. */
@@ -196,7 +200,7 @@ export interface RpTarget {
 }
 
 /** The fixed-for-a-session settings a restart may change for that session alone. */
-export type SessionQuality = Partial<Pick<RpPrefs, "res" | "codec" | "bitrateKbps">>;
+export type SessionQuality = Partial<Pick<RpPrefs, "res" | "codec" | "bitrateKbps" | "pictureHere">>;
 
 interface RpState {
   stream: RemotePlayStream | null;
@@ -226,6 +230,10 @@ interface RpState {
   /** What this session runs at instead of the saved prefs ("Switch to 720p", Go live's restart).
    *  Ends with the session: the saved settings are what the next one starts with. */
   sessionQuality: SessionQuality | null;
+  /** This session's picture on this device: off, nothing is decoded or played here. */
+  pictureHere: boolean;
+  /** Turn it off or back on for this session (Settings keep what the next one starts with). */
+  setPictureHere: (on: boolean) => void;
   start: (t: RpTarget, opts?: { attach?: boolean; quality?: SessionQuality | null }) => Promise<void>;
   stop: () => void;
   /** Stop to start again at once (Play Together stays open). */
@@ -297,6 +305,7 @@ export function padsCannotVibrate(
 function readPad(): PadState {
   if (rpInput.paused) return IDLE_PAD;
   const s = useRemotePlayStore.getState();
+  if (!s.pictureHere) return IDLE_PAD;
   const controls = currentControls();
   // A macro's key plays the macro, not whatever button the key map gives it.
   const macroKeys = controls?.macros.length ? new Set(controls.macros.map((m) => m.key)) : null;
@@ -350,6 +359,17 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
   pip: null,
   pipWindow: null,
   sessionQuality: null,
+  pictureHere: true,
+  setPictureHere(on) {
+    const stream = get().stream;
+    if (!on) {
+      rpInput.held.clear();
+      rpInput.touch = null;
+      rpInput.touchPad = IDLE_PAD;
+    }
+    if (stream) stream.setPictureHere(on);
+    else set({ pictureHere: on });
+  },
 
   async start(t, opts) {
     const cur = get().stream;
@@ -366,7 +386,13 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
     const dualSense = ds
       ? new DualSenseEffects(ds, (strong, weak) => get().stream?.vibrate(strong, weak))
       : undefined;
+    // A page joining a running session takes what the session has (the engine says).
+    const pictureHere = opts?.attach ? undefined : (quality?.pictureHere ?? prefs.pictureHere);
     const stream: RemotePlayStream = new RemotePlayStream({
+      pictureHere,
+      onPictureHere: (on) => {
+        if (get().stream === stream) set({ pictureHere: on });
+      },
       host: t.host,
       registKey: t.registKey,
       rpKey: t.rpKey,
@@ -454,7 +480,7 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
       gamepads: rpGamepads,
     });
     stream.setVolume(prefs.muted ? 0 : prefs.volume);
-    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null, passcode: null, sessionQuality: quality });
+    set({ stream, target: t, phase: "connecting", error: null, stats: null, light: null, keyboard: null, passcode: null, sessionQuality: quality, pictureHere: pictureHere !== false });
     await stream.start();
   },
 
@@ -508,19 +534,19 @@ export const useRemotePlayStore = create<RpState>((set, get) => ({
 // The OS's game mode (lib/gameMode.ts) while a stream plays, on any screen. Off at start-up:
 // nothing plays yet, and a hold a reloaded page left on is let go.
 setGameMode(false);
-useRemotePlayStore.subscribe((s) => setGameMode(!!s.stream && s.phase === "playing"));
+useRemotePlayStore.subscribe((s) => setGameMode(!!s.stream && s.phase === "playing" && s.pictureHere));
 
 // Keep the screen on while playing (a controller does not count as touching the phone). From the
 // store, not a screen: the stream keeps playing in the mini player on other screens.
 useRemotePlayStore.subscribe((s) => setScreenWakeReason("remote-play", !!s.stream && s.phase === "playing"));
 
 // Controllers are the page's while there is a stream (lib/androidPadBridge).
-useRemotePlayStore.subscribe((s) => setPadForwardReason("remote-play", !!s.stream));
+useRemotePlayStore.subscribe((s) => setPadForwardReason("remote-play", !!s.stream && s.pictureHere));
 
 // A DualSense's touchpad (lib/padTouchpad.ts) is read while a stream plays; each change sends the
 // pad at once, like a key, so a quick tap is not lost between two frames.
 setPadTouchpad(false, () => useRemotePlayStore.getState().stream?.sendPad());
-useRemotePlayStore.subscribe((s) => setPadTouchpad(!!s.stream && s.phase === "playing"));
+useRemotePlayStore.subscribe((s) => setPadTouchpad(!!s.stream && s.phase === "playing" && s.pictureHere));
 
 /** The session the engine is running, if any (it outlives a reload of this page). */
 export async function fetchRunningSession(): Promise<{
@@ -529,6 +555,8 @@ export async function fetchRunningSession(): Promise<{
   attached?: boolean;
   /** It was told to stop and is finishing (a wake or handshake it can't cut short at once). */
   stopping?: boolean;
+  /** False: the picture is off on this device for that session. */
+  picture?: boolean;
 }> {
   try {
     const r = await fetch(`${getEngineUrl()}/api/ps5/rp/session`);

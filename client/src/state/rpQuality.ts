@@ -95,7 +95,12 @@ export const useRpQualityStore = create<QualityState>((set, get) => {
       if (!t || !rp.stream || get().switching) return;
       set({ switching: { kind, retryAt: null } });
       // On top of an earlier restart of this session (720p, then Go live's H.264).
-      const quality = { ...rp.sessionQuality, ...next };
+      // The picture on this device stays as it is now, when that is not what a new session gets.
+      const quality = {
+        ...rp.sessionQuality,
+        ...next,
+        ...(rp.pictureHere === rp.prefs.pictureHere ? {} : { pictureHere: rp.pictureHere }),
+      };
       rp.stopForRestart();
       await until(() => !useRemotePlayStore.getState().stream, 10_000);
       await startAndWait(t, kind, quality);

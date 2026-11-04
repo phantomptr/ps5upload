@@ -7,7 +7,6 @@
 
 use serde_json::{json, Value};
 
-/// `(method, path)`, sorted by path, then method.
 /// Routes that hand out the keys that sign in to a console's user (Remote Play and wake): the app's
 /// own. They are not in [`ROUTES`], and `api_request` refuses them: a model's context, its logs and
 /// whoever reads them are no place for those keys. The curated tools use `/api/consoles`, which says
@@ -15,10 +14,9 @@ use serde_json::{json, Value};
 pub(crate) const HOLD_CONSOLE_KEYS: &[&str] =
     &["/api/consoles/document", "/api/settings-backup/get"];
 
-/// `path` names one of [`HOLD_CONSOLE_KEYS`], however it is written: percent-escapes, case, repeated
-/// or trailing slashes.
-pub(crate) fn holds_console_keys(path: &str) -> bool {
-    let bytes = path.as_bytes();
+/// Percent-escapes undone and letters lowered, `.` and repeated or trailing slashes gone.
+fn plain_path(text: &str) -> String {
+    let bytes = text.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
@@ -39,11 +37,57 @@ pub(crate) fn holds_console_keys(path: &str) -> bool {
         }
     }
     let text = String::from_utf8_lossy(&decoded).to_ascii_lowercase();
-    let segments: Vec<&str> = text.split('/').filter(|s| !s.is_empty()).collect();
-    let plain = format!("/{}", segments.join("/"));
-    HOLD_CONSOLE_KEYS.contains(&plain.as_str())
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in text.trim().split(['/', '\\']) {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            name => segments.push(name),
+        }
+    }
+    format!("/{}", segments.join("/"))
 }
 
+/// Every string in a request's JSON.
+fn any_text(value: &Value, found: &dyn Fn(&str) -> bool) -> bool {
+    match value {
+        Value::String(text) => found(text),
+        Value::Array(items) => items.iter().any(|v| any_text(v, found)),
+        Value::Object(map) => map.values().any(|v| any_text(v, found)),
+        _ => false,
+    }
+}
+
+/// This call reaches a console's backup slot. Each slot holds that console's wake and Remote Play
+/// keys (`forConsole` in the client's settingsBackup.ts), so it stays out of a tool's reach like
+/// [`HOLD_CONSOLE_KEYS`]. The other documents, and the `backups` index, stay readable: through
+/// `/api/mesh/doc` only the name counts, elsewhere only the helper's file path.
+pub(crate) fn reaches_a_backup_slot(
+    path: &str,
+    query: &[(&str, String)],
+    body: Option<&Value>,
+) -> bool {
+    if plain_path(path) == "/api/mesh/doc" {
+        let slot = |name: &str| plain_path(name).starts_with("/backup-");
+        return query.iter().any(|(k, v)| *k == "name" && slot(v))
+            || body
+                .and_then(|b| b.get("name"))
+                .and_then(Value::as_str)
+                .is_some_and(slot);
+    }
+    let file = |text: &str| plain_path(text).contains("/mesh/v1/doc-backup-");
+    query.iter().any(|(_, v)| file(v)) || body.is_some_and(|b| any_text(b, &file))
+}
+
+/// `path` names one of [`HOLD_CONSOLE_KEYS`], however it is written: percent-escapes, case, repeated
+/// or trailing slashes.
+pub(crate) fn holds_console_keys(path: &str) -> bool {
+    HOLD_CONSOLE_KEYS.contains(&plain_path(path).as_str())
+}
+
+/// `(method, path)`, sorted by path, then method.
 pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/"),
     ("POST", "/api/7z/inspect"),
@@ -370,6 +414,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/ps5/rp/pad-link/kick"),
     ("GET", "/api/ps5/rp/pad-relay"),
     ("POST", "/api/ps5/rp/passcode"),
+    ("POST", "/api/ps5/rp/picture"),
     ("GET", "/api/ps5/rp/replay"),
     ("GET", "/api/ps5/rp/session"),
     ("POST", "/api/ps5/rp/settings"),
@@ -699,6 +744,46 @@ mod tests {
         ] {
             assert!(!holds_console_keys(fine), "{fine}");
         }
+    }
+
+    #[test]
+    fn a_backup_slot_is_refused_however_it_is_written_and_only_a_slot() {
+        let doc = |path: &str, name: &str| {
+            reaches_a_backup_slot(path, &[("name", name.to_string())], None)
+        };
+        for (path, name) in [
+            ("/api/mesh/doc", "backup-01"),
+            ("/API/Mesh/Doc", "BACKUP-01"),
+            ("/api//mesh/doc/", "backup-01"),
+            ("/api/mesh/%64oc", "%62ackup-01"),
+            ("/api/mesh/doc", " backup-16 "),
+        ] {
+            assert!(doc(path, name), "{path} {name}");
+        }
+        for name in ["backups", "prefs", "my-backup-01", "shared"] {
+            assert!(!doc("/api/mesh/doc", name), "{name}");
+        }
+        assert!(!doc("/api/ps5/status", "backup-01"));
+        let put = json!({"addr": "a", "name": "backup-02", "base": 1, "doc": {}});
+        assert!(reaches_a_backup_slot("/api/mesh/doc", &[], Some(&put)));
+        for file in [
+            "/data/ps5upload/mesh/v1/doc-backup-01",
+            "/data//ps5upload/MESH/./v1/doc-backup-01",
+            "/data/ps5upload/mesh/v1/doc-%62ackup-01",
+            "/data/ps5upload/mesh/x/../v1/doc-backup-01",
+        ] {
+            let body = json!({"addr": "a", "req": {"path": file}});
+            assert!(
+                reaches_a_backup_slot("/api/ps5/fs/read-preview", &[], Some(&body)),
+                "{file}"
+            );
+        }
+        let other = json!({"path": "/data/ps5upload/mesh/v1/doc-prefs"});
+        assert!(!reaches_a_backup_slot(
+            "/api/ps5/fs/read-preview",
+            &[],
+            Some(&other)
+        ));
     }
 
     #[test]

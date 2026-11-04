@@ -243,6 +243,10 @@ async fn frame_with(
         Err(r) => return *r,
     };
     super::control::touch(&live);
+    // No decoder runs on the page: there is no picture to give, and asking would only time out.
+    if live.picture_off() {
+        return fail(StatusCode::CONFLICT, "picture_off");
+    }
     let Some((viewer, ctl)) = live
         .viewer
         .lock()
@@ -668,6 +672,40 @@ fn hold(live: &Arc<Live>, state: ControllerState, d: Duration) -> u64 {
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
+pub struct PictureReq {
+    #[serde(default)]
+    host: String,
+    #[serde(default)]
+    session: Option<u64>,
+    on: bool,
+}
+
+/// `POST /api/ps5/rp/picture {host, session?, on}`: the picture, sound and controller on this
+/// device off, or back on, for the running session (#670, #649). Guests and Go live are untouched.
+pub async fn picture(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Json(r): Json<PictureReq>,
+) -> Response {
+    if !crate::vinput_api::host_is_local(&headers) {
+        return crate::vinput_api::host_not_local();
+    }
+    picture_for(peer.ip(), super::live(), r)
+}
+
+fn picture_for(peer: IpAddr, live: Option<Arc<Live>>, r: PictureReq) -> Response {
+    if !crate::vinput_api::local_allowed(peer) {
+        return fail(StatusCode::FORBIDDEN, "local_only");
+    }
+    let live = match session_for(live, &r.host, r.session) {
+        Ok(l) => l,
+        Err(resp) => return *resp,
+    };
+    live.set_picture(r.on);
+    Json(serde_json::json!({"ok": true, "session": live.session, "picture": r.on})).into_response()
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
 pub struct ReleaseReq {
     #[serde(default)]
     #[serde(alias = "console", alias = "addr")]
@@ -958,6 +996,39 @@ mod tests {
 
     #[tokio::test]
     async fn no_session_stale_session_and_no_viewer() {
+        // The picture off on this device: no page can answer, so it says so at once.
+        let off = Arc::new(Live::new("10.0.0.9".into(), false, Duration::from_secs(60)));
+        let (st, v) = body_json(picture_for(
+            ip(LOCAL),
+            Some(off.clone()),
+            PictureReq {
+                host: "10.0.0.9".into(),
+                session: None,
+                on: false,
+            },
+        ))
+        .await;
+        assert_eq!((st, v["picture"].clone()), (StatusCode::OK, false.into()));
+        assert!(off.picture_off());
+        let (st, v) = body_json(frame_for(ip(LOCAL), Some(off.clone()), q("10.0.0.9")).await).await;
+        assert_eq!(
+            (st, v["error"].clone()),
+            (StatusCode::CONFLICT, "picture_off".into())
+        );
+        // Only this computer, as every automation route.
+        let (st, _) = body_json(picture_for(
+            ip("192.168.1.30"),
+            Some(off.clone()),
+            PictureReq {
+                host: "10.0.0.9".into(),
+                session: None,
+                on: true,
+            },
+        ))
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        assert!(off.picture_off());
+
         let (st, v) = body_json(frame_for(ip(LOCAL), None, q("10.0.0.9")).await).await;
         assert_eq!(
             (st, v["error"].as_str()),

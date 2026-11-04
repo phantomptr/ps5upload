@@ -1123,6 +1123,45 @@ async fn the_console_keys_stay_out_of_api_request_and_the_catalog() {
 }
 
 #[tokio::test]
+async fn a_console_backup_slot_stays_out_of_every_tool() {
+    let server = server();
+    for query in [
+        json!({"addr": "192.0.2.1", "name": "backup-01"}),
+        json!({"addr": "192.0.2.1", "name": "BACKUP-01"}),
+        json!({"addr": "192.0.2.1", "name": "%62ackup-01"}),
+    ] {
+        for path in ["/api/mesh/doc", "/api/mesh/%64oc", "/api//mesh/doc/"] {
+            let result = server
+                .tool("api_request", json!({"path": path, "query": query}))
+                .await;
+            assert_eq!(result["isError"], true, "{path} {query}");
+            assert!(result.to_string().contains("is refused"), "{result}");
+        }
+    }
+    let read = server
+        .tool(
+            "api_request",
+            json!({
+                "method": "POST",
+                "path": "/api/ps5/fs/read-preview",
+                "body": {"addr": "192.0.2.1", "path": "/data/ps5upload/mesh/v1/doc-backup-01"},
+            }),
+        )
+        .await;
+    assert!(read.to_string().contains("is refused"), "{read}");
+    // The index and the other documents are not refused (this test's router has no such route).
+    for name in ["backups", "prefs"] {
+        let other = server
+            .tool(
+                "api_request",
+                json!({"path": "/api/mesh/doc", "query": {"addr": "192.0.2.1", "name": name}}),
+            )
+            .await;
+        assert!(!other.to_string().contains("is refused"), "{other}");
+    }
+}
+
+#[tokio::test]
 async fn api_request_stays_inside_the_api() {
     let server = server();
     for path in [

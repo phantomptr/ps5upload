@@ -12,6 +12,8 @@ import {
   Loader2,
   Lock,
   Minimize,
+  Monitor,
+  MonitorOff,
   MonitorPlay,
   MoreHorizontal,
   Mouse,
@@ -93,6 +95,7 @@ import { useGameLaunch } from "../../lib/useGameLaunch";
 import { hostOf } from "../../lib/addr";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { closePip, openPip, pipPadsInBackground, pipSupport } from "./pip";
+import { PictureOffPlaceholder } from "./PictureHere";
 import { CaptureBarButtons, CaptureOverlay } from "./CaptureControls";
 import { LatencyLine, QualityNotice } from "./NetworkExtras";
 import { streamErrorMessage } from "./streamErrors";
@@ -488,7 +491,11 @@ export function StreamPanel() {
       rpInput.motion = null;
     };
   }, [running, prefs.motion]);
-  const playing = running && phase === "playing";
+  // The session plays; `playing` is whether it plays on this device (#670, #649).
+  const sessionPlaying = running && phase === "playing";
+  const pictureHere = useRemotePlayStore((s) => s.pictureHere);
+  const setPictureHere = useRemotePlayStore((s) => s.setPictureHere);
+  const playing = sessionPlaying && pictureHere;
   const goLive = goLiveAvailable({ mobile: isMobile() });
   useGoLivePolling(running && goLive, goLiveOpen);
   // Play a title on the stream (from a game's page, or the Game panel): stream, helper, launch.
@@ -808,7 +815,7 @@ export function StreamPanel() {
   }, [start, stopStream, okToStop]);
 
   useStreamLaunchRunner({
-    playingHost: playing && profile ? hostOf(profile.host) : null,
+    playingHost: sessionPlaying && profile ? hostOf(profile.host) : null,
     streamingHost: streaming && target ? hostOf(target.host) : null,
     // "busy" is waited out (startWhenFree): not a failure yet.
     streamError: error && error.code !== "busy" ? streamErrorMessage(tr, error) : null,
@@ -943,7 +950,7 @@ export function StreamPanel() {
   // setPointerCapture throw, so its buttons stop answering.
   const capture = useCallback(() => {
     const el = stage.current;
-    if (!el) return;
+    if (!el || !useRemotePlayStore.getState().pictureHere) return;
     el.focus();
     if (lastPointer.current !== "mouse") {
       // A finger: no pointer to capture; a keyboard attached to the tablet plays the PS5.
@@ -988,7 +995,7 @@ export function StreamPanel() {
   // page is view only (a scroll or a tap for the app's own bars must never press a button on
   // the console): Full screen is where the controller is. A controller or keyboard connected
   // to the device plays on the page too.
-  const showTouch = running && touchFirst && !pip;
+  const showTouch = running && touchFirst && !pip && pictureHere;
   const touchLayout: TouchLayout = !compact ? "overlay-bar" : portraitFull ? "deck" : "overlay";
   const touchHere = showTouch && (!compact || full);
   const touchOverPicture = touchHere && touchLayout !== "deck";
@@ -1127,6 +1134,7 @@ export function StreamPanel() {
               {phaseText(tr, phase)}
             </div>
           )}
+          {sessionPlaying && !pictureHere && <PictureOffPlaceholder />}
           {running && phase === "moved" && (
             <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/70 text-sm text-white/85">
               <MonitorPlay size={28} />
@@ -1246,26 +1254,42 @@ export function StreamPanel() {
                 <span className="me-2 inline-block h-2 w-2 rounded-full bg-[var(--color-success,#22c55e)] align-middle" />
                 {target?.name}
               </span>
+              {pictureHere && (
+                <>
+                  <BarButton
+                    label={tr("rp_show_stats_short", undefined, "Stats")}
+                    active={prefs.showStats}
+                    onClick={() => setPrefs({ showStats: !prefs.showStats })}
+                    testId="rp-toggle-stats"
+                  >
+                    <BarChart3 size={16} />
+                  </BarButton>
+                  <CaptureBarButtons />
+                  <BarButton
+                    label={muted ? tr("rp_unmute", undefined, "Sound on") : tr("rp_mute", undefined, "Mute")}
+                    active={muted}
+                    onClick={() => setPrefs({ muted: !prefs.muted, volume: prefs.volume || 1 })}
+                  >
+                    {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                  </BarButton>
+                  {/* Volume right on the picture (Settings has it too); keys on it never reach the pad. */}
+                  <VolumeSlider className="w-20 accent-white sm:w-28" />
+                </>
+              )}
               <BarButton
-                label={tr("rp_show_stats_short", undefined, "Stats")}
-                active={prefs.showStats}
-                onClick={() => setPrefs({ showStats: !prefs.showStats })}
-                testId="rp-toggle-stats"
+                label={
+                  pictureHere
+                    ? tr("rp_picture_turn_off", undefined, "Turn the picture off on this device")
+                    : tr("rp_picture_turn_on", undefined, "Turn the picture on")
+                }
+                active={!pictureHere}
+                onClick={() => setPictureHere(!pictureHere)}
+                testId="rp-picture-button"
               >
-                <BarChart3 size={16} />
+                {pictureHere ? <Monitor size={16} /> : <MonitorOff size={16} />}
               </BarButton>
-              <CaptureBarButtons />
-              <BarButton
-                label={muted ? tr("rp_unmute", undefined, "Sound on") : tr("rp_mute", undefined, "Mute")}
-                active={muted}
-                onClick={() => setPrefs({ muted: !prefs.muted, volume: prefs.volume || 1 })}
-              >
-                {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-              </BarButton>
-              {/* Volume right on the picture (Settings has it too); keys on it never reach the pad. */}
-              <VolumeSlider className="w-20 accent-white sm:w-28" />
               <MicBarButton />
-              {full && (
+              {full && pictureHere && (
                 // Picture size where it shows: in full screen (on the page the box is the
                 // picture's own shape, so every size looks the same).
                 <FitMenu
@@ -1340,7 +1364,7 @@ export function StreamPanel() {
               >
                 <Settings2 size={16} />
               </BarButton>
-              {pipKind && (
+              {pipKind && pictureHere && (
                 <BarButton
                   label={
                     pip
@@ -1377,7 +1401,7 @@ export function StreamPanel() {
               </button>
             </div>
           )}
-          {running && <CaptureOverlay />}
+          {running && pictureHere && <CaptureOverlay />}
           {running && goLive && <GoLiveChip />}
           <QualityNotice />
           {touchHere && touchpadOn && (
