@@ -2708,8 +2708,7 @@ async fn serve_handler(
     // strip_host_port for details — extracted so the URL-builder above
     // and this gate stay in sync (Round 1 fixed only this site; Round 2
     // caught the URL-builder mirror bug at the same site of truth).
-    let expected_ip = strip_host_port(&session.ps5_mgmt_addr);
-    let peer_ip = peer.ip().to_string();
+    let console_host = strip_host_port(&session.ps5_mgmt_addr);
     // A peer the operator already declared trusted via PS5UPLOAD_ALLOW_IP is
     // exempt from the source gate. This is what makes a NAT'd deployment work:
     // behind Docker port-mapping (Docker Desktop macOS/Windows) the console's
@@ -2720,12 +2719,17 @@ async fn serve_handler(
     // real console IP is visible and no allowlist entry is needed.
     let peer_trusted =
         peer.ip().is_loopback() || crate::allow_rules_contain(parse_allow_ips_env(), peer.ip());
-    if !peer_trusted && !session.shared_any && !expected_ip.is_empty() && peer_ip != expected_ip {
+    if !peer_trusted
+        && !session.shared_any
+        && !console_host.is_empty()
+        && !peer_is_console(&console_host, peer.ip()).await
+    {
         crate::log_warn!(
-            "pkg-host fetch REJECTED: peer={} expected={} session={} \
+            "pkg-host fetch REJECTED: peer={} expected={} (is {:?}) session={} \
              (set PS5UPLOAD_ALLOW_IP to this peer if the console is behind NAT)",
-            peer_ip,
-            expected_ip,
+            peer.ip(),
+            console_host,
+            console_addresses_known(&console_host),
             session.id,
         );
         return plain_response(
@@ -3640,6 +3644,83 @@ fn parse_allow_ips_env() -> &'static [crate::AllowRule] {
     })
 }
 
+/// How long an answer about a console's name is used before it is looked up again.
+const CONSOLE_NAME_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+type ConsoleNames = HashMap<String, (std::time::Instant, Vec<IpAddr>)>;
+
+/// A console added by name (`ps5.local`, a DNS name): the addresses that name last resolved to.
+fn console_names() -> &'static Mutex<ConsoleNames> {
+    static NAMES: std::sync::OnceLock<Mutex<ConsoleNames>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(Mutex::default)
+}
+
+/// The address a console was given as, when it was given as one. A zone (`fe80::1%en0`) is not
+/// part of the address a peer shows up with.
+fn console_ip_literal(host: &str) -> Option<IpAddr> {
+    host.split('%').next()?.parse().ok()
+}
+
+/// `peer` is one of `console`'s addresses. A v4 peer reaching a dual-stack socket shows up as
+/// `::ffff:a.b.c.d`.
+fn peer_matches(peer: IpAddr, console: &[IpAddr]) -> bool {
+    let peer = peer.to_canonical();
+    console.iter().any(|ip| ip.to_canonical() == peer)
+}
+
+/// What a console's name is known to resolve to right now, for the log.
+fn console_addresses_known(host: &str) -> Vec<IpAddr> {
+    if let Some(ip) = console_ip_literal(host) {
+        return vec![ip];
+    }
+    console_names()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(host)
+        .map(|(_, ips)| ips.clone())
+        .unwrap_or_default()
+}
+
+/// Whether `peer` is the console a session was made for. A session keeps the address as the
+/// client gave it, and the app accepts a name: comparing that text with the peer's IP refused
+/// every fetch from a console added as `ps5.local`, which then read as "the PS5 never reached
+/// this computer". A name is looked up as it is when the install URL is built, and the answer is
+/// kept briefly: the console asks for hundreds of ranges per install.
+async fn peer_is_console(host: &str, peer: IpAddr) -> bool {
+    if let Some(ip) = console_ip_literal(host) {
+        return peer_matches(peer, &[ip]);
+    }
+    let fresh = console_names()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(host)
+        .filter(|(at, _)| at.elapsed() < CONSOLE_NAME_TTL)
+        .map(|(_, ips)| peer_matches(peer, ips));
+    if let Some(answer) = fresh {
+        return answer;
+    }
+    let name = host.to_string();
+    let looked_up = tokio::task::spawn_blocking(move || {
+        use std::net::ToSocketAddrs;
+        format!("{name}:1")
+            .to_socket_addrs()
+            .map(|a| a.map(|s| s.ip()).collect::<Vec<IpAddr>>())
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    let mut names = console_names().lock().unwrap_or_else(|e| e.into_inner());
+    // A lookup that failed (a hiccup in mDNS, say) keeps what was known, so one failure does not
+    // cut off an install that is running.
+    let known = match names.get(host) {
+        Some((_, ips)) if looked_up.is_empty() => ips.clone(),
+        _ => looked_up,
+    };
+    let answer = peer_matches(peer, &known);
+    names.insert(host.to_string(), (std::time::Instant::now(), known));
+    answer
+}
+
 pub fn lan_ip_for_ps5(ps5_host: &str) -> std::io::Result<IpAddr> {
     let sock = std::net::UdpSocket::bind("0.0.0.0:0")?;
     // UDP "connect" doesn't actually send anything — it just sets the
@@ -3721,10 +3802,20 @@ pub(crate) fn engine_origin_for_ps5(ps5_addr: &str) -> std::io::Result<String> {
         })?,
         _ => lan_ip_for_ps5(&ps5_host_only)?,
     };
-    let host_port = std::env::var("PS5UPLOAD_ENGINE_PORT")
-        .ok()
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(19113);
+    // PS5UPLOAD_PKG_HOST_PORT is the same pin for the port: a container published on another host
+    // port (`-p 8080:19113`) listens on 19113 inside, and the PS5 can only reach it on 8080.
+    let host_port = match std::env::var("PS5UPLOAD_PKG_HOST_PORT") {
+        Ok(v) if !v.trim().is_empty() => v.trim().parse::<u16>().map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("PS5UPLOAD_PKG_HOST_PORT='{v}' is not a valid port: {e}"),
+            )
+        })?,
+        _ => std::env::var("PS5UPLOAD_ENGINE_PORT")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(19113),
+    };
     Ok(format!("http://{local_ip}:{host_port}"))
 }
 
@@ -4509,6 +4600,75 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
             url2.starts_with("http://127.0.0.1:"),
             "empty override should fall back to the routing guess: {url2}"
         );
+    }
+
+    /// `-p 8080:19113`: the engine listens on 19113 inside, the PS5 can only reach 8080.
+    #[test]
+    fn pkg_host_url_for_honours_a_published_port() {
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PS5UPLOAD_ENGINE_PORT", "19113");
+        std::env::set_var("PS5UPLOAD_PKG_HOST_PORT", "8080");
+        let url = pkg_host_url_for("127.0.0.1", "s", "IV0001-X");
+        std::env::set_var("PS5UPLOAD_PKG_HOST_PORT", "not-a-port");
+        let bad = pkg_host_url_for("127.0.0.1", "s", "IV0001-X");
+        std::env::set_var("PS5UPLOAD_PKG_HOST_PORT", " ");
+        let blank = pkg_host_url_for("127.0.0.1", "s", "IV0001-X");
+        std::env::remove_var("PS5UPLOAD_PKG_HOST_PORT");
+        std::env::remove_var("PS5UPLOAD_ENGINE_PORT");
+        assert!(url.unwrap().starts_with("http://127.0.0.1:8080/"));
+        assert!(bad.unwrap_err().to_string().contains("not a valid port"));
+        assert!(blank.unwrap().starts_with("http://127.0.0.1:19113/"));
+    }
+
+    #[test]
+    fn a_peer_is_compared_with_the_console_as_addresses() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert!(peer_matches(ip("192.168.1.5"), &[ip("192.168.1.5")]));
+        // A v4 peer on a dual-stack socket.
+        assert!(peer_matches(ip("::ffff:192.168.1.5"), &[ip("192.168.1.5")]));
+        // The text differs, the address does not.
+        assert!(peer_matches(ip("2001:db8::1"), &[ip("2001:DB8:0::1")]));
+        assert!(!peer_matches(ip("192.168.1.6"), &[ip("192.168.1.5")]));
+        assert_eq!(console_ip_literal("fe80::1%en0"), Some(ip("fe80::1")));
+        assert_eq!(console_ip_literal("ps5.local"), None);
+    }
+
+    /// A console added by name: its fetches come from the address the name resolves to. The
+    /// session's text is a name, which no peer address equals.
+    #[tokio::test]
+    async fn a_console_added_by_name_passes_the_source_gate_and_others_do_not() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        console_names().lock().unwrap().insert(
+            "ps5-gate-test.invalid".into(),
+            (std::time::Instant::now(), vec![ip("192.0.2.7")]),
+        );
+        assert!(peer_is_console("ps5-gate-test.invalid", ip("192.0.2.7")).await);
+        assert!(peer_is_console("ps5-gate-test.invalid", ip("::ffff:192.0.2.7")).await);
+        assert!(!peer_is_console("ps5-gate-test.invalid", ip("192.0.2.8")).await);
+        assert_eq!(
+            console_addresses_known("ps5-gate-test.invalid"),
+            vec![ip("192.0.2.7")]
+        );
+        // An address is never looked up.
+        assert!(peer_is_console("192.0.2.9", ip("192.0.2.9")).await);
+        assert!(!peer_is_console("192.0.2.9", ip("192.0.2.7")).await);
+    }
+
+    /// A lookup that fails keeps the last answer: one hiccup must not cut off a running install.
+    #[tokio::test]
+    async fn a_failed_lookup_keeps_what_was_known() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        // `.invalid` never resolves (RFC 6761), and the entry is past its TTL.
+        let long_ago = std::time::Instant::now()
+            .checked_sub(CONSOLE_NAME_TTL * 2)
+            .expect("the machine has been up long enough");
+        console_names().lock().unwrap().insert(
+            "ps5-hiccup-test.invalid".into(),
+            (long_ago, vec![ip("192.0.2.7")]),
+        );
+        assert!(peer_is_console("ps5-hiccup-test.invalid", ip("192.0.2.7")).await);
+        // Never known and unresolvable: refused.
+        assert!(!peer_is_console("ps5-unknown-test.invalid", ip("192.0.2.7")).await);
     }
 
     #[test]

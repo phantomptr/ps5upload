@@ -469,13 +469,23 @@ pub fn stream_unreachable_hint(
     code: u32,
     diag: Option<&crate::win_net::NetDiag>,
 ) -> String {
-    stream_unreachable_hint_for(
+    let mut hint = stream_unreachable_hint_for(
         served_from,
         code,
         crate::pkg_install::bridged_container_without_pkg_host_ip(),
         diag,
-    )
+    );
+    // Publishing the container on another host port looks exactly like a firewall from here.
+    if crate::pkg_install::in_container() {
+        hint.push(' ');
+        hint.push_str(HOST_PORT_ADVICE);
+    }
+    hint
 }
+
+/// The remedy for a container published on another host port (`-p 8080:19113`): the engine told
+/// the console the port it listens on inside.
+const HOST_PORT_ADVICE: &str = "If the container is published on a different port from the one shown, set PS5UPLOAD_PKG_HOST_PORT to that port.";
 
 /// `stream_unreachable_hint` with the container check passed in, so both
 /// wordings are testable. In a bridged container the firewall advice is

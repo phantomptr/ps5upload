@@ -583,7 +583,8 @@ volumes:
 ```
 
 - Keep port **19113** the same on both sides (`"19113:19113"`). The PS5 downloads packages from
-  that port during Stream & install, and the engine tells it to use 19113.
+  that port during Stream & install, and the engine tells it to use 19113. If you publish another
+  port (`"8080:19113"`), set `PS5UPLOAD_PKG_HOST_PORT` to it (`"8080"`).
 - `PS5UPLOAD_PKG_HOST_IP` is the address the PS5 is told to download from. Without it, a stream
   install hands the PS5 an address inside Docker that it cannot reach.
 - `/pkgs` is what the web UI's file picker shows: change `/Users/you/PS5` to the folder that holds
