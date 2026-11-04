@@ -3041,6 +3041,10 @@ export interface ModuleInfo {
 export interface ModuleList {
   modules: ModuleInfo[];
   err?: string;
+  /** How many the console listed; `refused` of them have no row, and `refused_rc` says why. */
+  count?: number;
+  refused?: number;
+  refused_rc?: string;
 }
 export async function procModulesGet(
   addr: string,

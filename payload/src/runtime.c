@@ -496,8 +496,8 @@ static int mgmt_reply(uint16_t frame_type, const void *body, uint64_t body_len) 
 }
 
 
-/* Creates a joinable worker thread with a bounded 512 KiB stack (the FreeBSD default is several MiB and the
- * console's per-process memory budget is small). Falls back to the default stack if attribute setup fails. */
+/* Creates a joinable worker thread with a bounded 512 KiB stack. The default is only 64 KiB (measured on FW
+ * 13.60), far too little for a handler. Falls back to the default stack if attribute setup fails. */
 static int create_worker_thread(pthread_t *tid, void *(*fn)(void *), void *arg) {
     pthread_attr_t attr;
     pthread_attr_t *attr_p = NULL;
@@ -8463,6 +8463,9 @@ static int handle_proc_modules(runtime_state_t *state, const char *body,
         if (w < 0 || w >= cap - n) { n = cap; } else { n += w; }
     }
     int wrote_one = 0;
+    /* A module Sony will not describe has no row, so say how many there were and what it answered. */
+    unsigned refused = 0;
+    int refused_rc = 0;
     for (size_t i = 0; i < count; i++) {
         /* Room to spare past the struct: whatever a firmware writes stays in here. */
         _Alignas(16) unsigned char raw[512];
@@ -8471,7 +8474,12 @@ static int handle_proc_modules(runtime_state_t *state, const char *body,
         info->size = sizeof(*info);
         if (!p_sceKernelGetModuleInfo) continue;
         module_info_call_t ic = {handles[i], info};
-        if (hw_guard_call_out("sceKernelGetModuleInfo", module_info_call, &ic) != 0) continue;
+        int info_rc = hw_guard_call_out("sceKernelGetModuleInfo", module_info_call, &ic);
+        if (info_rc != 0) {
+            refused++;
+            refused_rc = info_rc;
+            continue;
+        }
         info->name[sizeof(info->name) - 1] = '\0';
         char esc_name[260];
         json_escape_into(info->name, esc_name, sizeof(esc_name));
@@ -8483,15 +8491,15 @@ static int handle_proc_modules(runtime_state_t *state, const char *body,
         wrote_one = 1;
         int w = snprintf(resp + n, n < cap ? (size_t)(cap - n) : 0,
                        "{\"handle\":%d,\"name\":\"%s\","
-                       "\"base\":\"%p\",\"code_size\":%u}",
-                       handles[i], esc_name, base, code_size);
+                       "\"base\":\"0x%llx\",\"code_size\":%u}",
+                       handles[i], esc_name, (unsigned long long)(uintptr_t)base, code_size);
         if (w < 0) break;
         if ((size_t)w >= (size_t)(cap - n)) { n = cap; break; }
         n += w;
     }
-    if (n < cap - 2) {
-        resp[n++] = ']';
-        resp[n++] = '}';
+    if (n < cap - 64) {
+        n += snprintf(resp + n, (size_t)(cap - n), "],\"count\":%zu,\"refused\":%u,\"refused_rc\":\"0x%08x\"}", count,
+                      refused, (unsigned)refused_rc);
     }
     int rc2 = mgmt_reply(MGMT_FRAME_PROC_MODULES_ACK, resp, (uint64_t)n);
     free(resp);

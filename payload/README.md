@@ -96,7 +96,8 @@ in milliseconds and can't wedge a console.
 - **Never `rename()` across mounts.** It panics the kernel. Guard on
   `st_dev`.
 - **Nothing large on a thread stack.** Threads that need room ask for it
-  explicitly (512 KiB–1 MiB); the default is small. A 256 KiB buffer in
+  explicitly (512 KiB–1 MiB); the default is 64 KiB (measured on FW
+  13.60). A 256 KiB buffer in
   an FTP handler once overflowed it and wedged consoles hard enough to
   need a power cycle — bulk buffers are heap-allocated now.
 - **Every blocking wait needs a bound.** Unbounded `ptrace` waits froze
