@@ -6829,6 +6829,7 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "rp_stats_audio": "声音 {ms} ms",
 "rp_stats_audio_gaps": "中断 {n} 次",
 "rp_sound_blocked": "打开声音",
+"rp_sound_unavailable": "此设备无法播放串流的声音。请更新系统或浏览器，然后重新开始。",
 "rp_set_picture": "画面",
 "rp_fps": "帧率",
 "rp_fps_60": "60 fps（流畅）",

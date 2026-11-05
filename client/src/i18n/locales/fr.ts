@@ -6886,6 +6886,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "rp_stats_audio": "son {ms} ms",
 "rp_stats_audio_gaps": "{n} coupures",
 "rp_sound_blocked": "Activer le son",
+"rp_sound_unavailable": "Cet appareil ne peut pas lire le son du flux. Mets à jour ton système ou ton navigateur, puis recommence.",
 "rp_set_picture": "Image",
 "rp_fps": "Fréquence d'images",
 "rp_fps_60": "60 fps (fluide)",

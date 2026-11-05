@@ -6885,6 +6885,7 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "rp_stats_audio": "som {ms} ms",
 "rp_stats_audio_gaps": "{n} falhas",
 "rp_sound_blocked": "Ativar o som",
+"rp_sound_unavailable": "Este dispositivo não consegue reproduzir o som da transmissão. Atualize o sistema ou o navegador e comece de novo.",
 "rp_set_picture": "Imagem",
 "rp_fps": "Taxa de quadros",
 "rp_fps_60": "60 fps (fluido)",

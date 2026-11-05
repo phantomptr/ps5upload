@@ -465,6 +465,8 @@ export interface StreamStats {
   /** The browser holds the sound back until the page is clicked or a key pressed (autoplay
    *  rules: the session started without a click right before it). */
   soundBlocked?: boolean;
+  /** This device can't decode the stream's sound, so there is none. */
+  soundUnavailable?: boolean;
   fps: number;
   mbps: number;
   decodeMs: number;
@@ -719,6 +721,7 @@ export class RemotePlayStream {
   private audioWorker: Worker | null = null;
   /** The last audio header, for the page to take over if the worker fails. */
   private audioHeader: Uint8Array | null = null;
+  private soundUnavailable = false;
   /** No worklet: when the next scheduled buffer starts (AudioContext time). */
   private audioNext = 0;
   private audioMs = 0;
@@ -1267,6 +1270,7 @@ export class RemotePlayStream {
     this.statsTimer = window.setInterval(() => {
       this.o.onStats({
         soundBlocked: this.soundBlocked(),
+        soundUnavailable: this.soundUnavailable,
         fps: this.decoded - lastDecoded,
         mbps: ((this.bytes - lastBytes) * 8) / 1e6,
         decodeMs: this.decodeMs,
@@ -1430,7 +1434,9 @@ export class RemotePlayStream {
     }
     this.audioPipe?.reset();
     worker.onmessage = (e: MessageEvent) => {
-      const c = (e.data as { concealed?: unknown } | null)?.concealed;
+      const said = e.data as { concealed?: unknown; failed?: unknown } | null;
+      if (said?.failed) return this.audioWorkerFailed("its decoder failed");
+      const c = said?.concealed;
       if (typeof c === "number") this.workerConcealed = c;
     };
     worker.onerror = (e) => this.audioWorkerFailed(e.message || "error");
@@ -1476,7 +1482,16 @@ export class RemotePlayStream {
 
   /** The page's own decoder for the sound. */
   private pipe(): OpusPipe {
-    if (!this.audioPipe) this.audioPipe = new OpusPipe((planes, scale) => this.play(planes, scale));
+    if (!this.audioPipe) {
+      this.audioPipe = new OpusPipe(
+        (planes, scale) => this.play(planes, scale),
+        undefined,
+        () => {
+          this.soundUnavailable = true;
+          log.warn("remote-play", "sound: this device can't decode the stream's Opus sound, so there is none");
+        },
+      );
+    }
     return this.audioPipe;
   }
 

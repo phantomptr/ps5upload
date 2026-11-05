@@ -7152,6 +7152,7 @@ library_compressed_hint: "برای اجرای ایمیج فشرده به ShadowM
 "rp_stats_audio": "صدا {ms} ms",
 "rp_stats_audio_gaps": "{n} قطعی",
 "rp_sound_blocked": "روشن کردن صدا",
+"rp_sound_unavailable": "این دستگاه نمی‌تواند صدای استریم را پخش کند. سیستم یا مرورگر خود را به‌روز کنید و دوباره شروع کنید.",
 "rp_set_picture": "تصویر",
 "rp_fps": "نرخ فریم",
 "rp_fps_60": "60 fps (روان)",

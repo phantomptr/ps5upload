@@ -46,6 +46,41 @@ const header = () => {
 const frame = (idx: number, v: number) => new Uint8Array([idx >> 8, idx & 0xff, v]);
 
 describe("OpusPipe (Remote Play sound, records to samples)", () => {
+  it("says once that it can't decode when this device has no decoder", () => {
+    let said = 0;
+    const codecs: AudioCodecs = {
+      makeChunk: (init) => init as unknown as EncodedAudioChunk,
+      makeDecoder: () => {
+        throw new ReferenceError("AudioDecoder is not defined");
+      },
+    };
+    const pipe = new OpusPipe(() => {}, codecs, () => said++);
+    pipe.header(header());
+    pipe.header(header());
+    pipe.packet(frame(0, 1));
+    expect(said).toBe(1);
+    expect(pipe.open).toBe(false);
+  });
+
+  it("gives up on decoders that keep failing, instead of making new ones for ever", () => {
+    let said = 0;
+    let made = 0;
+    const errors: Array<(e: DOMException) => void> = [];
+    const codecs: AudioCodecs = {
+      makeChunk: (init) => init as unknown as EncodedAudioChunk,
+      makeDecoder: (init) => {
+        made++;
+        errors.push(init.error);
+        return { state: "configured", configure() {}, decode() {}, close() {} };
+      },
+    };
+    const pipe = new OpusPipe(() => {}, codecs, () => said++);
+    pipe.header(header());
+    for (let i = 0; i < 10 && said === 0; i++) errors[errors.length - 1](new DOMException("no"));
+    expect(said).toBe(1);
+    expect(made).toBe(3);
+  });
+
   it("decodes frames in order, puts late ones back in place, and covers lost ones", () => {
     const { codecs } = fakeCodecs();
     const got: Array<[number, number]> = [];

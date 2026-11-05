@@ -6872,6 +6872,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "rp_stats_audio": "âm thanh {ms} ms",
 "rp_stats_audio_gaps": "{n} lần ngắt",
 "rp_sound_blocked": "Bật âm thanh",
+"rp_sound_unavailable": "Thiết bị này không phát được âm thanh của luồng. Hãy cập nhật hệ thống hoặc trình duyệt rồi bắt đầu lại.",
 "rp_set_picture": "Hình ảnh",
 "rp_fps": "Tốc độ khung hình",
 "rp_fps_60": "60 fps (mượt)",

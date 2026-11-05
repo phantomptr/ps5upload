@@ -1164,6 +1164,14 @@ export function StreamPanel() {
               🔇 {tr("rp_sound_blocked", undefined, "Turn on sound")}
             </button>
           )}
+          {playing && stats?.soundUnavailable && !stats.soundBlocked && !settingsOpen && !pip && (
+            <div
+              className={`absolute right-3 z-20 max-w-[70%] rounded-2xl bg-black/70 px-3 py-1 text-xs text-white/90 ${showBar && !compact ? "top-16" : "top-3"}`}
+              data-testid="rp-sound-unavailable"
+            >
+              🔇 {tr("rp_sound_unavailable", undefined, "This device can't play the stream's sound. Update your system or browser, then start again.")}
+            </div>
+          )}
           {playing && kbm.pointerHeld && prefs.kbmChip && !settingsOpen && !pip && !kbm.hint && (
             <KbmReleaseChip low={showBar && !compact} />
           )}

@@ -6870,6 +6870,7 @@ library_compressed_hint: "সংকুচিত ইমেজ চালাতে 
 "rp_stats_audio": "শব্দ {ms} ms",
 "rp_stats_audio_gaps": "{n}টি বিরতি",
 "rp_sound_blocked": "শব্দ চালু করুন",
+"rp_sound_unavailable": "এই ডিভাইস স্ট্রিমের শব্দ চালাতে পারে না। আপনার সিস্টেম বা ব্রাউজার আপডেট করে আবার শুরু করুন।",
 "rp_set_picture": "ছবি",
 "rp_fps": "ফ্রেম রেট",
 "rp_fps_60": "60 fps (মসৃণ)",

@@ -6823,6 +6823,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "rp_stats_audio": "sonido {ms} ms",
 "rp_stats_audio_gaps": "{n} cortes",
 "rp_sound_blocked": "Activar el sonido",
+"rp_sound_unavailable": "Este dispositivo no puede reproducir el sonido de la transmisión. Actualiza tu sistema o navegador y vuelve a empezar.",
 "rp_set_picture": "Imagen",
 "rp_fps": "Velocidad de fotogramas",
 "rp_fps_60": "60 fps (fluido)",

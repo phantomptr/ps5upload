@@ -7111,6 +7111,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "rp_stats_audio": "dźwięk {ms} ms",
 "rp_stats_audio_gaps": "przerwy: {n}",
 "rp_sound_blocked": "Włącz dźwięk",
+"rp_sound_unavailable": "To urządzenie nie może odtworzyć dźwięku strumienia. Zaktualizuj system lub przeglądarkę, a potem zacznij od nowa.",
 "rp_set_picture": "Obraz",
 "rp_fps": "Liczba klatek",
 "rp_fps_60": "60 fps (płynnie)",

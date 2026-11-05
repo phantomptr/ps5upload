@@ -6884,6 +6884,7 @@ library_compressed_hint: "संपीड़ित इमेज चलाने 
 "rp_stats_audio": "ध्वनि {ms} ms",
 "rp_stats_audio_gaps": "{n} रुकावटें",
 "rp_sound_blocked": "आवाज़ चालू करें",
+"rp_sound_unavailable": "यह डिवाइस स्ट्रीम की आवाज़ नहीं चला सकता। अपना सिस्टम या ब्राउज़र अपडेट करें, फिर दोबारा शुरू करें।",
 "rp_set_picture": "चित्र",
 "rp_fps": "फ़्रेम दर",
 "rp_fps_60": "60 fps (सहज)",

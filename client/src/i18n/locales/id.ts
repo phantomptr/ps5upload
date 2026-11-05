@@ -6879,6 +6879,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "rp_stats_audio": "suara {ms} ms",
 "rp_stats_audio_gaps": "{n} putus",
 "rp_sound_blocked": "Nyalakan suara",
+"rp_sound_unavailable": "Perangkat ini tidak dapat memutar suara streaming. Perbarui sistem atau browser Anda, lalu mulai lagi.",
 "rp_set_picture": "Gambar",
 "rp_fps": "Laju bingkai",
 "rp_fps_60": "60 fps (mulus)",

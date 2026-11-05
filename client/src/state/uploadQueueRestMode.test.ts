@@ -188,6 +188,43 @@ for (const build of ["desktop", "browser"] as const) {
       expect(mockedStartFile).toHaveBeenCalledTimes(1);
     });
 
+    it("carries on with the whole queue the user started, not only the row it was on", async () => {
+      setPower("rest");
+      addItem("A");
+      addItem("B");
+      addItem("C");
+      await useUploadQueueStore.getState().start();
+
+      setPower("awake");
+      mockedJobStatus.mockResolvedValue({ status: "done", bytes_sent: 10 } as Snap);
+      const n = useUploadQueueStore.getState().resumeFailedRecoverable(HOST);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await n;
+      expect(useUploadQueueStore.getState().items.map((it) => it.status)).toEqual([
+        "done",
+        "done",
+        "done",
+      ]);
+    });
+
+    it("after a Stop, the wake runs only the row that was parked", async () => {
+      setPower("rest");
+      addItem("A");
+      addItem("B");
+      await useUploadQueueStore.getState().start();
+      useUploadQueueStore.getState().stop();
+
+      setPower("awake");
+      mockedJobStatus.mockResolvedValue({ status: "done", bytes_sent: 10 } as Snap);
+      const n = useUploadQueueStore.getState().resumeFailedRecoverable(HOST);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await n;
+      expect(useUploadQueueStore.getState().items.map((it) => it.status)).toEqual([
+        "done",
+        "pending",
+      ]);
+    });
+
     it("wakes a sleeping console that has wake set up, once", async () => {
       setWakeCredential("1234");
       setPower("rest");
