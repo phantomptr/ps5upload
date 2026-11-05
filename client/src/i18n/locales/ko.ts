@@ -7103,6 +7103,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "pt_picture_hint": "끄면 이 기기는 친구 초대만 합니다. 여기서는 화면, 소리, 컨트롤러가 없고 친구들의 게임은 계속됩니다. TV로 플레이할 때 쓰세요.",
 "pt_tv_title": "TV로 플레이하나요?",
 "pt_tv_note": "이 스트림은 PS5Upload와 페어링한 PS5 사용자로 로그인되어 있습니다. 본체의 DualSense에서 PS를 누르고 다른 사용자를 고르세요. 그 사용자가 TV에서의 당신입니다. 스트림의 사용자를 고르면 친구를 포함한 모두의 스트림이 끝납니다. 일부 게임은 스트림의 사용자도 플레이어로 세므로 친구 자리가 하나 줄 수 있습니다.",
+"pt_tv_seats": "PS5는 컨트롤러 4개를 받으며, 스트림 사용자는 아무도 쓰지 않아도 1개를 차지합니다. TV에서 DualSense를 쓰면 친구 2명이 들어올 수 있습니다.",
 "queue_waiting_for_engine_queue": "대기 중: 스크립트나 에이전트가 엔진 대기열로 이 PS5를 사용하고 있습니다. 끝나면 자동으로 이어집니다.",
 "activity_kind_console_task": "PS5에서",
 "activity_kind_upload_file": "업로드",

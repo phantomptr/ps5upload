@@ -7039,6 +7039,7 @@ library_compressed_hint: "Las imágenes comprimidas necesitan ShadowMount+ para 
 "pt_picture_hint": "Desactivado, este dispositivo solo invita a tus amigos: sin imagen, sonido ni mando aquí, y su partida continúa. Para jugar en la tele.",
 "pt_tv_title": "¿Juegas en la tele?",
 "pt_tv_note": "Esta transmisión tiene la sesión iniciada con el usuario de PS5 que emparejaste con PS5Upload. Pulsa PS en el DualSense de la consola y elige otro usuario: ese eres tú en la tele. Si eliges el usuario de la transmisión, esta termina para todos, amigos incluidos. Algunos juegos también cuentan al usuario de la transmisión como jugador, lo que puede dejar un sitio menos para un amigo.",
+"pt_tv_seats": "Una PS5 admite 4 mandos, y el usuario de la transmisión ocupa uno aunque nadie lo use. Con tu DualSense en la TV, queda sitio para 2 amigos.",
 "queue_waiting_for_engine_queue": "En espera: un script o agente está usando esta PS5 a través de la cola del motor. Después continuará por sí solo.",
 "activity_kind_console_task": "En la PS5",
 "activity_kind_upload_file": "Subida",

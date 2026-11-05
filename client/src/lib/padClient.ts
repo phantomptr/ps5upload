@@ -322,6 +322,12 @@ export class PadClient {
     ws.send(JSON.stringify({ pad: { ...p, touch: p.touch ?? null, motion: p.motion ?? null }, ka: 1 }));
   }
 
+  /** A watcher's picture needs a keyframe (the player spaces these out, and so does the engine). */
+  askKeyframe(): void {
+    const ws = this.ws;
+    if (ws && ws.readyState === this.WS.OPEN) ws.send(JSON.stringify({ keyframe: true }));
+  }
+
   /** Native keyboard & mouse (the Touchpad & keyboard tab): `{"kbm": …}` or a binary report,
    *  forwarded by the computer's engine to its page. False when it cannot be sent now. */
   sendKbm(m: { kbm: unknown } | Uint8Array<ArrayBuffer>): boolean {

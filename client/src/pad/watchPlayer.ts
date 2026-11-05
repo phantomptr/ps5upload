@@ -624,8 +624,22 @@ function mediaSourceCtor(): MseCtor | null {
   return w.ManagedMediaSource ?? w.MediaSource ?? null;
 }
 
+/** Seconds a track holds behind the playhead before old frames go, and how many it keeps. */
+const TRIM_AFTER_S = 10;
+const TRIM_KEEP_S = 3;
+
+/** Where old video can be cut: the last keyframe at least `keep` s behind the playhead. MSE removes
+ *  everything up to the next keyframe after a cut, and a Remote Play stream sends one only when
+ *  asked, so a cut anywhere else takes the frames being played with it and the picture freezes
+ *  (#649). Null when no keyframe qualifies. */
+export function trimPoint(keys: readonly number[], start: number, now: number, keep = TRIM_KEEP_S): number | null {
+  let cut: number | null = null;
+  for (const k of keys) if (k > start && k <= now - keep) cut = k;
+  return cut;
+}
+
 /** One <video>/<audio> element fed fragmented MP4 through a MediaSource. */
-class MseTrack {
+export class MseTrack {
   private ms: MediaSource | null = null;
   private sb: SourceBuffer | null = null;
   private queue: Uint8Array[] = [];
@@ -635,12 +649,23 @@ class MseTrack {
 
   /** A segment could not be added: the frames after it can't play until a keyframe. */
   dropped = false;
+  /** Video: when each keyframe plays. Null for sound, where any frame can start. */
+  private keys: number[] | null = null;
 
   constructor(
     readonly el: HTMLMediaElement,
     private onError: () => void,
     private latency: Latency | Edge = "watch",
-  ) {}
+    /** Video: there's no keyframe to cut at yet, so ask for one. */
+    private onNeedKey?: () => void,
+  ) {
+    if (onNeedKey) this.keys = [];
+  }
+
+  /** A keyframe was pushed that plays at `t` seconds. */
+  markKey(t: number): void {
+    this.keys?.push(t);
+  }
 
   /** (Re)starts the element on a new init segment. */
   open(mime: string, init: Uint8Array): boolean {
@@ -653,6 +678,7 @@ class MseTrack {
     this.queue = [init];
     this.seq = 1;
     this.ready = false;
+    if (this.keys) this.keys = [];
     ms.addEventListener("sourceopen", () => {
       if (this.ms !== ms) return;
       try {
@@ -702,14 +728,7 @@ class MseTrack {
       const act = edgeAction(end - el.currentTime, end, this.latency);
       if (act.seekTo !== null) el.currentTime = Math.max(start, act.seekTo);
       if (el.playbackRate !== act.rate) el.playbackRate = act.rate;
-      if (el.currentTime - start > 10) {
-        try {
-          sb.remove(start, el.currentTime - 3);
-          return;
-        } catch {
-          // Try again on the next segment.
-        }
-      }
+      if (el.currentTime - start > TRIM_AFTER_S && this.trim(sb, start)) return;
     }
     const seg = this.queue.shift();
     if (!seg) return;
@@ -720,6 +739,31 @@ class MseTrack {
       this.dropped = true;
     }
     if (el.paused) void el.play().catch(() => {});
+  }
+
+  /** Removes what has played, if it can. True when a removal started: `updateend` pumps again. */
+  private trim(sb: SourceBuffer, start: number): boolean {
+    const now = this.el.currentTime;
+    let cut: number | null = now - TRIM_KEEP_S;
+    if (this.keys) {
+      cut = trimPoint(this.keys, start, now);
+      if (cut === null) {
+        // A newer keyframe will qualify in a moment: only ask when there's none coming.
+        const last = this.keys[this.keys.length - 1] ?? -Infinity;
+        if (last <= now - TRIM_KEEP_S) this.onNeedKey?.();
+        return false;
+      }
+      const from = cut;
+      this.keys = this.keys.filter((k) => k >= from);
+      // Just before it, so a rounded time can't land past the keyframe and take the next stretch.
+      cut -= 0.001;
+    }
+    try {
+      sb.remove(start, cut);
+      return true;
+    } catch {
+      return false; // Try again on the next segment.
+    }
   }
 
   close(): void {
@@ -771,7 +815,7 @@ export class MsePlayer {
     this.audio = new MseSound(latency, () => this.onSoundFail?.());
     this.wrap.className = "h-full w-full";
     this.wrap.append(v, this.audio.el);
-    this.video = new MseTrack(v, () => this.onProblem("decode"), latency);
+    this.video = new MseTrack(v, () => this.onProblem("decode"), latency, () => this.keyAsk.waiting());
     // A decode error closes the source, and every segment after it would be dropped in silence.
     v.addEventListener("error", () => this.restartVideo());
     v.addEventListener("playing", () => {
@@ -865,6 +909,7 @@ export class MsePlayer {
     const now = performance.now();
     const dur = this.vLast ? Math.min(9000, Math.max(750, Math.round((now - this.vLast) * 90))) : 1500;
     this.vLast = now;
+    if (key) this.video.markKey(this.vTime / 90000);
     this.video.push(videoSegment(this.video.nextSeq(), this.vTime, dur, au, this.hevc, key));
     this.vTime += dur;
   }

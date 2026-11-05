@@ -7101,6 +7101,7 @@ library_compressed_hint: "Imagens compactadas precisam do ShadowMount+ para joga
 "pt_picture_hint": "Desligado, este dispositivo só convida seus amigos: sem imagem, som nem controle aqui, e o jogo deles continua. Para jogar na TV.",
 "pt_tv_title": "Vai jogar na TV?",
 "pt_tv_note": "Esta transmissão está conectada com o usuário do PS5 que você pareou com o PS5Upload. Aperte PS no DualSense do console e escolha outro usuário: esse é você na TV. Escolher o usuário da transmissão encerra a transmissão para todos, amigos inclusive. Alguns jogos também contam o usuário da transmissão como jogador, o que pode deixar uma vaga a menos para um amigo.",
+"pt_tv_seats": "Um PS5 aceita 4 controles, e o usuário da transmissão ocupa um mesmo sem ninguém usando. Com o seu DualSense na TV, sobra lugar para 2 amigos.",
 "queue_waiting_for_engine_queue": "Aguardando: um script ou agente está usando este PS5 pela fila do mecanismo. Depois, isto continua sozinho.",
 "activity_kind_console_task": "No PS5",
 "activity_kind_upload_file": "Envio",

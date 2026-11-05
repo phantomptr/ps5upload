@@ -7045,6 +7045,7 @@ library_compressed_hint: "压缩镜像需要 ShadowMount+ 才能游玩。如需�
 "pt_picture_hint": "关闭后，此设备只用来邀请好友：这里没有画面、声音和手柄，好友的游戏继续进行。适合在电视上玩。",
 "pt_tv_title": "在电视上玩？",
 "pt_tv_note": "此串流以你与 PS5Upload 配对的 PS5 用户登录。在主机的 DualSense 上按 PS 键并选择另一个用户：那就是电视上的你。选择串流自己的用户会结束所有人的串流，包括好友。有些游戏也会把串流的用户算作玩家，因此好友可能少一个位置。",
+"pt_tv_seats": "PS5 最多连接 4 个手柄，串流的用户即使没人操作也占 1 个。你在电视上用 DualSense 时，还能加入 2 位好友。",
 "queue_waiting_for_engine_queue": "等待中：有脚本或智能体正在通过引擎队列使用这台 PS5。之后会自动继续。",
 "activity_kind_console_task": "在 PS5 上",
 "activity_kind_upload_file": "上传",

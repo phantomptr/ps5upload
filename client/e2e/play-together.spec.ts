@@ -410,11 +410,19 @@ test.describe("a friend's phone", () => {
     await press(700);
     await expect(bar).toHaveAttribute("data-shown", "0");
 
-    // The TV asks who's using the controller: the card shows with the ask, and Hide works at
-    // once (it used to stay pinned until someone picked a user on the TV).
+    // The TV asks who's using the controller: the card stays away, because it would sit right on
+    // the console's menu (#649). A note at the top says what to do, and leaves the middle clear.
     say({ status: { player: 3, state: "picking_user", rtt_ms: 12, host: "Ann", block_system: true } });
+    const note = page.getByTestId("join-picking-note");
+    await expect(note).toBeVisible();
+    await expect(bar).toHaveAttribute("data-shown", "0");
+    const box = await note.boundingBox();
+    expect((box?.y ?? 999) + (box?.height ?? 0)).toBeLessThan(60);
+    // Still there if asked for: then the card says it and the note goes.
+    await press(700);
     await expect(bar).toHaveAttribute("data-shown", "1");
     await expect(page.getByTestId("join-picking")).toBeVisible();
+    await expect(note).toBeHidden();
     await page.getByTestId("join-hide-controls").tap();
     await expect(bar).toHaveAttribute("data-shown", "0");
   });

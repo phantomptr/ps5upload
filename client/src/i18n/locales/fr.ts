@@ -7102,6 +7102,7 @@ library_compressed_hint: "Les images compressées nécessitent ShadowMount+ pour
 "pt_picture_hint": "Désactivé, cet appareil ne fait qu'inviter vos amis : pas d'image, de son ni de manette ici, et leur partie continue. Pour jouer sur votre télé.",
 "pt_tv_title": "Vous jouez sur la télé ?",
 "pt_tv_note": "Ce flux est connecté avec l'utilisateur PS5 que vous avez associé à PS5Upload. Appuyez sur PS sur la DualSense de la console et choisissez un autre utilisateur : c'est vous sur la télé. Choisir l'utilisateur du flux met fin au flux pour tout le monde, amis compris. Certains jeux comptent aussi l'utilisateur du flux comme joueur, ce qui peut laisser une place de moins pour un ami.",
+"pt_tv_seats": "Une PS5 accepte 4 manettes, et l'utilisateur du flux en occupe une même si personne ne s'en sert. Avec ta DualSense sur la TV, il reste de la place pour 2 amis.",
 "queue_waiting_for_engine_queue": "En attente : un script ou un agent utilise cette PS5 via la file du moteur. La suite repart toute seule ensuite.",
 "activity_kind_console_task": "Sur la PS5",
 "activity_kind_upload_file": "Envoi",

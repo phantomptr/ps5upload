@@ -203,14 +203,11 @@ export function JoinView({
   // (away from the controller), the controller's menu button or Hide; full screen starts
   // without them. A mouse or keyboard keeps the quiet-moment hiding.
   const touch = coarsePointer();
-  // Picking a user on the TV holds the buttons up for a mouse; on touch it only shows them
-  // once (below), and Hide works at once: a friend wasn't left with a card in the middle of
-  // the game until someone picked a user on the TV.
+  // Picking a user on the TV holds the buttons up for a mouse. On touch they're a card in the
+  // middle of the picture, right over the console's user menu (#649), so they stay away and a
+  // small note at the top says what to do.
   const chrome = useAutoHide(autoHide, reconnecting || (picking && !touch) || barHover || barFocus, touch);
   const { poke } = chrome;
-  useEffect(() => {
-    if (picking && touch) poke();
-  }, [picking, touch, poke]);
   const hold = useRef<{ id: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const endHold = () => {
     if (hold.current) clearTimeout(hold.current.timer);
@@ -634,6 +631,15 @@ export function JoinView({
             data-testid="join-blocked"
           >
             {tr("join_block_note", { host }, `${host} turned off PS and Create for friends.`)}
+          </p>
+        )}
+
+        {picking && touch && !chrome.shown && !reconnecting && (
+          <p
+            className="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 whitespace-nowrap rounded-full bg-white/90 px-2.5 py-1 text-xs font-medium text-black"
+            data-testid="join-picking-note"
+          >
+            {tr("join_picking", undefined, "On the TV: pick Quick Play")}
           </p>
         )}
 

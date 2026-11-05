@@ -7088,6 +7088,7 @@ library_compressed_hint: "Ảnh đĩa nén cần ShadowMount+ để chơi. Để
 "pt_picture_hint": "Khi tắt, thiết bị này chỉ mời bạn bè: không có hình, tiếng hay tay cầm ở đây, và trò chơi của bạn bè vẫn tiếp tục. Dùng khi chơi trên TV.",
 "pt_tv_title": "Chơi trên TV?",
 "pt_tv_note": "Luồng này đang đăng nhập bằng người dùng PS5 mà bạn đã ghép đôi với PS5Upload. Nhấn PS trên DualSense của máy và chọn người dùng khác: đó là bạn trên TV. Chọn đúng người dùng của luồng sẽ kết thúc luồng cho mọi người, kể cả bạn bè. Một số trò chơi cũng tính người dùng của luồng là một người chơi, nên có thể bớt một chỗ cho bạn bè.",
+"pt_tv_seats": "PS5 nhận 4 tay cầm, và người dùng của luồng chiếm một tay dù không ai dùng. Khi DualSense của bạn chơi trên TV, còn chỗ cho 2 người bạn.",
 "queue_waiting_for_engine_queue": "Đang chờ: một script hoặc tác nhân đang dùng PS5 này qua hàng đợi của engine. Sau đó mục này tự tiếp tục.",
 "activity_kind_console_task": "Trên PS5",
 "activity_kind_upload_file": "Tải lên",

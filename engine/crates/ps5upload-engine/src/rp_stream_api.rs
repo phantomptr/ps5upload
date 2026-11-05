@@ -555,6 +555,13 @@ pub(crate) fn request_keyframe(host: &str, spectator: u64) {
     }
 }
 
+/// A watcher's picture needs a keyframe.
+pub(crate) fn request_spectator_keyframe(id: u64) {
+    if let Some(l) = live().filter(|l| !l.stop.load(Ordering::Relaxed)) {
+        l.guest_key_ask(id, Instant::now());
+    }
+}
+
 /// A watcher left.
 pub(crate) fn remove_spectator(id: u64) {
     if let Some(l) = live() {

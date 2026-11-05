@@ -529,10 +529,25 @@ jobs:
               script="$(cygpath -w "$GITHUB_WORKSPACE/scripts/release/azure-sign.ps1")"
               sign=(--config "$(node -e 'console.log(JSON.stringify({bundle:{windows:{signCommand:{cmd:"pwsh",args:["-NoProfile","-File",process.argv[1],"%1"]}}}}))' "$script")")
             fi
-            npx tauri build --target "$RUST_TARGET" --ci --bundles nsis "${sign[@]}"
+            build=(npx tauri build --target "$RUST_TARGET" --ci --bundles nsis "${sign[@]}")
           else
-            npx tauri build --target "$RUST_TARGET" --ci --verbose
+            build=(npx tauri build --target "$RUST_TARGET" --ci --verbose)
           fi
+          # Bundling depends on things outside this repo: GitHub's downloads (a 504 fetching
+          # AppRun failed 11.2.2) and the runner's disk images ("hdiutil: Resource busy" failed
+          # 11.1.0). A try costs little: the compile is already done. A real error fails three times.
+          for try in 1 2 3; do
+            if "${build[@]}"; then exit 0; fi
+            [ "$try" = 3 ] && break
+            echo "::warning::tauri build failed (try $try of 3), trying again"
+            if [ "$PLATFORM" = "macos" ]; then
+              for v in /Volumes/PS5Upload* /Volumes/dmg.*; do
+                [ -e "$v" ] && hdiutil detach "$v" -force || true
+              done
+            fi
+            sleep $((try * 30))
+          done
+          exit 1
 
       - name: Compile cache stats
         if: always()

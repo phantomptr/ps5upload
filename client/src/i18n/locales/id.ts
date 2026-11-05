@@ -7095,6 +7095,7 @@ library_compressed_hint: "Image terkompresi memerlukan ShadowMount+ untuk bermai
 "pt_picture_hint": "Saat mati, perangkat ini hanya mengundang teman: tanpa gambar, suara, atau kontroler di sini, dan game teman tetap berjalan. Untuk bermain di TV.",
 "pt_tv_title": "Bermain di TV?",
 "pt_tv_note": "Stream ini masuk sebagai pengguna PS5 yang Anda pasangkan dengan PS5Upload. Tekan PS pada DualSense konsol dan pilih pengguna lain: itulah Anda di TV. Memilih pengguna stream ini mengakhiri stream untuk semua orang, termasuk teman. Beberapa game juga menghitung pengguna stream sebagai pemain, sehingga tempat untuk teman bisa berkurang satu.",
+"pt_tv_seats": "PS5 menerima 4 kontroler, dan pengguna streaming memakai satu meski tidak ada yang menggunakannya. Dengan DualSense Anda di TV, tersisa tempat untuk 2 teman.",
 "queue_waiting_for_engine_queue": "Menunggu: skrip atau agen sedang memakai PS5 ini lewat antrean mesin. Setelah itu ini berlanjut sendiri.",
 "activity_kind_console_task": "Di PS5",
 "activity_kind_upload_file": "Unggah",

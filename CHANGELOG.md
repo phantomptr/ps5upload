@@ -4,6 +4,14 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.2.3
+
+- Play Together: a friend's picture no longer freezes about 10 seconds after joining. It hit friends on plain `http` links (LAN and Tailscale) until they reloaded. The Watch party on phones gets the same fix. (#649)
+- Play Together: on a phone, the buttons no longer sit on top of the console's "Who's using this controller?" menu. A small note at the top says what to do instead. (#649)
+- Play Together: **Block PS & Create for friends** is now on by default, so a friend can't quit your game or start a console update by accident. They can still press PS once to pick a user, and you can turn it off. (#649)
+- Play Together: playing on your TV leaves room for 2 friends, and the panel and FAQ now say why: a PS5 takes 4 controllers, and the stream's user holds one. (#649)
+- Helper: sending it through Payload Manager 0.6.3 no longer fails with HTTP 500 when an earlier copy is stored there. Storing a payload by hand after you confirm replacing it works too. (#679)
+
 ## 11.2.2
 
 - macOS: automatic updates and Install and restart work again. Since 11.1.0 they failed with "could not open the .dmg", because the download showed a license agreement that the updater couldn't accept. This version installs by itself from 11.1.0 or newer once it's offered.
