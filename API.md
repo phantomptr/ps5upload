@@ -9,6 +9,8 @@ The full reference is generated from the code:
 curl -s http://127.0.0.1:19113/api/openapi.json -o ps5upload-openapi.json
 ```
 
+**MCP & API** in the app's sidebar lists every route with a search and a curl line to copy.
+
 That is an OpenAPI 3.1 document of every route, which you can open in Swagger UI, Scalar or any
 other OpenAPI tool or generate a client from. This page explains what the document can't: how to
 reach the engine, who it answers, and how errors, long calls and events work.

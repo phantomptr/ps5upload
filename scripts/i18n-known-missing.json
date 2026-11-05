@@ -11,7 +11,8 @@
       "cw_settings_app_name",
       "ffpkg_inspect_sce_sys",
       "helper_copy_place_pldmgr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "bn": {
@@ -29,7 +30,8 @@
       "processes_pid",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "de": {
@@ -55,7 +57,9 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_api_nav",
+      "mcp_tab_api"
     ]
   },
   "es": {
@@ -76,7 +80,8 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "fa": {
@@ -91,7 +96,8 @@
       "cw_settings_app_name",
       "health_cat_remoteplay",
       "helper_copy_place_pldmgr",
-      "remote_play"
+      "remote_play",
+      "mcp_tab_api"
     ]
   },
   "fr": {
@@ -112,7 +118,8 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "queue_console_total",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "hi": {
@@ -130,7 +137,8 @@
       "processes_pid",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "hu": {
@@ -153,7 +161,8 @@
       "remote_play",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "id": {
@@ -177,7 +186,9 @@
       "search_saved_tooltip",
       "smp_meta_json",
       "status_helper_version",
-      "task_dump"
+      "task_dump",
+      "mcp_api_nav",
+      "mcp_tab_api"
     ]
   },
   "it": {
@@ -205,7 +216,8 @@
       "search_saved_tooltip",
       "shortcuts_sec_filesystem",
       "smp_meta_json",
-      "status_helper_version"
+      "status_helper_version",
+      "mcp_tab_api"
     ]
   },
   "ja": {
@@ -222,7 +234,8 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "ko": {
@@ -240,7 +253,8 @@
       "processes_pid",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "pl": {
@@ -260,7 +274,8 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "remote_play",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "pt-BR": {
@@ -284,7 +299,8 @@
       "power_wake_signin_rpkey",
       "processes_pid",
       "queue_console_total",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "ru": {
@@ -303,7 +319,8 @@
       "processes_pid",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "th": {
@@ -321,7 +338,8 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "remote_play",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "tr": {
@@ -342,7 +360,8 @@
       "remote_play",
       "screenshots_png_hdr",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "vi": {
@@ -363,7 +382,8 @@
       "processes_pid",
       "remote_play",
       "smp_meta_json",
-      "task_dump"
+      "task_dump",
+      "mcp_tab_api"
     ]
   },
   "zh-CN": {
@@ -380,7 +400,8 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   },
   "zh-TW": {
@@ -397,7 +418,8 @@
       "helper_copy_place_pldmgr",
       "processes_pid",
       "screenshots_png_sdr",
-      "smp_meta_json"
+      "smp_meta_json",
+      "mcp_tab_api"
     ]
   }
 }

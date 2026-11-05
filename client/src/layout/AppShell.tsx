@@ -57,7 +57,16 @@ import {
   useActiveProfile,
 } from "../state/roster";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { invoke } from "@tauri-apps/api/core";
+import { useToastStore } from "../state/toasts";
 import { isTauriEnv, safeUnlisten } from "../lib/tauriEnv";
+import {
+  agentsMayBeStale,
+  mcpUrl,
+  rememberAgentUrls,
+  staleAgents,
+  type AgentStatus,
+} from "../screens/McpApi/model";
 import { engineIsOnThisDevice } from "../state/engine";
 import { trStatic } from "../lib/trStatic";
 import { useRemotePlayStore } from "../state/remotePlay";
@@ -1083,6 +1092,42 @@ function useUpdateCheckOnMount() {
  *  can't let the console slip away.
  */
 const KEEP_PS5_AWAKE_TICK_MS = 2 * 60 * 1000;
+/** Tells the user when an agent they added still has the engine's old address, for the launch where
+ *  the engine moved. Agents' CLIs start only then, not on every launch. */
+function useAgentMcpStaleNotice() {
+  const tr = useTr();
+  const navigate = useNavigate();
+  const engineUp = useConnectionStore((s) => s.engineStatus === "up");
+  const checked = useRef(false);
+  useEffect(() => {
+    if (!engineUp || checked.current) return;
+    if (!isTauriEnv() || isMobile()) return;
+    checked.current = true;
+    void (async () => {
+      const engineUrl = await invoke<string>("engine_url_get");
+      if (!agentsMayBeStale(mcpUrl(engineUrl))) return;
+      const statuses = await invoke<AgentStatus[]>("agent_mcp_status");
+      rememberAgentUrls(statuses);
+      if (staleAgents(statuses).length === 0) return;
+      useToastStore.getState().push({
+        message: tr(
+          "mcp_stale_toast",
+          undefined,
+          "An agent still has the engine's old address, so it can't connect. Update it in MCP & API.",
+        ),
+        tone: "warn",
+        duration: 15000,
+        action: {
+          label: tr("mcp_stale_open", undefined, "Open"),
+          onClick: () => navigate("/mcp-api"),
+        },
+      });
+    })().catch(() => {
+      // Only a reminder: the page still shows where each agent stands.
+    });
+  }, [engineUp, navigate, tr]);
+}
+
 function useKeepPs5Awake() {
   const mode = useUploadSettingsStore((s) => s.keepPs5AwakeMode);
   const queueRunning = useUploadQueueStore((s) => s.running);
@@ -1613,6 +1658,7 @@ export default function AppShell() {
   useAutoRedeployDownHelpers();
   useMovedConsoleWatch();
   useUpdateCheckOnMount();
+  useAgentMcpStaleNotice();
   useKeepPs5Awake();
   useRoutePersistence();
   useWindowStatePersistence();

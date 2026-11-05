@@ -18,6 +18,7 @@
 //!   companions  — TCP probe of known scene-tool ports
 //!   title_meta  — HTML scrape of public title-info site (cover art)
 
+pub mod agent_mcp;
 pub mod app_events;
 pub mod app_info;
 pub mod app_lifecycle;
@@ -99,6 +100,7 @@ pub(crate) fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std:
 // Glob imports pull in both the command fn and the `#[tauri::command]`-
 // generated `__cmd__<name>` helper macros need to find via `commands::*`.
 // Explicit lists break `generate_handler!`.
+pub use agent_mcp::*;
 pub use app_info::*;
 pub use app_lifecycle::*;
 pub use companions::*;
