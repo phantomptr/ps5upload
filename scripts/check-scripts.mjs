@@ -164,7 +164,10 @@ ok = checkSdkPin() && ok;
 ok = checkLicense() && ok;
 for (const f of nodeFiles) ok = run(path.relative(repoRoot, f), "node", ["--check", f]) && ok;
 // Scripts with logic worth pinning carry a node:test file beside them.
-const nodeTests = nodeFiles.filter((f) => f.endsWith(".test.mjs"));
+// A test that imports vitest belongs to the client's `npm test`, which has ESLint installed.
+const nodeTests = nodeFiles.filter(
+  (f) => f.endsWith(".test.mjs") && !/from\s+["']vitest["']/.test(fs.readFileSync(f, "utf8")),
+);
 if (nodeTests.length) ok = run("node --test", "node", ["--test", ...nodeTests]) && ok;
 if (hasCommand("bash")) {
   for (const f of shellFiles) ok = run(path.relative(repoRoot, f), "bash", ["-n", f]) && ok;

@@ -560,6 +560,7 @@ _wait-payload-ready:
 #   engine .../install/, fakelibs_api.rs, icon_cache.rs, ps5upload-ava1 pool.rs, the lab's
 #   main.rs and bench.rs             old-port strip logic and its fixtures.
 #   payload/third_party              vendored code (zlib's CRC table holds 0x...9113 words).
+#   scripts/i18n-source-hashes.json  generated hashes, which can hold those digits anywhere.
 CHECK_NO_FTX2_PATTERN := ftx2|(^|[^0-9])911[34]([^0-9]|$$)
 CHECK_NO_FTX2_SCOPE := .
 CHECK_NO_FTX2_EXCEPT := \
@@ -580,7 +581,7 @@ CHECK_NO_FTX2_EXCEPT := \
 	':!client/src/lib/addr.ts' \
 	':!client/src/lib/humanizeError.ts' \
 	':!client/src/**/*.test.ts' ':!client/src/**/*.test.tsx' \
-	':!payload/third_party'
+	':!payload/third_party' ':!scripts/i18n-source-hashes.json'
 
 check-no-ftx2:
 	@if git grep -n -I -i -E '$(CHECK_NO_FTX2_PATTERN)' -- $(CHECK_NO_FTX2_SCOPE) $(CHECK_NO_FTX2_EXCEPT); then \
