@@ -2799,8 +2799,8 @@ mod request_shape_tests {
             "?path=%2Fa%20b%2Fc%26d"
         );
         assert_eq!(
-            query_string(&[("addr", Some("192.168.1.5:9113")), ("uid", Some("7"))]),
-            "?addr=192.168.1.5%3A9113&uid=7"
+            query_string(&[("addr", Some("192.168.1.5:9021")), ("uid", Some("7"))]),
+            "?addr=192.168.1.5%3A9021&uid=7"
         );
     }
 

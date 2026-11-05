@@ -751,7 +751,7 @@ async fn a_failure_is_attributed_to_the_console_its_handler_named() {
         .route(
             "/api/failing",
             post(|| async {
-                let _ = required_console_addr(Some("192.0.2.77:9113".to_string()));
+                let _ = required_console_addr(Some("192.0.2.77:9021".to_string()));
                 StatusCode::BAD_GATEWAY
             }),
         )
@@ -774,8 +774,8 @@ async fn a_failure_is_attributed_to_the_console_its_handler_named() {
 fn the_console_in_a_query_is_decoded_under_any_of_its_names() {
     let of = |q: &str| console_from_query(&q.parse::<axum::http::Uri>().unwrap());
     assert_eq!(
-        of("/x?addr=192.0.2.1%3A9113").as_deref(),
-        Some("192.0.2.1:9113")
+        of("/x?addr=192.0.2.1%3A9021").as_deref(),
+        Some("192.0.2.1:9021")
     );
     assert_eq!(
         of("/x?console=%5Bfe80%3A%3A1%5D").as_deref(),

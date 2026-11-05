@@ -265,6 +265,7 @@ fn local_ipv4_on_subnet_of(_dst: Ipv4Addr) -> Vec<(Ipv4Addr, Ipv4Addr)> {
 
 /// The broadcast address of `local`/`mask` when `dst` is on that subnet; `None` otherwise, or
 /// for a mask too wide or too narrow to be a LAN (/0, /31, /32).
+#[cfg(any(unix, test))]
 fn same_subnet_broadcast(local: Ipv4Addr, mask: Ipv4Addr, dst: Ipv4Addr) -> Option<Ipv4Addr> {
     let (l, m, d) = (u32::from(local), u32::from(mask), u32::from(dst));
     if m == 0 || m.count_zeros() < 2 || (l & m) != (d & m) || l == d {

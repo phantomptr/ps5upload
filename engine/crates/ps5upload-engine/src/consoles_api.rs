@@ -459,7 +459,7 @@ fn new_id() -> String {
 
 /// What `PUT /api/consoles` asks for, as profiles to save, or what is wrong with it.
 fn build_profiles(old: &[Value], input: Vec<ConsoleIn>) -> Result<Vec<Value>, String> {
-    let mut out: Vec<Value> = Vec::with_capacity(input.len());
+    let mut out: Vec<Value> = Vec::new();
     let mut seen_hosts: Vec<String> = Vec::new();
     let mut seen_ids: Vec<String> = Vec::new();
     for c in input {
@@ -721,7 +721,7 @@ mod tests {
     fn keys_leave_the_list_and_come_back_for_the_app() {
         let mut keys = KeyStore::open(None);
         let mut new = vec![json!({
-            "id": "a", "name": "A", "host": "10.0.0.2:9113",
+            "id": "a", "name": "A", "host": "10.0.0.2:9021",
             "wake_regist_key": R1, "wake_rp_key": K1, "wake_credential": "12345",
         })];
         assert!(take_keys(&mut keys, &[], &mut new));
@@ -778,7 +778,7 @@ mod tests {
         let mut keys = KeyStore::open(None);
         let mut list = vec![
             json!({"id": "a", "host": "10.0.0.2", "wake_rp_key": K1, "wake_regist_key": R1}),
-            json!({"id": "b", "host": "10.0.0.2:9113"}),
+            json!({"id": "b", "host": "10.0.0.2:9021"}),
         ];
         take_keys(&mut keys, &[], &mut list);
         assert_eq!(keys.get("10.0.0.2").unwrap()[RP_KEY], K1);
@@ -846,7 +846,7 @@ mod tests {
     #[test]
     fn a_bad_list_is_refused() {
         assert!(build_profiles(&[], vec![input(" ")]).is_err());
-        assert!(build_profiles(&[], vec![input("10.0.0.2"), input("10.0.0.2:9113")]).is_err());
+        assert!(build_profiles(&[], vec![input("10.0.0.2"), input("10.0.0.2:9021")]).is_err());
         let mut half = input("10.0.0.2");
         half.regist_key = Some(R1.into());
         assert!(build_profiles(&[], vec![half]).is_err());
@@ -897,7 +897,7 @@ mod tests {
         // Other routes can name it, and a start finds its keys.
         assert_eq!(resolve(&id), "10.1.0.2");
         assert_eq!(resolve("LIVING ROOM"), "10.1.0.2");
-        assert_eq!(rp_keys("10.1.0.2:9113"), Some((R1.into(), K1.into())));
+        assert_eq!(rp_keys("10.1.0.2:9021"), Some((R1.into(), K1.into())));
         // Worked out from the regist key.
         assert_eq!(
             wake_credential("10.1.0.2"),
@@ -973,7 +973,7 @@ mod tests {
     #[test]
     fn an_address_is_never_taken_for_a_name() {
         assert_eq!(resolve("10.0.0.2"), "10.0.0.2");
-        assert_eq!(resolve("10.0.0.2:9113"), "10.0.0.2:9113");
+        assert_eq!(resolve("10.0.0.2:9021"), "10.0.0.2:9021");
         assert_eq!(resolve("[::1]"), "[::1]");
         assert_eq!(resolve(""), "");
         assert_eq!(resolve("no such console"), "no such console");

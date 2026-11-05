@@ -163,8 +163,9 @@ fn run_with_deadline(
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
-    let stderr = reader.join().unwrap_or_default();
-    Ok(status.map(|status| (status, stderr)))
+    // Past the deadline nothing waits for the reader: a process the decoder started can hold the
+    // pipe open long after the decoder is gone, and the thread ends with the pipe.
+    Ok(status.map(|status| (status, reader.join().unwrap_or_default())))
 }
 
 /// Run as the one-shot decoder when started with `CHILD_ARG <src> <dst>`: convert, report any

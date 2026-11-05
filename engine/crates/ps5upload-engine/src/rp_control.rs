@@ -745,7 +745,7 @@ pub async fn mic(
             "send on or opus_b64",
         );
     }
-    let mut frames = Vec::with_capacity(r.opus_b64.len());
+    let mut frames = Vec::new();
     for f in &r.opus_b64 {
         match base64::engine::general_purpose::STANDARD.decode(f) {
             Ok(b) if !b.is_empty() => frames.push(b),

@@ -13909,7 +13909,7 @@ mod helpers_tests {
         }
         refused!(ps5_fs_mkdir, { "path": "/data/x" });
         refused!(ps5_fs_mkdir, { "addr": "", "path": "/data/x" });
-        refused!(ps5_fs_mkdir, { "addr": ":9113", "path": "/data/x" });
+        refused!(ps5_fs_mkdir, { "addr": ":9021", "path": "/data/x" });
         let eject =
             serde_json::from_value(serde_json::json!({ "mount_point": "/mnt/usb0" })).unwrap();
         let installs = std::sync::Arc::new(pkg_install::PkgInstallState::default());

@@ -161,7 +161,7 @@ fn exe_base() -> String {
             fn GetModuleHandleW(name: *const u16) -> *mut std::ffi::c_void;
         }
         // SAFETY: a null name asks for this program's own handle; nothing is written.
-        return format!("{:p}", unsafe { GetModuleHandleW(std::ptr::null()) });
+        format!("{:p}", unsafe { GetModuleHandleW(std::ptr::null()) })
     }
     #[cfg(not(windows))]
     "n/a".to_string()
@@ -393,7 +393,7 @@ fn wait_for_thread(thread: std::thread::JoinHandle<()>, limit: std::time::Durati
 }
 
 /// Until the program ends, or `limit`, and then it is closed. Whether it could start at all.
-#[cfg(any(test, not(any(windows, target_os = "macos"))))]
+#[cfg(any(all(test, unix), not(any(windows, target_os = "macos"))))]
 fn wait_for_program(
     command: &mut std::process::Command,
     limit: std::time::Duration,
@@ -451,9 +451,9 @@ mod tests {
     #[test]
     fn a_dialog_nobody_answers_is_not_waited_for_forever() {
         use std::time::{Duration, Instant};
-        let t0 = Instant::now();
         #[cfg(unix)]
         {
+            let t0 = Instant::now();
             let mut sleep = std::process::Command::new("sleep");
             sleep.arg("30");
             wait_for_program(&mut sleep, Duration::from_millis(200)).unwrap();
