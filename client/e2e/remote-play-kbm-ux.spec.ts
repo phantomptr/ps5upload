@@ -93,6 +93,68 @@ async function chord(page: Page) {
 const keysOf = (r: number[]) => r.slice(8).filter((k) => k !== 0);
 const last = (e: Engine) => e.reports[e.reports.length - 1];
 
+/** Diagnosis only (taken out again): what the page's main thread does from the capture on. */
+async function watchPage(page: Page) {
+  await page.evaluate(() => {
+    const t0 = performance.now();
+    const at = () => Math.round(performance.now() - t0);
+    const d = {
+      keys: [] as unknown[],
+      toast: [] as number[],
+      long: [] as unknown[],
+      loaf: [] as unknown[],
+      raf: { n: 0, gaps: [] as number[] },
+      lock: [] as unknown[],
+      fetches: 0,
+    };
+    (window as unknown as { __diag: unknown }).__diag = d;
+    for (const ty of ["keydown", "keyup"] as const)
+      window.addEventListener(
+        ty,
+        (e) => d.keys.push([ty, e.code, at(), Math.round(performance.now() - e.timeStamp)]),
+        true,
+      );
+    document.addEventListener("pointerlockchange", () => d.lock.push([at(), !!document.pointerLockElement]));
+    document.addEventListener("pointerlockerror", () => d.lock.push([at(), "error"]));
+    new MutationObserver(() => {
+      if (document.querySelector('[data-testid="rp-kbm-toast"]')) d.toast.push(at());
+    }).observe(document.body, { childList: true, subtree: true });
+    new PerformanceObserver((l) => {
+      for (const e of l.getEntries()) d.long.push([Math.round(e.startTime - t0), Math.round(e.duration)]);
+    }).observe({ type: "longtask", buffered: false });
+    try {
+      new PerformanceObserver((l) => {
+        for (const e of l.getEntries() as unknown as Array<{
+          startTime: number;
+          duration: number;
+          blockingDuration: number;
+          scripts: Array<{ sourceURL: string; sourceFunctionName: string; duration: number; invoker: string }>;
+        }>) {
+          d.loaf.push([
+            Math.round(e.startTime - t0),
+            Math.round(e.duration),
+            Math.round(e.blockingDuration),
+            e.scripts
+              .slice(0, 3)
+              .map((x) => [x.invoker.slice(0, 50), x.sourceURL.slice(-40), x.sourceFunctionName, Math.round(x.duration)]),
+          ]);
+        }
+      }).observe({ type: "long-animation-frame", buffered: false });
+    } catch {
+      /* not in this browser */
+    }
+    let last = performance.now();
+    const tick = () => {
+      const now = performance.now();
+      d.raf.n++;
+      if (now - last > 250) d.raf.gaps.push(Math.round(last - t0), Math.round(now - last));
+      last = now;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
 async function shot(page: Page, name: string) {
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png` });
 }
@@ -243,6 +305,8 @@ test.describe("desktop", () => {
     expect(saved.release).toEqual({ ctrl: false, alt: false, shift: false, meta: false, code: "F8" });
     await page.getByTestId("rp-settings-close").click();
 
+    await watchPage(page);
+    try {
     await capture(page);
     await expect(page.getByTestId("rp-kbm-card")).toContainText("Press F8 to get them back.");
     await page.getByTestId("rp-kbm-card-ok").click({ force: true }).catch(() => {});
@@ -252,6 +316,9 @@ test.describe("desktop", () => {
     await expect(page.getByTestId("rp-kbm-chip").or(page.getByTestId("rp-kbm-card"))).toBeVisible();
     await page.keyboard.press("Control+Shift+KeyN");
     await expect(page.getByTestId("rp-kbm-toast")).toHaveText("Mixed · F8 to release");
+    } finally {
+      console.log("[kbm-diag]", JSON.stringify(await page.evaluate(() => (window as unknown as { __diag: unknown }).__diag)));
+    }
     await page.keyboard.press("F8");
     await expect(page.getByTestId("rp-kbm-chip")).toHaveCount(0);
     await expect(page.getByTestId("rp-capture-hint")).toBeVisible();
