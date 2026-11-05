@@ -175,8 +175,8 @@ network, and plays your PS5 as Player 2, 3 or 4 while you play as Player 1.
    their own user) under "Who's using this controller?".
 
 They play with a controller connected to their device, the keyboard, or the on-screen controls on
-a phone, and hear the game. Their PS and Create buttons work like yours; to stop a stray press
-pulling everyone out of the game, turn on **Block PS & Create for friends** in the panel (they can
+a phone, and hear the game. **Block PS & Create for friends** is on by default, so a stray press
+can't pull everyone out of the game; you can turn it off in the panel (they can
 still press PS once in their first minute to pick a user on the TV). Up to three
 friends at once. Each friend has a card in the panel with what they're doing and their delay, and
 **Remove** takes them out. **New link** makes a fresh invite and the old one stops working. If a
@@ -229,6 +229,8 @@ is you on the TV. If there's only one user on the console, add one first.
 - **Keep the app open.** Friends' picture comes through the stream. It keeps running when the window
   is hidden, and with the picture off it stays up while friends are in or an invite is out, even if
   the app is closed for a while.
+- **That leaves room for 2 friends.** A PS5 takes 4 controllers, and the stream's user holds one
+  even with nobody on it. A third friend sees "No more controllers can be connected" on the TV.
 - **Some games count the stream's user as a player too**, even though it presses nothing, so a
   two-player game may have no place left for a friend. Friends' controllers are checked the same way
   as always (they pick **Quick Play** on the TV), but this setup hasn't been tried with every game.

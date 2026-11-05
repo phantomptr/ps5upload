@@ -69,6 +69,13 @@ export function PlayOnTvNote() {
           undefined,
           "This stream is signed in as the PS5 user you paired with PS5Upload. Press PS on the console's DualSense and pick a different user: that is you on the TV. Picking the stream's own user ends the stream for everyone, friends included. Some games count the stream's user as a player too, which can leave one place less for a friend.",
         )}
+        <p className="mt-2" data-testid="pt-tv-seats">
+          {tr(
+            "pt_tv_seats",
+            undefined,
+            "A PS5 takes 4 controllers, and the stream's user holds one even with nobody on it. With your DualSense on the TV, that leaves room for 2 friends.",
+          )}
+        </p>
       </Callout>
     </div>
   );

@@ -7094,6 +7094,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "pt_picture_hint": "Aus: Dieses Gerät lädt nur deine Freunde ein. Kein Bild, Ton oder Controller hier, und das Spiel deiner Freunde läuft weiter. Zum Spielen am Fernseher.",
 "pt_tv_title": "Spielst du am Fernseher?",
 "pt_tv_note": "Dieser Stream ist mit dem PS5-Benutzer angemeldet, den du mit PS5Upload gekoppelt hast. Drücke PS am DualSense der Konsole und wähle einen anderen Benutzer: Das bist du am Fernseher. Wählst du den Benutzer des Streams, endet der Stream für alle, auch für deine Freunde. Manche Spiele zählen den Benutzer des Streams ebenfalls als Spieler, sodass ein Platz weniger für Freunde bleiben kann.",
+"pt_tv_seats": "Eine PS5 nimmt 4 Controller an, und der Nutzer des Streams belegt einen, auch wenn niemand ihn benutzt. Mit deinem DualSense am Fernseher bleibt Platz für 2 Freunde.",
 "queue_waiting_for_engine_queue": "Wartet: Ein Skript oder Agent nutzt diese PS5 über die Warteschlange der Engine. Danach geht es von selbst weiter.",
 "activity_kind_console_task": "Auf der PS5",
 "activity_kind_upload_file": "Hochladen",

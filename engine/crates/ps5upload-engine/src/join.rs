@@ -205,7 +205,8 @@ pub(crate) fn parse_pad(b: &[u8]) -> Option<(u32, PadState)> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Settings {
     /// Take PS and Create from guests who are playing (they keep them while picking a user).
-    /// Off unless the host turns it on: a friend's PS (and holding it) works like the host's.
+    /// On unless the host turns it off: a friend's PS could quit the game, or update the console
+    /// past its exploit (#649).
     pub block_system_buttons: bool,
     /// Guests at most (1-3).
     pub max_players: u8,
@@ -214,7 +215,7 @@ pub(crate) struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            block_system_buttons: false,
+            block_system_buttons: true,
             max_players: MAX_GUESTS,
         }
     }
@@ -3504,9 +3505,8 @@ mod tests {
     #[test]
     fn ps_and_create_are_blocked_once_playing_not_while_picking_a_user() {
         let mut p = party();
-        // Off by default: a friend's PS works like the host's.
-        assert!(!p.settings.block_system_buttons);
-        p.settings.block_system_buttons = true;
+        // On by default: a friend's PS could quit the game or update the console.
+        assert!(p.settings.block_system_buttons);
         let t = Instant::now();
         let id = admit(&mut p, "A", t);
         let (tx, _rx) = conn();

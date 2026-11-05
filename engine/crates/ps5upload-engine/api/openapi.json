@@ -13409,7 +13409,7 @@
         "description": "The host's choices (one set for every console).",
         "properties": {
           "block_system_buttons": {
-            "description": "Take PS and Create from guests who are playing (they keep them while picking a user).\nOff unless the host turns it on: a friend's PS (and holding it) works like the host's.",
+            "description": "Take PS and Create from guests who are playing (they keep them while picking a user).\nOn unless the host turns it off: a friend's PS could quit the game, or update the console\npast its exploit (#649).",
             "type": "boolean"
           },
           "max_players": {

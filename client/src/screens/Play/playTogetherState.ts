@@ -45,7 +45,7 @@ export const EMPTY_JOIN: JoinHostState = {
   invite: null,
   guests: [],
   asks: [],
-  settings: { blockSystemButtons: false, maxPlayers: 3 },
+  settings: { blockSystemButtons: true, maxPlayers: 3 },
   helperOk: true,
   reason: null,
   ws: null,

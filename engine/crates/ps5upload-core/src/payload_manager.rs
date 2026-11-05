@@ -66,7 +66,7 @@ pub fn launch_elf(ip: &str, filename: &str, bytes: &[u8]) -> Result<(), String> 
         ));
     }
     own_folder(&body, filename)?;
-    let upload = format!("/manage:upload?filename={}", encode_query(filename));
+    let upload = upload_path(filename, &body);
     let (status, body) = request(ip, "POST", &upload, Some(bytes))?;
     if status != 200 {
         return Err(format!(
@@ -341,7 +341,17 @@ pub fn store(ip: &str, filename: &str, bytes: &[u8]) -> Result<(), String> {
     if filename.is_empty() || filename.contains('/') || filename.contains("..") {
         return Err(format!("{filename:?} is not a file name"));
     }
-    let upload = format!("/manage:upload?filename={}", encode_query(filename));
+    let check = request(
+        ip,
+        "GET",
+        &format!("/manage:check?filename={}", encode_query(filename)),
+        None,
+    )
+    .ok()
+    .filter(|(status, _)| *status == 200)
+    .map(|(_, body)| body)
+    .unwrap_or_default();
+    let upload = upload_path(filename, &check);
     let (status, body) = request(ip, "POST", &upload, Some(bytes))?;
     if status != 200 {
         return Err(format!(
@@ -350,6 +360,21 @@ pub fn store(ip: &str, filename: &str, bytes: &[u8]) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The upload request for `filename`, given Payload Manager's `/manage:check` reply. 0.6.3 refuses
+/// an upload over a stored file unless told to replace it (#679), so a copy left by an earlier
+/// launch failed every time. Only then does it say so: versions without this check send nothing
+/// extra, as before.
+fn upload_path(filename: &str, check_json: &[u8]) -> String {
+    let path = format!("/manage:upload?filename={}", encode_query(filename));
+    let exists = serde_json::from_slice::<serde_json::Value>(check_json)
+        .is_ok_and(|v| v.get("file_exists").and_then(|f| f.as_bool()) == Some(true));
+    if exists {
+        format!("{path}&mode=replace")
+    } else {
+        path
+    }
 }
 
 /// Payload Manager's boot autoload: on/off, the seconds it waits after boot,
@@ -592,6 +617,22 @@ fn dechunk(mut raw: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_upload_replaces_a_stored_copy_only_when_there_is_one() {
+        let there = br#"{"status":"ok","folder_exists":true,"file_exists":true,"folder_name":"ps5upload-helper","existing":{"slot":"local/ps5upload-helper"}}"#;
+        assert_eq!(
+            upload_path("ps5upload-helper.elf", there),
+            "/manage:upload?filename=ps5upload-helper.elf&mode=replace"
+        );
+        let none = br#"{"status":"ok","folder_exists":false,"file_exists":false,"existing":null}"#;
+        assert_eq!(
+            upload_path("ps5upload-helper.elf", none),
+            "/manage:upload?filename=ps5upload-helper.elf"
+        );
+        // A version with no check to read.
+        assert_eq!(upload_path("a.elf", b""), "/manage:upload?filename=a.elf");
+    }
 
     #[test]
     fn every_request_carries_the_request_marker_payload_manager_0_6_demands() {

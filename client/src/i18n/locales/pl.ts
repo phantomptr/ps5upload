@@ -7327,6 +7327,7 @@ library_compressed_hint: "Skompresowane obrazy wymagają ShadowMount+, aby grać
 "pt_picture_hint": "Po wyłączeniu to urządzenie tylko zaprasza znajomych: bez obrazu, dźwięku i kontrolera tutaj, a ich gra toczy się dalej. Do grania na telewizorze.",
 "pt_tv_title": "Grasz na telewizorze?",
 "pt_tv_note": "Ten strumień jest zalogowany jako użytkownik PS5 sparowany z PS5Upload. Naciśnij PS na DualSense konsoli i wybierz innego użytkownika: to Ty na telewizorze. Wybranie użytkownika strumienia kończy strumień dla wszystkich, także znajomych. Niektóre gry liczą użytkownika strumienia również jako gracza, przez co dla znajomego może zostać o jedno miejsce mniej.",
+"pt_tv_seats": "PS5 obsługuje 4 kontrolery, a użytkownik strumienia zajmuje jeden, nawet gdy nikt go nie używa. Z Twoim DualSense przy telewizorze zostaje miejsce dla 2 znajomych.",
 "queue_waiting_for_engine_queue": "Oczekiwanie: skrypt lub agent używa tej konsoli PS5 przez kolejkę silnika. Potem to zadanie ruszy samo.",
 "activity_kind_console_task": "Na PS5",
 "activity_kind_upload_file": "Przesyłanie",

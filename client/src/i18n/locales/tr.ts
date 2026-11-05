@@ -7093,6 +7093,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "pt_picture_hint": "Kapalıyken bu cihaz yalnızca arkadaşlarını davet eder: burada görüntü, ses ve kumanda yok, arkadaşlarının oyunu sürer. Televizyonda oynamak için.",
 "pt_tv_title": "Televizyonda mı oynuyorsun?",
 "pt_tv_note": "Bu yayın, PS5Upload ile eşleştirdiğin PS5 kullanıcısıyla oturum açmış durumda. Konsolun DualSense'inde PS'ye bas ve başka bir kullanıcı seç: televizyondaki sen o olursun. Yayının kendi kullanıcısını seçmek, arkadaşların dahil herkes için yayını bitirir. Bazı oyunlar yayının kullanıcısını da oyuncu sayar, bu da bir arkadaş için bir yer eksik bırakabilir.",
+"pt_tv_seats": "PS5 4 kumanda alır ve yayının kullanıcısı, kimse kullanmasa da birini tutar. DualSense'in TV'deyken 2 arkadaşa yer kalır.",
 "queue_waiting_for_engine_queue": "Bekliyor: bir betik veya aracı bu PS5'i motorun kuyruğu üzerinden kullanıyor. Sonrasında bu kendiliğinden devam eder.",
 "activity_kind_console_task": "PS5'te",
 "activity_kind_upload_file": "Yükleme",

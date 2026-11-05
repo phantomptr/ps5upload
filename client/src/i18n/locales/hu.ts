@@ -7382,6 +7382,7 @@ library_compressed_hint: "A tömörített képfájlok futtatásához ShadowMount
 "pt_picture_hint": "Kikapcsolva ez az eszköz csak meghívja a barátaidat: itt nincs kép, hang és kontroller, a barátaid játéka pedig folytatódik. Tévén játszáshoz.",
 "pt_tv_title": "Tévén játszol?",
 "pt_tv_note": "Ez a stream azzal a PS5-felhasználóval van bejelentkezve, akit a PS5Uploadhoz párosítottál. Nyomd meg a PS gombot a konzol DualSense-én, és válassz másik felhasználót: az leszel te a tévén. Ha a stream saját felhasználóját választod, a stream mindenkinek véget ér, a barátaidnak is. Egyes játékok a stream felhasználóját is játékosnak számítják, így eggyel kevesebb hely maradhat egy barátnak.",
+"pt_tv_seats": "A PS5 4 kontrollert fogad, és a közvetítés felhasználója egyet akkor is lefoglal, ha senki sem használja. A tévénél használt DualSense mellett 2 barátnak marad hely.",
 "queue_waiting_for_engine_queue": "Várakozik: egy szkript vagy ügynök a motor során keresztül használja ezt a PS5-öt. Utána magától folytatódik.",
 "activity_kind_console_task": "A PS5-ön",
 "activity_kind_upload_file": "Feltöltés",

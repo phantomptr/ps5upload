@@ -161,7 +161,7 @@ export function PadApp({
   }, [motionOn]);
 
   useEffect(() => {
-    const p = watch ? makeWatchPlayer(setProblem) : null;
+    const p = watch ? makeWatchPlayer(setProblem, "watch", () => c.askKeyframe()) : null;
     player.current = p;
     if (p) screen.current?.appendChild(p.element);
     setControl(!watch);

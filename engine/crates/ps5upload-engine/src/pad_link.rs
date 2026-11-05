@@ -53,6 +53,8 @@ const MAX_PENDING: usize = 4;
 const MAX_PADS: usize = 4;
 /// Watchers at once (watch party): each is a full copy of the stream on the LAN.
 const MAX_WATCHERS: usize = 4;
+/// The least time between a watcher's keyframe requests that reach the console.
+const WATCH_KEY_GAP: Duration = Duration::from_secs(1);
 /// How often a phone hears whether the session is playing (and a WebSocket ping).
 const STATE_EVERY: Duration = crate::rp_stream_api::PEER_PING_EVERY;
 /// A page that keeps sending (`"ka"`) and has not for this long: its pad is let go. The socket may
@@ -904,6 +906,7 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery, ip: std::net::IpAddr) {
     let mut quiet = 0u32;
     // When a page that keeps sending is let go of if it hasn't.
     let mut pad_due: Option<tokio::time::Instant> = None;
+    let mut key_asked: Option<std::time::Instant> = None;
     loop {
         tokio::select! {
             out = rx.recv() => match out {
@@ -955,8 +958,14 @@ async fn pad_session(mut socket: WebSocket, q: PadQuery, ip: std::net::IpAddr) {
                         #[serde(default)] kbm: Option<crate::vinput_api::KbmMsg>,
                         /// This page sends its pad at least every 250 ms.
                         #[serde(default)] ka: Option<serde_json::Value>,
+                        /// A watcher's picture needs a keyframe.
+                        #[serde(default)] keyframe: bool,
                     }
                     if let Ok(m) = serde_json::from_str::<In>(t.as_str()) {
+                        if m.keyframe && watch && key_asked.is_none_or(|t| t.elapsed() >= WATCH_KEY_GAP) {
+                            key_asked = Some(std::time::Instant::now());
+                            crate::rp_stream_api::request_spectator_keyframe(id);
+                        }
                         if let Some(p) = m.pad {
                             if plays(id) {
                                 crate::rp_stream_api::push_pad(id, Some(p));

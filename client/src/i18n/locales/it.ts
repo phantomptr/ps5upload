@@ -7039,6 +7039,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "pt_picture_hint": "Se disattivato, questo dispositivo invita solo i tuoi amici: niente immagine, audio o controller qui, e la loro partita continua. Per giocare sulla TV.",
 "pt_tv_title": "Giochi sulla TV?",
 "pt_tv_note": "Questo stream ha effettuato l'accesso con l'utente PS5 associato a PS5Upload. Premi PS sul DualSense della console e scegli un altro utente: quello sei tu sulla TV. Scegliere l'utente dello stream termina lo stream per tutti, amici compresi. Alcuni giochi contano anche l'utente dello stream come giocatore, il che può lasciare un posto in meno per un amico.",
+"pt_tv_seats": "Una PS5 accetta 4 controller, e l'utente dello streaming ne occupa uno anche se nessuno lo usa. Con il tuo DualSense sulla TV, resta posto per 2 amici.",
 "queue_waiting_for_engine_queue": "In attesa: uno script o un agente sta usando questa PS5 tramite la coda del motore. Dopo riprende da solo.",
 "activity_kind_console_task": "Sulla PS5",
 "activity_kind_upload_file": "Caricamento",
