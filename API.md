@@ -204,8 +204,9 @@ curl -s 'http://127.0.0.1:19113/api/queue?console=192.168.1.100'
   before 11.1.0 can't report its tasks, so `console_task` never shows there. It never sends the helper or
   wakes a console.
 - **Removing a running upload** (`cancel=true`) stops it and deletes its `<dest>.ava-part`, since nothing
-  can resume it. An empty `<dest>` the upload created, and part files inside a folder that was already
-  there, stay; Console clean-up finds those.
+  can resume it, unless anything else is running on that console: then the part stays. An empty `<dest>`
+  the upload created, and part files inside a folder that was already there, stay too. The health check's
+  junk scan lists `.ava-part` files.
 - **`status`** is `queued`, `running`, `paused`, `done`, `failed`, `cancelled` or `interrupted`.
 - **No retries of its own.** A failure may have come after the bytes landed, so a failed item stays
   failed until `POST /api/queue/{id}/resume`, the only way an item runs twice.

@@ -9448,10 +9448,14 @@ static runtime_state_t *g_mgmt_fs_state;
 
 /* Also the AVA1 data plane's read rule (ava1_glue.c may_read: downloads, hash, crc32), so a path
  * fs.read may open is one a download may open too (the disc and avatar carve-outs included). */
-int mgmt_fs_read_allowed(const char *path, int unsafe_read) {
+static int mgmt_fs_read_roots(const char *path, int unsafe_read) {
     return is_path_allowed(path) || is_profile_avatar_read_path(path) || is_disc_read_path(path) ||
            is_original_user_read_path(path) || is_hyperhen_ready_read_path(path) ||
            (unsafe_read && is_safe_unsafe_read_path(path));
+}
+
+int mgmt_fs_read_allowed(const char *path, int unsafe_read) {
+    return path_read_allowed(path, unsafe_read, mgmt_fs_read_roots);
 }
 
 static void mgmt_fs_count(void) {

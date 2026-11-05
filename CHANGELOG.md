@@ -358,9 +358,9 @@ What's new in ps5upload, written for humans.
 - Translations: fixed garbled text in Indonesian (SMP status), Arabic (Upload), Hindi (stopping a bulk action) and Japanese (a new playlist's name).
 - Translations: Remote Play now has its proper name in Russian, and the website no longer shows English words like "sideload" and "Pre-release" in other languages.
 - Website: download sizes follow the page's language, such as 1,2 Go in French.
-- Stopping a copy or Replace on the console page, or from the app's task list, no longer leaves a half-written `.ava-part` folder or an empty destination behind. Folders you already had are never touched.
-- The queue waits while a task is running on the console itself, such as a Minion copy, and says so. Removing a running upload from the queue deletes its part file, since nothing can resume it. A finished item shows its final figures.
+- The queue waits while a task is running on the console itself, such as a Minion copy, and says so. Removing a running upload from the queue deletes its part file when nothing else is running on the console, since nothing can resume it. A finished item shows its final figures.
 - Go live reports "live" with older ffmpeg builds set through `PS5UPLOAD_FFMPEG` too, instead of staying on "starting" while streaming.
+- The console's own keys (its AVA1 identity and the keys of saved network shares) could be read through the helper's file routes under `/user/data`, and no longer can.
 - Engine answers that can hold a key are no longer kept in a browser's cache, and logs and journal events keep passwords, tokens and keys out.
 - Remote Play pairing error 80108b03: a greyed-out Enable Remote Play on the console usually means that PS5 user's account isn't activated, and the message now says so and points to Accounts › Users.
 - Docker, going back to 11.0.8: that version reads the console list without its keys, so each browser's Play and Wake need pairing again. Upgrading again brings the keys back, or pair again.

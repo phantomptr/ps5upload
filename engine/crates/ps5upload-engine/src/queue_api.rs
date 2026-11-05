@@ -1055,19 +1055,20 @@ impl QueueState {
     }
 
     /// A removed upload can't resume: its id went with the item, so its part is only taking room.
-    /// Twice, the driver waiting: a stopped job's last writes can land just after it ended.
+    /// Deleting by name is safe only if nothing else may be writing there, so when anything runs on
+    /// the console the part stays: a leftover costs room, deleting another job's part costs data.
+    /// The driver holds the line meanwhile, so this queue starts nothing on it.
     async fn clear_part(&self, console: &str, part: &str) {
+        if self.console_is_in_use(console) || self.a_task_runs_on(console).await {
+            crate::log_info!("queue: {part} stays: something else runs on {console}");
+            return;
+        }
         let body = json!({ "addr": console, "path": part });
-        for again in [false, true] {
-            if again {
-                tokio::time::sleep(self.0.timing.settle).await;
-            }
-            let (status, answer) = self
-                .call(Method::POST, "/api/ps5/fs/delete", Some(&body))
-                .await;
-            if !status.is_success() && !again {
-                crate::log_info!("queue: {part} stays for now: {answer}");
-            }
+        let (status, answer) = self
+            .call(Method::POST, "/api/ps5/fs/delete", Some(&body))
+            .await;
+        if !status.is_success() {
+            crate::log_info!("queue: {part} stays for now: {answer}");
         }
     }
 

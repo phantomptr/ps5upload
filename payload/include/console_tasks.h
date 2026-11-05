@@ -40,19 +40,6 @@ int ctasks_cancel_requested(const uint8_t id[16]);
 /* The stop did not go through: how the job ends from here is how it ended by itself. */
 void ctasks_cancel_failed(const uint8_t id[16]);
 
-/* A copy going to `dest`, which is not there yet, nor its part folder <dest>.ava-part: the job makes
- * both. AVA1 clears its part files when a job is stopped, but not a staged tree (there the part and
- * final paths are the same) and not the empty <dest> it took as a lock, so a stopped copy would
- * leave them, while the person was told the item was left as it was. Only for what this copy made:
- * never call it for a folder that was already there. */
-void ctasks_note_new_dest(const uint8_t id[16], const char *dest);
-
-/* A stopped copy whose leftovers are due to be cleared: its dest in `out`, 1. Each comes up twice,
- * the second time CTASKS_CLEAR_AGAIN_MS later: a cancelled job's last writes can land just after it
- * ended. 0 when none is due. */
-int ctasks_take_leftover(uint64_t now_ms, char *out, size_t cap);
-#define CTASKS_CLEAR_AGAIN_MS 5000u
-
 /* A JobListResult of every job (ava1_jobs_list_all) brings the noted ones up to date. -1 when it
  * cannot be read. */
 int ctasks_observe(const uint8_t *res, size_t n, uint64_t now_ms);

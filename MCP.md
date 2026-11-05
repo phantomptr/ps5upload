@@ -246,7 +246,7 @@ by shape, so a key with no name beside it can't be recognised: the app never log
 `/user` and `/data`: saves, game data, the console's account data. That is your console's data, not this
 app's, and a file read can't tell a secret in it from anything else, so it isn't filtered. This app keeps
 no keys under `/user` apart from `/user/data`, which is `/data` under another name and is held to the
-same rules: the helper refuses its AVA1 identity and the saved shares' key, and no tool reads the PSN
+same rules (as is `/original_user/data`): the helper refuses its AVA1 identity and the saved shares' keys, and no tool reads the PSN
 sign-in copies in `np-backup`. Those rules go by path, so copying a whole folder to read it elsewhere is
 a step around them; copying is a tool that asks for confirmation for that reason.
 

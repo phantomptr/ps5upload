@@ -1167,17 +1167,43 @@ async fn removing_a_running_upload_clears_its_part() {
         .await;
     assert!(status.is_success(), "{answer}");
     for _ in 0..300 {
-        if fake.lock().deleted.len() >= 2 {
+        if !fake.lock().deleted.is_empty() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let deleted = fake.lock().deleted.clone();
-    assert!(!deleted.is_empty(), "nothing was cleared");
-    assert!(
-        deleted.iter().all(|p| p == "/data/r.bin.ava-part"),
-        "{deleted:?}"
-    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(fake.lock().deleted, ["/data/r.bin.ava-part"]);
+}
+
+/// Deleting by name could take another job's part: when anything else runs, a leftover is the cost.
+#[tokio::test]
+async fn a_removed_uploads_part_stays_while_anything_else_runs() {
+    let fake = Fake::default();
+    let engine = engine_on(None, Some(&fake));
+    let console = "127.0.5.44";
+    let id = engine.add_upload(console, "s.bin").await;
+    wait_started(&fake, 1).await;
+    engine.wait_status(&id, "running").await;
+    fake.lock().console_tasks = Some(json!({
+        "ok": true, "supported": true, "tasks": [{"id": "b", "state": "running"}],
+    }));
+    let (status, answer) = engine
+        .post(&format!("/api/queue/{id}/remove"), json!({"cancel": true}))
+        .await;
+    assert!(status.is_success(), "{answer}");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(fake.lock().deleted.is_empty());
+    assert_eq!(fake.lock().cancelled, ["job-0"]);
+
+    let other = helper_stop::enter(console);
+    fake.lock().console_tasks = None;
+    let id = engine.add_upload(console, "u.bin").await;
+    engine.wait_waiting_for(console, "other_work").await;
+    engine
+        .post(&format!("/api/queue/{id}/remove"), json!({}))
+        .await;
+    drop(other);
 }
 
 #[tokio::test]

@@ -7,7 +7,6 @@
  * buffer is on the heap. */
 #include "webui_api.h"
 
-#include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -618,21 +617,13 @@ static void send_job(int fd, const uint8_t id[16]) {
     send_json(fd, 200, json, (size_t)k);
 }
 
-/* Neither `dest` nor its part folder is there: whatever appears under those names is the copy's. */
-static int dest_is_fresh(const char *dest) {
-    char part[API_PATH + 16];
-    struct stat st;
-    if ((size_t)snprintf(part, sizeof part, "%s.ava-part", dest) >= sizeof part) return 0;
-    return lstat(dest, &st) != 0 && errno == ENOENT && lstat(part, &st) != 0 && errno == ENOENT;
-}
-
 static void r_fs_copy(const char *b, size_t n, uint8_t *out, int fd) {
     char src[API_PATH], dest[API_PATH];
     uint8_t req[2 * API_PATH + 64];
     ava1_job_copy_t q;
     ava1_w_t w;
     size_t ol;
-    int move = 0, overwrite = 0, st, rc, fresh;
+    int move = 0, overwrite = 0, st, rc;
     if (need_path(fd, b, n, "src", src, sizeof src) != 0) return;
     if (need_path(fd, b, n, "dest", dest, sizeof dest) != 0) return;
     rc = webui_json_bool(b, n, "move", &move);
@@ -648,7 +639,6 @@ static void r_fs_copy(const char *b, size_t n, uint8_t *out, int fd) {
         send_bad(fd, "bad_overwrite");
         return;
     }
-    fresh = dest_is_fresh(dest);
     memset(&q, 0, sizeof q);
     arc4random_buf(q.job_id, sizeof q.job_id); /* a fresh job: a known id would resume that job instead */
     q.src = (const uint8_t *)src;
@@ -666,7 +656,6 @@ static void r_fs_copy(const char *b, size_t n, uint8_t *out, int fd) {
         send_status_error(fd, st, out, ol);
     } else {
         ctasks_started(q.job_id, move ? "move" : "copy", src, (uint64_t)mono_ms());
-        if (fresh) ctasks_note_new_dest(q.job_id, dest);
         send_job(fd, q.job_id);
     }
 }
@@ -725,58 +714,6 @@ static void start_path_job(int fd, uint8_t *out, int op, const char *path, const
         ctasks_started(q.job_id, op_task_kind(op), path, (uint64_t)mono_ms());
         send_job(fd, q.job_id);
     }
-}
-
-/* One stopped copy's leftovers. The empty <dest> goes with rmdir, which refuses a folder with anything
- * in it; the part folder as a job of its own, so nobody waits for a large tree. On a thread of its
- * own: the management worker that reads the task list has a small stack, and this calls the RPC. */
-static void *clear_copy_main(void *arg) {
-    enum { PART_MAX = API_PATH + 16, ARGS_MAX = 6 * API_PATH + 64, REQ_MAX = ARGS_MAX + 64 };
-    char *dest = arg, *part = malloc(PART_MAX), *args = malloc(ARGS_MAX);
-    uint8_t *req = malloc(REQ_MAX), *res = malloc(API_OUT_MAX);
-    struct stat st;
-    proc_name_set_self("ps5upload-web");
-    (void)rmdir(dest);
-    if (part && args && req && res && (size_t)snprintf(part, PART_MAX, "%s.ava-part", dest) < PART_MAX &&
-        lstat(part, &st) == 0) {
-        int len = webui_path_job_args(args, ARGS_MAX, part, NULL, NULL);
-        ava1_job_run_t q;
-        ava1_w_t w;
-        size_t ol;
-        memset(&q, 0, sizeof q);
-        arc4random_buf(q.job_id, sizeof q.job_id);
-        q.op = (uint8_t)AVA1_JOB_OP_DELETE;
-        q.args = (const uint8_t *)args;
-        q.args_len = len > 0 ? (uint32_t)len : 0;
-        ava1_w_init(&w, req, REQ_MAX);
-        if (len > 0 && ava1_job_run_encode(&q, &w) == 0) (void)call(AVA1_METHOD_JOB_RUN, req, w.len, res, &ol);
-    }
-    free(part);
-    free(args);
-    free(req);
-    free(res);
-    free(dest);
-    return NULL;
-}
-
-/* What stopped copies left (ctasks_note_new_dest), for every client: runs where any of them reads the
- * list, which they all do after a stop. */
-static void clear_stopped_copies(void) {
-    char *dest = malloc(API_PATH);
-    while (dest && ctasks_take_leftover((uint64_t)mono_ms(), dest, API_PATH)) {
-        pthread_t t;
-        pthread_attr_t attr;
-        char *arg = strdup(dest);
-        int rc = -1;
-        if (arg && pthread_attr_init(&attr) == 0) {
-            if (pthread_attr_setstacksize(&attr, 256u * 1024u) == 0 &&
-                pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0)
-                rc = pthread_create(&t, &attr, clear_copy_main, arg);
-            pthread_attr_destroy(&attr);
-        }
-        if (rc != 0) free(arg); /* the second turn comes round later */
-    }
-    free(dest);
 }
 
 static void run_path_job(const char *b, size_t n, uint8_t *out, int fd, int op, const char *tail) {
@@ -1007,7 +944,6 @@ static void r_jobs(const char *b, size_t n, uint8_t *out, int fd) {
     }
     /* before the release below: how a job ended is kept for the apps (console_tasks.h) */
     (void)ctasks_observe(out, ol, (uint64_t)mono_ms());
-    clear_stopped_copies();
     json = malloc(API_JOBS_JSON + API_UPLOADS_JSON);
     if (!json) {
         send_error(fd, 500, "out_of_memory", 13);
@@ -1059,7 +995,6 @@ int webui_console_tasks(char *out, size_t cap) {
     if (ava1_jobs_list_all(k_console_id, res, API_OUT_MAX, &ol) == AVA1_STATUS_OK)
         (void)ctasks_observe(res, ol, (uint64_t)mono_ms());
     free(res);
-    clear_stopped_copies();
     pos = (size_t)snprintf(out, cap, "{\"ok\":true,\"now\":%lld,\"tasks\":[", (long long)time(NULL));
     if (pos >= cap) return snprintf(out, cap, "{\"ok\":false,\"err\":\"too_long\"}");
     k = ctasks_json(out + pos, cap - pos, (uint64_t)mono_ms());
