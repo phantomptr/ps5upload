@@ -211,6 +211,8 @@ update_toast_installs_on_quit: "बंद करने पर इंस्टॉ
 update_install_failed_title: "अपडेट इंस्टॉल नहीं हुआ",
 update_install_failed_body: "v{version} इंस्टॉल नहीं हो सका, इसलिए PS5Upload अभी पुराने वर्ज़न पर है।",
 update_install_failed_reason: "कारण: {message}",
+update_quit_app: "PS5Upload बंद करें",
+update_manual_hint: "इसे खुद इंस्टॉल करने के लिए पहले डाउनलोड करें, फिर ऐप बदलने से पहले PS5Upload बंद करें। विंडो बंद करने पर भी यह चलता रह सकता है, तब आपका सिस्टम कहेगा कि यह अभी खुला है।",
 update_try_again: "फिर से कोशिश करें",
 update_download_page: "डाउनलोड पेज",
 update_old_downloads: "आपके Downloads फ़ोल्डर में {count} पुराने अपडेट डाउनलोड हैं।",

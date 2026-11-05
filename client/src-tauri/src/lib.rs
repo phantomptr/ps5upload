@@ -703,6 +703,7 @@ pub fn run() {
             commands::update_download_cancel,
             commands::update_install,
             commands::update_install_on_quit,
+            commands::update_quit_for_manual_install,
             commands::update_last_install,
             commands::update_forget_failure,
             commands::update_old_downloads,

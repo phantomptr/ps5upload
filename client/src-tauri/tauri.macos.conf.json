@@ -12,15 +12,11 @@
     },
     "fileAssociations": [
       {
-        "ext": [
-          "pkg",
-          "fpkg"
-        ],
+        "ext": ["pkg", "fpkg"],
         "name": "PlayStation package",
         "role": "Viewer",
         "rank": "Alternate"
       }
-    ],
-    "licenseFile": null
+    ]
   }
 }
