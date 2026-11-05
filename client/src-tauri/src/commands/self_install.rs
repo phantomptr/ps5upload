@@ -238,8 +238,9 @@ while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 60 ]; do sleep 0.5; n=$((n+1)); d
 if kill -0 "$pid" 2>/dev/null; then say "the app did not quit in 30 s: ended it"; kill -9 "$pid"; sleep 1; fi
 mnt=$(mktemp -d /tmp/ps5upload-update.XXXXXX)
 # hdiutil attach is deprecated from macOS 27 (still works); diskutil image is its successor.
-if hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$dmg" >/dev/null 2>&1 \
-  || diskutil image attach --mountOptions nobrowse --readOnly --mountPoint "$mnt" "$dmg" >/dev/null 2>&1; then
+# yes: an image with a licence agreement waits for an answer, and here nobody can give one.
+if err=$(yes | hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$dmg" 2>&1 >/dev/null) \
+  || err=$(yes | diskutil image attach --mountOptions nobrowse --readOnly --mountPoint "$mnt" "$dmg" 2>&1 >/dev/null); then
   src=$(ls -d "$mnt"/*.app 2>/dev/null | head -n 1)
   new="$app.new.$$"
   old="$app.old.$$"
@@ -260,7 +261,7 @@ if hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$dmg" >/de
   rm -rf "$new"
   hdiutil detach "$mnt" -quiet || hdiutil detach "$mnt" -force -quiet
 else
-  say "could not open the .dmg"
+  say "could not open the .dmg: $(printf '%s' "$err" | tail -n 1)"
 fi
 rmdir "$mnt" 2>/dev/null
 xattr -dr com.apple.quarantine "$app" 2>/dev/null
@@ -1225,7 +1226,7 @@ mod tests {
         )
         .unwrap();
         for step in [
-            "say \"could not open the .dmg\"",
+            "say \"could not open the .dmg: ",
             "say \"the .dmg holds no app\"",
             "say \"could not move $app aside\"",
             "say \"replaced $app\"",
