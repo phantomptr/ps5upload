@@ -351,20 +351,6 @@ enum WaitingFor {
     Settle,
 }
 
-/// Where a stopped upload's unfinished copy sits: `<dest>.ava-part`, a file or a staged folder.
-fn part_left_by(item: &Item) -> Option<String> {
-    let uploads = matches!(
-        item.kind,
-        ItemKind::UploadFile
-            | ItemKind::UploadDir
-            | ItemKind::UploadZip
-            | ItemKind::Upload7z
-            | ItemKind::UploadRar
-    );
-    let dest = item.request.get("dest")?.as_str()?.trim_end_matches('/');
-    (uploads && !dest.is_empty()).then(|| format!("{dest}.ava-part"))
-}
-
 /// What `GET /api/ps5/console-tasks` answers holds a task still running.
 fn tasks_say_running(answer: &Value) -> bool {
     answer
@@ -943,7 +929,6 @@ impl QueueState {
 
     /// Ends an item and says so. An item someone asked to remove goes away instead.
     async fn finish(&self, id: &str, end: End) {
-        let mut part = None;
         let (removed, console) = {
             let mut book = self.book();
             let Some(at) = book.find(id) else { return };
@@ -956,9 +941,6 @@ impl QueueState {
             let removed = intent == Some(Intent::Remove);
             if removed {
                 let view = book.view(&book.items[at]);
-                if stopped {
-                    part = part_left_by(&book.items[at]);
-                }
                 book.items.remove(at);
                 bus().publish_json("queue", &json!({ "action": "removed", "item": view }));
             } else {
@@ -984,9 +966,6 @@ impl QueueState {
         };
         if !removed {
             self.announce("ended", id);
-        }
-        if let Some(part) = part {
-            self.clear_part(&console, &part).await;
         }
         crate::log_info!("queue: {console} item {id} ended (removed: {removed})");
         self.save().await;
@@ -1052,24 +1031,6 @@ impl QueueState {
         self.save().await;
         let end = self.follow(id, kind, &job).await;
         self.finish(id, end).await;
-    }
-
-    /// A removed upload can't resume: its id went with the item, so its part is only taking room.
-    /// Deleting by name is safe only if nothing else may be writing there, so when anything runs on
-    /// the console the part stays: a leftover costs room, deleting another job's part costs data.
-    /// The driver holds the line meanwhile, so this queue starts nothing on it.
-    async fn clear_part(&self, console: &str, part: &str) {
-        if self.console_is_in_use(console) || self.a_task_runs_on(console).await {
-            crate::log_info!("queue: {part} stays: something else runs on {console}");
-            return;
-        }
-        let body = json!({ "addr": console, "path": part });
-        let (status, answer) = self
-            .call(Method::POST, "/api/ps5/fs/delete", Some(&body))
-            .await;
-        if !status.is_success() {
-            crate::log_info!("queue: {part} stays for now: {answer}");
-        }
     }
 
     /// Follows the job to its end.
