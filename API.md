@@ -205,7 +205,7 @@ curl -s 'http://127.0.0.1:19113/api/queue?console=192.168.1.100'
   wakes a console.
 - **Removing a running upload** (`cancel=true`) stops it. Its `<dest>.ava-part` stays until it is cleaned
   up by hand or the same upload is resumed, and so do an empty `<dest>` it created and part files inside a
-  folder that was already there. The health check's junk scan lists `.ava-part` files.
+  folder that was already there.
 - **`status`** is `queued`, `running`, `paused`, `done`, `failed`, `cancelled` or `interrupted`.
 - **No retries of its own.** A failure may have come after the bytes landed, so a failed item stays
   failed until `POST /api/queue/{id}/resume`, the only way an item runs twice.

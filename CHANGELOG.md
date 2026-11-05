@@ -360,7 +360,8 @@ What's new in ps5upload, written for humans.
 - Website: download sizes follow the page's language, such as 1,2 Go in French.
 - The queue waits while a task is running on the console itself, such as a Minion copy, and says so. A finished item shows its final figures.
 - Go live reports "live" with older ffmpeg builds set through `PS5UPLOAD_FFMPEG` too, instead of staying on "starting" while streaming.
-- The console's own keys (its AVA1 identity and the keys of saved network shares) could be read through the helper's file routes under `/user/data`, and no longer can.
+- The helper now refuses file reads of its own key files (its AVA1 identity and the keys of saved network shares) under `/user/data` as well as `/data`. `stat` and `list-dir` still show their names and sizes, and the console's shell can still read them.
+- A stopped copy or Replace leaves a `.ava-part` folder, and possibly an empty destination. Repeating the job finishes or clears them; otherwise delete them by hand. Removing a running upload from the queue leaves its part the same way.
 - Engine answers that can hold a key are no longer kept in a browser's cache, and logs and journal events keep passwords, tokens and keys out.
 - Remote Play pairing error 80108b03: a greyed-out Enable Remote Play on the console usually means that PS5 user's account isn't activated, and the message now says so and points to Accounts › Users.
 - Docker, going back to 11.0.8: that version reads the console list without its keys, so each browser's Play and Wake need pairing again. Upgrading again brings the keys back, or pair again.

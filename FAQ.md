@@ -1604,7 +1604,13 @@ payload playlists, cheat downloads and the app's own update. Click it for a pane
 **Running**, **Waiting** and **Just finished**: **Cancel** or **Retry** a job there, **Open its
 screen** to go to the screen it belongs to, or **See all activity** for **Activity & Logs →
 Tasks**, whose **History** and **Stats** views cover the last 100 operations. **Cancel copy**
-stops a console copy and cleans up only what it created.
+stops a console copy and leaves your original alone.
+
+**Q: What does a stopped copy or Replace leave on the console?**
+A folder named after the destination with `.ava-part` on the end, and possibly an empty folder under
+the destination's own name. PS5Upload doesn't delete them by itself, because another job could be
+using the same name. Run the same copy or Replace again to finish or clear them, or delete them by
+hand in the file browser. The item you were replacing, and your original, stay as they were.
 
 **Q: Where are my notifications?**
 Under the bell at the top (on phones too). It previews the newest of what ps5upload has told you
