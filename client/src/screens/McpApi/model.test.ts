@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   addCommand,
   agentState,
+  agentsMayBeStale,
   claudeDesktopConfig,
   curlFor,
   filterRoutes,
@@ -11,6 +12,8 @@ import {
   mcpUrl,
   parseRoutes,
   parseTools,
+  rememberAgentUrls,
+  staleAgents,
   type AgentStatus,
 } from "./model";
 
@@ -48,10 +51,58 @@ describe("agentState", () => {
         status({ configured: true, saved_url: "http://127.0.0.1:50000/mcp" }),
       ),
     ).toBe("elsewhere");
-    // The stdio bridge has no address.
+  });
+
+  it("doesn't call a working bridge entry stale: it has no address to compare", () => {
     expect(agentState(status({ configured: true, saved_url: null }))).toBe(
-      "elsewhere",
+      "bridge",
     );
+  });
+});
+
+describe("noticing that the engine moved", () => {
+  const added = status({ configured: true, saved_url: URL });
+  const old = "http://127.0.0.1:50000/mcp";
+  const stale = status({ configured: true, saved_url: old });
+
+  beforeEach(() => {
+    const items = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => items.get(key) ?? null,
+        setItem: (key: string, value: string) => void items.set(key, value),
+        removeItem: (key: string) => void items.delete(key),
+      },
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("has nothing to check until an agent was seen using it", () => {
+    expect(agentsMayBeStale(URL)).toBe(false);
+    rememberAgentUrls([status({}), status({ found: false })]);
+    expect(agentsMayBeStale(URL)).toBe(false);
+  });
+
+  it("checks only once the address differs from the one remembered", () => {
+    rememberAgentUrls([added]);
+    expect(agentsMayBeStale(URL)).toBe(false);
+    expect(agentsMayBeStale(`${URL}/`)).toBe(false);
+    expect(agentsMayBeStale(old)).toBe(true);
+  });
+
+  it("keeps the old address while an agent still has it, and forgets once none do", () => {
+    rememberAgentUrls([added]);
+    rememberAgentUrls([stale]);
+    expect(agentsMayBeStale(old)).toBe(true);
+    expect(staleAgents([added, stale, status({})])).toEqual([stale]);
+    rememberAgentUrls([status({})]);
+    expect(agentsMayBeStale(old)).toBe(false);
+  });
+
+  it("leaves a bridge entry out: it follows the engine by itself", () => {
+    expect(
+      staleAgents([status({ configured: true, saved_url: null })]),
+    ).toEqual([]);
   });
 });
 

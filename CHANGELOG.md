@@ -4,6 +4,11 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.2.0
+
+- New **MCP & API** page in the sidebar. Claude Code, Codex and OpenCode get one-click Add, Update and Remove, plus the commands to copy. Gemini CLI, Cursor, Claude Desktop and curl have setup to copy. It lists all 128 agent tools with search, and every API route with a curl line, and two API calls can be run right there. OpenCode has no remove command, so its card says what to delete.
+- Agents stay up to date by themselves: when the app updates, new tools appear the next time you start a session in your agent. If the engine's address changes, the app tells you when it starts and Update fixes it in one click.
+
 ## 11.1.0
 
 - Agents can now drive PS5Upload: the engine has an MCP server at `/mcp`, and `ps5upload-engine mcp` connects clients that only speak stdio. It covers files, uploads, installs, games, saves, cheats, payloads, power, hardware and Remote Play, and can call any route of the engine's API. It answers to this computer only, and `PS5UPLOAD_MCP_READ_ONLY=1` makes it read-only.

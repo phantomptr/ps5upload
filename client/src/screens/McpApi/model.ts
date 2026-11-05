@@ -1,6 +1,8 @@
 // What the MCP & API screen shows, as plain data: the setup commands for each agent, the MCP tool
 // list and the API's routes. No React here, so it can all be tested on its own.
 
+import { safeGetItem, safeRemoveItem, safeSetItem } from "../../lib/safeStorage";
+
 export type AgentId = "claude-code" | "codex" | "opencode";
 
 /** What the desktop shell reports for one agent (commands/agent_mcp.rs). */
@@ -15,18 +17,40 @@ export interface AgentStatus {
 }
 
 export type AgentState =
-  "no_cli" | "unknown" | "not_added" | "added" | "elsewhere";
+  "no_cli" | "unknown" | "not_added" | "added" | "bridge" | "elsewhere";
 
 export function agentState(s: AgentStatus): AgentState {
   if (!s.found) return "no_cli";
   if (s.read_failed) return "unknown";
   if (!s.configured) return "not_added";
+  // An entry that runs the stdio bridge has no address to compare, and works.
+  if (s.saved_url === null) return "bridge";
   return sameUrl(s.saved_url, s.expected_url) ? "added" : "elsewhere";
 }
 
 function sameUrl(a: string | null, b: string): boolean {
   const trim = (u: string) => u.trim().replace(/\/+$/, "");
   return a !== null && trim(a) === trim(b);
+}
+
+const SAVED_URL_KEY = "ps5upload.mcp.savedUrl";
+
+/** Keeps the address agents were last seen using, so a later launch can tell when the engine moved
+ *  without starting every agent's CLI each time. */
+export function rememberAgentUrls(statuses: readonly AgentStatus[]): void {
+  const added = statuses.find((s) => agentState(s) === "added");
+  if (added) safeSetItem(SAVED_URL_KEY, added.expected_url);
+  else if (staleAgents(statuses).length === 0) safeRemoveItem(SAVED_URL_KEY);
+}
+
+/** The engine isn't where agents were last seen using it. */
+export function agentsMayBeStale(currentMcpUrl: string): boolean {
+  const saved = safeGetItem(SAVED_URL_KEY);
+  return saved !== null && !sameUrl(saved, currentMcpUrl);
+}
+
+export function staleAgents(statuses: readonly AgentStatus[]): AgentStatus[] {
+  return statuses.filter((s) => agentState(s) === "elsewhere");
 }
 
 /** The agents with one-click setup, in the order they're shown. */

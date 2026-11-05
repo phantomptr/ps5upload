@@ -21,6 +21,7 @@ import {
   geminiCommand,
   isLoopback,
   mcpUrl,
+  rememberAgentUrls,
   type AgentId,
   type AgentStatus,
 } from "./model";
@@ -62,6 +63,24 @@ export default function ConnectTab() {
         .catch(() => setBridgePath(""));
     }
   }, [desktop, refresh]);
+
+  useEffect(() => {
+    if (statuses?.length) rememberAgentUrls(statuses);
+  }, [statuses]);
+
+  const [engineVersion, setEngineVersion] = useState("");
+  useEffect(() => {
+    const stop = new AbortController();
+    void fetch(`${engineUrl.replace(/\/+$/, "")}/api/version`, {
+      signal: stop.signal,
+    })
+      .then((res) => res.json())
+      .then((doc: { version?: unknown }) => {
+        if (typeof doc?.version === "string") setEngineVersion(doc.version);
+      })
+      .catch(() => setEngineVersion(""));
+    return () => stop.abort();
+  }, [engineUrl]);
 
   const onChanged = (next: AgentStatus) => {
     setStatuses((list) =>
@@ -153,6 +172,44 @@ export default function ConnectTab() {
             "Start a new session in your agent to load it. Keep PS5Upload open while the agent works: the MCP server is part of its engine.",
           )}
         </p>
+      </section>
+
+      <section className="space-y-2" data-testid="mcp-keep-updated">
+        <h2 className="text-sm font-semibold">
+          {tr("mcp_update_title", undefined, "Keeping it up to date")}
+        </h2>
+        <ul className="list-disc space-y-1 ps-5 text-sm text-[var(--color-muted)]">
+          <li>
+            {tr(
+              "mcp_update_app",
+              undefined,
+              "When PS5Upload updates, there's nothing to do here. Agents get their tools from the engine, so new ones appear the next time you start a session. A session already open keeps the old list.",
+            )}
+          </li>
+          <li>
+            {tr(
+              "mcp_update_address",
+              undefined,
+              "If the engine's address changes, the app tells you when it starts, and the agent's card here shows Update. One click fixes it.",
+            )}
+          </li>
+          <li>
+            {tr(
+              "mcp_update_by_hand",
+              undefined,
+              "The app can't see Gemini CLI, Cursor, Claude Desktop or your own scripts. If the address here changes, or one stops connecting after an update, copy its setup again from Other agents and apps.",
+            )}
+          </li>
+        </ul>
+        {engineVersion && (
+          <p className="text-xs text-[var(--color-muted)]">
+            {tr(
+              "mcp_update_version",
+              { version: engineVersion },
+              `This engine is version ${engineVersion}. To see what an agent is connected to, ask it which version the PS5Upload engine is.`,
+            )}
+          </p>
+        )}
       </section>
 
       <section className="space-y-3">
@@ -325,7 +382,7 @@ function AgentCard({
         {checking && (
           <Badge>{tr("mcp_state_checking", undefined, "Checking…")}</Badge>
         )}
-        {state === "added" && (
+        {(state === "added" || state === "bridge") && (
           <Badge tone="good" dot>
             {tr("mcp_state_added", undefined, "Added")}
           </Badge>
@@ -360,9 +417,20 @@ function AgentCard({
         </p>
       )}
 
+      {state === "bridge" && (
+        <p className="text-xs text-[var(--color-muted)]">
+          {tr(
+            "mcp_bridge_body",
+            undefined,
+            "It runs the engine's bridge program instead of using this address. That works too. Update switches it to the address.",
+          )}
+        </p>
+      )}
+
       {desktop &&
         (state === "not_added" ||
           state === "elsewhere" ||
+          state === "bridge" ||
           state === "unknown") && (
           <Button
             variant="primary"
@@ -372,7 +440,7 @@ function AgentCard({
             onClick={() => void act("add")}
             leftIcon={<Plus size={14} />}
           >
-            {state === "elsewhere"
+            {state === "elsewhere" || state === "bridge"
               ? tr("mcp_update", undefined, "Update")
               : tr("mcp_add_to", { name }, `Add to ${name}`)}
           </Button>
@@ -387,7 +455,7 @@ function AgentCard({
           {tr("mcp_get_agent", { name }, `Get ${name}`)}
         </Button>
       )}
-      {state === "added" && status?.can_remove && (
+      {(state === "added" || state === "bridge") && status?.can_remove && (
         <Button
           variant="ghost"
           size="sm"
@@ -399,7 +467,7 @@ function AgentCard({
           {tr("mcp_remove", undefined, "Remove")}
         </Button>
       )}
-      {state === "added" && status && !status.can_remove && (
+      {(state === "added" || state === "bridge") && status && !status.can_remove && (
         <p className="text-xs text-[var(--color-muted)]">
           {tr(
             "mcp_opencode_remove",

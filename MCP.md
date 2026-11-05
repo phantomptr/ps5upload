@@ -52,6 +52,12 @@ your computer and adds this server with one click, using the engine's real addre
 entry has gone stale because the engine moved port, shows every tool, and has the commands below ready
 to copy.
 
+### Keeping it up to date
+
+- **When the app updates, do nothing.** Your agent's entry only holds the address, and the tools come from the engine. New tools show up the next time you start a session in the agent; a session already open keeps its old list. Ask the agent which version the engine is, to see what it's connected to.
+- **If the engine's address changes,** for example because something else took port 19113, the app tells you when it starts and **MCP & API** shows **Update** on that agent. By hand, run the add command again with the new address (Claude Code first needs `claude mcp remove --scope user ps5upload`).
+- **The app can't see other clients,** such as Gemini CLI, Cursor or Claude Desktop, so copy their setup again if the address changes. The stdio bridge starts the engine program from the app's folder, and an update replaces that program in place. If Claude Desktop stops connecting after an update on Windows, copy its setup again, as the program's name [can change there](#where-the-engine-program-is).
+
 To do it by hand, the address above works with any client that speaks HTTP. For a client that can only start a program,
 or that doesn't run on your computer, use the [stdio bridge](#the-stdio-bridge).
 
