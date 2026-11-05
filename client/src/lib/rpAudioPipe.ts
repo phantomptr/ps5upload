@@ -8,6 +8,9 @@
  *  sends a lost frame's recovered copy (FEC) right after the next ones. */
 export const AUDIO_HOLD = 3;
 
+/** Decoders in a row that may fail with no sound out before this device counts as unable. */
+const MAX_DECODER_FAILURES = 3;
+
 /** Where decoded sound goes: its channels (arrays the sink may keep or transfer), times `scale`. */
 export type AudioSink = (planes: Float32Array[], scale: number) => void;
 
@@ -41,10 +44,14 @@ export class OpusPipe {
   concealed = 0;
   /** Frames decoded since the start. */
   decoded = 0;
+  private failures = 0;
+  private gaveUp = false;
 
   constructor(
     private readonly sink: AudioSink,
     private readonly codecs: AudioCodecs = webCodecs,
+    /** This device can't decode the sound: no AudioDecoder, or no Opus. Said once. */
+    private readonly onUnavailable?: () => void,
   ) {}
 
   /** One engine record: [kind][payload]. */
@@ -55,6 +62,7 @@ export class OpusPipe {
 
   /** The audio header: [channels][?][u32 rate][u32 samples per frame]. */
   header(header: Uint8Array): void {
+    if (this.gaveUp) return;
     const dv = new DataView(header.buffer, header.byteOffset, header.byteLength);
     const channels = header[0];
     this.rate = dv.getUint32(2);
@@ -62,8 +70,10 @@ export class OpusPipe {
     const frameUs = (this.frame / this.rate) * 1e6;
     this.closeDecoder();
     const copy = header.slice();
-    const audio: AudioDecoderLike = this.codecs.makeDecoder({
+    let audio: AudioDecoderLike | null = null;
+    const init: AudioDecoderInit = {
       output: (data) => {
+        this.failures = 0;
         const n = data.numberOfFrames;
         const planes: Float32Array[] = [];
         for (let c = 0; c < data.numberOfChannels; c++) {
@@ -87,15 +97,33 @@ export class OpusPipe {
         this.sink(planes, 1);
       },
       error: () => {
-        // A new decoder for the same stream.
+        // A new decoder for the same stream, unless they keep failing with nothing played.
         if (audio === this.audio) {
           this.audio = null;
-          this.header(copy);
+          if (++this.failures >= MAX_DECODER_FAILURES) this.giveUp();
+          else this.header(copy);
         }
       },
-    });
-    audio.configure({ codec: "opus", sampleRate: this.rate, numberOfChannels: channels });
+    };
+    try {
+      audio = this.codecs.makeDecoder(init);
+      audio.configure({ codec: "opus", sampleRate: this.rate, numberOfChannels: channels });
+    } catch {
+      try {
+        audio?.close();
+      } catch {
+        // Already closed.
+      }
+      this.giveUp();
+      return;
+    }
     this.audio = audio;
+  }
+
+  private giveUp(): void {
+    if (this.gaveUp) return;
+    this.gaveUp = true;
+    this.onUnavailable?.();
   }
 
   /** One audio frame: [u16 index][Opus packet]. */
@@ -146,6 +174,8 @@ export class OpusPipe {
   /** A new stream follows (the engine sends the header again): the decoder goes. */
   reset(): void {
     this.closeDecoder();
+    this.failures = 0;
+    this.gaveUp = false;
     this.want = -1;
     this.ahead.clear();
     this.lastOut = -1;

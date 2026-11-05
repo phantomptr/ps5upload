@@ -6823,6 +6823,7 @@ library_compressed_hint: "Le immagini compresse richiedono ShadowMount+ per gioc
 "rp_stats_audio": "audio {ms} ms",
 "rp_stats_audio_gaps": "{n} interruzioni",
 "rp_sound_blocked": "Attiva l'audio",
+"rp_sound_unavailable": "Questo dispositivo non può riprodurre l'audio dello streaming. Aggiorna il sistema o il browser, poi ricomincia.",
 "rp_set_picture": "Immagine",
 "rp_fps": "Frequenza fotogrammi",
 "rp_fps_60": "60 fps (fluido)",

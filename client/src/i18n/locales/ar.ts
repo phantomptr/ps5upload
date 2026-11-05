@@ -6870,6 +6870,7 @@ library_compressed_hint: "تحتاج الصور المضغوطة إلى ShadowMo
 "rp_stats_audio": "الصوت {ms} ms",
 "rp_stats_audio_gaps": "{n} انقطاعات",
 "rp_sound_blocked": "تشغيل الصوت",
+"rp_sound_unavailable": "لا يستطيع هذا الجهاز تشغيل صوت البث. حدّث نظامك أو متصفحك، ثم ابدأ من جديد.",
 "rp_set_picture": "الصورة",
 "rp_fps": "معدل الإطارات",
 "rp_fps_60": "60 fps (سلس)",

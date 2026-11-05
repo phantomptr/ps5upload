@@ -6878,6 +6878,7 @@ library_compressed_hint: "Komprimierte Images benötigen ShadowMount+ zum Spiele
 "rp_stats_audio": "Ton {ms} ms",
 "rp_stats_audio_gaps": "{n} Aussetzer",
 "rp_sound_blocked": "Ton einschalten",
+"rp_sound_unavailable": "Dieses Gerät kann den Ton des Streams nicht abspielen. Aktualisiere dein System oder deinen Browser und starte dann neu.",
 "rp_set_picture": "Bild",
 "rp_fps": "Bildrate",
 "rp_fps_60": "60 fps (flüssig)",

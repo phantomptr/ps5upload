@@ -6887,6 +6887,7 @@ library_compressed_hint: "압축 이미지를 플레이하려면 ShadowMount+가
 "rp_stats_audio": "소리 {ms} ms",
 "rp_stats_audio_gaps": "끊김 {n}회",
 "rp_sound_blocked": "소리 켜기",
+"rp_sound_unavailable": "이 기기에서는 스트림 소리를 재생할 수 없습니다. 시스템이나 브라우저를 업데이트한 뒤 다시 시작하세요.",
 "rp_set_picture": "화면",
 "rp_fps": "프레임 레이트",
 "rp_fps_60": "60 fps (부드러움)",

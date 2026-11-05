@@ -313,7 +313,13 @@ impl RemoteFs for SmbFs {
     }
 
     async fn open(&self, path: &str) -> Result<Arc<dyn RemoteFile>, RemoteError> {
-        self.finish_closes().await?;
+        // A file already read that wouldn't close says nothing about this one.
+        if let Err(e) = self.finish_closes().await {
+            crate::log_warn!(
+                "remote smb: closing an earlier file on {} failed: {e}",
+                self.host
+            );
+        }
         let s = self.session.lock().await;
         let (client, tree) = &*s;
         let reader = client

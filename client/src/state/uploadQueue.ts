@@ -965,6 +965,10 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
   type RunScope = { installs: boolean; ids: Set<string> };
   /** Per console: what the current run may take, or absent for everything. */
   const runScope = new Map<string, RunScope>();
+  /** Consoles whose whole queue the user started and hasn't stopped. A run cut short (rest mode,
+   *  a lost connection) carries on with the rest of the queue when the console is back, not
+   *  only the row it was on. */
+  const wholeQueueStarted = new Set<string>();
   /** A console whose loop was stopped to take one row out and that runs again once the
    *  stopped job has ended (restartAfterStop). `gen` is the generation it was stopped at. */
   type PendingRestart = {
@@ -2400,6 +2404,9 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
               !next.sendNowAt &&
               !shouldContinueAfterFailure(get().continueOnFailure)
             ) {
+              // A failure a re-send can't fix ends the run for good: nothing carries on by itself.
+              const failed = get().items.find((it) => it.id === next.id);
+              if (!failed || !canResumeUnattended(failed)) wholeQueueStarted.delete(nh);
               break drain; // hard stop: tear down this console's loop
             }
             break; // continueOnFailure → move to the next item
@@ -3205,9 +3212,15 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
         if (hostOf(it.addr) === h && it.status === "pending" && it.waitingForWake) ids.push(it.id);
       }
       // Only spin up the drain loop for the rows reset here, and limited to them: it must never
-      // start uploads a user merely queued but hasn't launched. startHost is guarded by its own
-      // generation counter, so a redundant call is a no-op.
-      if (ids.length > 0) await get().startHost(host, { onlyIds: ids, unattended: true });
+      // start uploads a user merely queued but hasn't launched. A queue the user did start goes
+      // on as a whole. startHost is guarded by its own generation counter, so a redundant call is
+      // a no-op.
+      if (ids.length > 0) {
+        await get().startHost(
+          host,
+          wholeQueueStarted.has(h) ? { unattended: true } : { onlyIds: ids, unattended: true },
+        );
+      }
       return ids.length;
     },
 
@@ -3248,6 +3261,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
     async startHost(host, opts) {
       const h = hostOf(host);
       const limited = !!opts?.installsOnly || (opts?.onlyIds?.length ?? 0) > 0;
+      if (!limited && !opts?.unattended) wholeQueueStarted.add(h);
       const widen = (scope: RunScope) => {
         if (opts?.installsOnly) scope.installs = true;
         for (const id of opts?.onlyIds ?? []) scope.ids.add(id);
@@ -3328,6 +3342,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
             return { runningHosts: rh, running: anyRunning(rh) };
           });
           markLimited(h, false);
+          if (!nextPendingForHost(get().items, h)) wholeQueueStarted.delete(h);
           // Opt-in "rest mode after uploads finish" (#165). Fire only when
           // the drain completed NATURALLY (isLive — not a Stop, which
           // re-stamps the generation), the user enabled it, this console
@@ -3392,6 +3407,7 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       // sibling consoles keep draining untouched.
       hostGen.set(h, ++genCounter);
       markLimited(h, false);
+      wholeQueueStarted.delete(h);
       set((s) => {
         const rh = { ...s.runningHosts };
         delete rh[h];
@@ -3449,6 +3465,8 @@ export const useUploadQueueStore = create<QueueState>((rawSet, get) => {
       for (const h of Object.keys(get().runningHosts)) {
         get().stopHost(h);
       }
+      // Rows waiting for a wake have no run to stop, and Stop still means they don't go on.
+      wholeQueueStarted.clear();
     },
   };
 

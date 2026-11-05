@@ -6877,6 +6877,7 @@ library_compressed_hint: "อิมเมจที่บีบอัดต้อ
 "rp_stats_audio": "เสียง {ms} ms",
 "rp_stats_audio_gaps": "สะดุด {n} ครั้ง",
 "rp_sound_blocked": "เปิดเสียง",
+"rp_sound_unavailable": "อุปกรณ์นี้เล่นเสียงของสตรีมไม่ได้ อัปเดตระบบหรือเบราว์เซอร์ แล้วเริ่มใหม่",
 "rp_set_picture": "ภาพ",
 "rp_fps": "อัตราเฟรม",
 "rp_fps_60": "60 fps (ลื่นไหล)",

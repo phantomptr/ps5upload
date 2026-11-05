@@ -14,9 +14,13 @@ interface Scope {
 const scope = self as unknown as Scope;
 
 let out: MessagePort | null = null;
-const pipe = new OpusPipe((planes, scale) => {
-  out?.postMessage({ planes, scale }, planes.map((p) => p.buffer));
-});
+const pipe = new OpusPipe(
+  (planes, scale) => {
+    out?.postMessage({ planes, scale }, planes.map((p) => p.buffer));
+  },
+  undefined,
+  () => scope.postMessage({ failed: true }),
+);
 
 // Frames covered for missing ones, for the page's stats, when it changes.
 let lastConcealed = 0;

@@ -6823,6 +6823,7 @@ library_compressed_hint: "壓縮映像需要 ShadowMount+ 才能遊玩。如需�
 "rp_stats_audio": "聲音 {ms} ms",
 "rp_stats_audio_gaps": "中斷 {n} 次",
 "rp_sound_blocked": "開啟聲音",
+"rp_sound_unavailable": "此裝置無法播放串流的聲音。請更新系統或瀏覽器，然後重新開始。",
 "rp_set_picture": "畫面",
 "rp_fps": "影格率",
 "rp_fps_60": "60 fps（流暢）",

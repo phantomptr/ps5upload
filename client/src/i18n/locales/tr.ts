@@ -6877,6 +6877,7 @@ library_compressed_hint: "Sıkıştırılmış kalıpları oynatmak için Shadow
 "rp_stats_audio": "ses {ms} ms",
 "rp_stats_audio_gaps": "{n} kesinti",
 "rp_sound_blocked": "Sesi aç",
+"rp_sound_unavailable": "Bu cihaz yayının sesini çalamıyor. Sistemini veya tarayıcını güncelle, sonra yeniden başlat.",
 "rp_set_picture": "Görüntü",
 "rp_fps": "Kare hızı",
 "rp_fps_60": "60 fps (akıcı)",
