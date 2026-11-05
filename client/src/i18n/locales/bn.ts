@@ -211,6 +211,8 @@ update_toast_installs_on_quit: "বন্ধ করলে ইনস্টল হ
 update_install_failed_title: "আপডেট ইনস্টল হয়নি",
 update_install_failed_body: "v{version} ইনস্টল করা যায়নি, তাই PS5Upload এখনও পুরোনো সংস্করণে আছে।",
 update_install_failed_reason: "কারণ: {message}",
+update_quit_app: "PS5Upload বন্ধ করুন",
+update_manual_hint: "নিজে ইনস্টল করতে আগে এটি ডাউনলোড করুন, তারপর অ্যাপ বদলানোর আগে PS5Upload বন্ধ করুন। উইন্ডো বন্ধ করলেও এটি চলতে পারে, তখন সিস্টেম বলবে এটি এখনও খোলা আছে।",
 update_try_again: "আবার চেষ্টা করুন",
 update_download_page: "ডাউনলোড পেজ",
 update_old_downloads: "আপনার Downloads ফোল্ডারে {count}টি পুরোনো আপডেট ডাউনলোড আছে।",

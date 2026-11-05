@@ -4,6 +4,11 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 11.2.2
+
+- macOS: automatic updates and Install and restart work again. Since 11.1.0 they failed with "could not open the .dmg", because the download showed a license agreement that the updater couldn't accept. This version installs by itself from 11.1.0 or newer once it's offered.
+- Updates: when an update doesn't install, the box now says to quit PS5Upload before replacing the app by hand and has a Quit button. Closing the window can leave the app running, which is why your system said it was still open.
+
 ## 11.2.1
 
 - Queue: when rest mode or a lost connection interrupts a queue you started, the whole queue now carries on when the console is back. It used to run only the interrupted row, and the rest waited for you to press Start.

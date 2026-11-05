@@ -561,6 +561,11 @@ jobs:
                 echo "::error::no .dmg produced by tauri"
                 exit 1
               fi
+              # An image with a licence agreement can't be opened by the app's own updater.
+              if hdiutil imageinfo "$dmg" | grep -q "Software License Agreement: true"; then
+                echo "::error::the .dmg has a licence agreement, so auto-update would fail"
+                exit 1
+              fi
               cp -v "$dmg" "$dist_abs/"
               ;;
             linux)

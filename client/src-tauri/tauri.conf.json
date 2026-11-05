@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "PS5Upload",
-  "version": "11.2.1",
+  "version": "11.2.2",
   "identifier": "com.phantomptr.ps5upload",
   "build": {
     "beforeDevCommand": "npm run dev:vite",
@@ -61,7 +61,6 @@
     "longDescription": "The all-in-one PS5 companion app.",
     "copyright": "© PhantomPtr, GPL-3.0",
     "license": "GPL-3.0-or-later",
-    "licenseFile": "../../LICENSE",
     "publisher": "PhantomPtr",
     "homepage": "https://github.com/phantomptr/ps5upload",
     "linux": {

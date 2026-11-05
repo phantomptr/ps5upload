@@ -10,6 +10,7 @@ import {
   Upload as UploadIcon,
   FileJson,
   Download,
+  Power,
   RefreshCw,
   CheckCircle2,
   AlertTriangle,
@@ -78,7 +79,7 @@ import { hasBetaItems } from "../../layout/navItems";
 import { useRestAfterUploadStore } from "../../state/restAfterUpload";
 import { userConfigPath, resetAllAppData } from "../../state/userConfig";
 import { failedInstall, useUpdateStore, type UpdatePhase } from "../../state/update";
-import { updateOpenLog } from "../../api/ps5";
+import { updateOpenLog, updateQuitForManualInstall } from "../../api/ps5";
 import { useToastStore } from "../../state/toasts";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { releasePageUrl } from "../../layout/UpdateToast";
@@ -1986,7 +1987,27 @@ function UpdatesPanel() {
               <ExternalLink size={12} />
               {tr("update_download_page", undefined, "Download page")}
             </button>
+            {!mobile && (
+              <button
+                type="button"
+                data-testid="update-quit-manual"
+                onClick={() => void updateQuitForManualInstall()}
+                className="inline-flex items-center gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-border)] px-3 py-1.5 text-xs"
+              >
+                <Power size={12} />
+                {tr("update_quit_app", undefined, "Quit PS5Upload")}
+              </button>
+            )}
           </div>
+          {!mobile && (
+            <div className="mt-2 text-xs text-[var(--color-muted)]">
+              {tr(
+                "update_manual_hint",
+                undefined,
+                "To install it by hand, download it first, then quit PS5Upload before you replace the app. Closing the window can leave it running, and your system then says it's still open.",
+              )}
+            </div>
+          )}
         </div>
       )}
       {!mobile && oldDownloads > 0 && (

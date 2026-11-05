@@ -238,8 +238,9 @@ while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 60 ]; do sleep 0.5; n=$((n+1)); d
 if kill -0 "$pid" 2>/dev/null; then say "the app did not quit in 30 s: ended it"; kill -9 "$pid"; sleep 1; fi
 mnt=$(mktemp -d /tmp/ps5upload-update.XXXXXX)
 # hdiutil attach is deprecated from macOS 27 (still works); diskutil image is its successor.
-if hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$dmg" >/dev/null 2>&1 \
-  || diskutil image attach --mountOptions nobrowse --readOnly --mountPoint "$mnt" "$dmg" >/dev/null 2>&1; then
+# yes: an image with a licence agreement waits for an answer, and here nobody can give one.
+if err=$(yes | hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$dmg" 2>&1 >/dev/null) \
+  || err=$(yes | diskutil image attach --mountOptions nobrowse --readOnly --mountPoint "$mnt" "$dmg" 2>&1 >/dev/null); then
   src=$(ls -d "$mnt"/*.app 2>/dev/null | head -n 1)
   new="$app.new.$$"
   old="$app.old.$$"
@@ -260,7 +261,7 @@ if hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$dmg" >/de
   rm -rf "$new"
   hdiutil detach "$mnt" -quiet || hdiutil detach "$mnt" -force -quiet
 else
-  say "could not open the .dmg"
+  say "could not open the .dmg: $(printf '%s' "$err" | tail -n 1)"
 fi
 rmdir "$mnt" 2>/dev/null
 xattr -dr com.apple.quarantine "$app" 2>/dev/null
@@ -986,6 +987,14 @@ pub fn install_armed_on_quit() {
     }
 }
 
+/// Quit so the user can replace the app by hand: a running app can't be replaced. Nothing is left
+/// armed, or an install on quit would be replacing the app at the same time.
+#[tauri::command]
+pub fn update_quit_for_manual_install(app: AppHandle) {
+    *on_quit_slot() = None;
+    app.exit(0);
+}
+
 /// Install the downloaded update at `path` (version `version`) and restart into it. The app
 /// quits once the install has started; the new version (or, after a failure the script saw,
 /// the old one) starts again when it is done. An error means the app stays open, unchanged.
@@ -1030,6 +1039,32 @@ mod tests {
     use super::*;
 
     const YES: &dyn Fn(&Path) -> bool = &|_: &Path| true;
+
+    /// A licence agreement in the installer waits for an answer. On a Mac the updater can't give
+    /// one, so every update failed from 11.1.0 on ("could not open the .dmg").
+    #[test]
+    fn no_installer_shows_a_licence_agreement() {
+        for config in [
+            include_str!("../../tauri.conf.json"),
+            include_str!("../../tauri.macos.conf.json"),
+            include_str!("../../tauri.windows.conf.json"),
+            include_str!("../../tauri.linux.conf.json"),
+        ] {
+            assert!(!config.contains("licenseFile"));
+        }
+    }
+
+    #[test]
+    fn the_mac_script_answers_a_licence_agreement_and_keeps_the_reason() {
+        let plan = Plan::MacDmg {
+            dmg: "/d/u.dmg".into(),
+            bundle: "/Applications/P.app".into(),
+        };
+        let script = script_for(&plan, 1, true, Path::new("/l")).unwrap();
+        assert!(script.contains("yes | hdiutil attach"));
+        assert!(script.contains("yes | diskutil image attach"));
+        assert!(script.contains(r#"could not open the .dmg: $(printf"#));
+    }
     const NO: &dyn Fn(&Path) -> bool = &|_: &Path| false;
 
     #[test]
@@ -1225,7 +1260,7 @@ mod tests {
         )
         .unwrap();
         for step in [
-            "say \"could not open the .dmg\"",
+            "say \"could not open the .dmg: ",
             "say \"the .dmg holds no app\"",
             "say \"could not move $app aside\"",
             "say \"replaced $app\"",

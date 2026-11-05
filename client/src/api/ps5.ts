@@ -5179,6 +5179,11 @@ export async function updateInstall(path: string, version?: string): Promise<voi
 /** Arm (a downloaded update's path) or disarm (null) installing it when the app quits,
  *  without starting it again. Resolves whether it is armed: only an update this copy installs
  *  without a password can be. */
+/** Quit so the app can be replaced by hand. Nothing stays armed to install on quit. */
+export async function updateQuitForManualInstall(): Promise<void> {
+  await invoke("update_quit_for_manual_install");
+}
+
 export async function updateInstallOnQuit(
   path: string | null,
   version?: string | null,
