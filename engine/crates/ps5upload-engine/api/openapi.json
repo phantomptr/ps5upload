@@ -27341,6 +27341,10 @@
             "$ref": "#/components/responses/Error",
             "description": "Not found"
           },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -27437,6 +27441,10 @@
           "404": {
             "$ref": "#/components/responses/Error",
             "description": "Not found"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "Conflict"
           },
           "500": {
             "content": {
@@ -30768,17 +30776,10 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "properties": {
-                    "text": {
-                      "type": "string"
-                    }
-                  },
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
-            "description": "Success."
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
           },
           "403": {
             "$ref": "#/components/responses/Error",
@@ -30808,7 +30809,7 @@
             "name": "addr",
             "required": false
           },
-          "response_schema": "literal"
+          "response_schema": "json-unknown"
         }
       }
     },
@@ -36440,17 +36441,10 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "properties": {
-                    "text": {
-                      "type": "string"
-                    }
-                  },
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
-            "description": "Success."
+            "description": "Success: JSON the engine does not describe field by field, often what the console sent."
           },
           "403": {
             "$ref": "#/components/responses/Error",
@@ -36480,7 +36474,7 @@
             "name": "addr",
             "required": false
           },
-          "response_schema": "literal"
+          "response_schema": "json-unknown"
         }
       }
     },
@@ -39599,6 +39593,10 @@
           "403": {
             "$ref": "#/components/responses/Error",
             "description": "Refused by the engine's address, Origin or Host guards."
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "Not found"
           },
           "500": {
             "$ref": "#/components/responses/Error",
