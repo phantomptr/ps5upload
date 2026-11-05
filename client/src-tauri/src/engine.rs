@@ -133,7 +133,7 @@ fn engine_folder(app: &AppHandle) -> Result<PathBuf> {
 /// content doesn't hex-match the freshly-computed embedded hash, we
 /// re-extract + rewrite the stamp. A tampered binary on disk (with
 /// matching size but different bytes) re-extracts on next launch.
-fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
+pub(crate) fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
     let bin_name = if cfg!(target_os = "windows") {
         "ps5upload-engine.exe"
     } else {

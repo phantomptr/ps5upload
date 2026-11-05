@@ -15,6 +15,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Heart,
+  Plug,
   Cable,
   Send as SendIcon,
   Gamepad2,
@@ -206,6 +207,12 @@ export const NAV_ITEMS: NavItem[] = [
     fallback: "Settings",
     icon: SettingsIcon,
     section: { key: "nav_section_app", fallback: "App" },
+  },
+  {
+    to: "/mcp-api",
+    key: "mcp_api_nav",
+    fallback: "MCP & API",
+    icon: Plug,
   },
   {
     to: "/faq",

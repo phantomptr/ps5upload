@@ -47,7 +47,12 @@ Your client's own list (`tools/list`) is always the current one, and each tool s
 
 ## Set it up
 
-The address above works with any client that speaks HTTP. For a client that can only start a program,
+**The easy way:** open **MCP & API** in the app's sidebar. It finds Claude Code, Codex and OpenCode on
+your computer and adds this server with one click, using the engine's real address. It also says if an
+entry has gone stale because the engine moved port, shows every tool, and has the commands below ready
+to copy.
+
+To do it by hand, the address above works with any client that speaks HTTP. For a client that can only start a program,
 or that doesn't run on your computer, use the [stdio bridge](#the-stdio-bridge).
 
 If the engine isn't on port 19113, change the port in what follows: see
@@ -115,6 +120,21 @@ url = "http://127.0.0.1:19113/mcp"
 ```
 
 Or with the bridge: `codex mcp add ps5upload -- "<engine path>" mcp`.
+
+### OpenCode
+
+```sh
+opencode mcp add ps5upload --url http://127.0.0.1:19113/mcp
+opencode mcp list
+```
+
+Which writes this under `"mcp"` in `~/.config/opencode/opencode.json` (or `.jsonc`, keeping its comments):
+
+```json
+{ "ps5upload": { "type": "remote", "url": "http://127.0.0.1:19113/mcp" } }
+```
+
+OpenCode has no remove command: to remove it, delete that entry.
 
 ### Gemini CLI
 
@@ -286,10 +306,11 @@ Run against an engine on a private port, with no console attached, on macOS, 202
 
 | Client | What ran | Result |
 |---|---|---|
-| Claude Code 2.1.318 | `claude mcp add --transport http`, the same with the bridge, `claude mcp list` | Connected both ways |
+| Claude Code 2.1.318 | `claude mcp add --transport http`, the same with the bridge, `claude mcp list`, then `claude -p` calling `engine_version` | Connected both ways, and the call answered |
 | Gemini CLI 0.66.0 | `gemini mcp add --scope user --transport http`, the same with the bridge, `gemini mcp list` | Connected both ways |
 | MCP Inspector CLI | `tools/list`, `tools/call`, `resources/list` over HTTP; `tools/list` over the bridge | All answered |
-| Codex 0.166.0 | `codex mcp add --url`, the same with the bridge, `codex mcp list` | Config saved. Codex's list doesn't connect, so no call went through it |
+| Codex 0.166.0 | `codex mcp add --url`, the same with the bridge, `codex mcp list`, then `codex exec` calling `engine_version` | Config saved, and the call answered |
+| OpenCode 1.19.5 | `opencode mcp add --url`, `opencode mcp list` | Connected. No tool call: its model wasn't answering here |
 | curl and the bare bridge | Both protocol eras, read-only mode, no engine running | As this page says |
 | Claude Desktop, Cursor | Not installed here. Their setup above is untested | **Not run** |
 
