@@ -19,6 +19,7 @@ use crate::engine;
 const SERVER_NAME: &str = "ps5upload";
 const READ_DEADLINE: Duration = Duration::from_secs(25);
 const CHANGE_DEADLINE: Duration = Duration::from_secs(60);
+#[cfg(unix)]
 const SHELL_PATH_DEADLINE: Duration = Duration::from_secs(4);
 const SHELL_PATH_MARK: &str = "__ps5upload_path__";
 
